@@ -8,7 +8,7 @@ const SESSION_ATTENTION_ICON_REGISTRY = {
   alert: icons.alertTriangle,
   flag: icons.flag,
   lock: icons.lock,
-  hourglass: icons.hourglass,
+  hourglass: icons.circle,
 } as const satisfies Record<SessionAgentAttentionIconId, TemplateResult>;
 
 export function resolveSessionAttentionIcon(icon: SessionAgentAttentionIconId): TemplateResult {

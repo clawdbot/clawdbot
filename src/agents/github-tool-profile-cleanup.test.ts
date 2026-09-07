@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+
+const oauthMocks = vi.hoisted(() => ({ list: vi.fn() }));
+
+vi.mock("./github-oauth-records.js", () => ({ listGitHubOAuthRecords: oauthMocks.list }));
+
 import {
   resolveManagedGitHubAgentKey,
   resolveManagedGitHubProfileRoot,
@@ -18,6 +23,8 @@ async function createProfile(root: string, profileId: string) {
 }
 
 describe("managed GitHub profile startup cleanup", () => {
+  beforeEach(() => oauthMocks.list.mockReset().mockReturnValue([]));
+
   it("removes only unreferenced generations inside exact system and agent roots", async () => {
     const stateDir = await fs.realpath(tempDirs.make("openclaw-github-cleanup-"));
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -96,6 +103,50 @@ describe("managed GitHub profile startup cleanup", () => {
 
     expect(result).toEqual({ removed: 1, warnings: [] });
     await expect(fs.stat(removedRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("preserves a durable recovery generation until its OAuth record retires", async () => {
+    const stateDir = await fs.realpath(tempDirs.make("openclaw-github-cleanup-recovery-"));
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const systemRoot = resolveManagedGitHubProfileRoot({
+      agentId: "system",
+      scope: "system",
+      env,
+    });
+    const configured = "ghp_88888888888888888888888888888888";
+    const recovery = "ghp_99999999999999999999999999999999";
+    const retired = "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    await Promise.all([
+      createProfile(systemRoot, configured),
+      createProfile(systemRoot, recovery),
+      createProfile(systemRoot, retired),
+    ]);
+    oauthMocks.list.mockReturnValue([
+      {
+        profileId: recovery,
+        record: { profileId: recovery, scope: "system", agentId: "system" },
+      },
+    ]);
+
+    const first = await cleanupRetiredManagedGitHubProfiles({
+      config: { tools: { github: { profileId: configured } } },
+      env,
+    });
+
+    expect(first).toEqual({ removed: 1, warnings: [] });
+    await expect(fs.stat(path.join(systemRoot, configured))).resolves.toBeDefined();
+    await expect(fs.stat(path.join(systemRoot, recovery))).resolves.toBeDefined();
+    await expect(fs.stat(path.join(systemRoot, retired))).rejects.toMatchObject({ code: "ENOENT" });
+
+    oauthMocks.list.mockReturnValue([]);
+    const second = await cleanupRetiredManagedGitHubProfiles({
+      config: { tools: { github: { profileId: configured } } },
+      env,
+    });
+    expect(second).toEqual({ removed: 1, warnings: [] });
+    await expect(fs.stat(path.join(systemRoot, recovery))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("refuses symlink generations without touching their targets", async () => {

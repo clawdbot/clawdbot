@@ -17,6 +17,7 @@ export function registerCopilotActiveRun(params: {
   abortActiveSession: () => void;
   bridge: ReturnType<typeof attachEventBridge> | undefined;
   canAcceptSteering: () => boolean;
+  startedAtMs?: number;
   input: AttemptParamsLike;
   isAborted: () => boolean;
   isSettled: () => boolean;
@@ -63,19 +64,33 @@ export function registerCopilotActiveRun(params: {
       acceptanceReported = true;
       options?.onQueueAccepted?.(accepted);
     };
+    // The host owns question uncertainty; SDK-send rejection must not reopen it.
+    if (await claimPendingUserInputAnswer(text, options)) {
+      reportAcceptance(true);
+      return undefined;
+    }
     let messageId: string;
     try {
-      if (await claimPendingUserInputAnswer(text, options)) {
-        reportAcceptance(true);
-        return undefined;
-      }
+      // Keep reply context model-only; SDK user.message echoes displayPrompt.
+      // Source preparation may await, so it must precede the live-run checks.
+      const recorder = options?.userTurnTranscriptRecorder;
+      const sourceMessage = recorder ? await recorder.resolveMessage() : undefined;
       if (params.isSettled() || params.isAborted()) {
         throw new Error("Copilot steering is unavailable after the active run ended");
       }
       if (!params.canAcceptSteering()) {
         throw new Error("Copilot steering is unavailable before initial user validation");
       }
-      messageId = await params.session.send({ prompt: text });
+      messageId = await params.transcriptJournal.sendSdkUser(
+        () =>
+          params.session.send({
+            prompt: text,
+            ...(typeof sourceMessage?.content === "string"
+              ? { displayPrompt: sourceMessage.content }
+              : {}),
+          }),
+        recorder,
+      );
       reportAcceptance(true);
     } catch (error) {
       reportAcceptance(false);
@@ -102,10 +117,13 @@ export function registerCopilotActiveRun(params: {
   const activeRunHandle = {
     kind: "embedded" as const,
     runId: params.input.runId,
+    startedAtMs: params.startedAtMs,
     toolAuthorityFingerprint: params.input.toolAuthorityFingerprint,
     claimPendingUserInputAnswer,
     cancelPendingUserInput,
     queueMessage,
+    // SDK 1.0.11 awaits after send entry with no final-dispatch assertion. Keep
+    // shipped unscoped V1 only until upstream supports a guarded final dispatch.
     messageInjection: {
       isAvailable: () => params.canAcceptSteering() && !params.isSettled() && !params.isAborted(),
       queueMessage,

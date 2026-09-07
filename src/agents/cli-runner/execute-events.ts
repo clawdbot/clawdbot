@@ -1,6 +1,7 @@
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import type {
+  CliCompactionDelta,
   CliStreamingDelta,
   CliThinkingDelta,
   CliThinkingProgress,
@@ -288,6 +289,19 @@ export function createCliEventHandlers(params: {
     emitParsedToolTerminal(event);
     emitCliToolResult(event);
   };
+  const emitCliCompaction = (event: CliCompactionDelta) => {
+    observedCliActivity = true;
+    if (emitLiveEvents) {
+      emitAgentEvent({
+        runId: runParams.runId,
+        stream: "compaction",
+        data: {
+          ...event,
+          backend: context.backendResolved.id,
+        },
+      });
+    }
+  };
   const finalizeParsedTools = () => {
     for (const [toolCallId, activeTool] of Array.from(activeParsedTools)) {
       emitParsedToolTerminal({
@@ -309,7 +323,9 @@ export function createCliEventHandlers(params: {
       data: {
         kind: "preamble",
         itemId: `commentary-${runParams.runId}-${commentaryCounter}`,
-        phase: "update",
+        // The JSONL parser flushes a complete pre-tool text segment here.
+        // Mark its boundary so channels can safely create their first notification.
+        phase: "end",
         title: "commentary",
         status: "running",
         progressText: applyPluginTextReplacements(
@@ -378,6 +394,7 @@ export function createCliEventHandlers(params: {
     emitCliDisplayToolResult,
     emitParsedToolUseStart,
     emitParsedToolResult,
+    emitCliCompaction,
     finalizeParsedTools,
     emitCliCommentaryText,
     emitCliAssistantDelta,

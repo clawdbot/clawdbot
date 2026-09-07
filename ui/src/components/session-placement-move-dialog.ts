@@ -20,15 +20,20 @@ type Catalog = {
 };
 
 type Options = {
+  mode: "move" | "restart";
   sessionLabel: string;
   activeRun: boolean;
   deviceDisabledReason?: string;
+  profileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
   loadCatalog: () => Promise<Catalog>;
 };
 
 let active = false;
 
-function targetKey(target: SessionMoveTarget): string {
+function targetKey(target: SessionMoveTarget | null): string {
+  if (!target) {
+    return "";
+  }
   switch (target.kind) {
     case "gateway":
       return "gateway";
@@ -40,7 +45,7 @@ function targetKey(target: SessionMoveTarget): string {
   throw new Error("Unknown session placement move target");
 }
 
-export function showSessionPlacementMoveDialog(
+export function showSessionPlacementTargetDialog(
   options: Options,
 ): Promise<SessionMoveTarget | null> {
   if (active) {
@@ -53,7 +58,7 @@ export function showSessionPlacementMoveDialog(
     let loading = true;
     let loadError: string | null = null;
     let catalog: Catalog = { profiles: [], devices: [] };
-    let selected: SessionMoveTarget = { kind: "gateway" };
+    let selected: SessionMoveTarget | null = options.mode === "move" ? { kind: "gateway" } : null;
     const cloudMachines = new DraftCloudMachineState();
 
     const finish = (result: SessionMoveTarget | null) => {
@@ -70,6 +75,9 @@ export function showSessionPlacementMoveDialog(
 
     const submit = (event: Event) => {
       event.preventDefault();
+      if (!selected) {
+        return;
+      }
       if (selected.kind !== "profile") {
         finish(selected);
         return;
@@ -83,123 +91,163 @@ export function showSessionPlacementMoveDialog(
 
     function paint() {
       const selectedKey = targetKey(selected);
+      const restart = options.mode === "restart";
       render(
         html`
           <openclaw-modal-dialog
-            label=${t("sessionsView.moveSessionTitle")}
+            label=${t(
+              restart ? "sessionsView.restartSessionTitle" : "sessionsView.moveSessionTitle",
+            )}
             @modal-cancel=${() => finish(null)}
           >
             <form class="exec-approval-card" @submit=${submit}>
               <div class="exec-approval-header">
-                <div class="exec-approval-title">${t("sessionsView.moveSessionTitle")}</div>
+                <div class="exec-approval-title">
+                  ${t(
+                    restart ? "sessionsView.restartSessionTitle" : "sessionsView.moveSessionTitle",
+                  )}
+                </div>
                 <div class="muted">
-                  ${t("sessionsView.moveSessionDescription", { session: options.sessionLabel })}
+                  ${t(
+                    restart
+                      ? "sessionsView.restartSessionDescription"
+                      : "sessionsView.moveSessionDescription",
+                    { session: options.sessionLabel },
+                  )}
                 </div>
               </div>
-              ${options.activeRun
-                ? html`<div class="exec-approval-error" role="alert">
-                    ${t("sessionsView.moveSessionActiveRunWarning")}
-                  </div>`
-                : html`<div class="callout">${t("sessionsView.moveSessionNoReplayWarning")}</div>`}
-              ${loading
-                ? html`<div class="muted">${t("common.loading")}</div>`
-                : loadError
-                  ? html`<div class="exec-approval-error" role="alert">${loadError}</div>`
-                  : html`
-                      <div class="new-session-page__picker-root">
-                        ${renderSessionMenuItem(
-                          {
-                            value: "gateway",
-                            label: t("newSession.gateway"),
-                            icon: icons.monitor,
-                            checked: selectedKey === "gateway",
-                            onSelect: () => select({ kind: "gateway" }),
-                          },
-                          false,
-                        )}
-                        ${catalog.devices.length > 0
-                          ? html`
-                              <div class="new-session-page__menu-title">
-                                ${t("newSession.yourDevices")}
-                              </div>
-                              ${catalog.devices.map((device) => {
-                                const disabledReason =
-                                  options.deviceDisabledReason ?? device.disabledReason;
-                                return renderSessionMenuItem(
+              ${
+                restart
+                  ? html`<div class="exec-approval-error" role="alert">
+                      ${t("sessionsView.restartSessionWarning")}
+                    </div>`
+                  : options.activeRun
+                    ? html`<div class="exec-approval-error" role="alert">
+                        ${t("sessionsView.moveSessionActiveRunWarning")}
+                      </div>`
+                    : html`<div class="callout">
+                        ${t("sessionsView.moveSessionNoReplayWarning")}
+                      </div>`
+              }
+              ${
+                loading
+                  ? html`<div class="muted">${t("common.loading")}</div>`
+                  : loadError
+                    ? html`<div class="exec-approval-error" role="alert">${loadError}</div>`
+                    : html`
+                        <div class="new-session-page__picker-root">
+                          ${
+                            restart
+                              ? nothing
+                              : renderSessionMenuItem(
                                   {
-                                    value: `device:${device.deviceId}`,
-                                    label: device.label,
-                                    sub: device.subtitle,
+                                    value: "gateway",
+                                    label: t("newSession.gateway"),
                                     icon: icons.monitor,
-                                    facts: options.deviceDisabledReason
-                                      ? [options.deviceDisabledReason]
-                                      : device.facts,
-                                    checked: selectedKey === `device:${device.deviceId}`,
-                                    disabled:
-                                      Boolean(options.deviceDisabledReason) || !device.selectable,
-                                    title: disabledReason,
-                                    onSelect: () =>
-                                      select({ kind: "device", deviceId: device.deviceId }),
+                                    checked: selectedKey === "gateway",
+                                    onSelect: () => select({ kind: "gateway" }),
                                   },
                                   false,
-                                );
-                              })}
-                            `
-                          : nothing}
-                        ${catalog.profiles.length > 0
-                          ? html`
-                              <div class="new-session-page__menu-title">
-                                ${t("newSession.cloud")}
-                              </div>
-                              ${catalog.profiles.map((profile) => {
-                                const profileSelected =
-                                  selected.kind === "profile" && selected.profileId === profile.id;
-                                const machines = profile.machines ?? [];
-                                const selectedMachineId =
-                                  cloudMachines.resolve(profile.id) ||
-                                  machines.find((machine) => machine.default === true)?.id ||
-                                  "";
-                                return html`
-                                  ${renderCloudProfileMenuItems({
-                                    profiles: [profile],
-                                    selectedId: profileSelected ? profile.id : "",
-                                    submitting: false,
-                                    icon: icons.server,
-                                    onSelect: (profileId) => select({ kind: "profile", profileId }),
+                                )
+                          }
+                          ${
+                            catalog.devices.length > 0
+                              ? html`
+                                  <div class="new-session-page__menu-title">
+                                    ${t("newSession.yourDevices")}
+                                  </div>
+                                  ${catalog.devices.map((device) => {
+                                    const disabledReason =
+                                      options.deviceDisabledReason ?? device.disabledReason;
+                                    return renderSessionMenuItem(
+                                      {
+                                        value: `device:${device.deviceId}`,
+                                        label: device.label,
+                                        sub: device.subtitle,
+                                        icon: icons.monitor,
+                                        facts: options.deviceDisabledReason
+                                          ? [options.deviceDisabledReason]
+                                          : device.facts,
+                                        checked: selectedKey === `device:${device.deviceId}`,
+                                        disabled:
+                                          Boolean(options.deviceDisabledReason) ||
+                                          !device.selectable,
+                                        title: disabledReason,
+                                        onSelect: () =>
+                                          select({ kind: "device", deviceId: device.deviceId }),
+                                      },
+                                      false,
+                                    );
                                   })}
-                                  ${profileSelected && machines.length > 0
-                                    ? html`
-                                        <div class="new-session-page__menu-title">
-                                          ${t("newSession.machine")}
-                                        </div>
-                                        ${renderCloudMachineMenuItems({
-                                          machines,
-                                          selectedId: selectedMachineId,
-                                          submitting: false,
-                                          onSelect: (machineId) =>
-                                            cloudMachines.select(
-                                              profile.id,
-                                              machineId,
-                                              catalog.profiles,
-                                              false,
-                                              paint,
-                                            ),
-                                        })}
-                                      `
-                                    : nothing}
-                                `;
-                              })}
-                            `
-                          : nothing}
-                      </div>
-                    `}
+                                `
+                              : nothing
+                          }
+                          ${
+                            catalog.profiles.length > 0
+                              ? html`
+                                  <div class="new-session-page__menu-title">
+                                    ${t("newSession.cloud")}
+                                  </div>
+                                  ${catalog.profiles.map((profile) => {
+                                    const profileSelected =
+                                      selected?.kind === "profile" &&
+                                      selected.profileId === profile.id;
+                                    const machines = profile.machines ?? [];
+                                    const selectedMachineId =
+                                      cloudMachines.resolve(profile.id) ||
+                                      machines.find((machine) => machine.default === true)?.id ||
+                                      "";
+                                    return html`
+                                      ${renderCloudProfileMenuItems({
+                                        profiles: [profile],
+                                        selectedId: profileSelected ? profile.id : "",
+                                        submitting: false,
+                                        icon: icons.server,
+                                        profileDisabledReason: options.profileDisabledReason,
+                                        onSelect: (profileId) =>
+                                          select({ kind: "profile", profileId }),
+                                      })}
+                                      ${
+                                        profileSelected && machines.length > 0
+                                          ? html`
+                                              <div class="new-session-page__menu-title">
+                                                ${t("newSession.machine")}
+                                              </div>
+                                              ${renderCloudMachineMenuItems({
+                                                machines,
+                                                selectedId: selectedMachineId,
+                                                submitting: false,
+                                                onSelect: (machineId) =>
+                                                  cloudMachines.select(
+                                                    profile.id,
+                                                    machineId,
+                                                    catalog.profiles,
+                                                    false,
+                                                    paint,
+                                                  ),
+                                              })}
+                                            `
+                                          : nothing
+                                      }
+                                    `;
+                                  })}
+                                `
+                              : nothing
+                          }
+                        </div>
+                      `
+              }
               <div class="exec-approval-actions">
                 <button
                   type="submit"
                   class="btn primary"
-                  ?disabled=${loading || Boolean(loadError)}
+                  ?disabled=${loading || Boolean(loadError) || !selected}
                 >
-                  ${t("sessionsView.moveSessionAction")}
+                  ${t(
+                    restart
+                      ? "sessionsView.restartSessionAction"
+                      : "sessionsView.moveSessionAction",
+                  )}
                 </button>
                 <button type="button" class="btn" @click=${() => finish(null)}>
                   ${t("common.cancel")}

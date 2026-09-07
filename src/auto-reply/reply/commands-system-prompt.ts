@@ -1,8 +1,7 @@
 // Implements system prompt inspection commands for agent runtime sessions.
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
-import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { createOpenClawCodingTools } from "../../agents/agent-tools.js";
-import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
+import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import type { EmbeddedContextFile } from "../../agents/embedded-agent-helpers.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
 import {
@@ -10,24 +9,28 @@ import {
   resolveSandboxSkillRuntimeInputs,
 } from "../../agents/embedded-agent-runner/sandbox-skills.js";
 import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
-import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../agents/prompt-surface.js";
+import { resolveAgentRuntimePrompt } from "../../agents/runtime-prompt.js";
 import type { AgentTool } from "../../agents/runtime/index.js";
 import {
   ensureSandboxWorkspaceForSession,
   resolveSandboxRuntimeStatus,
 } from "../../agents/sandbox.js";
 import { buildConfiguredAgentSystemPrompt } from "../../agents/system-prompt-config.js";
-import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
 import type { SkillEligibilityContext } from "../../skills/types.js";
+import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
+
+const log = createSubsystemLogger("auto-reply/commands-system-prompt");
 
 type CommandsSystemPromptBundle = {
   systemPrompt: string;
@@ -75,6 +78,7 @@ async function resolveCommandSkillsPrompt(params: {
   agentId: string;
   config: HandleCommandsParams["cfg"];
   eligibility: SkillEligibilityContext;
+  sandboxAgentId: string;
   sandboxed: boolean;
   sessionKey: string | undefined;
   workspaceDir: string;
@@ -85,6 +89,7 @@ async function resolveCommandSkillsPrompt(params: {
       // those paths can be unreadable inside the container.
       const sandboxWorkspace = await ensureSandboxWorkspaceForSession({
         config: params.config,
+        agentId: params.sandboxAgentId,
         sessionKey: params.sessionKey,
         workspaceDir: params.workspaceDir,
       });
@@ -164,11 +169,7 @@ export async function resolveCommandsSystemPromptBundle(
 ): Promise<CommandsSystemPromptBundle> {
   const workspaceDir = params.workspaceDir;
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.cfg,
-    agentId: params.agentId,
-  });
+  const sessionAgentId = params.agentId;
   const { bootstrapFiles, contextFiles: injectedFiles } = await resolveBootstrapContextForRun({
     workspaceDir,
     config: params.cfg,
@@ -176,6 +177,11 @@ export async function resolveCommandsSystemPromptBundle(
     sessionId: targetSessionEntry?.sessionId,
     chatType: targetSessionEntry?.chatType,
     agentId: sessionAgentId,
+    warn: makeBootstrapWarn({
+      sessionLabel: params.sessionKey,
+      workspaceDir,
+      warn: (message) => log.warn(message),
+    }),
   });
   const toolPolicySessionKey = resolveRuntimePolicySessionKey({
     agentId: sessionAgentId,
@@ -185,7 +191,9 @@ export async function resolveCommandsSystemPromptBundle(
   });
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
-    sessionKey: toolPolicySessionKey,
+    agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+    classificationSessionKey: toolPolicySessionKey,
   });
   const skillsEligibility = resolveCommandSkillsEligibility({
     agentId: sessionAgentId,
@@ -197,6 +205,7 @@ export async function resolveCommandsSystemPromptBundle(
     agentId: sessionAgentId,
     config: params.cfg,
     eligibility: skillsEligibility,
+    sandboxAgentId: sandboxRuntime.classificationAgentId,
     sandboxed: sandboxRuntime.sandboxed,
     sessionKey: toolPolicySessionKey,
     workspaceDir,
@@ -227,27 +236,40 @@ export async function resolveCommandsSystemPromptBundle(
   })();
   const toolNames = tools.map((t) => t.name);
   const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
-  const defaultModelRef = resolveDefaultModelForAgent({
-    cfg: params.cfg,
-    agentId: sessionAgentId,
-  });
-  const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
-  const { runtimeInfo, userTimezone, userDate } = buildSystemPromptParams({
+  const accountId = params.command.accountId ?? params.ctx.AccountId;
+  // Thread adapters own provider-specific targets. Command-only route fallbacks cover
+  // synthetic command contexts that bypass the normal inbound attempt preparation.
+  const threadingContext = buildThreadingToolContext({
+    sessionCtx: params.ctx,
     config: params.cfg,
-    agentId: sessionAgentId,
-    workspaceDir,
-    cwd: process.cwd(),
-    runtime: {
+    hasRepliedRef: undefined,
+  });
+  const fallbackChannelId =
+    params.ctx.NativeChannelId?.trim() ||
+    params.ctx.ChatId?.trim() ||
+    params.ctx.OriginatingTo?.trim() ||
+    params.command.to;
+  const fallbackThreadId = params.ctx.MessageThreadId ?? params.ctx.TransportThreadId;
+  const { runtimeInfo, userTimezone, userDate, reactionGuidance, messageToolHints } =
+    await resolveAgentRuntimePrompt({
+      config: params.cfg,
+      agentId: sessionAgentId,
+      workspaceDir,
+      cwd: process.cwd(),
       sessionKey: params.sessionKey,
       sessionId: targetSessionEntry?.sessionId,
-      host: "unknown",
-      os: "unknown",
-      arch: "unknown",
-      node: process.version,
       model: `${params.provider}/${params.model}`,
-      defaultModel: defaultModelLabel,
-    },
-  });
+      channel: params.command.channel,
+      accountId,
+      chatType: normalizeChatType(params.ctx.ChatType ?? targetSessionEntry?.chatType),
+      currentChannelId: threadingContext.currentChannelId ?? fallbackChannelId,
+      currentThreadTs:
+        threadingContext.currentThreadTs ??
+        (fallbackThreadId === undefined ? undefined : String(fallbackThreadId)),
+      currentMessageId: threadingContext.currentMessageId,
+      senderId: params.ctx.SenderId ?? params.command.senderId,
+      senderIsOwner: params.command.senderIsOwner,
+    });
   const fullAccessState = resolveEmbeddedFullAccessState({
     execElevated: {
       enabled: params.elevated.enabled,
@@ -274,7 +296,6 @@ export async function resolveCommandsSystemPromptBundle(
     config: params.cfg,
     agentId: sessionAgentId,
     workspaceDir,
-    defaultThinkLevel: params.resolvedThinkLevel,
     reasoningLevel: params.resolvedReasoningLevel,
     extraSystemPrompt: undefined,
     ownerNumbers: undefined,
@@ -284,7 +305,6 @@ export async function resolveCommandsSystemPromptBundle(
     userDate,
     contextFiles: injectedFiles,
     skillsPrompt,
-    heartbeatPrompt: undefined,
     acpEnabled: isAcpRuntimeSpawnAvailable({
       config: params.cfg,
       sandboxed: sandboxRuntime.sandboxed,
@@ -293,6 +313,8 @@ export async function resolveCommandsSystemPromptBundle(
     nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance({
       surface: promptSurface,
     }),
+    reactionGuidance,
+    messageToolHints,
     runtimeInfo,
     sandboxInfo,
   });

@@ -401,6 +401,7 @@ internal class VoiceWakeManager(
             _statusText.value = nativeText("Listening")
             null
           }
+
           is VoiceWakeRecognitionEvent.Transcript -> {
             // Android partials routinely stop mid-command. Only a final transcript
             // has the recognizer's end-of-utterance boundary and is safe to dispatch.
@@ -413,6 +414,7 @@ internal class VoiceWakeManager(
             }
             transcriptAction
           }
+
           is VoiceWakeRecognitionEvent.Error -> {
             sessionActive = false
             _isListening.value = false
@@ -485,12 +487,14 @@ internal class VoiceWakeManager(
   private fun retryDelayMs(errorCode: Int): Long =
     when (errorCode) {
       SpeechRecognizer.ERROR_TOO_MANY_REQUESTS -> 15_000L
+
       SpeechRecognizer.ERROR_RECOGNIZER_BUSY,
       SpeechRecognizer.ERROR_SERVER,
       SpeechRecognizer.ERROR_SERVER_DISCONNECTED,
       SpeechRecognizer.ERROR_AUDIO,
       SpeechRecognizer.ERROR_CLIENT,
       -> 1_500L
+
       else -> restartDelayMs
     }
 
@@ -518,13 +522,21 @@ internal class VoiceWakeManager(
 
   private fun performRecognizerAction(action: RecognizerAction?) {
     when (action) {
-      is RecognizerAction.Start ->
+      is RecognizerAction.Start -> {
         recognizer.start(action.operationId) { event ->
           handleRecognitionEvent(action.sessionGeneration, event)
         }
-      is RecognizerAction.Stop -> recognizer.stop(action.operationId)
-      is RecognizerAction.Destroy -> recognizer.destroy(action.operationId)
-      null -> Unit
+      }
+
+      is RecognizerAction.Stop -> {
+        recognizer.stop(action.operationId)
+      }
+
+      is RecognizerAction.Destroy -> {
+        recognizer.destroy(action.operationId)
+      }
+
+      null -> {}
     }
   }
 }

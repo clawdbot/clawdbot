@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
@@ -19,7 +20,7 @@ import {
   buildTelegramThreadParams,
   getTelegramTextParts,
   joinTelegramTextParts,
-  resolveTelegramMessageThreadSpec,
+  type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
@@ -35,7 +36,7 @@ export type TelegramDebounceEntry = {
   debounceKey: string | null;
   debounceLane: TelegramDebounceLane;
   botUsername?: string;
-  threadId?: number;
+  threadSpec: TelegramThreadSpec;
   promptContextMinTimestampMs?: number;
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
   dispatchDedupeClaims: TelegramMessageDispatchReplayClaim[];
@@ -47,6 +48,7 @@ type TextFragmentEntry = {
   key: string;
   storeAllowFrom: string[];
   messages: Array<{ msg: Message; ctx: TelegramContext; receivedAtMs: number }>;
+  threadSpec: TelegramThreadSpec;
   promptContextMinTimestampMs?: number;
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
   dispatchDedupeClaims: TelegramMessageDispatchReplayClaim[];
@@ -59,8 +61,7 @@ type TelegramTextFragmentInput = {
   ctx: TelegramContext;
   msg: Message;
   chatId: number;
-  resolvedThreadId?: number;
-  dmThreadId?: number;
+  threadSpec: TelegramThreadSpec;
   storeAllowFrom: string[];
   isAbortControlMessage: boolean;
   isAuthorizedAbortControlMessage: () => Promise<boolean>;
@@ -105,10 +106,12 @@ export function createTelegramInboundBuffers({
     formatTelegramAmbientTranscriptBody,
     processMessageWithReplyChain,
   } = message;
-  const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
+  const readConfig = createRuntimeConfigReader(cfg);
+  const resolveDebounceMs = () =>
+    resolveInboundDebounceMs({ cfg: readConfig(), channel: "telegram" });
   const FORWARD_BURST_DEBOUNCE_MS = 80;
   const resolveTelegramDebounceEntryMs = (entry: TelegramDebounceEntry): number =>
-    entry.debounceLane === "forward" ? FORWARD_BURST_DEBOUNCE_MS : debounceMs;
+    entry.debounceLane === "forward" ? FORWARD_BURST_DEBOUNCE_MS : resolveDebounceMs();
   const shouldDebounceTelegramEntry = (entry: TelegramDebounceEntry): boolean => {
     const hasDebounceableText = shouldDebounceTextInbound({
       text: getTelegramTextParts(entry.msg).text,
@@ -137,7 +140,7 @@ export function createTelegramInboundBuffers({
       : "default";
   };
   const inboundDebouncer = createInboundDebouncer<TelegramDebounceEntry>({
-    debounceMs,
+    debounceMs: resolveDebounceMs(),
     serializeImmediate: true,
     resolveDebounceMs: resolveTelegramDebounceEntryMs,
     buildKey: (entry) => entry.debounceKey,
@@ -164,6 +167,7 @@ export function createTelegramInboundBuffers({
               options: {
                 receivedAtMs: last.receivedAtMs,
                 ingressBuffer: "inbound-debounce",
+                threadSpec: last.threadSpec,
                 ...promptContextBoundaryOptions(
                   last.promptContextMinTimestampMs,
                   last.promptContextAmbientWatermark,
@@ -212,6 +216,7 @@ export function createTelegramInboundBuffers({
               ),
               receivedAtMs: first.receivedAtMs,
               ingressBuffer: "inbound-debounce",
+              threadSpec: first.threadSpec,
               bufferedMessages: entries.map((entry) => entry.msg),
               ...promptContextBoundaryOptions(
                 latestPromptContextMinTimestampMs(
@@ -253,10 +258,7 @@ export function createTelegramInboundBuffers({
       }
       const chatId = items[0]?.msg.chat.id;
       if (chatId != null) {
-        const firstMessage = items[0]?.msg;
-        const threadParams = firstMessage
-          ? buildTelegramThreadParams(resolveTelegramMessageThreadSpec(firstMessage))
-          : undefined;
+        const threadParams = buildTelegramThreadParams(items[0]?.threadSpec);
         void bot.api
           .sendMessage(
             chatId,
@@ -326,6 +328,7 @@ export function createTelegramInboundBuffers({
           ambientTranscriptBody: formatTelegramAmbientTranscriptBody(bufferedMessages),
           receivedAtMs: first.receivedAtMs,
           ingressBuffer: "text-fragment",
+          threadSpec: entry.threadSpec,
           bufferedMessages,
           ...promptContextBoundaryOptions(
             entry.promptContextMinTimestampMs,
@@ -366,8 +369,7 @@ export function createTelegramInboundBuffers({
       (entity) => entity.type === "bot_command" && entity.offset === 0,
     );
     const senderId = params.msg.from?.id != null ? String(params.msg.from.id) : "unknown";
-    const threadId = params.resolvedThreadId ?? params.dmThreadId;
-    const key = `text:${params.chatId}:${threadId ?? "main"}:${senderId}`;
+    const key = `text:${params.chatId}:${params.threadSpec.scope}:${params.threadSpec.id ?? "main"}:${senderId}`;
     if (text && !isCommand && !params.isAbortControlMessage) {
       const nowMs = Date.now();
       const existing = textBuffer.get(key);
@@ -416,6 +418,7 @@ export function createTelegramInboundBuffers({
         const entry: TextFragmentEntry = {
           key,
           storeAllowFrom: params.storeAllowFrom,
+          threadSpec: params.threadSpec,
           messages: [{ msg: params.msg, ctx: params.ctx, receivedAtMs: nowMs }],
           dispatchDedupeClaims: params.dispatchDedupeClaims,
           spooledReplayParticipants: participant ? [participant] : [],

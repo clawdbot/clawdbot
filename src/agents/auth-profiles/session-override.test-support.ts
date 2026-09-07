@@ -35,16 +35,6 @@ const authStoreMocks = vi.hoisted(() => {
       ({ provider, modelId }: { provider: string; modelId?: string }) =>
         state.routeResolutions.get(`${provider}\0${modelId ?? ""}`) ?? null,
     ),
-    resolveProviderIdForAuth: vi.fn((provider: string) => {
-      const normalized = provider.trim().toLowerCase();
-      return (
-        {
-          "claude-cli": "anthropic",
-          "codex-cli": "openai",
-          "z.ai": "zai",
-        }[normalized] ?? normalized
-      );
-    }),
     reset() {
       state.hasSource = false;
       state.routeResolutions.clear();
@@ -53,13 +43,12 @@ const authStoreMocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("./store.js", () => ({
-  ensureAuthProfileStore: authStoreMocks.ensureAuthProfileStore,
+vi.mock("./store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./store.js")>()),
   hasAnyAuthProfileStoreSource: authStoreMocks.hasAnyAuthProfileStoreSource,
 }));
-
-vi.mock("../provider-auth-aliases.js", () => ({
-  resolveProviderIdForAuth: authStoreMocks.resolveProviderIdForAuth,
+vi.mock("./store-runtime.js", () => ({
+  ensureAuthProfileStore: authStoreMocks.ensureAuthProfileStore,
 }));
 
 vi.mock("./usage.js", () => ({
@@ -87,18 +76,6 @@ export async function withAuthState<T>(run: (state: OpenClawTestState) => Promis
     },
     run,
   );
-}
-
-export function createAuthStore(): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: {
-      "zai:work": { type: "api_key", provider: "zai", key: "sk-test" },
-    },
-    order: {
-      zai: ["zai:work"],
-    },
-  };
 }
 
 export function createAuthStoreWithProfiles(params: {

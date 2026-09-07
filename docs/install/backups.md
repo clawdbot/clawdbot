@@ -10,12 +10,13 @@ title: "Backups"
 # Backups
 
 OpenClaw keeps its authoritative state in SQLite: one global control-plane
-database plus one database per agent, all under the state directory (usually
-`~/.openclaw`). See [Database schemas](/reference/database-schemas) for the
-exact layout. This guide covers protecting that state: one-off archives,
-per-database snapshots, scheduling, offsite copies, and continuous
-replication for installs that should not re-upload whole databases on every
-backup.
+database under the state directory (usually `~/.openclaw`), plus one database
+per configured agent at `<agentDir>/openclaw-agent.sqlite`. Agent directories
+default to locations under the state directory but can be configured outside
+it. See [Database schemas](/reference/database-schemas) for the exact layout.
+This guide covers protecting that state: one-off archives, per-database
+snapshots, scheduling, offsite copies, and continuous replication for installs
+that should not re-upload whole databases on every backup.
 
 Never copy live `.sqlite`, `-wal`, `-shm`, or `-journal` files as a backup.
 The databases are written while the Gateway runs, and raw file copies of a
@@ -39,6 +40,8 @@ committed state safely.
 - Regular protection: provision the Gateway-owned backup automation.
 - Continuous, incremental, seconds of data loss: replicate the databases with
   Litestream.
+- Periodic incremental pull to another machine, no object storage:
+  `sqlite3_rsync`.
 
 ## Full archives
 
@@ -46,12 +49,21 @@ committed state safely.
 openclaw backup create --output ~/Backups/openclaw --verify
 ```
 
-This writes a timestamped `.tar.gz` covering state, config, credentials,
-sessions, and (by default) workspaces, then validates the archive manifest
-and payload. SQLite databases inside the archive are captured with SQLite's
-online backup API and compacted, so the archive is safe to create while the
-Gateway runs. [Backup CLI](/cli/backup) documents every flag, the volatile
-files that are intentionally skipped, and verification details.
+This writes a timestamped `.tar.gz` covering state, config, credentials, every
+configured agent directory, and (by default) workspaces, then validates the
+archive manifest and payload. Agent directories remain included when
+`--no-include-workspace` is set, even if their configured locations are outside
+the state directory. OpenClaw-owned SQLite databases, including agent databases
+inside workspace or managed-state assets, are captured with SQLite's online
+backup API, owner-verified, sanitized, and compacted. Other SQLite files in
+workspaces remain ordinary workspace files. [Backup CLI](/cli/backup)
+documents every flag, owner-declared regenerable resources, volatile files,
+and verification details.
+
+If the configuration is malformed, `--no-include-workspace` can still produce a
+partial recovery archive for state, config, and credentials. Its skipped
+diagnostics identify agent and plugin ownership that could not be resolved;
+repair the configuration before relying on an archive as complete.
 
 Archives are full copies: each run re-uploads everything. They are the right
 tool before an update, reset, uninstall, or machine move, and a reasonable
@@ -75,6 +87,12 @@ Each run publishes one verified snapshot directory (`manifest.json` plus
 deleted-page remnants do not inflate them, and every snapshot records a
 SHA-256 that `openclaw backup sqlite verify` rechecks later.
 
+`--agent <id>` resolves the database from that agent's configured `agentDir`,
+including roots outside the state directory. The same owner-derived lookup
+applies to explicit Git agent backups, `--all`, and scheduled Git backups.
+Verifying or restoring a historical artifact by agent id does not require that
+agent to exist in the current configuration.
+
 Snapshot repositories are local directories. Scheduling, upload, retention,
 and restore-on-boot are intentionally left to the operator; the sections
 below cover them.
@@ -82,7 +100,8 @@ below cover them.
 ## Schedule backups
 
 The recommended schedule is one Gateway-owned automation. This example backs
-up every registered database daily and pushes the current branch to `origin`.
+up the shared database and every configured agent database daily, including
+custom agent roots, and pushes the current branch to `origin`.
 Pushing requires the repository to have an `origin` remote first, so
 initialize it once before enabling a pushed schedule:
 
@@ -95,13 +114,13 @@ openclaw backup enable --repository ~/Backups/openclaw-git --every 24h --push
 configured, so a fresh install cannot silently create a schedule whose pushes
 always fail.
 
-Pushed schedules redact credential-bearing tables by default: an unattended
-recurring push would otherwise retain credentials durably in remote Git
-history. Pass `--include-secrets` to schedule full-fidelity remote backups
-when you accept that tradeoff and the remote is private; restores from
-redacted history require re-pairing devices and re-authenticating providers
-afterward. Local (non-push) schedules keep full fidelity so restores are
-complete.
+Pushed schedules redact credential-bearing tables and secret-prefixed
+machine-state rows by default: an unattended recurring push would otherwise
+retain credentials durably in remote Git history. Pass `--include-secrets` to
+schedule full-fidelity remote backups when you accept that tradeoff and the
+remote is private; restores from redacted history require re-pairing devices
+and re-authenticating providers afterward. Local (non-push) schedules keep full
+fidelity so restores are complete.
 
 Use `--global-only` or `--agent <id>` to narrow the scope. Add
 `--exclude-secrets` for a redacted Git history. Re-running the command updates
@@ -176,8 +195,9 @@ confirm ownership and run `chmod 700 <repository>` to repair unsafe permissions.
 The repository is ordinary Git and can use any remote, including GitHub. Keep
 the remote private: the default dump includes auth profiles, tokens, and other
 credential-bearing state. `--exclude-secrets` omits the documented secret
-tables when a redacted history is more useful than a credential-complete
-backup; see [Backup CLI](/cli/backup#versioned-git-backups) for the exact list.
+tables and machine-state key prefixes when a redacted history is more useful
+than a credential-complete backup; see
+[Backup CLI](/cli/backup#versioned-git-backups) for the exact list.
 
 Verify or restore one database at any commit without overwriting a live file:
 
@@ -200,8 +220,10 @@ storage, with periodic snapshots so restores stay fast. Only changed pages
 leave the machine, which makes it the right tool when backups must not
 re-upload whole databases.
 
-OpenClaw's databases run in WAL mode, which is Litestream's one hard
-requirement. A minimal `litestream.yml` replicating the control-plane
+Litestream's one hard requirement is WAL mode, which OpenClaw uses on local
+filesystems; on network-backed storage such as NFS or SMB, OpenClaw falls
+back to rollback journaling, so verify with `PRAGMA journal_mode;` first.
+A minimal `litestream.yml` replicating the control-plane
 database and one agent database to an S3-compatible bucket:
 
 ```yaml
@@ -222,10 +244,57 @@ offline:
 litestream restore -o ./restored-openclaw.sqlite s3://openclaw-backups/state
 ```
 
+For an agent with a custom `agentDir`, replace the example's default agent
+database path with its configured `<agentDir>/openclaw-agent.sqlite`.
+
 Litestream replicates database bytes only. Config, credentials files, and
 workspaces still need one of the file-based paths above, and the replicated
 data is as sensitive as the archives, so apply the same bucket access and
 encryption rules.
+
+## Pull replication with sqlite3_rsync
+
+[`sqlite3_rsync`](https://sqlite.org/rsync.html) is the SQLite project's
+official replication tool, modeled on `rsync`: it compares page hashes
+between an origin and a replica database and ships only changed pages,
+typically over SSH with the same binary installed on both ends. Unlike a raw
+file copy, it takes a read transaction on the origin, so pulling from a live
+database while the Gateway runs produces a consistent replica. WAL mode is
+required on the origin. OpenClaw uses WAL on local filesystems but
+deliberately falls back to rollback journaling on network-backed storage
+such as NFS or SMB, so check the origin before relying on this path:
+
+```bash
+sqlite3 ~/.openclaw/state/openclaw.sqlite "PRAGMA journal_mode;"
+```
+
+If this prints anything other than `wal`, use one of the file-based paths
+above instead.
+
+The tool ships in the `sqlite-tools` binary bundles on the
+[SQLite download page](https://sqlite.org/download.html) and in the full
+source tree; package-manager SQLite builds often omit it. Pull a database to
+another machine you control:
+
+```bash
+sqlite3_rsync 'user@gateway-host:~/.openclaw/state/openclaw.sqlite' ./replica/openclaw.sqlite
+```
+
+Re-running the command is incremental: an unchanged database exchanges only
+a few kilobytes of hashes, and appended data transfers at roughly its own
+size. Treat the replica as read-only and as sensitive as the origin.
+
+Two caveats. First, deltas are page-based, and OpenClaw's databases run
+incremental auto-vacuum on a periodic maintenance timer; a vacuum pass
+relocates pages, so a sync shortly after one (or after large deletions such
+as transcript-archive eviction) can transfer far more than the actual data
+change. Second, this replicates database bytes only, like Litestream:
+config, credentials files, and workspaces still need a file-based path
+above. For continuous replication with predictable upload size, prefer
+Litestream; use `sqlite3_rsync` for scheduled or ad-hoc pulls between
+machines without object storage. To recover, treat the replica like any
+restored database: copy it into place while the Gateway is stopped, then
+follow [Restore a database](#restore-a-database).
 
 ## Restore
 
@@ -246,12 +315,14 @@ ARCHIVE=./2026-03-09T08-00-00.000+08-00-openclaw-backup.tar.gz
 openclaw backup restore "$ARCHIVE" --target ./restored-openclaw
 ```
 
-The target must not exist or must be empty. OpenClaw verifies archive structure,
-the manifest, hardlinks, symbolic-link containment, and SQLite databases before it writes the target. A
-non-empty target is refused, and a failed extraction cleans its incomplete
-output. The command never touches the live state directory and has no force or
-in-place mode. Treat the restored directory as sensitive: it can contain
-credentials, auth profiles, sessions, and workspace data.
+The target must not exist or must be empty, and it must not be inside the live
+state directory or any configured live agent directory. OpenClaw verifies
+archive structure, the manifest, hardlinks, symbolic-link containment, and
+SQLite databases before it writes the target. A non-empty target is refused,
+and a failed extraction cleans its incomplete output. The command never writes
+into live state or agent roots and has no force or in-place mode. Treat the
+restored directory as sensitive: it can contain credentials, auth profiles,
+sessions, and workspace data.
 
 <Warning>
   Restoring an archive is time travel. Messaging-channel credentials with
@@ -264,10 +335,15 @@ credentials, auth profiles, sessions, and workspace data.
   `plugin-skills/` symlink index from current plugin metadata.
 </Warning>
 
-The manifest records `archiveRoot`, the original paths under `paths`, and an
-`assets[]` list. Each asset includes its `kind`, original `sourcePath`, and
-`archivePath` inside the tarball. Use those fields as the source of truth; do
-not derive the archive root from the archive filename.
+The schema-version-1 manifest records `archiveRoot`, the original paths under
+`paths`, an `assets[]` list, and additive configured-agent ownership metadata.
+Each asset includes its `kind`, original `sourcePath`, and `archivePath` inside
+the tarball. An external custom agent root has kind `agent` when it needs its
+own source; roots already covered by a state or workspace asset appear in
+ownership metadata without duplicating archive entries. Use the asset and
+ownership fields as the source of truth; do not derive the archive root from
+the archive filename or reconstruct agent paths from the default layout. Older
+archives without additive ownership metadata remain verifiable.
 
 The archive layout is:
 
@@ -280,11 +356,13 @@ The archive layout is:
 
 To activate, stop the Gateway and any node hosts that use the restored files.
 Make a fresh backup of current state or move it aside. Then move the extracted
-state asset into place, or point `OPENCLAW_STATE_DIR` at that asset, and run
-`openclaw doctor` before restarting the Gateway. On a new machine or under a
-different home directory, use the manifest to map config, credentials, and
-workspace assets to their new paths. See [Updating](/install/updating#rollback)
-for the rollback workflow.
+state asset into place, or point `OPENCLAW_STATE_DIR` at that asset. Restore
+every custom agent root using its recorded agent id and original source path;
+either preserve its configured `agentDir` or update that setting to its new
+location. On a new machine or under a different home directory, also use the
+manifest to map config, credentials, and workspace assets to their new paths.
+Run `openclaw doctor` before restarting the Gateway. See
+[Updating](/install/updating#rollback) for the rollback workflow.
 
 ### Restore a database
 

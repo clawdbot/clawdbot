@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import {
   createWorkspaceGitTransferList,
   runWorkspaceInventoryCommandToFile,
+  settleWorkspaceInventoryCommands,
   workspaceInventoryError,
 } from "./workspace-sync-inventory.js";
 
@@ -24,7 +25,7 @@ export async function preflightWorkerWorkspace(params: {
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const signal = params.signal ? AbortSignal.any([params.signal, timeoutSignal]) : timeoutSignal;
   const temporaryDirectory = await fs.mkdtemp(
-    path.join(os.tmpdir(), "openclaw-worker-workspace-preflight-"),
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-worker-workspace-preflight-"),
   );
   try {
     const canonicalRoot = await fs.realpath(params.localPath);
@@ -37,14 +38,13 @@ export async function preflightWorkerWorkspace(params: {
         signal,
         timeoutMs,
       });
-    const metadataResults = await Promise.allSettled([
-      runGit(["rev-parse", "--show-toplevel"], gitRootPath),
-      runGit(["rev-parse", "--verify", "HEAD"], baseCommitPath),
-    ]);
-    const failure = metadataResults.find((result) => result.status === "rejected");
-    if (failure?.status === "rejected") {
-      throw failure.reason;
-    }
+    await settleWorkspaceInventoryCommands(
+      [
+        runGit(["rev-parse", "--show-toplevel"], gitRootPath),
+        runGit(["rev-parse", "--verify", "HEAD"], baseCommitPath),
+      ],
+      signal,
+    );
     const [reportedRoot, baseCommit] = await Promise.all([
       readBoundedGitValue(gitRootPath),
       readBoundedGitValue(baseCommitPath),

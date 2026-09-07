@@ -16,7 +16,7 @@ import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/co
 import { startGatewayServer } from "../../../../src/gateway/server.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../../../../src/gateway/test-helpers.env.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
-import { loadGatewayTlsRuntime } from "../../../../src/infra/tls/gateway.js";
+import { loadGatewayTlsServerRuntime } from "../../../../src/infra/tls/gateway.js";
 import { createDeferred } from "../../../helpers/promise.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
@@ -314,7 +314,7 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
     delete process.env.VITEST;
     await writeDiscoveryProbePlugin(pluginDir, advertisementPath);
 
-    const preparedTls = await loadGatewayTlsRuntime({
+    const preparedTls = await loadGatewayTlsServerRuntime({
       enabled: true,
       autoGenerate: true,
       certPath,

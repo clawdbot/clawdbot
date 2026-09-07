@@ -5,7 +5,7 @@ import { createQuestionChannelRuntime } from "./question-channel-runtime-interna
 
 const log = createSubsystemLogger("gateway/questions");
 // Source-loaded plugin SDK chunks and Gateway chunks must share one delivery owner.
-// Clear its pending callbacks and retention timers when the Gateway closes or restarts.
+// Per-Gateway retirement is separate from the reusable process-lifecycle reset.
 const questionChannelRuntime = resolveGlobalSingleton(
   Symbol.for("openclaw.questionChannelRuntime"),
   () =>
@@ -21,4 +21,6 @@ const questionChannelRuntime = resolveGlobalSingleton(
 
 export const handleQuestionChannelRequested = questionChannelRuntime.handleRequested;
 export const handleQuestionChannelResolved = questionChannelRuntime.handleResolved;
+export const runWithQuestionChannelDeliveries = questionChannelRuntime.runWithDeliveries;
 export const registerQuestionChannelDelivery = questionChannelRuntime.registerDelivery;
+export const retireQuestionChannelGateway = questionChannelRuntime.retireGateway;

@@ -4,11 +4,16 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { embeddedAgentLog, type AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  embeddedAgentLog,
+  type AgentMessage,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -18,8 +23,18 @@ import {
   makeAgentUserMessage,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CodexAppServerEventProjector } from "./event-projector.js";
+import {
+  buildEmptyToolTelemetry,
+  createParams as createProjectorParams,
+  forCurrentTurn,
+  registerCodexEventProjectorTestLifecycle,
+  turnCompleted,
+} from "./event-projector.test-harness.js";
 import type { CodexThread } from "./protocol.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
+import { projectBoundedCodexVisibleSessionHistory } from "./transcript-history-projection.js";
+import { attachCodexMirrorRunId } from "./transcript-mirror-attestation.js";
 import {
   buildCodexUserPromptMessage,
   codexTranscriptMirrorRuntime,
@@ -31,6 +46,7 @@ import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 const mirrorCodexAppServerTranscript = codexTranscriptMirrorRuntime.mirror;
 const mirrorTranscriptBestEffort = codexTranscriptMirrorRuntime.mirrorBestEffort;
+const deliverAsyncMessageBestEffort = codexTranscriptMirrorRuntime.deliverAsyncMessageBestEffort;
 
 const publishSessionTranscriptUpdateByIdentityMock = vi.hoisted(() => vi.fn());
 
@@ -663,6 +679,72 @@ describe("projectBoundedCodexThreadHistory", () => {
     expect(JSON.stringify(projection)).not.toContain("failed tail");
   });
 
+  it("preserves imported async and commentary ownership while keeping async messages out of model history", () => {
+    const importedThread = {
+      ...thread,
+      turns: [
+        {
+          id: "turn-async-history",
+          status: "completed",
+          items: [
+            {
+              id: "user-async-history",
+              type: "userMessage",
+              content: [{ type: "text", text: "Investigate this" }],
+            },
+            {
+              id: "commentary-history",
+              type: "agentMessage",
+              text: "Checking the deployment.",
+              phase: "commentary",
+            },
+            {
+              id: "async-history",
+              type: "agentMessage",
+              text: "Which environment should I use?",
+              phase: "final_answer",
+              delivery: "async",
+            },
+            {
+              id: "final-history",
+              type: "agentMessage",
+              text: "Deployment complete.",
+              phase: "final_answer",
+            },
+          ],
+        },
+      ],
+    } as unknown as CodexThread;
+
+    const projection = projectBoundedCodexThreadHistory({
+      thread: importedThread,
+      throughTurnId: "turn-async-history",
+      importedAt: 1_800_000_000_000,
+    });
+
+    expect(projection.transcriptMessages).toHaveLength(4);
+    expect(projection.transcriptMessages[1]).toMatchObject({ phase: "commentary" });
+    expect(projection.transcriptMessages[2]).toMatchObject({
+      phase: "final_answer",
+      openclawAsyncDelivery: { itemId: "async-history" },
+    });
+    expect(JSON.stringify(projection.responseItems)).not.toContain(
+      "Which environment should I use?",
+    );
+    expect(projection.responseItems).toHaveLength(3);
+    const visibleSessionHistory = projectBoundedCodexVisibleSessionHistory(
+      projection.transcriptMessages.map((message, index) => ({
+        entryId: `entry-${index}`,
+        parentId: index === 0 ? null : `entry-${index - 1}`,
+        seq: index,
+        role: message.role,
+        message,
+      })),
+    );
+    expect(JSON.stringify(visibleSessionHistory)).not.toContain("Which environment should I use?");
+    expect(visibleSessionHistory).toHaveLength(3);
+  });
+
   it("accepts terminal boundaries", () => {
     for (const [status, stopReason] of [
       ["completed", "stop"],
@@ -793,7 +875,19 @@ describe("projectBoundedCodexThreadHistory", () => {
 });
 
 describe("mirrorCodexAppServerTranscript", () => {
+  it("clears terminal ownership when a mirrored message becomes non-terminal", () => {
+    const message = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "intermediate narration" }],
+      timestamp: Date.now(),
+    });
+    const terminal = attachCodexMirrorRunId(message, "run-1", true);
+    const intermediate = attachCodexMirrorRunId(terminal, "run-1");
+
+    expect(intermediate).toMatchObject({ __openclaw: { runId: "run-1" } });
+    expect(intermediate).not.toHaveProperty("__openclaw.runTerminal");
+  });
   it("hides current memory-maintenance messages without hiding replayed turns", async () => {
+    const prepareAssistantTranscriptMessage = vi.fn((message: AssistantMessage) => message);
     initializeGlobalHookRunner(
       createMockPluginRegistry([
         {
@@ -856,6 +950,9 @@ describe("mirrorCodexAppServerTranscript", () => {
       ...target,
       messages,
       idempotencyScope: "codex-app-server:memory",
+      runId: "run-memory",
+      terminalAssistantOwner: { mirrorIdentity: "turn-memory:assistant", runId: "run-memory" },
+      prepareAssistantTranscriptMessage,
     });
 
     const persistedMessages = (await readMirrorEvents(target))
@@ -868,6 +965,7 @@ describe("mirrorCodexAppServerTranscript", () => {
     expect(persistedMessages).toHaveLength(messages.length);
     expect(persistedMessages[0]).not.toHaveProperty("display", false);
     expect(persistedMessages.slice(1).every((message) => message.display === false)).toBe(true);
+    expect(prepareAssistantTranscriptMessage).not.toHaveBeenCalled();
   });
 
   it("mirrors user, assistant, and tool result messages by SQLite identity", async () => {
@@ -940,10 +1038,10 @@ describe("mirrorCodexAppServerTranscript", () => {
     expect(raw).toContain('"idempotencyKey":"client-run:user"');
     expect(raw).toContain('"mirrorOrigin":"codex-app-server"');
     expect(raw).not.toContain('"idempotencyKey":"codex-app-server:thread-1:');
-    expect(first.userMessagesPresent).toHaveLength(1);
-    expect(second.userMessagesPresent).toHaveLength(1);
     expect(first.userMessageReceipts).toHaveLength(1);
     expect(second.userMessageReceipts).toHaveLength(1);
+    expect(first.userMessageReceipts[0]?.appended).toBe(true);
+    expect(second.userMessageReceipts[0]?.appended).toBe(false);
     expect(second.userMessageReceipts[0]?.anchor.entryId).toBe(
       first.userMessageReceipts[0]?.anchor.entryId,
     );
@@ -1025,18 +1123,189 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
     });
     expect(updates[0]?.update?.messageSeq).toBe(1);
-    expect(firstMirror.userMessagesPresent).toHaveLength(1);
-    expect(firstMirror.userMessagesPresent[0]).toMatchObject({
+    expect(firstMirror.userMessageReceipts).toHaveLength(1);
+    expect(firstMirror.userMessageReceipts[0]?.message).toMatchObject({
       role: "user",
       content: [{ type: "text", text: "show me live" }],
       idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
     });
-    expect(secondMirror.userMessagesPresent).toHaveLength(1);
-    expect(secondMirror.userMessagesPresent[0]).toMatchObject({
+    expect(secondMirror.userMessageReceipts).toHaveLength(1);
+    expect(secondMirror.userMessageReceipts[0]?.message).toMatchObject({
       role: "user",
       content: [{ type: "text", text: "show me live" }],
       idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
     });
+  });
+
+  it("delivers the persisted async rewrite once across reconnect replay", async () => {
+    const target = await createSqliteMirrorTarget("openclaw-codex-mirror-async-reconnect-");
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_message_write",
+          handler: () => ({
+            message: castAgentMessage({
+              ...makeAgentAssistantMessage({
+                content: [{ type: "text", text: "[redacted async update]" }],
+                timestamp: Date.now(),
+              }),
+              phase: "final_answer",
+            }),
+          }),
+        },
+      ]),
+    );
+    const message = castAgentMessage({
+      ...makeAgentAssistantMessage({
+        content: [{ type: "text", text: "Sensitive background update." }],
+        timestamp: Date.now(),
+      }),
+      phase: "final_answer",
+      openclawAsyncDelivery: { itemId: "async-update" },
+    });
+    const onBlockReply = vi.fn();
+    const runParams = {
+      agentId: target.agentId,
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+      sessionTarget: target,
+      workspaceDir: path.dirname(target.storePath),
+      runId: "run-async",
+      onBlockReply,
+    } as unknown as EmbeddedRunAttemptParams;
+    const delivery = {
+      cwd: path.dirname(target.storePath),
+      params: runParams,
+      itemId: "async-update",
+      message,
+      text: "Sensitive background update.",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    };
+
+    await expect(deliverAsyncMessageBestEffort(delivery)).resolves.toBe("settled");
+    await expect(
+      deliverAsyncMessageBestEffort({
+        ...delivery,
+        params: { ...runParams, runId: "run-async-reconnect" },
+      }),
+    ).resolves.toBe("settled");
+
+    expect(onBlockReply).toHaveBeenCalledTimes(2);
+    expect(onBlockReply).toHaveBeenNthCalledWith(
+      1,
+      { text: "[redacted async update]" },
+      {
+        deliveryIntentId: "block-reply:v1:codex-app-server:thread-1:turn-1:async-update",
+      },
+    );
+    expect(onBlockReply.mock.calls[1]).toEqual(onBlockReply.mock.calls[0]);
+    expect(onBlockReply.mock.calls.map(([payload]) => payload)).not.toContainEqual({
+      text: "Sensitive background update.",
+    });
+    expect(await readMirrorMessages(target)).toEqual([
+      { role: "assistant", text: "[redacted async update]" },
+    ]);
+    const updates = publishSessionTranscriptUpdateByIdentityMock.mock.calls.map(
+      ([update]) => update as Record<string, unknown> & { update?: Record<string, unknown> },
+    );
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.update?.message).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "[redacted async update]" }],
+      phase: "final_answer",
+      idempotencyKey: "codex-app-server:thread-1:turn-1:async:async-update",
+      openclawAsyncDelivery: { itemId: "async-update" },
+    });
+  });
+
+  it("retries a durable async callback from the persisted row", async () => {
+    const target = await createSqliteMirrorTarget("openclaw-codex-mirror-async-callback-fail-");
+    const onBlockReply = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("channel unavailable"))
+      .mockResolvedValue(undefined);
+    const runParams = {
+      agentId: target.agentId,
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+      sessionTarget: target,
+      workspaceDir: path.dirname(target.storePath),
+      runId: "run-async-callback-fail",
+      onBlockReply,
+    } as unknown as EmbeddedRunAttemptParams;
+    const delivery = {
+      cwd: path.dirname(target.storePath),
+      params: runParams,
+      itemId: "async-callback-fail",
+      message: castAgentMessage({
+        ...makeAgentAssistantMessage({
+          content: [{ type: "text", text: "Persisted background update." }],
+          timestamp: Date.now(),
+        }),
+        openclawAsyncDelivery: { itemId: "async-callback-fail" },
+      }),
+      text: "Persisted background update.",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    };
+
+    await expect(deliverAsyncMessageBestEffort(delivery)).resolves.toBe("retry");
+    await expect(deliverAsyncMessageBestEffort(delivery)).resolves.toBe("settled");
+
+    expect(onBlockReply).toHaveBeenCalledTimes(2);
+    expect(onBlockReply.mock.calls[1]).toEqual(onBlockReply.mock.calls[0]);
+    expect(onBlockReply).toHaveBeenCalledWith(
+      { text: "Persisted background update." },
+      {
+        deliveryIntentId: "block-reply:v1:codex-app-server:thread-1:turn-1:async-callback-fail",
+      },
+    );
+    expect(await readMirrorMessages(target)).toEqual([
+      { role: "assistant", text: "Persisted background update." },
+    ]);
+    expect(publishSessionTranscriptUpdateByIdentityMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not deliver async messages blocked by before_message_write", async () => {
+    const target = await createSqliteMirrorTarget("openclaw-codex-mirror-async-blocked-");
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_message_write", handler: () => ({ block: true }) },
+      ]),
+    );
+    const onBlockReply = vi.fn();
+    const runParams = {
+      agentId: target.agentId,
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+      sessionTarget: target,
+      workspaceDir: path.dirname(target.storePath),
+      runId: "run-async-blocked",
+      onBlockReply,
+    } as unknown as EmbeddedRunAttemptParams;
+
+    await expect(
+      deliverAsyncMessageBestEffort({
+        cwd: path.dirname(target.storePath),
+        params: runParams,
+        itemId: "async-blocked",
+        message: castAgentMessage({
+          ...makeAgentAssistantMessage({
+            content: [{ type: "text", text: "Blocked update." }],
+            timestamp: Date.now(),
+          }),
+          openclawAsyncDelivery: { itemId: "async-blocked" },
+        }),
+        text: "Blocked update.",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }),
+    ).resolves.toBe("settled");
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(await readMirrorMessages(target)).toEqual([]);
+    expect(publishSessionTranscriptUpdateByIdentityMock).not.toHaveBeenCalled();
   });
 
   it("emits stable sequence numbers for multi-message mirror batches", async () => {
@@ -1061,12 +1330,35 @@ describe("mirrorCodexAppServerTranscript", () => {
         ),
       ],
       idempotencyScope: "codex-app-server:thread-1",
+      runId: "openclaw-run-1",
+      runMirrorIdentityPrefix: "turn-1:",
+      terminalAssistantOwner: {
+        mirrorIdentity: "turn-1:assistant",
+        runId: "openclaw-run-1",
+      },
     });
 
     const updates = publishSessionTranscriptUpdateByIdentityMock.mock.calls.map(
       ([update]) => update as Record<string, unknown> & { update?: Record<string, unknown> },
     );
     expect(updates.map((update) => update.update?.messageSeq)).toEqual([1, 2]);
+    expect(updates.map((update) => update.update?.runId)).toEqual([undefined, "openclaw-run-1"]);
+    expect(
+      updates.map(
+        (update) =>
+          (update.update?.message as { __openclaw?: { runId?: string } } | undefined)?.[
+            "__openclaw"
+          ]?.runId,
+      ),
+    ).toEqual(["openclaw-run-1", "openclaw-run-1"]);
+    expect(
+      updates.map(
+        (update) =>
+          (update.update?.message as { __openclaw?: { runTerminal?: boolean } } | undefined)?.[
+            "__openclaw"
+          ]?.runTerminal,
+      ),
+    ).toEqual([undefined, true]);
     expect(
       updates.map((update) => {
         const message = update.update?.message as { role?: string } | undefined;
@@ -1074,6 +1366,113 @@ describe("mirrorCodexAppServerTranscript", () => {
       }),
     ).toEqual(["user", "assistant"]);
   });
+
+  it.each([false, true])(
+    "prepares only the owned terminal media row before persistence and publication (skip hooks: %s)",
+    async (skipBeforeMessageWriteHooks) => {
+      const target = await createSqliteMirrorTarget("openclaw-codex-mirror-media-owner-");
+      const sourceText = "Artifacts ready\nMEDIA:./artifact.json";
+      const rewrittenText = skipBeforeMessageWriteHooks
+        ? sourceText
+        : `${sourceText}\nMEDIA:./hook-only.json`;
+      const prepareAssistantTranscriptMessage = vi.fn((message: AssistantMessage) => ({
+        ...message,
+        openclawDelivery: { mediaUrls: ["./artifact.json"] },
+      }));
+      const beforeMessageWrite = vi.fn((input: unknown) => {
+        const message = (input as { message: AgentMessage }).message;
+        return message.role === "assistant" &&
+          message.content.some((part) => part.type === "text" && part.text === sourceText)
+          ? { message: { ...message, content: [{ type: "text", text: rewrittenText }] } }
+          : undefined;
+      });
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_message_write",
+            handler: beforeMessageWrite,
+          },
+        ]),
+      );
+      const messages = [
+        attachCodexMirrorIdentity(makeAgentUserMessage({ content: sourceText }), "turn-1:prompt"),
+        ...[
+          "turn-0:assistant",
+          "turn-1:commentary:item",
+          "turn-1:async:item",
+          "turn-1:assistant",
+        ].map((identity) =>
+          attachCodexMirrorIdentity(
+            makeAgentAssistantMessage({
+              content: [
+                {
+                  type: "text",
+                  text: identity === "turn-1:assistant" ? sourceText : "MEDIA:./unowned.json",
+                },
+              ],
+            }),
+            identity,
+          ),
+        ),
+      ];
+      if (skipBeforeMessageWriteHooks) {
+        await mirrorCodexAppServerTranscript({
+          ...target,
+          messages,
+          runId: "run-media",
+          idempotencyScope: "codex-app-server:thread-1",
+          runMirrorIdentityPrefix: "turn-1:",
+          terminalAssistantOwner: { mirrorIdentity: "turn-1:assistant", runId: "run-media" },
+          prepareAssistantTranscriptMessage,
+          skipBeforeMessageWriteHooks,
+        });
+      } else {
+        await mirrorTranscriptBestEffort({
+          params: {
+            ...target,
+            sessionTarget: target,
+            runId: "run-media",
+            prepareAssistantTranscriptMessage,
+          } as unknown as EmbeddedRunAttemptParams,
+          result: { messagesSnapshot: messages } as Parameters<
+            typeof mirrorTranscriptBestEffort
+          >[0]["result"],
+          agentId: target.agentId,
+          sessionKey: target.sessionKey,
+          notifyUserMessagePersisted: () => undefined,
+          cwd: path.dirname(target.storePath),
+          threadId: "thread-1",
+          turnId: "turn-1",
+        });
+      }
+
+      expect(beforeMessageWrite).toHaveBeenCalledTimes(skipBeforeMessageWriteHooks ? 0 : 5);
+      expect(prepareAssistantTranscriptMessage).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ content: [{ type: "text", text: rewrittenText }] }),
+        sourceText,
+      );
+      const published = publishSessionTranscriptUpdateByIdentityMock.mock.calls.map(
+        ([params]) => params.update.message,
+      );
+      expect(published).toHaveLength(5);
+      expect(published.slice(0, -1)).toEqual(
+        messages
+          .slice(0, -1)
+          .map((message) =>
+            expect.objectContaining({ role: message.role, content: message.content }),
+          ),
+      );
+      expect(published.slice(0, -1).some((message) => message.openclawDelivery)).toBe(false);
+      expect(published.at(-1)).toMatchObject({
+        content: [{ type: "text", text: rewrittenText }],
+        openclawDelivery: { mediaUrls: ["./artifact.json"] },
+      });
+      const persisted = (await readMirrorEvents(target)).flatMap((event) =>
+        event && typeof event === "object" && "message" in event ? [event.message] : [],
+      );
+      expect(persisted).toEqual(published);
+    },
+  );
 
   it("keeps assistant ownership when live update publication fails", async () => {
     publishSessionTranscriptUpdateByIdentityMock.mockRejectedValueOnce(new Error("publish failed"));
@@ -1163,10 +1562,9 @@ describe("mirrorCodexAppServerTranscript", () => {
     expect((await readMirrorMessages(target)).filter((entry) => entry.role)).toEqual([
       { role: "user", text: "append once" },
     ]);
-    expect(results.map((result) => messageContent(result.userMessagesPresent[0]))).toEqual([
-      [{ type: "text", text: "append once" }],
-      [{ type: "text", text: "append once" }],
-    ]);
+    expect(results.map((result) => messageContent(result.userMessageReceipts[0]?.message))).toEqual(
+      [[{ type: "text", text: "append once" }], [{ type: "text", text: "append once" }]],
+    );
   });
 
   it("reports final assistant ownership for new and idempotent mirrors", async () => {
@@ -1196,6 +1594,58 @@ describe("mirrorCodexAppServerTranscript", () => {
       (await readMirrorMessages(target)).filter((message) => message.role === "assistant"),
     ).toHaveLength(1);
   });
+
+  it.each(["retain", "omit", "in-place", "forge"] as const)(
+    "sender provenance in Codex mirrors rejects hook reassignment: %s",
+    async (mode) => {
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_message_write",
+            handler: (event) => {
+              const message = (event as { message: { __openclaw: Record<string, unknown> } })
+                .message;
+              if (mode === "omit") {
+                delete message["__openclaw"].senderIdentity;
+              }
+              if (mode === "in-place") {
+                (message["__openclaw"].senderIdentity as { id: string }).id = "forged";
+              }
+              if (mode === "forge") {
+                message["__openclaw"].senderIdentity = { type: "profile", id: "forged" };
+              }
+            },
+          },
+        ]),
+      );
+      const target = await createSqliteMirrorTarget("sender-provenance-mirror-");
+      await mirrorCodexAppServerTranscript({
+        ...target,
+        idempotencyScope: "scope",
+        messages: [
+          castAgentMessage({
+            role: "user",
+            content: "hello",
+            timestamp: 1,
+            __openclaw: {
+              senderId: "author",
+              ...(mode === "forge" ? {} : { senderIdentity: { type: "profile", id: "author" } }),
+            },
+          }),
+        ],
+      });
+      const entries = (await readMirrorEvents(target)) as Array<{
+        type: string;
+        message?: { role: string; __openclaw?: Record<string, unknown> };
+      }>;
+      const messages = entries.filter(
+        (entry) => entry.type === "message" && entry.message?.role === "user",
+      );
+      expect(messages.map((entry) => entry.message?.["__openclaw"]?.senderIdentity)).toEqual([
+        mode === "retain" ? { type: "profile", id: "author" } : undefined,
+      ]);
+    },
+  );
 
   it("runs before_message_write before appending mirrored transcript messages", async () => {
     initializeGlobalHookRunner(
@@ -1261,13 +1711,13 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyScope: "scope-1",
     });
 
-    expect(first.userMessagesPresent[0]?.content).toEqual([
+    expect(first.userMessageReceipts[0]?.message.content).toEqual([
       { type: "text", text: "[redacted by hook]" },
     ]);
-    expect(second.userMessagesPresent[0]?.content).toEqual([
+    expect(second.userMessageReceipts[0]?.message.content).toEqual([
       { type: "text", text: "[redacted by hook]" },
     ]);
-    expect(JSON.stringify(second.userMessagesPresent)).not.toContain("secret prompt");
+    expect(JSON.stringify(second.userMessageReceipts)).not.toContain("secret prompt");
     expect(
       (await readMirrorMessages(target)).filter((message) => message.role === "user"),
     ).toHaveLength(1);
@@ -1478,7 +1928,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       turnId: "turn-1",
     });
 
-    expect(mirrorOutcome.assistantTranscriptOwned).toBe(true);
+    expect(mirrorOutcome.assistantTranscriptOwned).toBe(false);
     expect(mirrorOutcome.mirroredMessages).toEqual([]);
   });
 
@@ -1627,6 +2077,162 @@ describe("mirrorCodexAppServerTranscript", () => {
     expect(mirrorOutcome.terminalAnchor?.entryId).toBe(terminalEvent?.id);
   });
 
+  describe("projected transcript persistence", () => {
+    registerCodexEventProjectorTestLifecycle();
+
+    it.each([true, false])(
+      "keeps failed attempt diagnostics without taking deferred run ownership (deferred: %s)",
+      async (deferTerminalLifecycle) => {
+        const target = await createSqliteMirrorTarget("openclaw-codex-mirror-retry-owner-");
+        const params: EmbeddedRunAttemptParams = {
+          ...(await createProjectorParams()),
+          ...target,
+          sessionTarget: target,
+          workspaceDir: path.dirname(target.storePath),
+          suppressNextUserMessagePersistence: true,
+          deferTerminalLifecycle,
+        };
+        const finalRunId = deferTerminalLifecycle ? params.runId : "run-2";
+        const attempts = [
+          { turnId: "turn-1", runId: params.runId, failed: true, text: "The file is ready." },
+          {
+            turnId: "turn-2",
+            runId: finalRunId,
+            failed: false,
+            text: "The action completed once.",
+          },
+        ];
+        for (const attempt of attempts) {
+          const attemptParams = { ...params, runId: attempt.runId };
+          const projector = new CodexAppServerEventProjector(
+            attemptParams,
+            "thread-1",
+            attempt.turnId,
+          );
+          await projector.handleNotification({
+            method: "turn/completed",
+            params: {
+              threadId: "thread-1",
+              turn: {
+                id: attempt.turnId,
+                status: attempt.failed ? "failed" : "completed",
+                items: [
+                  { type: "agentMessage", id: `answer-${attempt.turnId}`, text: attempt.text },
+                ],
+                error: attempt.failed
+                  ? { message: "Rate limit reached", codexErrorInfo: "rateLimitExceeded" }
+                  : null,
+              },
+            },
+          });
+          await mirrorTranscriptBestEffort({
+            params: attemptParams,
+            result: projector.buildResult(buildEmptyToolTelemetry()),
+            agentId: target.agentId,
+            sessionKey: target.sessionKey,
+            notifyUserMessagePersisted: () => undefined,
+            cwd: params.workspaceDir,
+            threadId: "thread-1",
+            turnId: attempt.turnId,
+          });
+        }
+
+        const messages = await readCodexMirroredSessionHistoryMessages({
+          ...params,
+          sessionFile: target.bogusSessionFile,
+        });
+        expect(messages).toHaveLength(2);
+        expect(messages).toMatchObject([
+          {
+            content: [{ type: "text", text: "The file is ready." }],
+            stopReason: "error",
+            errorMessage: expect.stringContaining("Rate limit reached"),
+            __openclaw: { mirrorIdentity: "turn-1:assistant", runId: params.runId },
+          },
+          {
+            content: [{ type: "text", text: "The action completed once." }],
+            stopReason: "stop",
+            __openclaw: {
+              mirrorIdentity: "turn-2:assistant",
+              runId: finalRunId,
+              runTerminal: true,
+            },
+          },
+        ]);
+        if (deferTerminalLifecycle) {
+          expect(messages?.[0]).not.toHaveProperty("__openclaw.runTerminal");
+          expect(
+            publishSessionTranscriptUpdateByIdentityMock.mock.calls[0]?.[0].update,
+          ).not.toHaveProperty("runId");
+        } else {
+          expect(messages?.[0]).toHaveProperty("__openclaw.runTerminal", true);
+          expect(
+            publishSessionTranscriptUpdateByIdentityMock.mock.calls[0]?.[0].update,
+          ).toHaveProperty("runId", params.runId);
+        }
+        expect(
+          publishSessionTranscriptUpdateByIdentityMock.mock.calls[1]?.[0].update,
+        ).toHaveProperty("runId", finalRunId);
+      },
+    );
+
+    it("preserves reasoning as nonterminal thinking beside the final answer in SQLite", async () => {
+      const target = await createSqliteMirrorTarget("openclaw-codex-mirror-reasoning-");
+      const params: EmbeddedRunAttemptParams = {
+        ...(await createProjectorParams()),
+        ...target,
+        sessionTarget: target,
+        workspaceDir: path.dirname(target.storePath),
+      };
+      const projector = new CodexAppServerEventProjector(params, "thread-1", "turn-1");
+      await projector.handleNotification(
+        forCurrentTurn("item/reasoning/summaryTextDelta", {
+          itemId: "reason-1",
+          summaryIndex: 0,
+          delta: "checking the answer",
+        }),
+      );
+      await projector.handleNotification(
+        turnCompleted([
+          { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "hi there" },
+        ]),
+      );
+      const result = projector.buildResult(buildEmptyToolTelemetry());
+      expect(result.assistantTexts).toEqual(["hi there"]);
+
+      const mirrored = await mirrorTranscriptBestEffort({
+        params,
+        result,
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+        notifyUserMessagePersisted: () => undefined,
+        cwd: params.workspaceDir,
+        threadId: "thread-1",
+        turnId: "turn-1",
+      });
+
+      expect(mirrored.assistantTranscriptOwned).toBe(true);
+      const messages = await readCodexMirroredSessionHistoryMessages({
+        ...params,
+        sessionFile: target.bogusSessionFile,
+      });
+      expect(messages).toMatchObject([
+        { role: "user", content: "hello" },
+        {
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "checking the answer" }],
+          __openclaw: { mirrorIdentity: "turn-1:reasoning", runId: "run-1" },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "hi there" }],
+          __openclaw: { mirrorIdentity: "turn-1:assistant", runTerminal: true },
+        },
+      ]);
+      expect(messages?.[1]).not.toHaveProperty("__openclaw.runTerminal");
+    });
+  });
+
   it("dedupes mirrored messages despite snapshot positional shifts", async () => {
     const target = await createSqliteMirrorTarget("openclaw-codex-mirror-shift-");
     const userMessage = attachCodexMirrorIdentity(
@@ -1651,7 +2257,7 @@ describe("mirrorCodexAppServerTranscript", () => {
     });
     const reasoningMessage = attachCodexMirrorIdentity(
       makeAgentAssistantMessage({
-        content: [{ type: "text", text: "[Codex reasoning] thinking" }],
+        content: [{ type: "thinking", thinking: "thinking" }],
         timestamp: Date.now() + 2,
       }),
       "turn-1:reasoning",
@@ -1665,7 +2271,7 @@ describe("mirrorCodexAppServerTranscript", () => {
     expect((await readMirrorMessages(target)).map((m) => m.text)).toEqual([
       "hello",
       "hi there",
-      "[Codex reasoning] thinking",
+      undefined,
     ]);
   });
 

@@ -81,4 +81,55 @@ describe("managed artifact lifecycle", () => {
     expect(hoisted.resolveManagedUrlDownload).not.toHaveBeenCalled();
     expect(hoisted.visitSessionMessagesAsync).not.toHaveBeenCalled();
   });
+
+  it("lists managed attachment envelopes as file artifacts", async () => {
+    hoisted.visitSessionMessagesAsync.mockImplementationOnce(async (_scope, visit) => {
+      visit(
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "attachment",
+              attachment: {
+                artifactId: "artifact_managed_media_11111111-1111-4111-8111-111111111111",
+                kind: "document",
+                label: "report.csv",
+                mimeType: "text/csv",
+                sizeBytes: 12,
+                url: "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-111111111111/full",
+              },
+            },
+          ],
+          __openclaw: { seq: 2 },
+        },
+        2,
+      );
+      return 1;
+    });
+    const calls: Array<{ ok: boolean; payload?: unknown }> = [];
+
+    await artifactsHandlers["artifacts.list"]?.({
+      req: { type: "req", id: "list", method: "artifacts.list", params: {} },
+      params: { sessionKey: "agent:main:main" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond: (ok, payload) => calls.push({ ok, payload }),
+      context: { getRuntimeConfig: () => ({}) } as never,
+    });
+
+    expect(calls[0]).toMatchObject({
+      ok: true,
+      payload: {
+        artifacts: [
+          {
+            id: "artifact_managed_media_11111111-1111-4111-8111-111111111111",
+            type: "file",
+            title: "report.csv",
+            mimeType: "text/csv",
+            sizeBytes: 12,
+          },
+        ],
+      },
+    });
+  });
 });

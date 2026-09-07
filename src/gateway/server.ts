@@ -29,10 +29,12 @@ async function loadServerStart() {
 
 /** Starts the gateway server after lazily loading the full server implementation. */
 export async function startGatewayServer(
-  ...args: Parameters<typeof import("./server-start.js").startGatewayServerCore>
+  port = 18789,
+  opts: import("./server-public.js").GatewayServerOptions = {},
 ): ReturnType<typeof import("./server-start.js").startGatewayServerCore> {
+  const startupStartedAt = opts.startupStartedAt ?? Date.now();
   const mod = await loadServerStart();
-  return await mod.startGatewayServerCore(...args);
+  return await mod.startGatewayServerCore(port, { ...opts, startupStartedAt });
 }
 
 /** Clears prepared model-catalog generations between tests. */

@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 import { syncMemoryWikiUnsafeLocalSources } from "./unsafe-local.js";
 
@@ -21,6 +21,10 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
       return;
     }
     await fs.rm(fixtureRoot, { recursive: true, force: true });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   function nextCaseRoot(name: string): string {
@@ -66,12 +70,18 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     expect(page).toContain("sourceType: memory-unsafe-local");
     expect(page).toContain("provenanceMode: unsafe-local");
 
+    const readFile = vi.spyOn(fs, "readFile");
     const second = await syncMemoryWikiUnsafeLocalSources(config);
 
     expect(second.importedCount).toBe(0);
     expect(second.updatedCount).toBe(0);
     expect(second.skippedCount).toBe(3);
     expect(second.removedCount).toBe(0);
+    expect(
+      readFile.mock.calls.some(
+        ([filePath]) => typeof filePath === "string" && filePath.startsWith(vaultDir),
+      ),
+    ).toBe(false);
   });
 
   it.each([
@@ -194,6 +204,74 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     await expect(
       fs.readFile(path.join(vaultDir, unavailablePage!.pagePath), "utf8"),
     ).resolves.toContain("remember this");
+  });
+
+  it("skips generated source pages copied into a configured path", async () => {
+    const privateDir = await createPrivateDir("copied-vault");
+    const sourcePaths = [
+      path.join(privateDir, "legitimate.md"),
+      path.join(privateDir, "bridge-not-generated.md"),
+      path.join(privateDir, "unsafe-local-not-generated.md"),
+    ];
+    await Promise.all(
+      sourcePaths.map((sourcePath) => fs.writeFile(sourcePath, `# ${path.basename(sourcePath)}\n`)),
+    );
+    const { rootDir: vaultDir, config } = await createVault({
+      rootDir: nextCaseRoot("copied-vault-target"),
+      config: {
+        vaultMode: "unsafe-local",
+        unsafeLocal: {
+          allowPrivateMemoryCoreAccess: true,
+          paths: [privateDir],
+        },
+      },
+    });
+
+    const first = await syncMemoryWikiUnsafeLocalSources(config);
+    const generatedPage = first.pagePaths.find((pagePath) => pagePath.includes("legitimate-md"));
+    expect(generatedPage).toBeDefined();
+    const copiedPage = path.join(privateDir, "mirror", generatedPage!);
+    await fs.mkdir(path.dirname(copiedPage), { recursive: true });
+    await fs.copyFile(path.join(vaultDir, generatedPage!), copiedPage);
+
+    const second = await syncMemoryWikiUnsafeLocalSources(config);
+
+    expect(second.artifactCount).toBe(sourcePaths.length);
+    expect(second.importedCount).toBe(0);
+    expect(second.skippedCount).toBe(sourcePaths.length);
+    expect(second.pagePaths).toHaveLength(sourcePaths.length);
+  });
+
+  it("skips a configured source whose canonical path is inside the active vault", async () => {
+    const privateDir = await createPrivateDir("canonical-vault");
+    const sourcePath = path.join(privateDir, "legitimate.md");
+    await fs.writeFile(sourcePath, "# legitimate\n", "utf8");
+    const { rootDir: vaultDir, config } = await createVault({
+      rootDir: nextCaseRoot("canonical-vault-target"),
+      config: {
+        vaultMode: "unsafe-local",
+        unsafeLocal: {
+          allowPrivateMemoryCoreAccess: true,
+          paths: [sourcePath],
+        },
+      },
+    });
+    const first = await syncMemoryWikiUnsafeLocalSources(config);
+    const generatedPage = path.join(vaultDir, first.pagePaths[0] ?? "");
+    const configWithVaultPage = {
+      ...config,
+      unsafeLocal: {
+        ...config.unsafeLocal,
+        paths: [sourcePath, generatedPage],
+      },
+    };
+
+    const second = await syncMemoryWikiUnsafeLocalSources(configWithVaultPage);
+
+    expect(second.artifactCount).toBe(1);
+    expect(second.importedCount).toBe(0);
+    expect(second.skippedCount).toBe(1);
+    expect(second.pagePaths).toHaveLength(1);
   });
 
   it("caps composed unsafe-local filenames to the filesystem component limit", async () => {

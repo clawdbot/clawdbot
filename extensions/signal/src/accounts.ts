@@ -17,7 +17,7 @@ import {
   isSignalManagedNativeConnectionUrlForBind,
   resolveLocalSignalTransportPort,
 } from "./transport-policy.js";
-import { buildSignalTransportHttpUrl } from "./transport-url.js";
+import { buildSignalTransportHttpUrl, normalizeSignalTransportHost } from "./transport-url.js";
 
 export type ResolvedSignalTransport =
   | {
@@ -213,7 +213,9 @@ export function resolveSignalTransport(
     transport?.kind === "managed-native"
       ? assignSignalManagedNativePort(transport, transport.httpPort ?? managedNativePort)
       : transport;
-  const httpHost = normalizeOptionalString(managedTransport?.httpHost) ?? "127.0.0.1";
+  const httpHost = normalizeSignalTransportHost(
+    normalizeOptionalString(managedTransport?.httpHost) ?? "127.0.0.1",
+  );
   const httpPort = managedTransport?.httpPort ?? managedNativePort;
   const configPath = normalizeOptionalString(managedTransport?.configPath);
   const connectionUrl = normalizeOptionalString(managedTransport?.url);

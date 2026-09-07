@@ -4,6 +4,7 @@ import path from "node:path";
 import type { ContainerConfig } from "@microsoft/mxc-sdk";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import type { MxcConfig } from "./config.js";
+import { normalizeMxcPathForComparison } from "./path-comparison.js";
 import { resolveBaselineReadonlyPaths, type BaselineHostEnv } from "./sandbox-baseline.js";
 import type {
   LoadedSandboxBaselinePolicy,
@@ -215,8 +216,8 @@ function resolveWorkspaceReadonlyPathSpecs(workspace: MxcWorkspaceContext): File
   const readonlyPathSpecs = [requiredFilesystemPath(workspace.workspaceDir)];
   if (
     workspace.workspaceAccess === "ro" &&
-    normalizePathForComparison(workspace.agentWorkspaceDir) !==
-      normalizePathForComparison(workspace.workspaceDir)
+    normalizeMxcPathForComparison(workspace.agentWorkspaceDir) !==
+      normalizeMxcPathForComparison(workspace.workspaceDir)
   ) {
     readonlyPathSpecs.push(requiredFilesystemPath(workspace.agentWorkspaceDir));
   }
@@ -239,9 +240,9 @@ function resolveMxcProtectedSkillPolicyPaths(context: MxcWorkspaceContext): stri
   const deduped = new Map<string, string>();
   for (const mount of resolveMxcProtectedSkillMounts(context)) {
     const hostPath = path.resolve(mount.hostPath);
-    deduped.set(normalizePathForComparison(hostPath), hostPath);
+    deduped.set(normalizeMxcPathForComparison(hostPath), hostPath);
     const containerPath = path.resolve(mount.containerPath);
-    deduped.set(normalizePathForComparison(containerPath), containerPath);
+    deduped.set(normalizeMxcPathForComparison(containerPath), containerPath);
   }
   return [...deduped.values()];
 }
@@ -277,7 +278,7 @@ function resolveExistingFilesystemPaths(
   >();
 
   for (const pathSpec of pathSpecs) {
-    const key = normalizePathForComparison(pathSpec.path);
+    const key = normalizeMxcPathForComparison(pathSpec.path);
     const existing = deduped.get(key);
     if (existing) {
       existing.required ||= pathSpec.required;
@@ -385,14 +386,9 @@ function assertNoMxcReadwriteReadonlyOverlap(params: {
 }
 
 function pathsOverlap(first: string, second: string): boolean {
-  const left = normalizePathForComparison(first);
-  const right = normalizePathForComparison(second);
+  const left = normalizeMxcPathForComparison(first);
+  const right = normalizeMxcPathForComparison(second);
   return isPathInside(left, right) || isPathInside(right, left);
-}
-
-function normalizePathForComparison(value: string): string {
-  const resolved = path.resolve(value);
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 function hostPathExists(candidatePath: string): boolean {

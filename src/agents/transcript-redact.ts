@@ -5,16 +5,26 @@ import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-pa
  * Applies logging redaction rules to persisted messages while preserving unchanged object identity.
  */
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readLoggingConfig } from "../logging/config.js";
+import { redactSourceInputTextWithConfig } from "../logging/redact-source.js";
 import {
-  getDefaultRedactPatterns,
-  redactSensitiveFieldValue,
+  redactModelVisibleSensitiveFieldValueWithConfig,
+  redactModelVisibleToolPayloadTextWithConfig,
+  redactSensitiveFieldValueWithConfig,
   redactSensitiveText,
+  redactToolPayloadTextWithConfig,
 } from "../logging/redact.js";
+import { readNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import type { ProviderEndpointClass } from "./provider-attribution.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
+import {
+  copyCodeModeSourceAppend,
+  readCodeModeSourceFields,
+  type CodeModeSourceAppend,
+} from "./transcript-code-mode-source.js";
 import {
   sanitizeTranscriptImageDataUrlField,
   sanitizeTranscriptImageRecord,
@@ -23,42 +33,39 @@ import {
 } from "./transcript-redact-images.js";
 import { sanitizeCompactionReplayState } from "./transcript-redact-replay.js";
 
-function resolveTranscriptRedactPatterns(patterns?: string[]) {
-  return patterns && patterns.length > 0 ? [...patterns, ...getDefaultRedactPatterns()] : undefined;
-}
-
-function redactTranscriptOptions(cfg?: OpenClawConfig) {
+function resolveTranscriptLoggingConfig(cfg?: OpenClawConfig) {
   const configuredLogging = readLoggingConfig();
-  const patterns = resolveTranscriptRedactPatterns(
-    cfg?.logging?.redactPatterns ?? configuredLogging?.redactPatterns,
-  );
-  if (patterns === undefined) {
-    return undefined;
-  }
-  return {
-    mode: "tools" as const,
-    ...(patterns !== undefined ? { patterns } : {}),
-  };
+  const redactPatterns = cfg?.logging?.redactPatterns ?? configuredLogging?.redactPatterns;
+  return redactPatterns ? { redactPatterns } : undefined;
 }
 
-function isTranscriptRedactionDisabled(cfg?: OpenClawConfig): boolean {
-  void cfg;
-  return false;
-}
-
-function redactTranscriptText(value: string, cfg?: OpenClawConfig): string {
-  return redactSensitiveText(value, redactTranscriptOptions(cfg));
+function redactTranscriptText(
+  value: string,
+  cfg?: OpenClawConfig,
+  modelVisibleToolResult = false,
+): string {
+  const loggingConfig = resolveTranscriptLoggingConfig(cfg);
+  return modelVisibleToolResult
+    ? redactModelVisibleToolPayloadTextWithConfig(value, loggingConfig)
+    : redactToolPayloadTextWithConfig(value, loggingConfig);
 }
 
 function redactTranscriptStructuredFieldValue(
   key: string,
   value: string,
   cfg?: OpenClawConfig,
+  modelVisibleToolResult = false,
 ): string {
   // Preserve pagination state only in transcripts; value-pattern and global log redaction remain.
   return /^(?:next[_-]?)?page[_-]?token$|^page[_-]?cursor$/i.test(key)
-    ? redactTranscriptText(value, cfg)
-    : redactSensitiveFieldValue(key, value, redactTranscriptOptions(cfg));
+    ? redactTranscriptText(value, cfg, modelVisibleToolResult)
+    : modelVisibleToolResult
+      ? redactModelVisibleSensitiveFieldValueWithConfig(
+          key,
+          value,
+          resolveTranscriptLoggingConfig(cfg),
+        )
+      : redactSensitiveFieldValueWithConfig(key, value, resolveTranscriptLoggingConfig(cfg));
 }
 
 function isPlainTranscriptObject(value: object): value is Record<string, unknown> {
@@ -70,6 +77,7 @@ type TranscriptValueLocation =
   | "root"
   | "assistant-content-array"
   | "assistant-content-block"
+  | "nested-tool-details"
   | "nested";
 
 type TranscriptAssistantRoute = {
@@ -238,6 +246,7 @@ const replaySanitizerHelpers = {
   isOpenAIResponsesRoute,
   isPlainTranscriptObject,
   isStructurallyValidOpaqueReplayToken,
+  redactTranscriptStructuredValue,
   redactTranscriptText,
 };
 
@@ -483,12 +492,15 @@ function redactTranscriptStructuredValue(
   preserveImageDataUrlFields = false,
   location: TranscriptValueLocation = "nested",
   assistantRoute?: TranscriptAssistantRoute,
+  modelVisibleToolResult = false,
+  sourceFields?: ReadonlyMap<string, string>,
+  sourceSlots?: ReadonlyMap<object, ReadonlyMap<string, string>>,
 ): unknown {
   if (typeof value === "string") {
     if (fieldKey) {
-      return redactTranscriptStructuredFieldValue(fieldKey, value, cfg);
+      return redactTranscriptStructuredFieldValue(fieldKey, value, cfg, modelVisibleToolResult);
     }
-    return redactTranscriptText(value, cfg);
+    return redactTranscriptText(value, cfg, modelVisibleToolResult);
   }
   if (Array.isArray(value)) {
     if (seen.has(value)) {
@@ -505,6 +517,9 @@ function redactTranscriptStructuredValue(
         preserveImageDataUrlFields,
         location === "assistant-content-array" ? "assistant-content-block" : "nested",
         assistantRoute,
+        modelVisibleToolResult,
+        undefined,
+        sourceSlots,
       );
       changed ||= next !== item;
       return next;
@@ -541,6 +556,20 @@ function redactTranscriptStructuredValue(
     // The append transaction owns this control-plane identity. Redacting it would
     // make stored dedupe disagree with the admitted message identity.
     if (location === "root" && key === "idempotencyKey") {
+      continue;
+    }
+    // Correlation keys must match live events; nested payload lookalikes are still redacted.
+    if (
+      typeof item === "string" &&
+      ((location === "root" && source.role === "toolResult" && key === "toolCallId") ||
+        (location === "assistant-content-block" && source.type === "toolCall" && key === "id") ||
+        (location === "nested-tool-details" &&
+          (key === "toolCallId" ||
+            key === "parentToolCallId" ||
+            key === "runId" ||
+            key === "scopeId" ||
+            key === "afterEntryId")))
+    ) {
       continue;
     }
     if (location === "root" && source.role === "assistant" && key === "providerReplay") {
@@ -651,38 +680,81 @@ function redactTranscriptStructuredValue(
     if (shouldPreserveTranscriptImagePayload(source, key, item, preserveImageDataUrlFields)) {
       continue;
     }
-    const redacted = redactTranscriptStructuredValue(
-      item,
-      cfg,
-      key,
-      seen,
-      preserveImageDataUrlFields || shouldPreserveNestedTranscriptImageDataUrlFields(source, key),
-      location === "root" && source.role === "assistant" && key === "content" && Array.isArray(item)
-        ? "assistant-content-array"
-        : "nested",
-      currentAssistantRoute,
-    );
+    const redacted =
+      typeof item === "string" && sourceFields?.get(key) === item
+        ? redactSourceInputTextWithConfig(item, resolveTranscriptLoggingConfig(cfg))
+        : redactTranscriptStructuredValue(
+            item,
+            cfg,
+            key,
+            seen,
+            preserveImageDataUrlFields ||
+              shouldPreserveNestedTranscriptImageDataUrlFields(source, key),
+            location === "root" &&
+              source.role === "assistant" &&
+              key === "content" &&
+              Array.isArray(item)
+              ? "assistant-content-array"
+              : location === "root" && key === "details" && readNestedToolActivity(source)
+                ? "nested-tool-details"
+                : "nested",
+            currentAssistantRoute,
+            modelVisibleToolResult ||
+              (location === "root" && source.role === "toolResult" && key === "content"),
+            location === "assistant-content-block" && key === "arguments"
+              ? sourceSlots?.get(source)
+              : undefined,
+            sourceSlots,
+          );
     if (redacted === item) {
       continue;
     }
     next ??= { ...source };
     next[key] = redacted;
   }
+  // Redacted source facts no longer identify the producer's sender. Keep display
+  // redaction, but never qualify the replacement bytes as a person or remote actor.
+  if (fieldKey === "__openclaw" && next) {
+    if (next.senderIdentity !== source.senderIdentity || next.senderId !== source.senderId) {
+      delete next.senderIdentity;
+    }
+    if (next.humanMentions !== source.humanMentions) {
+      delete next.humanMentions;
+    }
+  }
+  if (location === "root" && source.role === "user" && next && next.content !== source.content) {
+    const metadata = asOptionalRecord(next["__openclaw"]);
+    if (metadata?.humanMentions !== undefined) {
+      // UTF-16 selections cannot retain their binding after storage redacts the content.
+      const retained = { ...metadata };
+      delete retained.humanMentions;
+      next["__openclaw"] = retained;
+    }
+  }
   seen.delete(value);
   return next ?? value;
 }
 
 /** Return a redacted transcript message according to logging config. */
-export function redactTranscriptMessage(message: AgentMessage, cfg?: OpenClawConfig): AgentMessage {
-  if (isTranscriptRedactionDisabled(cfg)) {
-    return message;
-  }
-  return redactTranscriptStructuredValue(
+export function redactTranscriptMessage(
+  message: AgentMessage,
+  cfg?: OpenClawConfig,
+  sourceAppend?: CodeModeSourceAppend,
+): AgentMessage {
+  const redacted = redactTranscriptStructuredValue(
     message,
     cfg,
     undefined,
     new WeakSet<object>(),
     false,
     "root",
+    undefined,
+    false,
+    undefined,
+    readCodeModeSourceFields(message, sourceAppend),
   ) as AgentMessage;
+  copyCodeModeSourceAppend(message, redacted, sourceAppend, (source) =>
+    redactSourceInputTextWithConfig(source, resolveTranscriptLoggingConfig(cfg)),
+  );
+  return redacted;
 }

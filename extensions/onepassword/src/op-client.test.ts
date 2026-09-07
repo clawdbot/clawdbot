@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { OnePasswordError } from "./errors.js";
 import { OpClient } from "./op-client.js";
 import { createTrustedNodeFixture } from "./trusted-node.test-support.js";
@@ -14,9 +14,23 @@ describe("OpClient", () => {
   let root = "";
   let opBin = "";
   let interpreter = "";
+  let interpreterRoot: string | undefined;
   let tokenFile = "";
   const fixtureAuth = ["fixture", "auth"].join("-");
   const rightFixture = ["right", "fixture"].join("-");
+
+  beforeAll(async () => {
+    // Only the immutable interpreter is shared; executable and token trust stay per-test.
+    // openclaw-temp-dir: allow plugin tests cannot import the core-only tracker.
+    interpreterRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onepassword-node-"));
+    interpreter = createTrustedNodeFixture(interpreterRoot);
+  });
+
+  afterAll(async () => {
+    if (interpreterRoot) {
+      await fs.rm(interpreterRoot, { recursive: true, force: true });
+    }
+  });
 
   beforeEach(async () => {
     // openclaw-temp-dir: allow plugin tests cannot import the core-only tracker.
@@ -24,7 +38,6 @@ describe("OpClient", () => {
     tempDirs.push(root);
     opBin = path.join(root, process.platform === "win32" ? "op.exe" : "op");
     tokenFile = path.join(root, "service-account-token");
-    interpreter = createTrustedNodeFixture(root);
     await fs.writeFile(opBin, `#!${interpreter}\nprocess.exit(0);\n`, { mode: 0o700 });
     await fs.writeFile(tokenFile, `  ${fixtureAuth}\n`, { mode: 0o600 });
   });

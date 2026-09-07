@@ -282,7 +282,7 @@ export function pageOutboundMessageAuditEventsForRun(params: {
   limit: number;
   now?: number;
   database?: OpenClawStateDatabaseOptions;
-}): { events: OutboundMessageAuditEventRecord[]; nextCursor?: OutboundMessageAuditEventCursor } {
+}): { entries: OwnedMessageEvent[]; nextCursor?: OutboundMessageAuditEventCursor } {
   if (params.after) {
     const stage = Math.floor(params.after.rowId / MESSAGE_CURSOR_STAGE_SPAN);
     const sequence = params.after.rowId % MESSAGE_CURSOR_STAGE_SPAN;
@@ -339,7 +339,7 @@ export function pageOutboundMessageAuditEventsForRun(params: {
   const pageRows = rows.slice(0, params.limit);
   const last = pageRows.at(-1);
   return {
-    events: pageRows.map((item) => item.event),
+    entries: pageRows,
     ...(rows.length > params.limit && last
       ? { nextCursor: { occurredAt: last.event.occurredAt, rowId: last.rowId } }
       : {}),

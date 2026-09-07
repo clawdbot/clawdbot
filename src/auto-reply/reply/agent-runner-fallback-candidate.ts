@@ -1,4 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { markAutoFallbackPrimaryProbe } from "../../agents/agent-scope.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
@@ -6,22 +5,32 @@ import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
-import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { prepareGitHubPublicationAvailability } from "../../gateway/github-publication-availability.js";
+import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { CommandLane } from "../../process/lanes.js";
+import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveFallbackCandidateRun, resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import { runCliFallbackCandidate } from "./agent-runner-cli-candidate.js";
+import {
+  invalidateTurnCompactionContext,
+  recordTurnCompaction,
+} from "./agent-runner-compaction-accounting.js";
 import { runEmbeddedFallbackCandidate } from "./agent-runner-embedded-candidate.js";
 import type { MessageToolDeliveryState } from "./agent-runner-event-handler.js";
 import type { EmbeddedAgentRunResult } from "./agent-runner-execution.types.js";
-import type { AgentFallbackCycleParams } from "./agent-runner-fallback-cycle.types.js";
+import type {
+  AgentFallbackCandidateCommonParams,
+  AgentFallbackCycleParams,
+} from "./agent-runner-fallback-cycle.types.js";
 import { emitModelFallbackStepLifecycle } from "./agent-runner-model-fallback-lifecycle.js";
 import {
   resolveModelFallbackOptions,
   resolveRunFastModeForFallbackCandidate,
+  resolveRunThinkingLevelForFallbackCandidate,
 } from "./agent-runner-utils.js";
+import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
 import {
   bindSourceReplyDeliveryRuntime,
   createSourceReplyDeliveryRuntime,
@@ -52,9 +61,8 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   bindSourceReplyDeliveryRuntime(turn.followupRun.run, sourceReplyDeliveryRuntime);
   const sourceReplyDeliveryModeOrigin = sourceReplyDeliveryRuntime.origin;
   const preserveProgressCallbackStartOrder = turn.opts?.preserveProgressCallbackStartOrder === true;
-  const runLane = CommandLane.Main;
+  const runLane = turn.isHeartbeat ? CommandLane.CronNested : CommandLane.Main;
   let queuedUserMessagePersistedAcrossFallback = false;
-  let assistantErrorPersistedAcrossFallback = false;
   const messageToolDeliveryState: MessageToolDeliveryState = {
     toolCallIds: new Set(),
     completed: false,
@@ -86,9 +94,9 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
       entry: activeEntry,
       cfg: params.runtimeConfig,
     });
+    const pinnedHarnessId = resolveSessionPinnedHarnessId(activeEntry);
     const locksPersistedHarness =
-      activeEntry?.modelSelectionLocked === true &&
-      normalizeLowercaseStringOrEmpty(activeEntry.agentHarnessId) === sessionRuntimeOverride;
+      pinnedHarnessId !== undefined && pinnedHarnessId === sessionRuntimeOverride;
     const selectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
       config: params.runtimeConfig,
     });
@@ -184,11 +192,20 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         kind: "reconcile-completed",
         reconcile: params.clearRecoveredAutoFallbackPrimaryProbe,
       },
+      onAcceptedTerminal: () => {
+        params.commitTerminalOutcome();
+        return turn.replyOperation
+          ? beginReplyOperationFinalizationWork(turn.replyOperation, RUN_STALE_TAKEOVER_MS)
+          : undefined;
+      },
       abortSignal: params.runAbortSignal,
       onFallbackStep: (step) => {
         emitModelFallbackStepLifecycle({ runId: params.runId, sessionKey: turn.sessionKey, step });
       },
       runCandidate: async (provider, model, runOptions) => {
+        params.state.maintenanceAuthProfile = undefined;
+        params.state.compactionRequestBudget = undefined;
+        invalidateTurnCompactionContext(params.state.compaction);
         params.state.attemptedRuntimeProvider = provider;
         params.state.attemptedRuntimeModel = model;
         const runtime = params.timing.measureSync("fallback_resolve_runtime", () =>
@@ -207,11 +224,11 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         if (candidateSourceReplyDeliveryMode && applySourceReplyDeliveryModeBeforeInvocation) {
           sourceReplyDeliveryRuntime.applyMode(candidateRun, candidateSourceReplyDeliveryMode);
         }
-        const candidateThinkLevel = resolveCandidateThinkingLevel({
+        const candidateThinkLevel = resolveRunThinkingLevelForFallbackCandidate({
           cfg: params.runtimeConfig,
           provider,
           modelId: model,
-          level: turn.followupRun.run.thinkLevel,
+          run: turn.followupRun.run,
           catalog: turn.followupRun.run.thinkingCatalog,
           agentId: turn.followupRun.run.agentId,
           sessionKey: turn.followupRun.run.runtimePolicySessionKey ?? turn.sessionKey,
@@ -229,6 +246,16 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           markAutoFallbackPrimaryProbe({ probe: activeProbe, sessionKey: turn.sessionKey });
         }
         turn.opts?.onModelSelected?.({ provider, model, thinkLevel: candidateThinkLevel });
+        const signalExecutionPhaseForCandidate: AgentFallbackCandidateCommonParams["signalExecutionPhaseForTyping"] =
+          (info) => {
+            if (
+              params.state.compaction.count > 0 &&
+              (info.phase === "model_call_started" || info.phase === "process_spawned")
+            ) {
+              params.state.postCompactionModelAttempted = true;
+            }
+            params.signalExecutionPhaseForTyping(info);
+          };
         const common = {
           preparedRunAdmission: params.preparedRunAdmission,
           turn,
@@ -240,6 +267,8 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           candidateFastMode,
           runId: params.runId,
           runAbortSignal: params.runAbortSignal,
+          runLane,
+          isFallbackRetry: runOptions.isFallbackRetry,
           isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
           suppressQueuedUserPersistenceForCandidate:
             (turn.followupRun.run.suppressNextUserMessagePersistence ?? false) ||
@@ -247,6 +276,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           userTurnTranscriptRecorder,
           contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
           onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
+          assistantErrorTranscript: runOptions.assistantErrorTranscript,
           notifyUserMessagePersisted: () => {
             queuedUserMessagePersistedAcrossFallback = true;
           },
@@ -255,7 +285,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           bootstrapContextRunKind,
           bootstrapPromptWarningSignaturesSeen: params.state.bootstrapPromptWarningSignaturesSeen,
           currentTurnImages: params.currentTurnImages,
-          signalExecutionPhaseForTyping: params.signalExecutionPhaseForTyping,
+          signalExecutionPhaseForTyping: signalExecutionPhaseForCandidate,
           notifyAgentRunStart: params.notifyAgentRunStart,
           preserveProgressCallbackStartOrder,
           presentation: params.presentation,
@@ -263,13 +293,14 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           onLifecycleBackstop: (backstop: AgentLifecycleTerminalBackstop) => {
             params.state.pendingLifecycleTerminal = { provider, model, backstop };
           },
-        };
+          deferredLifecycle: params.state.deferredLifecycle,
+        } satisfies AgentFallbackCandidateCommonParams;
         if (runtime.useCliExecution) {
           const candidate = await runCliFallbackCandidate({
             ...common,
             cliExecutionProvider: runtime.cliExecutionProvider,
+            classifyResult: runOptions.classifyResult,
             lifecycleGeneration: params.state.lifecycleGeneration,
-            runLane,
           });
           params.state.bootstrapPromptWarningSignaturesSeen =
             candidate.bootstrapPromptWarningSignaturesSeen;
@@ -292,18 +323,19 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             params.state.lifecycleGeneration = generation;
           },
           allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
-          suppressAssistantErrorPersistenceForCandidate: assistantErrorPersistedAcrossFallback,
-          onAssistantErrorMessagePersisted: () => {
-            assistantErrorPersistedAcrossFallback = true;
-          },
           notifyUserAboutCompaction: params.notifyUserAboutCompaction,
           messageToolDeliveryState,
-          onCompactionCount: (count) => {
-            params.state.autoCompactionCount += count;
+          onCompactionFacts: ({ accounting, postCompactionModelAttempted }) => {
+            if (accounting) {
+              recordTurnCompaction(params.state.compaction, accounting);
+            }
+            params.state.postCompactionModelAttempted ||= postCompactionModelAttempted;
           },
         });
         params.state.bootstrapPromptWarningSignaturesSeen =
           candidate.bootstrapPromptWarningSignaturesSeen;
+        params.state.maintenanceAuthProfile = candidate.maintenanceAuthProfile;
+        params.state.compactionRequestBudget = candidate.compactionRequestBudget;
         return candidate.result;
       },
     }),

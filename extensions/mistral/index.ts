@@ -1,4 +1,3 @@
-import { adaptMemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
   applyMistralModelCompat,
@@ -30,6 +29,7 @@ export default defineSingleProviderPluginEntry({
     docsPath: "/providers/models",
     manifestAuth: { applyConfig: applyMistralConfig },
     catalog: {
+      discoveryMode: "strict",
       allowExplicitBaseUrl: true,
       liveModelDiscovery: true,
     },
@@ -45,9 +45,7 @@ export default defineSingleProviderPluginEntry({
     buildReplayPolicy: () => buildMistralReplayPolicy(),
   },
   register(api) {
-    api.registerEmbeddingProvider(
-      adaptMemoryEmbeddingProviderAdapter(mistralMemoryEmbeddingProviderAdapter),
-    );
+    api.registerEmbeddingProvider(mistralMemoryEmbeddingProviderAdapter);
     api.registerMediaUnderstandingProvider(mistralMediaUnderstandingProvider);
     api.registerRealtimeTranscriptionProvider(buildMistralRealtimeTranscriptionProvider());
   },

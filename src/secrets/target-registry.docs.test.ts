@@ -99,7 +99,7 @@ describe("secret target registry docs", () => {
 
     const supportedFromMatrix = new Set(
       matrix.entries.map((entry) =>
-        entry.configFile === "auth-profiles.json" && entry.refPath ? entry.refPath : entry.path,
+        entry.configFile === "auth-profile-store" && entry.refPath ? entry.refPath : entry.path,
       ),
     );
     const unsupportedFromMatrix = new Set(matrix.excludedMutableOrRuntimeManaged);

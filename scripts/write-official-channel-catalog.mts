@@ -19,12 +19,14 @@ type CatalogEntry = Partial<Record<"version" | "description" | "source" | "kind"
   name: string;
   openclaw: {
     plugin?: Record<string, unknown>;
+    setupFeatures?: Record<string, unknown>;
     catalog?: Record<string, unknown>;
     contracts?: Record<string, string[] | undefined>;
     channel: Record<string, unknown>;
     channelHostConfig?: Record<string, unknown>;
-    channelConfigs?: Record<string, { schema?: unknown }>;
+    channelConfigs?: Record<string, { schema?: unknown; label?: string }>;
     providerEndpoints?: Array<Record<string, unknown>>;
+    legacyNpmPackageNames?: string[];
     install: CatalogInstall;
   };
 };
@@ -306,8 +308,22 @@ export function buildOfficialChannelCatalog(params: CatalogParams = {}): {
   return { entries };
 }
 
+function serializeOfficialChannelCatalog(catalog: { entries: readonly CatalogEntry[] }): string {
+  return [
+    "{",
+    '  "entries": [',
+    ...catalog.entries.map(
+      (entry, index) =>
+        `    ${JSON.stringify(entry)}${index === catalog.entries.length - 1 ? "" : ","}`,
+    ),
+    "  ]",
+    "}",
+    "",
+  ].join("\n");
+}
+
 function renderOfficialChannelCatalog(params: CatalogParams = {}) {
-  return `${JSON.stringify(buildOfficialChannelCatalog(params), null, 2)}\n`;
+  return serializeOfficialChannelCatalog(buildOfficialChannelCatalog(params));
 }
 
 export function writeOfficialChannelCatalog(params: CatalogParams = {}) {

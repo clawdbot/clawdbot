@@ -36,7 +36,7 @@ describe("readConfiguredLogTail redaction", () => {
         `X-OpenClaw-Token: ${openClawToken}`,
         `x-pomerium-jwt-assertion: ${pomeriumJwt}`,
         "normal diagnostic line",
-      ].join("\n"),
+      ].join("\n") + "\n",
       "utf8",
     );
     setLoggerOverride({ file: logFile });

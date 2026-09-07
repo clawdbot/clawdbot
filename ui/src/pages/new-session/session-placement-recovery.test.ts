@@ -8,6 +8,7 @@ import {
   listSessionPlacementRecoveries,
   migrateSessionPlacementRecoveryScope,
   parseSessionPlacementCreateParams,
+  pauseSessionPlacementRecovery,
   readSessionPlacementRecovery,
   writeSessionPlacementRecovery,
   writeSessionPlacementRecoveryIfAvailable,
@@ -91,6 +92,164 @@ describe("session placement recovery", () => {
 
     clearSessionPlacementRecovery(recovery.gatewayUrl, recovery.recoveryScope);
     expect(listSessionPlacementRecoveries(recovery.gatewayUrl, recovery.recoveryScope)).toEqual([]);
+  });
+
+  it("preserves automatic device selection across placement recovery", () => {
+    const automatic = {
+      ...recovery,
+      target: { kind: "auto-device" as const },
+    };
+    expect(writeSessionPlacementRecovery(automatic)).toBe(true);
+    expect(
+      readSessionPlacementRecovery(
+        automatic.gatewayUrl,
+        automatic.recoveryScope,
+        automatic.sessionKey,
+      ),
+    ).toEqual(automatic);
+  });
+
+  it("does not retire a replacement submission at the same session key", () => {
+    const replacement = { ...recovery, messageId: "message-newer", message: "newer input" };
+    expect(writeSessionPlacementRecovery(replacement)).toBe(true);
+    clearSessionPlacementRecovery(
+      recovery.gatewayUrl,
+      recovery.recoveryScope,
+      recovery.sessionKey,
+      recovery.messageId,
+    );
+    expect(
+      readSessionPlacementRecovery(
+        recovery.gatewayUrl,
+        recovery.recoveryScope,
+        recovery.sessionKey,
+      ),
+    ).toEqual(replacement);
+    clearSessionPlacementRecovery(
+      recovery.gatewayUrl,
+      recovery.recoveryScope,
+      recovery.sessionKey,
+      replacement.messageId,
+    );
+    expect(
+      readSessionPlacementRecovery(
+        recovery.gatewayUrl,
+        recovery.recoveryScope,
+        recovery.sessionKey,
+      ),
+    ).toBeNull();
+  });
+
+  it.each(["not-sent", "rejected", "unconfirmed"] as const)(
+    "retains a paused %s failure without changing pending recovery or storage lifetime",
+    (reason) => {
+      const paused = {
+        ...recovery,
+        phase: "paused" as const,
+        reason,
+        error: "Target unavailable",
+      };
+      expect(writeSessionPlacementRecovery(paused)).toBe(true);
+      expect(
+        readSessionPlacementRecovery(
+          recovery.gatewayUrl,
+          recovery.recoveryScope,
+          recovery.sessionKey,
+        ),
+      ).toEqual(paused);
+      expect(writeSessionPlacementRecovery({ ...paused, error: "x".repeat(4097) })).toBe(false);
+      expect(
+        readSessionPlacementRecovery(
+          recovery.gatewayUrl,
+          recovery.recoveryScope,
+          recovery.sessionKey,
+        ),
+      ).toEqual(paused);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps input in memory on a failed pause write (already paused=%s)",
+    (alreadyPaused) => {
+      const retained = alreadyPaused
+        ? {
+            ...recovery,
+            phase: "paused" as const,
+            reason: "not-sent" as const,
+            error: "first failure",
+          }
+        : recovery;
+      expect(writeSessionPlacementRecovery(retained)).toBe(true);
+      const storage = sessionStorage;
+      vi.stubGlobal("sessionStorage", {
+        getItem: storage.getItem.bind(storage),
+        removeItem: storage.removeItem.bind(storage),
+        setItem: () => {
+          throw new DOMException("quota exceeded", "QuotaExceededError");
+        },
+      });
+      expect(pauseSessionPlacementRecovery(retained, "later failure", true)).toMatchObject({
+        persisted: false,
+        recovery: {
+          message: retained.message,
+          messageId: retained.messageId,
+          phase: "paused",
+          reason: "not-sent",
+          error: expect.stringContaining("Keep this page open"),
+        },
+      });
+      expect(
+        readSessionPlacementRecovery(
+          recovery.gatewayUrl,
+          recovery.recoveryScope,
+          recovery.sessionKey,
+        ),
+      ).toEqual(alreadyPaused ? retained : null);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps bounded pause errors on UTF-16 boundaries (persistent=%s)",
+    (persistent) => {
+      const error = `${"x".repeat(4095)}🤖`;
+      const paused = pauseSessionPlacementRecovery(recovery, error, persistent);
+
+      expect(paused.recovery.error).toBe("x".repeat(4095));
+      expect(paused.persisted).toBe(persistent);
+      expect(
+        readSessionPlacementRecovery(
+          recovery.gatewayUrl,
+          recovery.recoveryScope,
+          recovery.sessionKey,
+        ),
+      ).toEqual(persistent ? paused.recovery : null);
+    },
+  );
+
+  it("keeps storage-failure guidance on UTF-16 boundaries", () => {
+    const prefix = "Recovery could not be saved in this tab. Keep this page open.\n";
+    const error = `${"x".repeat(4095 - prefix.length)}🤖`;
+    expect(writeSessionPlacementRecovery(recovery)).toBe(true);
+    const storage = sessionStorage;
+    vi.stubGlobal("sessionStorage", {
+      getItem: storage.getItem.bind(storage),
+      removeItem: storage.removeItem.bind(storage),
+      setItem: () => {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      },
+    });
+
+    const paused = pauseSessionPlacementRecovery(recovery, error, true);
+
+    expect(paused.recovery.error).toBe(`${prefix}${"x".repeat(4095 - prefix.length)}`);
+    expect(paused.persisted).toBe(false);
+    expect(
+      readSessionPlacementRecovery(
+        recovery.gatewayUrl,
+        recovery.recoveryScope,
+        recovery.sessionKey,
+      ),
+    ).toBeNull();
   });
 
   it("migrates only exact framed rows under a new scope", () => {
@@ -253,7 +412,10 @@ describe("session placement recovery", () => {
     ).toEqual(attachmentRecovery);
   });
 
-  it("requires matching create parameters for a creating recovery", () => {
+  it.each([
+    { projectId: "openclaw", worktree: true as const },
+    { repository: { url: "https://github.com/openclaw/openclaw.git", ref: "release/next" } },
+  ])("requires matching create parameters for a creating recovery: %j", (workspace) => {
     const creating = {
       ...recovery,
       phase: "creating" as const,
@@ -262,10 +424,14 @@ describe("session placement recovery", () => {
         agentId: "cloud",
         message: "" as const,
         category: "Client work",
-        projectId: "openclaw",
         thinkingLevel: "high",
+        toolOverrides: {
+          mcpServers: { github: false },
+          skills: { release: false },
+          webSearch: false,
+        },
         visibility: "draft" as const,
-        worktree: true as const,
+        ...workspace,
       },
     };
     expect(writeSessionPlacementRecovery(creating)).toBe(true);
@@ -295,10 +461,26 @@ describe("session placement recovery", () => {
     { name: "a non-string project id", value: { projectId: 42 } },
     { name: "a project id with a cwd", value: { projectId: "openclaw", cwd: "/tmp/repo" } },
     {
+      name: "a repository with a Gateway worktree",
+      value: { repository: { url: "https://github.com/openclaw/openclaw.git" } },
+    },
+    { name: "an invalid repository", value: { worktree: undefined, repository: { url: "" } } },
+    {
+      name: "a repository with a local path",
+      value: {
+        worktree: undefined,
+        repository: { url: "https://github.com/openclaw/openclaw.git" },
+        cwd: "/gateway/repo",
+      },
+    },
+    {
       name: "a project id with an exec node",
       value: { projectId: "openclaw", execNode: "macbook" },
     },
     { name: "an unsupported visibility", value: { visibility: "shared" } },
+    { name: "an unsupported Fast Mode", value: { fastMode: "fast" } },
+    { name: "a null Fast Mode", value: { fastMode: null } },
+    { name: "malformed tool overrides", value: { toolOverrides: { webSearch: "yes" } } },
     { name: "an unknown field", value: { unknown: true } },
   ])("rejects $name in creating parameters", ({ value }) => {
     expect(

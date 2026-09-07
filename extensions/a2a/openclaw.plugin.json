@@ -1,0 +1,22 @@
+{
+  "id": "a2a",
+  "name": "A2A",
+  "description": "A2A v1.0 Agent-to-Agent protocol channel plugin.",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": [
+    "a2a"
+  ],
+  "channelConfigs": {
+    "a2a": {
+      "label": "A2A",
+      "description": "A2A peer authentication, discovery, and task delivery."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

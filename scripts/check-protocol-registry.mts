@@ -39,14 +39,25 @@ check(
 );
 
 const composition = registrySource.match(
-  /export const ProtocolSchemas = composeProtocolSchemaFragments\(\[([\s\S]*?)\]\s+as const\);/u,
+  /export const ProtocolSchemas:\s*([\s\S]*?)\s*= composeProtocolSchemaFragments\(\[([\s\S]*?)\]\s+as const\);/u,
 );
-const composedBindings = (composition?.[1] ?? "")
+const composedBindings = (composition?.[2] ?? "")
   .split("\n")
   .map((line) => line.trim().replace(/,$/u, ""))
   .filter(Boolean);
+const annotatedBindings = (composition?.[1] ?? "")
+  .split("&")
+  .map((type) => /^typeof ([A-Za-z0-9_]+)$/u.exec(type.trim())?.[1]);
 const importedBindings = fragmentImports.map(({ binding }) => binding);
-check(Boolean(composition), `${registryPath} must explicitly compose an ordered fragment array`);
+check(
+  Boolean(composition),
+  `${registryPath} must explicitly type and compose an ordered fragment array`,
+);
+check(
+  annotatedBindings.length === composedBindings.length &&
+    annotatedBindings.every((binding, index) => binding === composedBindings[index]),
+  `${registryPath} must annotate the composed fragments with their exact ordered typeof intersection`,
+);
 check(
   composedBindings.length === importedBindings.length &&
     new Set(composedBindings).size === composedBindings.length &&
@@ -113,8 +124,8 @@ const ownerModules = [
   ...schemaModulesSource.matchAll(/^export \* from "\.\/schema\/([^"]+)\.js";$/gmu),
 ].map(([, moduleName = ""]) => moduleName);
 check(
-  ownerModules.length === 59 && new Set(ownerModules).size === ownerModules.length,
-  "schema-modules.ts must contain one unique 59-module owner list",
+  ownerModules.length === 64 && new Set(ownerModules).size === ownerModules.length,
+  "schema-modules.ts must contain one unique 64-module owner list",
 );
 check(
   schemaModulesSource.split("\n").filter(Boolean).length === ownerModules.length,

@@ -104,6 +104,10 @@ const cronRunLogEntrySchema = z.looseObject({
   delivered: z.boolean().optional().catch(undefined),
   deliveryStatus: cronDeliveryStatusSchema.optional().catch(undefined),
   deliveryError: optionalCronStringSchema,
+  deliverySuppressionReason: z
+    .enum(["empty", "silent", "heartbeat", "channel_transform"])
+    .optional()
+    .catch(undefined),
   failureNotificationDelivery: cronFailureNotificationDeliverySchema,
   delivery: z.custom<{ [key: string]: JsonValue }>(isJsonObject).optional().catch(undefined),
   sessionId: optionalNonBlankCronStringSchema,
@@ -181,6 +185,9 @@ export function parseCronRunLogEntryObject(
   if (entryObj.deliveryError !== undefined) {
     entry.deliveryError = entryObj.deliveryError;
   }
+  if (entryObj.deliverySuppressionReason !== undefined) {
+    entry.deliverySuppressionReason = entryObj.deliverySuppressionReason;
+  }
   if (entryObj.failureNotificationDelivery !== undefined) {
     entry.failureNotificationDelivery = entryObj.failureNotificationDelivery;
   }
@@ -196,7 +203,7 @@ export function parseCronRunLogEntryObject(
   return entry;
 }
 
-/** Encodes cron-only outcome fields; generic lifecycle fields stay on TaskRecord. */
+/** Encodes cron-owned outcome fields; the generic lifecycle projection stays on TaskRecord. */
 export function cronRunLogEntryToTaskDetail(
   entry: CronRunLogEntry,
   options: {
@@ -209,12 +216,15 @@ export function cronRunLogEntryToTaskDetail(
     kind: CRON_TASK_DETAIL_KIND,
     status: entry.status,
     completionStatus: entry.completionStatus,
+    error: entry.error ?? null,
+    summary: entry.summary ?? null,
     storeKey: options.storeKey,
     errorReason: entry.errorReason,
     diagnostics: entry.diagnostics,
     delivered: entry.delivered,
     deliveryStatus: entry.deliveryStatus,
     deliveryError: entry.deliveryError,
+    deliverySuppressionReason: entry.deliverySuppressionReason,
     failureNotificationDelivery: entry.failureNotificationDelivery,
     delivery: entry.delivery,
     sessionId: entry.sessionId,
@@ -330,13 +340,14 @@ export function cronTaskRecordToRunLogEntry(task: TaskRecord): CronRunLogEntry |
   // Task detail is canonical write-time state; history reads do not rederive error reasons.
   const entry = parseCronRunLogEntryObject(
     {
+      // Released rows stored these only on the generic task; current detail wins
+      // when task cancellation and the underlying execution have different outcomes.
+      error: task.error,
+      summary: task.terminalSummary,
       ...wireDetail,
       ts: resolveCronTaskRecordTimestamp(task),
       jobId: task.sourceId,
       action: "finished",
-      status: isCronRunStatus(task.detail.status) ? task.detail.status : undefined,
-      error: task.error,
-      summary: task.terminalSummary,
       sessionKey: task.childSessionKey,
       runId: typeof task.detail.runId === "string" ? task.detail.runId : undefined,
     },
@@ -345,13 +356,12 @@ export function cronTaskRecordToRunLogEntry(task: TaskRecord): CronRunLogEntry |
   if (!entry) {
     return null;
   }
-  // The legacy SQLite reader materializes these indexed columns even when absent.
-  return {
-    ...entry,
+  // The parsed entry is private; materialize the legacy reader’s absent indexed fields on it.
+  return Object.assign(entry, {
     delivered: entry.delivered,
     deliveryStatus: entry.deliveryStatus,
     deliveryError: entry.deliveryError,
     sessionId: entry.sessionId,
     sessionKey: entry.sessionKey,
-  };
+  });
 }

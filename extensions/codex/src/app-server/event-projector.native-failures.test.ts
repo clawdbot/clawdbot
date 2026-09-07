@@ -1,3 +1,4 @@
+import { createContractToolTerminalObserver } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -5,13 +6,13 @@ import {
   expect,
   it,
   vi,
-  createCodexTestToolTerminalObserver,
   createMockPluginRegistry,
   flushDiagnosticEvents,
   initializeGlobalHookRunner,
   createParams,
   createProjector,
   buildEmptyToolTelemetry,
+  findAgentEvent,
   forCurrentTurn,
   readAttemptTerminal,
   type DiagnosticEventPayload,
@@ -22,9 +23,13 @@ registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector native tool failure recovery", () => {
   it("orders declined native tool diagnostics after their start event", async () => {
-    const observeToolTerminal = vi.fn(createCodexTestToolTerminalObserver());
+    const onAgentEvent = vi.fn();
+    const observeToolTerminal = vi.fn(
+      createContractToolTerminalObserver("run-codex-native-declined"),
+    );
     const projector = await createProjector({
       ...(await createParams()),
+      onAgentEvent,
       observeToolTerminal,
     });
     const diagnosticEvents: DiagnosticEventPayload[] = [];
@@ -102,10 +107,15 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
         toolCallId: "cmd-declined",
       },
     ]);
+    expect(
+      findAgentEvent(onAgentEvent, { stream: "item", phase: "end", itemId: "cmd-declined" }).data
+        .status,
+    ).toBe("blocked");
     expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toEqual({
       toolName: "bash",
       meta: "run tests (workspace)",
       error: "codex native tool blocked",
+      executionStarted: false,
       mutatingAction: false,
     });
     expect(observeToolTerminal).toHaveBeenLastCalledWith(
@@ -419,7 +429,9 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
   });
 
   it("preserves distinct native mutation failures when only one action recovers", async () => {
-    const observeToolTerminal = vi.fn(createCodexTestToolTerminalObserver());
+    const observeToolTerminal = vi.fn(
+      createContractToolTerminalObserver("run-codex-native-failed"),
+    );
     const projector = await createProjector({
       ...(await createParams()),
       observeToolTerminal,
@@ -451,6 +463,9 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
         item: commandItem("cmd-first-failed", firstCommand, "failed", "first failed", 1),
       }),
     );
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
+      executionStarted: true,
+    });
     await projector.handleNotification(
       forCurrentTurn("item/completed", {
         item: commandItem("cmd-second-failed", secondCommand, "failed", "second failed", 1),
@@ -462,11 +477,7 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
       }),
     );
 
-    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toMatchObject({
-      toolName: "bash",
-      error: "first failed",
-      actionFingerprint: expect.stringContaining(firstCommand),
-    });
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();
 
     await projector.handleNotification(
       forCurrentTurn("item/completed", {

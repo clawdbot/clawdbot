@@ -1,27 +1,39 @@
 ---
-summary: "Security considerations and threat model for running an AI gateway with shell access"
+summary: "Trust model, safe defaults, and hardening guidance for running OpenClaw"
 read_when:
   - Adding features that widen access or automation
+  - Reviewing OpenClaw security posture or hardening a deployment
 title: "Security"
 ---
 
-<Warning>
-  **Personal assistant trust model.** This guidance assumes one trusted
-  operator boundary per gateway (single-user, personal-assistant model).
-  OpenClaw is not a hostile multi-tenant security boundary for multiple
-  adversarial users sharing one agent or gateway. For mixed-trust or
-  adversarial-user operation, split trust boundaries: separate gateway +
-  credentials, ideally separate OS users or hosts.
-</Warning>
+OpenClaw ships with conservative defaults. On a regular host install the Gateway binds to loopback; most chat channels answer an unknown DM sender with a pairing code instead of processing the message; and group access is allowlisted, usually behind a mention gate. The exceptions are deliberate and documented: container images default to an exposed bind (pair that with auth - see the [exposure runbook](/gateway/security/exposure-runbook)), and a few workspace channels such as ClickClack trust workspace membership by default - each channel page states its exact defaults. Run on those defaults and you are in good shape, and one command tells you if you have drifted:
 
-## Scope: personal assistant security model
+```bash
+openclaw security audit
+```
 
-- Supported: one user/trust boundary per gateway (prefer one OS user/host/VPS per boundary).
+The rest of this page is the deep end: the trust model, what the audit checks, and how to harden further as you expose more surface.
+
+<Note>
+  **One trust boundary per gateway.** This guidance assumes one trusted
+  boundary per gateway: a single operator, or a team whose members trust
+  each other. Group chats and [multi-user](/concepts/multi-user) operation
+  are supported deployments inside that boundary. OpenClaw is not a hostile
+  multi-tenant security boundary for mutually adversarial users sharing one
+  agent or gateway. For mixed-trust or adversarial-user operation, split
+  trust boundaries: separate gateway + credentials, ideally separate OS
+  users or hosts.
+</Note>
+
+## Scope: one trust boundary per gateway
+
+- Supported: one trust boundary per gateway - a single operator or a mutually trusting team (prefer one OS user/host/VPS per boundary).
 - Not supported: one shared gateway/agent used by mutually untrusted or adversarial users.
 - Adversarial-user isolation needs separate gateways (and ideally separate OS users/hosts).
-- If several untrusted users can message one tool-enabled agent, they share that agent's delegated tool authority.
+- Everyone who can message a tool-enabled agent shares that agent's delegated tool authority. That is fine for teammates who already trust each other; it is why adversarial users cannot share an agent.
+- Session tools reach across the whole Gateway by default: `tools.sessions.visibility` defaults to `all` and `tools.agentToAgent.enabled` defaults to `true`, so any tool-enabled agent running unsandboxed can list, read, search, and message every agent's sessions, including other users' transcripts. Sandboxed sessions stay clamped to their own spawn tree by default, which limits them as callers but does not hide their transcripts from unsandboxed agents. That matches one trust boundary per Gateway. For personas with different trust levels on one Gateway, set `tools.sessions.visibility` to `agent` or `self` (`tree` still admits requester-owned native and ACP children across agents), restrict pairs with `tools.agentToAgent.allow`, or set `tools.agentToAgent.enabled: false`. See [`tools.sessions`](/gateway/config-tools#tools-sessions) and [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent).
 - If someone can modify Gateway host state/config (`~/.openclaw`, including `openclaw.json`), treat them as a trusted operator.
-- Inside one Gateway, authenticated operator access is a trusted control-plane role, not a per-user tenant role.
+- Inside one Gateway, authenticated operator access is a trusted control-plane role, not a per-user tenant role. [Named operator roles](/gateway/operator-scopes#named-operator-roles) bound what each teammate's connections can do; they are collaboration guardrails, not tenant isolation.
 - `sessionKey` (session IDs, labels) is a routing selector, not an authorization token.
 
 Hosting multiple users or organizations? Run one isolated Gateway cell per tenant instead of sharing a Gateway. See [Multi-tenant hosting](/gateway/multi-tenant-hosting).
@@ -44,9 +56,10 @@ openclaw security audit --json
 ### What the audit checks (high level)
 
 - **Inbound access** - DM/group policies, allowlists: can strangers trigger the bot?
+- **Cross-agent session access** - two or more agents with default Gateway-wide session visibility and unrestricted agent-to-agent access: `info` for one operator's personas, `warn` when sandboxing, agent-level tool restrictions, or shared-user ingress suggest different trust levels. Fully sandboxed rosters under the default spawn-tree clamp produce no finding; setting `agents.defaults.sandbox.sessionToolsVisibility` to `"all"` disables that exemption.
 - **Tool blast radius** - elevated tools + open rooms: could prompt injection become shell/file/network actions?
 - **Exec filesystem drift** - mutating filesystem tools denied while `exec`/`process` stay available without sandbox constraints.
-- **Exec approval drift** - `security="full"`, `autoAllowSkills`, interpreter allowlists without `strictInlineEval`. `security="full"` alone is a broad posture warning, not proof of a bug - it is the chosen default for trusted personal-assistant setups; tighten it only when your threat model needs approval or allowlist guardrails.
+- **Exec approval drift** - `security="full"`, `autoAllowSkills`, interpreter allowlists without `strictInlineEval`. `security="full"` alone is a broad posture warning, not proof of a bug - it is the chosen default for trusted-operator setups; tighten it only when your threat model needs approval or allowlist guardrails.
 - **Network exposure** - Gateway bind/auth, Tailscale Serve/Funnel, weak/short auth tokens.
 - **Browser control exposure** - remote nodes, relay ports, remote CDP endpoints.
 - **Local disk hygiene** - permissions, symlinks, config includes, synced-folder paths.
@@ -55,7 +68,7 @@ openclaw security audit --json
 - **Runtime expectation drift** - assuming implicit exec still means `sandbox` when `tools.exec.host` now defaults to `auto`, or setting `tools.exec.host="sandbox"` while sandbox mode is off.
 - **Model hygiene** - warns on legacy configured models (soft warning, not a hard block).
 
-Each finding has a structured `checkId` (for example `gateway.bind_no_auth`, `tools.exec.security_full_configured`). Prefixes: `fs.*` (permissions), `gateway.*` (bind/auth/Tailscale/Control UI/trusted-proxy), `hooks.*`/`browser.*`/`sandbox.*`/`tools.exec.*` (per-surface hardening), `plugins.*`/`skills.*` (supply chain), `security.exposure.*` (access policy x tool blast radius). Full catalog with severity and auto-fix support: [Security audit checks](/gateway/security/audit-checks). See also [Formal Verification](/security/formal-verification).
+Each finding has a structured `checkId` (for example `gateway.bind_no_auth`, `tools.exec.security_full_configured`). Prefixes: `fs.*` (permissions), `gateway.*` (bind/auth/Tailscale/Control UI/trusted-proxy), `hooks.*`/`browser.*`/`sandbox.*`/`tools.exec.*` (per-surface hardening), `plugins.*`/`skills.*` (supply chain), `security.exposure.*` (access policy x tool blast radius), `security.trust_model.*` (shared-context and cross-agent defaults). Full catalog with severity and auto-fix support: [Security audit checks](/gateway/security/audit-checks). See also [Formal Verification](/security/formal-verification).
 
 ### Priority order when triaging findings
 
@@ -84,6 +97,8 @@ Each finding has a structured `checkId` (for example `gateway.bind_no_auth`, `to
     fs: { workspaceOnly: true },
     exec: { security: "deny", ask: "always" },
     elevated: { enabled: false },
+    sessions: { visibility: "agent" },
+    agentToAgent: { enabled: false },
   },
   channels: {
     whatsapp: { dmPolicy: "pairing", groups: { "*": { requireMention: true } } },
@@ -91,7 +106,7 @@ Each finding has a structured `checkId` (for example `gateway.bind_no_auth`, `to
 }
 ```
 
-Keeps the Gateway local-only, isolates DMs, and disables control-plane/runtime tools by default. Re-enable tools selectively per trusted agent from there.
+Keeps the Gateway local-only, isolates DMs, limits session tools to the agent's own sessions, turns off ordinary cross-agent access, and disables control-plane/runtime tools by default. Re-enable tools selectively per trusted agent from there.
 
 Built-in baseline for chat-driven agent turns: non-owner senders cannot use the `cron` or `gateway` tools regardless of config.
 
@@ -105,16 +120,17 @@ Treat these controls as defense in depth that reduces direct capability for a re
 
 Quick model for triaging risk reports:
 
-| Boundary or control                                       | What it means                                     | Common misread                                                                |
-| --------------------------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `gateway.auth` (token/password/trusted-proxy/device auth) | Authenticates callers to gateway APIs             | "Needs per-message signatures on every frame to be secure"                    |
-| `sessionKey`                                              | Routing key for context/session selection         | "Session key is a user auth boundary"                                         |
-| Prompt/content guardrails                                 | Reduce model abuse risk                           | "Prompt injection alone proves auth bypass"                                   |
-| Browser evaluate                                          | Intentional operator capability when enabled      | "Any JS eval primitive is automatically a vuln in this trust model"           |
-| Local TUI `!` shell                                       | Explicit operator-triggered local execution       | "Local shell convenience command is remote injection"                         |
-| Node pairing and node commands                            | Operator-level remote execution on paired devices | "Remote device control should be treated as untrusted user access by default" |
-| `gateway.nodes.pairing.autoApproveCidrs`                  | Opt-in trusted-network node enrollment policy     | "A disabled-by-default allowlist is an automatic pairing vulnerability"       |
-| `gateway.nodes.pairing.sshVerify`                         | Key-verified node enrollment over operator SSH    | "Default-on auto-approval is an automatic pairing vulnerability"              |
+| Boundary or control                                       | What it means                                                         | Common misread                                                                |
+| --------------------------------------------------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `gateway.auth` (token/password/trusted-proxy/device auth) | Authenticates callers to gateway APIs                                 | "Needs per-message signatures on every frame to be secure"                    |
+| `sessionKey`                                              | Routing key for context/session selection                             | "Session key is a user auth boundary"                                         |
+| Prompt/content guardrails                                 | Reduce model abuse risk                                               | "Prompt injection alone proves auth bypass"                                   |
+| Browser evaluate                                          | Intentional operator capability when enabled                          | "Any JS eval primitive is automatically a vuln in this trust model"           |
+| Local TUI `!` shell                                       | Explicit operator-triggered local execution                           | "Local shell convenience command is remote injection"                         |
+| Node pairing and node commands                            | Operator-level remote execution on paired devices                     | "Remote device control should be treated as untrusted user access by default" |
+| `gateway.nodes.pairing.autoApproveCidrs`                  | Opt-in trusted-network node enrollment policy                         | "A disabled-by-default allowlist is an automatic pairing vulnerability"       |
+| `gateway.nodes.pairing.sshVerify`                         | Key-verified node enrollment over operator SSH                        | "Default-on auto-approval is an automatic pairing vulnerability"              |
+| `tools.sessions.visibility` / `tools.agentToAgent`        | Session-tool reach inside one Gateway; Gateway-wide and on by default | "Default cross-agent session access is a tenant-isolation bypass"             |
 
 ## Not vulnerabilities by design
 
@@ -129,6 +145,7 @@ Quick model for triaging risk reports:
 - `gateway.nodes.pairing.sshVerify` treated as a vulnerability because it is enabled by default. It never approves on network locality or SSH reachability alone: the gateway reads the device identity back over SSH (BatchMode, strict host keys) and approves only on an exact device-key match with the pending request, which requires the connecting keypair to already live under the operator's account on a host the operator controls. Probes are bounded to private/CGNAT source addresses, share the trusted-CIDR eligibility floor (fresh scopeless `role: node` only), and `sshVerify: false` turns the feature off.
 - `gateway.nodes.pairing.autoApproveCidrs` treated as a vulnerability by itself. It is disabled by default, requires explicit CIDR/IP entries, only applies to first-time `role: node` pairing with no requested scopes, and never auto-approves operator/browser/Control UI, WebChat, role/scope upgrades, metadata or public-key changes, or same-host loopback trusted-proxy header paths (even when loopback trusted-proxy auth is enabled).
 - "Missing per-user authorization" findings that treat `sessionKey` as an auth token.
+- Default Gateway-wide session visibility or default-on agent-to-agent messaging treated as a vulnerability on its own. The audit reports plain multi-agent defaults as `info`, not a vulnerability finding, and escalates to `warn` only with trust-boundary signals. One Gateway is one trust boundary; narrow `tools.sessions.visibility` or `tools.agentToAgent` for persona separation, and run separate gateways for adversarial users.
 
 </Accordion>
 
@@ -173,7 +190,7 @@ openclaw pairing approve <channel> <code>
 
 Details + files on disk: [Pairing](/channels/pairing)
 
-Treat `dmPolicy="open"` and `groupPolicy="open"` as last-resort settings; prefer pairing + allowlists unless you fully trust every member of the room.
+Prefer pairing + allowlists for DMs. For groups, decide by membership, not by channel type: a private room whose members you trust - your team, family, or friends - is a normal deployment for `groupPolicy: "open"` (any member can trigger the bot). Keep sender allowlists or mention gating on rooms where strangers can join or post, and treat `dmPolicy="open"` as a deliberate opt-in.
 
 ### Allowlists (two layers)
 
@@ -249,16 +266,16 @@ What helps in practice:
 - Limit high-risk tools (`exec`, `browser`, `web_fetch`, `web_search`) to trusted agents or explicit allowlists.
 - If you allowlist interpreters (`python`, `node`, `ruby`, `perl`, `php`, `lua`, `osascript`), enable `tools.exec.strictInlineEval` so inline eval forms (`-c`, `-e`, and similar) still need explicit approval. In allowlist mode, any heredoc segment (`<<`) always requires reviewer or explicit approval, regardless of quoting - an allowlisted command cannot use a heredoc body to bypass allowlist review.
 - Reduce blast radius by using a read-only or tool-disabled **reader agent** to summarize untrusted content, then pass the summary to your main agent.
-- For Gmail hooks, the built-in per-message session isolates conversation context but does not remove the target agent's tool or workspace permissions. Route untrusted mail to a dedicated reader agent, apply [per-agent sandbox and tool restrictions](/tools/multi-agent-sandbox-tools), and constrain any handoff to the main agent with [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent). See [Gmail integration](/gateway/configuration-reference#gmail-integration).
+- For Gmail hooks, the built-in per-message session isolates conversation context but does not remove the target agent's tool or workspace permissions. Route untrusted mail to a dedicated reader agent and apply [per-agent sandbox and tool restrictions](/tools/multi-agent-sandbox-tools). Agent-to-agent messaging is on by default, and omitted or empty `allow` permits every agent pair: constrain any handoff to the main agent with an explicit [`tools.agentToAgent.allow`](/gateway/config-tools#tools-agenttoagent) list, or set `tools.agentToAgent.enabled: false` to turn cross-agent access off. See [Gmail integration](/gateway/config-hooks#gmail-integration).
 - Keep `web_search` / `web_fetch` / `browser` off for tool-enabled agents unless needed.
 - For OpenResponses URL inputs (`input_file` / `input_image`), set a tight `gateway.http.endpoints.responses.files.urlAllowlist` / `images.urlAllowlist` and keep `maxUrlParts` low (empty allowlists count as unset). Use `files.allowUrl: false` / `images.allowUrl: false` to disable URL fetching entirely.
 - Keep secrets out of prompts; pass them via env/config on the gateway host instead.
 
 **Model choice matters.** Prompt-injection resistance is not uniform across model tiers - smaller/cheaper models are more susceptible to tool misuse and instruction hijacking under adversarial prompts.
 
-<Warning>
+<Note>
 For tool-enabled agents or agents that read untrusted content, prompt-injection risk with older/smaller models is often too high. Do not run those workloads on weak model tiers.
-</Warning>
+</Note>
 
 - Use the latest-generation, best-tier model for any bot that can run tools or touch files/networks.
 - Do not use older/weaker/smaller tiers for tool-enabled agents or untrusted inboxes.
@@ -299,10 +316,10 @@ Slash commands and directives are honored only for authorized senders. Configure
 
 Two built-in tools remain control-plane sensitive:
 
-- `gateway` reads config with `config.schema.lookup` / `config.get`. It cannot write config, update OpenClaw, or restart the Gateway.
+- `gateway` reads config with `config.schema.lookup` / `config.get` and starts owner-requested OpenClaw updates with `update.run`. It has no config-write or standalone restart action; update restart and completion notices are automatic.
 - `cron` creates scheduled jobs that keep running after the original chat/task ends.
 
-The `gateway` tool stays owner-only because config reads can expose secrets and host topology. Agents request persistent config or lifecycle changes through the `openclaw` delegation tool; OpenClaw maps them to typed operations and requires human approval before applying them. See [OpenClaw setup agent](/cli/openclaw#operations-and-approval).
+The `gateway` tool stays owner-only because config reads can expose secrets and host topology and `update.run` changes the running installation. Updates require an explicit user request. Agents request other persistent config or lifecycle changes through the `openclaw` delegation tool. OpenClaw maps them to typed operations and applies the requesting run's effective permission policy: Full Access, including Default (Full Access), authorizes permitted changes without an approval prompt; restricted runs require human approval. Independent tool, filesystem, sandbox, and operation restrictions still apply, and the host revalidates live authority before execution. See [Session permission modes](/gateway/permission-modes#delegated-setup-and-repair) and [OpenClaw setup agent](/cli/openclaw#operations-and-approval).
 
 For any agent/surface handling untrusted content, deny these by default:
 
@@ -336,7 +353,7 @@ OpenClaw can refresh the skills list mid-session: the skills watcher updates the
 
 Plugins run in-process with the Gateway - treat them as trusted code.
 
-- Only install from sources you trust; prefer explicit `plugins.allow` allowlists; review plugin config before enabling; restart the Gateway after plugin changes.
+- Only install from sources you trust; prefer explicit `plugins.allow` allowlists; review plugin config before enabling. Restart the Gateway after plugin code, metadata, or discovery-root changes. With the default hybrid reload mode, ordinary config and enablement changes hot-reload unless the plugin declares a restart-triggering prefix.
 - Installing/updating plugins runs executable code:
   - The install path is the per-plugin directory under the active plugin install root.
   - ClawHub packages and OpenClaw's bundled/official catalog are trusted sources. A new arbitrary npm, `npm-pack:`, git, local path/archive, or marketplace source warns before install; noninteractive installs require `--force` after you review and trust that source. `--force` confirms provenance and permits overwrite; it does not bypass `security.installPolicy` or remaining install safety checks. Updates reuse the already selected source.
@@ -369,9 +386,9 @@ Agent workspace access inside the sandbox (`agents.defaults.sandbox.workspaceAcc
 
 Extra `sandbox.docker.binds` are validated against normalized, canonicalized source paths. A blocked-path denylist covers `/etc`, `/private/etc`, `/proc`, `/sys`, `/dev`, `/root`, `/boot`, and directories that commonly contain or alias the Docker socket (`/run`, `/var/run`, and `docker.sock` under them), plus HOME credential subpaths (`.aws`, `.cargo`, `.config`, `.docker`, `.gnupg`, `.netrc`, `.npm`, `.ssh`). Parent-symlink tricks and canonical home aliases are resolved through existing ancestors and re-checked, so they still fail closed if they resolve into a blocked root.
 
-<Warning>
+<Note>
 `tools.elevated` is the global baseline escape hatch that runs exec outside the sandbox. The effective host is `gateway` by default, or `node` when the exec target is configured to `node`. Keep `tools.elevated.allowFrom` tight and do not enable it for strangers. Further restrict per agent via `agents.entries.*.tools.elevated`. See [Elevated mode](/tools/elevated).
-</Warning>
+</Note>
 
 ### Sub-agent delegation guardrail
 
@@ -394,6 +411,8 @@ Build a read-only profile by combining `agents.defaults.sandbox.workspaceAccess:
 Each agent can have its own sandbox + tool policy: full access, read-only, or no access. See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for precedence rules.
 
 Common patterns: personal agent (full access, no sandbox), family/work agent (sandboxed + read-only tools), public agent (sandboxed + no filesystem/shell tools).
+
+Tool profiles do not narrow session-tool reach, and sandboxing only clamps the sandboxed caller to its spawn tree; an unsandboxed agent can still read a sandboxed agent's sessions. Session visibility is Gateway-wide and agent-to-agent messaging is on by default, so pair persona profiles with `tools.sessions.visibility` and `tools.agentToAgent` when agents on one Gateway should not see or message each other (see the last example below).
 
 ### Full access (no sandbox)
 
@@ -435,9 +454,9 @@ Common patterns: personal agent (full access, no sandbox), family/work agent (sa
 
 ```json5
 {
-  // Session tools can reveal transcript data. Default scope is current + spawned;
-  // reads also include same-agent groups watched through ambient group awareness.
-  // Use visibility: "self" to exclude those watched sessions.
+  // The default "all" covers every session on the Gateway, including other agents' and other users' transcripts.
+  // Explicit tree scope limits non-main callers to current + spawned sessions.
+  // Use visibility: "self" for strict current-session access, including main.
   tools: { sessions: { visibility: "tree" } }, // self | tree | agent | all
   agents: {
     entries: {
@@ -523,6 +542,7 @@ Private/internal destinations stay blocked unless you explicitly opt in.
 
 - Default: `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` unset, so private/internal/special-use destinations stay blocked. Legacy alias `allowPrivateNetwork` still accepted.
 - Opt-in: set `dangerouslyAllowPrivateNetwork: true` to allow those destinations.
+- `browser.ssrfPolicy.blockedHostnames` denies exact hosts and wildcard subdomains before DNS and any allow rule, including private-network exceptions. `*.example.com` does not block the apex `example.com`; add both to block the entire domain. An empty or absent list adds no denials. `tools.web.fetch.ssrfPolicy.blockedHostnames` provides the same policy for guarded fetches, including redirects.
 - In strict mode, use wildcard-aware `allowedHostnames` entries for patterns like `*.example.com` and exact host exceptions, including otherwise-blocked names like `localhost`.
 - Direct navigation requests are preflight checked. During the action and bounded post-action grace, guarded Playwright interactions (click, coordinate click, hover, drag, scroll, select, press, type, form fill, and evaluate) intercept policy-denied top-level and subframe document loads before HTTP request bytes, then best-effort re-check the final `http(s)` URL.
 - Before each fresh managed Chrome launch, OpenClaw best-effort disables network prediction, suppressing Chromium's observed speculative preconnect for those denied loads. This is defense in depth, not a policy boundary: a browser reused across a control-service restart and other browser backends may not share the hardening. Page routing remains request-level interception, not a network firewall: redirect hops, a popup's first request, Service Worker traffic, page code that runs after the bounded guard window, and some background/subresource paths can bypass it. Final-URL checks remain detection/quarantine defense; complete prevention requires owner-side egress isolation or a policy-enforcing proxy.
@@ -754,7 +774,7 @@ The Control UI generates device identity with pure-JS Ed25519, so pairing works 
 ## Deployment and host trust
 
 - Full-disk encryption on the gateway host; prefer a dedicated OS user account for the Gateway if the host is shared.
-- Published package dependency lock: source checkouts use `pnpm-lock.yaml`; the published `openclaw` npm package and OpenClaw-owned npm plugin packages include `npm-shrinkwrap.json` so installs use the reviewed transitive dependency graph from the release instead of resolving a fresh graph at install time. This is a supply-chain hardening and release reproducibility boundary, not a sandbox - see [npm shrinkwrap](/gateway/security/dependency-locking).
+- Published package dependencies: `pnpm-lock.yaml` is the reviewed source dependency graph. Plugin packages bundle runtime dependencies by default; native-heavy plugins resolve them at install time from exact-pinned direct dependencies, and the root `openclaw` package also resolves dependencies at install time. Root and plugin tarballs ship neither `npm-shrinkwrap.json` nor `package-lock.json`. See [Dependency locking](/gateway/security/dependency-locking).
 - Secure file operations: OpenClaw uses `@openclaw/fs-safe` for root-bounded file access, atomic writes, archive extraction, temp workspaces, and secret-file helpers. Optional native acceleration defaults **off**; set `OPENCLAW_FS_SAFE_NATIVE_MODE=auto` to use an installed platform binding or `require` to fail closed when native support is unavailable. Details: [Secure file operations](/gateway/security/secure-file-operations).
 - Shared Slack workspace risk: if everyone in Slack can message the bot, the core risk is delegated tool authority - any allowed sender can induce tool calls (`exec`, browser, network/file tools) within the agent's policy, prompt/content injection from one sender can affect shared state/devices/outputs, and if the shared agent has sensitive credentials/files, any allowed sender can potentially drive exfiltration via tool usage. Use separate agents/gateways with minimal tools for team workflows; keep personal-data agents private.
 - Company-shared agent (acceptable pattern): fine when everyone using the agent is in the same trust boundary (for example one company team) and the agent is strictly business-scoped. Run it on a dedicated machine/VM/container, use a dedicated OS user + dedicated browser/profile/accounts, and do not sign that runtime into personal Apple/Google accounts or personal password-manager/browser profiles. Mixing personal and company identities on the same runtime collapses the separation and increases personal-data exposure risk.
@@ -862,7 +882,7 @@ For phone-number-based channels, consider running the assistant on a separate nu
 
 1. Rotate Gateway auth (`gateway.auth.token` / `OPENCLAW_GATEWAY_PASSWORD`) and restart.
 2. Rotate remote client secrets (`gateway.remote.token` / `.password`) on any machine that can call the Gateway.
-3. Rotate provider/API credentials (WhatsApp creds, Slack/Discord tokens, model/API keys in `auth-profiles.json`, and encrypted secrets payload values when used).
+3. Rotate provider/API credentials (WhatsApp creds, Slack/Discord tokens, model/API keys in SQLite auth stores, and encrypted secrets payload values when used).
 
 ### Audit
 
@@ -880,10 +900,10 @@ For phone-number-based channels, consider running the assistant on a separate nu
 
 ## Secret scanning
 
-CI runs the pre-commit `detect-private-key` hook over the repository. If it fails, remove or rotate the committed key material, then reproduce locally:
+CI runs the in-repo `scripts/detect-private-keys.mts` scanner over every tracked regular file except colocated `*.test.ts` fixtures and the iOS Fastfile; pull requests run the base branch's copy of the scanner and fail if the base branch lacks it. The local `detect-private-key` pre-commit hook runs the same scanner over the text files pre-commit hands it. If CI fails, remove or rotate the committed key material, then reproduce locally:
 
 ```bash
-pre-commit run --all-files detect-private-key
+node scripts/detect-private-keys.mts
 ```
 
 ## Reporting security issues

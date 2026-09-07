@@ -10,3 +10,15 @@ describe("Claude CLI logged-out failures", () => {
     expect(classifyFailoverReason(loggedOutMessage)).toBeNull();
   });
 });
+
+describe("OAuth session expiry", () => {
+  const expiredMessage = "Failed to authenticate: OAuth session expired and could not be refreshed";
+
+  it("classifies OAuth expiry as auth only for claude-cli", () => {
+    expect(classifyFailoverReason(expiredMessage, { provider: "claude-cli" })).toBe("auth");
+    expect(classifyFailoverReason(expiredMessage, { provider: "custom-cli" })).toBe(
+      "session_expired",
+    );
+    expect(classifyFailoverReason(expiredMessage)).toBe("session_expired");
+  });
+});

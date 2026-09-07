@@ -1,3 +1,5 @@
+import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
+import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import type { SessionDiffFileTextLoader, SessionDiffLoader } from "./session-diff-panel.ts";
 
 type DetailUnavailableReason = "not_found" | "oversized" | "not_visible";
@@ -11,7 +13,6 @@ type SidebarFullMessageRequest = {
   sessionKey: string;
   agentId?: string;
   messageId: string;
-  kind: "assistant_message" | "tool_output";
 };
 
 export type SidebarFullMessageLoader = (
@@ -22,8 +23,6 @@ type MarkdownSidebarContent = {
   kind: "markdown";
   content: string;
   rawText?: string | null;
-  fullMessageRequest?: SidebarFullMessageRequest;
-  unavailableReason?: DetailUnavailableReason | null;
 };
 
 type CanvasSidebarContent = {
@@ -35,8 +34,6 @@ type CanvasSidebarContent = {
   /** Per-preview sandbox ceiling; keeps widget iframes below the global embed mode. */
   sandbox?: "strict" | "scripts";
   rawText?: string | null;
-  fullMessageRequest?: SidebarFullMessageRequest;
-  unavailableReason?: DetailUnavailableReason | null;
 };
 
 type ImageSidebarContent = {
@@ -45,8 +42,48 @@ type ImageSidebarContent = {
   src: string;
   mimeType?: string | null;
   rawText?: string | null;
-  fullMessageRequest?: SidebarFullMessageRequest;
-  unavailableReason?: DetailUnavailableReason | null;
+};
+
+type AttachmentSidebarSource = {
+  src: string;
+  playback?: ChatMediaPlaybackMode;
+  authToken?: string | null;
+  sizeBytes?: number;
+  durationMs?: number;
+  width?: number;
+  height?: number;
+};
+
+export type AttachmentSidebarRuntime = {
+  sessionKey?: string;
+  agentId?: string;
+  policyKey?: string;
+  connectionEpoch?: number;
+  authToken?: string | null;
+  resourceBasePath?: string;
+  resolveArtifactDownload?: ArtifactDownloadResolver;
+};
+
+type AttachmentSidebarContent = {
+  kind: "attachment";
+  attachmentKind?: "audio" | "video" | "document" | "image";
+  title: string;
+  /** Static sources only; expiring sources are resolved live through resolveSource. */
+  src?: string;
+  mimeType?: string | null;
+  sourceIdentity?: string;
+  playback?: ChatMediaPlaybackMode;
+  authToken?: string | null;
+  sizeBytes?: number;
+  durationMs?: number;
+  width?: number;
+  height?: number;
+  voiceNote?: boolean;
+  resolveSource?: (
+    onRequestUpdate: () => void,
+    runtime: AttachmentSidebarRuntime,
+  ) => AttachmentSidebarSource | null;
+  rawText?: string | null;
 };
 
 type SessionDiffSidebarContent = {
@@ -55,10 +92,7 @@ type SessionDiffSidebarContent = {
   load: SessionDiffLoader;
   loadFileText?: SessionDiffFileTextLoader;
   openFile?: (path: string) => void;
-  revealFile?: (path: string) => void;
   rawText?: string | null;
-  fullMessageRequest?: SidebarFullMessageRequest;
-  unavailableReason?: DetailUnavailableReason | null;
 };
 
 type FileSaveOutcome =
@@ -84,8 +118,6 @@ type FileSidebarContent = {
   language?: string;
   line?: number | null;
   rawText?: string | null;
-  fullMessageRequest?: SidebarFullMessageRequest;
-  unavailableReason?: DetailUnavailableReason | null;
   edit?: FileSidebarEdit;
 };
 
@@ -93,6 +125,7 @@ export type SidebarContent =
   | MarkdownSidebarContent
   | CanvasSidebarContent
   | ImageSidebarContent
+  | AttachmentSidebarContent
   | FileSidebarContent
   | SessionDiffSidebarContent
   | { kind: "task"; taskId: string };

@@ -10,6 +10,7 @@ import {
   loadRatchetReference,
   loadRatchetSnapshot,
   loadRatchetSources,
+  parseRatchetArgs,
   parseRatchetPaths,
   reportRatchetFailures,
   reportRatchetSuccess,
@@ -186,36 +187,14 @@ function writeBaseline(root: string, entries: string[]) {
   fs.writeFileSync(path.join(root, BASELINE_PATH), BASELINE_HEADER + entries.join("\n") + "\n");
 }
 
-function parseArgs(argv: string[]) {
-  const args: { base?: string; prune: boolean; staged: boolean } = { prune: false, staged: false };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--prune") {
-      args.prune = true;
-      continue;
-    }
-    if (arg === "--staged") {
-      args.staged = true;
-      continue;
-    }
-    if (arg === "--base" && argv[index + 1]) {
-      args.base = argv[index + 1];
-      index += 1;
-      continue;
-    }
-    throw new Error("Unknown or incomplete argument: " + arg);
-  }
-  return args;
-}
-
 function envVarCountArgs(argv: string[]) {
-  const args = parseArgs(argv);
+  const args = parseRatchetArgs(argv);
   return [...(args.staged ? ["--staged"] : []), ...(args.base ? ["--base", args.base] : [])];
 }
 
 export function main(root = process.cwd(), argv: string[] = process.argv.slice(2)) {
   try {
-    const args = parseArgs(argv);
+    const args = parseRatchetArgs(argv);
     if (args.staged && args.prune) {
       throw new Error("--prune cannot be combined with --staged");
     }

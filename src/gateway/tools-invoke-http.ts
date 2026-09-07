@@ -65,7 +65,7 @@ export async function handleToolsInvokeHttpRequest(
   if (!authResult) {
     return true;
   }
-  const { cfg, requestAuth } = authResult;
+  const { cfg, requestAuth, operatorScopes } = authResult;
   if (req.socket.destroyed || res.destroyed || res.socket?.destroyed) {
     return true;
   }
@@ -98,6 +98,9 @@ export async function handleToolsInvokeHttpRequest(
       accountId,
       agentTo,
       agentThreadId,
+      authenticatedUserProfile: requestAuth.authenticatedUserProfile,
+      operatorRoleActor: requestAuth.operatorRoleActor,
+      operatorScopes,
       senderIsOwner,
       conversationReadOrigin: "direct-operator",
       toolCallIdPrefix: "http",

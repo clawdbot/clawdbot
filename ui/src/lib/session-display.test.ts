@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
+  resolveSessionWorkContext,
   resolveSessionWorkSubtitle,
 } from "./session-display.ts";
 
@@ -235,6 +236,14 @@ describe("resolveSessionWorkSubtitle", () => {
   it("combines repo, branch, and node host", () => {
     expect(
       resolveSessionWorkSubtitle({
+        repository: {
+          url: "https://github.com/openclaw/openclaw.git",
+          branch: "openclaw/cloud-task",
+        },
+      }),
+    ).toBe("openclaw ⎇ cloud-task");
+    expect(
+      resolveSessionWorkSubtitle({
         worktree: { branch: "openclaw/session-ui", repoRoot: "/repo/clawdbot" },
       }),
     ).toBe("clawdbot ⎇ session-ui");
@@ -258,6 +267,40 @@ describe("resolveSessionWorkSubtitle", () => {
         execNode: "11c38726acc6fac280357576c87acc6fac280357",
       }),
     ).toBe("clawdbot ⎇ wt-1 · …0357");
+  });
+});
+
+describe("resolveSessionWorkContext", () => {
+  it("projects only repository or authoritative workspace facts", () => {
+    expect(
+      resolveSessionWorkContext({
+        worktree: { branch: "openclaw/session-ui", repoRoot: "/repo/openclaw" },
+      }),
+    ).toEqual({
+      kind: "project",
+      name: "openclaw",
+      path: "/repo/openclaw",
+      branch: "session-ui",
+    });
+    expect(
+      resolveSessionWorkContext({
+        spawnedWorkspaceDir: "/workspaces/release-notes",
+        spawnedCwd: "/stale/cwd",
+      }),
+    ).toEqual({
+      kind: "workspace",
+      name: "release-notes",
+      path: "/workspaces/release-notes",
+    });
+    expect(
+      resolveSessionWorkContext({
+        execNode: "remote-node",
+        execCwd: "/remote/workspace",
+        spawnedWorkspaceDir: "/local/workspace",
+        worktree: { branch: "openclaw/local-branch", repoRoot: "/gateway/repo" },
+      }),
+    ).toEqual({ kind: "workspace", name: "workspace", path: "/remote/workspace" });
+    expect(resolveSessionWorkContext({ execCwd: "/stale/local-routing-cwd" })).toBeUndefined();
   });
 });
 

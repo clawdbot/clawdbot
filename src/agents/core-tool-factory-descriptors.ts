@@ -7,13 +7,14 @@ import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 export type CoreToolFactoryFamily = "base-coding" | "shell" | "openclaw";
 
 type CoreToolFactoryDescriptor = {
-  name: string;
-  family: CoreToolFactoryFamily;
+  readonly name: string;
+  readonly family: CoreToolFactoryFamily;
 };
 
 const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "edit", family: "base-coding" },
   { name: "read", family: "base-coding" },
+  { name: "ls", family: "base-coding" },
   { name: "write", family: "base-coding" },
   { name: "apply_patch", family: "shell" },
   { name: "exec", family: "shell" },
@@ -28,9 +29,12 @@ const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "conversations_send", family: "openclaw" },
   { name: "conversations_turn", family: "openclaw" },
   { name: AUTOMATIONS_TOOL_NAME, family: "openclaw" },
+  { name: "screen", family: "openclaw" },
+  { name: "secrets", family: "openclaw" },
   { name: "dashboard", family: "openclaw" },
   { name: "gateway", family: "openclaw" },
   { name: "get_goal", family: "openclaw" },
+  { name: "github_identity_status", family: "openclaw" },
   { name: "github_publish", family: "openclaw" },
   { name: "heartbeat_respond", family: "openclaw" },
   { name: "view_image", family: "openclaw" },
@@ -80,6 +84,10 @@ export type OpenClawCodingToolConstructionPlan = {
 
 export function resolveCoreToolFactoryFamily(name: string): CoreToolFactoryFamily | undefined {
   return CORE_TOOL_FACTORY_FAMILY_BY_NAME.get(name);
+}
+
+export function listCoreToolFactoryDescriptors(): readonly CoreToolFactoryDescriptor[] {
+  return CORE_TOOL_FACTORY_DESCRIPTORS;
 }
 
 /**

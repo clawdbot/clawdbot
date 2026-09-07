@@ -10,11 +10,12 @@ function createNodesRuntime(
   return {
     list: vi.fn(async () => ({ nodes })),
     invoke: vi.fn(async () => ({ ok: true })),
+    openDuplex: vi.fn(),
   };
 }
 
 describe("Canvas widget presenter", () => {
-  it("prefers the existing local Mac default and presents the hosted URL atomically", async () => {
+  it.each(["macos", "macOS 26.6.2"])("presents the hosted URL on a %s node", async (platform) => {
     const runtime = createNodesRuntime([
       {
         nodeId: "android-recent",
@@ -28,7 +29,7 @@ describe("Canvas widget presenter", () => {
       {
         nodeId: "mac-local",
         displayName: "Studio",
-        platform: "macos",
+        platform,
         connected: true,
         connectedAtMs: 10,
         caps: ["canvas"],

@@ -7,9 +7,9 @@ status: active
 
 OpenClaw has three related but different controls:
 
-1. **Sandbox** (`agents.defaults.sandbox.*` / `agents.entries.*.sandbox.*`) decides **where tools run** (sandbox backend vs host).
+1. **Sandbox** (`agents.defaults.sandbox.*`, `agents.entries.*.sandbox.*`, or a required creator-role policy) decides **where tools run** (sandbox backend vs host).
 2. **Tool policy** (`tools.*`, `tools.sandbox.tools.*`, `agents.entries.*.tools.*`) decides **which tools are available/allowed**.
-3. **Elevated** (`tools.elevated.*`, `agents.entries.*.tools.elevated.*`) is an **exec-only escape hatch** to run outside the sandbox when you are sandboxed (`gateway` by default, or `node` when the exec target is configured to `node`).
+3. **Elevated** (`tools.elevated.*`, `agents.entries.*.tools.elevated.*`) is an **exec-only escape hatch** from ordinary sandboxing (`gateway` by default, or `node` when the exec target is configured to `node`). It cannot bypass a creator role's required sandbox.
 
 ## Quick debug
 
@@ -33,11 +33,16 @@ It prints:
 
 Sandboxing is controlled by `agents.defaults.sandbox.mode`:
 
-- `"off"`: everything runs on the host.
+- `"off"`: sessions run on the host unless their creator's operator role requires sandboxing.
 - `"non-main"`: only non-main sessions are sandboxed (common "surprise" for groups/channels).
 - `"all"`: everything is sandboxed.
 
 `agents.defaults.sandbox.workspaceAccess` controls what the sandbox can see: `"none"`, `"ro"`, or `"rw"`.
+
+An operator role with `sandbox: "required"` overrides agent mode, cannot be
+escaped through elevated execution or host overrides, and fails closed when its
+sandbox cannot be provisioned. See
+[Named operator roles](/gateway/operator-scopes#named-operator-roles).
 
 See [Sandboxing](/gateway/sandboxing) for the full matrix (scope, workspace mounts, images).
 
@@ -117,7 +122,7 @@ For sandboxed MCP servers, the sandbox tool policy is a second allow gate. If `m
 
 Elevated does **not** grant extra tools; it only affects `exec`.
 
-- If you are sandboxed, `/elevated on` (or `exec` with `elevated: true`) runs outside the sandbox (approvals may still apply).
+- If you are ordinarily sandboxed, `/elevated on` (or `exec` with `elevated: true`) runs outside the sandbox (approvals may still apply). Creator-role-required sandboxes reject elevated execution.
 - Use `/elevated full` to skip exec approvals for the session.
 - If you are already running direct, elevated is effectively a no-op (still gated).
 - Elevated is **not** skill-scoped and does **not** override tool allow/deny.
@@ -137,7 +142,7 @@ See [Elevated Mode](/tools/elevated).
 
 Fix-it keys (pick one):
 
-- Disable sandbox: `agents.defaults.sandbox.mode=off` (or per-agent `agents.entries.*.sandbox.mode=off`)
+- Disable ordinary sandboxing: `agents.defaults.sandbox.mode=off` (or per-agent `agents.entries.*.sandbox.mode=off`); this does not override a creator role's required sandbox.
 - Allow the tool inside sandbox:
   - remove it from `tools.sandbox.tools.deny` (or per-agent `agents.entries.*.tools.sandbox.tools.deny`)
   - or add it to `tools.sandbox.tools.allow` (or per-agent allow)

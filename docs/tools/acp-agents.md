@@ -153,9 +153,10 @@ Quick `/acp` flow from chat:
     - Spawn creates or resumes an ACP runtime session, records ACP metadata in the OpenClaw session store, and may create a background task when the run is parent-owned.
     - Parent-owned ACP sessions are treated as background work even when the runtime session is persistent; completion and cross-surface delivery go through the parent task notifier rather than acting like a normal user-facing chat session.
     - Task maintenance closes terminal or orphaned parent-owned one-shot ACP sessions. Persistent ACP sessions are preserved while an active conversation binding remains; stale persistent sessions without an active binding are closed so they cannot be silently resumed after the owning task is done or its task record is gone.
-    - Bound follow-up messages go directly to the ACP session until the binding is closed, unfocused, reset, or expired.
-    - Gateway commands stay local. `/acp ...`, `/status`, and `/unfocus` are never sent as normal prompt text to a bound ACP harness.
+    - Bound follow-up messages go directly to the ACP session until the binding is closed, detached, reset, or expired.
+    - Gateway commands stay local. `/acp ...`, `/status`, and `/session` are never sent as normal prompt text to a bound ACP harness.
     - `cancel` aborts the active turn when the backend supports cancellation; it does not delete the binding or session metadata.
+    - Turn completion waits for queued output delivery. If delivery fails, OpenClaw cancels the active turn and waits for backend cleanup before starting the next queued turn, within the configured turn timeout.
     - `close` ends the ACP session from OpenClaw's point of view and removes the binding. A harness may still keep its own upstream history if it supports resume.
     - The acpx plugin cleans up OpenClaw-owned wrapper and adapter process trees after `close`, and reaps stale OpenClaw-owned ACPX orphans during Gateway startup.
     - Idle runtime workers are eligible for cleanup after the built-in idle period; stored session metadata remains available for `/acp sessions`.
@@ -288,7 +289,7 @@ Examples:
     - `--bind here` only works on channels that advertise current-conversation binding; OpenClaw returns a clear unsupported message otherwise. Bindings persist across gateway restarts.
     - On Discord, `spawnSessions` gates child thread creation for `--thread auto|here` - not `--bind here`.
     - If you spawn to a different ACP agent without `--cwd`, OpenClaw inherits the **target agent's** workspace by default. Missing inherited paths (`ENOENT`/`ENOTDIR`) fall back to the backend default; other access errors (e.g. `EACCES`) surface as spawn errors.
-    - Gateway management commands stay local in bound conversations - `/acp ...` commands are handled by OpenClaw even when normal follow-up text routes to the bound ACP session; `/status` and `/unfocus` also stay local whenever command handling is enabled for that surface.
+    - Gateway management commands stay local in bound conversations - `/acp ...` commands are handled by OpenClaw even when normal follow-up text routes to the bound ACP session; `/status` and `/session` also stay local whenever command handling is enabled for that surface.
 
   </Accordion>
   <Accordion title="Thread-bound sessions">
@@ -297,8 +298,8 @@ Examples:
     - OpenClaw binds a thread to a target ACP session.
     - Follow-up messages in that thread route to the bound ACP session.
     - ACP output is delivered back to the same thread.
-    - Unfocus/close/archive/idle-timeout or max-age expiry removes the binding.
-    - `/acp close`, `/acp cancel`, `/acp status`, `/status`, and `/unfocus` are Gateway commands, not prompts to the ACP harness.
+    - `/session unbind`, close, archive, idle timeout, or max-age expiry removes the binding. `/session unbind` detaches only the current conversation and leaves the ACP session running.
+    - `/acp close`, `/acp cancel`, `/acp status`, `/status`, and `/session` are Gateway commands, not prompts to the ACP harness.
 
     Required feature flags for thread-bound ACP:
 
@@ -371,6 +372,24 @@ Use `agents.entries.*.runtime` to define ACP defaults once per agent:
 1. `bindings[].acp.*`
 2. `agents.entries.*.runtime.acp.*`
 3. Global ACP defaults (e.g. `acp.backend`)
+
+Configured bindings also forward the owning agent's explicit model and thinking
+policy. Thinking uses the agent's `thinkingDefault`, then per-model
+`agents.defaults.models["provider/model"].params.thinking`, then
+`agents.defaults.thinkingDefault`. Without configured policy, the external
+harness keeps its own defaults.
+
+Changing a configured model or thinking value updates the existing session
+before its next turn without replacing the conversation. Each option is saved
+only after the harness accepts it; a rejected option returns an error and keeps
+that option's previous selection. Model and thinking changes are independent,
+not an atomic batch. Removing a default
+uses any remaining configured policy; if none remains, OpenClaw retains the
+session's last selection. Omission is not a backend reset. To change thinking
+explicitly, use `/acp set thinking <level>` with a level supported by the harness.
+For Codex ACP, `off` only omits a fresh session's startup override. Switching an
+existing session to `off` is unsupported and returns an error without clearing
+its current reasoning effort or conversation.
 
 ### Example
 
@@ -457,7 +476,7 @@ Use `agents.entries.*.runtime` to define ACP defaults once per agent:
 - Messages in that channel, topic, or chat route to the configured ACP session.
 - Configured ACP bindings own their session route. Channel broadcast fan-out does not replace the configured ACP session for a matched binding.
 - In bound conversations, `/new` and `/reset` reset the same ACP session key in place.
-- Temporary runtime bindings (for example created by thread-focus flows) still apply where present.
+- Runtime bindings created by thread-bound spawns still apply where present.
 - For cross-agent ACP spawns without an explicit `cwd`, OpenClaw inherits the target agent workspace from agent config.
 - Missing inherited workspace paths fall back to the backend default cwd; non-missing access failures surface as spawn errors.
 
@@ -567,15 +586,17 @@ config-the-default error).
   Codex ACP reasoning effort. When omitted, `sessions_spawn({ runtime: "acp" })`
   uses existing subagent model defaults (`agents.defaults.subagents.model` or
   `agents.entries.*.subagents.model`) when configured; otherwise it lets the ACP
-  harness use its own default model. Other harnesses must advertise ACP
-  `models` and support `session/set_model`; otherwise OpenClaw/acpx fails
-  clearly instead of silently falling back to the target agent default.
+  harness use its own default model. Other harnesses must advertise ACP model
+  controls for an explicit selection. Without those controls, an explicit
+  selection fails; an inherited default may be omitted so the harness can use
+  its own default.
 </ParamField>
 <ParamField path="thinking" type="string">
   Explicit thinking/reasoning effort. For Codex ACP, `minimal` maps to low
   effort, `low`/`medium`/`high`/`xhigh` map directly, and `off` omits the
-  reasoning-effort startup override. When omitted, ACP spawns use existing
-  subagent thinking defaults and per-model
+  reasoning-effort startup override. An explicit value takes precedence over
+  a reasoning suffix in `model`, including `off`. When omitted, ACP spawns use existing
+  subagent thinking defaults, the configured target agent's `thinkingDefault`, and per-model
   `agents.defaults.models["provider/model"].params.thinking` for the selected
   model.
 </ParamField>
@@ -681,8 +702,10 @@ work. The delivery path depends on that shape.
     its own parent-owned one-shot ACP child. In that case, running A2A on top
     of task completion can wake the parent with the child's result, forward
     the parent's reply back into the child, and create a parent/child echo
-    loop. The `sessions_send` result reports `delivery.status="skipped"` for
-    that owned-child case because the completion path is already responsible
+    loop. Accepted `sessions_send` results report target admission separately
+    from announcement delivery: `targetDisposition` is `queued` or `steered`,
+    while `delivery.status` is `pending` or `skipped`. For this owned-child case,
+    `delivery.status="skipped"` because the completion path is already responsible
     for the result.
 
   </Accordion>
@@ -772,6 +795,21 @@ Current-conversation bindings and thread bindings both participate in step 2.
 If no target resolves, OpenClaw returns a clear error
 (`Unable to resolve session target: ...`).
 
+### Session owner and harness
+
+The OpenClaw agent that owns a session is separate from the external harness
+selected by ACP. For example, a session owned by `work` can run the `claude`
+harness. Owner-aware manager calls carry `agentId`; `agent` remains the harness
+name. Configured bindings use their OpenClaw agent owner and their configured
+ACP harness independently. Free ACP spawns keep their existing harness namespace.
+
+Bare keys such as `global` require an explicit owner when ownership is explicit.
+ACP keeps arbitrary logical keys such as `shared-project` unchanged; ACPX scopes
+the backend resource name by owner.
+An agent-qualified main alias retains its owner even when it resolves to `global`.
+Conflicting owner/key pairs fail visibly. A backend that cannot isolate bare
+sessions must be upgraded before those sessions can run.
+
 ## ACP controls
 
 | Command              | What it does                                              | Example                                                       |
@@ -817,9 +855,22 @@ does not accept a target token.
 | `/acp set thinking <level>`  | canonical option `thinking`          | OpenClaw sends the backend-advertised equivalent when present, preferring `thinking`, then `effort`, `reasoning_effort`, or `thought_level`. For Codex ACP, the adapter maps values to `reasoning_effort`. |
 | `/acp permissions <profile>` | canonical option `permissionProfile` | OpenClaw sends the backend-advertised equivalent when present, such as `approval_policy`, `permission_profile`, `permissions`, or `permission_mode`.                                                       |
 | `/acp timeout <seconds>`     | canonical option `timeoutSeconds`    | OpenClaw sends the backend-advertised equivalent when present, such as `timeout` or `timeout_seconds`.                                                                                                     |
-| `/acp cwd <path>`            | runtime cwd override                 | Direct update.                                                                                                                                                                                             |
+| `/acp cwd <path>`            | runtime cwd override                 | Applied on the next runtime operation, which closes the previous handle before replacing it.                                                                                                               |
 | `/acp set <key> <value>`     | generic                              | `key=cwd` uses the cwd override path.                                                                                                                                                                      |
-| `/acp reset-options`         | clears all runtime overrides         | -                                                                                                                                                                                                          |
+| `/acp reset-options`         | clears all runtime overrides         | Closes a retained runtime without starting a new backend.                                                                                                                                                  |
+
+When a backend returns its accepted controls, OpenClaw keeps an already-selected
+thinking level in sync with that response. A model switch may lower the level or
+remove thinking support; subsequent turns and reconnects use the accepted
+selection instead of replaying the old level. Backend defaults do not become new
+session overrides, and the model reference keeps its OpenClaw provider prefix.
+Model overrides are validated before prompt submission, including after reconnect.
+Unsupported inherited defaults dropped during new session initialization are not
+saved as overrides.
+
+`/acp reset-options` also works after a restart when an old working directory or
+model override prevents backend startup. If closing a retained runtime fails,
+the options remain available for retry.
 
 ## acpx harness, plugin setup, and permissions
 
@@ -848,7 +899,7 @@ see [ACP agents - setup](/tools/acp-agents-setup).
 | `Sandboxed sessions cannot spawn ACP sessions ...`                                        | ACP runtime is host-side; requester session is sandboxed.                                                              | Use `runtime="subagent"` from sandboxed sessions, or run ACP spawn from a non-sandboxed session.                                                                         |
 | `sessions_spawn sandbox="require" is unsupported for runtime="acp" ...`                   | `sandbox="require"` requested for ACP runtime.                                                                         | Use `runtime="subagent"` for required sandboxing, or use ACP with `sandbox="inherit"` from a non-sandboxed session.                                                      |
 | `Cannot apply --model ... did not advertise model support`                                | The target harness does not expose generic ACP model switching.                                                        | Use a harness that advertises ACP `models`/`session/set_model`, use Codex ACP model refs, or configure the model directly in the harness if it has its own startup flag. |
-| Missing ACP metadata for bound session                                                    | Stale/deleted ACP session metadata.                                                                                    | Recreate with `/acp spawn`, then rebind/focus thread.                                                                                                                    |
+| Missing ACP metadata for bound session                                                    | Stale/deleted ACP session metadata.                                                                                    | Detach with `/session unbind`, then recreate with `/acp spawn --bind here` or `/acp spawn --thread here`.                                                                |
 | ACP input request is declined or cancelled                                                | The form/URL is malformed, exceeds field/choice limits, uses unsupported constraints, or the owning turn ended.        | Read the visible decline reason, retry with a standard primitive form or valid HTTP(S) URL, and keep the originating turn active while answering.                        |
 | `PermissionPromptUnavailableError: Permission prompt unavailable in non-interactive mode` | `permissionMode` blocks writes/exec in non-interactive ACP session.                                                    | Set `plugins.entries.acpx.config.permissionMode` to `approve-all` and restart gateway. See [Permission configuration](/tools/acp-agents-setup#permission-configuration). |
 | ACP session fails early with little output                                                | Permission prompts are blocked by `permissionMode`/`nonInteractivePermissions`.                                        | Check gateway logs for `AcpRuntimeError`. For full permissions, set `permissionMode=approve-all`; for graceful degradation, set `nonInteractivePermissions=deny`.        |

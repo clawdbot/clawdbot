@@ -1,6 +1,7 @@
 // Discord plugin module implements runtime.messaging behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
-import type { ActionGate, DiscordActionConfig, OpenClawConfig } from "../runtime-api.js";
+import type { ActionGate } from "openclaw/plugin-sdk/channel-actions";
+import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { handleDiscordMessageManagementAction } from "./runtime.messaging.messages.js";
 import { handleDiscordReactionMessagingAction } from "./runtime.messaging.reactions.js";
 import { handleDiscordMessageSendAction } from "./runtime.messaging.send.js";

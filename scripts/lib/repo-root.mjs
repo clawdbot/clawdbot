@@ -2,9 +2,9 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** Resolves the repository root by walking upward from the caller module. */
-export function resolveRepoRoot(importMetaUrl) {
-  let dir = path.dirname(fileURLToPath(importMetaUrl));
+/** Finds the checkout containing a directory, including linked worktrees. */
+export function findRepoRoot(startDir) {
+  let dir = path.resolve(startDir);
   const { root } = path.parse(dir);
   while (dir !== root) {
     if (
@@ -16,5 +16,11 @@ export function resolveRepoRoot(importMetaUrl) {
     }
     dir = path.dirname(dir);
   }
-  return path.resolve(path.dirname(fileURLToPath(importMetaUrl)), "..", "..");
+  return undefined;
+}
+
+/** Resolves the repository root by walking upward from the caller module. */
+export function resolveRepoRoot(importMetaUrl) {
+  const callerDir = path.dirname(fileURLToPath(importMetaUrl));
+  return findRepoRoot(callerDir) ?? path.resolve(callerDir, "..", "..");
 }

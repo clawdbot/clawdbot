@@ -4,14 +4,17 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { EventEmitter } from "node:events";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
+import process from "node:process";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { keepHttpServerTaskAlive, waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
+import { killProcessTree } from "openclaw/plugin-sdk/process-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   readJsonBodyWithLimit,
+  sendHttpRequestRejection,
   WEBHOOK_BODY_READ_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import { RAFT_CHANNEL_ID, type ResolvedRaftAccount } from "./accounts.js";
@@ -45,7 +48,7 @@ const WAKE_EVENT_ID_FIELDS = [
   "id",
 ] as const;
 
-type RaftBridgeProcess = Pick<ChildProcess, "kill"> & Pick<EventEmitter, "once">;
+type RaftBridgeProcess = Pick<ChildProcess, "pid"> & Pick<EventEmitter, "once">;
 
 type RaftWakeReplayEvent = { accountId: string; key: string };
 
@@ -80,6 +83,7 @@ class WakeRequestError extends Error {
   constructor(
     readonly statusCode: number,
     message: string,
+    /** Body-limit rejections own the connection, so their answer goes through the transport. */
     readonly closeAfterResponse = false,
   ) {
     super(message);
@@ -114,6 +118,7 @@ function spawnRaftBridge(params: {
         ...process.env,
         RAFT_CHANNEL_TOKEN: params.token,
       },
+      detached: process.platform !== "win32",
       stdio: "ignore",
       windowsHide: true,
     },
@@ -205,10 +210,13 @@ function closeServer(server: Server, sockets: Set<Socket>) {
 }
 
 function stopBridge(child: RaftBridgeProcess) {
-  child.kill("SIGTERM");
-  const forceKill = setTimeout(() => child.kill("SIGKILL"), 5_000);
-  forceKill.unref();
-  child.once("exit", () => clearTimeout(forceKill));
+  if (typeof child.pid !== "number") {
+    return;
+  }
+  killProcessTree(child.pid, {
+    graceMs: 5_000,
+    detached: process.platform !== "win32",
+  });
 }
 
 async function listenLoopback(server: Server): Promise<number> {
@@ -331,23 +339,26 @@ export async function startRaftGatewayAccount(
         runtimeSession,
         ...(dispatched ? {} : { duplicate: true }),
       });
-    })().catch((error: unknown) => {
+    })().catch(async (error: unknown) => {
       const statusCode = error instanceof WakeRequestError ? error.statusCode : 500;
       const message = error instanceof WakeRequestError ? error.message : "Internal server error.";
       ctx.log?.warn?.(`Raft wake request rejected: ${message}`);
-      if (!response.headersSent) {
-        if (error instanceof WakeRequestError && error.closeAfterResponse) {
-          response.setHeader("Connection", "close");
-          response.once("close", () => {
-            if (!request.destroyed) {
-              request.destroy();
-            }
-          });
-        }
-        sendJson(response, statusCode, { error: message });
-      } else {
+      if (response.headersSent) {
         response.destroy();
+        return;
       }
+      if (error instanceof WakeRequestError && error.closeAfterResponse) {
+        response.setHeader("cache-control", "no-store");
+        await sendHttpRequestRejection(
+          request,
+          response,
+          statusCode,
+          JSON.stringify({ error: message }),
+          "application/json; charset=utf-8",
+        );
+        return;
+      }
+      sendJson(response, statusCode, { error: message });
     });
   });
   server.on("connection", (socket) => {

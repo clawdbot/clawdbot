@@ -192,6 +192,12 @@ Gateway approval resolution is guarded by the dedicated `operator.approvals` sco
 You can forward exec approval prompts to any chat channel (including plugin channels) and approve
 them with `/approve`. This uses the normal outbound delivery pipeline.
 
+For a command the user has authorized, the agent requests execution through the tool first. The
+execution host decides whether an approval is needed. The agent relays an `/approve` command only
+from an actual pending approval, using the exact request ID and reply instructions. A bare
+`/approve` or an invented ID cannot approve a command. An `allow-once` grant covers only its
+specific command; subsequent commands receive their own policy decision.
+
 Config:
 
 ```json5
@@ -295,15 +301,13 @@ Generic model:
 - WhatsApp and Signal reaction approval delivery are gated by `approvals.exec` and
   `approvals.plugin`; they do not have `channels.<channel>.execApprovals` blocks
 
-Native approval clients auto-enable DM-first delivery when all of these are true:
+For channels with an `execApprovals` block, enable native delivery by setting
+`enabled: true` or `"auto"` and configuring resolvable approvers. Defaults vary by
+channel: Discord and Slack require explicit enablement; Telegram treats unset as
+`"auto"`. Approvers can come from `execApprovals.approvers` or the channel's
+supported owner configuration, such as `commands.ownerAllowFrom`.
 
-- the channel supports native approval delivery
-- approvers can be resolved from explicit `execApprovals.approvers` or owner
-  identity such as `commands.ownerAllowFrom`
-- `channels.<channel>.execApprovals.enabled` is unset or `"auto"`
-
-Set `enabled: false` to disable a native approval client explicitly. Set `enabled: true` to force
-it on when approvers resolve. Public origin-chat delivery stays explicit through
+Set `enabled: false` to disable a native approval client explicitly. Public origin-chat delivery stays explicit through
 `channels.<channel>.execApprovals.target`. When native `target` enables origin-chat delivery,
 approval prompts include the command text.
 

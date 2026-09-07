@@ -63,7 +63,7 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "model.auth.login",
     description: "Run the existing provider auth login flow.",
     transports: ["local"],
-    flags: ["--provider", "--method"],
+    flags: ["--provider", "--method", "--agent"],
     resultShape: "interactive auth result",
   },
   {
@@ -77,7 +77,7 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "model.auth.status",
     description: "Show configured model auth state.",
     transports: ["local"],
-    flags: ["--json"],
+    flags: ["--agent", "--json"],
     resultShape: "model status summary",
   },
   {
@@ -152,7 +152,7 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "audio.transcribe",
     description: "Transcribe one audio file.",
     transports: ["local"],
-    flags: ["--file", "--language", "--prompt", "--model", "--json"],
+    flags: ["--file", "--agent", "--language", "--prompt", "--model", "--json"],
     resultShape: "normalized text output",
   },
   {
@@ -259,7 +259,7 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "video.describe",
     description: "Describe one video file through media-understanding providers.",
     transports: ["local"],
-    flags: ["--file", "--model", "--json"],
+    flags: ["--file", "--agent", "--model", "--json"],
     resultShape: "normalized text output",
   },
   {

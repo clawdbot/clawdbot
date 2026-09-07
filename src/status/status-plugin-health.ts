@@ -1,5 +1,6 @@
 // Builds compact plugin health summaries for chat status surfaces.
 import type { PluginDiagnosticCode } from "../plugins/manifest-types.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 
 type StatusPluginDependencyStatus = {
   hasDependencies?: boolean;
@@ -82,22 +83,10 @@ export type StatusPluginHealthSnapshot = {
   }>;
 };
 
-/** Keeps the first record per key; later duplicates are dropped. */
-function dedupeBy<T>(items: readonly T[], keyOf: (item: T) => string): T[] {
-  const seen = new Map<string, T>();
-  for (const item of items) {
-    const key = keyOf(item);
-    if (!seen.has(key)) {
-      seen.set(key, item);
-    }
-  }
-  return [...seen.values()];
-}
-
 export function dedupePluginDiagnostics(
   diagnostics: readonly PluginDiagnosticRecord[],
 ): PluginDiagnosticRecord[] {
-  return dedupeBy(diagnostics, (entry) =>
+  return dedupeByKey(diagnostics, (entry) =>
     JSON.stringify([entry.level, entry.pluginId ?? "", entry.code ?? "", entry.message]),
   );
 }
@@ -107,7 +96,7 @@ export function dedupePluginDiagnostics(
 export function dedupeChannelPluginFailures(
   failures: readonly ChannelPluginFailureRecord[],
 ): ChannelPluginFailureRecord[] {
-  return dedupeBy(failures, (entry) =>
+  return dedupeByKey(failures, (entry) =>
     JSON.stringify([entry.channelId, entry.pluginId ?? "", entry.message]),
   );
 }
@@ -115,7 +104,7 @@ export function dedupeChannelPluginFailures(
 function dedupeCompatibilityNotices(
   notices: readonly PluginCompatibilityHealthNotice[],
 ): PluginCompatibilityHealthNotice[] {
-  return dedupeBy(notices, (entry) =>
+  return dedupeByKey(notices, (entry) =>
     JSON.stringify([entry.pluginId, entry.severity, entry.code ?? "", entry.message]),
   );
 }

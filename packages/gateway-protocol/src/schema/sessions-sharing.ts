@@ -41,6 +41,23 @@ export const SessionVisibilitySetResultSchema = closedObject({
   visibility: SessionVisibilitySchema,
 });
 
+export const SessionPublicShareSchema = closedObject({
+  token: Type.String({ pattern: "^v1\\.[A-Za-z0-9_-]+$", maxLength: 7000 }),
+  createdAt: Type.Integer({ minimum: 0 }),
+});
+
+export const SessionPublicShareSetParamsSchema = closedObject({
+  ...SessionSharingTargetParamsSchema,
+  expectedSessionId: NonEmptyString,
+  enabled: Type.Boolean(),
+});
+
+export const SessionPublicShareSetResultSchema = closedObject({
+  ok: Type.Literal(true),
+  sessionKey: NonEmptyString,
+  publicShare: Type.Optional(SessionPublicShareSchema),
+});
+
 export const SessionMembersListParamsSchema = closedObject(SessionSharingTargetParamsSchema);
 
 export const SessionMemberSchema = closedObject({
@@ -49,10 +66,32 @@ export const SessionMemberSchema = closedObject({
   addedAt: Type.Integer({ minimum: 0 }),
 });
 
+export const SessionMemberEvidenceSchema = Object.assign(
+  closedObject({
+    identityId: NonEmptyString,
+    addedBy: Type.Optional(NonEmptyString),
+    /** Explicit principal-less evidence; omission means no actor evidence was supplied. */
+    addedByState: Type.Optional(Type.Literal("unknown")),
+    addedAt: Type.Integer({ minimum: 0 }),
+  }),
+  { not: { required: ["addedBy", "addedByState"] } },
+);
+
 export const SessionMembersListResultSchema = closedObject({
   sessionKey: NonEmptyString,
+  publicShare: Type.Optional(SessionPublicShareSchema),
   owner: Type.Optional(SessionSharingIdentitySchema),
   members: Type.Array(SessionMemberSchema),
+  identities: Type.Array(SessionSharingIdentitySchema),
+  role: SessionSharingRoleSchema,
+  allowedVisibilities: Type.Array(SessionVisibilitySchema),
+});
+
+export const SessionMembersListEvidenceResultSchema = closedObject({
+  sessionKey: NonEmptyString,
+  publicShare: Type.Optional(SessionPublicShareSchema),
+  owner: Type.Optional(SessionSharingIdentitySchema),
+  members: Type.Array(SessionMemberEvidenceSchema),
   identities: Type.Array(SessionSharingIdentitySchema),
   role: SessionSharingRoleSchema,
   allowedVisibilities: Type.Array(SessionVisibilitySchema),
@@ -71,24 +110,49 @@ export const SessionMemberMutationResultSchema = closedObject({
   identityId: NonEmptyString,
 });
 
-export const SessionSharingEventSchema = closedObject({
+const SessionSharingEventTargetFields = {
   action: SessionSharingActionSchema,
   sessionKey: NonEmptyString,
   agentId: NonEmptyString,
-  actor: SessionSharingIdentitySchema,
+};
+
+const SessionSharingEventChangeFields = {
   visibility: Type.Optional(SessionVisibilitySchema),
   identityId: Type.Optional(NonEmptyString),
   ts: Type.Integer({ minimum: 0 }),
+};
+
+/** Original sharing event contract. Older generated clients require `actor`. */
+export const SessionSharingEventSchema = closedObject({
+  ...SessionSharingEventTargetFields,
+  actor: SessionSharingIdentitySchema,
+  ...SessionSharingEventChangeFields,
+});
+
+/** Principal-less sharing changes use a distinct additive event name. */
+export const SessionSharingEvidenceEventSchema = closedObject({
+  ...SessionSharingEventTargetFields,
+  /** Explicit principal-less evidence; omission means no actor evidence was supplied. */
+  actorState: Type.Optional(Type.Literal("unknown")),
+  ...SessionSharingEventChangeFields,
 });
 
 export type SessionSharingIdentity = Static<typeof SessionSharingIdentitySchema>;
 export type SessionSharingAction = Static<typeof SessionSharingActionSchema>;
 export type SessionVisibilitySetParams = Static<typeof SessionVisibilitySetParamsSchema>;
 export type SessionVisibilitySetResult = Static<typeof SessionVisibilitySetResultSchema>;
+export type SessionPublicShare = Static<typeof SessionPublicShareSchema>;
+export type SessionPublicShareSetParams = Static<typeof SessionPublicShareSetParamsSchema>;
+export type SessionPublicShareSetResult = Static<typeof SessionPublicShareSetResultSchema>;
 export type SessionMembersListParams = Static<typeof SessionMembersListParamsSchema>;
 export type SessionMember = Static<typeof SessionMemberSchema>;
+export type SessionMemberEvidence = Static<typeof SessionMemberEvidenceSchema>;
 export type SessionMembersListResult = Static<typeof SessionMembersListResultSchema>;
+export type SessionMembersListEvidenceResult = Static<
+  typeof SessionMembersListEvidenceResultSchema
+>;
 export type SessionMemberAddParams = Static<typeof SessionMemberAddParamsSchema>;
 export type SessionMemberRemoveParams = Static<typeof SessionMemberRemoveParamsSchema>;
 export type SessionMemberMutationResult = Static<typeof SessionMemberMutationResultSchema>;
 export type SessionSharingEvent = Static<typeof SessionSharingEventSchema>;
+export type SessionSharingEvidenceEvent = Static<typeof SessionSharingEvidenceEventSchema>;

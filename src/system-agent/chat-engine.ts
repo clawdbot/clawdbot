@@ -11,7 +11,7 @@ import {
   type SystemAgentTurnRunner,
 } from "./agent-turn.js";
 import type { SystemAgentApprovalClassifier } from "./approval-intent.js";
-import type { SystemAgentAssistantPlanner, SystemAgentAssistantTurn } from "./assistant.js";
+import type { SystemAgentAssistantTurn } from "./assistant.js";
 import {
   ChatTurnRouter,
   redactSensitiveCommandText,
@@ -44,7 +44,6 @@ export { SystemAgentWizardAnswerError } from "./chat-wizard-host.js";
 export type SystemAgentChatEngineOptions = {
   yes?: boolean;
   deps?: SystemAgentCommandDeps;
-  planWithAssistant?: SystemAgentAssistantPlanner;
   planGreeting?: SystemAgentGreetingPlanner;
   runAgentTurn?: SystemAgentTurnRunner;
   classifyApproval?: SystemAgentApprovalClassifier;
@@ -102,7 +101,6 @@ export class SystemAgentChatEngine {
         rebindVerifiedInference: (next) => this.rebindVerifiedInference(next),
         getVerifiedInference: () => this.verifiedInference,
         loadOverview: async () => await this.loadOverview(),
-        getHistory: () => this.history,
         verifyConfigAfterWrite: async () => await this.verifyConfigAfterWrite(),
       },
     );
@@ -112,10 +110,6 @@ export class SystemAgentChatEngine {
     return this.router.propose(operation);
   }
 
-  hasPendingProposal(): boolean {
-    return this.router.hasPendingProposal();
-  }
-
   getPendingOperatorProposal(): { operation: SystemAgentOperation; hash: string } | null {
     return this.router.getPendingOperatorProposal();
   }
@@ -123,9 +117,21 @@ export class SystemAgentChatEngine {
   async resolveOperatorApproval(
     decision: "allow-once" | "allow-always" | "deny" | null,
     proposalHash: string,
+    beforePersistentApply?: () => void,
+    terminalStatus?: "expired" | "cancelled",
   ): Promise<SystemAgentChatReply | null> {
     const turn = this.turnQueue.then(async () => {
-      const reply = await this.router.resolveOperatorApproval(decision, proposalHash);
+      const reply = await this.router.resolveOperatorApproval(
+        decision,
+        proposalHash,
+        beforePersistentApply,
+      );
+      if (reply && terminalStatus && !reply.applied) {
+        reply.text = `OpenClaw change ${terminalStatus}. No change. Retry the request if it is still needed.`;
+      }
+      if (reply && decision === "allow-once" && !reply.applied) {
+        reply.text += " Check the current settings and OpenClaw status before retrying.";
+      }
       if (reply?.text) {
         this.history.push({ role: "assistant", text: reply.text });
       }
@@ -214,9 +220,9 @@ export class SystemAgentChatEngine {
 
   async loadOverview(): Promise<SystemAgentOverview> {
     const route = await this.requireVerifiedInference();
-    const overview = this.options.deps?.loadOverview
-      ? await this.options.deps.loadOverview()
-      : await loadSystemAgentOverview();
+    const overview = await (this.options.deps?.loadOverview ?? loadSystemAgentOverview)({
+      agentId: route.agentId,
+    });
     return { ...overview, defaultModel: route.modelLabel };
   }
 

@@ -9,6 +9,23 @@ import Testing
 struct TalkModeManagerTests {
     private struct CloseError: Error {}
 
+    @Test func `recording sessions preserve system keyboard feedback`() throws {
+        let session = AVAudioSession.sharedInstance()
+        let previousSetting = session.allowHapticsAndSystemSoundsDuringRecording
+        defer {
+            try? session.setAllowHapticsAndSystemSoundsDuringRecording(previousSetting)
+            try? session.setActive(false, options: [.notifyOthersOnDeactivation])
+        }
+
+        try session.setAllowHapticsAndSystemSoundsDuringRecording(false)
+        try TalkModeManager.configureAudioSession()
+        #expect(session.allowHapticsAndSystemSoundsDuringRecording)
+
+        try session.setAllowHapticsAndSystemSoundsDuringRecording(false)
+        try TalkModeManager.configureRealtimeAudioSession()
+        #expect(session.allowHapticsAndSystemSoundsDuringRecording)
+    }
+
     private static func parse(_ config: [String: Any]) -> TalkModeGatewayConfigState {
         TalkModeGatewayConfigParser.parse(
             config: config,
@@ -65,6 +82,20 @@ struct TalkModeManagerTests {
         #expect(object["sessionKey"] as? String == "agent:main:main")
         #expect(object["voiceSessionId"] as? String == "voice-1")
         #expect(object["capabilities"] as? [String] == ["voice-transcript"])
+    }
+
+    @Test func `omits gateway-owned model from realtime client request`() throws {
+        let params = TalkRealtimeClientCreateParams(
+            sessionKey: "main",
+            voiceSessionId: nil,
+            provider: "openai",
+            model: nil,
+            voice: "marin",
+            capabilities: ["voice-transcript"])
+        let object = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(params)) as? [String: Any])
+
+        #expect(object["model"] == nil)
     }
 
     @Test func `decodes optional realtime client voice session id`() throws {
@@ -256,6 +287,45 @@ struct TalkModeManagerTests {
         #expect(parsed.realtimeVoiceId == nil)
     }
 
+    @Test func `omits model override when gateway owns redacted selection`() {
+        let parsed = Self.parse([
+            "talk": [
+                "realtime": [
+                    "provider": "openai",
+                    "mode": "realtime",
+                    "transport": "gateway-relay",
+                ],
+            ],
+            "clientHints": [
+                "realtime": [
+                    "modelSource": "gateway",
+                    "gatewayRelaySupported": false,
+                ],
+            ],
+        ])
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        manager._test_applyLoadedTalkConfig(parsed, providerSelection: .gatewayDefault)
+
+        #expect(parsed.executionMode == .realtimeRelay)
+        #expect(parsed.realtimeModelId == nil)
+        #expect(manager._test_realtimeModelId() == nil)
+        #expect(manager._test_executionMode() == .realtimeRelay)
+    }
+
+    @Test func `preserves the released realtime model override`() {
+        let parsed = Self.parseRealtime(
+            provider: "openai",
+            model: "gpt-live-1-codex",
+            voice: "spruce",
+            mode: "realtime",
+            transport: "gateway-relay")
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        manager._test_applyLoadedTalkConfig(parsed, providerSelection: .gatewayDefault)
+
+        #expect(parsed.realtimeModelId == "gpt-live-1-codex")
+        #expect(manager._test_realtimeModelId() == "gpt-live-1-codex")
+    }
+
     @Test func `resolves realtime voice picker overrides`() {
         #expect(TalkModeRealtimeVoiceSelection.resolvedOverride(nil) == nil)
         #expect(TalkModeRealtimeVoiceSelection.resolvedOverride("") == nil)
@@ -403,6 +473,16 @@ struct TalkModeManagerTests {
         #expect(issue.technicalDetails.contains("code: realtime_unavailable"))
     }
 
+    @Test func `relay issue preserves known code and falls back for unknown code`() {
+        let codes = ["audio_input_unavailable", "realtime_output_cancel_failed", "future_code"].map { rawCode in
+            TalkModeManager.runtimeIssue(from: RealtimeTalkRelayIssue(
+                code: rawCode,
+                message: "failed")).code
+        }
+
+        #expect(codes == [.audioInputUnavailable, .realtimeOutputCancelFailed, .realtimeUnavailable])
+    }
+
     @Test func `native fallback keeps realtime issue visible`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
         let issue = TalkRuntimeIssue(
@@ -480,6 +560,7 @@ struct TalkModeManagerTests {
         #expect(manager._test_gatewayTalkActiveModeTitle() != "Not active")
 
         manager._test_handleRealtimeRelayStatus("Ready")
+        manager._test_handleRealtimeRelayTermination()
 
         #expect(manager.statusText == "Ready")
         #expect(manager._test_gatewayTalkActiveModeTitle() == "Not active")
@@ -524,6 +605,7 @@ struct TalkModeManagerTests {
 
         manager._test_handleRealtimeRelayStatus("Listening (Realtime)")
         manager._test_handleRealtimeRelayStatus("Ready")
+        manager._test_handleRealtimeRelayTermination()
 
         #expect(manager.statusText == "Reconnecting")
         #expect(manager._test_rapidRealtimeRestartCount() == 1)

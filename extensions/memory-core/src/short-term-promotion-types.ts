@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { MemoryEntryProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT,
@@ -10,17 +9,6 @@ import type { ConceptTagScriptCoverage } from "./concept-vocabulary.js";
 export const DEFAULT_PROMOTION_MIN_SCORE = DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE;
 export const DEFAULT_PROMOTION_MIN_RECALL_COUNT = DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT;
 export const DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES = DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES;
-export const SHORT_TERM_STORE_RELATIVE_PATH = path.join(
-  "memory",
-  ".dreams",
-  "short-term-recall.json",
-);
-export const SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH = path.join(
-  "memory",
-  ".dreams",
-  "phase-signals.json",
-);
-
 export type PromotionWeights = {
   frequency: number;
   relevance: number;
@@ -81,6 +69,7 @@ export type ShortTermStoreMeta = {
 export type ShortTermLockEntry = {
   owner: string;
   acquiredAt: number;
+  ownerStartTime?: number;
 };
 
 type PromotionComponents = {
@@ -165,14 +154,14 @@ export type RankShortTermPromotionOptions = {
   minUniqueQueries?: number;
   maxAgeDays?: number;
   includePromoted?: boolean;
-  /** Require explicit provenance when ranking for consolidation. */
-  requireProvenance?: boolean;
   recencyHalfLifeDays?: number;
   weights?: Partial<PromotionWeights>;
   nowMs?: number;
 };
 
 export type ApplyShortTermPromotionsOptions = {
+  agentId?: string;
+  workspaceAgentIds?: readonly string[];
   workspaceDir: string;
   candidates: PromotionCandidate[];
   limit?: number;
@@ -200,7 +189,7 @@ export type ApplyShortTermPromotionsOptions = {
   maxPromotedSnippetTokens?: number;
   maxPriorEntryLossFraction?: number;
   consolidation?: {
-    subagent?: import("./dreaming-narrative.js").SubagentSurface;
+    subagent?: import("./dreaming-narrative.js").DreamingCompletion;
     model?: string;
     logger: {
       info: (message: string) => void;

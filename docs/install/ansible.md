@@ -88,13 +88,15 @@ sudo systemctl status openclaw
 # View live logs
 sudo journalctl -u openclaw -f
 
-# Restart gateway
-sudo systemctl restart openclaw
+# Restart gateway (run as openclaw user)
+openclaw gateway restart
 
 # Channel login (run as openclaw user)
 sudo -i -u openclaw
 openclaw channels login --channel <name>
 ```
+
+`openclaw gateway restart` records managed restart intent. For a system-scope service, follow the exact `sudo systemctl restart <unit>` command it prints.
 
 ## Security architecture
 

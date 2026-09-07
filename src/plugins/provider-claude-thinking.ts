@@ -10,6 +10,7 @@ import {
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
+  requiresClaudeMandatoryAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeXhighEffort,
 } from "@openclaw/llm-core";
@@ -44,16 +45,22 @@ export function resolveClaudeThinkingProfile(
   if (resolveClaudeFable5ModelIdentity(ref) || resolveClaudeMythos5ModelIdentity(ref)) {
     return CLAUDE_FABLE_5_THINKING_PROFILE;
   }
+  // Before the generic xhigh branch: Opus 5 defaults thinking on ("high"),
+  // unlike Opus 4.7/4.8 whose omitted-thinking default is off.
   if (resolveClaudeOpus5ModelIdentity(ref)) {
     return CLAUDE_OPUS_5_THINKING_PROFILE;
   }
   if (resolveClaudeSonnet5ModelIdentity(ref)) {
     return CLAUDE_SONNET_5_THINKING_PROFILE;
   }
-  // Before the generic xhigh branch: Opus 5 defaults thinking on ("high"),
-  // unlike Opus 4.7/4.8 whose omitted-thinking default is off.
-  if (resolveClaudeOpus5ModelIdentity(ref)) {
-    return CLAUDE_OPUS_5_THINKING_PROFILE;
+  if (requiresClaudeMandatoryAdaptiveThinking(ref)) {
+    return {
+      // Mythos Preview requires adaptive thinking but does not expose the
+      // native xhigh/max ladder owned by the released Claude 5 families.
+      levels: [...BASE_CLAUDE_THINKING_LEVELS.slice(1), { id: "adaptive" }],
+      defaultLevel: "adaptive",
+      preserveWhenCatalogReasoningFalse: true,
+    };
   }
   if (supportsClaudeNativeXhighEffort(ref)) {
     return {

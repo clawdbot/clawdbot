@@ -35,7 +35,7 @@ export function expandIMessageUserPath(value: string): string {
     return value;
   }
   const home = resolveIMessageHomeDir();
-  return home ? value.replace(/^~(?=$|[\\/])/, home) : value;
+  return home ? value.replace(/^~(?=$|[\\/])/, () => home) : value;
 }
 
 function resolveIMessageExecutable(cliPath: string): string | undefined {

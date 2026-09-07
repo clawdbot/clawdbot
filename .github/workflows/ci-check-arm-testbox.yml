@@ -15,7 +15,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('{0}-pr-v1-{1}', github.workflow, github.event.pull_request.number) || format('{0}-manual-v1-{1}', github.workflow, github.run_id) }}
+  # Admission precedes job skips: isolate passive drafts before they can cancel useful work.
+  # Keep conversion events in the PR group where subscribed, as an intentional cancellation signal.
+  group: >-
+    ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.action != 'converted_to_draft'
+      && format('{0}-passive-draft-{1}', github.workflow, github.run_id)
+      || (github.event_name == 'pull_request' && format('{0}-pr-v1-{1}', github.workflow, github.event.pull_request.number) || format('{0}-manual-v1-{1}', github.workflow, github.run_id)) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -33,7 +38,7 @@ jobs:
     timeout-minutes: 120
     steps:
       - name: Begin Testbox
-        uses: useblacksmith/begin-testbox@d0e04585c26905fdd92c94a09c159544c7ee1b67
+        uses: useblacksmith/begin-testbox@233448af4bfdc6fca509a7f0974411ac6d8a8043 # v2
         with:
           testbox_id: ${{ inputs.testbox_id }}
       - name: Verify ARM runner
@@ -52,25 +57,21 @@ jobs:
               ;;
           esac
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: ${{ github.event_name == 'pull_request' && '2' || '0' }}
           persist-credentials: false
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
           install-trufflehog: "true"
-      - name: Ensure Testbox base commit
-        if: github.event_name == 'pull_request'
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event.pull_request.base.ref }}
       - name: Prepare Testbox shell
         uses: ./.github/actions/prepare-testbox-shell
         with:
           base-ref: ${{ github.event.pull_request.base.sha || 'refs/remotes/origin/main' }}
+          go-version: "1.27.0"
 
       - name: Hydrate Testbox provider env helper
         shell: bash
@@ -81,6 +82,7 @@ jobs:
           BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
           DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
           FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
           FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
@@ -124,7 +126,9 @@ jobs:
         run: bash scripts/ci-hydrate-testbox-env.sh
 
       - name: Run Testbox
-        uses: useblacksmith/run-testbox@5ca05834db1d3813554d1dd109e5f2087a8d7cbc
+        # Temporary local-listener fix: https://github.com/useblacksmith/run-testbox/pull/15
+        # Return to useblacksmith/run-testbox after the fix lands upstream.
+        uses: steipete/run-testbox@2b6b1be536ec7f3c73757fedf5460a27ab4856b4
         if: always()
         env:
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"

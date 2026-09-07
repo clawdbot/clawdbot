@@ -1,6 +1,6 @@
 // E2E: ordinary embedded Gateway turns preserve raw transcript cursor continuity.
 import { randomUUID } from "node:crypto";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import path from "node:path";
 import { readSessionTranscriptRawDelta } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +10,7 @@ import {
 } from "../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -43,7 +44,10 @@ describe("embedded transcript cursor settlement", () => {
       const instance = await createOpenClawTestInstance({
         name: "embedded-transcript-cursor",
         config: createTestConfig(modelServer.baseUrl),
-        env: { OPENCLAW_SKIP_PROVIDERS: undefined },
+        env: {
+          OPENCLAW_SKIP_PROVIDERS: undefined,
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        },
       });
       instances.push(instance);
       await instance.startGateway();
@@ -232,7 +236,11 @@ async function startMockModelServer(): Promise<MockModelServer> {
       }
       await drainRequest(request);
       responseCount += 1;
-      writeModelResponse(response, responseCount);
+      writeOpenAiResponsesText(response, {
+        text: `cursor settlement response ${responseCount}`,
+        messageId: `cursor-settlement-message-${responseCount}`,
+        responseId: `cursor-settlement-response-${responseCount}`,
+      });
     })().catch((error: unknown) => {
       response.writeHead(500, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: { message: String(error) } }));
@@ -261,54 +269,4 @@ async function drainRequest(request: IncomingMessage): Promise<void> {
   for await (const chunk of request) {
     void chunk;
   }
-}
-
-function writeModelResponse(response: ServerResponse, sequence: number): void {
-  const text = `cursor settlement response ${sequence}`;
-  const message = {
-    type: "message",
-    id: `cursor-settlement-message-${sequence}`,
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text, annotations: [] }],
-  };
-  const events = [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...message, status: "in_progress", content: [] },
-    },
-    {
-      type: "response.output_text.delta",
-      item_id: message.id,
-      output_index: 0,
-      content_index: 0,
-      delta: text,
-    },
-    {
-      type: "response.output_text.done",
-      item_id: message.id,
-      output_index: 0,
-      content_index: 0,
-      text,
-    },
-    { type: "response.output_item.done", output_index: 0, item: message },
-    {
-      type: "response.completed",
-      response: {
-        id: `cursor-settlement-response-${sequence}`,
-        status: "completed",
-        output: [message],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ];
-  response.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  response.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
 }

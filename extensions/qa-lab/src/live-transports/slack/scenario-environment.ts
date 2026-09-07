@@ -71,7 +71,9 @@ export function createSlackQaScenarioEnvironment(params: {
 }) {
   const observedMessages: SlackObservedMessage[] = [];
 
-  const prepareFlow = async (input: FlowPreparationInput) => {
+  const prepareFlow = async (
+    input: FlowPreparationInput,
+  ): Promise<{ slackScenarioContext: SlackQaScenarioEnvironment }> => {
     const context = {
       channelId: params.channelId,
       driverClient: params.driverClient,

@@ -5,8 +5,9 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  assertCodexNativeHookRelayAllowed,
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayDisabledConfig,
   emitCodexNativePreToolUseFailureDiagnostic,
@@ -19,6 +20,41 @@ function flushDiagnosticEvents(): Promise<void> {
     setImmediate(resolve);
   });
 }
+
+describe("Codex native hook relay managed policy", () => {
+  it.each([
+    { name: "absent requirements", response: { requirements: null } },
+    { name: "ordinary hooks", response: { requirements: { allowManagedHooksOnly: false } } },
+  ])("accepts $name and caches the authoritative process policy", async ({ response }) => {
+    const request = vi.fn(async () => response);
+    const client = { request };
+
+    await assertCodexNativeHookRelayAllowed(client as never);
+    await assertCodexNativeHookRelayAllowed(client as never);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith("configRequirements/read", undefined, {
+      signal: undefined,
+    });
+  });
+
+  it.each([
+    { name: "missing response", response: {} },
+    { name: "invalid requirements", response: { requirements: [] } },
+    { name: "invalid managed hook flag", response: { requirements: { allowManagedHooksOnly: 1 } } },
+  ])("fails closed on $name and allows a corrected retry", async ({ response }) => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(response)
+      .mockResolvedValueOnce({ requirements: null });
+    const client = { request };
+
+    await expect(assertCodexNativeHookRelayAllowed(client as never)).rejects.toThrow(/invalid/i);
+    await expect(assertCodexNativeHookRelayAllowed(client as never)).resolves.toBeUndefined();
+
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe("Codex native hook relay config", () => {
   it("builds deterministic Codex config overrides with command hooks", () => {

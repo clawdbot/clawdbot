@@ -6,7 +6,7 @@ import type { SqliteBackedMatrixSyncStore } from "../client/file-sync-store.js";
 import type { MatrixSyncState } from "../sync-state.js";
 
 const MATRIX_SYNC_QUIESCE_TIMEOUT_MS = 5_000;
-const MATRIX_JS_SDK_SYNC_VERSION = "41.9.0";
+const MATRIX_JS_SDK_SYNC_VERSION = "42.2.0";
 const matrixJsSdkPackage = createRequire(import.meta.url)("matrix-js-sdk/package.json") as {
   version?: unknown;
 };
@@ -46,7 +46,7 @@ export async function quiesceMatrixClientSync(params: {
     throw error;
   }
 
-  // 41.9.0: stop protected classic sync here; public stopClient also stops crypto.
+  // 42.2.0: stop protected classic sync here; public stopClient also stops crypto.
   const syncApi = (params.client as MatrixJsClient & { syncApi?: unknown }).syncApi;
   if (syncApi === undefined && !params.started) {
     return;

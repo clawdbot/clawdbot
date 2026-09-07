@@ -52,6 +52,7 @@ import {
   resolveOpenAICompletionsCompat,
   type ResolvedOpenAICompletionsCompat,
 } from "../transports/openai-completions-compat.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import { streamOpenAICompletions } from "./openai-completions.js";
 
 const baseModel: Model<"openai-completions"> = {
@@ -93,6 +94,7 @@ function resolveTestEndpointClass(baseUrl: string | undefined): string {
     "llm.chutes.ai": "chutes-native",
     "api.z.ai": "zai-native",
     "api.deepseek.com": "deepseek-native",
+    "dashscope.aliyuncs.com": "modelstudio-native",
     "127.0.0.1": "local",
     localhost: "local",
   };
@@ -125,7 +127,9 @@ function resolveTestCapabilities(
       ? "moonshot"
       : provider === "openai" || provider === "azure-openai"
         ? "openai-family"
-        : (provider ?? "unknown");
+        : provider === "qwen" || provider === "dashscope"
+          ? "modelstudio"
+          : (provider ?? "unknown");
   const usesConfiguredBaseUrl = endpointClass !== "default";
   const usesKnownNativeOpenAIEndpoint =
     endpointClass === "openai-public" ||
@@ -510,6 +514,106 @@ afterEach(() => {
 });
 
 describe("OpenAI-compatible completions compatibility", () => {
+  it.each([
+    { provider: "dashscope", baseUrl: "", expected: "anthropic" },
+    { provider: "modelstudio", baseUrl: "", expected: "anthropic" },
+    { provider: "qwen", baseUrl: "", expected: "anthropic" },
+    {
+      provider: "custom",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      expected: "anthropic",
+    },
+    { provider: "custom", baseUrl: "https://proxy.example/v1", expected: undefined },
+    { provider: "qwen", baseUrl: "https://proxy.example/v1", expected: undefined },
+    { provider: "moonshot", baseUrl: "https://api.moonshot.ai/v1", expected: undefined },
+  ])("defaults cache markers for $provider at $baseUrl", ({ provider, baseUrl, expected }) => {
+    expect(
+      resolveOpenAICompletionsCompat(createModel({ provider, baseUrl })).cacheControlFormat,
+    ).toBe(expected);
+  });
+
+  it("honors explicit cache compatibility settings on Model Studio", () => {
+    const compat = { cacheControlFormat: "anthropic", supportsLongCacheRetention: true } as const;
+    expect(
+      resolveOpenAICompletionsCompat(createModel({ provider: "modelstudio", compat })),
+    ).toMatchObject(compat);
+  });
+
+  it.each([undefined, "anthropic"] as const)(
+    "requires explicit cache format %s for Qwen behind a custom endpoint",
+    async (cacheControlFormat) => {
+      const model = createModel({
+        id: "qwen-plus",
+        provider: "qwen",
+        compat: { cacheControlFormat },
+      });
+      await streamOpenAICompletions(
+        model,
+        {
+          systemPrompt: "Follow instructions.",
+          messages: [userMessage],
+          tools: [
+            {
+              name: "lookup",
+              description: "Look up data",
+              parameters: { type: "object", properties: {} },
+            },
+          ],
+        },
+        { apiKey: "test", cacheRetention: "short" },
+      ).result();
+
+      expect(mockOpenAI.payloads).toHaveLength(1);
+      const markers = JSON.stringify(mockOpenAI.payloads[0]).match(/"cache_control":/g) ?? [];
+      expect(markers).toHaveLength(cacheControlFormat === "anthropic" ? 3 : 0);
+      expect(resolveOpenAICompletionsCompat(model).cacheControlFormat).toBe(cacheControlFormat);
+    },
+  );
+
+  it.each([undefined, "short", "long", "none"] as const)(
+    "sends Model Studio cache markers without OpenAI cache fields for retention %s",
+    async (cacheRetention) => {
+      const model = createModel({
+        id: "qwen-plus",
+        provider: "custom",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      });
+      await streamOpenAICompletions(
+        model,
+        {
+          systemPrompt: "Follow instructions.",
+          messages: [userMessage, { ...userMessage, content: "latest", timestamp: 2 }],
+          tools: ["alpha", "zeta"].map((name) => ({
+            name,
+            description: name,
+            parameters: { type: "object", properties: {} },
+          })),
+        },
+        { apiKey: "test", sessionId: "session-test", cacheRetention },
+      ).result();
+
+      const cacheControl = cacheRetention === "none" ? undefined : { type: "ephemeral" };
+      const content = (text: string) =>
+        cacheControl ? [{ type: "text", text, cache_control: cacheControl }] : text;
+      const expectedPayload = {
+        model: "qwen-plus",
+        messages: [
+          { role: "system", content: content("Follow instructions.") },
+          { role: "user", content: "hello" },
+          { role: "user", content: content("latest") },
+        ],
+        stream: true,
+        tools: ["alpha", "zeta"].map((name) => ({
+          type: "function",
+          function: { name, description: name, parameters: { type: "object", properties: {} } },
+          cache_control: name === "zeta" ? cacheControl : undefined,
+        })),
+      };
+      // Compare wire JSON, where undefined cache fields must be omitted.
+      expect(JSON.stringify(mockOpenAI.payloads[0])).toBe(JSON.stringify(expectedPayload));
+    },
+  );
+
   it.each(legacyMatrixParityCases)(
     "maps former provider matrix case %s to canonical endpoint policy",
     (_name, overrides, legacyExpected, expected, divergence) => {
@@ -808,17 +912,32 @@ describe("OpenAI-compatible completions compatibility", () => {
       }),
       expectedHeaders: { "x-session-id": "session-123" },
     },
-  ])("sends exact $name session-affinity headers", async ({ model, expectedHeaders }) => {
-    await streamOpenAICompletions(model, context, {
-      apiKey: "test",
-      sessionId: "session-123",
-    }).result();
+    {
+      name: "OpenCode Go without caching",
+      cacheRetention: "none" as const,
+      model: createModel({ baseUrl: "https://opencode.ai/zen/go/v1" }),
+      expectedHeaders: { "x-opencode-session": "session-123" },
+    },
+    {
+      name: "OpenCode Zen",
+      model: createModel({ baseUrl: "https://opencode.ai/zen/v1" }),
+      expectedHeaders: { "x-opencode-session": "session-123" },
+    },
+  ])(
+    "sends exact $name session-affinity headers",
+    async ({ model, expectedHeaders, ...testCase }) => {
+      await streamOpenAICompletions(model, context, {
+        apiKey: "test",
+        sessionId: "session-123",
+        ...testCase,
+      }).result();
 
-    const clientOptions = mockOpenAI.clientOptions[0] as {
-      defaultHeaders?: Record<string, string>;
-    };
-    expect(clientOptions.defaultHeaders).toEqual(expectedHeaders);
-  });
+      const clientOptions = mockOpenAI.clientOptions[0] as {
+        defaultHeaders?: Record<string, string>;
+      };
+      expect(clientOptions.defaultHeaders).toEqual(expectedHeaders);
+    },
+  );
 
   it("retains replayed Z.AI thinking when reasoning is enabled", async () => {
     let payload: unknown;
@@ -841,14 +960,7 @@ describe("OpenAI-compatible completions compatibility", () => {
         },
         { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
       ],
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsage(),
       stopReason: "toolUse",
       timestamp: 2,
     };
@@ -889,16 +1001,10 @@ describe("OpenAI-compatible completions compatibility", () => {
     });
   });
 
-  it.each([
-    { configured: undefined, expected: 0 },
-    { configured: 3, expected: 3 },
-  ])("uses maxRetries=$expected when configured value is $configured", async (testCase) => {
-    await streamOpenAICompletions(baseModel, context, {
-      apiKey: "test",
-      maxRetries: testCase.configured,
-    }).result();
+  it("pins OpenAI SDK retries to zero", async () => {
+    await streamOpenAICompletions(baseModel, context, { apiKey: "test" }).result();
 
-    expect(mockOpenAI.requestOptions[0]).toMatchObject({ maxRetries: testCase.expected });
+    expect(mockOpenAI.clientOptions[0]).toMatchObject({ maxRetries: 0 });
   });
 
   it("surfaces HTTP response body text from OpenAI-compatible errors", async () => {

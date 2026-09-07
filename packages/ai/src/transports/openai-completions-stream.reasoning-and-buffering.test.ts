@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createZeroUsage } from "../usage.test-support.js";
 import { processCompletionsStream } from "./openai-completions-stream.js";
 import {
   createAssistantOutput,
@@ -182,14 +183,7 @@ describe("openai completions stream", () => {
       api: model.api,
       provider: model.provider,
       model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsage(),
       stopReason: "stop" as const,
       timestamp: Date.now(),
     };
@@ -268,7 +262,9 @@ describe("openai completions stream", () => {
       {
         type: "text",
         text: "Interim.",
-        textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        textSignature: expect.stringMatching(
+          /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+        ),
       },
       {
         type: "thinking",
@@ -278,7 +274,9 @@ describe("openai completions stream", () => {
       {
         type: "text",
         text: "Final.",
-        textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+        textSignature: expect.stringMatching(
+          /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
+        ),
       },
     ]);
   });
@@ -297,14 +295,7 @@ describe("openai completions stream", () => {
       api: model.api,
       provider: model.provider,
       model: model.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsage(),
       stopReason: "stop" as const,
       timestamp: Date.now(),
     };

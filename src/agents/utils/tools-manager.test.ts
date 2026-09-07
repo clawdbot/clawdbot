@@ -1,12 +1,16 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { FileLockOptions } from "../../infra/file-lock.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const extractArchiveMock = vi.hoisted(() => vi.fn());
+const withFileLockMock = vi.hoisted(() =>
+  vi.fn(async (_path: string, _options: FileLockOptions, fn: () => Promise<unknown>) => fn()),
+);
 
 vi.mock("../../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
@@ -21,6 +25,10 @@ vi.mock("../../infra/archive.js", () => ({
   extractArchive: extractArchiveMock,
 }));
 
+vi.mock("../../infra/file-lock.js", () => ({
+  withFileLock: withFileLockMock,
+}));
+
 let originalAgentDir: string | undefined;
 let tempAgentDir: string | undefined;
 
@@ -30,6 +38,11 @@ beforeEach(() => {
   setTestEnvValue("OPENCLAW_AGENT_DIR", tempAgentDir);
   fetchWithSsrFGuardMock.mockReset();
   extractArchiveMock.mockReset();
+  withFileLockMock
+    .mockReset()
+    .mockImplementation(
+      async (_path: string, _options: FileLockOptions, fn: () => Promise<unknown>) => fn(),
+    );
   spawnSyncMock.mockReturnValue({
     error: new Error("ENOENT"),
     status: null,
@@ -39,6 +52,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.doUnmock("node:os");
   vi.clearAllMocks();
   vi.resetModules();
   vi.unstubAllEnvs();
@@ -54,6 +68,80 @@ afterEach(() => {
 });
 
 describe("ensureTool", () => {
+  it("single-flights concurrent installs of the same tool", async () => {
+    const { ensureTool } = await import("./tools-manager.js");
+    const releaseCheckRelease = vi.fn(async () => {});
+    const downloadRelease = vi.fn(async () => {});
+    let resolveReleaseCheck!: (value: {
+      response: Response;
+      release: typeof releaseCheckRelease;
+      finalUrl: string;
+    }) => void;
+    const releaseCheck = new Promise<Parameters<typeof resolveReleaseCheck>[0]>((resolve) => {
+      resolveReleaseCheck = resolve;
+    });
+    extractArchiveMock.mockImplementation(async (params: { destDir: string }) => {
+      writeFileSync(join(params.destDir, "fd"), "binary");
+    });
+    fetchWithSsrFGuardMock.mockReturnValueOnce(releaseCheck).mockResolvedValueOnce({
+      response: new Response("archive-bytes", { status: 200 }),
+      release: downloadRelease,
+      finalUrl: "https://github.com/sharkdp/fd/releases/download/v10.3.0/archive.tar.gz",
+    });
+    withFileLockMock.mockImplementationOnce(
+      async (lockPath: string, _options: FileLockOptions, fn: () => Promise<unknown>) => {
+        expect(existsSync(dirname(lockPath))).toBe(true);
+        return fn();
+      },
+    );
+
+    const installs = [ensureTool("fd", true), ensureTool("fd", true)];
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+    resolveReleaseCheck({
+      response: new Response(JSON.stringify({ tag_name: "v10.3.0" }), { status: 200 }),
+      release: releaseCheckRelease,
+      finalUrl: "https://api.github.com/repos/sharkdp/fd/releases/latest",
+    });
+    await expect(Promise.all(installs)).resolves.toEqual([
+      join(tempAgentDir!, "bin", "fd"),
+      join(tempAgentDir!, "bin", "fd"),
+    ]);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+    expect(extractArchiveMock).toHaveBeenCalledOnce();
+    expect(withFileLockMock).toHaveBeenCalledOnce();
+    const lockOptions = withFileLockMock.mock.calls[0]?.[1];
+    if (!lockOptions) {
+      throw new Error("expected tool installation lock options");
+    }
+    const minimumLockWaitMs = Array.from({ length: lockOptions.retries.retries }, (_, attempt) =>
+      Math.min(
+        lockOptions.retries.maxTimeout,
+        Math.max(
+          lockOptions.retries.minTimeout,
+          lockOptions.retries.minTimeout * lockOptions.retries.factor ** attempt,
+        ),
+      ),
+    ).reduce((total, delay) => total + delay, 0);
+    expect(minimumLockWaitMs).toBeGreaterThan(lockOptions.stale);
+  });
+
+  it("reuses an installation published while waiting for the file lock", async () => {
+    const binaryPath = join(tempAgentDir!, "bin", "fd");
+    withFileLockMock.mockImplementationOnce(
+      async (_path: string, _options: FileLockOptions, fn: () => Promise<unknown>) => {
+        mkdirSync(join(tempAgentDir!, "bin"), { recursive: true });
+        writeFileSync(binaryPath, "binary");
+        return fn();
+      },
+    );
+    const { ensureTool } = await import("./tools-manager.js");
+
+    await expect(ensureTool("fd", true)).resolves.toBe(binaryPath);
+
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
   it("treats trimmed on as the canonical offline opt-in", async () => {
     vi.stubEnv("OPENCLAW_OFFLINE", " ON ");
     const { ensureTool } = await import("./tools-manager.js");
@@ -135,7 +223,7 @@ describe("ensureTool", () => {
     expect(extractArchiveMock).toHaveBeenCalledWith(
       expect.objectContaining({
         archivePath: expect.stringContaining(".zip"),
-        destDir: expect.stringContaining("extract_tmp_rg_"),
+        destDir: expect.stringMatching(/install_tmp_rg_.+[\\/]extract$/),
         timeoutMs: 60_000,
         limits: {
           maxArchiveBytes: 100 * 1024 * 1024,

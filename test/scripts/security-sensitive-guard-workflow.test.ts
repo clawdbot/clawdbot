@@ -76,7 +76,7 @@ describe("security-sensitive guard workflow", () => {
       const steps = jobs[jobName]?.steps ?? [];
       const checkout = steps.find((step) => step.uses?.startsWith("actions/checkout@"));
 
-      expect(checkout?.uses).toBe("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd");
+      expect(checkout?.uses).toBe("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1");
       expect(checkout?.with?.ref).toBe("${{ github.workflow_sha }}");
       expect(checkout?.with?.ref).not.toBe("${{ github.event.pull_request.base.sha }}");
       expect(checkout?.with?.["persist-credentials"]).toBe(false);

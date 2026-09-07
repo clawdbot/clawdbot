@@ -3,19 +3,21 @@ export type ServiceChildStart = {
   generation: string;
   command: string;
   args: string[];
+  argv0?: string;
   cwd?: string;
   env?: Record<string, string>;
   stdinMode: "inherit" | "pipe-open" | "pipe-closed";
   secretFd?: number;
-  controlFd: number;
+  controlFd?: number;
+  windowsShellCommand?: string;
 };
 
-type ServiceChildControlMessage = {
+export type ServiceChildControlMessage = {
   generation: string;
   sequence: number;
 } & ({ type: "cancel"; signal: "SIGTERM" | "SIGKILL" } | { type: "startup-error-ack" });
 
-type ServiceChildAnchorPayload =
+export type ServiceChildAnchorPayload =
   | {
       type: "ready";
       commandPid: number;
@@ -25,6 +27,19 @@ type ServiceChildAnchorPayload =
       type: "root-result";
       code: number | null;
       signal: NodeJS.Signals | null;
+    }
+  | {
+      type: "result-error";
+      error: string;
+    }
+  | {
+      type: "output";
+      stream: "stdout" | "stderr";
+      chunk: string;
+    }
+  | {
+      type: "output-end";
+      stream: "stdout" | "stderr";
     }
   | {
       type: "closing";
@@ -42,7 +57,6 @@ export type ServiceChildAnchorMessage = ServiceChildAnchorPayload & {
 
 export type ServiceChildRelayMessage =
   | ServiceChildStart
-  | { type: "anchor-exit"; generation: string; code: number | null; signal: NodeJS.Signals | null }
   | { type: "relay-error"; generation: string; error: string };
 
 export function encodeServiceChildMessage(

@@ -2,7 +2,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { startQaGatewayChild } from "./gateway-child.js";
+import { createQaGatewayChild, type QaGatewayChild } from "./gateway-child.js";
 import { startQaLabServer } from "./lab-server.js";
 import { startQaProviderServer } from "./providers/server-runtime.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
@@ -37,14 +37,15 @@ async function startHookAccountFixture() {
   const mock = await startQaProviderServer("mock-openai", {
     modelRefs: [MODEL],
   });
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
 
   try {
     if (!mock) {
       throw new Error("mock-openai provider server did not start");
     }
     const transport = createQaChannelTransport(lab.state);
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -82,7 +83,7 @@ async function startHookAccountFixture() {
       },
     });
   } catch (error) {
-    await gateway?.stop().catch(() => undefined);
+    await gatewayOwner.stop().catch(() => undefined);
     await mock?.stop().catch(() => undefined);
     await lab.stop().catch(() => undefined);
     throw error;
@@ -95,7 +96,7 @@ async function startHookAccountFixture() {
     gateway,
     lab,
     stop: async () => {
-      await gateway.stop().catch(() => undefined);
+      await gatewayOwner.stop().catch(() => undefined);
       await mock.stop().catch(() => undefined);
       await lab.stop().catch(() => undefined);
     },

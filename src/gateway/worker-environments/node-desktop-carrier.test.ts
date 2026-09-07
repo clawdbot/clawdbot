@@ -93,6 +93,7 @@ function pendingTransport(params: {
   );
   const transport: NodeWorkerSupervisorTransport = {
     listCurrentNodes: async () => [params.proof],
+    hasCurrentRunner: (nodeId) => nodeId === params.proof.nodeId && params.isProofCurrent(),
     isCurrent: () => params.isProofCurrent(),
     invoke,
   };
@@ -270,6 +271,7 @@ describe("worker node desktop carrier", () => {
     carrier.bindRuntime({
       transport: {
         listCurrentNodes: async () => [proof],
+        hasCurrentRunner: (nodeId) => nodeId === proof.nodeId,
         isCurrent: () => true,
         invoke,
       },
@@ -303,6 +305,7 @@ describe("worker node desktop carrier", () => {
       carrier.bindRuntime({
         transport: {
           listCurrentNodes: async () => [proof],
+          hasCurrentRunner: (nodeId) => nodeId === proof.nodeId && proofCurrent,
           isCurrent: () => proofCurrent,
           invoke,
         },

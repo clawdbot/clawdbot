@@ -327,16 +327,36 @@ describe("parseTtsDirectives provider-aware routing", () => {
     expect(result.cleanedText).toBe("spoken content");
   });
 
-  it("does not parse tts examples inside markdown code", () => {
-    const input = [
-      "Use `[[tts:text]]` for hidden speech.",
-      "",
-      "```",
-      "[[tts:provider=elevenlabs voice=alloy]]",
-      "```",
-      "",
-      "Then continue normally.",
-    ].join("\n");
+  const ttsExample =
+    "[[tts:text]]hidden example[[/tts:text]] [[tts]]visible example[[/tts]] " +
+    "[[tts:provider=elevenlabs speed=1.2]] [[tts]] [[/tts:text]]";
+
+  it.each([
+    {
+      name: "a closed fence and inline span",
+      input: [
+        "Use `[[tts:text]]` for hidden speech.",
+        "",
+        "```",
+        ttsExample,
+        "```",
+        "",
+        "Then continue normally.",
+      ].join("\n"),
+    },
+    { name: "an unclosed fence", input: `\`\`\`md\n${ttsExample}` },
+    {
+      name: "a false closing fence",
+      input: `\`\`\`md\n\`\`\` not a close\n${ttsExample}\n\`\`\``,
+    },
+    {
+      name: "a longer enclosing fence",
+      input: `\`\`\`\`md\n\`\`\`\n${ttsExample}\n\`\`\`\n\`\`\`\``,
+    },
+    { name: "a multiline code span", input: `Use \`a\n${ttsExample}\nb\` literally.` },
+    { name: "a quoted fence", input: `> \`\`\`md\n> ${ttsExample}\n> \`\`\`` },
+    { name: "an indented code block", input: `    ${ttsExample}` },
+  ])("does not parse tts examples inside $name", ({ input }) => {
     const result = parseTtsDirectives(input, fullPolicy, {
       providers: [elevenlabs, minimax],
     });

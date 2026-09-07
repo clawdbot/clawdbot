@@ -53,6 +53,7 @@ describe("readSessionMethodAccess", () => {
 
   it.each([
     ["sessions.dispatch", { key: "agent:main:device", deviceId: "runner" }],
+    ["sessions.dispatch", { key: "agent:main:auto", autoDevice: true }],
     ["sessions.move", { key: "agent:main:device", target: { kind: "device", deviceId: "runner" } }],
   ])("allows write-scoped device placement through %s", (method, params) => {
     expect(
@@ -114,21 +115,23 @@ describe("readSessionMethodAccess", () => {
   });
 
   it("allows read, write, and admin scopes to satisfy read-scoped actions", () => {
-    for (const scope of ["operator.read", "operator.write", "operator.admin"]) {
-      expect(
-        readSessionMethodAccess(snapshot({ methods: ["session.members.list"], scopes: [scope] }), {
-          method: "session.members.list",
-          requiredScope: "operator.read",
-        }).allowed,
-      ).toBe(true);
+    for (const method of ["session.members.list", "session.members.listEvidence"]) {
+      for (const scope of ["operator.read", "operator.write", "operator.admin"]) {
+        expect(
+          readSessionMethodAccess(snapshot({ methods: [method], scopes: [scope] }), {
+            method,
+            requiredScope: "operator.read",
+          }).allowed,
+        ).toBe(true);
+      }
     }
   });
 
   it("rejects a read-scoped action without a compatible operator scope", () => {
     expect(
       readSessionMethodAccess(
-        snapshot({ methods: ["session.members.list"], scopes: ["operator.approvals"] }),
-        { method: "session.members.list", requiredScope: "operator.read" },
+        snapshot({ methods: ["session.members.listEvidence"], scopes: ["operator.approvals"] }),
+        { method: "session.members.listEvidence", requiredScope: "operator.read" },
       ),
     ).toMatchObject({
       allowed: false,

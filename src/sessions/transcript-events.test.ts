@@ -1,9 +1,12 @@
 // Transcript event tests cover transcript event parsing and compaction.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  attachSessionTranscriptRunId,
   emitSessionTranscriptUpdate,
   onInternalSessionTranscriptUpdate,
   onSessionTranscriptUpdate,
+  readSessionTranscriptRunId,
+  resolveTerminalAssistantTranscriptRunId,
 } from "./transcript-events.js";
 
 const cleanup: Array<() => void> = [];
@@ -15,6 +18,34 @@ afterEach(() => {
 });
 
 describe("transcript events", () => {
+  it.each(["assistant", "toolResult"])("persists normalized run ownership on %s rows", (role) => {
+    const message = { role, content: [], __openclaw: { seq: 2 } };
+
+    expect(attachSessionTranscriptRunId(message, "  run-owned  ")).toEqual({
+      ...message,
+      __openclaw: { seq: 2, runId: "run-owned" },
+    });
+    expect(attachSessionTranscriptRunId(message, "  ")).toBe(message);
+  });
+
+  it("does not assign output run ownership to user rows", () => {
+    const message = { role: "user", content: "prompt" };
+
+    expect(attachSessionTranscriptRunId(message, "run-owned")).toBe(message);
+  });
+
+  it.each([
+    [
+      "attached assistant row",
+      { role: "assistant", __openclaw: { runId: "run-owned" } },
+      "run-owned",
+    ],
+    ["blank attached run id", { role: "assistant", __openclaw: { runId: "  " } }, undefined],
+    ["row without the marker", { role: "assistant", content: [] }, undefined],
+  ])("reads back stored run ownership from %s", (_name, message, expected) => {
+    expect(readSessionTranscriptRunId(message)).toBe(expected);
+  });
+
   it("emits trimmed archive file updates only to internal listeners", () => {
     const listener = vi.fn();
     cleanup.push(onInternalSessionTranscriptUpdate(listener));
@@ -39,6 +70,7 @@ describe("transcript events", () => {
       message: { role: "assistant", content: "hi" },
       messageId: "  msg-1  ",
       messageSeq: 2,
+      runId: "  run-1  ",
     });
 
     expect(publicListener).toHaveBeenCalledWith({
@@ -53,6 +85,7 @@ describe("transcript events", () => {
       message: { role: "assistant", content: "hi" },
       messageId: "msg-1",
       messageSeq: 2,
+      runId: "run-1",
     });
     expect(internalListener).toHaveBeenCalledWith({
       sessionFile: "/tmp/session.jsonl",
@@ -67,6 +100,7 @@ describe("transcript events", () => {
       message: { role: "assistant", content: "hi" },
       messageId: "msg-1",
       messageSeq: 2,
+      runId: "run-1",
     });
   });
 
@@ -287,5 +321,36 @@ describe("transcript events", () => {
     expect(emitSessionTranscriptUpdate({ sessionFile: "/tmp/session.jsonl" })).toBeUndefined();
     expect(first).toHaveBeenCalledTimes(1);
     expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { name: "user", message: { role: "user", content: "prompt" }, expected: undefined },
+    {
+      name: "tool result",
+      message: { role: "toolResult", content: [{ type: "text", text: "result" }] },
+      expected: undefined,
+    },
+    {
+      name: "intermediate tool turn without a call block",
+      message: { role: "assistant", content: [], stopReason: "toolUse" },
+      expected: undefined,
+    },
+    ...["toolCall", "toolUse", "functionCall"].map((type) => ({
+      name: `incomplete ${type} block`,
+      message: { role: "assistant", content: [{ type }], stopReason: "error" },
+      expected: undefined,
+    })),
+    ...["stop", "length", "error", "aborted"].map((stopReason) => ({
+      name: `${stopReason} terminal assistant`,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "answer" }],
+        stopReason,
+      },
+      expected: "run-owned",
+    })),
+  ])("attributes run ownership only to terminal assistants: $name", ({ message, expected }) => {
+    expect(resolveTerminalAssistantTranscriptRunId(message, "  run-owned  ")).toBe(expected);
+    expect(resolveTerminalAssistantTranscriptRunId(message, "  ")).toBeUndefined();
   });
 });

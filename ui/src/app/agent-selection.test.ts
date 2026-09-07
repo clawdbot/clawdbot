@@ -1,13 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import { createAgentSelectionCapability, selectApplicationSession } from "./agent-selection.ts";
 
-function createGateway(assistantAgentId: string | null = "Main") {
+function createGateway(
+  assistantAgentId: string | null = "Main",
+  initialGatewayUrl = "ws://gateway-a.test",
+) {
   let snapshot = { client: null as GatewayBrowserClient | null, assistantAgentId };
+  let gatewayUrl = initialGatewayUrl;
   const listeners = new Set<(next: typeof snapshot) => void>();
   return {
     gateway: {
+      get connection() {
+        return { gatewayUrl };
+      },
       get snapshot() {
         return snapshot;
       },
@@ -18,6 +25,12 @@ function createGateway(assistantAgentId: string | null = "Main") {
     },
     publish(next: typeof snapshot) {
       snapshot = next;
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    },
+    switchGateway(nextGatewayUrl: string) {
+      gatewayUrl = nextGatewayUrl;
       for (const listener of listeners) {
         listener(snapshot);
       }
@@ -48,12 +61,91 @@ function createRoster() {
 }
 
 describe("agent selection", () => {
+  it("restores a persisted selection before the Gateway default arrives", () => {
+    const harness = createGateway(null);
+    const persistence = {
+      load: () => "OpenClaw",
+      save: vi.fn(),
+    };
+    const selection = createAgentSelectionCapability(
+      harness.gateway,
+      createRoster().roster,
+      persistence,
+    );
+
+    harness.publish({
+      client: { request() {} } as unknown as GatewayBrowserClient,
+      assistantAgentId: "Dummy",
+    });
+
+    expect(selection.state).toEqual({ selectedId: "openclaw", scopeId: "openclaw" });
+    expect(persistence.save).not.toHaveBeenCalled();
+  });
+
+  it("persists explicit selections and clears a removed agent", () => {
+    const harness = createGateway("Dummy");
+    const roster = createRoster();
+    roster.publish({
+      defaultId: "dummy",
+      mainKey: "main",
+      scope: "global",
+      agents: [
+        { id: "dummy", kind: "agent" },
+        { id: "openclaw", kind: "agent" },
+      ],
+    });
+    const persistence = { load: () => null, save: vi.fn() };
+    const selection = createAgentSelectionCapability(harness.gateway, roster.roster, persistence);
+
+    selection.set("OpenClaw");
+    expect(persistence.save).toHaveBeenLastCalledWith("ws://gateway-a.test", "openclaw");
+
+    roster.publish({
+      defaultId: "dummy",
+      mainKey: "main",
+      scope: "global",
+      agents: [{ id: "dummy", kind: "agent" }],
+    });
+    expect(selection.state).toEqual({ selectedId: "dummy", scopeId: "dummy" });
+    expect(persistence.save).toHaveBeenLastCalledWith("ws://gateway-a.test", null);
+  });
+
+  it("restores selection independently when the Gateway changes", () => {
+    const harness = createGateway("Dummy");
+    const persistence = {
+      load: (gatewayUrl: string) =>
+        gatewayUrl === "wss://gateway-b.test" ? "Research" : "OpenClaw",
+      save: vi.fn(),
+    };
+    const selection = createAgentSelectionCapability(
+      harness.gateway,
+      createRoster().roster,
+      persistence,
+    );
+
+    expect(selection.state.selectedId).toBe("openclaw");
+    harness.switchGateway("wss://gateway-b.test");
+    expect(selection.state).toEqual({ selectedId: "research", scopeId: "research" });
+  });
+
   it("keeps page scope separate from the concrete chat agent", () => {
     const harness = createGateway();
-    const selection = createAgentSelectionCapability(harness.gateway, createRoster().roster);
+    const roster = createRoster();
+    const selection = createAgentSelectionCapability(harness.gateway, roster.roster);
 
     expect(selection.state).toEqual({ selectedId: "main", scopeId: "main" });
     selection.setScope(null);
+    expect(selection.state).toEqual({ selectedId: "main", scopeId: null });
+
+    roster.publish({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [
+        { id: "main", kind: "agent" },
+        { id: "writer", kind: "agent" },
+      ],
+    });
     expect(selection.state).toEqual({ selectedId: "main", scopeId: null });
 
     selection.set("Writer");

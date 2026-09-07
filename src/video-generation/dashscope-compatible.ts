@@ -2,7 +2,6 @@ import { kindFromMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 // DashScope-compatible video provider adapts DashScope-style generation APIs.
-import { readResponseWithLimit } from "../infra/http-body.js";
 import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
 import {
   assertOkOrThrowHttpError,
@@ -11,6 +10,7 @@ import {
   executeProviderOperationWithRetry,
   fetchWithTimeoutGuarded,
   postJsonRequest,
+  readProviderBinaryResponse,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
@@ -629,9 +629,8 @@ export async function downloadDashscopeGeneratedVideos(params: {
           throw new Error(`${downloadLabel}: malformed video response`);
         }
       } catch (error) {
-        // Header rejection happens before the body reader, so explicitly cancel
-        // unread streams before their guarded dispatcher and timeout release.
-        await result.response.body?.cancel(error).catch(() => undefined);
+        // A capture tee can retain cancellation until the guarded transport is released.
+        void result.response.body?.cancel(error).catch(() => undefined);
         throw error;
       }
 
@@ -644,12 +643,12 @@ export async function downloadDashscopeGeneratedVideos(params: {
           params.defaultTimeoutMs,
         );
       } catch (error) {
-        // The body reader normally owns cancellation. If deadline resolution
-        // fails first, cancel here before release clears the guarded abort.
-        await result.response.body?.cancel(error).catch(() => undefined);
+        // A capture tee must not delay releasing the expired request.
+        void result.response.body?.cancel(error).catch(() => undefined);
         throw error;
       }
-      buffer = await readResponseWithLimit(result.response, params.maxBytes, {
+      buffer = await readProviderBinaryResponse(result.response, downloadLabel, "video", {
+        maxBytes: params.maxBytes,
         chunkTimeoutMs: downloadTimeoutMs,
         onOverflow: ({ maxBytes }) =>
           new Error(`${params.providerLabel} generated video download exceeds ${maxBytes} bytes`),

@@ -16,10 +16,12 @@ import {
   MAX_PRESERVED_PENDING_LINE_BYTES,
   resolveMaxOutputBytes,
   resolveOutputCapture,
+  shouldTerminateOnOutputError,
   shouldTerminateOnOutputLimit,
   type CapturedOutputBuffers,
   type CommandOutputCaptureMode,
   type CommandOutputCaptureOption,
+  type CommandOutputErrorOption,
   type CommandOutputLimitOption,
   type CommandOutputStream,
   type PreserveOutputLine,
@@ -34,7 +36,6 @@ import {
 } from "./exec-result.js";
 import { COMMAND_PROCESS_TREE_KILL_GRACE_MS, spawnCommandWithInvocation } from "./exec-spawn.js";
 import { createCommandTerminationController } from "./exec-termination.js";
-import { resolveCommandStdio } from "./spawn-utils.js";
 
 const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
 const WINDOWS_CLOSE_STATE_POLL_MS = 10;
@@ -57,12 +58,16 @@ export type CommandOptions = {
   onOutputChunk?: (chunk: Buffer, stream: CommandOutputStream) => boolean | void;
   /** Accept a successful exit when only the selected diagnostic output stream failed. */
   tolerateOutputError?: { stdout?: boolean; stderr?: boolean };
+  /** Terminate when the selected output stream emits an error. */
+  terminateOnOutputError?: CommandOutputErrorOption;
   terminateOnOutputLimit?: CommandOutputLimitOption;
   maxPreservedOutputLines?: number;
   preserveOutputLine?: PreserveOutputLine;
   killProcessTree?: boolean;
-  /** Signal used when terminating the direct child; tree termination owns its own grace policy. */
+  /** Initial signal for direct-child and graceful process-group cancellation. */
   killSignal?: NodeJS.Signals | number;
+  /** Grace between graceful termination and the force-kill fallback. */
+  killGraceMs?: number;
 };
 
 export async function runCommandWithTimeout(
@@ -97,11 +102,16 @@ async function runCommandWithOutputEncoding(
     signal,
     killProcessTree,
     killSignal,
+    killGraceMs,
   } = options;
   const resolvedTimeoutMs =
     typeof timeoutMs === "number" ? resolveTimerTimeoutMs(timeoutMs, 1) : undefined;
   const hasInput = input !== undefined;
-  const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
+  const resolvedKillGraceMs = resolveTimerTimeoutMs(
+    killGraceMs,
+    COMMAND_PROCESS_TREE_KILL_GRACE_MS,
+    0,
+  );
 
   if (signal?.aborted) {
     return {
@@ -111,6 +121,7 @@ async function runCommandWithOutputEncoding(
       signal: null,
       killed: false,
       termination: "signal",
+      cleanup: "normal",
       noOutputTimedOut: false,
     };
   }
@@ -153,6 +164,7 @@ async function runCommandWithOutputEncoding(
   let noOutputTimer: NodeJS.Timeout | undefined;
   let outputObserverError: unknown;
   let outputErrorStream: CommandOutputStream | undefined;
+  let terminatingOutputError: Error | undefined;
 
   const { child, invocation } = spawnCommandWithInvocation(argv, {
     buffer: false,
@@ -162,11 +174,11 @@ async function runCommandWithOutputEncoding(
     encoding: "buffer",
     baseEnv,
     env,
-    forceKillAfterDelay: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
+    forceKillAfterDelay: resolvedKillGraceMs,
     killSignal,
     ...(hasInput ? { input } : {}),
     reject: false,
-    stdio,
+    stdio: [hasInput ? "pipe" : "inherit", "pipe", "pipe"],
     stripFinalNewline: false,
     windowsVerbatimArguments: options.windowsVerbatimArguments,
   });
@@ -181,9 +193,11 @@ async function runCommandWithOutputEncoding(
     cancelController,
     baseEnv,
     env,
-    killProcessTree,
+    processTree: killProcessTree ? { mode: "graceful" } : undefined,
     isChildExited: () => childExited,
     isCommandSettled: () => commandSettled,
+    killGraceMs: resolvedKillGraceMs,
+    killSignal,
   });
 
   const clearNoOutputTimer = () => {
@@ -294,10 +308,8 @@ async function runCommandWithOutputEncoding(
       }
     } else {
       const remaining = Math.max(0, maxCombinedOutputBytes - combinedBytesBeforeChunk);
-      if (remaining > 0) {
-        appendCapturedOutput(capture, buffer.subarray(0, remaining), maxBytes, captureMode);
-      }
-      capture.truncatedBytes += Math.max(0, buffer.byteLength - remaining);
+      const maxCaptureBytes = Math.min(maxBytes, capture.bytes + remaining);
+      appendCapturedOutput(capture, buffer, maxCaptureBytes, captureMode);
     }
     if (
       (combinedLimitExceeded &&
@@ -324,12 +336,21 @@ async function runCommandWithOutputEncoding(
     return buffer;
   };
 
-  child.stdout?.once("error", () => {
-    outputErrorStream ??= "stdout";
-  });
-  child.stderr?.once("error", () => {
-    outputErrorStream ??= "stderr";
-  });
+  const onOutputError = (error: unknown, stream: CommandOutputStream) => {
+    outputErrorStream ??= stream;
+    if (
+      termination ||
+      options.tolerateOutputError?.[stream] === true ||
+      !shouldTerminateOnOutputError(options.terminateOnOutputError, stream)
+    ) {
+      return;
+    }
+    terminatingOutputError = toErrorObject(error, `Command ${stream} stream failed`);
+    Object.assign(terminatingOutputError, { outputErrorStream: stream });
+    cancel("signal");
+  };
+  child.stdout?.once("error", (error) => onOutputError(error, "stdout"));
+  child.stderr?.once("error", (error) => onOutputError(error, "stderr"));
   child.stdout?.on("data", (chunk) => {
     const buffer = observeOutputChunk(chunk, "stdout");
     appendPreservedOutputLines({
@@ -366,9 +387,18 @@ async function runCommandWithOutputEncoding(
     signal?.removeEventListener("abort", onAbort);
     releaseOutput();
   });
-  await terminationController.settle();
+  let cleanup = await terminationController.settle();
+  const resolvedSignal = result.signal ?? childExitState?.signal ?? nodeChild.signalCode ?? null;
+  if (cleanup !== "forced" && resolvedSignal) {
+    cleanup = "uncertain";
+  }
+  if (terminatingOutputError) {
+    throw Object.assign(terminatingOutputError, { cleanup });
+  }
   if (outputObserverError !== undefined) {
-    throw toErrorObject(outputObserverError, "Command output observer failed");
+    throw Object.assign(toErrorObject(outputObserverError, "Command output observer failed"), {
+      cleanup,
+    });
   }
   // Patched Node can report null/null after a cmd.exe shim exits. Execa turns
   // that into a cause-less failure; preserve the shim fallback only post-spawn.
@@ -416,13 +446,20 @@ async function runCommandWithOutputEncoding(
     )
   ) {
     const error = createSanitizedCommandError(result);
+    Object.assign(error, {
+      cleanup:
+        typeof nodeChild.pid === "number"
+          ? cleanup === "normal"
+            ? "uncertain"
+            : cleanup
+          : "normal",
+    });
     if (outputErrorStream) {
       Object.assign(error, { outputErrorStream });
     }
     throw error;
   }
 
-  const resolvedSignal = result.signal ?? childExitState?.signal ?? nodeChild.signalCode ?? null;
   const resolvedCode = resolveProcessExitCode({
     explicitCode: result.exitCode ?? childExitState?.code,
     childExitCode: nodeChild.exitCode,
@@ -487,6 +524,7 @@ async function runCommandWithOutputEncoding(
     code: normalizedCode,
     signal: resolvedSignal,
     killed: nodeChild.killed,
+    cleanup,
     termination: termination === "output-limit" ? "signal" : termination,
     noOutputTimedOut: termination === "no-output-timeout",
     outputLimitExceeded: termination === "output-limit" || undefined,

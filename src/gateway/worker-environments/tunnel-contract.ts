@@ -2,6 +2,7 @@ import type { WorkerTunnelStatus } from "@openclaw/gateway-protocol";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../../infra/node-commands.js";
 import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
+import type { NodeWorkerWorkspaceSeedInput } from "../../worker/node-workspace-protocol.js";
 import type { NodeWorkerWorkspaceTransferInput } from "../../worker/node-workspace-transfer-protocol.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type {
@@ -11,9 +12,29 @@ import type {
 
 export type { WorkerTunnelStatus };
 
+/** A disconnected node cannot hide an unfinished or failed local sibling cleanup. */
+export async function joinWorkerTunnelStops(operations: readonly (Promise<void> | undefined)[]) {
+  const outcomes = await Promise.allSettled(
+    operations.filter((operation) => operation !== undefined),
+  );
+  const errors = outcomes.flatMap((outcome) =>
+    outcome.status === "rejected" ? [outcome.reason] : [],
+  );
+  if (
+    errors.length === 1 ||
+    (errors.length > 1 &&
+      errors.every((error) => error instanceof WorkerTunnelOwnerDisconnectedError))
+  ) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "Worker tunnel cleanup failed");
+  }
+}
+
 export class WorkerTunnelOwnerDisconnectedError extends Error {
-  constructor() {
-    super("Worker tunnel owner is no longer connected");
+  constructor(message = "Worker tunnel owner is no longer connected") {
+    super(message);
     this.name = "WorkerTunnelOwnerDisconnectedError";
   }
 }
@@ -43,30 +64,87 @@ export type WorkerTunnelRequest = {
   ownerEpoch: number;
 };
 
+/** Provider teardown fences local work first; only its confirmed result releases physical ownership. */
+export type WorkerTunnelStopReason = "provider-destroying" | "provider-destroyed";
+
 export type WorkerWorkspaceCommand = {
   argv: readonly string[];
   transportRetry: "idempotent" | "never";
+  /** Local owner guard revalidated after transport awaits, immediately before dispatch. */
+  assertCurrent?: () => void;
   onDispatchReady?: () => void;
   input?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
   transfer?: NodeWorkerWorkspaceTransferInput;
+  seed?: NodeWorkerWorkspaceSeedInput;
 };
 
-export type WorkerWorkspaceSyncRequest = {
+export type WorkerLocalWorkspaceSyncRequest = {
   localPath: string;
   sessionId: string;
   generation: number;
   gitAuthor?: { name?: string; email?: string };
+  /** Immutable project identity from the owning environment's provisioning snapshot. */
+  projectKey?: string;
 };
 
-export type WorkerWorkspaceSyncResult = {
-  mode: "git" | "plain";
-  remoteWorkspaceDir: string;
-  manifestRef: string;
+type WorkerRepositoryCheckpointPayload = {
+  stagingRoot: string;
+  baseManifestRaw: string;
+  currentManifestRaw: string;
+  baseManifestRef: string;
+  currentManifestRef: string;
+  publicationStagingRoot?: string;
+  publicationDigest?: string;
 };
 
-export type WorkerWorkspaceReconcileRequest = {
+type WorkerRepositoryCheckpointPreparation = {
+  verify(): Promise<void>;
+  publish(): Promise<unknown>;
+  discard(): Promise<void>;
+};
+
+type WorkerRepositoryWorkspaceSource = {
+  kind: "repository";
+  url: string;
+  ref?: string;
+  branch: string;
+  baseCommit?: string;
+  gitToken?: string;
+  runSetupScript?: boolean;
+  checkpoint?: Pick<
+    WorkerRepositoryCheckpointPayload,
+    | "stagingRoot"
+    | "baseManifestRaw"
+    | "currentManifestRaw"
+    | "publicationStagingRoot"
+    | "publicationDigest"
+  >;
+};
+
+export type WorkerWorkspaceSyncRequest = {
+  sessionId: string;
+  generation: number;
+  gitAuthor?: { name?: string; email?: string };
+  source: { kind: "local"; path: string; projectKey?: string } | WorkerRepositoryWorkspaceSource;
+};
+
+export type WorkerWorkspaceSyncResult =
+  | {
+      mode: "git" | "plain";
+      remoteWorkspaceDir: string;
+      manifestRef: string;
+    }
+  | {
+      mode: "repository";
+      remoteWorkspaceDir: string;
+      manifestRef: string;
+      baseCommit: string;
+      baseManifestRef: string;
+    };
+
+export type WorkerLocalWorkspaceReconcileRequest = {
   localPath: string;
   remoteWorkspaceDir: string;
   baseManifestRef: string;
@@ -75,6 +153,25 @@ export type WorkerWorkspaceReconcileRequest = {
     ref: string;
     record(ref: string): void;
   };
+};
+
+export type WorkerWorkspaceReconcileRequest = {
+  remoteWorkspaceDir: string;
+  baseManifestRef: string;
+  source:
+    | {
+        kind: "local";
+        path: string;
+        journal: WorkerWorkspaceReconciliationJournalAdapter;
+        stagedResult?: WorkerLocalWorkspaceReconcileRequest["stagedResult"];
+      }
+    | {
+        kind: "repository";
+        referenceManifestRef: string;
+        prepareCheckpoint(
+          payload: WorkerRepositoryCheckpointPayload,
+        ): Promise<WorkerRepositoryCheckpointPreparation>;
+      };
 };
 
 export type WorkerWorkspaceReconcileResult = {
@@ -100,10 +197,13 @@ export type WorkerWorkspaceQuiescence = {
   resume(): Promise<void>;
 };
 
-export type WorkerTurnLaunchRequest = {
+type WorkerTurnLaunchRequest = {
   plan: WorkerLaunchPlan;
   turnClaim: WorkerSessionTurnClaim;
   timeoutMs?: number;
+  // Expiry of the minted admission credential; launch adapters cap admission
+  // re-arms so no advertised retry can outlive it.
+  credentialExpiresAtMs?: number;
   signal?: AbortSignal;
   onDispatchReady?: () => void;
 };
@@ -112,7 +212,13 @@ export type WorkerWorkspaceTunnelHandle = {
   environmentId: string;
   ownerEpoch: number;
   launchTurn?: never;
+  measureLaunchTurn?: never;
   runWorkspaceCommand(command: WorkerWorkspaceCommand): Promise<SpawnResult>;
+  stageAttachments?(request: {
+    localPath: string;
+    isAuthorized: () => boolean;
+    signal: AbortSignal;
+  }): Promise<void>;
   quiesceWorkspace(remoteWorkspaceDir: string): Promise<WorkerWorkspaceQuiescence>;
   syncWorkspace(request: WorkerWorkspaceSyncRequest): Promise<WorkerWorkspaceSyncResult>;
   reconcileWorkspace(
@@ -121,7 +227,11 @@ export type WorkerWorkspaceTunnelHandle = {
   stop(): Promise<void>;
 };
 
-export type WorkerTurnTunnelHandle = Omit<WorkerWorkspaceTunnelHandle, "launchTurn"> & {
+export type WorkerTurnTunnelHandle = Omit<
+  WorkerWorkspaceTunnelHandle,
+  "launchTurn" | "measureLaunchTurn"
+> & {
+  measureLaunchTurn(plan: WorkerLaunchPlan, claim: WorkerSessionTurnClaim): number;
   launchTurn(request: WorkerTurnLaunchRequest): Promise<SpawnResult>;
 };
 

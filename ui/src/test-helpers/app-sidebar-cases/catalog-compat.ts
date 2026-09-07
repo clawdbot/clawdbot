@@ -274,6 +274,7 @@ describe("AppSidebar session catalog pagination", () => {
       expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.list", {
         agentId: "main",
         catalogId: "codex",
+        hostIds: ["gateway:local"],
         cursors: { "gateway:local": "page-2" },
       });
       expect(section()?.querySelector('[data-session-catalog-error="codex"]')).toBeNull();

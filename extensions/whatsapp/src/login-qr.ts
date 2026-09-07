@@ -57,6 +57,7 @@ type ActiveLogin = {
   verbose: boolean;
   runtime: RuntimeEnv;
   socketTiming: WhatsAppSocketTimingOptions;
+  beforeCredentialPersistence?: () => Promise<void>;
 };
 
 type LoginQrRaceResult =
@@ -89,8 +90,10 @@ function closeSocket(sock: WaSocket) {
 async function resetActiveLogin(accountId: string, reason?: string) {
   const login = activeLogins.get(accountId);
   if (login) {
-    closeSocket(login.sock);
+    // Revoke the operation before closing its socket so close-triggered credential
+    // work cannot race through with authority from the retired login instance.
     activeLogins.delete(accountId);
+    closeSocket(login.sock);
   }
   if (reason) {
     logInfo(reason);
@@ -201,6 +204,7 @@ function attachLoginWaiter(accountId: string, login: ActiveLogin) {
     verbose: login.verbose,
     runtime: login.runtime,
     socketTiming: login.socketTiming,
+    beforeCredentialPersistence: login.beforeCredentialPersistence,
     onQr: (qr) => {
       const current = activeLogins.get(accountId);
       if (!current || current.id !== login.id) {
@@ -322,6 +326,7 @@ export async function startWebLoginWithQr(
     force?: boolean;
     accountId?: string;
     runtime?: RuntimeEnv;
+    beforeCredentialPersistence?: () => Promise<void>;
   } = {},
 ): Promise<StartWebLoginWithQrResult> {
   const runtime = opts.runtime ?? defaultRuntime;
@@ -348,6 +353,7 @@ export async function startWebLoginWithQr(
         authDir: account.authDir,
         isLegacyAuthDir: account.isLegacyAuthDir,
         runtime,
+        beforeCredentialPersistence: opts.beforeCredentialPersistence,
       });
       if (!cleared) {
         return {
@@ -389,10 +395,22 @@ export async function startWebLoginWithQr(
   let sock: WaSocket;
   let pendingQr: string | null = null;
   const loginId = randomUUID();
+  const operationOwner: { current?: ActiveLogin } = {};
+  const beforeCredentialPersistence = async () => {
+    const login = operationOwner.current;
+    if (!login) {
+      await opts.beforeCredentialPersistence?.();
+      return;
+    }
+    if (activeLogins.get(account.accountId) !== login || !isLoginFresh(login)) {
+      throw new Error("WhatsApp login is no longer active.");
+    }
+  };
   try {
     sock = await createWaSocket(false, Boolean(opts.verbose), {
       authDir: account.authDir,
       ...socketTiming,
+      beforeCredentialPersistence,
       onQr: (qr: string) => {
         pendingQr = qr;
         const current = activeLogins.get(account.accountId);
@@ -421,7 +439,7 @@ export async function startWebLoginWithQr(
       message: `Failed to start WhatsApp login: ${String(err)}`,
     };
   }
-  const login: ActiveLogin = {
+  const nextLogin: ActiveLogin = {
     accountId: account.accountId,
     authDir: account.authDir,
     isLegacyAuthDir: account.isLegacyAuthDir,
@@ -437,23 +455,36 @@ export async function startWebLoginWithQr(
     verbose: Boolean(opts.verbose),
     runtime,
     socketTiming,
+    beforeCredentialPersistence,
   };
-  resetQrUpdateSignal(login);
-  activeLogins.set(account.accountId, login);
+  try {
+    // Bootstrap authority is checked immediately before ownership transfers to
+    // this exact login instance; stale, expired, or replaced instances fail later writes.
+    await opts.beforeCredentialPersistence?.();
+  } catch (err) {
+    clearTimeout(qrTimer);
+    closeSocket(sock);
+    return {
+      message: `Failed to start WhatsApp login: ${String(err)}`,
+    };
+  }
+  operationOwner.current = nextLogin;
+  resetQrUpdateSignal(nextLogin);
+  activeLogins.set(account.accountId, nextLogin);
   if (pendingQr) {
-    const qrVersion = updateLoginQrState(login, pendingQr);
+    const qrVersion = updateLoginQrState(nextLogin, pendingQr);
     renderLatestQrDataUrlInBackground({
       accountId: account.accountId,
-      loginId: login.id,
+      loginId: nextLogin.id,
       qr: pendingQr,
       qrVersion,
     });
   }
-  attachLoginWaiter(account.accountId, login);
+  attachLoginWaiter(account.accountId, nextLogin);
 
   const loginStartResult = await waitForQrOrRecoveredLogin({
     accountId: account.accountId,
-    login,
+    login: nextLogin,
     qrPromise,
   });
   clearTimeout(qrTimer);
@@ -475,8 +506,8 @@ export async function startWebLoginWithQr(
     };
   }
 
-  const qr = login.qr ?? loginStartResult.qr;
-  const qrVersion = login.qrVersion;
+  const qr = nextLogin.qr ?? loginStartResult.qr;
+  const qrVersion = nextLogin.qrVersion;
   if (qrVersion === 0) {
     await resetActiveLogin(account.accountId);
     return {
@@ -488,7 +519,7 @@ export async function startWebLoginWithQr(
   try {
     qrDataUrl = await ensureQrDataUrl({
       accountId: account.accountId,
-      loginId: login.id,
+      loginId: nextLogin.id,
       qr,
       qrVersion,
     });

@@ -23,58 +23,13 @@ resolve_plain_gh_bin() {
     return 1
   fi
 
-  local candidate
-  while IFS= read -r candidate; do
-    if [ -x "$candidate" ]; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
-  done < <(plain_gh_system_candidates)
-
-  if candidate=$(PATH="$(plain_gh_search_path)" type -P gh 2>/dev/null); then
-    printf '%s\n' "$candidate"
-    return 0
-  fi
-
+  # PATH owns routing and guarded delegation; plain only normalizes output.
   type -P gh 2>/dev/null
 }
 
-plain_gh_system_candidates() {
-  # bin/gh may intentionally be an Octopool shim; prefer package-manager opt paths.
-  printf '%s\n' \
-    /opt/homebrew/opt/gh/bin/gh \
-    /usr/local/opt/gh/bin/gh \
-    /home/linuxbrew/.linuxbrew/opt/gh/bin/gh \
-    /opt/homebrew/bin/gh \
-    /usr/local/bin/gh
-}
-
-plain_gh_search_path() {
-  local path_value="${PATH:-}"
-  local home_bin="${HOME:-}/bin"
-  local item
-  local output=""
-  local first=true
-  local path_parts=()
-
-  IFS=':' read -r -a path_parts <<<"$path_value"
-  for item in "${path_parts[@]}"; do
-    if [ -n "${HOME:-}" ] && [ "$item" = "$home_bin" ]; then
-      continue
-    fi
-    if [ "$first" = "true" ]; then
-      output="$item"
-      first=false
-    else
-      output="${output}:$item"
-    fi
-  done
-
-  printf '%s\n' "$output"
-}
-
 plain_gh_auth_token() {
-  if [ -n "${GH_TOKEN:-}" ] ||
+  if [ -z "${OPENCLAW_GH_BIN:-}" ] ||
+    [ -n "${GH_TOKEN:-}" ] ||
     [ -n "${GITHUB_TOKEN:-}" ] ||
     [ -n "${GH_ENTERPRISE_TOKEN:-}" ] ||
     [ -n "${GITHUB_ENTERPRISE_TOKEN:-}" ]; then

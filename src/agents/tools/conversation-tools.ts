@@ -149,7 +149,7 @@ export function createConversationsSendTool(
     name: "conversations_send",
     displaySummary: "Send to an exact external conversation.",
     description:
-      "Send directly through a conversationRef from conversations_list. This performs channel delivery; it does not run the local agent in the backing session.",
+      "Send directly through a conversationRef. This performs channel delivery; it does not run the local agent in the backing session.",
     parameters: ConversationsSendSchema,
     outputSchema: ConversationSendResultSchema,
     execute: async (toolCallId, args, signal) => {

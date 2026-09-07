@@ -22,6 +22,51 @@ describe("gateway wizard e2e", () => {
   beforeEach(resetGatewayTestState);
   afterEach(resetGatewayTestState);
 
+  it(
+    "requires boolean consent through wizard.next",
+    { timeout: GATEWAY_E2E_TIMEOUT_MS },
+    async () => {
+      const { envSnapshot, tempHome } = await setupGatewayTempHome({
+        prefix: "openclaw-wizard-consent-home-",
+        minimalGateway: true,
+      });
+      const token = nextGatewayId("wizard-consent");
+      const port = await getGatewayE2ePortBlock();
+      const confirmations: boolean[] = [];
+      const server = await startGatewayServer(port, {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
+        wizardRunner: async (_opts, _runtime, prompter) => {
+          confirmations.push(await prompter.confirm({ message: "Continue?", initialValue: false }));
+        },
+      });
+      const client = await connectGatewayClient({ url: `ws://127.0.0.1:${port}`, token });
+
+      try {
+        for (const { value, expected } of [
+          { value: "false", expected: false },
+          { value: false, expected: false },
+          { value: true, expected: true },
+        ]) {
+          const start = await client.request<WizardStartResult>("wizard.start", { mode: "local" });
+          expect(start.step).toMatchObject({ type: "confirm", initialValue: false });
+          const result = await client.request<WizardNextResult>("wizard.next", {
+            sessionId: start.sessionId,
+            answer: { stepId: start.step?.id, value },
+          });
+          expect(result).toMatchObject({ done: true, status: "done" });
+          expect(confirmations.at(-1)).toBe(expected);
+        }
+      } finally {
+        await disconnectGatewayClient(client);
+        await server.close({ reason: "wizard consent E2E complete" });
+        await removeGatewayTempHome(tempHome);
+        envSnapshot.restore();
+      }
+    },
+  );
+
   it("contains hosted wizard exits", { timeout: GATEWAY_E2E_TIMEOUT_MS }, async () => {
     const { envSnapshot, tempHome } = await setupGatewayTempHome({
       prefix: "openclaw-wizard-contained-exit-home-",

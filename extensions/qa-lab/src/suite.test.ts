@@ -72,7 +72,10 @@ describe("qa suite", () => {
       closeWebSessions: step("web sessions"),
       cleanupTransportBeforeGatewayStop: step("transport before gateway", transportFailure),
       cleanupTransportAfterGatewayStop: step("transport after gateway"),
-      stopGateway: step("gateway"),
+      stopGateway: async () => {
+        await step("gateway")();
+        return { process: "confirmed-stopped", errors: [] };
+      },
       disposeAgentHarnesses: step("agent harnesses"),
       stopProvider: step("provider", providerFailure),
       finishLab: step("lab"),
@@ -181,27 +184,26 @@ describe("qa suite", () => {
     expect((thrown as Error).message).not.toContain("evidence=");
   });
 
-  it("does not release transport credentials when gateway teardown fails", async () => {
-    const calls: string[] = [];
-    const gatewayFailure = new Error("gateway remained alive");
-    const step = (name: string, error?: Error) => async () => {
-      calls.push(name);
-      if (error) {
-        throw error;
-      }
-    };
-
-    const failures = await runQaFlowSuiteCleanupPlan({
-      cleanupTransportBeforeGatewayStop: step("transport before gateway"),
-      cleanupTransportAfterGatewayStop: step("transport after gateway"),
-      stopGateway: step("gateway", gatewayFailure),
-      disposeAgentHarnesses: step("agent harnesses"),
-      finishLab: step("lab"),
-    });
-
-    expect(calls).toEqual(["transport before gateway", "gateway", "agent harnesses", "lab"]);
-    expect(failures).toEqual([{ phase: "gateway stop", error: gatewayFailure }]);
-  });
+  it.each(["never-spawned", "confirmed-stopped", "unconfirmed"] as const)(
+    "gates after-stop cleanup on %s, independently of diagnostic errors",
+    async (process) => {
+      const diagnostic = new Error("cleanup diagnostic failed");
+      const release = vi.fn(async () => {});
+      const finishLab = vi.fn(async () => {});
+      const failures = await runQaFlowSuiteCleanupPlan({
+        cleanupTransportBeforeGatewayStop: async () => {},
+        cleanupTransportAfterGatewayStop: release,
+        stopGateway: async () => ({ process, errors: [diagnostic] }),
+        disposeAgentHarnesses: async () => {},
+        finishLab,
+      });
+      expect(release).toHaveBeenCalledTimes(process === "unconfirmed" ? 0 : 1);
+      expect(failures).toEqual([
+        { phase: "gateway stop", error: expect.objectContaining({ errors: [diagnostic] }) },
+      ]);
+      expect(finishLab).toHaveBeenCalledOnce();
+    },
+  );
 
   it("rejects unsupported transport ids before starting the lab", async () => {
     const startLab = vi.fn();
@@ -461,10 +463,10 @@ describe("qa suite", () => {
         concurrency: 1,
         transportId: "qa-channel",
         channelDriverSelection: {
-          capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+          capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
           channel: "telegram",
           channelDriver: "crabline",
-          smokeArtifactPath: "crabline-fake-provider-smoke.json",
+          providerReadinessArtifactPath: "crabline-provider-readiness.json",
         },
       }),
     ).toBe(
@@ -612,8 +614,8 @@ describe("qa suite", () => {
 
       expect(artifacts.evidence?.kind).toBe(QA_EVIDENCE_SUMMARY_KIND);
       await expect(fs.access(artifacts.evidencePath)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.access(artifacts.reportPath)).resolves.toBeUndefined();
-      await expect(fs.access(artifacts.summaryPath)).resolves.toBeUndefined();
+      await fs.access(artifacts.reportPath);
+      await fs.access(artifacts.summaryPath);
     } finally {
       await fs.rm(outputDir, { recursive: true, force: true });
     }
@@ -710,10 +712,10 @@ describe("qa suite", () => {
         channel: "telegram",
         channelDriver: "crabline",
         channelDriverSelection: {
-          capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+          capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
           channel: "telegram",
           channelDriver: "crabline",
-          smokeArtifactPath: "crabline-fake-provider-smoke.json",
+          providerReadinessArtifactPath: "crabline-provider-readiness.json",
         },
       });
 
@@ -724,16 +726,25 @@ describe("qa suite", () => {
         };
       };
       const capabilityMatrixPath = summary.run?.channelCapabilityMatrixPath;
-      const smokeArtifactPath = summary.run?.channelDriverSmokePath;
-      if (typeof capabilityMatrixPath !== "string" || typeof smokeArtifactPath !== "string") {
+      const providerReadinessArtifactPath = summary.run?.channelDriverSmokePath;
+      if (
+        typeof capabilityMatrixPath !== "string" ||
+        typeof providerReadinessArtifactPath !== "string"
+      ) {
         throw new Error("Crabline generation artifact paths missing from QA summary.");
       }
       const artifactGenerationDirectory = path.dirname(capabilityMatrixPath);
-      expect(path.dirname(artifactGenerationDirectory)).toBe(".crabline-smoke-artifacts");
+      expect(path.dirname(artifactGenerationDirectory)).toBe(".crabline-channel-driver-artifacts");
       expect(path.basename(artifactGenerationDirectory)).toMatch(/^generation-[^/\\]+$/u);
-      expect(path.basename(capabilityMatrixPath)).toBe("crabline-fake-provider-capabilities.json");
-      expect(path.dirname(smokeArtifactPath)).toBe(artifactGenerationDirectory);
-      expect(path.basename(smokeArtifactPath)).toBe("crabline-fake-provider-smoke.json");
+      expect(path.basename(capabilityMatrixPath)).toBe("crabline-channel-driver-capabilities.json");
+      expect(path.dirname(providerReadinessArtifactPath)).toBe(artifactGenerationDirectory);
+      expect(path.basename(providerReadinessArtifactPath)).toBe("crabline-provider-readiness.json");
+      await expect(
+        fs.access(path.join(outputDir, "crabline-channel-driver-capabilities.json")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(
+        fs.access(path.join(outputDir, "crabline-provider-readiness.json")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
       const matrix = JSON.parse(
         await fs.readFile(path.resolve(outputDir, capabilityMatrixPath), "utf8"),
       ) as {
@@ -743,16 +754,32 @@ describe("qa suite", () => {
       expect(matrix.report?.result?.supportedChannels?.toSorted()).toEqual(
         [...CRABLINE_SERVER_CHANNELS].toSorted(),
       );
-      const smoke = JSON.parse(
-        await fs.readFile(path.resolve(outputDir, smokeArtifactPath), "utf8"),
-      ) as { smoke?: { result?: { ok?: boolean; provider?: string } } };
-      expect(smoke.smoke?.result).toMatchObject({ ok: true, provider: "telegram" });
+      const readiness = JSON.parse(
+        await fs.readFile(path.resolve(outputDir, providerReadinessArtifactPath), "utf8"),
+      ) as { providerReadiness?: { result?: { ok?: boolean; provider?: string } } };
+      expect(readiness.providerReadiness?.result).toMatchObject({
+        ok: true,
+        provider: "telegram",
+      });
       const evidence = JSON.parse(await fs.readFile(artifacts.evidencePath, "utf8")) as {
         entries?: Array<{
-          execution?: { channel?: { driver?: string; id?: string } };
+          execution?: {
+            artifacts?: Array<{ kind?: string; path?: string }>;
+            channel?: { driver?: string; id?: string };
+          };
           result?: { failure?: { reason?: string }; status?: string };
         }>;
       };
+      expect(evidence.entries?.[0]?.execution?.artifacts).toEqual(
+        expect.arrayContaining([
+          { kind: "channel-capability-matrix", path: capabilityMatrixPath, source: "qa-suite" },
+          {
+            kind: "channel-driver-smoke",
+            path: providerReadinessArtifactPath,
+            source: "qa-suite",
+          },
+        ]),
+      );
       expect(evidence.entries?.[0]?.execution?.channel).toMatchObject({
         driver: "crabline",
         id: "telegram",
@@ -764,119 +791,6 @@ describe("qa suite", () => {
     } finally {
       await fs.rm(outputDir, { recursive: true, force: true });
     }
-  });
-
-  it("uses Crabline generation artifact paths without rewriting them", async () => {
-    const outputDir = await tempDirs.makeTempDir("qa-suite-crabline-generation-");
-    const capabilityMatrixPath = path.join(
-      outputDir,
-      ".crabline-smoke-artifacts",
-      "generation-11111111-1111-4111-8111-111111111111",
-      "capabilities.json",
-    );
-    const smokeArtifactPath = path.join(
-      outputDir,
-      ".crabline-smoke-artifacts",
-      "generation-11111111-1111-4111-8111-111111111111",
-      "smoke.json",
-    );
-    const providerReadinessArtifactPath = path.join(
-      path.dirname(smokeArtifactPath),
-      "provider-readiness.json",
-    );
-    await fs.mkdir(path.dirname(capabilityMatrixPath), { recursive: true });
-    await fs.writeFile(capabilityMatrixPath, "authoritative capabilities\n", "utf8");
-    await fs.writeFile(smokeArtifactPath, "authoritative smoke\n", "utf8");
-    await fs.writeFile(providerReadinessArtifactPath, "authoritative provider readiness\n", "utf8");
-
-    const artifacts = await writeQaSuiteArtifacts({
-      outputDir,
-      startedAt: new Date("2026-07-12T00:00:00.000Z"),
-      finishedAt: new Date("2026-07-12T00:01:00.000Z"),
-      scenarios: [{ name: "Telegram DM", status: "pass", steps: [] }],
-      scenarioDefinitions: [
-        {
-          ...makeQaSuiteTestScenario("telegram-dm", {
-            surface: "channel",
-          }),
-          coverage: {
-            primary: ["channels.dm"],
-          },
-        },
-      ],
-      transport: {
-        id: "qa-channel",
-        createReportNotes: () => [],
-      } as unknown as QaTransportAdapter,
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      alternateModel: "mock-openai/gpt-5.6-luna-alt",
-      fastMode: true,
-      concurrency: 1,
-      channelDriverSelection: {
-        capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
-        channel: "telegram",
-        channelDriver: "crabline",
-        providerReadinessArtifactPath: "crabline-fake-provider-smoke.json",
-        smokeArtifactPath: "crabline-fake-provider-smoke.json",
-      },
-      runCrablineChannelDriverSmoke: vi.fn(async () => ({
-        artifactPointerPath: path.join(outputDir, ".crabline-smoke-artifacts", "current.json"),
-        capabilityMatrixPath,
-        capabilityReport: {},
-        generation: "generation-11111111-1111-4111-8111-111111111111",
-        manifestPath: path.join(
-          outputDir,
-          ".crabline-smoke-artifacts",
-          "generation-11111111-1111-4111-8111-111111111111",
-          "manifest.json",
-        ),
-        providerReadiness: {},
-        providerReadinessArtifactPath,
-        smoke: {},
-        smokeArtifactPath,
-      })),
-    });
-
-    await expect(fs.readFile(capabilityMatrixPath, "utf8")).resolves.toBe(
-      "authoritative capabilities\n",
-    );
-    await expect(fs.readFile(smokeArtifactPath, "utf8")).resolves.toBe("authoritative smoke\n");
-    await expect(fs.readFile(providerReadinessArtifactPath, "utf8")).resolves.toBe(
-      "authoritative provider readiness\n",
-    );
-    await expect(
-      fs.access(path.join(outputDir, "crabline-fake-provider-capabilities.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(
-      fs.access(path.join(outputDir, "crabline-fake-provider-smoke.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-
-    const evidence = JSON.parse(await fs.readFile(artifacts.evidencePath, "utf8")) as {
-      entries?: Array<{ execution?: { artifacts?: Array<{ kind?: string; path?: string }> } }>;
-    };
-    expect(evidence.entries?.[0]?.execution?.artifacts).toEqual(
-      expect.arrayContaining([
-        { kind: "channel-capability-matrix", path: capabilityMatrixPath, source: "qa-suite" },
-        { kind: "channel-driver-smoke", path: smokeArtifactPath, source: "qa-suite" },
-      ]),
-    );
-    const summary = JSON.parse(await fs.readFile(artifacts.summaryPath, "utf8")) as {
-      run?: {
-        channelCapabilityMatrixPath?: string;
-        channelDriverSmokePath?: string;
-      };
-    };
-    expect(summary.run).toMatchObject({
-      channelCapabilityMatrixPath: capabilityMatrixPath,
-      channelDriverSmokePath: smokeArtifactPath,
-    });
-    expect(artifacts.report).toContain(`Generation capability filename: ${capabilityMatrixPath}.`);
-    expect(artifacts.report).toContain(
-      `Generation provider-readiness filename: ${providerReadinessArtifactPath}.`,
-    );
-    expect(artifacts.report).not.toContain("crabline-fake-provider-capabilities.json");
-    expect(artifacts.report).not.toContain("crabline-fake-provider-smoke.json");
   });
 
   it("arms gateway heap checkpoint env only when requested", () => {

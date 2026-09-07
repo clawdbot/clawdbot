@@ -1,6 +1,7 @@
 import {
   gatewayServerBackedHttpTestFiles,
   gatewayServerExcludedTestFiles,
+  gatewayServerIsolatedTestFiles,
 } from "./vitest.gateway-server-paths.mjs";
 // Vitest gateway server config wires the gateway server test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
@@ -11,7 +12,11 @@ export function createGatewayServerVitestConfig(env?: Record<string, string | un
     {
       dir: "src/gateway",
       env,
-      exclude: ["src/gateway/server-methods/**/*.test.ts", ...gatewayServerExcludedTestFiles],
+      exclude: [
+        "src/gateway/server-methods/**/*.test.ts",
+        ...gatewayServerExcludedTestFiles,
+        ...gatewayServerIsolatedTestFiles,
+      ],
       fileParallelism: false,
       // Gateway child projects share one include file; preserve this project's ownership.
       intersectIncludeFile: true,

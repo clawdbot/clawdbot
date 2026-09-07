@@ -9,8 +9,6 @@ import type { AgentMessage } from "../runtime/index.js";
 import { estimateTokens } from "../sessions/index.js";
 import type { CompactionMessageMetrics } from "./compact.types.js";
 
-export const hasRealConversationContent = isRealConversationMessage;
-
 export function createDirectCompactionDiagId(): string {
   return `cmp-${Date.now().toString(36)}-${generateSecureToken(4)}`;
 }
@@ -94,6 +92,6 @@ export function summarizeCompactionMessages(messages: AgentMessage[]): Compactio
 
 export function containsRealConversationMessages(messages: AgentMessage[]): boolean {
   return messages.some((message, index, allMessages) =>
-    hasRealConversationContent(message, allMessages, index),
+    isRealConversationMessage(message, allMessages, index),
   );
 }

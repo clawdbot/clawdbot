@@ -2,12 +2,15 @@
 // Disconnects clients when config writes invalidate shared credentials.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
+import {
+  invalidateGatewayPolicyClient,
+  type GatewayPolicyClient,
+} from "./server/ws-policy-close.js";
 
 /** Gateway client subset relevant to shared auth generation enforcement. */
-export type SharedGatewayAuthClient = {
+export type SharedGatewayAuthClient = GatewayPolicyClient & {
   usesSharedGatewayAuth?: boolean;
   sharedGatewaySessionGeneration?: string;
-  socket: { close: (code: number, reason: string) => void };
 };
 
 /** Mutable shared auth generation state. */
@@ -53,11 +56,11 @@ export function disconnectStaleSharedGatewayAuthClients(params: {
     if (gatewayClient.sharedGatewaySessionGeneration === params.expectedGeneration) {
       continue;
     }
-    try {
-      gatewayClient.socket.close(4001, "gateway auth changed");
-    } catch {
-      /* ignore */
-    }
+    invalidateGatewayPolicyClient(gatewayClient, {
+      reason: "gateway-auth-changed",
+      code: 4001,
+      message: "gateway auth changed",
+    });
   }
 }
 
@@ -69,11 +72,11 @@ export function disconnectAllSharedGatewayAuthClients(
     if (!gatewayClient.usesSharedGatewayAuth) {
       continue;
     }
-    try {
-      gatewayClient.socket.close(4001, "gateway auth changed");
-    } catch {
-      /* ignore */
-    }
+    invalidateGatewayPolicyClient(gatewayClient, {
+      reason: "gateway-auth-changed",
+      code: 4001,
+      message: "gateway auth changed",
+    });
   }
 }
 

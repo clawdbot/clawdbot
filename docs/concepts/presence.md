@@ -25,14 +25,46 @@ Presence entries are structured objects with fields like:
 
 - `instanceId` (optional but strongly recommended): stable client identity (usually `connect.client.instanceId`)
 - `host`: human-friendly host name
-- `ip`: best-effort IP address
+- `ip`: best-effort IP address; the [geolocation plugin](/plugins/geolocation) resolves it to a coarse city where one is available
 - `version`: client version string
 - `deviceFamily` / `modelIdentifier`: hardware hints
+- `timeZone`: self-reported IANA zone (for example `Europe/Vienna`); browsers report it during connect, and it stays useful when the connecting IP is loopback, tunneled, or CGNAT
 - `mode`: `ui`, `webchat`, `cli`, `backend`, `node`, `probe`, `test`
 - `lastInputSeconds`: seconds since last user input, if known
 - `reason`: free-form client-supplied string; the Gateway itself only emits `self`, `connect`, and `disconnect`
 - `deviceId`, `roles`, `scopes`: device identity and role/scope hints from the connect handshake
-- `ts`: last update timestamp (ms since epoch)
+- `ts`: last presence update timestamp (ms since epoch), including heartbeat updates; not a user-activity timestamp
+- `onlineSince`: start of an authenticated person's current continuous online period, shared across overlapping connections
+- `lastActivityAt`: latest observed accepted interaction during that online period; absent until activity is observed
+- `watchedSessions`: session keys the client explicitly declares it is viewing, filtered for the recipient
+
+## Who can see presence
+
+The presence roster is shared with operators who have `operator.read` access;
+`operator.write` and `operator.admin` also grant read access. Readers can see other
+people's online and activity timing and reported `timeZone`, including people who
+are not watching a session. Node connections, pairing-only operators, and other
+connections without read access receive an empty presence roster in the connect
+snapshot and no `presence` events. The `system-presence` RPC requires the same
+operator read access.
+
+Watched-session references are filtered separately for each recipient using the
+same visibility rules as `sessions.list`. Hidden or missing sessions are omitted
+entirely, without counts or placeholders. This filtering applies to connect
+snapshots, `system-presence` responses, and presence events; the person being
+viewed does not grant the recipient access to their sessions.
+
+Drafts, incognito sessions, and operator role restrictions follow those list
+rules. Missing or deleted references are omitted even for admins. Keys retain
+their agent scope, including agent-qualified `global` and `unknown` references.
+Non-admin readers awaiting authenticated profile verification receive person
+metadata but no watched references; established admin grants retain admin list
+visibility. When no references are visible, `watchedSessions` is omitted.
+Message subscriptions alone do not declare viewer presence.
+
+This policy does not change which IP addresses are shared between readers and
+does not isolate all Gateway metadata. Use separate Gateway trust boundaries
+when readers must not see each other's presence or other shared metadata.
 
 ## Producers (where presence comes from)
 
@@ -72,16 +104,30 @@ is sampled for this compatibility value.
 When a node connects over the Gateway WebSocket with `role: node`, the Gateway
 upserts a presence entry for that node (same flow as other WS clients).
 
-## Merge + dedupe rules (why `instanceId` matters)
+## Connection rows and beacon deduplication
 
-Presence entries are stored in a single in-memory map, keyed case-insensitively
-by the first available of, in order: a paired device id, `connect.client.instanceId`,
-or the per-connection id as a last resort.
+Presence entries are stored in a single in-memory map with case-insensitive keys.
+User WebSocket clients have one row per connection, so two tabs watching different
+sessions cannot overwrite each other. Node connections use their device id,
+then `connect.client.instanceId`, then the connection id.
 
-Ephemeral control-plane clients are excluded from tracking entirely (see
-above), so their connection ids never become keys. For every other client, the
-connection id fallback means a client that reconnects without a stable
-`instanceId` shows up as a **duplicate** row.
+`system-event` beacons merge by device id or instance id when supplied, otherwise
+by parsed host or other beacon metadata. A stable `instanceId` helps consumers
+associate rows with the same client; it does not merge separate user WebSocket
+connections. Ephemeral control-plane clients are excluded from tracking entirely.
+
+The Control UI groups connection rows by their recorded identity namespace when
+displaying people. Connections with the same qualified profile identity share one
+person; unqualified connections with the same raw ID form a separate group. A raw
+ID matching a profile ID never combines their watched sessions, connection facts,
+or viewer counts. The Gateway uses the same namespace boundary for online/activity
+timing and collaborative typing counts. Overlapping tabs share timing facts only
+within their namespace; later activity stays separate if a raw tab gains profile
+qualification. Self exclusion follows the authenticated user's recorded
+qualification, using the current connection only when that user is unavailable.
+Only a displayed owner with the exact qualified profile identity is deduplicated
+from a session's live viewers. The [people card](/concepts/multi-user#people-cards) keeps online duration
+and observed activity separate from each entry's heartbeat freshness.
 
 ## TTL and bounded size
 
@@ -115,11 +161,11 @@ indicator (Active/Idle/Stale) based on the age of the last update.
 
 ## Debugging tips
 
-- To see the raw list, call `system-presence` against the Gateway.
+- To see the list projected for your connection, call `system-presence` against the Gateway.
 - If you see duplicates:
   - confirm clients send a stable `client.instanceId` in the handshake
   - confirm periodic beacons use the same `instanceId`
-  - check whether the connection-derived entry is missing `instanceId` (duplicates are expected)
+  - check for multiple tabs or reconnects; separate user connections have separate rows, and old rows expire after the TTL
 
 ## Related
 

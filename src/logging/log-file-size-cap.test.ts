@@ -60,9 +60,7 @@ describe("log file size cap", () => {
   });
 
   it("rotates file writes after cap is reached and keeps logging", async () => {
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(
-      () => true as unknown as ReturnType<typeof process.stderr.write>, // preserve stream contract in test spy
-    );
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     setLoggerOverride({ level: "info", file: logPath, maxFileBytes: 256 });
     const logger = getLogger();
 
@@ -86,9 +84,7 @@ describe("log file size cap", () => {
     vi.spyOn(fs, "renameSync").mockImplementation(() => {
       throw new Error("rotation denied");
     });
-    const stderrSpy = vi
-      .spyOn(process.stderr, "write")
-      .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     setLoggerOverride({
       level: "info",
       file: logPath,
@@ -109,41 +105,34 @@ describe("log file size cap", () => {
     });
   });
 
-  it("keeps cached default rolling loggers on the current-day file", async () => {
-    const logDir = path.dirname(logPath);
-    const firstDay = path.join(logDir, "openclaw-2026-01-01.log");
-    const secondDay = path.join(logDir, "openclaw-2026-01-02.log");
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T08:00:00Z"));
-    setLoggerOverride({ level: "info", file: firstDay });
-    const logger = getLogger();
+  it.each([
+    { name: "default rolling", prefix: "openclaw", rolls: true },
+    { name: "explicit profile-shaped", prefix: "openclaw-dev", rolls: false },
+  ])(
+    "keeps cached $name loggers on the expected files across date changes",
+    async ({ prefix, rolls }) => {
+      const logDir = path.dirname(logPath);
+      const firstDay = path.join(logDir, `${prefix}-2026-01-01.log`);
+      const secondDay = path.join(logDir, `${prefix}-2026-01-02.log`);
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-01-01T08:00:00Z"));
+      setLoggerOverride({ level: "info", file: firstDay });
+      const logger = getLogger();
 
-    logger.info({ message: "first day" });
-    vi.setSystemTime(new Date("2026-01-02T08:00:00Z"));
-    logger.info({ message: "second day" });
-    await testApi.flushFileLogQueueForTests();
+      logger.info({ message: "first day" });
+      vi.setSystemTime(new Date("2026-01-02T08:00:00Z"));
+      logger.info({ message: "second day" });
+      await testApi.flushFileLogQueueForTests();
 
-    expect(fs.readFileSync(firstDay, "utf8")).toContain("first day");
-    expect(fs.readFileSync(secondDay, "utf8")).toContain("second day");
-    expect(fs.readFileSync(firstDay, "utf8")).not.toContain("second day");
-  });
-
-  it("keeps an explicit profile-shaped log path stable across date changes", async () => {
-    const logDir = path.dirname(logPath);
-    const configured = path.join(logDir, "openclaw-dev-2026-01-01.log");
-    const inferredNextDay = path.join(logDir, "openclaw-dev-2026-01-02.log");
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T08:00:00Z"));
-    setLoggerOverride({ level: "info", file: configured });
-    const logger = getLogger();
-
-    logger.info({ message: "first day" });
-    vi.setSystemTime(new Date("2026-01-02T08:00:00Z"));
-    logger.info({ message: "second day" });
-    await testApi.flushFileLogQueueForTests();
-
-    expect(fs.readFileSync(configured, "utf8")).toContain("first day");
-    expect(fs.readFileSync(configured, "utf8")).toContain("second day");
-    expect(fs.existsSync(inferredNextDay)).toBe(false);
-  });
+      const firstContent = fs.readFileSync(firstDay, "utf8");
+      expect(firstContent).toContain("first day");
+      if (rolls) {
+        expect(fs.readFileSync(secondDay, "utf8")).toContain("second day");
+        expect(firstContent).not.toContain("second day");
+      } else {
+        expect(firstContent).toContain("second day");
+        expect(fs.existsSync(secondDay)).toBe(false);
+      }
+    },
+  );
 });

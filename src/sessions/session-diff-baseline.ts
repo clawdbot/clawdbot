@@ -1,6 +1,7 @@
 import {
   isSessionWorkStartInvalidatedError,
   resolveSessionWorkStartError,
+  SessionWorkStartChangedError,
   SessionWorkStartInvalidatedError,
 } from "../config/sessions/lifecycle.js";
 import {
@@ -34,8 +35,8 @@ function invalidatedSessionWork(params: {
   entry: InternalSessionEntry | null | undefined;
   expectedSessionId: string;
   sessionKey: string;
-}): SessionWorkStartInvalidatedError {
-  return new SessionWorkStartInvalidatedError(
+}): SessionWorkStartChangedError {
+  return new SessionWorkStartChangedError(
     resolveSessionWorkStartError(params.sessionKey, params.entry, {
       expectedSessionId: params.expectedSessionId,
     }) ?? `Session "${params.sessionKey}" changed while starting work. Retry.`,

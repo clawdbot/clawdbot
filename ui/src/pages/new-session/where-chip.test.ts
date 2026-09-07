@@ -3,7 +3,7 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderWhereChip, resolveWhereChip } from "./where-chip.ts";
 
-function renderPicker(isAdmin: boolean) {
+function renderPicker(isAdmin: boolean, autoPlacementMode?: "least-busy" | "eligible-order") {
   const state = resolveWhereChip({
     environments: [
       {
@@ -48,11 +48,13 @@ function renderPicker(isAdmin: boolean) {
       popoverOpen: true,
       popoverHiding: false,
       isAdmin,
+      ...(autoPlacementMode ? { autoPlacementMode } : {}),
       onGuardTransition: vi.fn(),
       onPopoverShow: vi.fn(),
       onPopoverHide: vi.fn(),
       onPopoverAfterHide: vi.fn(),
       onSelectDevice: vi.fn(),
+      onSelectAutoDevice: vi.fn(),
       onSelectCloudProfile: vi.fn(),
       onConnectMachine: vi.fn(),
     }),
@@ -62,7 +64,7 @@ function renderPicker(isAdmin: boolean) {
 }
 
 describe("Where chip", () => {
-  it("projects the selected device label and exact capacity facts", () => {
+  it("keeps capacity structured and exposes busy slots without an ambiguous visible fraction", () => {
     const state = resolveWhereChip({
       environments: [
         {
@@ -81,11 +83,27 @@ describe("Where chip", () => {
 
     expect(state.kind).toBe("device");
     expect(state.label).toBe("Build runner");
-    expect(state.devices[0]?.facts).toEqual(["Worker slots 1/2"]);
+    const row = renderPicker(false).querySelector('[data-value="device:runner"]');
+    expect(row?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
+      "1 of 2 slots busy",
+    );
+    expect(row?.getAttribute("title")).toBe("1 of 2 slots busy");
+    expect(row?.textContent).not.toContain("Worker slots");
+    expect(state.devices[0]?.workerSlots).toEqual({ total: 2, available: 1 });
+    expect(state.devices[0]?.facts).toEqual([]);
   });
 
   it("renders devices for writers while cloud and Connect remain admin-only", () => {
     const writer = renderPicker(false);
+    const autoRow = writer.querySelector('[data-value="auto-device"]');
+    expect(autoRow?.textContent).toContain("Auto");
+    expect(autoRow?.querySelector(".session-menu__sub")?.textContent).toContain(
+      "Least-busy device",
+    );
+    const remoteExec = renderPicker(false, "eligible-order");
+    expect(
+      remoteExec.querySelector('[data-value="auto-device"] .session-menu__sub')?.textContent,
+    ).toContain("First eligible device");
     expect(writer.querySelector('[data-value="device:runner"]')).not.toBeNull();
     expect(writer.querySelector('[data-value="device:runner"] .session-menu__sub')).toBeNull();
     expect(
@@ -118,7 +136,7 @@ describe("Where chip", () => {
       cloudProfiles: [],
       cloudProfileId: "",
       deviceId: "",
-      deviceDisabledReason: "Needs the embedded runtime",
+      deviceDisabledReason: "This runtime does not support paired devices",
     });
     const container = document.createElement("div");
     render(
@@ -138,6 +156,7 @@ describe("Where chip", () => {
         onPopoverHide: () => undefined,
         onPopoverAfterHide: () => undefined,
         onSelectDevice: () => undefined,
+        onSelectAutoDevice: () => undefined,
         onSelectCloudProfile: () => undefined,
         onConnectMachine: () => undefined,
       }),
@@ -146,7 +165,236 @@ describe("Where chip", () => {
 
     const device = container.querySelector<HTMLButtonElement>('[data-value="device:macbook"]');
     expect(device?.disabled).toBe(true);
-    expect(device?.textContent).toContain("Needs the embedded runtime");
-    expect(device?.title).toBe("Needs the embedded runtime");
+    expect(device?.textContent).toContain("This runtime does not support paired devices");
+    // The disabled reason owns the title; the meter's no-claim alt text stays on its aria-label.
+    expect(device?.title).toBe("This runtime does not support paired devices");
   });
+
+  it("omits the devices section entirely when no devices are paired", () => {
+    const state = resolveWhereChip({
+      environments: [],
+      cloudProfiles: [],
+      cloudProfileId: "",
+      deviceId: "",
+    });
+    const emptyContainer = document.createElement("div");
+    render(
+      renderWhereChip({
+        state,
+        gatewayName: "",
+        cloudProfileId: "",
+        deviceId: "",
+        worktreeAvailable: true,
+        submitting: false,
+        pendingPlacement: false,
+        popoverOpen: true,
+        popoverHiding: false,
+        isAdmin: false,
+        onGuardTransition: vi.fn(),
+        onPopoverShow: vi.fn(),
+        onPopoverHide: vi.fn(),
+        onPopoverAfterHide: vi.fn(),
+        onSelectDevice: vi.fn(),
+        onSelectAutoDevice: vi.fn(),
+        onSelectCloudProfile: vi.fn(),
+        onConnectMachine: vi.fn(),
+      }),
+      emptyContainer,
+    );
+    expect(emptyContainer.querySelector('[data-value="auto-device"]')).toBeNull();
+  });
+
+  it.each([
+    {
+      name: "no paired device hosts sessions",
+      issues: undefined,
+      reason: /no session hosts are paired/i,
+    },
+    {
+      name: "a paired node must be updated before it can advertise session hosting",
+      issues: [
+        {
+          code: "update-required",
+          action: "update-and-reconnect",
+          updateCommand: "openclaw update",
+          headlessReconnectCommand: "openclaw node restart",
+        } as const,
+      ],
+      reason: /openclaw update.*openclaw node restart/i,
+    },
+  ])("disables automatic selection with an actionable reason when $name", ({ issues, reason }) => {
+    const state = resolveWhereChip({
+      environments: [
+        {
+          id: "node:macbook",
+          type: "node",
+          label: "MacBook",
+          status: "available",
+          sessionHost: false,
+          ...(issues ? { issues } : {}),
+        },
+      ],
+      cloudProfiles: [],
+      cloudProfileId: "",
+      deviceId: "",
+    });
+    const container = document.createElement("div");
+    render(
+      renderWhereChip({
+        state,
+        gatewayName: "",
+        cloudProfileId: "",
+        deviceId: "",
+        worktreeAvailable: true,
+        submitting: false,
+        pendingPlacement: false,
+        popoverOpen: true,
+        popoverHiding: false,
+        isAdmin: false,
+        onGuardTransition: vi.fn(),
+        onPopoverShow: vi.fn(),
+        onPopoverHide: vi.fn(),
+        onPopoverAfterHide: vi.fn(),
+        onSelectDevice: vi.fn(),
+        onSelectAutoDevice: vi.fn(),
+        onSelectCloudProfile: vi.fn(),
+        onConnectMachine: vi.fn(),
+      }),
+      container,
+    );
+
+    const automatic = container.querySelector<HTMLButtonElement>('[data-value="auto-device"]');
+    expect(automatic?.disabled).toBe(true);
+    expect(automatic?.title).toMatch(reason);
+    expect(automatic?.textContent).toMatch(reason);
+  });
+
+  it.each([
+    {
+      name: "allows enabled remote execution without a free worker slot",
+      devicePlacement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+      workerSlots: { total: 1, available: 0 },
+      invocableCommands: ["codex.exec-server.stdio.v1"],
+      commandState: "invocable" as const,
+      disabled: false,
+      label: "1 of 1 slots busy",
+      tone: "warn",
+    },
+    {
+      name: "shows slot-less remote execution without a capacity claim",
+      devicePlacement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+      workerSlots: undefined,
+      invocableCommands: ["codex.exec-server.stdio.v1"],
+      commandState: "invocable" as const,
+      disabled: false,
+      label: "Codex exec",
+      tone: undefined,
+    },
+    {
+      name: "keeps worker execution capacity-gated",
+      devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+      workerSlots: { total: 1, available: 0 },
+      invocableCommands: [],
+      commandState: undefined,
+      disabled: true,
+      reason: "No worker slots are available. Wait for a slot or pick another device.",
+      label: "Slot utilization unavailable",
+      tone: "stale",
+    },
+    {
+      name: "disables a declared remote command that the Gateway has not enabled",
+      devicePlacement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+      workerSlots: { total: 1, available: 1 },
+      invocableCommands: [],
+      commandState: "unauthorized" as const,
+      disabled: true,
+      reason:
+        "Authorize codex.exec-server.stdio.v1 in the Gateway node command policy, or pick another device.",
+      label: "Slot utilization unavailable",
+      tone: "stale",
+    },
+  ])(
+    "$name in the New Session picker",
+    ({
+      devicePlacement,
+      workerSlots,
+      invocableCommands,
+      commandState,
+      disabled,
+      reason,
+      label,
+      tone,
+    }) => {
+      const state = resolveWhereChip({
+        environments: [
+          {
+            id: "node:runner",
+            type: "node",
+            label: "Build runner",
+            status: "available",
+            sessionHost: true,
+            workerSlots,
+            capabilities: ["codex.exec-server.stdio.v1"],
+            invocableCommands,
+            ...(commandState
+              ? {
+                  requiredNodeCommand: {
+                    command: "codex.exec-server.stdio.v1",
+                    state: commandState,
+                  },
+                }
+              : {}),
+          },
+        ],
+        cloudProfiles: [],
+        cloudProfileId: "",
+        deviceId: "",
+        devicePlacement,
+      });
+      const container = document.createElement("div");
+      render(
+        renderWhereChip({
+          state,
+          gatewayName: "",
+          cloudProfileId: "",
+          deviceId: "",
+          worktreeAvailable: true,
+          submitting: false,
+          pendingPlacement: false,
+          popoverOpen: true,
+          popoverHiding: false,
+          isAdmin: true,
+          onGuardTransition: vi.fn(),
+          onPopoverShow: vi.fn(),
+          onPopoverHide: vi.fn(),
+          onPopoverAfterHide: vi.fn(),
+          onSelectDevice: vi.fn(),
+          onSelectAutoDevice: vi.fn(),
+          onSelectCloudProfile: vi.fn(),
+          onConnectMachine: vi.fn(),
+        }),
+        container,
+      );
+
+      const device = container.querySelector<HTMLButtonElement>('[data-value="device:runner"]');
+      expect(device?.disabled).toBe(disabled);
+      const meter = device?.querySelector('[role="img"]');
+      expect(meter?.getAttribute("aria-label")).toBe(label);
+      if (tone) {
+        expect(meter?.classList.contains(`session-context-meter--${tone}`)).toBe(true);
+      }
+      if (reason) {
+        expect(device?.title).toBe(reason);
+      }
+    },
+  );
 });

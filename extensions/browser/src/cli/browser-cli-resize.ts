@@ -1,9 +1,10 @@
 /**
  * Shared Browser CLI resize runner used by resize and set viewport commands.
  */
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ACT_MAX_VIEWPORT_DIMENSION } from "../browser/act-policy.js";
 import {
-  callBrowserResize,
+  callBrowserRequest,
   parseBrowserPositiveIntegerValue,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
@@ -31,7 +32,6 @@ export async function runBrowserResizeWithOutput(params: {
   width: number;
   height: number;
   targetId?: string;
-  timeoutMs?: number;
   successMessage: string;
 }): Promise<void> {
   const { width, height } = params;
@@ -46,16 +46,17 @@ export async function runBrowserResizeWithOutput(params: {
     return;
   }
 
-  const result = await callBrowserResize(
-    params.parent,
-    {
-      profile: params.profile,
+  const result = await callBrowserRequest(params.parent, {
+    method: "POST",
+    path: "/act",
+    query: params.profile ? { profile: params.profile } : undefined,
+    body: {
+      kind: "resize",
       width,
       height,
-      targetId: params.targetId,
+      targetId: normalizeOptionalString(params.targetId),
     },
-    { timeoutMs: params.timeoutMs ?? 20000 },
-  );
+  });
 
   if (params.parent?.json) {
     defaultRuntime.writeJson(result);

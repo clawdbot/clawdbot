@@ -229,6 +229,58 @@ describe("RouterOutletController not-found boundary", () => {
     router.stop();
   });
 
+  it("keeps a navigation started by an earlier not-found subscriber", async () => {
+    const secondModule = deferred<TestModule>();
+    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
+      routes: [
+        definePage({
+          id: "first",
+          path: "/first",
+          component: () => module("first"),
+          loader: (): TestData => {
+            throw Object.assign(new Error("Initial route not found"), { type: "notFound" });
+          },
+        }),
+        definePage({
+          id: "second",
+          path: "/second",
+          component: () => secondModule.promise,
+          loader: () => ({ label: "second" }),
+        }),
+      ],
+    });
+    let recovery: Promise<void> | undefined;
+    let redirected = false;
+    const unsubscribe = router.subscribe((state) => {
+      if (state.status === "notFound" && !redirected) {
+        redirected = true;
+        recovery = router.navigate("second", { label: "test" });
+      }
+    });
+    const onNotFound = vi.fn();
+    const controller = new RouterOutletController<RouteId, TestContext, TestModule, TestData>(
+      vi.fn(),
+    );
+    controller.setInputs({ router, onNotFound });
+    controller.connect();
+    try {
+      await expect(router.navigate("first", { label: "test" })).rejects.toMatchObject({
+        type: "notFound",
+      });
+      await flushPromises();
+
+      expect(router.getState().status).toBe("loading");
+      expect(onNotFound).not.toHaveBeenCalled();
+      expect(controller.snapshot.pending?.routeId).toBe("second");
+    } finally {
+      secondModule.resolve(module("second"));
+      await recovery;
+      unsubscribe();
+      controller.disconnect();
+      router.stop();
+    }
+  });
+
   it("cancels the queued fallback on disconnect and re-evaluates it on reconnect", async () => {
     const router = createTestRouter();
     const onNotFound = vi.fn();

@@ -1,4 +1,5 @@
 // Covers synchronous extra security audit aggregation.
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setConfigResolutionFacts } from "../config/resolution-facts.js";
@@ -11,14 +12,6 @@ import { collectSecretsInConfigFindings } from "./audit-extra.sync.js";
 vi.mock("../plugins/web-search-credential-presence.js", () => ({
   hasConfiguredWebSearchCredential: () => false,
 }));
-
-function requireFirstFinding<T>(findings: readonly T[], label: string): T {
-  const [finding] = findings;
-  if (!finding) {
-    throw new Error(`Expected ${label} finding`);
-  }
-  return finding;
-}
 
 describe("collectSecretsInConfigFindings", () => {
   it("distinguishes an unresolved password from byte-identical literal text", () => {
@@ -62,9 +55,9 @@ describe("collectAttackSurfaceSummaryFindings", () => {
       expectedDetail: ["hooks.internal: disabled"],
     },
   ])("$name", ({ cfg, expectedDetail }) => {
-    const finding = requireFirstFinding(
-      collectAttackSurfaceSummaryFindings(cfg),
-      "attack surface summary",
+    const finding = expectDefined(
+      collectAttackSurfaceSummaryFindings(cfg).at(0),
+      "attack surface summary finding",
     );
     expect(finding.checkId).toBe("summary.attack_surface");
     for (const snippet of expectedDetail) {
@@ -126,12 +119,12 @@ describe("collectSmallModelRiskFindings", () => {
       detailExcludes: ["web=[browser]"],
     },
   ])("$name", ({ cfg, env, expectedSeverity, detailIncludes, detailExcludes }) => {
-    const finding = requireFirstFinding(
+    const finding = expectDefined(
       collectSmallModelRiskFindings({
         cfg,
         env,
-      }),
-      "small model risk",
+      }).at(0),
+      "small model risk finding",
     );
 
     expect(finding.checkId).toBe("models.small_params");

@@ -1,4 +1,5 @@
 import { render } from "lit";
+import { expect } from "vitest";
 import type { CronJob } from "../../api/types.ts";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
 import { renderCron } from "./view.ts";
@@ -25,13 +26,15 @@ function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
     basePath: "",
     agentId: "main",
     loading: false,
+    hasLoaded: true,
+    listError: null,
     canManage: true,
     jobsLoadingMore: false,
-    status: null,
-    failingCount: null,
-    agentScoped: false,
-    scopedTotal: null,
-    scopedNextWakeAtMs: null,
+    status: {
+      enabled: true,
+      triggersEnabled: true,
+      jobs: Math.max(overrides.jobsTotal ?? 0, overrides.jobs?.length ?? 0),
+    },
     jobs: [],
     jobsTotal: 0,
     jobsHasMore: false,
@@ -39,11 +42,13 @@ function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
     jobsEnabledFilter: "all",
     jobsScheduleKindFilter: "all",
     jobsLastStatusFilter: "all",
+    jobsTriggerFilter: "all",
     jobsSortBy: "nextRunAtMs",
     jobsSortDir: "asc",
     error: null,
     busy: false,
     form: { ...DEFAULT_CRON_FORM },
+    heartbeatScratch: "",
     fieldErrors: {},
     canSubmit: true,
     editingJob: null,
@@ -92,4 +97,46 @@ export function renderCronView(overrides: Partial<CronProps> = {}) {
   const container = document.createElement("div");
   render(renderCron(createCronViewProps(overrides)), container);
   return container;
+}
+
+export function getButtonByText(container: Element, text: string): HTMLButtonElement {
+  const button = Array.from(container.querySelectorAll("button")).find(
+    (btn) => btn.textContent?.replace(/\s+/g, " ").trim() === text,
+  );
+  expect(button).toBeInstanceOf(HTMLButtonElement);
+  if (!(button instanceof HTMLButtonElement)) {
+    throw new Error(`Expected button with text "${text}"`);
+  }
+  return button;
+}
+
+export function getElement<T extends Element>(
+  container: Element,
+  selector: string,
+  constructor: new () => T,
+): T {
+  const element = container.querySelector<T>(selector);
+  expect(element).toBeInstanceOf(constructor);
+  if (!(element instanceof constructor)) {
+    throw new Error(`Expected ${selector} to match ${constructor.name}`);
+  }
+  return element;
+}
+
+export function selectSegmented(control: HTMLElement) {
+  const group = control.closest<HTMLElement & { value: string }>("wa-radio-group");
+  expect(group).not.toBeNull();
+  if (!group) {
+    return;
+  }
+  group.value = control.getAttribute("value") ?? "";
+  group.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+export function findToggleByLabel(container: Element, label: string) {
+  return (
+    Array.from(container.querySelectorAll("wa-switch.settings-toggle")).find((toggle) =>
+      toggle.textContent?.includes(label),
+    ) ?? null
+  );
 }

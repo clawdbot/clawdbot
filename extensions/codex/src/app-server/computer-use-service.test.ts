@@ -64,7 +64,7 @@ describe("Codex Computer Use native service", () => {
       sourceBuild: "1000761",
     });
     const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
-    await expect(fs.access(path.join(targetPath, CLIENT_RELATIVE_PATH))).resolves.toBeUndefined();
+    await fs.access(path.join(targetPath, CLIENT_RELATIVE_PATH));
     await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
   });
 
@@ -298,7 +298,7 @@ describe("Codex Computer Use native service", () => {
     expect(copyServiceApp).not.toHaveBeenCalled();
   });
 
-  it("reuses a completed process-lifetime sync without repeated signature inspection", async () => {
+  it("refreshes when the signed desktop service changes at the same source path", async () => {
     const root = tempDirs.make("openclaw-computer-use-service-");
     const sourcePath = path.join(root, "source", "Codex Computer Use.app");
     const codexHome = path.join(root, "codex-home");
@@ -314,8 +314,7 @@ describe("Codex Computer Use native service", () => {
       inspectServiceApp,
     });
     expect(first.status).toBe("installed");
-    const inspectionCount = inspectServiceApp.mock.calls.length;
-    const copyCount = copyServiceApp.mock.calls.length;
+    await writeServiceFixture(sourcePath, UNEXPECTED_IDENTITY);
 
     const second = await ensureCodexComputerUseServiceApp({
       codexHome,
@@ -326,51 +325,18 @@ describe("Codex Computer Use native service", () => {
     });
 
     expect(second).toMatchObject({
-      status: "already_current",
-      changed: false,
-      sourceBuild: "1000761",
+      status: "refreshed",
+      changed: true,
+      previousBuild: "1000761",
+      sourceBuild: "1000900",
     });
-    expect(inspectServiceApp).toHaveBeenCalledTimes(inspectionCount);
-    expect(copyServiceApp).toHaveBeenCalledTimes(copyCount);
+    expect(copyServiceApp).toHaveBeenCalledTimes(2);
+    const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
+    await expect(inspectServiceFixture(targetPath)).resolves.toEqual(UNEXPECTED_IDENTITY);
+    await expect(findInstallDebris(path.dirname(targetPath))).resolves.toEqual([]);
   });
 
-  it("bounds completed synchronization state and re-inspects an evicted home", async () => {
-    const root = tempDirs.make("openclaw-computer-use-service-cache-");
-    const sourcePath = path.join(root, "source", "Codex Computer Use.app");
-    await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
-    const inspectServiceApp = vi.fn(inspectServiceFixture);
-    const codexHomes = Array.from({ length: 65 }, (_, index) =>
-      path.join(root, `codex-home-${index}`),
-    );
-    const oldestCodexHome = codexHomes[0];
-    if (!oldestCodexHome) {
-      throw new Error("expected at least one Codex home fixture");
-    }
-
-    for (const codexHome of codexHomes) {
-      const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
-      await writeServiceFixture(targetPath, CURRENT_IDENTITY);
-      await ensureCodexComputerUseServiceApp({
-        codexHome,
-        platform: "darwin",
-        sourceAppCandidates: [sourcePath],
-        inspectServiceApp,
-      });
-    }
-
-    const inspectionsBeforeRecall = inspectServiceApp.mock.calls.length;
-    await expect(
-      ensureCodexComputerUseServiceApp({
-        codexHome: oldestCodexHome,
-        platform: "darwin",
-        sourceAppCandidates: [sourcePath],
-        inspectServiceApp,
-      }),
-    ).resolves.toMatchObject({ status: "already_current", changed: false });
-    expect(inspectServiceApp.mock.calls.length).toBeGreaterThan(inspectionsBeforeRecall);
-  });
-
-  it("invalidates a completed selection before a different selection fails", async () => {
+  it("revalidates the current source after a different selection fails", async () => {
     const root = tempDirs.make("openclaw-computer-use-service-");
     const firstSourcePath = path.join(root, "first", "Codex Computer Use.app");
     const failingSourcePath = path.join(root, "failing", "Codex Computer Use.app");
@@ -555,7 +521,7 @@ describe("Codex Computer Use native service", () => {
     await expect(findInstallDebris(path.dirname(targetPath))).resolves.toEqual([]);
   });
 
-  it("serializes different selected sources and invalidates the prior completed selection", async () => {
+  it("serializes different selected sources and revalidates each selection", async () => {
     const root = tempDirs.make("openclaw-computer-use-service-");
     const firstSourcePath = path.join(root, "first", "Codex Computer Use.app");
     const secondSourcePath = path.join(root, "second", "Codex Computer Use.app");
@@ -627,6 +593,44 @@ describe("Codex Computer Use native service", () => {
       firstSourcePath,
     ]);
     await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
+  });
+
+  it("leaves the prior service intact when its generation becomes stale before publication", async () => {
+    const root = tempDirs.make("openclaw-computer-use-service-stale-");
+    const firstSourcePath = path.join(root, "first", "Codex Computer Use.app");
+    const secondSourcePath = path.join(root, "second", "Codex Computer Use.app");
+    const codexHome = path.join(root, "codex-home");
+    const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
+    await writeServiceFixture(firstSourcePath, CURRENT_IDENTITY);
+    await writeServiceFixture(secondSourcePath, UNEXPECTED_IDENTITY);
+    await ensureCodexComputerUseServiceApp({
+      codexHome,
+      platform: "darwin",
+      sourceAppCandidates: [firstSourcePath],
+      copyServiceApp: copyServiceFixture,
+      inspectServiceApp: inspectServiceFixture,
+    });
+
+    let currentnessChecks = 0;
+    await expect(
+      ensureCodexComputerUseServiceApp({
+        codexHome,
+        platform: "darwin",
+        sourceAppCandidates: [secondSourcePath],
+        copyServiceApp: copyServiceFixture,
+        inspectServiceApp: inspectServiceFixture,
+        assertCurrent: () => {
+          currentnessChecks += 1;
+          if (currentnessChecks === 2) {
+            throw new Error("desktop generation is stale");
+          }
+        },
+      }),
+    ).rejects.toThrow("desktop generation is stale");
+    expect(currentnessChecks).toBe(2);
+
+    await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
+    await expect(findInstallDebris(path.dirname(targetPath))).resolves.toEqual([]);
   });
 
   it("does not provision the macOS service on other platforms", async () => {

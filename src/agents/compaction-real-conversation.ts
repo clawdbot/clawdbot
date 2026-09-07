@@ -29,7 +29,10 @@ function isSummaryRole(role: unknown): boolean {
 }
 
 /** Returns whether a message has content worth preserving as conversation. */
-export function hasMeaningfulConversationContent(message: AgentMessage): boolean {
+function hasMeaningfulConversationContent(message: AgentMessage): boolean {
+  if ("excludeFromContext" in message && message.excludeFromContext === true) {
+    return false;
+  }
   if ((message as { role?: unknown }).role === "custom") {
     const custom = message as { content?: unknown; display?: unknown };
     return custom.display !== false && hasMeaningfulMessageContent(custom.content);
@@ -38,11 +41,7 @@ export function hasMeaningfulConversationContent(message: AgentMessage): boolean
     const bash = message as {
       command?: unknown;
       output?: unknown;
-      excludeFromContext?: unknown;
     };
-    if (bash.excludeFromContext === true) {
-      return false;
-    }
     const command = typeof bash.command === "string" ? bash.command : "";
     const output = typeof bash.output === "string" ? bash.output : "";
     return hasMeaningfulText(`${command}\n${output}`);

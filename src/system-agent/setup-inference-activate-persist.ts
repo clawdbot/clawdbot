@@ -1,11 +1,15 @@
 import { isDeepStrictEqual } from "node:util";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
-import { applyAutoLocalModelLean } from "../config/local-model-lean-auto.js";
 import { applyMergePatch } from "../config/merge-patch.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  createRuntimeConfigWriteApplication,
+} from "../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { normalizePluginTargetConfig } from "../plugins/config-state.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
+import { captureGatewayRootWorkAdmissionContinuationScope } from "../process/gateway-work-admission.js";
 import {
   projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
@@ -32,31 +36,78 @@ import {
   rollbackManualAuthProfiles,
   applyManualAuthConfig,
   type ManualAuthPersistenceReceipt,
-  runSetupInferenceTest,
 } from "./setup-inference-persist.js";
 import {
   projectSetupTargetModelMetadata,
-  resolveSetupAgentRuntimeId,
   type SetupInferenceTestPlan,
 } from "./setup-inference-plan-helpers.js";
+import { runSetupInferenceTest } from "./setup-inference-test.js";
 import { createSystemAgentModelSelectionUpdater } from "./setup-model-selection.js";
 import type { SystemAgentOwnerPluginArtifactSnapshot } from "./verified-inference.js";
 
 type ProjectedInferenceRoute = Awaited<ReturnType<typeof projectInferenceRoute>>;
 
 export type SetupInferenceActivationPersistenceState = {
-  committedConfig: OpenClawConfig | undefined;
-  autoLocalModelLeanApplied: boolean;
   codexInstallOwnership: "unknown" | "owned" | "unowned";
+  gatewayRestartRequired: boolean;
 };
+
+/** Build one typed candidate projection for verification and final persistence. */
+export async function createSetupInferenceCandidateStager(params: {
+  plan: Pick<SetupInferenceTestPlan, "manualAuth" | "persistModelRef" | "authProfileId">;
+  targetAgentId?: string;
+  agentRuntimeId?: string;
+  codexPluginPatch: unknown;
+  pendingCodexInstall: PluginInstallRecord | undefined;
+  enablePlugin?: typeof enablePluginInConfig;
+}) {
+  const { plan, codexPluginPatch, pendingCodexInstall } = params;
+  const { stripPendingPluginInstallRecords } = await import("../plugins/install-record-commit.js");
+  const selectModel = plan.persistModelRef
+    ? await createSystemAgentModelSelectionUpdater({
+        model: plan.persistModelRef,
+        ...(params.targetAgentId ? { targetAgentId: params.targetAgentId } : {}),
+        ...(params.agentRuntimeId ? { agentRuntimeId: params.agentRuntimeId } : {}),
+        ...(plan.manualAuth && plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
+      })
+    : undefined;
+  return (current: OpenClawConfig, currentSourceConfig: OpenClawConfig): OpenClawConfig => {
+    let next = codexPluginPatch === undefined ? current : stripPendingPluginInstallRecords(current);
+    if (plan.manualAuth) {
+      next = applyManualAuthConfig(
+        next,
+        plan.manualAuth,
+        currentSourceConfig,
+        params.enablePlugin ?? enablePluginInConfig,
+      );
+    }
+    if (codexPluginPatch !== undefined) {
+      const patched = applyMergePatch(next, codexPluginPatch) as OpenClawConfig;
+      const enabledCodex = enablePluginInConfig(
+        normalizePluginTargetConfig(patched, "codex"),
+        "codex",
+      );
+      if (!enabledCodex.enabled) {
+        throw new SetupInferenceActivationUnavailableError(
+          `Could not enable the Codex runtime plugin: ${enabledCodex.reason ?? "plugin disabled"}.`,
+        );
+      }
+      next = enabledCodex.config;
+    }
+    next = selectModel ? selectModel(next) : next;
+    return pendingCodexInstall
+      ? { ...next, plugins: { ...next.plugins, installs: { codex: pendingCodexInstall } } }
+      : next;
+  };
+}
 
 export async function persistActivatedSetupInference(input: {
   params: ActivateSetupInferenceParams;
   deps: ActivateSetupInferenceDeps;
   plan: SetupInferenceTestPlan;
-  testPlan: SetupInferenceTestPlan;
+  stageCandidate: Awaited<ReturnType<typeof createSetupInferenceCandidateStager>>;
+  targetAgentId?: string;
   test: Extract<Awaited<ReturnType<typeof runSetupInferenceTest>>, { ok: true }>;
-  codexPluginPatch: unknown;
   pendingCodexInstall: PluginInstallRecord | undefined;
   cfg: OpenClawConfig;
   sourceCfg: OpenClawConfig;
@@ -81,9 +132,9 @@ export async function persistActivatedSetupInference(input: {
     params,
     deps,
     plan,
-    testPlan,
+    stageCandidate,
+    targetAgentId,
     test,
-    codexPluginPatch,
     pendingCodexInstall,
     cfg,
     sourceCfg,
@@ -99,78 +150,29 @@ export async function persistActivatedSetupInference(input: {
     state,
     revalidateOwner,
   } = input;
-  let committedConfig: OpenClawConfig | undefined;
   let { codexInstallOwnership } = state;
-  const requestedAgentId = params.agentId ? testPlan.routeAgentId : undefined;
-  const projectRoute = (config: OpenClawConfig) =>
-    projectInferenceRoute(config, requestedAgentId, routeDeps);
+  const requestedAgentId = targetAgentId;
+  const projectRoute = (config: OpenClawConfig, sourceConfig: OpenClawConfig) =>
+    projectInferenceRoute(config, requestedAgentId, routeDeps, sourceConfig);
   const resolveRoute = (config: OpenClawConfig) =>
     resolveSystemAgentConfiguredRouteFromConfig(config, requestedAgentId, routeDeps);
 
   const { stripPendingPluginInstallRecords } = await import("../plugins/install-record-commit.js");
-  const agentRuntimeId = resolveSetupAgentRuntimeId(params.kind);
-  const selectModel = plan.persistModelRef
-    ? await createSystemAgentModelSelectionUpdater({
-        model: plan.persistModelRef,
-        ...(params.agentId ? { targetAgentId: testPlan.routeAgentId } : {}),
-        ...(agentRuntimeId ? { agentRuntimeId } : {}),
-        ...(plan.manualAuth && plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
-      })
-    : undefined;
-  const stageCandidate = (
-    current: OpenClawConfig,
-    configKind: "runtime" | "source",
-  ): OpenClawConfig => {
-    let next = codexPluginPatch === undefined ? current : stripPendingPluginInstallRecords(current);
-    if (plan.manualAuth) {
-      next = applyManualAuthConfig(
-        next,
-        plan.manualAuth,
-        configKind,
-        deps.enablePluginInConfig ?? enablePluginInConfig,
-      );
-    }
-    if (codexPluginPatch !== undefined) {
-      const patched = applyMergePatch(next, codexPluginPatch) as OpenClawConfig;
-      const enabledCodex = enablePluginInConfig(
-        normalizePluginTargetConfig(patched, "codex"),
-        "codex",
-      );
-      if (!enabledCodex.enabled) {
-        throw new SetupInferenceActivationUnavailableError(
-          `Could not enable the Codex runtime plugin: ${enabledCodex.reason ?? "plugin disabled"}.`,
-        );
-      }
-      next = enabledCodex.config;
-    }
-    next = applyAutoLocalModelLean({
-      config: next,
-      providerId: testPlan.provider,
-      modelRef: plan.modelRef,
-    }).config;
-    next = selectModel ? selectModel(next) : next;
-    if (!pendingCodexInstall) {
-      return next;
-    }
-    return {
-      ...next,
-      plugins: {
-        ...next.plugins,
-        installs: { codex: pendingCodexInstall },
-      },
-    };
-  };
+  const sourceCandidate = stageCandidate(sourceCfg, sourceCfg);
   // Pending install records are probe-only discovery input. The config
   // writer moves them into the installed-plugin index before committing,
   // so post-write reconciliation must compare against the stripped route
   // and verify the exact index record separately below.
   const persistedRoute = pendingCodexInstall
-    ? await projectRoute(stripPendingPluginInstallRecords(stageCandidate(cfg, "runtime")))
+    ? await projectRoute(
+        stripPendingPluginInstallRecords(stageCandidate(cfg, sourceCfg)),
+        stripPendingPluginInstallRecords(sourceCandidate),
+      )
     : verifiedRoute;
   // Runtime config may materialize provider defaults that are intentionally
   // absent from authored config. Compare source writes against the candidate
   // produced from the original source shape, without ignoring concurrent rows.
-  const expectedSourceCandidateRoute = await projectRoute(stageCandidate(sourceCfg, "source"));
+  const expectedSourceCandidateRoute = await projectRoute(sourceCandidate, sourceCandidate);
   // Resolve every fallible config-commit dependency before writing a
   // credential into the real agent store. From this point onward, any
   // failure is inside the rollback boundary below.
@@ -180,13 +182,15 @@ export async function persistActivatedSetupInference(input: {
   let manualAuthReceipt: ManualAuthPersistenceReceipt | undefined;
   if (hasPreparedAuthProfiles && plan.manualAuth) {
     throwIfSetupInferenceCancelled(params);
-    const initialCandidate = stageCandidate(cfg, "runtime");
-    const initialRoute = await projectRoute(initialCandidate);
+    await params.beforePersistentEffect?.();
+    throwIfSetupInferenceCancelled(params);
+    const initialCandidate = stageCandidate(cfg, sourceCfg);
+    const initialRoute = await projectRoute(initialCandidate, sourceCandidate);
     const resolvedRoute = await resolveRoute(initialCandidate);
     if (
       !sameDefaultInferenceRoute(initialRoute, verifiedRoute) ||
       !resolvedRoute ||
-      resolvedRoute.modelLabel !== plan.modelRef ||
+      resolvedRoute.modelLabel !== (plan.persistModelRef ?? plan.modelRef) ||
       resolvedRoute.authProfileId !== plan.authProfileId
     ) {
       throw new Error(
@@ -197,6 +201,7 @@ export async function persistActivatedSetupInference(input: {
       profiles: plan.manualAuth.profiles,
       agentDir: resolvedRoute.agentDir,
       deps,
+      secretStorage: { config: initialCandidate, env: process.env },
     });
     if (persistedManualAuth.status === "unknown") {
       const rolledBack = await rollbackManualAuthProfiles(persistedManualAuth.receipt, deps);
@@ -221,22 +226,30 @@ export async function persistActivatedSetupInference(input: {
     }
     manualAuthReceipt = persistedManualAuth.receipt;
   }
+  const application = params.onRuntimeApplication
+    ? createRuntimeConfigWriteApplication(captureGatewayRootWorkAdmissionContinuationScope()?.run)
+    : undefined;
+  if (application) {
+    params.onRuntimeApplication?.(application);
+  }
   let commitMayHaveStarted = false;
   try {
     throwIfSetupInferenceCancelled(params);
     const committed = await transformConfig({
       base: "source",
+      ...(application
+        ? { writeOptions: attachRuntimeConfigWriteApplication({}, application) }
+        : {}),
       // The transform stays side-effect free so a config conflict can retry
       // without replaying credential writes in another agent directory.
-      // Setup changes only hot-reloadable model, agent, and plugin-entry surfaces.
-      // Publish the verified route now so the next turn cannot reuse the old harness.
-      afterWrite: { mode: "auto" },
+      // The install-record owner adds a restart follow-up when this commit adopts
+      // a new plugin source. Preserve that intent for structured setup clients.
       transform: async (current, context) => {
         const latestRuntime = context.snapshot.runtimeConfig ?? context.snapshot.config;
         // Validate that the candidate is still admissible before reporting
         // broader route drift, so policy revocations retain their actionable error.
-        const stagedRuntime = stageCandidate(latestRuntime, "runtime");
-        const latestBaseline = await projectRoute(latestRuntime);
+        const stagedRuntime = stageCandidate(latestRuntime, context.snapshot.sourceConfig);
+        const latestBaseline = await projectRoute(latestRuntime, context.snapshot.sourceConfig);
         if (!sameDefaultInferenceRoute(latestBaseline, baselineRoute)) {
           throw new Error(
             "The default-agent inference route changed during its live test, so the verified candidate was not saved. Review the current model/auth/runtime settings and retry.",
@@ -256,7 +269,8 @@ export async function persistActivatedSetupInference(input: {
             "The target model metadata changed during its live inference test, so the verified candidate was not saved. Review the current model settings and retry.",
           );
         }
-        const currentRoute = await projectRoute(stagedRuntime);
+        const nextConfig = stageCandidate(current, current);
+        const currentRoute = await projectRoute(stagedRuntime, nextConfig);
         if (!sameDefaultInferenceRoute(currentRoute, verifiedRoute)) {
           throw new Error(
             "The default-agent inference route changed during its live test, so the verified candidate was not saved. Review the current model/auth/runtime settings and retry.",
@@ -265,7 +279,7 @@ export async function persistActivatedSetupInference(input: {
         const resolvedRoute = await resolveRoute(stagedRuntime);
         if (
           !resolvedRoute ||
-          resolvedRoute.modelLabel !== plan.modelRef ||
+          resolvedRoute.modelLabel !== (plan.persistModelRef ?? plan.modelRef) ||
           (plan.authProfileId && resolvedRoute.authProfileId !== plan.authProfileId)
         ) {
           throw new Error(
@@ -282,18 +296,12 @@ export async function persistActivatedSetupInference(input: {
             "The authored target model metadata changed during its live inference test, so the verified candidate was not saved. Review the current model settings and retry.",
           );
         }
-        const autoLocalModelLean = applyAutoLocalModelLean({
-          config: current,
-          providerId: testPlan.provider,
-          modelRef: plan.modelRef,
-        });
-        const nextConfig = stageCandidate(current, "source");
-        const nextRouteProjection = await projectRoute(nextConfig);
+        const nextRouteProjection = await projectRoute(nextConfig, nextConfig);
         const nextResolvedRoute = await resolveRoute(nextConfig);
         if (
           !sameDefaultInferenceRoute(nextRouteProjection, expectedSourceCandidateRoute) ||
           !nextResolvedRoute ||
-          nextResolvedRoute.modelLabel !== plan.modelRef ||
+          nextResolvedRoute.modelLabel !== (plan.persistModelRef ?? plan.modelRef) ||
           (plan.authProfileId && nextResolvedRoute.authProfileId !== plan.authProfileId)
         ) {
           throw new Error(
@@ -311,11 +319,10 @@ export async function persistActivatedSetupInference(input: {
         throwIfSetupInferenceCancelled(params);
         params.onCommitStarted?.(current);
         commitMayHaveStarted = true;
-        state.autoLocalModelLeanApplied = autoLocalModelLean.enabled;
         return { nextConfig };
       },
     });
-    committedConfig = committed.nextConfig;
+    state.gatewayRestartRequired = committed.followUp.requiresRestart;
     if (pendingCodexInstall) {
       codexInstallOwnership = "owned";
     }
@@ -336,7 +343,10 @@ export async function persistActivatedSetupInference(input: {
       reconciledSnapshot?.exists && reconciledSnapshot.valid
         ? (reconciledSnapshot.runtimeConfig ?? reconciledSnapshot.config)
         : undefined;
-    const reconciledRoute = reconciledRuntime ? await projectRoute(reconciledRuntime) : undefined;
+    const reconciledRoute =
+      reconciledRuntime && reconciledSnapshot
+        ? await projectRoute(reconciledRuntime, reconciledSnapshot.sourceConfig)
+        : undefined;
     const codexInstallPersisted = pendingCodexInstall
       ? await isCodexInstallRecordPersisted(pendingCodexInstall, deps)
       : true;
@@ -367,13 +377,12 @@ export async function persistActivatedSetupInference(input: {
       }
       throw error;
     }
-    committedConfig = reconciledSnapshot?.sourceConfig ?? reconciledRuntime;
+    state.gatewayRestartRequired = pendingCodexInstall !== undefined;
     setupInferenceLog.warn(
       "Inference activation committed successfully despite a post-write cleanup error.",
     );
   }
 
-  state.committedConfig = committedConfig;
   state.codexInstallOwnership = codexInstallOwnership;
   return undefined;
 }

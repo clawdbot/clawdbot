@@ -44,14 +44,40 @@ function responseFromText(text: string): Response {
   );
 }
 
-function responseFromReaderText(text: string, releaseLock: () => void): Response {
+function responseFromSseFrames(frames: unknown[]): Response {
+  const encoder = new TextEncoder();
+  const chunks = frames.map((frame) => encoder.encode(`data: ${JSON.stringify(frame)}\n\n`));
+  const reader = {
+    read: vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      const value = chunks.shift();
+      return value ? { done: false, value } : { done: true, value: undefined };
+    }),
+    cancel: vi.fn(async () => undefined),
+    releaseLock: vi.fn(),
+  } as unknown as ReadableStreamDefaultReader<Uint8Array>;
+
+  return {
+    ok: true,
+    status: 200,
+    body: { getReader: () => reader },
+  } as Response;
+}
+
+function responseFromReaderText(
+  text: string,
+  releaseLock: () => void,
+  cancel: () => Promise<void> = async () => undefined,
+): Response {
   const chunks: Array<ReadableStreamReadResult<Uint8Array>> = [
     { done: false, value: new TextEncoder().encode(text) },
     { done: true, value: undefined },
   ];
   const reader = {
     read: async () => chunks.shift() ?? { done: true, value: undefined },
-    cancel: async () => undefined,
+    cancel,
     releaseLock,
   } as ReadableStreamDefaultReader<Uint8Array>;
 
@@ -157,6 +183,118 @@ describe("streamProxy", () => {
     ]);
     await expect(stream.result()).resolves.toMatchObject({
       content: [{ type: "text", text: "Working...", textSignature: contentSignature }],
+    });
+  });
+
+  it("accepts data lines without a space after the colon", async () => {
+    // The SSE spec makes the space optional; proxies emitting `data:{...}`
+    // must not have their events silently dropped.
+    const proxyEvents = [
+      { type: "text_start", contentIndex: 0, contentSignature: "sig" },
+      { type: "text_delta", contentIndex: 0, delta: "Working..." },
+      { type: "text_end", contentIndex: 0 },
+      { type: "done", reason: "stop", usage },
+    ];
+    const body = [
+      `data:${JSON.stringify(proxyEvents[0])}`,
+      "",
+      `data: ${JSON.stringify(proxyEvents[1])}`,
+      "",
+      `data:${JSON.stringify(proxyEvents[2])}`,
+      "",
+      `data:${JSON.stringify(proxyEvents[3])}`,
+      "",
+    ].join("\n");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => responseFromText(body)),
+    );
+
+    const stream = streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+    });
+    const events = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    expect(events.map((event) => event.type)).toEqual([
+      "text_start",
+      "text_delta",
+      "text_end",
+      "done",
+    ]);
+    await expect(stream.result()).resolves.toMatchObject({
+      content: [{ type: "text", text: "Working..." }],
+    });
+  });
+
+  it("delays tool argument previews while preserving exact terminal arguments", async () => {
+    const initialContent = "a".repeat(128);
+    const checkpointContent = "b".repeat(400);
+    const deltas = [`{"content":"${initialContent}`, checkpointContent, `","terminal":"exact"}`];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        responseFromSseFrames([
+          { type: "toolcall_start", contentIndex: 0, id: "call-1", toolName: "write" },
+          ...deltas.map((delta) => ({ type: "toolcall_delta", contentIndex: 0, delta })),
+          { type: "toolcall_end", contentIndex: 0 },
+          { type: "done", reason: "toolUse", usage },
+        ]),
+      ),
+    );
+
+    const stream = streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+    });
+    const argumentSnapshots: Array<Record<string, unknown>> = [];
+    let terminalArguments: Record<string, unknown> | undefined;
+    for await (const event of stream) {
+      if (event.type === "toolcall_delta") {
+        const content = event.partial.content[event.contentIndex];
+        if (content?.type === "toolCall") {
+          argumentSnapshots.push(structuredClone(content.arguments));
+        }
+      } else if (event.type === "toolcall_end") {
+        terminalArguments = structuredClone(event.toolCall.arguments);
+      }
+    }
+
+    const checkpointPreview = { content: initialContent + checkpointContent };
+    expect(argumentSnapshots).toEqual([{}, checkpointPreview, checkpointPreview]);
+    const exactArguments = {
+      content: initialContent + checkpointContent,
+      terminal: "exact",
+    };
+    expect(terminalArguments).toEqual(exactArguments);
+    await expect(stream.result()).resolves.toMatchObject({
+      content: [{ type: "toolCall", arguments: exactArguments }],
+    });
+  });
+
+  it("preserves empty arguments for terminal-only tool calls", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        responseFromSseFrames([
+          { type: "toolcall_start", contentIndex: 0, id: "call-1", toolName: "list" },
+          { type: "toolcall_end", contentIndex: 0 },
+          { type: "done", reason: "toolUse", usage },
+        ]),
+      ),
+    );
+
+    const stream = streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+    });
+
+    await expect(stream.result()).resolves.toMatchObject({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "call-1", name: "list", arguments: {} }],
     });
   });
 
@@ -390,17 +528,14 @@ describe("streamProxy", () => {
     expect(cancel).not.toHaveBeenCalled();
     secondReadResolve?.({
       done: false,
-      value: encoder.encode(
-        `${JSON.stringify({
-          type: "done",
-          reason: "stop",
-          usage,
-        })}\n\n`,
-      ),
+      value: encoder.encode(`${JSON.stringify({ type: "start" })}\n\n`),
     });
     await vi.advanceTimersByTimeAsync(119_000);
     expect(cancel).not.toHaveBeenCalled();
-    thirdReadResolve?.({ done: true, value: undefined });
+    thirdReadResolve?.({
+      done: false,
+      value: encoder.encode(`data: ${JSON.stringify({ type: "done", reason: "stop", usage })}\n\n`),
+    });
 
     await expect(stream.result()).resolves.toMatchObject({
       stopReason: "stop",
@@ -455,17 +590,14 @@ describe("streamProxy", () => {
     expect(cancel).not.toHaveBeenCalled();
     secondReadResolve?.({
       done: false,
-      value: encoder.encode(
-        `${JSON.stringify({
-          type: "done",
-          reason: "stop",
-          usage,
-        })}\n\n`,
-      ),
+      value: encoder.encode(`${JSON.stringify({ type: "start" })}\n\n`),
     });
     await vi.advanceTimersByTimeAsync(4);
     expect(cancel).not.toHaveBeenCalled();
-    thirdReadResolve?.({ done: true, value: undefined });
+    thirdReadResolve?.({
+      done: false,
+      value: encoder.encode(`data: ${JSON.stringify({ type: "done", reason: "stop", usage })}\n\n`),
+    });
 
     await expect(stream.result()).resolves.toMatchObject({
       stopReason: "stop",
@@ -553,14 +685,8 @@ describe("streamProxy", () => {
     expect(cancel).toHaveBeenCalledWith(expect.any(Error));
   });
 
-  it("releases the proxy response reader after a terminal stream", async () => {
-    let resolveReleased: (() => void) | undefined;
-    const released = new Promise<void>((resolve) => {
-      resolveReleased = resolve;
-    });
-    const releaseLock = vi.fn(() => {
-      resolveReleased?.();
-    });
+  it("releases the response reader when terminal stream cancellation never settles", async () => {
+    const releaseLock = vi.fn();
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
@@ -571,6 +697,7 @@ describe("streamProxy", () => {
             usage,
           })}\n\n`,
           releaseLock,
+          () => new Promise<void>(() => {}),
         ),
       ),
     );
@@ -579,9 +706,30 @@ describe("streamProxy", () => {
       authToken: "token",
       proxyUrl: "https://proxy.example",
     }).result();
-    await released;
 
     expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cancel a naturally drained response ending with a terminal frame", async () => {
+    const cancel = vi.fn(async () => undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        responseFromReaderText(
+          `data: ${JSON.stringify({ type: "done", reason: "stop", usage })}`,
+          () => undefined,
+          cancel,
+        ),
+      ),
+    );
+
+    await expect(
+      streamProxy(model, context, {
+        authToken: "token",
+        proxyUrl: "https://proxy.example",
+      }).result(),
+    ).resolves.toMatchObject({ stopReason: "stop" });
+    expect(cancel).not.toHaveBeenCalled();
   });
 
   it("returns an error result when EOF arrives without a terminal event", async () => {
@@ -693,6 +841,67 @@ describe("streamProxy loopback /api/stream", () => {
     }
     return { port: address.port, request };
   }
+
+  it.each([
+    {
+      name: "terminal success",
+      terminal: { type: "done", reason: "stop", usage },
+      expected: { stopReason: "stop" },
+    },
+    {
+      name: "terminal error",
+      terminal: { type: "error", reason: "error", errorMessage: "upstream failed", usage },
+      expected: { stopReason: "error", errorMessage: "upstream failed" },
+    },
+    {
+      name: "malformed event",
+      terminal: "{invalid json",
+      expected: { stopReason: "error" },
+    },
+  ])(
+    "closes a hanging native SSE body after $name without applying later frames",
+    async (entry) => {
+      let notifyClosed: (() => void) | undefined;
+      const closed = new Promise<void>((resolve) => {
+        notifyClosed = resolve;
+      });
+      server = http.createServer((_req, res) => {
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.once("close", () => notifyClosed?.());
+        const frames = [
+          { type: "text_start", contentIndex: 0 },
+          { type: "text_delta", contentIndex: 0, delta: "visible" },
+          entry.terminal,
+          { type: "text_delta", contentIndex: 0, delta: " late mutation" },
+        ];
+        res.write(
+          frames
+            .map(
+              (frame) => `data: ${typeof frame === "string" ? frame : JSON.stringify(frame)}\n\n`,
+            )
+            .join(""),
+        );
+      });
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected loopback server address");
+      }
+
+      const result = await streamProxy(model, context, {
+        authToken: "token",
+        proxyUrl: `http://127.0.0.1:${address.port}`,
+        timeoutMs: 3_000,
+      }).result();
+      // Native cancellation closes the remote socket asynchronously; the test owns the deadline.
+      await closed;
+      expect(result).toMatchObject({
+        ...entry.expected,
+        content: [{ type: "text", text: "visible" }],
+      });
+    },
+  );
 
   it("falls back to the HTTP status for malformed UTF-8 proxy errors", async () => {
     const prefix = Buffer.from('{"error":"corrupted ');

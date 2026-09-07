@@ -122,15 +122,16 @@ function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number
 
   const record = schema as Record<string, unknown>;
   let changed = false;
-  const normalized: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(record)) {
-    const next = normalizeStrictOpenAIJsonSchemaRecursive(
-      value,
-      key === "properties" ? depth : depth + 1,
-    );
-    normalized[key] = next;
-    changed ||= next !== value;
-  }
+  const normalized = Object.fromEntries<unknown>(
+    Object.entries(record).map(([key, value]) => {
+      const next = normalizeStrictOpenAIJsonSchemaRecursive(
+        value,
+        key === "properties" ? depth : depth + 1,
+      );
+      changed ||= next !== value;
+      return [key, next];
+    }),
+  );
 
   if (normalized.type === "object") {
     const properties =

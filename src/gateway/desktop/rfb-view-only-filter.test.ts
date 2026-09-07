@@ -63,10 +63,10 @@ describe("RFB view-only client message filter", () => {
     });
   });
 
-  it("fails closed on unsupported security types", () => {
+  it.each([19, 30])("fails closed on unsupported security type %s", (securityType) => {
     const filter = createRfbClientMessageFilter();
-    expect(filter.filter(Buffer.concat([VERSION, Buffer.from([19])]))).toEqual({
-      error: "unsupported RFB security type 19",
+    expect(filter.filter(Buffer.concat([VERSION, Buffer.from([securityType])]))).toEqual({
+      error: `unsupported RFB security type ${securityType}`,
     });
   });
 
@@ -81,15 +81,23 @@ describe("RFB view-only client message filter", () => {
     const framebufferUpdateRequest = Buffer.from([3, 1, 0, 0, 0, 0, 0, 64, 0, 64]);
     const keyEvent = Buffer.from([4, 1, 0, 0, 0, 0, 0, 65]);
     const pointerEvent = Buffer.from([5, 1, 0, 10, 0, 20]);
+    const extendedPointerEvent = Buffer.from([5, 0x80, 0, 10, 0, 20, 1]);
     const cutText = Buffer.concat([Buffer.from([6, 0, 0, 0, 0, 0, 0, 3]), Buffer.from("abc")]);
+    const setDesktopSize = Buffer.alloc(24);
+    setDesktopSize[0] = 251;
+    const extendedKeyEvent = Buffer.alloc(12);
+    extendedKeyEvent[0] = 255;
 
     const result = filter.filter(
       Buffer.concat([
         keyEvent,
         setPixelFormat,
         pointerEvent,
+        extendedPointerEvent,
         setEncodings,
         cutText,
+        setDesktopSize,
+        extendedKeyEvent,
         framebufferUpdateRequest,
       ]),
     );
@@ -187,8 +195,8 @@ describe("RFB view-only client message filter", () => {
 
   it("fails closed on unknown message types", () => {
     const filter = enterMessagePhase();
-    expect(filter.filter(Buffer.from([255]))).toEqual({
-      error: "unsupported RFB client message type 255",
+    expect(filter.filter(Buffer.from([254]))).toEqual({
+      error: "unsupported RFB client message type 254",
     });
   });
 

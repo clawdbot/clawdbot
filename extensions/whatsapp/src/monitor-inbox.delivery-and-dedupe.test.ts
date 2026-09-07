@@ -605,7 +605,7 @@ describe("web monitor inbox delivery and dedupe", () => {
     await listener.close();
   });
 
-  it("delivery coordinator retries redelivery after an explicit retryable failure", async () => {
+  it("delivery coordinator automatically retries after an explicit retryable failure", async () => {
     let attempts = 0;
     const onMessage = vi.fn(async () => {
       attempts += 1;
@@ -625,10 +625,6 @@ describe("web monitor inbox delivery and dedupe", () => {
     });
 
     sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 1);
-    expect(sock.readMessages).not.toHaveBeenCalled();
-
-    sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 2);
     await vi.waitFor(() => {
       expect(sock.readMessages).toHaveBeenCalledTimes(1);
@@ -637,7 +633,7 @@ describe("web monitor inbox delivery and dedupe", () => {
     await listener.close();
   });
 
-  it("delivery coordinator retries redelivery after reply session conflicts", async () => {
+  it("delivery coordinator automatically retries after reply session conflicts", async () => {
     let attempts = 0;
     const onMessage = vi.fn(async () => {
       attempts += 1;
@@ -656,10 +652,6 @@ describe("web monitor inbox delivery and dedupe", () => {
       timestamp: 1_700_000_000,
       pushName: "Tester",
     });
-
-    sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 1);
-    expect(sock.readMessages).not.toHaveBeenCalled();
 
     sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 2);

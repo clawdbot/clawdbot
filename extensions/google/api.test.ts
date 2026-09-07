@@ -1,11 +1,15 @@
 // Google tests cover api plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
+  applyGoogleGeminiModelDefault,
+  GOOGLE_GEMINI_DEFAULT_MODEL,
   isGoogleGenerativeAiApi,
   isGoogleVertexBaseUrl,
   isGoogleVertexHostname,
+  normalizeAntigravityModelId,
   normalizeGoogleApiBaseUrl,
   normalizeGoogleGenerativeAiBaseUrl,
+  normalizeGoogleModelId,
   normalizeGoogleProviderConfig,
   parseGeminiAuth,
   resolveGoogleGenerativeAiHttpRequestConfig,
@@ -13,8 +17,23 @@ import {
   resolveGoogleGenerativeAiTransport,
   shouldNormalizeGoogleGenerativeAiProviderConfig,
 } from "./api.js";
+import {
+  normalizeAntigravityModelId as normalizeAntigravityModelIdDirect,
+  normalizeGoogleModelId as normalizeGoogleModelIdDirect,
+} from "./model-id.js";
+import {
+  applyGoogleGeminiModelDefault as applyGoogleGeminiModelDefaultDirect,
+  GOOGLE_GEMINI_DEFAULT_MODEL as GOOGLE_GEMINI_DEFAULT_MODEL_DIRECT,
+} from "./onboard.js";
 
 describe("google generative ai helpers", () => {
+  it("re-exports model normalization and default helpers", () => {
+    expect(normalizeAntigravityModelId).toBe(normalizeAntigravityModelIdDirect);
+    expect(normalizeGoogleModelId).toBe(normalizeGoogleModelIdDirect);
+    expect(applyGoogleGeminiModelDefault).toBe(applyGoogleGeminiModelDefaultDirect);
+    expect(GOOGLE_GEMINI_DEFAULT_MODEL).toBe(GOOGLE_GEMINI_DEFAULT_MODEL_DIRECT);
+  });
+
   it("detects the Google Generative AI transport id", () => {
     expect(isGoogleGenerativeAiApi("google-generative-ai")).toBe(true);
     expect(isGoogleGenerativeAiApi("google-gemini-cli")).toBe(false);

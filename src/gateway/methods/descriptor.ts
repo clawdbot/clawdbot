@@ -1,5 +1,6 @@
 // Gateway method descriptor types define the reusable contract shared by core, plugin, channel, and auxiliary methods.
-import type { OperatorScope } from "../operator-scopes.js";
+import { normalizePluginGatewayMethodScope } from "../../shared/gateway-method-policy.js";
+import { ADMIN_SCOPE, type OperatorScope } from "../operator-scopes.js";
 
 /** Scope marker for methods that only authenticated node clients may call. */
 export const NODE_GATEWAY_METHOD_SCOPE = "node" as const;
@@ -47,6 +48,24 @@ export type GatewayMethodDescriptorInput = Omit<
   name: string;
   profileAccess?: GatewayMethodProfileAccess;
 };
+
+/** Creates a plugin-owned method descriptor with plugin namespace scope normalization. */
+export function createPluginGatewayMethodDescriptor(params: {
+  pluginId: string;
+  name: string;
+  handler: GatewayMethodHandler;
+  scope?: OperatorScope;
+  profileAccess?: GatewayMethodProfileAccess;
+}): GatewayMethodDescriptor {
+  const normalizedScope = normalizePluginGatewayMethodScope(params.name, params.scope).scope;
+  return {
+    name: params.name,
+    handler: params.handler,
+    owner: { kind: "plugin", pluginId: params.pluginId },
+    profileAccess: params.profileAccess ?? "required",
+    scope: normalizedScope ?? ADMIN_SCOPE,
+  };
+}
 
 /** Read-only method registry view used by request dispatch and method listing. */
 export type GatewayMethodRegistryView = {

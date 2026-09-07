@@ -24,15 +24,25 @@ afterEach(async () => {
 });
 
 describe("qa test file scenario runner", () => {
-  it.each([
-    { evidence: "missing", expectedFailure: /without writing fresh producer QA evidence/u },
-    { evidence: "stale", expectedFailure: /without writing fresh producer QA evidence/u },
-    { evidence: "empty", expectedFailure: /without reporting an executed producer check/u },
-    { evidence: "malformed", expectedFailure: /invalid JSON/u },
-    { evidence: "outside", expectedFailure: /inside its scenario output directory/u },
-  ] as const)(
-    "fails a successful script with $evidence producer evidence",
-    async ({ evidence, expectedFailure }) => {
+  it.each(
+    (
+      [
+        { evidence: "missing", expectedFailure: /without writing fresh producer QA evidence/u },
+        { evidence: "stale", expectedFailure: /without writing fresh producer QA evidence/u },
+        { evidence: "empty", expectedFailure: /without reporting an executed producer check/u },
+        { evidence: "malformed", expectedFailure: /invalid JSON/u },
+        { evidence: "outside", expectedFailure: /inside its scenario output directory/u },
+      ] as const
+    ).flatMap(({ evidence, expectedFailure }) =>
+      (["full", "slim"] as const).map((evidenceMode) => ({
+        evidence,
+        expectedFailure,
+        evidenceMode,
+      })),
+    ),
+  )(
+    "retains $evidence producer failure alongside passing evidence in $evidenceMode mode",
+    async ({ evidence, evidenceMode, expectedFailure }) => {
       const repoRoot = await makeTempRepo(`qa-script-${evidence}-producer-evidence-`);
       const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-script");
       const scenarioOutputDir = path.join(outputDir, "scenario-script");
@@ -54,8 +64,24 @@ describe("qa test file scenario runner", () => {
         repoRoot,
         outputDir,
         ...QA_TEST_RUNNER_DEFAULTS,
-        scenarios: [makeTestFileScenario("script", "scripts/evidence-producer.ts")],
-        runCommand: async () => {
+        evidenceMode,
+        scenarios: [
+          makeTestFileScenario("script", "scripts/evidence-producer.ts"),
+          {
+            ...makeTestFileScenario("script", "scripts/healthy-evidence-producer.ts"),
+            id: "healthy-scenario",
+          },
+        ],
+        runCommand: async (command) => {
+          if (command.args.includes("scripts/healthy-evidence-producer.ts")) {
+            await writeScriptProducerEvidence({
+              outputDir,
+              scenarioId: "healthy-scenario",
+              producerId: "healthy-check",
+              status: "pass",
+            });
+            return { exitCode: 0, stdout: "healthy check passed\n", stderr: "" };
+          }
           await fs.mkdir(scenarioOutputDir, { recursive: true });
           if (evidence === "stale") {
             await expect(fs.access(latestRunPath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -106,11 +132,18 @@ describe("qa test file scenario runner", () => {
 
       expect(result.results[0]).toMatchObject({ status: "fail" });
       expect(result.results[0]?.failureMessage).toMatch(expectedFailure);
-      expect(result.evidence.entries).toHaveLength(1);
-      expect(result.evidence.entries[0]).toMatchObject({
-        test: { id: "scenario-script" },
-        result: { status: "fail" },
-      });
+      expect(result.results[1]).toMatchObject({ status: "pass" });
+      const exportedEvidence = validateQaEvidenceSummaryJson(
+        JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
+      );
+      expect(exportedEvidence.evidenceMode).toBe(evidenceMode);
+      expect(exportedEvidence.entries).toMatchObject([
+        { test: { id: "scenario-script" }, result: { status: "fail" } },
+        { test: { id: "healthy-check" }, result: { status: "pass" } },
+      ]);
+      if (evidenceMode === "slim") {
+        expect(exportedEvidence.entries.every((entry) => entry.execution === undefined)).toBe(true);
+      }
     },
   );
 
@@ -306,7 +339,7 @@ describe("qa test file scenario runner", () => {
     { producerStatus: "blocked" as const, terminal: "timeout" as const },
     { producerStatus: "skipped" as const, terminal: "exit" as const },
   ])(
-    "makes a real $terminal failure override colliding $producerStatus producer evidence",
+    "makes a $terminal failure override colliding $producerStatus producer evidence",
     async ({ producerStatus, terminal }) => {
       const commandName = path.basename(process.execPath);
       const tempRoot = await makeTempRepo(`qa-script-terminal-${terminal}-${producerStatus}-`);
@@ -321,28 +354,48 @@ describe("qa test file scenario runner", () => {
         producerId: "scenario-script",
         status: producerStatus,
       });
-      await fs.writeFile(
-        scriptPath,
-        [
-          "import fs from 'node:fs/promises';",
-          "import path from 'node:path';",
-          "const artifactBase = process.argv[process.argv.indexOf('--artifact-base') + 1];",
-          "const runRoot = path.join(artifactBase, 'run-1');",
-          "await fs.mkdir(runRoot, { recursive: true });",
-          "await fs.writeFile(path.join(runRoot, 'producer.log'), 'producer evidence\\n');",
-          `await fs.writeFile(path.join(runRoot, 'qa-evidence.json'), ${JSON.stringify(JSON.stringify(producerEvidence))});`,
-          "await fs.writeFile(path.join(artifactBase, 'latest-run.json'), JSON.stringify({ qaEvidence: 'run-1/qa-evidence.json' }));",
-          terminal === "timeout" ? "setInterval(() => {}, 1_000);" : "process.exitCode = 7;",
-        ].join("\n"),
-        "utf8",
-      );
-
       const result = await runQaTestFileScenarios({
         repoRoot: process.cwd(),
         outputDir,
         ...QA_TEST_RUNNER_DEFAULTS,
         scenarios: [makeTestFileScenario("script", scriptPath)],
         commandTimeoutMs: 1_000,
+        runCommand: async (command) => {
+          const artifactBase = path.join(outputDir, "scenario-script");
+          expect(command.args).toEqual([
+            "--import",
+            "tsx",
+            scriptPath,
+            "--once",
+            "--artifact-base",
+            artifactBase,
+          ]);
+          expect(command.timeoutMs).toBe(1_000);
+
+          const runRoot = path.join(artifactBase, "run-1");
+          await fs.mkdir(runRoot, { recursive: true });
+          await fs.writeFile(path.join(runRoot, "producer.log"), "producer evidence\n", "utf8");
+          await fs.writeFile(
+            path.join(runRoot, "qa-evidence.json"),
+            JSON.stringify(producerEvidence),
+            "utf8",
+          );
+          await fs.writeFile(
+            path.join(artifactBase, "latest-run.json"),
+            JSON.stringify({ qaEvidence: "run-1/qa-evidence.json" }),
+            "utf8",
+          );
+
+          return {
+            exitCode: terminal === "timeout" ? 1 : 7,
+            signal: null,
+            stdout: "",
+            stderr: "",
+            ...(terminal === "timeout"
+              ? { failureMessage: `${commandName} timed out after ${command.timeoutMs}ms` }
+              : {}),
+          };
+        },
       });
 
       expect(result.results[0]).toMatchObject({

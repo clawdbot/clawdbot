@@ -1,5 +1,4 @@
 // Migrate Claude plugin module implements memory behavior.
-import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -11,6 +10,7 @@ import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import {
   CLAUDE_AUTO_MEMORY_MAX_FILES,
   CLAUDE_AUTO_MEMORY_MAX_SCAN_ENTRIES,
+  readMemoryDir,
   type ClaudeSource,
 } from "./source.js";
 import type { PlannedTargets } from "./targets.js";
@@ -32,52 +32,31 @@ async function lstatIfExists(filePath: string) {
   }
 }
 
-async function addMemoryItem(params: {
+async function addInstructionItem(params: {
   items: MigrationItem[];
   id: string;
   source?: string;
   target: string;
   sourceLabel: string;
-  copyWhenMissing?: boolean;
-  overwrite?: boolean;
 }): Promise<void> {
   if (!params.source) {
     return;
   }
-  const targetStat = await lstatIfExists(params.target);
-  const targetExists = targetStat !== undefined;
-  const targetNotRegular = targetExists && !targetStat.isFile();
-  const action = params.copyWhenMissing && !targetExists ? "copy" : "append";
-  const targetConflict =
-    targetNotRegular || (action === "copy" && targetExists && !params.overwrite);
+  const targetNotRegular = (await lstatIfExists(params.target))?.isFile() === false;
   params.items.push(
     createMigrationItem({
       id: params.id,
       kind: ["AGENTS.md", "USER.md"].includes(path.basename(params.target))
         ? "workspace"
         : "memory",
-      action,
+      action: "append",
       source: params.source,
       target: params.target,
-      status: targetConflict ? "conflict" : "planned",
-      reason: targetNotRegular
-        ? MIGRATION_REASON_TARGET_NOT_REGULAR
-        : targetConflict
-          ? MIGRATION_REASON_TARGET_EXISTS
-          : undefined,
+      status: targetNotRegular ? "conflict" : "planned",
+      reason: targetNotRegular ? MIGRATION_REASON_TARGET_NOT_REGULAR : undefined,
       details: { sourceLabel: params.sourceLabel },
     }),
   );
-}
-
-async function readMemoryDir(dir: string): Promise<Dirent[]> {
-  try {
-    return await fs.readdir(dir, { withFileTypes: true });
-  } catch (error) {
-    throw new Error(`Unable to read Claude Code auto-memory directory: ${dir}`, {
-      cause: error,
-    });
-  }
 }
 
 type MarkdownFileScan = {
@@ -239,30 +218,26 @@ export async function buildMemoryItems(params: {
 }): Promise<MigrationItem[]> {
   const items: MigrationItem[] = [];
   if (params.includeInstructions !== false) {
-    await addMemoryItem({
+    await addInstructionItem({
       items,
       id: "workspace:CLAUDE.md",
       source: params.source.projectMemoryPath,
       target: path.join(params.targets.workspaceDir, "AGENTS.md"),
       sourceLabel: "project CLAUDE.md",
-      copyWhenMissing: true,
-      overwrite: params.overwrite,
     });
-    await addMemoryItem({
+    await addInstructionItem({
       items,
       id: "workspace:.claude/CLAUDE.md",
       source: params.source.projectDotClaudeMemoryPath,
       target: path.join(params.targets.workspaceDir, "AGENTS.md"),
       sourceLabel: "project .claude/CLAUDE.md",
-      overwrite: params.overwrite,
     });
-    await addMemoryItem({
+    await addInstructionItem({
       items,
       id: "memory:user-CLAUDE.md",
       source: params.source.userMemoryPath,
       target: path.join(params.targets.workspaceDir, "USER.md"),
       sourceLabel: "user ~/.claude/CLAUDE.md",
-      overwrite: params.overwrite,
     });
   }
   items.push(...(await buildAutoMemoryItems(params)));

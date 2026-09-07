@@ -143,6 +143,7 @@ function isNodeSession(value: unknown, sessionIdPattern: RegExp): value is Sessi
     typeof value.canContinue === "boolean" &&
     typeof value.canArchive === "boolean" &&
     isOptionalString(value.name) &&
+    isOptionalString(value.color) &&
     isOptionalString(value.cwd) &&
     isOptionalString(value.source) &&
     isOptionalString(value.modelProvider) &&
@@ -354,6 +355,10 @@ async function listHosts(
       query.onHost?.(host);
     }
   }
+  // Use the captured host selection after local discovery and progress callbacks.
+  if (requested && !Array.from(requested).some((hostId) => hostId.startsWith("node:"))) {
+    return hosts;
+  }
   let nodes: CatalogNode[];
   try {
     nodes = (await (query.listNodes?.() ?? options.runtime.nodes.list())).nodes;
@@ -512,8 +517,10 @@ export function createSessionCatalogFamily(
       }
       const agentId = options.continuation.resolveAgentId(request.agentId);
       const sourceKey = sessionCatalogAdoptedSourceKey(request.hostId, request.threadId);
+      // Scope in-flight results to the agent without changing host/thread adoption lookup keys.
+      const operationKey = `${agentId}\0${sourceKey}`;
       return await continueAdoption({
-        sourceKey,
+        sourceKey: operationKey,
         findExisting: async () => (await options.continuation.listAdopted(agentId)).get(sourceKey),
         create: async () => {
           const session = await options.continuation.loadSession(request.threadId);

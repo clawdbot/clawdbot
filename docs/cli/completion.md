@@ -42,10 +42,27 @@ The install writes a small `# OpenClaw Completion` block into your shell profile
 
 Profile changes are staged beside the destination and atomically replace it only after a complete durable write. A failed install leaves an existing profile unchanged.
 
+Installed source lines preserve literal cache paths, including spaces, quotes, dollar signs, and backslashes. Reinstalling replaces OpenClaw's previous source line after the state directory changes.
+
+## Permission failures
+
+If Doctor or onboarding cannot update your shell profile, completion remains
+optional and setup continues. When a cache is available, the warning includes a
+command to load that cache in your current matching shell session. Run the complete
+command as printed. This does not install completion for future shell sessions.
+
+For persistent installation, resolve the reported permission or read-only error
+before retrying `openclaw completion --install`. The failure location may be a
+staging directory or a symlink target, not the profile itself. Atomic replacement
+also needs write access to the destination directory. The installer uses the
+profile selected in the table above; it has no profile-file destination option.
+
 ## Notes
 
 - Without `--install` or `--write-state`, the command prints the script to stdout.
 - Completion generation eagerly loads the full command tree, including plugin CLI commands, so nested subcommands are included.
+- If invalid configuration prevents plugin discovery, generation warns and still includes core commands. Repair the configuration and regenerate to include plugin commands.
+- Bash completion supports both `--flag value` and `--flag=value`, including named profiles before nested commands and single-quoted, double-quoted, or backslash-escaped value prefixes.
 - `openclaw update` refreshes the completion cache automatically after a successful update; `openclaw doctor` can repair missing or stale completion setups.
 
 ## Related

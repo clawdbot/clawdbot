@@ -1,6 +1,6 @@
 // Stable public surface for short-term promotion behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { resolvePromotionStaticRejection } from "./dreaming-consolidation-candidates.js";
+import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
 import { readPhaseSignalStore, readStore } from "./short-term-promotion-store.js";
 import {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
@@ -13,7 +13,9 @@ import {
 import {
   calculateRecencyComponent,
   clampScore,
+  isContaminatedDreamingSnippet,
   isShortTermMemoryPath,
+  isShortTermSessionCorpusPath,
   normalizeWeights,
   toFiniteNonNegativeInt,
   toFinitePositive,
@@ -125,9 +127,13 @@ export async function rankShortTermPromotionCandidates(
     if (!entry || entry.source !== "memory" || !isShortTermMemoryPath(entry.path)) {
       continue;
     }
+    // Apply rejects these origins too; exclude them before scoring and candidate limits.
+    if (isPromotionOriginBlocked(entry)) {
+      continue;
+    }
     if (
-      resolvePromotionStaticRejection(entry, {
-        requireProvenance: options.requireProvenance,
+      isContaminatedDreamingSnippet(entry.snippet, {
+        allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(entry.path),
       })
     ) {
       continue;

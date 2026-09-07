@@ -9,13 +9,15 @@ import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.outlined.MicNone
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -25,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -98,10 +101,6 @@ internal class AndroidChatDictationRecognizer(
     generation += 1
     val operation = generation
     retireRecognizer()
-    if (!isAvailable) {
-      onEvent(ChatDictationRecognitionEvent.Error(SpeechRecognizer.ERROR_SERVER_DISCONNECTED))
-      return
-    }
     val active = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
     active.setRecognitionListener(
       object : RecognitionListener {
@@ -202,8 +201,6 @@ internal class ChatDictationController(
   private val lock = Any()
   private val _state = MutableStateFlow<ChatDictationState>(ChatDictationState.Idle)
   val state: StateFlow<ChatDictationState> = _state.asStateFlow()
-  val isAvailable: Boolean
-    get() = recognizer.isAvailable
 
   private var completion: CompletableDeferred<String?>? = null
   private var ownsMic = false
@@ -347,17 +344,22 @@ internal class ChatDictationController(
 internal fun dictationFailureForError(code: Int): ChatDictationFailure =
   when (code) {
     SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> ChatDictationFailure.PermissionRequired
+
     SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> ChatDictationFailure.Busy
+
     SpeechRecognizer.ERROR_NETWORK,
     SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
     -> ChatDictationFailure.Network
+
     SpeechRecognizer.ERROR_NO_MATCH,
     SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
     -> ChatDictationFailure.NoSpeech
+
     SpeechRecognizer.ERROR_SERVER_DISCONNECTED,
     SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED,
     SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE,
     -> ChatDictationFailure.Unavailable
+
     else -> ChatDictationFailure.Generic
   }
 
@@ -430,19 +432,22 @@ internal fun ChatComposerMicButton(
           },
         ),
     shape = CircleShape,
-    color = if (dictationActive) ClawTheme.colors.primary else ClawTheme.colors.surfaceRaised,
+    color = Color.Transparent,
     contentColor =
       when {
         dictationActive -> ClawTheme.colors.primaryText
-        dictationEnabled || voiceNoteEnabled -> ClawTheme.colors.text
+        dictationEnabled || voiceNoteEnabled -> ClawTheme.colors.textMuted
         else -> ClawTheme.colors.textSubtle
       },
   ) {
-    Box(contentAlignment = Alignment.Center) {
+    Box(
+      modifier = Modifier.padding(8.dp).background(if (dictationActive) ClawTheme.colors.primary else Color.Transparent, CircleShape),
+      contentAlignment = Alignment.Center,
+    ) {
       Icon(
-        imageVector = if (dictationActive) Icons.Default.Stop else Icons.Default.Mic,
+        imageVector = if (dictationActive) Icons.Default.Stop else Icons.Outlined.MicNone,
         contentDescription = null,
-        modifier = Modifier.size(18.dp),
+        modifier = Modifier.size(20.dp),
       )
     }
   }

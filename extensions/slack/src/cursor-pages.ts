@@ -1,3 +1,5 @@
+import type { WebClient } from "@slack/web-api";
+
 type SlackCursorResponse = {
   response_metadata?: { next_cursor?: string };
 };
@@ -5,6 +7,14 @@ type SlackCursorResponse = {
 // Slack documents an empty cursor as the only normal termination signal. This
 // backstop is deliberately far above any plausible channel or user directory.
 const SLACK_CURSOR_PAGE_LIMIT = 10_000;
+
+export const fetchSlackChannelListPage = (client: WebClient, cursor?: string) =>
+  client.conversations.list({
+    types: "public_channel,private_channel",
+    exclude_archived: false,
+    limit: 1000,
+    cursor,
+  });
 
 export async function collectSlackCursorPages<
   TItem,

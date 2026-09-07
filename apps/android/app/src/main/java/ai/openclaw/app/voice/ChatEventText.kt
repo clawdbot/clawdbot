@@ -21,8 +21,11 @@ internal object ChatEventText {
 
   private fun textFromContent(content: JsonElement?): String? =
     when (content) {
-      is JsonPrimitive -> content.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
-      is JsonArray ->
+      is JsonPrimitive -> {
+        content.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+      }
+
+      is JsonArray -> {
         // Gateway content can be either bare strings or text-part objects;
         // preserve part ordering when composing the spoken reply.
         content
@@ -30,7 +33,11 @@ internal object ChatEventText {
           .filter { it.isNotEmpty() }
           .joinToString("\n")
           .takeIf { it.isNotBlank() }
-      else -> null
+      }
+
+      else -> {
+        null
+      }
     }
 
   private fun textFromContentPart(part: JsonElement): String? {

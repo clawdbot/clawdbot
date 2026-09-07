@@ -68,8 +68,6 @@ export default definePluginEntry({
     if (typeof sourceCredential !== "string" || !sourceCredential) {
       throw new Error("qa worker generation provider requires a direct credential");
     }
-    const runtimeCredential = `qa-worker-runtime-${generation}`;
-
     trace("registered", { registrationMode: api.registrationMode });
     api.registerReload({
       hotPrefixes: [`plugins.entries.${PLUGIN_ID}.config`],
@@ -101,7 +99,10 @@ export default definePluginEntry({
           await waitForBarrierRelease(barrierPath);
           trace("auth-prepare-released", { waited: true });
         }
-        trace("auth-ready", { runtimeCredentialGeneration: generation });
+        const runtimeGeneration =
+          typeof apiKey === "string" ? apiKey.slice(apiKey.lastIndexOf("-") + 1) : generation;
+        const runtimeCredential = `qa-worker-runtime-${runtimeGeneration}`;
+        trace("auth-ready", { runtimeCredentialGeneration: runtimeGeneration });
         return { apiKey: runtimeCredential };
       },
       createStreamFn: ({ model }) => {

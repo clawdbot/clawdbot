@@ -2,6 +2,7 @@
 summary: "Current integration path for external apps, scripts, dashboards, CI jobs, and IDE extensions"
 title: "Gateway integrations for external apps"
 sidebarTitle: "External apps"
+doc-schema-version: 1
 read_when:
   - You are building an external app, script, dashboard, CI job, or IDE extension that talks to OpenClaw
   - You are choosing between Gateway RPC and the Plugin SDK
@@ -17,11 +18,11 @@ for results, cancel work, or inspect Gateway resources.
 <Note>
   For npm packages, device pairing, reconnect recovery, history, subscriptions,
   and approvals, start with
-  [Building a Gateway client](https://docs.openclaw.ai/gateway/clients). If your
+  [Building a Gateway client](/gateway/clients#install-the-packages). The install
+  guide pins the verified stable `2026.8.1` packages and explains how package and
+  wire versions affect compatibility. If your
   app supervises the Gateway as a child process, also read
-  [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding). During the
-  initial package rollout, npm may return `E404` until the first package-bearing
-  OpenClaw release is published.
+  [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding).
 </Note>
 
 <Note>
@@ -31,14 +32,14 @@ for results, cancel work, or inspect Gateway resources.
 
 ## What is available today
 
-| Surface                                                          | Status        | Use it for                                                                                    |
-| ---------------------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------- |
-| [Gateway client guide](https://docs.openclaw.ai/gateway/clients) | Release train | npm packages, auth, reconnect, history, events, approvals, and version policy.                |
-| [Embedding guide](https://docs.openclaw.ai/gateway/embedding)    | Release train | Child-process environment, readiness, lifecycle, recovery, RPC ownership, and packaging.      |
-| [Gateway protocol](/gateway/protocol)                            | Ready         | WebSocket transport, connect handshake, auth scopes, protocol versioning, and events.         |
-| [Gateway RPC reference](/reference/rpc)                          | Ready         | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
-| [`openclaw agent`](/cli/agent)                                   | Ready         | One-shot script integration when shelling out to the CLI is enough.                           |
-| [`openclaw message`](/cli/message)                               | Ready         | Sending messages or channel actions from scripts.                                             |
+| Surface                                                       | Status          | Use it for                                                                                    |
+| ------------------------------------------------------------- | --------------- | --------------------------------------------------------------------------------------------- |
+| [Gateway client guide](/gateway/clients#install-the-packages) | Stable packages | npm packages, auth, reconnect, history, events, approvals, and version policy.                |
+| [Embedding guide](https://docs.openclaw.ai/gateway/embedding) | Release train   | Child-process environment, readiness, lifecycle, recovery, RPC ownership, and packaging.      |
+| [Gateway protocol](/gateway/protocol)                         | Ready           | WebSocket transport, connect handshake, auth scopes, protocol versioning, and events.         |
+| [Gateway RPC reference](/reference/rpc)                       | Ready           | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
+| [`openclaw agent`](/cli/agent)                                | Ready           | One-shot script integration when shelling out to the CLI is enough.                           |
+| [`openclaw message`](/cli/message)                            | Ready           | Sending messages or channel actions from scripts.                                             |
 
 ## Recommended path
 
@@ -53,6 +54,12 @@ terminal result. For durable conversation state, use the `sessions.*` methods.
 For UI integrations, subscribe to Gateway events and render only the event
 families your app understands.
 
+`agent.wait` can return `status: "pending"` while a turn is queued. A timeout
+response without terminal metadata means the wait expired; continue waiting or
+consume lifecycle events. Terminal `status: "error"` can represent cancellation:
+`stopReason: "superseded"` means a newer session writer replaced the run. Preserve
+that reason when presenting the result.
+
 ## Cooperative host suspension
 
 Hosting controllers that freeze or snapshot a running process can use the
@@ -60,38 +67,66 @@ host-neutral suspension handshake:
 
 1. Stop admitting external ingress controlled by the host.
 2. Call `gateway.suspend.prepare` with a stable, unique `requestId`.
-3. If the response is `busy`, keep the process running and retry later.
-4. If it is `ready`, save the returned `suspensionId`, then freeze or snapshot
-   the process before `expiresAtMs`.
+3. If the response is `busy`, keep the process running and retry later. To hold
+   admission closed while already-admitted work finishes, request the optional
+   drain mode and poll `gateway.suspend.status` instead.
+4. If the response is `ready`, save the returned `suspensionId`, then freeze or
+   snapshot the process before `expiresAtMs`.
 5. After thaw, or if suspension is abandoned, call `gateway.suspend.resume`
    with that `suspensionId` over the existing or a newly authenticated
    WebSocket. The CLI equivalents are `openclaw gateway suspend` and
    `openclaw gateway resume <suspensionId>`.
 
-A prepared Gateway accepts authenticated WebSocket connects, but fences every
-method except `gateway.suspend.*` and one exact predecessor-bound restart. That
-exception requires a non-safe `gateway.restart.request` whose `target` matches
-the live Gateway lock; safe and untargeted restart requests remain fenced.
-Controllers may reconnect after thaw and call resume. The
+A draining or prepared Gateway accepts authenticated operator WebSocket
+connections, allowing a controller to reconnect and check, renew, or release
+its own lease. New node and worker connections remain fenced. A prepared
+Gateway fences every method except `gateway.suspend.*` and one exact
+predecessor-bound restart. That exception requires a non-safe
+`gateway.restart.request` whose `target` matches the live Gateway lock; safe and
+untargeted restart requests remain fenced. That restart RPC exception is not
+available while the Gateway is still draining. Controllers may reconnect after thaw and
+call resume. The
 [Admin HTTP RPC plugin](/plugins/admin-http-rpc) remains available for hosts
 that cannot speak WebSocket at all. If every control path is lost, the
 two-minute lease expiry reopens admission automatically.
 
+Closing the Gateway cancels background work queued by operator reconnects without
+waiting for suspension expiry. Shutdown still waits for work already running to finish.
+
+The hello snapshot includes `suspension: { phase }`, and `gateway.suspension`
+events publish admission changes immediately. The phase is `accepting`,
+`preparing`, `draining`, or `prepared`; neither surface exposes suspension IDs.
+The Control UI's bottom-left connection indicator shows **Suspending…** during
+preparation or draining and **Suspended** while prepared, including in Settings.
+It clears when suspension admission reopens, not when a request succeeds.
+Offline and restart indicators take precedence. Scheduler recovery keeps the
+suspension indicator until admission actually reopens; there is no separate
+resuming phase.
+
 The RPC contract is:
 
 - `gateway.suspend.prepare` — `operator.admin`; params
-  `{ "requestId": "stable-host-operation-id", "terminalPolicy": "preserve" }`
+  `{ "requestId": "stable-host-operation-id", "terminalPolicy": "preserve", "drain": true }`
 - `gateway.suspend.status` — `operator.read`; params
   `{ "suspensionId": "id-from-prepare" }`
 - `gateway.suspend.resume` — `operator.admin`; params
   `{ "suspensionId": "id-from-prepare" }`
+- `gateway.suspend.handoff` — `operator.admin`; params
+  `{ "suspensionId": "id-from-prepare", "target": { "pid": 123, "processInstanceId": "id-from-system-info" } }`
 
-`terminalPolicy` is optional and accepts only `"preserve"` or `"terminate"`.
-Omitting it defaults to `"preserve"`, so open terminal sessions block normal
-host suspension. A caller preparing an update that will terminate the Gateway
-may explicitly use `"terminate"`; this ignores open process-local terminal
-sessions only. Terminal persistence activity and all other tracked work still
-block preparation.
+`terminalPolicy` and `drain` are optional. `terminalPolicy` accepts only
+`"preserve"` or `"terminate"` and defaults to `"preserve"`; `drain` defaults
+to `false`. The terminal policy applies to both immediate preparation and drain
+mode:
+
+- `"preserve"`: open terminal sessions block suspension. Use this for host
+  freeze/snapshot operations that must preserve the running process.
+- `"terminate"`: open process-local terminal sessions do not block suspension.
+  Use this for release updates that will restart the Gateway. Preparation does
+  not close terminals; the actual Gateway restart ends their PTYs and commands.
+
+Pending final chat-state writes (`terminal-persistence`) and all other tracked
+work still block preparation under either policy.
 
 IDs are trimmed, must contain a non-whitespace character, and are limited to
 128 characters. A busy prepare result has `status: "busy"`, `reason`,
@@ -107,36 +142,124 @@ IDs are trimmed, must contain a non-whitespace character, and are limited to
 }
 ```
 
-Status returns `{"status":"running"}` or a ready result with `expiresAtMs`.
+If `drain: true` finds active work, preparation acquires a renewable lease,
+pauses new automatic cron scheduling, closes admission to unrelated new work,
+and returns:
+
+```json
+{
+  "status": "draining",
+  "suspensionId": "2c3f...",
+  "expiresAtMs": 1770000000000,
+  "retryAfterMs": 20000,
+  "activeCount": 2,
+  "blockers": [
+    { "kind": "root-request", "count": 1, "message": "1 active request" },
+    { "kind": "terminal-session", "count": 1, "message": "1 open terminal session" }
+  ]
+}
+```
+
+Already-admitted work and its owned completions continue naturally; unrelated
+new runs, sessions, scheduled jobs, and independent work stay rejected. With
+`terminalPolicy: "preserve"`, an open terminal can keep the lease draining until
+it closes, the controller resumes the Gateway, or the lease expires. With
+`terminalPolicy: "terminate"`, that same terminal remains open but does not
+block readiness. Neither policy terminates or detaches terminals during
+preparation, polling, renewal, resume, or lease expiry.
+
+Poll `gateway.suspend.status` with the returned `suspensionId`, honoring
+`retryAfterMs`. While blockers remain, status returns `status: "draining"`
+together with `expiresAtMs`, `retryAfterMs`, `activeCount`, and `blockers`.
+Each status call refreshes the active-work snapshot. Once every blocker has
+finished, the same lease transitions to `{"status":"ready","expiresAtMs":...}`.
+Status returns `{"status":"running"}` when no suspension is held; querying a
+different active lease returns a conflict without exposing its identifiers.
 Resume returns `{"ok":true,"status":"running","resumed":true}`; repeating it
 after a successful resume returns `resumed: false`.
+
+The dedicated `openclaw gateway suspend` command retains its existing
+refuse-only behavior. Controllers can request drain mode through any Gateway
+client or the generic CLI RPC command:
+
+```bash
+openclaw gateway call gateway.suspend.prepare \
+  --params '{"requestId":"host-operation-1","terminalPolicy":"preserve","drain":true}' \
+  --json
+openclaw gateway call gateway.suspend.status \
+  --params '{"suspensionId":"<suspension-id>"}' \
+  --json
+openclaw gateway resume '<suspension-id>'
+```
+
+For a release update, use the same handshake with `terminalPolicy: "terminate"`
+so an open terminal cannot hold the drain indefinitely:
+
+```bash
+openclaw gateway call gateway.suspend.prepare \
+  --params '{"requestId":"release-update-1","terminalPolicy":"terminate","drain":true}' \
+  --json
+```
+
+Wait for the lease to become `ready` before performing the checked restart.
+Terminal commands and scrollback are not recovered after restart; see
+[Restart recovery](/gateway/restart-recovery#what-is-not-resumed).
+
+An external deployment controller that explicitly authorizes interrupting
+remaining work can instead call `gateway.suspend.handoff` after its own graceful
+drain budget. The target must match the `pid` and `processInstanceId` obtained from
+`system.info` before suspension. This arms
+restart cleanup for that exact lease and host iteration's next `SIGTERM`; it
+does not send a signal or create a successor. The controller still owns the
+native service restart. A successful response is
+`{ "status": "armed", "suspensionId": "...", "expiresAtMs": ... }`.
+
+The arm expires with the lease. Repeating prepare or handoff does not extend
+armed authority. Resume, replacement, another accepted lifecycle action, or
+host retirement invalidates it. Pending final-chat persistence refuses arming
+and is checked again when `SIGTERM` consumes the arm. If that check refuses,
+the Gateway logs the refusal and retains ordinary graceful-stop behavior.
+An accepted handoff uses the existing restart recovery and abort cleanup,
+then exits for the external controller. An ordinary stop without an arm keeps
+waiting for active work. Controllers must defer on unsupported methods or
+refused handoffs; a draining lease alone never authorizes interruption.
 
 A competing request ID or transient scheduler-resume failure returns retryable
 `UNAVAILABLE` with `retryAfterMs`. During scheduler recovery, prepare, status,
 and resume all return that error, the Gateway remains not-ready and
 fail-closed, and the host must not freeze or snapshot it. OpenClaw retries the
 scheduler automatically and reopens admission only after recovery succeeds. A
-mismatched resume ID returns `INVALID_REQUEST`. Prepare shares the Gateway's
-control-plane write budget of three attempts per minute; honor the returned
-retry delay. WebSocket clients are bucketed by device and IP. Admin HTTP
+mismatched resume ID returns `INVALID_REQUEST`. Prepare is subject to the
+Gateway's control-plane write limit of 30 attempts per minute; honor the
+returned retry delay. WebSocket clients are bucketed by device and IP. Admin HTTP
 controllers are bucketed by resolved client IP, so controllers behind one
 proxy can share a budget.
 
-Preparation is refuse-only: OpenClaw closes new root/session/command admission,
-pauses automatic cron ticks, and inspects work synchronously. If anything is
-active, it resumes the scheduler and reopens admission before returning
-`busy`; it does not interrupt or drain that work. A ready lease lasts two
-minutes. Repeating `prepare` with the same `requestId` renews it; expiry resumes
-the scheduler before reopening admission.
+Without `drain: true`, preparation remains refuse-only: OpenClaw closes new
+root/session/command admission, pauses automatic cron ticks, and inspects work
+synchronously. If anything is active, it resumes the scheduler and reopens
+admission before returning `busy`; it does not interrupt or drain that work.
+With `drain: true`, the same suspension owner instead keeps admission closed
+and cron scheduling paused until existing work settles. Already-owned cron
+completion and reconciliation continue.
+
+Both draining and ready leases last two minutes. Repeat `prepare` before
+`expiresAtMs` with the same `requestId`, terminal policy, and drain mode to renew
+the same `suspensionId` unless a restart handoff is armed; changing any of those values conflicts with the
+existing lease. Use `status` for routine polling and reserve `prepare` for
+renewal to avoid consuming the write budget. Explicit resume and lease expiry
+restore scheduling before reopening admission. Leases remain in memory and
+disappear if the Gateway process exits.
 Restart emission that becomes due during a ready lease waits until the lease
 resumes; an in-flight restart makes preparation return `busy`.
 
-While ready, `/healthz` remains live and `/readyz` returns `503`. Local or
-authenticated readiness responses include `gateway-draining`; unauthenticated
-remote probes receive only `{ "ready": false }`. The HTTP health probe,
-suspension methods on existing WebSocket connections, and an already-enabled
-Admin HTTP RPC route remain available. Other RPCs return retryable
-`UNAVAILABLE`. Built-in HTTP user-work routes and ordinary plugin HTTP routes,
+While draining or ready, `/healthz` remains live and `/readyz` returns `503`.
+Local or authenticated readiness responses include `gateway-draining`;
+unauthenticated remote probes receive only `{ "ready": false }`. The HTTP health
+probe, suspension methods on authenticated operator WebSocket connections, and
+an already-enabled Admin HTTP RPC route remain available. Other unrelated RPCs
+return retryable `UNAVAILABLE`. Built-in HTTP user-work routes and ordinary
+plugin HTTP routes,
 including OpenAI-compatible APIs, tool/session operations, node watches, and
 configured hooks, return `503` with `error.code: "gateway_unavailable"`. New
 plugin-owned WebSocket upgrades also return `503`; this covers upgrade

@@ -1,3 +1,4 @@
+export { getEventStreamCompletion } from "@openclaw/llm-core/event-stream";
 export * from "./default-runtime.js";
 export * from "../env-api-keys.js";
 export * from "../model-utils.js";
@@ -13,3 +14,4 @@ export * from "../utils/reasoning-tag-text-partitioner.js";
 export * from "../utils/sanitize-unicode.js";
 export * from "../utils/stream-first-event-timeout.js";
 export * from "../utils/streaming-byte-guard.js";
+export { parseTerminalToolCallArguments } from "../transports/transport-stream-shared.js";

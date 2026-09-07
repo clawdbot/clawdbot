@@ -2,8 +2,9 @@
 import { installChannelOutboundPayloadContractSuite } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { createSlackOutboundPayloadHarness as createHarness, slackOutbound } from "../test-api.js";
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
+import { slackOutbound } from "./outbound-adapter.js";
+import { createSlackOutboundPayloadHarness as createHarness } from "./outbound-payload.test-harness.js";
 import type { SlackReplyBlockSegment } from "./reply-blocks.js";
 import { sendMessageSlack } from "./send.js";
 
@@ -618,29 +619,39 @@ describe("slackOutbound sendPayload", () => {
     expect(linkButton).not.toHaveProperty("value");
   });
 
-  it.each([
-    {
-      name: "title",
-      presentation: { title: "x".repeat(151), blocks: [] },
-    },
-    {
-      name: "text block",
-      presentation: { blocks: [{ type: "text", text: "x".repeat(3001) }] },
-    },
-    {
-      name: "context block",
-      presentation: { blocks: [{ type: "context", text: "x".repeat(3001) }] },
-    },
-  ] satisfies Array<{
-    name: string;
-    presentation: NonNullable<ReplyPayload["presentation"]>;
-  }>)("keeps the portable fallback for an oversized $name", async ({ presentation }) => {
-    const payload: ReplyPayload = { presentation };
-
+  it("keeps the portable fallback for an oversized title", async () => {
+    const payload: ReplyPayload = { presentation: { title: "x".repeat(151), blocks: [] } };
     const segments = renderedPresentationSegments(await renderPresentation(payload));
     expect(segments).toHaveLength(1);
     expect(segments[0]).toMatchObject({ kind: "text", mrkdwn: false });
   });
+
+  it.each(["text", "context"] as const)(
+    "renders oversized %s blocks as complete bounded native Slack blocks",
+    async (type) => {
+      const text = "x".repeat(3_001);
+      const payload: ReplyPayload = { presentation: { blocks: [{ type, text }] } };
+      const segments = renderedPresentationSegments(await renderPresentation(payload));
+      const [segment] = segments;
+
+      expect(segments).toHaveLength(1);
+      expect(segment?.kind).toBe("blocks");
+      if (segment?.kind !== "blocks") {
+        throw new Error("Expected native Slack blocks");
+      }
+      expect(segment.blocks).toHaveLength(2);
+      const chunks = segment.blocks.flatMap((block) => {
+        if (block.type === "section" && "text" in block && block.text?.type === "mrkdwn") {
+          return [block.text.text];
+        }
+        const element =
+          block.type === "context" && "elements" in block ? block.elements[0] : undefined;
+        return element?.type === "mrkdwn" ? [element.text] : [];
+      });
+      expect(chunks.join("")).toBe(text);
+      expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
+    },
+  );
 
   it("starts a new segment when presentation content crosses Slack's block limit", async () => {
     const payload: ReplyPayload = {
@@ -847,6 +858,7 @@ describe("slackOutbound sendPayload", () => {
     const controlsSent = sentSlackMessage(sendMock, 1);
     expect(controlsSent.to).toBe(to);
     expect(controlsSent.text).toBe("Approval required\n\nAllow");
+    expect(controlsSent.options).not.toHaveProperty("mediaUrl");
     expect(controlsSent.options.blocks?.map((block) => block.type)).toEqual(["section", "actions"]);
     expect(result.channel).toBe("slack");
     expect(result.messageId).toBe("sl-controls");

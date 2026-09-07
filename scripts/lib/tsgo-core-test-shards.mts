@@ -12,6 +12,11 @@ export const TSGO_CORE_TEST_SHARDS = [
     config: "test/tsconfig/tsconfig.core.test.agents-other.json",
   },
   {
+    name: "agents-tools",
+    group: "src",
+    config: "test/tsconfig/tsconfig.core.test.agents-tools.json",
+  },
+  {
     name: "gateway-root",
     group: "src",
     config: "test/tsconfig/tsconfig.core.test.gateway-root.json",
@@ -37,9 +42,14 @@ export const TSGO_CORE_TEST_SHARDS = [
   { name: "services", group: "src", config: "test/tsconfig/tsconfig.core.test.services.json" },
   { name: "other", group: "src", config: "test/tsconfig/tsconfig.core.test.other.json" },
   {
-    name: "ui-pages-e2e",
+    name: "ui-pages",
     group: "ui",
-    config: "test/tsconfig/tsconfig.core.test.ui-pages-e2e.json",
+    config: "test/tsconfig/tsconfig.core.test.ui-pages.json",
+  },
+  {
+    name: "ui-e2e",
+    group: "ui",
+    config: "test/tsconfig/tsconfig.core.test.ui-e2e.json",
   },
   { name: "ui-other", group: "ui", config: "test/tsconfig/tsconfig.core.test.ui-other.json" },
   {
@@ -49,6 +59,15 @@ export const TSGO_CORE_TEST_SHARDS = [
     sparseRoots: ["packages", "src", "ui/src"],
   },
 ] as const;
+
+export const TSGO_CORE_GRAPHS = [
+  { name: "core", config: "tsconfig.core.json" },
+  { name: "ui", config: "tsconfig.ui.json" },
+  ...TSGO_CORE_TEST_SHARDS.map((shard) => ({
+    name: `core-test-${shard.name}`,
+    config: shard.config,
+  })),
+];
 
 export type TsgoCoreTestShard = (typeof TSGO_CORE_TEST_SHARDS)[number];
 
@@ -132,4 +151,37 @@ export function findTsgoCoreTestShardViolations(params: {
   }
 
   return violations;
+}
+
+/** Select every consuming graph, not just the file's declared root partition. */
+export function selectChangedTsgoCoreTestShards(
+  paths: readonly string[],
+  graphs: readonly { config: string; roots: readonly string[]; files: readonly string[] }[],
+): readonly { name: string; config: string }[] | undefined {
+  if (
+    paths.length === 0 ||
+    paths.some((file) => !/^(?:src|ui|packages)\/.+\.test\.tsx?$/u.test(file))
+  ) {
+    return undefined;
+  }
+  const testConfigs = new Set<string>(TSGO_CORE_TEST_SHARDS.map((shard) => shard.config));
+  const testGraphs = graphs.filter((graph) => testConfigs.has(graph.config));
+  if (
+    graphs.length !== TSGO_CORE_GRAPHS.length ||
+    TSGO_CORE_GRAPHS.some(
+      (expected) => graphs.filter((graph) => graph.config === expected.config).length !== 1,
+    ) ||
+    paths.some((file) => testGraphs.filter((graph) => graph.roots.includes(file)).length !== 1) ||
+    paths.some((file) => !testGraphs.some((graph) => graph.files.includes(file))) ||
+    graphs.some(
+      (graph) => !testConfigs.has(graph.config) && paths.some((file) => graph.files.includes(file)),
+    )
+  ) {
+    return undefined;
+  }
+  return TSGO_CORE_TEST_SHARDS.filter((shard) =>
+    testGraphs.some(
+      (graph) => graph.config === shard.config && paths.some((file) => graph.files.includes(file)),
+    ),
+  );
 }

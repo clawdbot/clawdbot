@@ -7,7 +7,7 @@ import {
 } from "../lifecycle/skill-change-hook.js";
 import {
   applyWorkspaceSkillMutation,
-  assertInsideWorkspace,
+  assertInsideSkillsRoot,
   isWorkspaceSkillMutationApplied,
   isWorkspaceSkillMutationRestored,
   prepareWorkspaceSkillMutation,
@@ -15,16 +15,14 @@ import {
   restoreWorkspaceSkillMutation,
   type PreparedWorkspaceSkillMutation,
 } from "../lifecycle/workspace-skill-write.js";
-import { resolveAllowedSkillSymlinkTargetRealPaths } from "../loading/symlink-targets.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
-import { resolveSkillWorkshopConfig } from "./config.js";
 import { readProposalFrontmatter, stripProposalFrontmatterForSkill } from "./frontmatter.js";
-import { isWorkshopOwnedSkillDir } from "./ownership.js";
 import { createSkillProposalEvent, dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 import { hashSkillProposalContent } from "./proposal-hash.js";
 import { scanProposalBundle } from "./proposal-scan.js";
 import { hashSkillProposalRevision } from "./revision-hash.js";
+import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import type { NewSkillProposalEvent } from "./store-sqlite-event.js";
 import { readStoredProposal } from "./store-sqlite-record.js";
 import { clearSkillProposalRollback, writeSkillProposalRollback } from "./store-sqlite-rollback.js";
@@ -70,25 +68,18 @@ const SKILL_PROPOSAL_APPLY_TRANSITIONS: Readonly<
   stale: {},
 };
 
-type PreparedSkillProposalSupportFile = SkillProposalSupportFile & { content: string };
-
 export type SkillProposalApplyTransitionDependencies = {
   assertExpectedRevisionHash: (actual: string, expected?: string) => void;
   evaluateSkillProposal: (
     input: SkillProposalEvaluateInput,
   ) => Promise<SkillProposalEvaluateResult>;
   isCreateTargetConflict: (error: unknown) => boolean;
-  readProposalSupportFiles: (
-    record: SkillProposalRecord,
-    options?: SkillWorkshopStoreOptions,
-  ) => Promise<PreparedSkillProposalSupportFile[]>;
   readRequiredProposal: (
     proposalId: string,
-    workspaceDir?: string,
-    env?: NodeJS.ProcessEnv,
-    agentId?: string,
-    readOptions?: {
-      config?: OpenClawConfig;
+    env: NodeJS.ProcessEnv | undefined,
+    agentId: string | undefined,
+    readOptions: {
+      config: OpenClawConfig;
       reconcile?: boolean;
     },
   ) => Promise<SkillProposalReadResult>;
@@ -96,7 +87,7 @@ export type SkillProposalApplyTransitionDependencies = {
 
 export type SkillProposalTransitionInput = Pick<
   SkillProposalActionInput,
-  "agentId" | "correlationId" | "env" | "eventActor" | "workspaceDir"
+  "agentId" | "config" | "correlationId" | "env" | "eventActor" | "workspaceDir"
 >;
 
 class SkillProposalLifecycleError extends Error {
@@ -120,14 +111,13 @@ export async function applySkillProposalTransition(
   input: SkillProposalActionInput,
   dependencies: SkillProposalApplyTransitionDependencies,
 ): Promise<SkillProposalApplyResult> {
-  const recoveryReadOptions = input.config ? { config: input.config } : undefined;
+  const recoveryReadOptions = { config: input.config };
   const lockedReadOptions = {
-    ...(input.config ? { config: input.config } : {}),
+    config: input.config,
     reconcile: false,
   };
   const initial = await dependencies.readRequiredProposal(
     input.proposalId,
-    input.workspaceDir,
     input.env,
     input.agentId,
     recoveryReadOptions,
@@ -144,6 +134,7 @@ export async function applySkillProposalTransition(
     evaluated = await dependencies.evaluateSkillProposal({
       workspaceDir: input.workspaceDir,
       ...(input.agentId ? { agentId: input.agentId } : {}),
+      config: input.config,
       ...(input.eventActor ? { eventActor: input.eventActor } : {}),
       ...(input.env ? { env: input.env } : {}),
       proposalId: input.proposalId,
@@ -158,7 +149,6 @@ export async function applySkillProposalTransition(
         async () => {
           const current = await dependencies.readRequiredProposal(
             input.proposalId,
-            input.workspaceDir,
             input.env,
             input.agentId,
             lockedReadOptions,
@@ -177,7 +167,7 @@ export async function applySkillProposalTransition(
           }
           throw error;
         },
-        storeOptions(input.env),
+        storeOptions(input.env, input.agentId, input.config),
       );
       await withSkillProposalLifecycleDispatch(input, staleTransition);
     }
@@ -195,12 +185,10 @@ export async function applySkillProposalTransition(
   }
 
   const application = withSkillProposalCommitLock(
-    input.workspaceDir,
     evaluated.record,
     async () => {
       const read = await dependencies.readRequiredProposal(
         input.proposalId,
-        input.workspaceDir,
         input.env,
         input.agentId,
         lockedReadOptions,
@@ -213,10 +201,7 @@ export async function applySkillProposalTransition(
       if (hashSkillProposalContent(content) !== record.draftHash) {
         throw new Error("Proposal draft changed without updating proposal metadata.");
       }
-      const supportFiles = await dependencies.readProposalSupportFiles(
-        record,
-        storeOptions(input.env),
-      );
+      const supportFiles = read.supportFiles ?? [];
       if (!readProposalFrontmatter(content)) {
         throw new Error("Proposal draft must include proposal frontmatter.");
       }
@@ -225,25 +210,12 @@ export async function applySkillProposalTransition(
         await quarantineSkillProposalAfterScan({ input, record, scan });
       }
 
-      assertInsideWorkspace(input.workspaceDir, record.target.skillFile, "skill file");
-      assertInsideWorkspace(input.workspaceDir, record.target.skillDir, "skill directory");
-      if (
-        record.kind === "update" &&
-        !isWorkshopOwnedSkillDir(
-          input.workspaceDir,
-          record.target.skillDir,
-          storeOptions(input.env),
-        )
-      ) {
-        throw new Error(`Skill Workshop does not own this skill path: ${record.target.skillKey}`);
+      if (!input.agentId) {
+        throw new Error("Skill Workshop requires the active agent id.");
       }
-      const workshopConfig = resolveSkillWorkshopConfig(input.config);
-      const symlinkPolicy = {
-        allowWrites: workshopConfig.allowSymlinkTargetWrites,
-        allowedTargetRealPaths: workshopConfig.allowSymlinkTargetWrites
-          ? resolveAllowedSkillSymlinkTargetRealPaths(input.config)
-          : [],
-      };
+      const skillsRoot = resolveWorkshopSkillsDir(input.config, input.agentId, input.env);
+      assertInsideSkillsRoot(skillsRoot, record.target.skillFile, "skill file");
+      assertInsideSkillsRoot(skillsRoot, record.target.skillDir, "skill directory");
       if (record.evaluation?.id !== evaluated.evaluation.id) {
         throw new Error("Skill proposal evaluation changed before apply; retry the operation.");
       }
@@ -260,13 +232,12 @@ export async function applySkillProposalTransition(
       }
 
       const mutation = await prepareWorkspaceSkillMutation({
-        workspaceDir: input.workspaceDir,
+        skillsRoot,
         skillDir: record.target.skillDir,
         skillFile: record.target.skillFile,
         content: stripProposalFrontmatterForSkill(content),
         supportFiles,
         mode: record.kind,
-        symlinkPolicy,
       });
       await assertApplyTargetUnchanged(record, mutation, input);
 
@@ -283,7 +254,7 @@ export async function applySkillProposalTransition(
       await writeSkillProposalRollback({
         proposalId: record.id,
         rollback,
-        store: storeOptions(input.env),
+        store: storeOptions(input.env, input.agentId, input.config),
       });
 
       try {
@@ -296,7 +267,7 @@ export async function applySkillProposalTransition(
           await clearSkillProposalRollback({
             proposalId: record.id,
             expectedRecordJson: JSON.stringify(record),
-            store: storeOptions(input.env),
+            store: storeOptions(input.env, input.agentId, input.config),
           }).catch(() => false);
         }
         throw error;
@@ -334,7 +305,7 @@ export async function applySkillProposalTransition(
           expected: record,
           record: applied,
           event: eventInput,
-          store: storeOptions(input.env),
+          store: storeOptions(input.env, input.agentId, input.config),
           operationLabel: "skill-workshop.apply.commit",
         });
       } catch (error) {
@@ -345,7 +316,8 @@ export async function applySkillProposalTransition(
           event: eventInput,
           mutation,
           env: input.env,
-          workspaceDir: input.workspaceDir,
+          agentId: input.agentId,
+          config: input.config,
         });
         if (!recoveredEvent) {
           throw error;
@@ -361,7 +333,8 @@ export async function applySkillProposalTransition(
           event: eventInput,
           mutation,
           env: input.env,
-          workspaceDir: input.workspaceDir,
+          agentId: input.agentId,
+          config: input.config,
         });
         if (!recoveredEvent) {
           throw error;
@@ -370,30 +343,27 @@ export async function applySkillProposalTransition(
       }
 
       bumpSkillsSnapshotVersion({
-        workspaceDir: input.workspaceDir,
         reason: "workshop",
         changedPath: record.target.skillFile,
       });
       return {
         result: { record: applied, targetSkillFile: record.target.skillFile },
-        ...(commit.state === "committed" && commit.event ? { event: commit.event } : {}),
+        event: commit.event,
         skillChange: shouldDispatchSkillChange
           ? { before: beforeSkill, after: afterSkill }
           : undefined,
       };
     },
-    storeOptions(input.env),
+    storeOptions(input.env, input.agentId, input.config),
   );
 
   const result = await withSkillProposalLifecycleDispatch(input, application);
-  if (result.event) {
-    await dispatchSkillProposalChanged({
-      event: result.event,
-      record: result.result.record,
-      workspaceDir: input.workspaceDir,
-      ...(input.agentId ? { agentId: input.agentId } : {}),
-    });
-  }
+  await dispatchSkillProposalChanged({
+    event: result.event,
+    record: result.result.record,
+    workspaceDir: input.workspaceDir,
+    ...(input.agentId ? { agentId: input.agentId } : {}),
+  });
   if (result.skillChange) {
     await dispatchCommittedSkillChangeBestEffort({
       action: result.result.record.kind === "create" ? "created" : "updated",
@@ -482,10 +452,10 @@ export function transitionPendingSkillProposalToStale(params: {
       ...(params.input.correlationId ? { correlationId: params.input.correlationId } : {}),
       occurredAt: now,
     }),
-    store: storeOptions(params.input.env),
+    store: storeOptions(params.input.env, params.input.agentId, params.input.config),
     operationLabel: "skill-workshop.stale.commit",
   });
-  if (commit.state !== "committed" || !commit.event) {
+  if (commit.state !== "committed") {
     throw new Error("Failed to record stale Skill Workshop proposal.");
   }
   return { record: stale, event: commit.event };
@@ -550,10 +520,10 @@ async function quarantineSkillProposalAfterScan(params: {
       ...(params.input.correlationId ? { correlationId: params.input.correlationId } : {}),
       occurredAt: now,
     }),
-    store: storeOptions(params.input.env),
+    store: storeOptions(params.input.env, params.input.agentId, params.input.config),
     operationLabel: "skill-workshop.quarantine.commit",
   });
-  if (commit.state !== "committed" || !commit.event) {
+  if (commit.state !== "committed") {
     throw new Error("Failed to record quarantined Skill Workshop proposal.");
   }
   throw new SkillProposalLifecycleError(
@@ -630,17 +600,21 @@ async function recoverAfterApplyCommitFailure(params: {
   event: NewSkillProposalEvent;
   mutation: PreparedWorkspaceSkillMutation;
   env?: NodeJS.ProcessEnv;
-  workspaceDir: string;
+  agentId?: string;
+  config: OpenClawConfig;
 }): Promise<SkillProposalEvent | null> {
   const committed = readCommittedSkillProposalTransition({
     record: params.applied,
     event: params.event,
-    store: storeOptions(params.env),
+    store: storeOptions(params.env, params.agentId, params.config),
   });
   if (committed) {
-    return committed.event ?? null;
+    return committed.event;
   }
-  const authoritative = readStoredProposal(params.expected.id, storeOptions(params.env));
+  const authoritative = readStoredProposal(
+    params.expected.id,
+    storeOptions(params.env, params.agentId, params.config),
+  );
   if (authoritative?.record.status === "applied") {
     throw new Error("Applied Skill Workshop transition is missing its committed event.", {
       cause: params.error,
@@ -656,7 +630,6 @@ async function recoverAfterApplyCommitFailure(params: {
       await restoreWorkspaceSkillMutation(params.mutation);
     } finally {
       bumpSkillsSnapshotVersion({
-        workspaceDir: params.workspaceDir,
         reason: "workshop",
         changedPath: params.expected.target.skillFile,
       });
@@ -672,7 +645,7 @@ async function recoverAfterApplyCommitFailure(params: {
   await clearSkillProposalRollback({
     proposalId: params.expected.id,
     expectedRecordJson: JSON.stringify(params.expected),
-    store: storeOptions(params.env),
+    store: storeOptions(params.env, params.agentId, params.config),
   }).catch(() => false);
   return null;
 }
@@ -685,6 +658,14 @@ function requiredApplyStatus(outcome: SkillProposalApplyOutcome): SkillProposalS
   return status;
 }
 
-function storeOptions(env?: NodeJS.ProcessEnv): SkillWorkshopStoreOptions {
-  return env ? { env } : {};
+function storeOptions(
+  env: NodeJS.ProcessEnv | undefined,
+  agentId: string | undefined,
+  config: OpenClawConfig,
+): SkillWorkshopStoreOptions {
+  return {
+    ...(env ? { env } : {}),
+    ...(agentId ? { agentId } : {}),
+    config,
+  };
 }

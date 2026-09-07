@@ -1,6 +1,7 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Typing tests cover typing indicator start, update, and cleanup behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createTypingCallbacks } from "./typing.js";
 
 type TypingCallbackOverrides = Partial<Parameters<typeof createTypingCallbacks>[0]>;
@@ -109,29 +110,133 @@ describe("createTypingCallbacks", () => {
     }
   });
 
-  it("does not block reply start on a pending typing request", async () => {
+  it("coalesces concurrent starts without blocking and allows a later start", async () => {
     let resolveStart: (() => void) | undefined;
     const { start, callbacks } = createTypingHarness({
-      start: vi.fn(
-        () =>
-          new Promise<void>((resolve) => {
-            resolveStart = resolve;
-          }),
-      ),
+      start: vi
+        .fn()
+        .mockImplementationOnce(
+          () =>
+            new Promise<void>((resolve) => {
+              resolveStart = resolve;
+            }),
+        )
+        .mockResolvedValue(undefined),
     });
 
     try {
-      await callbacks.onReplyStart();
+      await Promise.all(Array.from({ length: 100 }, () => callbacks.onReplyStart()));
 
       expect(start).toHaveBeenCalledTimes(1);
       if (!resolveStart) {
         throw new Error("Expected typing start resolver to be initialized");
       }
       resolveStart();
+      await flushMicrotasks();
+
+      await callbacks.onReplyStart();
+      expect(start).toHaveBeenCalledTimes(2);
     } finally {
       callbacks.onCleanup?.();
     }
   });
+
+  it("coalesces explicit starts with a pending keepalive without shifting cadence", async () => {
+    await withFakeTimers(async () => {
+      let resolvePendingStart: (() => void) | undefined;
+      const { start, callbacks } = createTypingHarness({
+        start: vi
+          .fn()
+          .mockResolvedValueOnce(undefined)
+          .mockImplementationOnce(
+            () =>
+              new Promise<void>((resolve) => {
+                resolvePendingStart = resolve;
+              }),
+          )
+          .mockResolvedValue(undefined),
+      });
+
+      await callbacks.onReplyStart();
+      await flushMicrotasks();
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(start).toHaveBeenCalledTimes(2);
+
+      await callbacks.onReplyStart();
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(start).toHaveBeenCalledTimes(2);
+
+      if (!resolvePendingStart) {
+        throw new Error("Expected pending keepalive resolver to be initialized");
+      }
+      resolvePendingStart();
+      await flushMicrotasks();
+
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(start).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(start).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it.each([
+    { phase: "initial", finish: "cleanup", rejected: false },
+    { phase: "initial", finish: "idle", rejected: false },
+    { phase: "keepalive", finish: "cleanup", rejected: false },
+    { phase: "keepalive", finish: "idle", rejected: false },
+    { phase: "keepalive", finish: "TTL", rejected: false },
+    { phase: "keepalive", finish: "cleanup", rejected: true },
+  ])(
+    "orders $finish stop after the pending $phase start (rejected=$rejected)",
+    async ({ phase, finish, rejected }) => {
+      await withFakeTimers(async () => {
+        const { promise, resolve, reject } = createDeferred();
+        const startImplementation = vi.fn<() => Promise<void>>();
+        if (phase === "keepalive") {
+          startImplementation.mockResolvedValueOnce(undefined);
+        }
+        startImplementation.mockReturnValueOnce(promise);
+        const { start, stop, onStartError, callbacks } = createTypingHarness({
+          maxDurationMs: 10_000,
+          start: startImplementation,
+        });
+
+        await callbacks.onReplyStart();
+        if (phase === "keepalive") {
+          await vi.advanceTimersByTimeAsync(3_000);
+        }
+        const admittedStarts = start.mock.calls.length;
+        if (finish === "TTL") {
+          vi.spyOn(console, "warn").mockImplementation(() => {});
+          await vi.advanceTimersByTimeAsync(7_000);
+        } else if (finish === "idle") {
+          callbacks.onIdle?.();
+        } else {
+          callbacks.onCleanup?.();
+        }
+        callbacks.onCleanup?.();
+        expect(stop).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+
+        const failure = new Error("typing unavailable");
+        if (rejected) {
+          reject(failure);
+        } else {
+          resolve();
+        }
+        await flushMicrotasks();
+        expect(stop).toHaveBeenCalledTimes(1);
+        expect(onStartError).toHaveBeenCalledTimes(rejected ? 1 : 0);
+        if (rejected) {
+          expect(onStartError).toHaveBeenCalledWith(failure);
+        }
+        expect(vi.getTimerCount()).toBe(0);
+        await vi.advanceTimersByTimeAsync(20_000);
+        await callbacks.onReplyStart();
+        expect(start).toHaveBeenCalledTimes(admittedStarts);
+      });
+    },
+  );
 
   it("invokes stop on idle and reports stop errors", async () => {
     const { stop, onStopError, callbacks } = createTypingHarness({
@@ -219,12 +324,12 @@ describe("createTypingCallbacks", () => {
     });
   });
 
-  it("stops keepalive after consecutive start failures", async () => {
+  it("counts a coalesced rejection once and stops keepalive at the failure breaker", async () => {
     await withFakeTimers(async () => {
       const { start, onStartError, callbacks } = createTypingHarness({
         start: vi.fn().mockRejectedValue(new Error("gone")),
       });
-      await callbacks.onReplyStart();
+      await Promise.all(Array.from({ length: 100 }, () => callbacks.onReplyStart()));
       await flushMicrotasks();
       expect(start).toHaveBeenCalledTimes(1);
       expect(onStartError).toHaveBeenCalledTimes(1);

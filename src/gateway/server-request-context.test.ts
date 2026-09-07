@@ -1,12 +1,14 @@
 /**
  * Gateway request context construction tests.
  */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { listSystemPresence } from "../infra/system-presence.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import {
   ensureProfileForEmail,
   getUserProfileDisplay,
@@ -16,10 +18,19 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 
 type GatewayRequestContextParams = Parameters<typeof createGatewayRequestContext>[0];
 type TestCronState = GatewayServerLiveState["cronState"];
+type RequestRuntime = GatewayRequestContextParams["runtime"];
+
+vi.mock("./server/health-state.js", () => ({
+  getHealthCache: vi.fn(() => null),
+  getHealthVersion: vi.fn(() => 1),
+  incrementPresenceVersion: vi.fn(() => 1),
+}));
 
 function makeCronState(overrides: Partial<TestCronState> = {}): TestCronState {
   return {
@@ -27,100 +38,129 @@ function makeCronState(overrides: Partial<TestCronState> = {}): TestCronState {
     storePath: "/tmp/cron",
     cronEnabled: true,
     reconcileExitWatchers: vi.fn(async () => {}),
-    stopExitWatchers: vi.fn(),
     reconcileStreamWatchers: vi.fn(async () => {}),
     stopStreamWatchers: vi.fn(async () => {}),
-    reconcileHeartbeatJobs: vi.fn(async () => {}),
+    reconcileSystemJobs: vi.fn(async () => "converged" as const),
     ...overrides,
   };
 }
 
-function makeContextParams(
-  overrides: Partial<GatewayRequestContextParams> = {},
-): GatewayRequestContextParams {
+function makeContextParams(overrides: Partial<RequestRuntime> = {}): GatewayRequestContextParams {
   const config = {} as never;
-  const runtimeState: Pick<GatewayServerLiveState, "cronState"> = {
-    cronState: makeCronState({
-      cron: { start: vi.fn(), stop: vi.fn() } as never,
-      storePath: "/tmp/cron",
-    }),
-  };
   return {
-    deps: {} as never,
-    runtimeState,
-    getRuntimeConfig: vi.fn(() => config),
-    getGatewayMethodRegistry: vi.fn(() => ({}) as never),
-    sessionCompanion: {} as never,
-    sessionObserver: {} as never,
-    resolveTerminalLaunchPolicy: vi.fn(() => ({
-      ok: false as const,
-      block: { kind: "disabled" as const },
-    })),
-    isTerminalEnabled: vi.fn(() => false),
-    execApprovalManager: undefined,
-    pluginApprovalManager: undefined,
-    validateAgentRuntimeApprovalAuthority: () => false,
-    listSessionPendingApprovals: undefined,
-    loadGatewayModelCatalog: vi.fn(async () => []),
-    loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
-      agentId: "main",
-      agentDir: "/tmp/model-catalog-agent",
-      catalogComplete: false,
-      workspaceDir: "/tmp/model-catalog-workspace",
-      config,
-      entries: [],
-      routeVariants: [],
-    })),
-    readChatMetadata: vi.fn(async () => ({ swarmEnabled: false })),
-    getHealthCache: vi.fn(() => null),
-    refreshHealthSnapshot: vi.fn(async () => ({}) as never),
+    runtime: {
+      connectionWork: { track: trackAsyncWork },
+      deps: {} as never,
+      runtimeState: {
+        cronState: makeCronState(),
+        configReloader: { isConfigReloadSettled: vi.fn(() => true) },
+      },
+      lifecycle: { closePreludeStarted: false },
+      getAttachedGatewayMethodRegistry: vi.fn(() => ({}) as never),
+      gatewayTls: { enabled: false },
+      sessionCompanion: {} as never,
+      sessionObserver: { removeConnection: vi.fn() } as never,
+      mentionInbox: undefined,
+      transportBridge: {
+        getPortalService: vi.fn(() => undefined),
+        getMcpAppSandboxPort: vi.fn(() => undefined),
+        ensureSandboxHostPort: vi.fn(async () => 18790),
+      },
+      terminalLaunchPolicy: {
+        resolve: vi.fn(() => ({ ok: false as const, block: { kind: "disabled" as const } })),
+        isEnabled: vi.fn(() => false),
+      },
+      execApprovalManager: undefined,
+      questionManager: undefined,
+      cancelRunBoundApprovals: undefined,
+      forwardPluginApprovalRequest: undefined,
+      approvalWebPushDelivery: undefined,
+      pluginApprovalIosPushDelivery: undefined,
+      pluginApprovalManager: undefined,
+      placementStandingGrants: undefined,
+      systemAgentApprovalManager: undefined,
+      approvalSessionEvents: { replay: undefined },
+      validateAgentRuntimeApprovalAuthority: () => false,
+      loadGatewayModelCatalog: vi.fn(async () => []),
+      loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
+        agentId: "main",
+        agentDir: "/tmp/model-catalog-agent",
+        catalogComplete: false,
+        workspaceDir: "/tmp/model-catalog-workspace",
+        config,
+        entries: [],
+        routeVariants: [],
+      })),
+      readPreparedGatewayModelCatalog: undefined,
+      refreshGatewayHealthSnapshotWithRuntime: vi.fn(async () => ({}) as never),
+      broadcast: vi.fn(),
+      broadcastToConnIds: vi.fn(),
+      nodeSendToSession: vi.fn(),
+      nodeSendToAllSubscribed: vi.fn(),
+      nodeSubscribe: vi.fn(),
+      nodeUnsubscribe: vi.fn(),
+      nodeUnsubscribeAll: vi.fn(),
+      hasTalkNodeConnected: vi.fn(async () => false),
+      clients: new Set(),
+      isConnectionActive: vi.fn(() => false),
+      watchNodeHttpRuntime: {
+        invalidateSessionsForDevice: vi.fn(),
+        disconnectSessionsForDevice: vi.fn(),
+      },
+      sharedGatewaySessionGenerationState: {} as never,
+      resolveSharedGatewaySessionGenerationForRuntimeSnapshot: vi.fn(() => undefined),
+      nodeRegistry: { invalidateConnectionForPairingChange: vi.fn() } as never,
+      nodeDesktopService: undefined,
+      workerEnvironmentService: undefined,
+      hostDesktopService: undefined,
+      workerEnvironmentStartup: undefined,
+      workerPlacementRuntime: undefined,
+      workerPlacementControlAvailable: undefined,
+      githubPublicationService: undefined,
+      terminalSessions: undefined,
+      agentRunSeq: new Map(),
+      chatAbortControllers: new Map(),
+      chatQueuedTurns: new Map(),
+      chatRunState: createChatRunState(),
+      addChatRun: vi.fn(),
+      removeChatRun: vi.fn(),
+      sessionEventSubscribers: {
+        subscribe: vi.fn(),
+        unsubscribe: vi.fn(),
+        getAll: vi.fn(() => new Set<string>()),
+      },
+      subscribeSessionMessageEvents: vi.fn(),
+      unsubscribeSessionMessageEvents: vi.fn(),
+      sessionMessageSubscribers: { unsubscribeAll: vi.fn() },
+      toolEventRecipients: { add: vi.fn() },
+      dedupe: new Map(),
+      wizardSessions: new Map(),
+      systemAgentSessions: new Map(),
+      findRunningWizard: vi.fn(() => null),
+      purgeWizardSession: vi.fn(),
+      getRuntimeSnapshot: vi.fn(() => ({}) as never),
+      readinessEventLoopHealth: { snapshot: vi.fn(() => undefined) },
+      startChannel: vi.fn(async () => new Map()),
+      stopChannel: vi.fn(async () => undefined),
+      markChannelLoggedOut: vi.fn(),
+      wizardRunner: vi.fn(async () => undefined),
+      channelWizardRunner: vi.fn(async () => undefined),
+      broadcastVoiceWakeChanged: vi.fn(),
+      broadcastVoiceWakeRoutingChanged: vi.fn(),
+      kernel: {
+        notifyPluginMetadataChanged: vi.fn(),
+        getConfigReloaderHotReloadStatus: vi.fn(() => undefined),
+      },
+      unavailableGatewayMethods: new Set(),
+      ...overrides,
+    },
+    chatMetadataLifecycle: {
+      read: vi.fn(async () => ({ swarmEnabled: false })),
+      readStartup: undefined,
+    },
     logHealth: { error: vi.fn() },
-    logGateway: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } as never,
-    incrementPresenceVersion: vi.fn(() => 1),
-    getHealthVersion: vi.fn(() => 1),
-    broadcast: vi.fn(),
-    broadcastToConnIds: vi.fn(),
-    nodeSendToSession: vi.fn(),
-    nodeSendToAllSubscribed: vi.fn(),
-    nodeSubscribe: vi.fn(),
-    nodeUnsubscribe: vi.fn(),
-    nodeUnsubscribeAll: vi.fn(),
-    hasConnectedTalkNode: vi.fn(async () => false),
-    clients: new Set(),
-    isConnectionActive: vi.fn(() => false),
-    enforceSharedGatewayAuthGenerationForConfigWrite: vi.fn(),
-    nodeRegistry: { invalidateConnectionForPairingChange: vi.fn() } as never,
-    agentRunSeq: new Map(),
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
-    chatRunState: createChatRunState(),
-    addChatRun: vi.fn(),
-    removeChatRun: vi.fn(),
-    subscribeSessionEvents: vi.fn(),
-    unsubscribeSessionEvents: vi.fn(),
-    subscribeSessionMessageEvents: vi.fn(),
-    unsubscribeSessionMessageEvents: vi.fn(),
-    unsubscribeAllSessionEvents: vi.fn(),
-    getSessionEventSubscriberConnIds: vi.fn(() => new Set<string>()),
-    registerToolEventRecipient: vi.fn(),
-    dedupe: new Map(),
-    wizardSessions: new Map(),
-    systemAgentSessions: new Map(),
-    findRunningWizard: vi.fn(() => null),
-    purgeWizardSession: vi.fn(),
-    getRuntimeSnapshot: vi.fn(() => ({}) as never),
-    startChannel: vi.fn(async () => undefined),
-    stopChannel: vi.fn(async () => undefined),
-    markChannelLoggedOut: vi.fn(),
-    wizardRunner: vi.fn(async () => undefined),
-    channelWizardRunner: vi.fn(async () => undefined),
-    broadcastVoiceWakeChanged: vi.fn(),
-    broadcastVoiceWakeRoutingChanged: vi.fn(),
-    notifyPluginMetadataChanged: vi.fn(),
-    getConfigReloaderHotReloadStatus: vi.fn(() => undefined),
-    unavailableGatewayMethods: new Set(),
-    ...overrides,
-    configRevisionProjector: overrides.configRevisionProjector ?? {
+    log: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } as never,
+    configRevisionProjector: {
       projectRawHash: (hash) => hash,
       projectResolvedHash: (hash) => hash,
     },
@@ -150,7 +190,7 @@ function makeGatewayClient(params: {
       scopes: params.scopes ?? [],
       caps: params.caps ?? [],
     },
-    socket: { close: vi.fn() },
+    socket: { close: vi.fn(), readyState: 1 },
     ...(params.approvalRuntime ? { internal: { approvalRuntime: true } } : {}),
     ...(params.invalidated ? { invalidated: true } : {}),
   };
@@ -160,7 +200,7 @@ describe("createGatewayRequestContext", () => {
   it("reuses the canonical connection liveness predicate", () => {
     const isConnectionActive = vi.fn(() => true);
     const params = makeContextParams();
-    Object.assign(params, { isConnectionActive });
+    Object.assign(params.runtime, { isConnectionActive });
 
     const context = createGatewayRequestContext(params);
 
@@ -168,14 +208,20 @@ describe("createGatewayRequestContext", () => {
   });
 
   it("cleans connection-scoped replace-sets with the other session subscriptions", () => {
-    const unsubscribeAllSessionEvents = vi.fn();
-    const unsubscribePullRequests = vi.fn();
-    const unsubscribeViewerPresence = vi.fn();
-    const params = makeContextParams({ unsubscribeAllSessionEvents });
-    params.runtimeState.controlUiSessionPullRequests = {
+    const order: string[] = [];
+    const unsubscribeAllSessionEvents = vi.fn(() => order.push("session-events"));
+    const unsubscribeMessages = vi.fn(() => order.push("messages"));
+    const removeObserver = vi.fn(() => order.push("observer"));
+    const unsubscribePullRequests = vi.fn(() => order.push("pull-requests"));
+    const unsubscribeViewerPresence = vi.fn(() => order.push("presence"));
+    const params = makeContextParams();
+    params.runtime.sessionEventSubscribers.unsubscribe = unsubscribeAllSessionEvents;
+    params.runtime.sessionMessageSubscribers.unsubscribeAll = unsubscribeMessages;
+    params.runtime.sessionObserver.removeConnection = removeObserver;
+    params.runtime.runtimeState.controlUiSessionPullRequests = {
       unsubscribe: unsubscribePullRequests,
     } as never;
-    params.runtimeState.sessionViewerPresence = {
+    params.runtime.runtimeState.sessionViewerPresence = {
       unsubscribe: unsubscribeViewerPresence,
     } as never;
     const context = createGatewayRequestContext(params);
@@ -183,15 +229,41 @@ describe("createGatewayRequestContext", () => {
     context.unsubscribeAllSessionEvents("conn-control-ui");
 
     expect(unsubscribeAllSessionEvents).toHaveBeenCalledWith("conn-control-ui");
+    expect(unsubscribeMessages).toHaveBeenCalledWith("conn-control-ui");
+    expect(removeObserver).toHaveBeenCalledWith("conn-control-ui");
     expect(unsubscribePullRequests).toHaveBeenCalledWith("conn-control-ui");
     expect(unsubscribeViewerPresence).toHaveBeenCalledWith("conn-control-ui");
+    expect(order).toEqual(["session-events", "messages", "observer", "pull-requests", "presence"]);
+  });
+
+  it("reads the portal service after its transport becomes available", () => {
+    let portalService: GatewayRequestContext["portalService"];
+    const params = makeContextParams();
+    params.runtime.transportBridge.getPortalService = () => portalService;
+    const context = createGatewayRequestContext(params);
+
+    expect(context.portalService).toBeUndefined();
+    portalService = {
+      open: vi.fn(async () => {
+        throw new Error("unused");
+      }),
+      list: vi.fn(() => []),
+      listWorkerPortals: vi.fn(() => []),
+      close: vi.fn(async () => {}),
+      closeWorkerPortals: vi.fn(async () => {}),
+      closeAll: vi.fn(async () => {}),
+    };
+    expect(context.portalService).toBe(portalService);
+    portalService = undefined;
+    expect(context.portalService).toBeUndefined();
   });
 
   it("reads cron state live from runtime state", () => {
     const cronA = { start: vi.fn(), stop: vi.fn() } as never;
     const cronB = { start: vi.fn(), stop: vi.fn() } as never;
-    const runtimeState: Pick<GatewayServerLiveState, "cronState"> = {
+    const runtimeState: RequestRuntime["runtimeState"] = {
       cronState: makeCronState({ cron: cronA, storePath: "/tmp/cron-a" }),
+      configReloader: { isConfigReloadSettled: () => true },
     };
 
     const context = createGatewayRequestContext(makeContextParams({ runtimeState }));
@@ -205,33 +277,50 @@ describe("createGatewayRequestContext", () => {
     expect(context.cronStorePath).toBe("/tmp/cron-b");
   });
 
-  it("reads config hot-reload status through the live kernel bridge", () => {
+  it("reads config reload status and readiness through the live kernel bridge", () => {
     let status: "active" | "disabled" | undefined;
-    const context = createGatewayRequestContext(
-      makeContextParams({ getConfigReloaderHotReloadStatus: () => status }),
-    );
+    let settled = true;
+    const params = makeContextParams();
+    params.runtime.kernel.getConfigReloaderHotReloadStatus = () => status;
+    params.runtime.runtimeState.configReloader.isConfigReloadSettled = () => settled;
+    const context = createGatewayRequestContext(params);
 
     expect(context.getConfigReloaderHotReloadStatus?.()).toBeUndefined();
 
     status = "active";
     expect(context.getConfigReloaderHotReloadStatus?.()).toBe("active");
+    expect(context.isConfigReloadSettled()).toBe(true);
+    settled = false;
+    expect(context.isConfigReloadSettled()).toBe(false);
 
     status = "disabled";
     expect(context.getConfigReloaderHotReloadStatus?.()).toBe("disabled");
   });
 
-  it("publishes the worker disk-space reader through the kernel bridge", () => {
+  it("publishes worker services through the kernel bridge", () => {
     const workerPlacementDiskSpaceReader = { read: vi.fn(), version: vi.fn(() => 1) };
+    const repositoryWorkspaceMutationService = { mutate: vi.fn() };
     const context = createGatewayRequestContext(
-      makeContextParams({ workerPlacementDiskSpaceReader }),
+      makeContextParams({
+        workerPlacementRuntime: {
+          diskSpace: workerPlacementDiskSpaceReader,
+          runnerAvailability: undefined,
+          repositoryWorkspaceMutationService,
+        },
+      }),
     );
 
     expect(context.workerPlacementDiskSpaceReader).toBe(workerPlacementDiskSpaceReader);
+    expect(context.workerRepositoryWorkspaceMutationService).toBe(
+      repositoryWorkspaceMutationService,
+    );
   });
 
   it("routes plugin metadata changes through the kernel bridge", () => {
     const notifyPluginMetadataChanged = vi.fn();
-    const context = createGatewayRequestContext(makeContextParams({ notifyPluginMetadataChanged }));
+    const params = makeContextParams();
+    params.runtime.kernel.notifyPluginMetadataChanged = notifyPluginMetadataChanged;
+    const context = createGatewayRequestContext(params);
 
     context.notifyPluginMetadataChanged();
 
@@ -338,7 +427,7 @@ describe("createGatewayRequestContext", () => {
     expect(readCapturedDisplayName()).toBe("Augusta Ada");
     expect(second.authenticatedUserProfile).toEqual(first.authenticatedUserProfile);
     expect(unrelated.authenticatedUserProfile.displayName).toBe("Grace");
-    expect(params.broadcast).toHaveBeenNthCalledWith(
+    expect(params.runtime.broadcast).toHaveBeenNthCalledWith(
       1,
       "presence",
       {
@@ -346,6 +435,7 @@ describe("createGatewayRequestContext", () => {
           expect.objectContaining({
             user: {
               id: "profile-ada",
+              identity: { type: "profile", id: "profile-ada" },
               email: "ada@example.test",
               name: "Augusta Ada",
               avatarUrl: "/api/users/profile-ada/avatar?v=avatar-new-png",
@@ -354,6 +444,7 @@ describe("createGatewayRequestContext", () => {
           expect.objectContaining({
             user: {
               id: "profile-ada",
+              identity: { type: "profile", id: "profile-ada" },
               email: "ada@work.test",
               name: "Augusta Ada",
               avatarUrl: "/api/users/profile-ada/avatar?v=avatar-new-png",
@@ -366,7 +457,7 @@ describe("createGatewayRequestContext", () => {
         stateVersion: { presence: 1, health: 1 },
       },
     );
-    expect(params.broadcast).toHaveBeenNthCalledWith(
+    expect(params.runtime.broadcast).toHaveBeenNthCalledWith(
       2,
       "presence",
       {
@@ -374,6 +465,7 @@ describe("createGatewayRequestContext", () => {
           expect.objectContaining({
             user: {
               id: "profile-ada",
+              identity: { type: "profile", id: "profile-ada" },
               email: "ada@example.test",
               name: "Augusta Ada",
               avatarUrl: "/api/users/profile-ada/avatar?v=avatar-newer-png",
@@ -382,6 +474,7 @@ describe("createGatewayRequestContext", () => {
           expect.objectContaining({
             user: {
               id: "profile-ada",
+              identity: { type: "profile", id: "profile-ada" },
               email: "ada@work.test",
               name: "Augusta Ada",
               avatarUrl: "/api/users/profile-ada/avatar?v=avatar-newer-png",
@@ -415,6 +508,18 @@ describe("createGatewayRequestContext", () => {
           updatedAt: source.updatedAt,
         },
         presenceKey: "profile-refresh-merge-source",
+        personPresence: { onlineSince: 1_000, lastActivityAt: 2_000 },
+      };
+      const targetClient = {
+        ...sourceClient,
+        connId: "merge-target",
+        authenticatedUserId: "merge-target@example.test",
+        authenticatedUserProfile: {
+          ...sourceClient.authenticatedUserProfile,
+          profileId: target.id,
+        },
+        presenceKey: "profile-refresh-merge-target",
+        personPresence: { onlineSince: 1_500, lastActivityAt: 3_000 },
       };
       const unrelatedClient = {
         ...makeGatewayClient({
@@ -433,7 +538,7 @@ describe("createGatewayRequestContext", () => {
       };
       const capturedProfile = sourceClient.authenticatedUserProfile;
       const params = makeContextParams({
-        clients: new Set([sourceClient, unrelatedClient]) as never,
+        clients: new Set([sourceClient, targetClient, unrelatedClient]) as never,
       });
       const context = createGatewayRequestContext(params);
 
@@ -454,13 +559,21 @@ describe("createGatewayRequestContext", () => {
         updatedAt: linked.updatedAt,
       });
       expect(unrelatedClient.authenticatedUserProfile.profileId).toBe(unrelatedProfile.id);
-      const presence = vi.mocked(params.broadcast).mock.calls[0]?.[1] as {
+      for (const email of ["merge-source@example.test", "merge-target@example.test"]) {
+        expect(listSystemPresence().find((entry) => entry.user?.email === email)).toMatchObject({
+          user: { id: target.id, identity: { type: "profile", id: target.id } },
+          onlineSince: 1_000,
+          lastActivityAt: 3_000,
+        });
+      }
+      const presence = vi.mocked(params.runtime.broadcast).mock.calls[0]?.[1] as {
         presence?: Array<{ user?: { id?: string; email?: string; avatarUrl?: string } }>;
       };
       expect(
         presence.presence?.find((entry) => entry.user?.email === "merge-source@example.test")?.user,
       ).toEqual({
         id: target.id,
+        identity: { type: "profile", id: target.id },
         email: "merge-source@example.test",
         name: target.displayName,
         avatarUrl: `/api/users/${target.id}/avatar?v=${display.avatarRevision}`,
@@ -470,6 +583,127 @@ describe("createGatewayRequestContext", () => {
       );
     });
   });
+
+  it("publishes an owner rename to every tab without inventing an email", () => {
+    const ownerClients = [];
+    for (const tab of ["one", "two"]) {
+      ownerClients.push({
+        ...makeGatewayClient({
+          connId: `owner-${tab}`,
+          clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        }),
+        authenticatedUserProfile: {
+          profileId: "profile-owner",
+          displayName: "Ada",
+          avatarRevision: "1",
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+        presenceKey: `profile-owner-${tab}`,
+        personPresence: { onlineSince: 1_000 },
+      });
+    }
+    const params = makeContextParams({ clients: new Set(ownerClients) as never });
+    createGatewayRequestContext(params).refreshConnectedUserProfile?.({
+      id: "profile-owner",
+      displayName: "Augusta Ada",
+      avatarRevision: "2",
+      hasAvatar: false,
+      updatedAt: 2,
+    });
+
+    for (const client of ownerClients) {
+      expect(client.authenticatedUserProfile.displayName).toBe("Augusta Ada");
+    }
+    const ownerRows = listSystemPresence().filter((entry) => entry.user?.id === "profile-owner");
+    expect(ownerRows).toHaveLength(2);
+    for (const entry of ownerRows) {
+      expect(entry.user).toEqual({
+        id: "profile-owner",
+        identity: { type: "profile", id: "profile-owner" },
+        name: "Augusta Ada",
+        avatarUrl: "/api/users/profile-owner/avatar?v=2",
+      });
+    }
+    expect(params.runtime.broadcast).toHaveBeenCalledExactlyOnceWith(
+      "presence",
+      { presence: expect.arrayContaining(ownerRows) },
+      { dropIfSlow: true, stateVersion: { presence: 1, health: 1 } },
+    );
+  });
+
+  it("publishes only server-stamped activity from the exact live client", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    onTestFinished(() => now.mockRestore());
+    const client: GatewayWsClient = {
+      ...makeGatewayClient({ connId: "activity-live", clientId: GATEWAY_CLIENT_IDS.CONTROL_UI }),
+      socket: { readyState: 1 } as GatewayWsClient["socket"],
+      usesSharedGatewayAuth: false,
+      presenceKey: "activity-live",
+      authenticatedUserId: "live@activity.test",
+      personPresence: { onlineSince: 9_000 },
+    };
+    const clients = new Set([client]);
+    const params = makeContextParams({ clients });
+    const context = createGatewayRequestContext(params);
+    context.recordClientActivity?.({ ...client });
+    expect(params.runtime.broadcast).not.toHaveBeenCalled();
+    context.recordClientActivity?.(client);
+    expect(params.runtime.broadcast).toHaveBeenCalledExactlyOnceWith(
+      "presence",
+      {
+        presence: expect.arrayContaining([
+          expect.objectContaining({
+            user: { id: "live@activity.test", email: "live@activity.test" },
+            onlineSince: 9_000,
+            lastActivityAt: 10_000,
+          }),
+        ]),
+      },
+      { dropIfSlow: true, stateVersion: { presence: 1, health: 1 } },
+    );
+    now.mockReturnValue(11_000);
+    clients.delete(client);
+    context.recordClientActivity?.(client);
+    expect(params.runtime.broadcast).toHaveBeenCalledOnce();
+  });
+
+  it.each(["removed", "invalidated", "closing"] as const)(
+    "does not refresh a %s profile connection or resurrect its presence",
+    (state) => {
+      const client: GatewayWsClient = {
+        ...makeGatewayClient({
+          connId: `profile-${state}`,
+          clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        }),
+        socket: { readyState: state === "closing" ? 2 : 1 } as GatewayWsClient["socket"],
+        usesSharedGatewayAuth: false,
+        authenticatedUserId: `${state}@profile.test`,
+        authenticatedUserProfile: {
+          profileId: `inactive-${state}`,
+          displayName: "Before",
+          avatarRevision: "1",
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+        presenceKey: `profile-${state}`,
+        invalidated: state === "invalidated",
+      };
+      const params = makeContextParams({ clients: new Set(state === "removed" ? [] : [client]) });
+      createGatewayRequestContext(params).refreshConnectedUserProfile?.({
+        id: `inactive-${state}`,
+        displayName: "After",
+        avatarRevision: "2",
+        hasAvatar: false,
+        updatedAt: 2,
+      });
+      expect(client.authenticatedUserProfile?.displayName).toBe("Before");
+      expect(params.runtime.broadcast).not.toHaveBeenCalled();
+      expect(
+        listSystemPresence().some((entry) => entry.user?.email === `${state}@profile.test`),
+      ).toBe(false);
+    },
+  );
 
   it("preserves the Gravatar-backed route when a changed profile has no upload", () => {
     const client = {
@@ -499,13 +733,14 @@ describe("createGatewayRequestContext", () => {
     });
 
     expect(client.authenticatedUserProfile.hasAvatar).toBe(false);
-    const presence = vi.mocked(params.broadcast).mock.calls[0]?.[1] as {
+    const presence = vi.mocked(params.runtime.broadcast).mock.calls[0]?.[1] as {
       presence?: Array<{ user?: { id?: string; avatarUrl?: string } }>;
     };
     expect(
       presence.presence?.find((entry) => entry.user?.id === "profile-ada-avatar-removed")?.user,
     ).toEqual({
       id: "profile-ada-avatar-removed",
+      identity: { type: "profile", id: "profile-ada-avatar-removed" },
       email: "ada@example.test",
       name: "Ada",
       avatarUrl: "/api/users/profile-ada-avatar-removed/avatar?v=profile-updated-2",
@@ -540,13 +775,14 @@ describe("createGatewayRequestContext", () => {
       updatedAt: 2,
     });
 
-    const presence = vi.mocked(params.broadcast).mock.calls[0]?.[1] as {
+    const presence = vi.mocked(params.runtime.broadcast).mock.calls[0]?.[1] as {
       presence?: Array<{ user?: { id?: string; email?: string } }>;
     };
     expect(
       presence.presence?.find((entry) => entry.user?.id === "profile-ada-tailscale")?.user,
     ).toEqual({
       id: "profile-ada-tailscale",
+      identity: { type: "profile", id: "profile-ada-tailscale" },
       name: "Augusta Ada",
       avatarUrl: "/api/users/profile-ada-tailscale/avatar?v=avatar-tailscale-new-png",
     });
@@ -646,7 +882,10 @@ describe("createGatewayRequestContext", () => {
     const context = createGatewayRequestContext(
       makeContextParams({
         clients,
-        invalidateDeviceTransports,
+        watchNodeHttpRuntime: {
+          invalidateSessionsForDevice: invalidateDeviceTransports,
+          disconnectSessionsForDevice: vi.fn(),
+        },
         nodeRegistry: { invalidateConnectionForPairingChange } as never,
       }),
     );
@@ -679,7 +918,13 @@ describe("createGatewayRequestContext", () => {
     const disconnectDeviceTransports = vi.fn();
 
     const context = createGatewayRequestContext(
-      makeContextParams({ clients, disconnectDeviceTransports }),
+      makeContextParams({
+        clients,
+        watchNodeHttpRuntime: {
+          invalidateSessionsForDevice: vi.fn(),
+          disconnectSessionsForDevice: disconnectDeviceTransports,
+        },
+      }),
     );
     context.disconnectClientsForDevice?.("device-1");
 
@@ -687,6 +932,54 @@ describe("createGatewayRequestContext", () => {
     expect((target as { invalidatedReason?: string }).invalidatedReason).toBe("device-removed");
     expect(target.socket.close).toHaveBeenCalledWith(4001, "device removed");
     expect(disconnectDeviceTransports).toHaveBeenCalledWith("device-1", undefined);
+  });
+
+  it("disconnects only clients authenticated as the reassigned durable profile", () => {
+    const target = {
+      ...makeGatewayClient({
+        connId: "profile-target",
+        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        scopes: ["operator.admin"],
+      }),
+      authenticatedUserProfile: {
+        profileId: "profile-ada",
+        displayName: "Ada",
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+    };
+    const unrelated = {
+      ...makeGatewayClient({
+        connId: "profile-unrelated",
+        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      }),
+      authenticatedUserProfile: {
+        profileId: "profile-grace",
+        displayName: "Grace",
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+    };
+    const unidentified = makeGatewayClient({
+      connId: "shared-secret",
+      clientId: GATEWAY_CLIENT_IDS.CLI,
+      scopes: ["operator.admin"],
+    });
+    const clients = new Set([target, unrelated, unidentified]) as never;
+    const context = createGatewayRequestContext(makeContextParams({ clients }));
+    target.socket.close.mockImplementation(() => {
+      expect((target as { invalidated?: boolean }).invalidated).toBe(true);
+    });
+
+    context.disconnectClientsForUserProfile?.("profile-ada");
+
+    expect((target as { invalidated?: boolean }).invalidated).toBe(true);
+    expect((target as { invalidatedReason?: string }).invalidatedReason).toBe(
+      "operator-role-changed",
+    );
+    expect(target.socket.close).toHaveBeenCalledWith(4001, "operator role changed");
+    expect(unrelated.socket.close).not.toHaveBeenCalled();
+    expect(unidentified.socket.close).not.toHaveBeenCalled();
   });
 
   it("invalidateClientsForDevice filters by role when provided", () => {

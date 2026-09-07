@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "./types.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("legacy provider-shaped config snapshots", () => {
-  it("accepts a string map of voice aliases while still flagging legacy talk config", () => {
+  it("preserves provider-owned legacy Talk fields for the provider doctor migration", () => {
     const raw = {
       talk: {
         voiceAliases: {
@@ -17,22 +17,8 @@ describe("legacy provider-shaped config snapshots", () => {
     const changes: string[] = [];
     const migrated = normalizeLegacyTalkConfig(raw as unknown as OpenClawConfig, changes);
 
-    expect(changes).toContain(
-      "Normalized talk.provider/providers shape (trimmed provider ids and merged missing compatibility fields).",
-    );
-    const next = migrated as {
-      talk?: {
-        providers?: {
-          elevenlabs?: {
-            voiceAliases?: Record<string, string>;
-          };
-        };
-      };
-    };
-    expect(next?.talk?.providers?.elevenlabs?.voiceAliases).toEqual({
-      Clawd: "VoiceAlias1234567890",
-      Roger: "CwhRBWXzGAHq8TQ4Fs17",
-    });
+    expect(changes).toEqual([]);
+    expect(migrated).toEqual(raw);
   });
 
   it("rejects non-string voice alias values", () => {

@@ -68,6 +68,7 @@ describe("acpx plugin", () => {
     expect(api.registerService).toHaveBeenCalledWith(service);
     expect(api.on).toHaveBeenCalledWith("reply_dispatch", expect.any(Function), {
       timeoutMs: 120_000,
+      eligibleDispatchKinds: ["acp"],
     });
   });
 
@@ -86,6 +87,7 @@ describe("acpx plugin", () => {
 
     expect(api.on).toHaveBeenCalledWith("reply_dispatch", expect.any(Function), {
       timeoutMs: 180_000,
+      eligibleDispatchKinds: ["acp"],
     });
   });
 

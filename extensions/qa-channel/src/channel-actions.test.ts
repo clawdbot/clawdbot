@@ -225,6 +225,51 @@ describe("qa-channel direct message actions", () => {
     }
   });
 
+  it("preserves versioned direct and escaped group targets through message actions", async () => {
+    installQaChannelTestRegistry();
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+
+    try {
+      const cfg = createQaChannelConfig(bus.baseUrl);
+      const handleAction = requireQaActionHandler();
+      const cases = [
+        {
+          target: "thread:/v1/dm/Alice/Topic",
+          conversation: { id: "Alice", kind: "direct" },
+          threadId: "Topic",
+        },
+        {
+          target: "thread:/v1/group/Room%2FOne/Topic%2FTwo",
+          conversation: { id: "Room/One", kind: "group" },
+          threadId: "Topic/Two",
+        },
+      ] as const;
+
+      for (const testCase of cases) {
+        const result = await handleAction({
+          channel: "qa-channel",
+          action: "send",
+          cfg,
+          accountId: "default",
+          params: {
+            target: testCase.target,
+            message: "versioned target",
+          },
+        });
+        expect(extractToolPayload(result)).toMatchObject({
+          message: {
+            conversation: testCase.conversation,
+            text: "versioned target",
+            threadId: testCase.threadId,
+          },
+        });
+      }
+    } finally {
+      await bus.stop();
+    }
+  });
+
   it("keeps the shipped thread and edit aliases for direct API callers", async () => {
     installQaChannelTestRegistry();
     const state = createQaBusState();

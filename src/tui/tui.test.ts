@@ -3,7 +3,6 @@ import { EventEmitter } from "node:events";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
@@ -380,7 +379,7 @@ describe("resolveInitialTuiAgentId", () => {
 
   it("keeps an ownerless explicit fleet selection-required", () => {
     expect(() => resolveInitialTuiAgentId({ cfg, cwd: "/var/tmp/unrelated" })).toThrow(
-      AgentSelectionRequiredError,
+      "Multiple agents are configured, but TUI startup has no explicit owner. Pass an agent-scoped --session key (e.g., 'openclaw tui --session agent:agentname:main').",
     );
   });
 
@@ -984,13 +983,13 @@ describe("TUI shutdown safety", () => {
     vi.useFakeTimers();
     const calls: string[] = [];
     const forceExit = vi.fn();
+    const recordPhase = (phase: string) => async () => {
+      calls.push(phase);
+    };
     beginTestShutdown({
-      stopClient: async () => {
-        calls.push("client");
-      },
-      stopTui: async () => {
-        calls.push("tui");
-      },
+      stopCommandScopes: recordPhase("scopes"),
+      stopClient: recordPhase("client"),
+      stopTui: recordPhase("tui"),
       disposeStatus: () => {
         calls.push("status");
       },
@@ -1001,7 +1000,7 @@ describe("TUI shutdown safety", () => {
     });
 
     await vi.advanceTimersByTimeAsync(0);
-    expect(calls).toEqual(["status", "client", "tui", "status", "finish"]);
+    expect(calls).toEqual(["status", "scopes", "client", "tui", "status", "finish"]);
     expect(forceExit).not.toHaveBeenCalled();
   });
 
@@ -1017,7 +1016,6 @@ describe("TUI shutdown safety", () => {
           finishTuiStop = resolve;
         }),
     );
-    const clearTimeoutFn = vi.fn();
     const requestFinish = vi.fn(() => calls.push("finish"));
     const onError = vi.fn((error: unknown) => {
       calls.push("error");
@@ -1033,31 +1031,34 @@ describe("TUI shutdown safety", () => {
       requestFinish,
       onError,
       keepHardExitArmed: false,
-      clearTimeoutFn,
     });
 
     await vi.advanceTimersByTimeAsync(0);
     expect(calls).toEqual(["client", "tui"]);
-    expect(clearTimeoutFn).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(1);
     expect(requestFinish).not.toHaveBeenCalled();
 
     finishTuiStop?.();
     await vi.advanceTimersByTimeAsync(0);
     expect(calls).toEqual(["client", "tui", "error", "finish"]);
     expect(stopTui).toHaveBeenCalledOnce();
-    expect(clearTimeoutFn).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
     expect(onError).toHaveBeenCalledOnce();
     expect(requestFinish).toHaveBeenCalledOnce();
   });
 
   it("reports transport and terminal shutdown errors in phase order", async () => {
     vi.useFakeTimers();
+    const scopeError = new Error("command scope stop failed");
     const transportError = new Error("transport stop failed");
     const terminalError = new Error("terminal stop failed");
     const onError = vi.fn();
     const requestFinish = vi.fn();
 
     beginTestShutdown({
+      stopCommandScopes: async () => {
+        throw scopeError;
+      },
       stopClient: async () => {
         throw transportError;
       },
@@ -1072,7 +1073,7 @@ describe("TUI shutdown safety", () => {
     expect(onError).toHaveBeenCalledOnce();
     const error = onError.mock.calls[0]?.[0];
     expect(error).toBeInstanceOf(AggregateError);
-    expect((error as AggregateError).errors).toEqual([transportError, terminalError]);
+    expect((error as AggregateError).errors).toEqual([scopeError, transportError, terminalError]);
     expect(requestFinish).toHaveBeenCalledOnce();
   });
 
@@ -1090,34 +1091,29 @@ describe("TUI shutdown safety", () => {
   });
 
   it("does not keep a clean standalone TUI alive for the watchdog deadline", () => {
-    const unref = vi.fn();
-    const setTimeoutFn = vi.fn((_callback: () => void, delayMs: number) => {
-      expect(delayMs).toBe(2000);
-      return { unref };
-    });
-    const exit = vi.fn();
-    const writeStderr = vi.fn();
-
-    scheduleProcessExitAfterTuiReturn({ setTimeoutFn, exit, writeStderr });
-
-    expect(setTimeoutFn).toHaveBeenCalledOnce();
-    expect(unref).toHaveBeenCalledOnce();
-    expect(writeStderr).not.toHaveBeenCalled();
-    expect(exit).not.toHaveBeenCalled();
+    const timer = scheduleProcessExitAfterTuiReturn();
+    try {
+      expect(timer.hasRef()).toBe(false);
+    } finally {
+      clearTimeout(timer);
+    }
   });
 
-  it("forces standalone TUI exit on deadline while another handle lingers", async () => {
+  it("forces standalone TUI exit on deadline while another handle lingers", () => {
     vi.useFakeTimers();
     const lingeringHandle = setInterval(() => {}, 60_000);
-    const exit = vi.fn();
-    const writeStderr = vi.fn();
+    const exited = new Error("process exited");
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw exited;
+    });
+    const writeStderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
 
-    const timer = scheduleProcessExitAfterTuiReturn({ exit, writeStderr });
+    const timer = scheduleProcessExitAfterTuiReturn();
 
-    expect((timer as NodeJS.Timeout).hasRef()).toBe(false);
-    await vi.advanceTimersByTimeAsync(1999);
+    expect(timer.hasRef()).toBe(false);
+    vi.advanceTimersByTime(1999);
     expect(exit).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
+    expect(() => vi.advanceTimersByTime(1)).toThrow(exited);
     expect(writeStderr).toHaveBeenCalledWith("openclaw tui forcing process exit after return\n");
     expect(exit).toHaveBeenCalledWith(0);
     clearInterval(lingeringHandle);

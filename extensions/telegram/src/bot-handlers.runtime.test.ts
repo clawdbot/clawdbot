@@ -32,6 +32,7 @@ describe("registerTelegramHandlers", () => {
     registerTelegramHandlers(params);
 
     expect(on.mock.calls.map(([trigger]) => trigger)).toEqual([
+      "my_chat_member",
       "message_reaction",
       "poll",
       "poll_answer",

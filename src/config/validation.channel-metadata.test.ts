@@ -3,18 +3,17 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "./validation.js";
 
 const mockLoadPluginManifestRegistry = vi.hoisted(() =>
-  vi.fn(
-    (): PluginManifestRegistry => ({
-      diagnostics: [],
-      plugins: [],
-    }),
-  ),
+  vi.fn((): PluginManifestRegistry => ({
+    diagnostics: [],
+    plugins: [],
+  })),
 );
 
 function createTelegramSchemaRegistry(): PluginManifestRegistry {
@@ -250,7 +249,8 @@ vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: () => mockLoadPluginManifestRegistry(),
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
   loadPluginMetadataSnapshot: () => ({
     manifestRegistry: mockLoadPluginManifestRegistry(),
   }),
@@ -260,6 +260,7 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
 }));
 
 vi.mock("../plugins/doctor-contract-registry.js", () => ({
+  collectDoctorConfigRepairPluginIds: () => [],
   collectRelevantDoctorPluginIds: () => [],
   listPluginDoctorLegacyConfigRules: () => [],
   applyPluginDoctorCompatibilityMigrations: () => ({ next: null, changes: [] }),
@@ -290,7 +291,8 @@ function setupPluginSchemaWithRequiredDefault() {
 }
 
 beforeEach(() => {
-  mockLoadPluginManifestRegistry.mockClear();
+  clearPluginMetadataLifecycleCaches();
+  mockLoadPluginManifestRegistry.mockReset().mockReturnValue({ diagnostics: [], plugins: [] });
 });
 
 describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)", () => {
@@ -333,6 +335,35 @@ describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)
       expect(result.config.channels?.discord?.accounts?.work?.agentComponents?.ttlMs).toBe(60_000);
     }
   });
+
+  it.each([
+    ["feishu", "allowlist", "allowlist_quote"],
+    ["mattermost", "allowlist_quote", "all"],
+  ] as const)(
+    "accepts %s contextVisibility at channel and account scope",
+    (channelId, channelMode, accountMode) => {
+      const result = validateConfigObjectWithPlugins({
+        channels: {
+          [channelId]: {
+            contextVisibility: channelMode,
+            accounts: { work: { contextVisibility: accountMode } },
+          },
+        },
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        config: {
+          channels: {
+            [channelId]: {
+              contextVisibility: channelMode,
+              accounts: { work: { contextVisibility: accountMode } },
+            },
+          },
+        },
+      });
+    },
+  );
 
   it('warns on Mattermost dmPolicy="open" without wildcard allowFrom', () => {
     const result = validateConfigObjectWithPlugins({

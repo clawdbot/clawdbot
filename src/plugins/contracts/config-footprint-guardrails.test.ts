@@ -188,7 +188,7 @@ describe("config footprint guardrails", () => {
     );
   });
 
-  it("keeps current channel schemas plugin-owned", () => {
+  it("keeps current channel schemas plugin-owned behind shipped compatibility exports", () => {
     const source = readSource("src/plugin-sdk/channel-config-schema.ts");
     const bundledSource = readSource("src/plugin-sdk/bundled-channel-config-schema.ts");
     const bundledSection = bundledSource.slice(
@@ -215,8 +215,12 @@ describe("config footprint guardrails", () => {
     ].toSorted((left, right) => left.localeCompare(right));
 
     expect(exportedSchemaNames).toEqual([
+      "DiscordConfigSchema",
       "GoogleChatConfigSchema",
       "IMessageConfigSchema",
+      "MSTeamsConfigSchema",
+      "SignalConfigSchema",
+      "SlackConfigSchema",
       "TelegramConfigSchema",
       "WhatsAppConfigSchema",
     ]);
@@ -245,8 +249,8 @@ describe("config footprint guardrails", () => {
     // channel-config-schema is the canonical internal module; the primitives
     // and bundled shells stay export-compatible for plugins only.
     const allowedShellImporters = new Set([
-      // The facade's focused regression tests are its only internal consumers.
-      "src/plugin-sdk/bundled-channel-config-schema.test.ts",
+      // The compatibility test exercises the shipped facade exports.
+      "src/plugin-sdk/shipped-channel-compat.test.ts",
       // This guardrail file embeds facade specifiers in shell-shape assertions.
       "src/plugins/contracts/config-footprint-guardrails.test.ts",
     ]);

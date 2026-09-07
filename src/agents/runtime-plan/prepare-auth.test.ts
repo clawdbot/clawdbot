@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { AuthProfileStore } from "../auth-profiles.js";
 import { resolveAgentHarnessPreparedAuthSupport } from "../harness/support.js";
 import { getApiKeyForModelCore } from "../model-auth.js";
@@ -15,6 +16,7 @@ import {
 // coverage; keep those runtimes out of this focused planner test.
 vi.mock("../../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: () => undefined,
+  resolveProviderDeprecatedAuthProfileIds: () => [],
   resolveProviderSyntheticAuthWithPlugin: () => undefined,
   shouldDeferProviderSyntheticProfileAuthWithPlugin: () => undefined,
 }));
@@ -130,15 +132,15 @@ describe("prepareAgentRuntimeAuthPlan", () => {
       modelId: "model",
       env: {},
       authProfileStore: authStore({}),
-      metadataSnapshot: {
+      metadataSnapshot: createPluginMetadataSnapshotFixture({
         plugins: [
           {
             id: "alias-owner",
             origin: "bundled",
             providerAuthAliases: { "legacy-provider": "canonical-provider" },
-          } as never,
+          },
         ],
-      },
+      }),
     });
 
     expect(plan.providerForAuth).toBe("canonical-provider");
@@ -229,6 +231,11 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     expect(plan.forwardedAuthProfileId).toBeUndefined();
     expect(plan.forwardedAuthProfileCandidateIds).toBeUndefined();
     expect(plan.selectedAuthMode).toBe("aws-sdk");
+    expect(plan.credentialSource).toEqual({
+      kind: "direct",
+      evidence: "aws-sdk",
+      authorization: "declared",
+    });
     expect(plan.modelRoute).toBeUndefined();
   });
 
@@ -443,6 +450,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
       requestTransportOverrides: "none",
       runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
     });
+    expect(plan.credentialSource).toBeUndefined();
     expect(resolveAgentHarnessPreparedAuthSupport({ plan })).toEqual({ source: "harness" });
   });
 
@@ -511,28 +519,33 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     ).toThrow(/temporarily unavailable/u);
   });
 
-  it("does not bypass an all-cooldown auth order through direct provider auth", () => {
-    expect(() =>
-      prepareAgentRuntimeAuthPlan({
-        ...openAIPlatformAuthFixture(),
-        config: {
-          models: {
-            providers: {
-              openai: {
-                apiKey: { source: "env", provider: "default", id: "DIRECT_OPENAI_KEY" },
-                baseUrl: "",
-                models: [],
-              },
+  it("keeps an explicit provider SecretRef ahead of an all-cooldown auth order", () => {
+    const plan = prepareAgentRuntimeAuthPlan({
+      ...openAIPlatformAuthFixture(),
+      config: {
+        models: {
+          providers: {
+            openai: {
+              apiKey: { source: "env", provider: "default", id: "DIRECT_OPENAI_KEY" },
+              baseUrl: "",
+              models: [],
             },
           },
-          secrets: { providers: { default: { source: "env" } } },
-        } as OpenClawConfig,
-        env: { DIRECT_OPENAI_KEY: "sk-direct" },
-        harnessId: "codex",
-        harnessRuntime: "codex",
-        authProfileStore: allCooldownOpenAIStore(),
-      }),
-    ).toThrow(/temporarily unavailable/u);
+        },
+        secrets: { providers: { default: { source: "env" } } },
+      } as OpenClawConfig,
+      env: { DIRECT_OPENAI_KEY: "sk-direct" },
+      harnessId: "codex",
+      harnessRuntime: "codex",
+      authProfileStore: allCooldownOpenAIStore(),
+    });
+
+    expect(plan.forwardedAuthProfileId).toBeUndefined();
+    expect(plan.credentialSource).toEqual({
+      kind: "direct",
+      evidence: "environment",
+      authorization: "declared",
+    });
   });
 
   it("does not let clear OAuth auth hide a cooldown Platform tier before literal fallback", () => {
@@ -783,43 +796,48 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     });
   });
 
-  it("rejects an all-invalid auth order before configured direct auth", () => {
-    expect(() =>
-      prepareAgentRuntimeAuthPlan({
-        ...openAIPlatformAuthFixture(),
-        config: {
-          auth: { order: { openai: ["openai:ordered"] } },
-          secrets: {
-            providers: {
-              default: { source: "env" },
-              vault: { source: "file", path: "/tmp/secrets.json", mode: "json" },
+  it("keeps an explicit provider SecretRef ahead of an all-invalid auth order", () => {
+    const plan = prepareAgentRuntimeAuthPlan({
+      ...openAIPlatformAuthFixture(),
+      config: {
+        auth: { order: { openai: ["openai:ordered"] } },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+            vault: { source: "file", path: "/tmp/secrets.json", mode: "json" },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              apiKey: { source: "env", provider: "default", id: "DIRECT_OPENAI_KEY" },
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
             },
           },
-          models: {
-            providers: {
-              openai: {
-                apiKey: { source: "env", provider: "default", id: "DIRECT_OPENAI_KEY" },
-                baseUrl: "https://api.openai.com/v1",
-                models: [],
-              },
-            },
+        },
+      } as OpenClawConfig,
+      env: { DIRECT_OPENAI_KEY: "sk-direct" },
+      harnessId: "codex",
+      harnessRuntime: "codex",
+      authProfileStore: authStore(
+        {
+          "openai:ordered": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "env", provider: "vault", id: "ORDERED_OPENAI_KEY" },
           },
-        } as OpenClawConfig,
-        env: { DIRECT_OPENAI_KEY: "sk-direct" },
-        harnessId: "codex",
-        harnessRuntime: "codex",
-        authProfileStore: authStore(
-          {
-            "openai:ordered": {
-              type: "api_key",
-              provider: "openai",
-              keyRef: { source: "env", provider: "vault", id: "ORDERED_OPENAI_KEY" },
-            },
-          },
-          { openai: ["openai:ordered"] },
-        ),
-      }),
-    ).toThrow(/explicit auth order.*no usable profiles/iu);
+        },
+        { openai: ["openai:ordered"] },
+      ),
+    });
+
+    expect(plan.forwardedAuthProfileId).toBeUndefined();
+    expect(plan.credentialSource).toEqual({
+      kind: "direct",
+      evidence: "environment",
+      authorization: "declared",
+    });
   });
 
   it("does not cross to an incompatible auth route for a user pin", () => {
@@ -1225,6 +1243,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
         allowAuthProfileFallback: attempt.allowAuthProfileFallback,
         requiresPriorProfileAttempt: attempt.requiresPriorProfileAttempt,
         forwardedAuthProfileId: attempt.plan.forwardedAuthProfileId,
+        credentialSource: attempt.plan.credentialSource,
       })),
     ).toEqual([
       {
@@ -1233,6 +1252,7 @@ describe("prepareAgentRuntimeAuthPlan", () => {
         allowAuthProfileFallback: undefined,
         requiresPriorProfileAttempt: undefined,
         forwardedAuthProfileId: "openai:platform-backup",
+        credentialSource: { kind: "profile" },
       },
       {
         kind: "direct",
@@ -1240,6 +1260,11 @@ describe("prepareAgentRuntimeAuthPlan", () => {
         allowAuthProfileFallback: false,
         requiresPriorProfileAttempt: true,
         forwardedAuthProfileId: undefined,
+        credentialSource: {
+          kind: "direct",
+          evidence: "provider-config",
+          authorization: "declared",
+        },
       },
     ]);
     expect(prepared.attempts[1]?.plan).toMatchObject({
@@ -1348,6 +1373,11 @@ describe("prepareAgentRuntimeAuthPlan", () => {
 
     expect(prepared.attempts).toMatchObject([{ kind: "direct" }]);
     expect(prepared.attempts.some((attempt) => attempt.kind === "profile")).toBe(false);
+    expect(prepared.plan.credentialSource).toEqual({
+      kind: "direct",
+      evidence: "environment",
+      authorization: "ambient",
+    });
   });
 
   // Declared apiKey material keeps normal direct-source standing, so the
@@ -1366,6 +1396,48 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     });
 
     expect(prepared.attempts).toMatchObject([{ kind: "direct" }]);
+    expect(prepared.plan.credentialSource).toEqual({
+      kind: "direct",
+      evidence: "provider-config",
+      authorization: "declared",
+    });
+  });
+
+  it("reports a local provider marker as synthetic auth", () => {
+    const prepared = prepareAgentRuntimeAuth({
+      provider: "ollama-remote",
+      modelId: "qwen3.5:27b",
+      config: {
+        models: {
+          providers: {
+            "ollama-remote": {
+              api: "ollama",
+              apiKey: "ollama-local",
+              baseUrl: "http://192.168.178.122:11434",
+              models: [
+                {
+                  id: "qwen3.5:27b",
+                  name: "Qwen 3.5 27B",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 8_192,
+                  maxTokens: 4_096,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      env: {},
+      authProfileStore: authStore({}),
+    });
+
+    expect(prepared.plan.credentialSource).toEqual({
+      kind: "direct",
+      evidence: "synthetic",
+      authorization: "declared",
+    });
   });
 
   // An environment credential named nowhere in config is not an authorized
@@ -1454,6 +1526,11 @@ describe("prepareAgentRuntimeAuthPlan", () => {
       expect(prepared.plan).toMatchObject({
         forwardedAuthProfileId: undefined,
         selectedAuthMode: "api-key",
+        credentialSource: {
+          kind: "direct",
+          evidence: "environment",
+          authorization: "declared",
+        },
         modelRoute: {
           api: "openai-responses",
           baseUrl: "https://api.openai.com/v1",
@@ -1486,12 +1563,16 @@ describe("prepareAgentRuntimeAuthPlan", () => {
         mode: "api-key",
       });
       expect(resolved.profileId).toBeUndefined();
+      expect(JSON.stringify(prepared.plan.credentialSource)).not.toContain(
+        "secret-ref-platform-key",
+      );
+      expect(JSON.stringify(prepared.plan.credentialSource)).not.toContain("OPENAI_PLATFORM_KEY");
     } finally {
       vi.unstubAllEnvs();
     }
   });
 
-  it("keeps a provider apiKey SecretRef after API-key-compatible profiles", () => {
+  it("keeps a provider apiKey SecretRef ahead of API-key-compatible profiles", () => {
     const prepared = prepareAgentRuntimeAuth({
       ...openAIChatGptAuthFixture(),
       config: {
@@ -1525,19 +1606,18 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     });
 
     expect(prepared.plan).toMatchObject({
-      forwardedAuthProfileId: "openai:platform",
-      selectedAuthMode: "api_key",
+      forwardedAuthProfileId: undefined,
+      selectedAuthMode: "api-key",
       modelRoute: {
         api: "openai-responses",
         authRequirement: "api-key",
       },
     });
     expect(prepared.attempts).toMatchObject([
-      { kind: "profile", profileId: "openai:platform" },
       {
         kind: "direct",
         allowAuthProfileFallback: false,
-        requiresPriorProfileAttempt: true,
+        requiresPriorProfileAttempt: false,
       },
     ]);
   });

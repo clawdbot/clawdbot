@@ -1,4 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { performance } from "node:perf_hooks";
+import { createDeferredCore } from "./deferred.js";
 import { resolveGlobalSingleton } from "./global-singleton.js";
 
 /** Pending exclusive store write plus the promise hooks for its caller. */
@@ -13,8 +15,6 @@ type StoreWriterTask = {
 
 /** Per-store-path FIFO queue that serializes file writes within one process. */
 export type StoreWriterQueue = {
-  /** True while a drain loop owns this queue. */
-  running: boolean;
   /** Writes waiting behind the active drain. */
   pending: StoreWriterTask[];
   /** Active drain promise, reused by waiters until the current batch settles. */
@@ -23,6 +23,9 @@ export type StoreWriterQueue = {
 
 /** Store writer queues keyed by the canonical store path. */
 type StoreWriterQueues = Map<string, StoreWriterQueue>;
+
+/** Request-owned monotonic timestamps; queued work may be rejected without entering. */
+export type StoreWriterTiming = { startedAt?: number; finishedAt?: number };
 
 type ActiveStoreWriter = {
   active: boolean;
@@ -53,11 +56,18 @@ async function runActiveStoreWriter<T>(
   queues: StoreWriterQueues,
   storePath: string,
   fn: () => Promise<T>,
+  timing?: StoreWriterTiming,
 ): Promise<T> {
   const writer = { active: true, parent: activeStoreWriters.getStore(), queues, storePath };
+  if (timing) {
+    timing.startedAt = performance.now();
+  }
   try {
     return await activeStoreWriters.run(writer, fn);
   } finally {
+    if (timing) {
+      timing.finishedAt = performance.now();
+    }
     writer.active = false;
   }
 }
@@ -70,58 +80,47 @@ function getOrCreateStoreWriterQueue(
   if (existing) {
     return existing;
   }
-  const created: StoreWriterQueue = { running: false, pending: [], drainPromise: null };
+  const created: StoreWriterQueue = { pending: [], drainPromise: null };
   queues.set(storePath, created);
   return created;
 }
 
 async function drainStoreWriterQueue(queues: StoreWriterQueues, storePath: string): Promise<void> {
   const queue = queues.get(storePath);
-  if (!queue) {
+  if (!queue || queue.drainPromise) {
     return;
   }
-  if (queue.drainPromise) {
-    await queue.drainPromise;
-    return;
-  }
-  queue.running = true;
-  queue.drainPromise = (async () => {
-    try {
-      while (queue.pending.length > 0) {
-        const task = queue.pending.shift();
-        if (!task) {
-          continue;
-        }
-        let result: unknown;
-        let failed: unknown;
-        let hasFailure = false;
-        try {
-          result = await task.fn();
-        } catch (err) {
-          hasFailure = true;
-          failed = err;
-        }
-        if (hasFailure) {
-          task.reject(failed);
-          continue;
-        }
-        task.resolve(result);
+  const drain = createDeferredCore();
+  // Publish ownership before the first writer can enqueue more work, without
+  // yielding its place to a competing lifecycle admission on an idle lane.
+  queue.drainPromise = drain.promise;
+  try {
+    while (queue.pending.length > 0) {
+      const task = queue.pending.shift();
+      if (!task) {
+        continue;
       }
-    } finally {
-      queue.running = false;
-      queue.drainPromise = null;
-      if (queue.pending.length === 0) {
-        queues.delete(storePath);
-      } else {
-        // Late enqueues after the loop drained run in a fresh microtask so this
-        // drainPromise can settle before the next writer batch starts.
-        queueMicrotask(() => {
-          void drainStoreWriterQueue(queues, storePath);
-        });
+      let result: unknown;
+      let failed: unknown;
+      let hasFailure = false;
+      try {
+        result = await task.fn();
+      } catch (err) {
+        hasFailure = true;
+        failed = err;
       }
+      if (hasFailure) {
+        task.reject(failed);
+        continue;
+      }
+      task.resolve(result);
     }
-  })();
-  await queue.drainPromise;
+  } finally {
+    queue.drainPromise = null;
+    // No enqueue can interleave with this synchronous empty-queue cleanup.
+    queues.delete(storePath);
+    drain.resolve();
+  }
 }
 
 /** Runs one store write after prior writes for the same store path have finished. */
@@ -131,6 +130,7 @@ export async function runQueuedStoreWrite<T>(params: {
   label: string;
   fn: () => Promise<T>;
   reentrant?: boolean;
+  timing?: StoreWriterTiming;
 }): Promise<T> {
   if (!params.storePath || typeof params.storePath !== "string") {
     throw new Error(
@@ -142,12 +142,31 @@ export async function runQueuedStoreWrite<T>(params: {
   // Explicit reentrancy keeps one logical read/decide/write section on the
   // active lane; ordinary async children must queue behind the current writer.
   if (params.reentrant === true && isActiveStoreWriter(params.queues, params.storePath)) {
-    return await params.fn();
+    if (params.timing) {
+      params.timing.startedAt = performance.now();
+    }
+    try {
+      return await params.fn();
+    } finally {
+      if (params.timing) {
+        params.timing.finishedAt = performance.now();
+      }
+    }
   }
+  // A queued writer retains its caller's authority, never the preceding writer's
+  // async context. The active-writer scope still belongs to actual execution.
+  const runInAsyncContext = AsyncLocalStorage.snapshot();
   const queue = getOrCreateStoreWriterQueue(params.queues, params.storePath);
   return await new Promise<T>((resolve, reject) => {
     const task: StoreWriterTask = {
-      fn: async () => await runActiveStoreWriter(params.queues, params.storePath, params.fn),
+      fn: async () =>
+        await runInAsyncContext(
+          runActiveStoreWriter,
+          params.queues,
+          params.storePath,
+          params.fn,
+          params.timing,
+        ),
       resolve: (value) => resolve(value as T),
       reject,
     };

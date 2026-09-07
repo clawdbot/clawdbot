@@ -61,12 +61,24 @@ describe("createTerminalLaunchPolicy", () => {
 
   it("applies restart-bound revocations without granting access early", () => {
     const enabled = {
-      gateway: { terminal: { enabled: true } },
+      gateway: { port: 18789, terminal: { enabled: true } },
     } as OpenClawConfig;
     const policy = createTerminalLaunchPolicy(enabled);
 
-    policy.prepareConfig(disabled, { restartPending: true });
+    policy.prepareConfig(
+      { gateway: { port: 18790, terminal: { enabled: false } } },
+      { restartPending: true },
+    );
     policy.prepareConfig(enabled, { restartPending: true });
+    expect(policy.isEnabled()).toBe(false);
+    expect(policy.resolve()).toEqual({ ok: false, block: { kind: "disabled" } });
+
+    policy.prepareConfig(
+      { gateway: { port: 18790, terminal: { enabled: true, shell: "/bin/new-shell" } } },
+      { restartPending: false },
+    );
+    policy.commitConfig();
+    policy.acceptConfig({ retireRejectedRestart: false });
     expect(policy.isEnabled()).toBe(false);
     expect(policy.resolve()).toEqual({ ok: false, block: { kind: "disabled" } });
 
@@ -138,6 +150,41 @@ describe("createTerminalLaunchPolicy", () => {
     expect(policy.resolve("alpha").ok).toBe(true);
   });
 
+  it.each(["sandboxed", "unknown-agent"] as const)(
+    "retains a pending %s restriction when hot-enabling an initially disabled terminal",
+    (kind) => {
+      const initial: OpenClawConfig = {
+        ...disabled,
+        agents: { ownership: "explicit", entries: { ops: {}, other: {} } },
+      };
+      const policy = createTerminalLaunchPolicy(initial);
+      policy.prepareConfig(
+        {
+          gateway: { ...initial.gateway, port: 18790 },
+          agents: {
+            ...initial.agents,
+            entries:
+              kind === "sandboxed"
+                ? { ops: { sandbox: { mode: "all" } }, other: {} }
+                : { other: {} },
+          },
+        },
+        { restartPending: true },
+      );
+      policy.acceptConfig({ retireRejectedRestart: false });
+      policy.prepareConfig(
+        { ...initial, gateway: { port: 18790, terminal: { enabled: true } } },
+        { restartPending: false },
+      );
+      policy.commitConfig();
+      policy.acceptConfig({ retireRejectedRestart: false });
+
+      expect(policy.isEnabled()).toBe(true);
+      expect(policy.resolve("ops")).toMatchObject({ ok: false, block: { kind } });
+      expect(policy.resolve("other").ok).toBe(true);
+    },
+  );
+
   it("keeps current launch details until a restart-bound change takes effect", () => {
     const workspace = tempDirs.make("term-policy-");
     const policy = createTerminalLaunchPolicy({
@@ -172,6 +219,49 @@ describe("createTerminalLaunchPolicy", () => {
       expect(tightened.block.kind).toBe("sandboxed");
     }
   });
+
+  it.each([false, true])(
+    "publishes shell changes only at hot commit with pending restart=%s",
+    (restartPending) => {
+      const initial: OpenClawConfig = {
+        gateway: { terminal: { enabled: true, shell: "/bin/old-shell" } },
+      };
+      const policy = createTerminalLaunchPolicy(initial);
+      const originalLaunch = policy.resolve();
+      if (restartPending) {
+        policy.prepareConfig(
+          { ...initial, gateway: { ...initial.gateway, port: 18790 } },
+          {
+            restartPending: true,
+          },
+        );
+      }
+      const nextConfig: OpenClawConfig = {
+        gateway: { terminal: { enabled: true, shell: "/bin/new-shell" } },
+      };
+      policy.prepareConfig(nextConfig, { restartPending: false });
+      expect(policy.resolve()).toMatchObject({ ok: true, plan: { shell: "/bin/old-shell" } });
+
+      policy.commitConfig();
+      expect(policy.resolve()).toMatchObject({ ok: true, plan: { shell: "/bin/new-shell" } });
+      expect(originalLaunch).toMatchObject({ ok: true, plan: { shell: "/bin/old-shell" } });
+
+      policy.prepareConfig(
+        { gateway: { terminal: { shell: "/bin/rejected-shell" } } },
+        {
+          restartPending: false,
+        },
+      );
+      policy.acceptConfig({ retireRejectedRestart: false });
+      policy.commitConfig();
+      expect(policy.resolve()).toMatchObject({ ok: true, plan: { shell: "/bin/new-shell" } });
+
+      const defaults = createTerminalLaunchPolicy({}).resolve();
+      policy.prepareConfig({}, { restartPending: false });
+      policy.commitConfig();
+      expect(policy.resolve()).toEqual(defaults);
+    },
+  );
 
   it("applies non-restart sandbox policy changes immediately", () => {
     const policy = createTerminalLaunchPolicy({
@@ -359,47 +449,48 @@ describe("createTerminalLaunchPolicy", () => {
     expect(policy.isEnabled()).toBe(false);
   });
 
-  it("does not promote a terminal setting previously ignored by reload mode", () => {
-    const disabledPolicy = createTerminalLaunchPolicy(disabled);
-    disabledPolicy.prepareConfig(
-      {
-        gateway: { terminal: { enabled: true } },
-        agents: { defaults: { sandbox: { mode: "non-main" } } },
-      },
-      { restartPending: false },
-    );
-    disabledPolicy.commitConfig();
-    expect(disabledPolicy.isEnabled()).toBe(false);
-    expect(disabledPolicy.resolve()).toEqual({ ok: false, block: { kind: "disabled" } });
+  it.each([false, true])(
+    "commits hot enablement and keeps failed disable restrictions until commit with pending restart=%s",
+    (restartPending) => {
+      const policy = createTerminalLaunchPolicy(disabled);
+      const disabledConfig: OpenClawConfig = {
+        gateway: { ...(restartPending ? { port: 18790 } : {}), terminal: { enabled: false } },
+      };
+      const enabledConfig: OpenClawConfig = {
+        gateway: { ...disabledConfig.gateway, terminal: { enabled: true, shell: "/bin/sh" } },
+      };
+      if (restartPending) {
+        policy.prepareConfig(disabledConfig, { restartPending: true });
+        policy.acceptConfig({ retireRejectedRestart: false });
+      }
+      policy.prepareConfig(enabledConfig, { restartPending: false });
+      expect(policy.isEnabled()).toBe(false);
+      expect(policy.resolve()).toEqual({ ok: false, block: { kind: "disabled" } });
 
-    const enabledPolicy = createTerminalLaunchPolicy({
-      gateway: { terminal: { enabled: true, shell: "/bin/current-shell" } },
-    });
-    enabledPolicy.prepareConfig(
-      {
-        gateway: { terminal: { enabled: false, shell: "/bin/ignored-shell" } },
-        agents: { defaults: { sandbox: { mode: "non-main" } } },
-      },
-      { restartPending: false },
-    );
-    enabledPolicy.commitConfig();
-    expect(enabledPolicy.isEnabled()).toBe(true);
-    const resolved = enabledPolicy.resolve();
-    expect(resolved.ok).toBe(true);
-    if (resolved.ok) {
-      expect(resolved.plan.shell).toBe("/bin/current-shell");
-    }
+      policy.commitConfig();
+      policy.acceptConfig({ retireRejectedRestart: false });
+      expect(policy.isEnabled()).toBe(true);
+      expect(policy.resolve()).toMatchObject({ ok: true, plan: { shell: "/bin/sh" } });
 
-    enabledPolicy.prepareConfig(disabled, { restartPending: true });
-    enabledPolicy.prepareConfig(
-      {
-        gateway: { terminal: { enabled: true } },
-        agents: { defaults: { sandbox: { mode: "non-main" } } },
-      },
-      { restartPending: false },
-    );
-    expect(enabledPolicy.isEnabled()).toBe(false);
-  });
+      policy.prepareConfig(disabledConfig, { restartPending: false });
+      expect(policy.isEnabled()).toBe(false);
+      expect(policy.resolve()).toEqual({ ok: false, block: { kind: "disabled" } });
+      // A failed disable cannot grant access through an uncommitted relaxation.
+      policy.prepareConfig(enabledConfig, { restartPending: false });
+      expect(policy.isEnabled()).toBe(false);
+      expect(policy.resolve()).toEqual({ ok: false, block: { kind: "disabled" } });
+      policy.commitConfig();
+      policy.acceptConfig({ retireRejectedRestart: false });
+      expect(policy.isEnabled()).toBe(true);
+      expect(policy.resolve().ok).toBe(true);
+
+      policy.prepareConfig(disabledConfig, { restartPending: false });
+      policy.commitConfig();
+      policy.acceptConfig({ retireRejectedRestart: false });
+      expect(policy.isEnabled()).toBe(false);
+      expect(policy.resolve()).toEqual({ ok: false, block: { kind: "disabled" } });
+    },
+  );
 });
 
 describe("buildTerminalEnv", () => {

@@ -13,7 +13,7 @@ import { loadPluginRegistryHandle } from "../../plugins/loader.js";
 import type { PluginChannelRegistration } from "../../plugins/registry-types.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../../plugins/runtime.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { pruneMapToMaxSize } from "../map-size.js";
 
 const MAX_BOOTSTRAP_CONFIG_GENERATIONS = 64;
@@ -94,7 +94,9 @@ export function bootstrapOutboundChannelPlugin(params: {
     return undefined;
   }
 
-  const activeRegistry = getActivePluginRegistry();
+  const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const scopedEntry = findChannelEntry(scopedRegistry ?? null, params.channel);
+  const activeRegistry = scopedEntry ? scopedRegistry : getActivePluginRegistry();
   const activeSendRegistry = resolveSendCapableRegistry(activeRegistry, params.channel);
   if (activeSendRegistry) {
     return activeSendRegistry;
@@ -102,20 +104,22 @@ export function bootstrapOutboundChannelPlugin(params: {
 
   // Outbound callers already know the admitted run owner. Preserve it here so
   // explicit fleets do not fall back to forbidden ambient-agent selection.
-  // Agent-less sends route through the configured ambient owner (legacy
-  // default, then systemAgent); ownerless fleets never throw — startup
+  // Agent-less sends route through the configured ambient owner (systemAgent,
+  // then the legacy default); ownerless fleets never throw — startup
   // delivery recovery runs this path — and bootstrap with global-scope
-  // plugin discovery only. normalizeAgentId never returns "", so "" is a
+  // plugin discovery only. Normalized agent ids never equal "", so "" is a
   // collision-free ownerless cache slot.
-  const agentId = params.agentId?.trim()
-    ? normalizeAgentId(params.agentId)
-    : tryResolveAmbientOwnerAgentId(cfg);
+  const agentId = tryResolveAmbientOwnerAgentId(cfg, params.agentId);
   const outcomeKey = `${agentId ?? ""}\0${params.channel}`;
-  const registries = resolveBootstrapRegistries(cfg);
-  const cachedRegistry = registries.get(outcomeKey);
-  if (cachedRegistry !== undefined) {
-    cacheBootstrapOutcome(registries, outcomeKey, cachedRegistry);
-    return resolveSendCapableRegistry(cachedRegistry, params.channel);
+  // Root-generation memoization cannot replace a selected scoped setup owner.
+  // Its activation uses the loader's own registry-handle cache instead.
+  const registries = scopedEntry ? undefined : resolveBootstrapRegistries(cfg);
+  if (registries) {
+    const cachedRegistry = registries.get(outcomeKey);
+    if (cachedRegistry !== undefined) {
+      cacheBootstrapOutcome(registries, outcomeKey, cachedRegistry);
+      return resolveSendCapableRegistry(cachedRegistry, params.channel);
+    }
   }
 
   const autoEnabled = applyPluginAutoEnable({ config: cfg });
@@ -146,6 +150,8 @@ export function bootstrapOutboundChannelPlugin(params: {
   } catch {
     // Best-effort bootstrap; the caller reports the unavailable channel.
   }
-  cacheBootstrapOutcome(registries, outcomeKey, sendRegistry ?? null);
+  if (registries) {
+    cacheBootstrapOutcome(registries, outcomeKey, sendRegistry ?? null);
+  }
   return sendRegistry;
 }

@@ -1,8 +1,19 @@
+# Shell-local operation state, never inherited freshness from the environment.
+unset PR_MAIN_SHA
+PR_MAIN_SHA=""
+
 repo_root() {
   # Resolve canonical repository root from git common-dir so wrappers work
   # the same from main checkout or any linked worktree.
   local base_dir
   local common_git_dir
+  # Anchor-exec handoff (see scripts/pr): the wrapper runs from materialized
+  # temp-dir bytes with no git context of its own; the handoff env carries the
+  # repository the run addresses.
+  if [ -n "${OPENCLAW_PR_ANCHOR_REPO_ROOT:-}" ]; then
+    (cd "$OPENCLAW_PR_ANCHOR_REPO_ROOT" && pwd)
+    return
+  fi
   base_dir="${script_parent_dir:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 
   if common_git_dir=$(git -C "$base_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
@@ -15,23 +26,17 @@ repo_root() {
 }
 
 ensure_gh_api_auth() {
-  # gh auth status fetches token scopes through REST and misreports quota
-  # failures as invalid credentials. GraphQL verifies the active local token
-  # without sending maintainers through a login that cannot restore quota.
-  if gh_plain api graphql -f 'query=query { viewer { login } }' --jq .data.viewer.login >/dev/null 2>&1; then
-    return 0
-  fi
-
-  cat >&2 <<'EOF'
-GitHub CLI auth is not usable for non-interactive API calls.
-Run `gh auth login -h github.com` (or refresh the current token) and retry.
-EOF
-  return 1
+  # Diagnose only this viewer request's budget. A pooled REST probe can describe
+  # a different credential; raw response/error text must never reach diagnostics.
+  local response exit_code=0
+  response=$(gh_plain api graphql -f 'query=query { viewer { login } }' --include 2>/dev/null) || exit_code=$?
+  printf '%s' "$response" | node "$(dirname "${BASH_SOURCE[0]}")/gh-api-preflight.mjs" "$exit_code"
 }
 
 ensure_full_pr_worktree_checkout() {
   local sparse_checkout
-  sparse_checkout=$(git config --bool core.sparseCheckout 2>/dev/null || true)
+  # An unset key (exit 1) is normal; other Git failures must not skip materialization.
+  sparse_checkout=$(git config --bool core.sparseCheckout 2>/dev/null) || [ "$?" -eq 1 ] || return 1
   if [ "$sparse_checkout" = "true" ]; then
     # Prepare gates build the whole repository. Inherited sparse settings can
     # omit tracked transitive inputs and turn healthy PRs into false failures.
@@ -47,38 +52,49 @@ refuse_review_transition() {
   return 1
 }
 
+# Foreground pipelines join Git readers and propagate failures through pipefail;
+# process substitutions can outlive a successful guard and discard reader failures.
 require_no_foreign_untracked() {
   local pr="$1"
-  local foreign=()
   local file
-  while IFS= read -r -d '' file; do
-    case "$file" in
-      .local|.local/*) ;;
-      *) foreign+=("$file") ;;
-    esac
-  done < <(git ls-files --others --exclude-standard -z)
-  [ "${#foreign[@]}" -eq 0 ] || refuse_review_transition "$pr" "untracked files are not owned by scripts/pr."
+  git ls-files --others --exclude-standard -z |
+    while IFS= read -r -d '' file; do
+      case "$file" in .local|.local/*) continue ;; esac
+      refuse_review_transition "$pr" "untracked files are not owned by scripts/pr."
+      return 1
+    done
 }
 
 require_no_ignored_transition_paths() {
   local pr="$1"
   local source="$2"
   local target="$3"
-  local file ignored
-  while IFS= read -r -d '' file; do
-    case "$file" in
-      .local|.local/*)
-        refuse_review_transition "$pr" "the journaled transition touches the reserved .local artifact namespace."
-        return 1
-        ;;
-    esac
-    if IFS= read -r -d '' ignored < <(
-      git ls-files --others --ignored --exclude-standard -z -- ":(literal)$file"
-    ); then
-      refuse_review_transition "$pr" "ignored file '$ignored' would be overwritten by the journaled transition."
+  local file
+  # Keep ls-files' literal subtree matching: check-ignore on a directory misses
+  # ignored descendants that restore would delete. Bound argv; skip empty diffs.
+  git diff --name-only --no-renames -z "$source" "$target" |
+    while IFS= read -r -d '' file; do
+      case "$file" in
+        .local|.local/*)
+          refuse_review_transition "$pr" "the journaled transition touches the reserved .local artifact namespace."
+          return 1
+          ;;
+      esac
+      printf ':(literal)%s\0' "$file"
+      # A file or symlink ancestor would also be replaced; ordinary directories
+      # may contain unrelated ignored data and must not widen the query.
+      while [[ "$file" == */* ]]; do
+        file=${file%/*}
+        if [ -L "$file" ] || { [ -e "$file" ] && [ ! -d "$file" ]; }; then
+          printf ':(literal)%s\0' "$file"
+        fi
+      done
+    done |
+    xargs -0 -r -s 32768 git ls-files --others --ignored --exclude-standard -z -- |
+    while IFS= read -r -d '' file; do
+      refuse_review_transition "$pr" "ignored file '$file' would be overwritten by the journaled transition."
       return 1
-    fi
-  done < <(git diff --name-only --no-renames -z "$source" "$target")
+    done
 }
 
 validate_review_transition_state() {
@@ -98,12 +114,13 @@ validate_review_transition_state() {
 
   # A path changed from source is owned only when its index mode and blob match target.
   local file
-  while IFS= read -r -d '' file; do
-    if ! git diff --cached --quiet "$target" -- ":(literal)$file"; then
-      refuse_review_transition "$pr" "'$file' is neither its journaled source nor target entry."
-      return 1
-    fi
-  done < <(git diff --cached --name-only --no-renames -z "$source")
+  git diff --cached --name-only --no-renames -z "$source" |
+    while IFS= read -r -d '' file; do
+      if ! git diff --cached --quiet "$target" -- ":(literal)$file"; then
+        refuse_review_transition "$pr" "'$file' is neither its journaled source nor target entry."
+        return 1
+      fi
+    done
 }
 
 write_review_transition_journal() {
@@ -144,8 +161,8 @@ recover_review_transition() {
     return 1
   }
   IFS=$'\t' read -r source target mode branch <<<"$fields"
-  if ! git cat-file -e "$source^{commit}" 2>/dev/null ||
-    ! git cat-file -e "$target^{commit}" 2>/dev/null ||
+  if ! GIT_NO_LAZY_FETCH=1 git cat-file -e "$source^{commit}" 2>/dev/null ||
+    ! GIT_NO_LAZY_FETCH=1 git cat-file -e "$target^{commit}" 2>/dev/null ||
     { [ "$mode" = "branch" ] && [ "$branch" != "temp/pr-$pr" ]; }
   then
     refuse_review_transition "$pr" "the transition journal names an invalid endpoint or branch."
@@ -153,13 +170,12 @@ recover_review_transition() {
   fi
 
   validate_review_transition_state "$pr" "$source" "$target" || return 1
-  local paths=()
-  local file
-  while IFS= read -r -d '' file; do
-    paths+=(":(literal)$file")
-  done < <(git diff --name-only --no-renames -z "$source" "$target")
-  if [ "${#paths[@]}" -gt 0 ]; then
-    git restore --source="$target" --staged --worktree -- "${paths[@]}" || return 1
+  # Completed deletions are absent from both index and target, so replay only
+  # remaining entries rather than passing already-removed paths to restore.
+  if ! git diff --cached --quiet "$target"; then
+    git diff --cached --name-only --no-renames -z "$target" |
+      git --literal-pathspecs restore --source="$target" --staged --worktree \
+        --pathspec-from-file=- --pathspec-file-nul || return 1
   fi
   if [ "$(git write-tree)" != "$(git rev-parse "$target^{tree}")" ] || ! git diff --quiet; then
     refuse_review_transition "$pr" "the tracked tree did not reach the journaled target."
@@ -205,46 +221,80 @@ checkout_pr_worktree_target() {
   recover_review_transition "$pr"
 }
 
+fetch_canonical_main() {
+  local root source git_dir refspec=refs/heads/main
+  local options=(--no-tags --refmap=)
+  if [ -n "${1:-}" ]; then
+    refspec="+$refspec:$1"
+    options+=(--no-write-fetch-head)
+  fi
+  root=$(repo_root) || return 1
+  source=$(git -C "$root" remote get-url origin) || return 1
+  git_dir=$(git rev-parse --absolute-git-dir) || return 1
+  # Resolve relative URLs at the canonical root; ignore worktree origin/refmaps.
+  # Other PRs and ordinary fetches own shared refs and the root FETCH_HEAD.
+  git -C "$root" --git-dir="$git_dir" fetch "${options[@]}" "$source" "$refspec"
+}
+
+refresh_main_snapshot() {
+  # The PR lock owns this worktree's FETCH_HEAD, not the shared origin/main ref.
+  # Capture immediately: subsequent PR-head fetches overwrite FETCH_HEAD.
+  PR_MAIN_SHA=""
+  local sha
+  fetch_canonical_main || return 1
+  sha=$(git rev-parse --verify 'FETCH_HEAD^{commit}') || return 1
+  PR_MAIN_SHA="$sha"
+}
+
 enter_worktree() {
+  # OR-list callers disable errexit throughout this function; guard required steps explicitly.
   local pr="$1"
   local reset_to_main="${2:-false}"
   local invoke_cwd
   invoke_cwd="$PWD"
   local root
-  root=$(repo_root)
+  root=$(repo_root) || return 1
 
   if [ "$invoke_cwd" != "$root" ]; then
     echo "Detected non-root invocation cwd=$invoke_cwd, using canonical root $root"
   fi
 
-  cd "$root"
-  ensure_gh_api_auth
-  git -C "$root" fetch origin main
+  cd "$root" || return 1
+  ensure_gh_api_auth || { PR_MAIN_SHA=""; return 1; }
+  # Fetch can launch helpers and mutate Git state even when it fails; leave validation first.
+  mark_pr_operation_side_effects_started || return 1
 
   # Resolve through the parent, never through the leaf: a missing directory has
   # no real path of its own, and resolving a leaf symlink would silently adopt
   # whichever worktree it aliases.
   local dir="$root/.worktrees/pr-$pr"
-  local resolved_parent resolved_dir=""
+  local resolved_parent resolved_dir="" initialized_sha=""
   resolved_parent=$(resolve_existing_dir_path "$(dirname "$dir")" 2>/dev/null || true)
   [ -z "$resolved_parent" ] || resolved_dir="$resolved_parent/pr-$pr"
 
   if [ ! -d "$dir" ] || [ -z "$resolved_dir" ] || ! worktree_is_registered "$resolved_dir"; then
     if [ -e "$dir" ] || { [ -n "$resolved_dir" ] && worktree_is_registered "$resolved_dir"; }; then
+      require_worktree_cleanup_evidence "$dir" || return 1
       echo "Pruning stale worktree registration for .worktrees/pr-$pr"
-      git -C "$root" worktree prune
-      remove_worktree_if_present "$dir"
+      git -C "$root" worktree prune || return 1
+      remove_worktree_if_present "$dir" || return 1
       [ ! -e "$dir" ] || {
         echo "Refusing scripts/pr operation for PR #$pr: $dir is not a registered worktree and could not be cleared; scripts/pr refuses to mutate the shared canonical checkout." >&2
         return 1
       }
     fi
-    # Per-PR locking makes resetting this script-owned branch namespace safe.
-    git -C "$root" worktree add "$dir" -B "temp/pr-$pr" origin/main
-    resolved_dir="$(resolve_existing_dir_path "$(dirname "$dir")")/pr-$pr"
+    # Cold bootstrap needs one extra fetch before private FETCH_HEAD exists.
+    # Initialize fully before the next network wait so interruption is retryable.
+    # The PR lock owns this existing temp branch, not shared origin/main or FETCH_HEAD.
+    PR_MAIN_SHA=""
+    fetch_canonical_main "refs/heads/temp/pr-$pr" || return 1
+    git -C "$root" worktree add -B "temp/pr-$pr" "$dir" "refs/heads/temp/pr-$pr" || return 1
+    resolved_parent=$(resolve_existing_dir_path "$(dirname "$dir")") || return 1
+    resolved_dir="$resolved_parent/pr-$pr"
+    initialized_sha=$(git -C "$dir" rev-parse --verify HEAD) || return 1
   fi
 
-  cd "$resolved_dir"
+  cd "$resolved_dir" || return 1
 
   # Containment, not repair: every mutation below runs against ambient cwd, so
   # prove Git resolves it to this worktree before any branch moves. A directory
@@ -257,11 +307,14 @@ enter_worktree() {
     return 1
   fi
 
+  [ -n "$PR_MAIN_SHA" ] || refresh_main_snapshot || return 1
   recover_review_transition "$pr" || return 1
-  ensure_full_pr_worktree_checkout
-  git fetch origin main
-  if [ "$reset_to_main" = "true" ]; then
-    checkout_pr_worktree_target "$pr" origin/main "temp/pr-$pr" || return 1
+  ensure_full_pr_worktree_checkout || return 1
+  # Explicit resets still validate foreign state, even when the seed matches.
+  # Otherwise a new temp branch needs a transition only if main moved.
+  if [ "$reset_to_main" = true ] ||
+    { [ -n "$initialized_sha" ] && [ "$initialized_sha" != "$PR_MAIN_SHA" ]; }; then
+    checkout_pr_worktree_target "$pr" "$PR_MAIN_SHA" "temp/pr-$pr" || return 1
   fi
   mkdir -p .local
 }
@@ -308,9 +361,12 @@ pr_meta_json() {
 
   actual_file_count=$(printf '%s\n' "$files" | jq -r 'length')
   if [ "$actual_file_count" -ne "$expected_file_count" ]; then
+    local repo_nwo
+    repo_nwo=$(gh_plain repo view --json nameWithOwner --jq .nameWithOwner) || return 1
+    # Pin the base repository and revalidate every page before the final head check.
     if ! files=$(
       set -o pipefail
-      gh_plain api --paginate "repos/{owner}/{repo}/pulls/$pr/files?per_page=100" |
+      gh_plain api --paginate "repos/$repo_nwo/pulls/$pr/files?per_page=100" -H 'Cache-Control: max-age=0' |
         jq -cs '
           add
           | map({
@@ -443,24 +499,16 @@ gc_pr_worktrees() {
     state=$(gh pr view "$pr" --json state --jq .state 2>/dev/null || printf 'UNKNOWN')
     case "$state" in
       MERGED|CLOSED)
-        if [ "$dry_run" = "true" ]; then
+        if ! require_worktree_cleanup_evidence "$dir"; then
+          echo "skipping $dir (merge evidence preserved)"
+        elif [ "$dry_run" = "true" ]; then
           echo "would remove $dir (PR #$pr state=$state)"
           removed=$((removed + 1))
+        elif cleanup_pr_worktree "$dir"; then
+          echo "removed $dir (PR #$pr state=$state)"
+          removed=$((removed + 1))
         else
-          remove_worktree_if_present "$dir"
-          delete_local_branch_if_safe "temp/pr-$pr"
-          delete_local_branch_if_safe "pr-$pr"
-          delete_local_branch_if_safe "pr-$pr-prep"
-          if [ ! -e "$dir" ] &&
-            ! git show-ref --verify --quiet "refs/heads/temp/pr-$pr" &&
-            ! git show-ref --verify --quiet "refs/heads/pr-$pr" &&
-            ! git show-ref --verify --quiet "refs/heads/pr-$pr-prep"
-          then
-            echo "removed $dir (PR #$pr state=$state)"
-            removed=$((removed + 1))
-          else
-            echo "skipping $dir (cleanup incomplete)"
-          fi
+          echo "skipping $dir (cleanup incomplete)"
         fi
         ;;
     esac

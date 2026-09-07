@@ -2,6 +2,7 @@
 // remote gateway auth values.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveConfigForRead } from "../config/io.read-helpers.js";
 import { setConfigResolutionFacts } from "../config/resolution-facts.js";
 import {
   resolveGatewayCredentialsFromConfig,
@@ -521,6 +522,37 @@ describe("resolveGatewayCredentialsFromConfig", () => {
       password: undefined,
     });
   });
+
+  it.each([
+    { name: "unresolved bare shorthand", authored: "$MISSING", env: {}, expected: null },
+    { name: "unresolved braced shorthand", authored: "${MISSING}", env: {}, expected: null },
+    {
+      name: "substituted braced-looking literal",
+      authored: "${SOURCE}",
+      env: { SOURCE: "${OTHER}" },
+      expected: "${OTHER}",
+    },
+    { name: "escaped template literal", authored: "$${OTHER}", env: {}, expected: "${OTHER}" },
+  ])(
+    "classifies gateway credentials from authored provenance: $name",
+    ({ authored, env, expected }) => {
+      const read = resolveConfigForRead(
+        { gateway: { auth: { mode: "token", token: authored } } },
+        env,
+      );
+      const config = read.resolvedConfigRaw as OpenClawConfig;
+      setConfigResolutionFacts(config, read.resolutionFacts);
+
+      if (expected === null) {
+        expect(() => resolveGatewayCredentialsWithEmptyEnv(config)).toThrow("gateway.auth.token");
+        return;
+      }
+      expect(resolveGatewayCredentialsWithEmptyEnv(config)).toEqual({
+        token: expected,
+        password: undefined,
+      });
+    },
+  );
 });
 
 describe("resolveGatewayCredentialsFromValues", () => {

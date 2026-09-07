@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
 import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.errors.js";
 import type {
@@ -72,8 +74,24 @@ function removeReplyDispatchRuntimeProjections(
   });
 }
 
+function replaceReplyDispatchRuntimeProjections(
+  publication: PreparedReplyDispatchPublication,
+  replacement: PreparedReplyDispatchPublication,
+  agentIds: ReadonlySet<string>,
+): PreparedReplyDispatchPublication {
+  return Object.freeze({
+    runtimes: Object.freeze(
+      [
+        ...publication.runtimes.filter((runtime) => !agentIds.has(runtime.agentId)),
+        ...replacement.runtimes,
+      ].toSorted((left, right) => left.agentId.localeCompare(right.agentId)),
+    ),
+  });
+}
+
 type PreparedReplyDispatchPublicationHost = Readonly<{
   isGatewayLifecycleActive: () => boolean;
+  getPendingOwnerPublication: (agentId: string) => Promise<unknown> | undefined;
   getPendingReplacement: () => Promise<void> | undefined;
 }>;
 
@@ -87,6 +105,14 @@ export class PreparedReplyDispatchPublicationOwner {
     this.#publication = EMPTY_REPLY_DISPATCH_PUBLICATION;
   }
 
+  advanceConfig(config: OpenClawConfig): void {
+    this.#publication = Object.freeze({
+      runtimes: Object.freeze(
+        this.#publication.runtimes.map((runtime) => Object.freeze({ ...runtime, config })),
+      ),
+    });
+  }
+
   rebuild(owners: Iterable<PreparedModelRuntimeOwner>): void {
     this.#publication = this.host.isGatewayLifecycleActive()
       ? buildReplyDispatchPublication(owners)
@@ -97,18 +123,39 @@ export class PreparedReplyDispatchPublicationOwner {
     this.#publication = removeReplyDispatchRuntimeProjections(this.#publication, agentIds);
   }
 
+  replace(owners: readonly PreparedModelRuntimeOwner[]): void {
+    const replacements = buildReplyDispatchPublication(owners);
+    this.#publication = replaceReplyDispatchRuntimeProjections(
+      this.#publication,
+      replacements,
+      new Set(replacements.runtimes.map((runtime) => runtime.agentId)),
+    );
+  }
+
   readonly load = async ({
     agentId,
+    abortSignal,
   }: {
     agentId: string;
+    abortSignal?: AbortSignal;
   }): Promise<PreparedReplyDispatchRuntime | undefined> => {
     for (;;) {
+      if (abortSignal?.aborted) {
+        throw createAbortError("Prepared reply dispatch admission aborted", {
+          cause: abortSignal.reason,
+        });
+      }
       if (!this.host.isGatewayLifecycleActive()) {
         return undefined;
       }
       const replacement = this.host.getPendingReplacement();
       if (replacement) {
-        await replacement;
+        await racePromiseWithAbortSignal(replacement, abortSignal);
+        continue;
+      }
+      const pendingOwner = this.host.getPendingOwnerPublication(agentId);
+      if (pendingOwner) {
+        await racePromiseWithAbortSignal(pendingOwner, abortSignal);
         continue;
       }
       const matches = this.#publication.runtimes.filter((runtime) => runtime.agentId === agentId);

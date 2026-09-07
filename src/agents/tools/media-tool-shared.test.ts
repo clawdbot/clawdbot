@@ -1,19 +1,25 @@
 // Shared media tool tests cover root separation, provider availability, and
 // model-registry normalization for generation/understanding tools.
+import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import {
   hasGenerationToolAvailability,
   isCapabilityProviderConfigured,
-  readBooleanToolParam,
+  loadMediaToolReferences,
+  resolveGenerateAction,
   resolveMediaToolInboundRoots,
   resolveCapabilityModelConfigForTool,
   resolveMediaToolReferenceAccess,
-  resolveModelFromRegistry,
+  resolveMediaToolSandboxConfig,
 } from "./media-tool-shared.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 // Keep media-tool-shared tests focused on root separation; channel-inbound
 // tests cover the real bundled contract loader.
@@ -44,27 +50,22 @@ function normalizeHostPath(value: string): string {
   return path.normalize(path.resolve(value));
 }
 
-function createModelRegistryStub(resolve: (provider: string, modelId: string) => unknown): {
-  calls: Array<[string, string]>;
-  registry: { find: (provider: string, modelId: string) => unknown };
-} {
-  const calls: Array<[string, string]> = [];
-  return {
-    calls,
-    registry: {
-      find(provider, modelId) {
-        calls.push([provider, modelId]);
-        return resolve(provider, modelId);
-      },
-    },
-  };
-}
+describe("resolveGenerateAction", () => {
+  it.each([
+    { name: "absent action", args: {}, expected: "generate" },
+    { name: "blank action", args: { action: "   " }, expected: "generate" },
+    { name: "non-string action", args: { action: 1 }, expected: "generate" },
+    { name: "generate action", args: { action: "generate" }, expected: "generate" },
+    { name: "normalized status action", args: { action: " STATUS " }, expected: "status" },
+    { name: "list action", args: { action: "list" }, expected: "list" },
+  ])("$name", ({ args, expected }) => {
+    expect(resolveGenerateAction(args)).toBe(expected);
+  });
 
-describe("readBooleanToolParam", () => {
-  it("parses booleans and true/false string tokens", () => {
-    expect(readBooleanToolParam({ audio: true }, "audio")).toBe(true);
-    expect(readBooleanToolParam({ audio: " FALSE " }, "audio")).toBe(false);
-    expect(readBooleanToolParam({ audio: "yes" }, "audio")).toBeUndefined();
+  it("rejects invalid actions with the ordered contract message", () => {
+    expect(() => resolveGenerateAction({ action: "invalid" })).toThrowError(
+      /^action must be "generate", "status", or "list"$/,
+    );
   });
 });
 
@@ -192,55 +193,87 @@ describe("resolveMediaToolReferenceAccess", () => {
       }),
     ).rejects.toThrow(expected);
   });
+
+  it.each(["image_generate", "video_generate", "music_generate"] as const)(
+    "loads a producer-staged bare handle for %s references",
+    async (toolName) => {
+      const root = tempDirs.make("openclaw-media-tool-staged-");
+      const stagedPath = "media/inbound/openclaw-staged-proof/input-file_upload.png";
+      const fullPath = path.join(root, stagedPath);
+      await fs.mkdir(path.dirname(fullPath), { recursive: true });
+      await fs.writeFile(
+        fullPath,
+        Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
+          "base64",
+        ),
+      );
+      const sandbox = resolveMediaToolSandboxConfig(
+        {
+          root,
+          bridge: createHostSandboxFsBridge(root),
+          stagedMediaPaths: new Map([["file_upload", stagedPath]]),
+        },
+        true,
+      );
+
+      const loaded = await loadMediaToolReferences({
+        inputs: ["file_upload"],
+        toolName,
+        expectedKind: "image",
+        sandbox,
+        workspaceDir: root,
+        maxBytes: 1024,
+        mapMedia: (media) => media.buffer,
+      });
+
+      expect(loaded).toMatchObject([
+        { resolvedInput: "file_upload", rewrittenFrom: "file_upload" },
+      ]);
+    },
+  );
 });
 
-describe("resolveModelFromRegistry", () => {
-  it("normalizes provider and model refs before registry lookup", () => {
-    const foundModel = { provider: "ollama", id: "qwen3.5:397b-cloud" };
-    const { calls, registry } = createModelRegistryStub(() => foundModel);
-
-    const result = resolveModelFromRegistry({
-      modelRegistry: registry,
-      provider: " OLLAMA ",
-      modelId: " qwen3.5:397b-cloud ",
+describe("resolveCapabilityModelConfigForTool", () => {
+  it("does not load runtime providers while resolving an explicitly configured model", () => {
+    const listProviders = vi.fn(() => {
+      throw new Error("runtime provider list should not run for explicit model config");
     });
 
-    expect(calls).toEqual([["ollama", "qwen3.5:397b-cloud"]]);
-    expect(result).toBe(foundModel);
-  });
-
-  it("reports the normalized ref when the registry lookup misses", () => {
-    const { registry } = createModelRegistryStub(() => null);
-
-    expect(() =>
-      resolveModelFromRegistry({
-        modelRegistry: registry,
-        provider: " OLLAMA ",
-        modelId: " qwen3.5:397b-cloud ",
+    expect(
+      resolveCapabilityModelConfigForTool({
+        modelConfig: { primary: "qwen/wan2.6-t2v" },
+        providers: listProviders,
       }),
-    ).toThrow("Unknown model: ollama/qwen3.5:397b-cloud");
+    ).toEqual({ primary: "qwen/wan2.6-t2v" });
+    expect(listProviders).not.toHaveBeenCalled();
   });
 
-  it("falls back to provider-prefixed custom model IDs", () => {
-    // Custom providers can store ids with provider prefixes; try both forms so
-    // callers can pass the short local model id.
-    const foundModel = { provider: "kimchi", id: "kimchi/claude-opus-4-6" };
-    const { calls, registry } = createModelRegistryStub((_, modelId) =>
-      modelId === "kimchi/claude-opus-4-6" ? foundModel : null,
-    );
-
-    const result = resolveModelFromRegistry({
-      modelRegistry: registry,
-      provider: "kimchi",
-      modelId: "claude-opus-4-6",
+  it("orders auto-detected provider defaults by canonical aliases", () => {
+    expect(
+      resolveCapabilityModelConfigForTool({
+        cfg: {
+          agents: { defaults: { model: { primary: "media-alias/gpt-5.5" } } },
+        },
+        providers: [
+          {
+            id: "fal",
+            defaultModel: "fal-ai/minimax/video-01-live",
+            isConfigured: () => true,
+          },
+          {
+            id: "openai",
+            aliases: ["media-alias"],
+            defaultModel: "sora-2",
+            isConfigured: () => true,
+          },
+        ],
+      }),
+    ).toEqual({
+      primary: "openai/sora-2",
+      fallbacks: ["fal/fal-ai/minimax/video-01-live"],
     });
-
-    expect(calls).toEqual([
-      ["kimchi", "claude-opus-4-6"],
-      ["kimchi", "kimchi/claude-opus-4-6"],
-    ]);
-    expect(result).toBe(foundModel);
-  }, 180_000);
+  });
 });
 
 describe("hasGenerationToolAvailability", () => {

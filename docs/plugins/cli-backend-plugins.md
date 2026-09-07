@@ -108,14 +108,9 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
 
   <Step title="Register the backend">
     ```typescript index.ts
-    import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-    import {
-      CLI_FRESH_WATCHDOG_DEFAULTS,
-      CLI_RESUME_WATCHDOG_DEFAULTS,
-      type CliBackendPlugin,
-    } from "openclaw/plugin-sdk/cli-backend";
+    import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 
-    function buildAcmeCliBackend(): CliBackendPlugin {
+    function buildAcmeCliBackend(): Parameters<OpenClawPluginApi["registerCliBackend"]>[0] {
       return {
         id: "acme-cli",
         liveTest: {
@@ -156,12 +151,6 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
           imageArg: "--image",
           imageMode: "repeat",
           imagePathScope: "workspace",
-          reliability: {
-            watchdog: {
-              fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
-              resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
-            },
-          },
           serialize: true,
         },
       };
@@ -188,7 +177,7 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
 
 `CliBackendConfig` describes how OpenClaw should launch and parse the CLI. The
 worked example above intentionally exercises the same command, resume, JSONL,
-model-alias, session, image, and watchdog fields as the bundled
+model-alias, session, and image fields as the bundled
 `google-gemini-cli` adapter:
 
 | Field                                                     | Use                                                                               |
@@ -215,7 +204,28 @@ model-alias, session, image, and watchdog fields as the bundled
 | `imagePathScope`                                          | Where staged image files live before handoff: `temp` or `workspace`               |
 | `serialize`                                               | Keep same-backend runs ordered                                                    |
 | `reseedFromRawTranscriptWhenUncompacted`                  | Opt in to bounded raw-transcript reseed before compaction for safe session resets |
+| `freshSessionRecovery`                                    | Fresh recovery policy after a recoverable resumed-session failure                 |
 | `reliability.watchdog`                                    | No-output timeout tuning, separate for fresh vs resumed runs                      |
+
+`claude-stream-json` is more than a parser choice: it declares that the backend's `result` records carry Claude Code's terminal semantics, including `terminal_reason`. A reply-less `result` whose `terminal_reason` is `hook_stopped`, `stop_hook_prevented`, `aborted_tools`, `aborted_streaming`, `budget_exhausted`, or `max_turns` is a recorded turn stop: OpenClaw reports that reason to the user and does not replay the turn on a fallback model, because the backend's tool actions may already have run.
+
+Omit `reliability.watchdog` to inherit the standard profiles, including the
+longer resumed-run budget for cron and explicit timeouts. Set it only when a
+backend intentionally needs its own watchdog policy.
+
+`freshSessionRecovery` is a backend-owned compatibility contract:
+
+- Leave it undefined or set it to `"replace-binding"` to preserve the legacy
+  clear-and-reseed behavior. OpenClaw clears the persisted binding and retries
+  with a fresh session when the failure is eligible for recovery.
+- Set it to `"invalidated-only"` to suppress fresh replacement unless the
+  canonical invalidation predicate proves the old session is dead. Currently,
+  only `session_expired` does so.
+
+Choose the value from the CLI or SDK session contract, not from a provider id
+or broad error class. The bundled Anthropic backend uses `"invalidated-only"`;
+its native session contract does not treat non-expiration failures as proof that the
+conversation can no longer resume.
 
 Prefer the smallest static config that matches the CLI. Add plugin callbacks
 only for behavior that really belongs to the backend.
@@ -235,27 +245,40 @@ only for behavior that really belongs to the backend.
 | `authEpochMode`                    | Decide how auth changes invalidate stored CLI sessions                      |
 | `nativeToolMode`                   | Declare whether native tools are absent, always on, or host-selectable      |
 | `toolAvailabilityEnforcement`      | Declare whether exact tool caps are enforced in argv or execution staging   |
+| `projectNativeToolAuthority`       | Map the observed native tool list to canonical capabilities for cron caps   |
 | `sideQuestionToolMode`             | Declare disabled native tools for `/btw` side questions                     |
 | `bundleMcp` / `bundleMcpMode`      | Opt into OpenClaw's loopback MCP tool bridge                                |
 | `ownsNativeCompaction`             | Backend owns its own automatic compaction - OpenClaw defers                 |
 | `manualCompaction`                 | Atomic command, transport, and positive-acknowledgement contract            |
 | `subscriptionAuthDispatch`         | Opted-in embedded runs on subscription credentials execute via this backend |
 | `runtimeArtifact`                  | Bound a script launcher to its complete bundled package tree                |
-| `liveSessionRequirement`           | Require an init capability before trusting long-lived session output        |
 
 Keep these hooks provider-owned. Do not add CLI-specific branches to core when
 a backend hook can express the behavior.
 
-`liveSessionRequirement` declares one exact capability that the CLI must
-advertise in its initialization record before OpenClaw trusts streamed output.
-It also supplies the first known compatible version, version-probe arguments,
-and update command used by setup and Doctor. Runtime support remains
-capability-based, so a compatible backport or wrapper is not rejected only
-because of its version string.
-
 `prepareExecution(ctx)` receives `ctx.contextTokenBudget`, the effective token
 limit selected for the run. Backends that own native compaction can map that
-budget into their CLI-specific launch contract.
+budget into their CLI-specific launch contract. It also receives the optional
+effective `ctx.thinkingLevel`: `off`, `minimal`, `low`, `medium`, `high`,
+`xhigh`, `adaptive`, or `max`. Use that field when the selected level must be
+applied through launch environment or staged configuration; the same field is
+available to `resolveExecutionArgs(ctx)` for native CLI flags.
+
+`prepareExecution(ctx)` may also return an optional `execute` transport when a
+backend owns the installed CLI's protocol or SDK integration. The transport
+receives the exact prepared command, arguments, optional `argv0`, environment,
+prompt, session, and tool availability; it yields the backend's existing structured
+stream records. Preserve the prepared command, `argv0`, and interpreter or script
+prefix in `args` when constructing the CLI invocation. `argv0` preserves
+the invocation name of a PATH shim. Optional `promptContext.prependContext` and `promptContext.appendContext`
+are private prompt-build additions, separate from the ordinary `prompt`. Transport
+them through the native runtime's private context mechanism; never record them as
+operator-authored input. OpenClaw's policy and observation hooks still receive the
+complete logical prompt. Native tool actions must use the provided, run-bound
+`requestToolPermission` callback rather than creating independent approval
+authority. OpenClaw retains cancellation, watchdogs, session policy, and MCP
+grant ownership. Paired-node execution and
+manual compaction continue through the existing host-managed process path.
 
 `runtimeArtifact` is plugin-owned. It is consulted
 only when a live inference turn mints or revalidates verified setup authority;
@@ -303,15 +326,35 @@ Runtime caps such as cron `toolsAllow` are normalized and group-expanded by
 OpenClaw before this contract is built. Native tools are disabled, and a
 backend without a complete declared enforcement path fails before execution.
 
-Plugins built against `v2026.7.2-beta.1` through `v2026.7.2-beta.3` may still
-read the deprecated `ctx.toolAvailability.mcp` transport-name projection and
-may omit `toolAvailabilityEnforcement` when a selectable backend implements
-`resolveExecutionArgs`. OpenClaw recognizes that shipped beta path from the
-plugin package's required `openclaw.build.openclawVersion` metadata and
-preserves it through the `2026.8.x` line. New and updated plugins should use canonical
-`ctx.toolAvailability.openClaw` names and declare
-`toolAvailabilityEnforcement: "execution-args"` explicitly; the beta
-compatibility path is scheduled for removal after that window.
+A backend whose native tools are model-callable may declare
+`projectNativeToolAuthority(nativeTools)` so that automations created from its
+sessions keep the creator's native capabilities. For Claude stream-JSON, the
+input is the parent turn's `system/init.tools` list, intersected with
+`toolAvailability.native` when a host selection exists. Managed native settings
+can remove tools after CLI argument selection, so defaults are never inferred.
+Each turn starts with pending authority: MCP discovery remains available, but
+tool calls reject visibly until initialization supplies the list. Warm turns
+cannot borrow a previous turn's snapshot. Return only canonical names from the
+core vocabulary (`read`, `write`, `edit`, `apply_patch`, `exec`, `process`,
+`web_search`, `web_fetch`), each derived from a native tool the host enforces
+through this contract. Core validates the result before updating the active
+loopback grant and again at final creator-cap capture; any other name fails the
+turn. Updating the snapshot invalidates earlier cached tool projections.
+Project only equivalent capabilities: Claude's `Glob` locates paths and
+`NotebookEdit` edits notebook cells, so neither grants general `read` or `edit`.
+The native list contains tool names, not permission-rule patterns.
+Codex native code mode projects `read` and `exec` after OpenClaw explicitly
+requests the shell and rejects managed requirements or legacy managed settings
+that disable it. The effective setting and its source are checked at each
+preflight; a user-local shell disable is overridden for native mode, while a
+managed denial rejects before capture. It never infers `write`, `edit`,
+`apply_patch`, or `process`. The pinned Codex registry has
+no shell-disabled models; a custom model that disables its shell remains an
+unobservable exception because Codex does not expose that model capability.
+
+Previously saved empty automation caps remain restricted. Recreate the job or
+explicitly edit its tools from a fresh authorized creator turn; an old empty cap
+cannot safely be distinguished from an intentional denial.
 
 ### `parseJsonlEvent`: provider-specific JSONL streams
 
@@ -326,9 +369,25 @@ may include final text, usage, an error, and a successor session id. Session ids
 reported by either event shape participate in resumed-session and fork
 persistence.
 
+Lifecycle events are intentionally separate from this return union so existing
+plugins can continue to match it exhaustively. Use `parseJsonlLifecycleEvent`
+for backend-owned lifecycle records instead.
+
 Tool events describe work the backend already performed. OpenClaw renders and
 summarizes them, but does not treat them as host tool execution, trusted
 diagnostics, loopback correlation, or message-delivery evidence.
+
+### `parseJsonlLifecycleEvent`: provider-native lifecycle records
+
+Set `parseJsonlLifecycleEvent` when a backend emits JSONL records for lifecycle
+state that is independent of assistant text, tools, sessions, and terminal
+results. The hook receives the same line and context as `parseJsonlEvent` and is
+tried first. Returning a lifecycle event consumes that line; returning `null`
+lets the source-compatible `parseJsonlEvent` hook or built-in parser handle it.
+
+The current lifecycle contract supports native compaction start and end records.
+An end record includes `completed` so channels can distinguish successful and
+incomplete compaction without inferring an outcome from later messages.
 
 ### `ownsNativeCompaction`: opting out of OpenClaw compaction
 

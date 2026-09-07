@@ -21,6 +21,7 @@ import {
   workerSshOptions,
   workerSshRemoteCommand,
 } from "./ssh.js";
+import { joinWorkerTunnelStops } from "./tunnel-contract.js";
 import {
   type WorkerSshProcess,
   type WorkerSshRunner,
@@ -105,8 +106,10 @@ export function createWorkerDesktopTunnels(deps: {
     }
   };
 
-  const fenceReplacedOwners = async (environmentId: string, ownerEpoch: number): Promise<void> => {
-    await sessions.stopSuperseded(environmentId, ownerEpoch);
+  const stopReplacedAppLaunches = async (
+    environmentId: string,
+    ownerEpoch: number,
+  ): Promise<void> => {
     const staleLaunches = [...appLaunches.values()].filter(
       (entry) => entry.environmentId === environmentId && entry.ownerEpoch < ownerEpoch,
     );
@@ -116,135 +119,132 @@ export function createWorkerDesktopTunnels(deps: {
     await Promise.allSettled(staleLaunches.map((entry) => entry.operation));
   };
 
+  const fenceReplacedOwners = async (environmentId: string, ownerEpoch: number): Promise<void> => {
+    await joinWorkerTunnelStops([
+      sessions.stopSuperseded(environmentId, ownerEpoch),
+      stopReplacedAppLaunches(environmentId, ownerEpoch),
+    ]);
+  };
+
   const createSessionHooks = (request: DesktopAcquireRequest) => {
     let prepared: PreparedWorkerSsh | undefined;
     let child: WorkerSshProcess | undefined;
-    let stoppedChild: WorkerSshProcess | undefined;
-    let startSettled = false;
 
-    const start = async (isCurrent: () => boolean): Promise<DesktopAcquireResult> => {
-      try {
-        prepared = await prepareWorkerSsh({
-          ssh: request.ssh,
-          pinnedHostKey: request.ssh.hostKey,
-          resolveIdentity: request.resolveIdentity,
-          temporaryDirectoryPrefix: "openclaw-worker-desktop-",
-        });
-        if (!isCurrent()) {
-          await prepared.dispose();
-          prepared = undefined;
-          throw new Error("Worker desktop tunnel stopped before connecting");
-        }
-        const localSocketPath = path.join(path.dirname(prepared.knownHostsPath), "desktop.sock");
-        child = deps.runner.start(
+    const start = async (
+      isCurrent: () => boolean,
+      stopOwner: () => Promise<void>,
+    ): Promise<DesktopAcquireResult> => {
+      if (!isCurrent()) {
+        throw new Error("Worker desktop tunnel stopped before connecting");
+      }
+      prepared = await prepareWorkerSsh({
+        ssh: request.ssh,
+        pinnedHostKey: request.ssh.hostKey,
+        resolveIdentity: request.resolveIdentity,
+        // macOS Unix sockets allow 103 bytes; share one short private directory with SSH credentials.
+        temporaryDirectoryPrefix: "/tmp/openclaw-worker-desktop-",
+      });
+      if (!isCurrent()) {
+        throw new Error("Worker desktop tunnel stopped before connecting");
+      }
+      const localSocketPath = path.join(path.dirname(prepared.knownHostsPath), "desktop.sock");
+      child = deps.runner.start(
+        [
+          "ssh",
+          ...workerSshOptions(prepared, { forwarding: "explicit" }),
+          "-a",
+          "-x",
+          "-T",
+          "-o",
+          "ServerAliveInterval=15",
+          "-o",
+          "ServerAliveCountMax=3",
+          "-o",
+          "StreamLocalBindMask=0177",
+          "-L",
+          `${localSocketPath}:127.0.0.1:${request.desktop.port}`,
+          "-p",
+          String(prepared.port),
+          "--",
+          prepared.sshTarget,
+          workerSshRemoteCommand(["sh", "-s"]),
+        ],
+        workerSshCommandOptions({
+          input: REMOTE_DESKTOP_READY_SCRIPT,
+          timeoutMs: Number.MAX_SAFE_INTEGER,
+        }),
+      );
+      const startedChild = child;
+      void startedChild.exited.then(() => {
+        void stopOwner();
+      });
+      await startedChild.ready;
+      if (!isCurrent()) {
+        throw new Error("Worker desktop tunnel stopped before connecting");
+      }
+      let vncPassword: string | undefined;
+      if (request.desktop.passwordFilePath) {
+        const result = await deps.runner.run(
           [
             "ssh",
-            ...workerSshOptions(prepared, { forwarding: "explicit" }),
+            ...workerSshOptions(prepared, { forwarding: "disabled" }),
             "-a",
             "-x",
             "-T",
-            "-o",
-            "ServerAliveInterval=15",
-            "-o",
-            "ServerAliveCountMax=3",
-            "-o",
-            "StreamLocalBindMask=0177",
-            "-L",
-            `${localSocketPath}:127.0.0.1:${request.desktop.port}`,
             "-p",
             String(prepared.port),
             "--",
             prepared.sshTarget,
-            workerSshRemoteCommand(["sh", "-s"]),
+            workerSshRemoteCommand(["cat", request.desktop.passwordFilePath]),
           ],
-          workerSshCommandOptions({
-            input: REMOTE_DESKTOP_READY_SCRIPT,
-            timeoutMs: Number.MAX_SAFE_INTEGER,
-          }),
+          workerSshCommandOptions({ timeoutMs: PASSWORD_READ_TIMEOUT_MS }),
         );
-        const startedChild = child;
-        void startedChild.exited.then(() => {
-          if (isCurrent()) {
-            void sessions.stop(request.environmentId, request.ownerEpoch);
-          }
-        });
-        await startedChild.ready;
-        if (!isCurrent()) {
-          await startedChild.stop();
-          throw new Error("Worker desktop tunnel stopped before connecting");
+        if (!successful(result)) {
+          throw workerSshProcessError(result.stderr || result.stdout);
         }
-        let vncPassword: string | undefined;
-        if (request.desktop.passwordFilePath) {
-          const result = await deps.runner.run(
-            [
-              "ssh",
-              ...workerSshOptions(prepared, { forwarding: "disabled" }),
-              "-a",
-              "-x",
-              "-T",
-              "-p",
-              String(prepared.port),
-              "--",
-              prepared.sshTarget,
-              workerSshRemoteCommand(["cat", request.desktop.passwordFilePath]),
-            ],
-            workerSshCommandOptions({ timeoutMs: PASSWORD_READ_TIMEOUT_MS }),
-          );
-          if (!successful(result)) {
-            throw workerSshProcessError(result.stderr || result.stdout);
-          }
-          vncPassword = result.stdout.replace(/(?:\r?\n)+$/u, "");
-          if (!vncPassword) {
-            throw new Error("Worker desktop password file is empty");
-          }
-          registerSecretValueForRedaction(vncPassword);
+        vncPassword = result.stdout.replace(/(?:\r?\n)+$/u, "");
+        if (!vncPassword) {
+          throw new Error("Worker desktop password file is empty");
         }
-        return {
-          attachment: { kind: "unix-socket", socketPath: localSocketPath },
-          ...(vncPassword ? { vncPassword } : {}),
-        };
-      } finally {
-        startSettled = true;
+        registerSecretValueForRedaction(vncPassword);
       }
+      return {
+        attachment: { kind: "unix-socket", socketPath: localSocketPath },
+        ...(vncPassword ? { vncPassword } : {}),
+      };
     };
 
-    const teardown = async (): Promise<void> => {
-      if (child && child !== stoppedChild) {
-        stoppedChild = child;
-        await child.stop().catch(() => undefined);
-      }
-      if (!startSettled) {
-        return;
-      }
-      if (child && child !== stoppedChild) {
-        stoppedChild = child;
-        await child?.stop().catch(() => undefined);
-      }
-      await prepared?.dispose().catch(() => undefined);
-      prepared = undefined;
+    return {
+      start,
+      teardown: async () => {
+        await child?.stop();
+      },
+      dispose: async () => {
+        await prepared?.dispose();
+      },
     };
-
-    return { start, teardown };
   };
 
   async function acquire(request: DesktopAcquireRequest): Promise<DesktopAcquireResult> {
     if (platform === "win32") {
       throw new WorkerDesktopUnsupportedError();
     }
-    const ownerAdvanced = claimOwnerEpoch(request.environmentId, request.ownerEpoch);
-    if (ownerAdvanced) {
-      await fenceReplacedOwners(request.environmentId, request.ownerEpoch);
-    }
-    if (!sessions.isOwnerEpochCurrent(request.environmentId, request.ownerEpoch)) {
-      throw new Error("Worker desktop owner epoch is stale");
-    }
     const hooks = createSessionHooks(request);
     try {
-      return await sessions.acquire({
+      claimOwnerEpoch(request.environmentId, request.ownerEpoch);
+      // Register before abort callbacks can reenter Stop; the registry defers source startup.
+      const acquiring = sessions.acquire({
         sourceKey: request.environmentId,
         ownerEpoch: request.ownerEpoch,
         ...hooks,
+        start: async (isCurrent, stopOwner) => {
+          await fencing;
+          return await hooks.start(isCurrent, stopOwner);
+        },
       });
+      const fencing = stopReplacedAppLaunches(request.environmentId, request.ownerEpoch);
+      await joinWorkerTunnelStops([acquiring.then(() => undefined), fencing]);
+      return await acquiring;
     } catch (error) {
       if (error instanceof DesktopSessionStaleOwnerError) {
         throw new Error("Worker desktop owner epoch is stale", { cause: error });
@@ -367,7 +367,7 @@ export function createWorkerDesktopTunnels(deps: {
   }
 
   async function stop(environmentId: string, ownerEpoch?: number): Promise<void> {
-    await Promise.all([
+    await joinWorkerTunnelStops([
       sessions.stop(environmentId, ownerEpoch),
       stopAppLaunches(environmentId, ownerEpoch),
     ]);
@@ -377,7 +377,7 @@ export function createWorkerDesktopTunnels(deps: {
     for (const entry of appLaunches.values()) {
       entry.abortController.abort(new Error("Worker desktop app launcher stopped"));
     }
-    await Promise.all([
+    await joinWorkerTunnelStops([
       sessions.stopAll(),
       ...[...appLaunches.values()].map((entry) => entry.operation.catch(() => undefined)),
     ]);

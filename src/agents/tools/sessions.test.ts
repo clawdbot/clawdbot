@@ -18,7 +18,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { extractStoredAssistantText, sanitizeTextContent } from "./chat-history-text.js";
+import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { extractStoredAssistantText } from "./chat-history-text.js";
 
 const callGatewayMock = vi.fn();
 const inProcessGatewayRequestMock = vi.fn((opts: unknown) => callGatewayMock(opts));
@@ -283,6 +284,7 @@ async function executeFireAndForgetA2AFrom(
     bindingTeamId?: string;
   },
 ) {
+  setActivePluginRegistry(createSessionConversationTestRegistry());
   const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
   vi.mocked(runSessionsSendA2AFlow).mockClear();
   const targetSessionKey = "agent:other:discord:group:ops";
@@ -346,9 +348,6 @@ async function executeFireAndForgetA2AFrom(
         sessions: [{ key: targetSessionKey, kind: "group" }],
       };
     }
-    if (request.method === "chat.history") {
-      return { messages: [] };
-    }
     if (request.method === "agent") {
       return { runId: "run-fire-and-forget", acceptedAt: 123 };
     }
@@ -368,10 +367,9 @@ async function executeFireAndForgetA2AFrom(
   expect(requireDetails(result).status).toBe("accepted");
   expect(recordParticipantMock).toHaveBeenCalledWith(
     expect.objectContaining({
-      actor: { type: "agent", id: "main" },
+      identity: { type: "agent", id: "main" },
       agentId: "other",
       sessionKey: targetSessionKey,
-      source: "agent",
     }),
   );
   const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
@@ -381,13 +379,13 @@ async function executeFireAndForgetA2AFrom(
   return flowParams;
 }
 
-describe("sanitizeTextContent", () => {
+describe("extractStoredAssistantText sanitization", () => {
   it("strips minimax tool call XML and downgraded markers", () => {
     // Session recall should not replay provider/tool markup as assistant text.
     const input =
       'Hello <invoke name="tool">payload</invoke></minimax:tool_call> ' +
       "[Tool Call: foo (ID: 1)] world";
-    const result = sanitizeTextContent(input).trim();
+    const result = extractStoredAssistantText({ role: "assistant", content: input })?.trim();
     expect(result).toBe("Hello  world");
     expect(result).not.toContain("invoke");
     expect(result).not.toContain("Tool Call");
@@ -395,14 +393,14 @@ describe("sanitizeTextContent", () => {
 
   it("strips tool_result XML via the shared assistant-visible sanitizer", () => {
     const input = 'Prefix\n<tool_result>{"output":"hidden"}</tool_result>\nSuffix';
-    const result = sanitizeTextContent(input).trim();
+    const result = extractStoredAssistantText({ role: "assistant", content: input })?.trim();
     expect(result).toBe("Prefix\n\nSuffix");
     expect(result).not.toContain("tool_result");
   });
 
   it("strips thinking tags", () => {
     const input = "Before <think>secret</think> after";
-    const result = sanitizeTextContent(input).trim();
+    const result = extractStoredAssistantText({ role: "assistant", content: input })?.trim();
     expect(result).toBe("Before  after");
   });
 });
@@ -1017,6 +1015,36 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { name: "canonical message", args: { message: "    indented body" } },
+    { name: "formatted text alias", args: { text: "Thinking\n_summary_\n    indented body" } },
+    { name: "snake-case alias", args: { send_message: "    indented body" } },
+    { name: "blank earlier alias", args: { SendMessage: " \n\t ", text: "    indented body" } },
+  ])("forwards substantive indentation through $name", async ({ args }) => {
+    callGatewayMock.mockResolvedValue({ runId: "body-whitespace" });
+    const result = await createMainSessionsSendTool().execute("body-whitespace", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      timeoutSeconds: 0,
+      ...args,
+    });
+    expect(requireDetails(result).status).toBe("accepted");
+    const call = callGatewayMock.mock.calls.find(([request]) => request.method === "agent");
+    const request = requireRecord(call?.[0], "agent request");
+    const forwarded = requireRecord(request.params, "agent params");
+    expect(forwarded.message).toMatch(/\n {4}indented body$/u);
+  });
+
+  it.each(["", " \n\t "])("rejects blank message %j before forwarding", async (message) => {
+    await expect(
+      createMainSessionsSendTool().execute("blank-body", {
+        sessionKey: MAIN_AGENT_SESSION_KEY,
+        message,
+        timeoutSeconds: 0,
+      }),
+    ).rejects.toThrow("message required");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it.each([1.5, -1, "1sec"])("rejects invalid timeoutSeconds value %s", async (timeoutSeconds) => {
     const tool = createMainSessionsSendTool();
 
@@ -1171,6 +1199,7 @@ describe("sessions_send gating", () => {
       expect(requireDetails(result)).toMatchObject({
         status: "accepted",
         sessionKey: targetSessionKey,
+        targetDisposition: "queued",
         delivery: { status: "skipped", mode: "announce" },
         watched: false,
       });
@@ -1294,6 +1323,7 @@ describe("sessions_send gating", () => {
   });
 
   it("rejects direct thread session targets before dispatching an agent run", async () => {
+    setActivePluginRegistry(createSessionConversationTestRegistry());
     loadConfigMock.mockReturnValue({
       session: { scope: "per-sender", mainKey: "main" },
       tools: {
@@ -1361,6 +1391,7 @@ describe("sessions_send gating", () => {
   });
 
   it("rejects label targets that resolve to canonical thread sessions", async () => {
+    setActivePluginRegistry(createSessionConversationTestRegistry());
     loadConfigMock.mockReturnValue({
       session: { scope: "per-sender", mainKey: "main" },
       tools: {
@@ -1390,6 +1421,7 @@ describe("sessions_send gating", () => {
   });
 
   it("does not disclose a resolved thread session key from a sessionId target", async () => {
+    setActivePluginRegistry(createSessionConversationTestRegistry());
     loadConfigMock.mockReturnValue({
       session: { scope: "per-sender", mainKey: "main" },
       tools: {
@@ -1477,12 +1509,6 @@ describe("sessions_send gating", () => {
           },
         } as never,
       });
-      let historyCalls = 0;
-      const staleAssistantMessage = {
-        role: "assistant",
-        content: [{ type: "text", text: "older reply from a previous run" }],
-        timestamp: 20,
-      };
       const freshPrivateFinal = {
         role: "assistant",
         content: [{ type: "text", text: "private final that must stay private" }],
@@ -1508,13 +1534,7 @@ describe("sessions_send gating", () => {
           };
         }
         if (request.method === "chat.history") {
-          historyCalls += 1;
-          return {
-            messages:
-              historyCalls === 1
-                ? [staleAssistantMessage]
-                : [staleAssistantMessage, freshPrivateFinal],
-          };
+          return { messages: [freshPrivateFinal] };
         }
         return {};
       });
@@ -1525,7 +1545,9 @@ describe("sessions_send gating", () => {
         timeoutSeconds: 1,
       });
 
-      expect(historyCalls).toBe(1);
+      expect(
+        callGatewayMock.mock.calls.some(([request]) => request.method === "chat.history"),
+      ).toBe(false);
       const details = requireDetails(result);
       expect(details.status).toBe("no_reply");
       expect(details.reply).toBeUndefined();
@@ -1536,46 +1558,89 @@ describe("sessions_send gating", () => {
     },
   );
 
-  it("passes a baseline into fire-and-forget same-session A2A delivery", async () => {
-    const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
-    vi.mocked(runSessionsSendA2AFlow).mockClear();
-    const tool = createMainSessionsSendTool();
-    const staleAssistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "older reply from a previous run" }],
-      timestamp: 20,
-    };
+  it.each([true, false])(
+    "uses source delivery without reading history (visible text: %s)",
+    async (hasText) => {
+      const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
+      vi.mocked(runSessionsSendA2AFlow).mockClear();
+      const targetSessionKey = "agent:main:other";
+      const tool = createSessionsSendTool({
+        agentSessionKey: MAIN_AGENT_SESSION_KEY,
+        agentChannel: MAIN_AGENT_CHANNEL,
+        config: {
+          session: { scope: "per-sender", mainKey: "main" },
+          tools: { agentToAgent: { enabled: false }, sessions: { visibility: "all" } },
+        } as never,
+      });
 
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string };
-      if (request.method === "sessions.list") {
-        return {
-          path: "/tmp/sessions.json",
-          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
-        };
-      }
-      if (request.method === "chat.history") {
-        return { messages: [staleAssistantMessage] };
-      }
-      if (request.method === "agent") {
-        return { runId: "run-fire-and-forget", acceptedAt: 123 };
-      }
-      return {};
-    });
+      callGatewayMock.mockImplementation(async (opts: unknown) => {
+        const request = opts as { method?: string };
+        if (request.method === "sessions.list") {
+          return {
+            path: "/tmp/sessions.json",
+            sessions: [{ key: targetSessionKey, kind: "direct" }],
+          };
+        }
+        if (request.method === "chat.history") {
+          return { messages: [] };
+        }
+        if (request.method === "agent") {
+          return { runId: "run-source-reply", acceptedAt: 123 };
+        }
+        if (request.method === "agent.wait") {
+          return {
+            runId: "run-source-reply",
+            status: "ok",
+            terminalReply: hasText
+              ? { disposition: "visible", text: "Already delivered to the source" }
+              : { disposition: "empty" },
+            terminalReceipt: {
+              runId: "run-source-reply",
+              sessionId: "target-session",
+              turnId: "target-turn",
+              requested: { provider: "provider", model: "model" },
+              effective: { provider: "provider", model: "model", responseModel: "model" },
+              successfulToolNames: ["message"],
+              sourceReplyDelivered: true,
+              rerouted: false,
+              terminalDisposition: "visible",
+            },
+          };
+        }
+        return {};
+      });
 
-    const result = await tool.execute("call-fire-and-forget-same-session", {
-      sessionKey: MAIN_AGENT_SESSION_KEY,
-      message: "ping",
-      timeoutSeconds: 0,
-    });
+      const result = await tool.execute("call-source-reply", {
+        sessionKey: targetSessionKey,
+        message: "ping",
+        timeoutSeconds: 1,
+      });
 
-    const details = requireDetails(result);
-    expect(details.status).toBe("accepted");
-    expect(details.sessionKey).toBe(MAIN_AGENT_SESSION_KEY);
-    const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
-    expect(flowParams?.waitRunId).toBe("run-fire-and-forget");
-    expect(flowParams?.baseline?.text).toBe("older reply from a previous run");
-  });
+      if (hasText) {
+        expect(requireDetails(result)).toMatchObject({
+          status: "ok",
+          reply: "Already delivered to the source",
+          sessionKey: targetSessionKey,
+        });
+        await vi.waitFor(() => expect(runSessionsSendA2AFlow).toHaveBeenCalledOnce());
+        expect(vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0]).toMatchObject({
+          roundOneReply: "Already delivered to the source",
+          sourceReplyDelivered: true,
+          targetSessionKey,
+        });
+      } else {
+        expect(requireDetails(result)).toMatchObject({
+          status: "no_reply",
+          message:
+            "The target delivered its final reply directly to its source conversation. Do not resend.",
+        });
+        expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
+      }
+      expect(
+        callGatewayMock.mock.calls.some(([request]) => request.method === "chat.history"),
+      ).toBe(false);
+    },
+  );
 
   it("detaches fire-and-forget A2A work from parent transcript ownership", async () => {
     const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
@@ -1619,12 +1684,6 @@ describe("sessions_send gating", () => {
         tools: { agentToAgent: { enabled: false } },
       } as never,
     });
-    const staleAssistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "older reply from a previous run" }],
-      timestamp: 20,
-    };
-
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
@@ -1632,9 +1691,6 @@ describe("sessions_send gating", () => {
           path: "/tmp/sessions.json",
           sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
         };
-      }
-      if (request.method === "chat.history") {
-        return { messages: [staleAssistantMessage] };
       }
       if (request.method === "agent") {
         return { runId: "run-alias-fire-and-forget", acceptedAt: 123 };
@@ -1654,43 +1710,6 @@ describe("sessions_send gating", () => {
     const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
     expect(flowParams?.requesterSessionKey).toBe(MAIN_AGENT_SESSION_KEY);
     expect(flowParams?.targetSessionKey).toBe(MAIN_AGENT_SESSION_KEY);
-    expect(flowParams?.baseline?.text).toBe("older reply from a previous run");
-  });
-
-  it("accepts fire-and-forget same-session sends when baseline history is unavailable", async () => {
-    const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
-    vi.mocked(runSessionsSendA2AFlow).mockClear();
-    const tool = createMainSessionsSendTool();
-
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string };
-      if (request.method === "sessions.list") {
-        return {
-          path: "/tmp/sessions.json",
-          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
-        };
-      }
-      if (request.method === "chat.history") {
-        throw new Error("history unavailable");
-      }
-      if (request.method === "agent") {
-        return { runId: "run-fire-and-forget", acceptedAt: 123 };
-      }
-      return {};
-    });
-
-    const result = await tool.execute("call-fire-and-forget-history-fail", {
-      sessionKey: MAIN_AGENT_SESSION_KEY,
-      message: "ping",
-      timeoutSeconds: 0,
-    });
-
-    const details = requireDetails(result);
-    expect(details.status).toBe("accepted");
-    expect(details.sessionKey).toBe(MAIN_AGENT_SESSION_KEY);
-    const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
-    expect(flowParams?.waitRunId).toBe("run-fire-and-forget");
-    expect(flowParams?.baseline).toBeUndefined();
   });
 
   it.each([
@@ -1943,10 +1962,11 @@ describe("sessions_send gating", () => {
       }
       if (request.method === "agent.wait") {
         waitTimeouts.push(request.timeoutMs);
-        return { runId: "run-huge-timeout", status: "ok" };
-      }
-      if (request.method === "chat.history") {
-        return { messages: [] };
+        return {
+          runId: "run-huge-timeout",
+          status: "ok",
+          terminalReply: { disposition: "empty" },
+        };
       }
       return {};
     });
@@ -1980,9 +2000,6 @@ describe("sessions_send agent-main materialization provenance", () => {
       }
       if (request.method === "sessions.create") {
         throw new Error("plain sessions.create must not be used for trusted materialization");
-      }
-      if (request.method === "chat.history") {
-        return { messages: [] };
       }
       if (request.method === "agent") {
         return { runId: "run-ensure-main", acceptedAt: 1 };

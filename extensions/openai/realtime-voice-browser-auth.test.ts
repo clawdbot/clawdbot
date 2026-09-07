@@ -30,10 +30,16 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuardMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
-  isProviderAuthProfileConfigured: mocks.isProviderAuthProfileConfiguredMock,
-  resolveProviderAuthProfileApiKey: mocks.resolveProviderAuthProfileApiKeyMock,
-}));
+vi.mock("openclaw/plugin-sdk/provider-auth", async () => {
+  const { resolveOpenAICodexAuthIdentity } = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/provider-oauth-runtime")
+  >("openclaw/plugin-sdk/provider-oauth-runtime");
+  return {
+    isProviderAuthProfileConfigured: mocks.isProviderAuthProfileConfiguredMock,
+    resolveProviderAuthProfileApiKey: mocks.resolveProviderAuthProfileApiKeyMock,
+    resolveOpenAICodexAuthIdentity,
+  };
+});
 import { createOpenAIRealtimeTestSupport } from "./realtime-voice-test-support.js";
 
 const {
@@ -307,6 +313,7 @@ describe("OpenAI realtime voice browser authentication", () => {
       transport: "webrtc",
       clientSecret: "client-secret-123",
       offerUrl: "https://api.openai.com/v1/realtime/calls",
+      offerResponseMaxBytes: 256 * 1024,
       model: "gpt-realtime-2.1",
       expiresAt: 1_765_000_000_000,
     });

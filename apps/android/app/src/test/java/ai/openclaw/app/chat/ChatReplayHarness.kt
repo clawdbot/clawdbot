@@ -1,36 +1,56 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.gateway.GatewaySession
+import androidx.room3.Room
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.job
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.robolectric.RuntimeEnvironment
 import java.util.concurrent.CopyOnWriteArrayList
 
 internal val chatControllerTestJson = Json { ignoreUnknownKeys = true }
 
+internal fun emptyChatGatewayResponse(method: String): String = if (method == "sessions.branches.list") """{"branches":[]}""" else "{}"
+
+internal fun CoroutineScope.createChatOutboxDatabase(): ClientStateDatabase {
+  val database =
+    Room
+      .inMemoryDatabaseBuilder(RuntimeEnvironment.getApplication(), ClientStateDatabase::class.java)
+      .setQueryCoroutineContext(coroutineContext.minusKey(Job))
+      .build()
+  coroutineContext.job.invokeOnCompletion { database.close() }
+  return database
+}
+
+internal fun CoroutineScope.createChatCommandOutbox(): ChatCommandOutbox = RoomChatCommandOutbox(createChatOutboxDatabase())
+
 internal fun CoroutineScope.createChatController(
   requestGatewayForGateway: (suspend (gatewayId: String, method: String, paramsJson: String?) -> String)? = null,
-  captureSettingsRequestLease: ((gatewayScope: ChatCacheScope?) -> GatewaySession.RequestLease?)? = null,
+  captureRequestLease: ((gatewayScope: ChatCacheScope?) -> GatewaySession.RequestLease?)? = null,
   transcriptCache: ChatTranscriptCache? = null,
-  cacheScope: () -> ChatCacheScope? = { null },
+  cacheScope: () -> ChatCacheScope? = { ChatCacheScope("gateway-test", 1L) },
   currentDefaultAgentId: () -> String? = { "main" },
   currentDefaultAgentRevision: () -> Long = { 0L },
-  gatewayAdvertisesProgressCard: () -> Boolean? = { null },
+  gatewayAdvertisesMethod: (method: String) -> Boolean? = { null },
+  gatewayAdvertisesCapability: (capability: String) -> Boolean? = { null },
   recordModelRecent: (String) -> Unit = {},
   onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
   onOfflineDefaultAgentRestored: (String) -> Unit = {},
   onAssistantReplyFinalized: (owner: ChatComposerOwner, runId: String, text: String) -> Unit = { _, _, _ -> },
-  requestGateway: suspend (method: String, paramsJson: String?) -> String = { _, _ -> "{}" },
+  requestGateway: suspend (method: String, paramsJson: String?) -> String = { method, _ -> emptyChatGatewayResponse(method) },
 ): ChatController {
   val scopedRequest =
     requestGatewayForGateway ?: { _, method, paramsJson -> requestGateway(method, paramsJson) }
   val settingsLease =
-    captureSettingsRequestLease ?: { gatewayScope ->
-      GatewaySession.RequestLease(endpointStableId = gatewayScope?.gatewayId.orEmpty()) { method, paramsJson, _ ->
+    captureRequestLease ?: { gatewayScope ->
+      GatewaySession.RequestLease(endpointStableId = gatewayScope?.gatewayId.orEmpty()) { method, paramsJson, _, withEnqueue ->
+        withEnqueue {}
         if (gatewayScope == null) {
           requestGateway(method, paramsJson)
         } else {
@@ -43,12 +63,14 @@ internal fun CoroutineScope.createChatController(
     json = chatControllerTestJson,
     requestGateway = requestGateway,
     requestGatewayForGateway = scopedRequest,
-    captureSettingsRequestLease = settingsLease,
+    captureRequestLease = settingsLease,
     transcriptCache = transcriptCache,
     cacheScope = cacheScope,
+    commandOutbox = createChatCommandOutbox(),
     currentDefaultAgentId = currentDefaultAgentId,
     currentDefaultAgentRevision = currentDefaultAgentRevision,
-    gatewayAdvertisesProgressCard = gatewayAdvertisesProgressCard,
+    gatewayAdvertisesMethod = gatewayAdvertisesMethod,
+    gatewayAdvertisesCapability = gatewayAdvertisesCapability,
     recordModelRecent = recordModelRecent,
     onSessionDeleted = onSessionDeleted,
     onOfflineDefaultAgentRestored = onOfflineDefaultAgentRestored,
@@ -60,7 +82,9 @@ internal class ChatControllerTestSetup(
   private val scope: CoroutineScope,
 ) {
   val requests = mutableListOf<Pair<String, String?>>()
-  var cacheScope: () -> ChatCacheScope? = { null }
+  var cacheScope: () -> ChatCacheScope? = { ChatCacheScope("gateway-test", 1L) }
+  var gatewayAdvertisesMethod: (method: String) -> Boolean? = { null }
+  var gatewayAdvertisesCapability: (capability: String) -> Boolean? = { null }
   var recordModelRecent: (String) -> Unit = {}
 
   private val handlers = mutableMapOf<String, suspend (String?) -> String>()
@@ -82,11 +106,12 @@ internal class ChatControllerTestSetup(
   val controller: ChatController by lazy {
     scope.createChatController(
       cacheScope = cacheScope,
+      gatewayAdvertisesMethod = gatewayAdvertisesMethod,
+      gatewayAdvertisesCapability = gatewayAdvertisesCapability,
       recordModelRecent = recordModelRecent,
       requestGateway = { method, paramsJson ->
         requests += method to paramsJson
-        // Unscripted methods preserve the original controller-test empty-object fallback.
-        handlers[method]?.invoke(paramsJson) ?: "{}"
+        handlers[method]?.invoke(paramsJson) ?: emptyChatGatewayResponse(method)
       },
     )
   }
@@ -134,6 +159,7 @@ internal class ScriptedGateway(
     respondWith("health", "{}")
     respondWith("chat.metadata", """{"commands":[],"models":[]}""")
     respondWith("sessions.list", """{"sessions":[]}""")
+    respondWith("sessions.branches.list", """{"branches":[]}""")
     respondWith("progressCard.get", """{"card":null}""")
   }
 
@@ -337,3 +363,18 @@ internal fun chunkPreservingCodePoints(
   }
   return chunks
 }
+
+internal suspend fun ChatCommandOutbox.recordTranscriptTip(
+  gatewayId: String,
+  scope: ChatOutboxScope,
+  leafEntryId: String,
+  previousState: ChatOutboxBranchState,
+): Boolean =
+  reconcileBranchScope(
+    gatewayId,
+    scope,
+    ChatOutboxBranchEvidence.History(previousState),
+    leafEntryId,
+    setOf(leafEntryId),
+    OUTBOX_BRANCH_CHANGED_ERROR,
+  ) != null

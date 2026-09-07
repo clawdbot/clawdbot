@@ -1,6 +1,5 @@
 // Coverage for terminal attempt trajectory status classification.
 import { describe, expect, it } from "vitest";
-import { hasAttemptTerminalState } from "./attempt-terminal-evidence.js";
 import {
   resolveAttemptTrajectoryTerminal,
   resolveTerminalAssistantTexts,
@@ -45,17 +44,6 @@ describe("attempt trajectory status", () => {
     expect(
       resolveAttemptTrajectoryTerminal(baseParams({ assistantTexts: ["Visible answer."] })),
     ).toEqual({ status: "success" });
-  });
-
-  it("records a recovery receipt without assistant text as successful terminal output", () => {
-    const hasTerminalOutput = hasAttemptTerminalState({
-      lastToolRecovery: { toolName: "write" },
-    });
-
-    expect(hasTerminalOutput).toBe(true);
-    expect(resolveAttemptTrajectoryTerminal(baseParams({ hasTerminalOutput }))).toEqual({
-      status: "success",
-    });
   });
 
   it("records length-limited visible text as success with no synthesized payload", () => {
@@ -146,6 +134,17 @@ describe("attempt trajectory status", () => {
           didSendViaMessagingTool: true,
           messagingToolSentTargets: [{ channel: "telegram" }],
           lastAssistantStopReason: "length",
+        }),
+      ),
+    ).toEqual({ status: "success" });
+  });
+
+  it("keeps media-only committed delivery as terminal progress", () => {
+    expect(
+      resolveAttemptTrajectoryTerminal(
+        baseParams({
+          messagingToolSentMediaUrls: ["file:///tmp/render.png"],
+          lastAssistantStopReason: "toolUse",
         }),
       ),
     ).toEqual({ status: "success" });

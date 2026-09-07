@@ -31,8 +31,11 @@ function readUiCss(): string {
     "ui/src/styles/config.css",
     "ui/src/styles/usage.css",
     "ui/src/styles/chat/layout.css",
+    "ui/src/styles/chat/message-layout.css",
+    "ui/src/styles/chat/composer.css",
     "ui/src/styles/sidebar-markdown.css",
     "ui/src/styles/chat/sidebar.css",
+    "ui/src/styles/plugins.css",
   ];
   return files.map((file) => readStyleSheet(file)).join("\n");
 }
@@ -165,6 +168,96 @@ describeBrowserLayout("sensitive input visibility", () => {
         display: getComputedStyle(mask).display,
       }));
       expect(state).toEqual({ hidden: true, display: "none" });
+    } finally {
+      await page.close().catch(() => {});
+    }
+  });
+});
+
+describeBrowserLayout("settings icon buttons", () => {
+  it("keeps plugin and MCP remove glyphs proportionate to settings buttons", async () => {
+    const page = await desktopContext.newPage();
+    try {
+      await page.setContent(`
+        <!doctype html>
+        <html data-theme-mode="light">
+          <head><style>${readUiCss()}</style></head>
+          <body>
+            <div class="settings-row__control">
+              <button class="btn btn--sm btn--icon plugins-remove" type="button">
+                <svg viewBox="0 0 24 24"><path d="M3 6h18" /></svg>
+              </button>
+            </div>
+          </body>
+        </html>
+      `);
+
+      const metrics = await page.locator(".plugins-remove").evaluate((button) => {
+        const glyph = button.querySelector("svg");
+        if (!(glyph instanceof SVGElement)) {
+          throw new Error("Missing remove button glyph");
+        }
+        const buttonRect = button.getBoundingClientRect();
+        const glyphRect = glyph.getBoundingClientRect();
+        return {
+          button: [buttonRect.width, buttonRect.height],
+          glyph: [glyphRect.width, glyphRect.height],
+        };
+      });
+      expect(metrics).toEqual({ button: [32, 32], glyph: [18, 18] });
+    } finally {
+      await page.close().catch(() => {});
+    }
+  });
+});
+
+describeBrowserLayout("settings row wrapping", () => {
+  it.each([393, 768, 1200])("keeps long copy beside its tile at %ipx", async (width) => {
+    const page = await desktopContext.newPage();
+    try {
+      await page.setViewportSize({ width, height: 1000 });
+      const description =
+        "Calendar notes and reminders remain readable before enabling a connector. ".repeat(8);
+      await page.setContent(`<!doctype html><html><head><meta charset="utf-8"><style>${readUiCss()}</style></head>
+        <body><main style="max-width: 1100px">
+          <div class="settings-row plugins-item">
+            <span class="plugins-tile" aria-hidden="true">C</span>
+            <div class="settings-row__text"><span class="settings-row__title">Connector</span>
+              <span class="settings-row__desc">${description}</span></div>
+            <div class="settings-row__control"><button class="btn btn--sm">Disable</button>
+              <button class="btn btn--sm btn--icon" aria-label="Remove connector">×</button></div>
+            <div class="plugins-row-message" role="status">Connector remains disabled.</div>
+          </div>
+        </main></body></html>`);
+      const geometry = await page.locator(".settings-row").evaluate((row) => {
+        const [tile, text, control, message] = Array.from(row.children, (child) =>
+          child.getBoundingClientRect(),
+        );
+        if (!tile || !text || !control || !message) {
+          throw new Error("Missing settings row fixture child");
+        }
+        const style = getComputedStyle(row);
+        const contentWidth =
+          row.clientWidth -
+          Number.parseFloat(style.paddingLeft) -
+          Number.parseFloat(style.paddingRight);
+        return {
+          copyBesideTile:
+            text.left >= tile.right && text.top < tile.bottom && tile.top < text.bottom,
+          desktopControls:
+            control.left >= text.right && control.top < text.bottom && text.top < control.bottom,
+          narrowControls: control.top >= Math.max(tile.bottom, text.bottom),
+          messageBelow: message.top >= Math.max(tile.bottom, text.bottom, control.bottom),
+          messageWidth: message.width,
+          contentWidth,
+          overflow: row.scrollWidth - row.clientWidth,
+        };
+      });
+      expect(geometry.copyBesideTile).toBe(true);
+      expect(width <= 640 ? geometry.narrowControls : geometry.desktopControls).toBe(true);
+      expect(geometry.messageBelow).toBe(true);
+      expect(geometry.messageWidth).toBeCloseTo(geometry.contentWidth, 0);
+      expect(geometry.overflow).toBeLessThanOrEqual(1);
     } finally {
       await page.close().catch(() => {});
     }
@@ -482,7 +575,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
             <div class="shell shell--mobile-nav">
               <span class="nav-item">Mobile navigation</span>
               <div class="file-view__search"><input value="query" /></div>
-              <div class="sidebar-agent-menu__filter"><input value="agent" /></div>
               <input class="settings-sidebar__search-input" value="settings" />
               <div class="sidebar-recent-session sidebar-recent-session--child">
                 <span class="sidebar-recent-session__name">Child session</span>
@@ -506,7 +598,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
             childName: fontSize(".sidebar-recent-session--child .sidebar-recent-session__name"),
             childTrail: fontSize(".sidebar-recent-session--child .session-row-trail"),
             coarsePointer: matchMedia("(hover: none) and (pointer: coarse)").matches,
-            agentFilter: fontSize(".sidebar-agent-menu__filter input"),
             fileSearch: fontSize(".file-view__search input"),
             settingsSearch: fontSize(".settings-sidebar__search-input"),
             navItem: fontSize(".shell--mobile-nav .nav-item"),
@@ -518,7 +609,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
         childName: 12,
         childTrail: 10,
         coarsePointer: true,
-        agentFilter: 16,
         fileSearch: 16,
         settingsSearch: 16,
         navItem: 12,
@@ -528,7 +618,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
         document.documentElement.style.setProperty("--control-ui-text-scale", "1.4");
       });
       const scaled = await readSizes();
-      expect(scaled.agentFilter).toBeCloseTo(12 * 1.4, 1);
       expect(scaled.childName).toBeCloseTo(12 * 1.4, 1);
       expect(scaled.childTrail).toBeCloseTo(10 * 1.4, 1);
       expect(scaled.fileSearch).toBeCloseTo(12 * 1.4, 1);
@@ -601,7 +690,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
 
       expect(metrics).toEqual({
         chatSelection: "text",
-        chromeSelection: "none",
+        chromeSelection: "auto",
         contentScrollbar: "12px",
         hiddenRailScrollbarWidth: "none",
         inputSelection: "text",

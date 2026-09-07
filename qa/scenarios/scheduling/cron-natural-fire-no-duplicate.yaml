@@ -101,9 +101,13 @@ flow:
               timeoutMs:
                 expr: "liveTurnTimeoutMs(env, Math.max(60000, config.fireDelayMs + 45000))"
         - assert:
-            expr: "Date.now() >= scheduledAtMs"
+            expr: "Number.isSafeInteger(completedRun?.runAtMs) && completedRun.runAtMs >= scheduledAtMs"
             message:
-              expr: "`cron completed before scheduled time ${scheduledFor}`"
+              expr: "`cron actually started before its scheduled time ${scheduledFor}: ${JSON.stringify(completedRun)}`"
+        - assert:
+            expr: "Number.isSafeInteger(completedRun?.ts) && completedRun.ts >= runStartedAt && completedRun.ts >= completedRun.runAtMs"
+            message:
+              expr: "`expected the current naturally scheduled cron attempt's recorded completion, got ${JSON.stringify(completedRun)}`"
         - assert:
             expr: "completedRun?.status === 'ok'"
             message:
