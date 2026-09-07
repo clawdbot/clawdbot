@@ -161,6 +161,10 @@ export function shouldRetryFailoverSignal(params: {
   }
   const reason =
     params.classification?.kind === "reason" ? params.classification.reason : undefined;
+  const status = resolveRetrySignalStatus(params.signal);
+  if (reason === "format" && status !== undefined && status >= 500 && status < 600) {
+    return false;
+  }
   const hasLongLimitWindow = classifyRateLimitWindow(params.signal.message).kind === "long";
   if (
     hasLongLimitWindow &&

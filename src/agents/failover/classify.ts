@@ -98,6 +98,7 @@ function isTransportHtmlErrorStatus(status: number | undefined): boolean {
 function classifyFailoverClassificationFromMessage(
   raw: string,
   provider?: string,
+  errorType?: string,
 ): FailoverClassification | null {
   if (isImageDimensionErrorMessage(raw)) {
     return null;
@@ -196,10 +197,11 @@ function classifyFailoverClassificationFromMessage(
   if (isTimeoutErrorMessage(raw)) {
     return toReasonClassification("timeout");
   }
-  // Some adapters preserve only the raw JSON response body. Reuse the same
-  // structured type mapping as typed SDK errors after all more-specific text
-  // and provider rules have had a chance to classify the failure.
-  const apiErrorReason = classifyCoreFailoverReasonFromErrorType(parseApiErrorInfo(raw)?.type);
+  // Inspect raw and SDK-preserved types before the generic HTTP fallback, but
+  // after more-specific text so invalid-request wrappers cannot hide an outage.
+  const apiErrorReason = classifyCoreFailoverReasonFromErrorType(
+    parseApiErrorInfo(raw)?.type ?? errorType,
+  );
   if (apiErrorReason) {
     return toReasonClassification(apiErrorReason);
   }
@@ -263,7 +265,7 @@ export function classifyFailoverSignal(
   const explicitStatus =
     typeof signal.status === "number" && Number.isFinite(signal.status) ? signal.status : undefined;
   const messageClassification = signal.message
-    ? classifyFailoverClassificationFromMessage(signal.message, signal.provider)
+    ? classifyFailoverClassificationFromMessage(signal.message, signal.provider, signal.errorType)
     : null;
   const detailClassification = classifyFailoverDetailCandidates(signal.details, signal.provider);
   const messageOrDetailClassification = mergeMessageAndDetailClassification(

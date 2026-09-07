@@ -203,6 +203,35 @@ describe("isRetryableAssistantError", () => {
     expect(isRetryableAssistantError(errorMessage(text))).toBe(true);
   });
 
+  it.each([500, 502])("does not replay HTTP %s request-validation errors", (status) => {
+    expect(
+      isRetryableAssistantError({
+        ...errorMessage(`${status} Unknown parameter: 'logprobs'`),
+        errorType: "invalid_request_error",
+        errorCode: "unknown_parameter",
+      }),
+    ).toBe(false);
+    expect(
+      isRetryableAssistantError(
+        errorMessage(
+          `${status} {"error":{"type":"invalid_request_error","message":"Unsupported parameter: logprobs"}}`,
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it.each(["502 Bad gateway", "503 service unavailable", "529 Overloaded"])(
+    "keeps concrete outage evidence ahead of a generic invalid-request type: %s",
+    (text) => {
+      expect(
+        isRetryableAssistantError({
+          ...errorMessage(text),
+          errorType: "invalid_request_error",
+        }),
+      ).toBe(true);
+    },
+  );
+
   it("does not treat permanent provider-wrapped 4xx as retryable", () => {
     expect(
       isRetryableAssistantError(
