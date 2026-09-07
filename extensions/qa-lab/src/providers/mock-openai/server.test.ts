@@ -7122,44 +7122,90 @@ Update and merge these partial structured summaries.`,
     expect(outputToolArgsFromItem(outputToolCall(freshPayload, "exec"))).toEqual(execArgs);
   });
 
-  it("derives three restart checkpoints from request history without server counters", async () => {
-    const server = await startMockServer();
-    const prompt =
-      "Code Mode restart wait QA check. Original prompt marker: RESTART-CODE-MODE-PROMPT.";
-    const tools = restartCheckpointTools;
-    const input: Array<Record<string, unknown>> = [makeUserInput(prompt)];
+  it.each([
+    {
+      label: "direct body tools",
+      surface: "direct",
+    },
+    {
+      label: "developer additional tools",
+      surface: "developer",
+    },
+  ])(
+    "derives three restart checkpoints from request history without server counters via $label",
+    async ({ surface }) => {
+      const server = await startMockServer();
+      const prompt =
+        "Code Mode restart wait QA check. Original prompt marker: RESTART-CODE-MODE-PROMPT.";
+      const withDeclarationSurface = (
+        tools: Array<Record<string, unknown>>,
+        input: Array<Record<string, unknown>>,
+      ) =>
+        surface === "direct"
+          ? { tools, input }
+          : { input: [{ type: "additional_tools", role: "developer", tools }, ...input] };
+      const input: Array<Record<string, unknown>> = [makeUserInput(prompt)];
 
-    for (const checkpoint of [1, 2, 3]) {
-      const execPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
-      const execCall = outputToolCall(execPayload, "exec");
-      const execArgs = outputToolArgsFromItem(execCall);
-      await expectRestartCheckpointExecution(execArgs, checkpoint);
+      for (const checkpoint of [1, 2, 3]) {
+        const execPayload = await expectOpenAiNonStreamingResponsesJson(
+          server,
+          withDeclarationSurface(restartCheckpointTools, input),
+        );
+        const execCall = outputToolCall(execPayload, "exec");
+        const execArgs = outputToolArgsFromItem(execCall);
+        await expectRestartCheckpointExecution(execArgs, checkpoint);
 
-      const runId = `restart-checkpoint-${checkpoint}`;
-      input.push(
-        execCall,
-        makeToolOutputWithCallId(
-          outputToolCallId(execCall, `checkpoint-exec-${checkpoint}`),
-          JSON.stringify({ status: "waiting", runId }),
+        const runId = `restart-checkpoint-${checkpoint}`;
+        input.push(
+          execCall,
+          makeToolOutputWithCallId(
+            outputToolCallId(execCall, `checkpoint-exec-${checkpoint}`),
+            JSON.stringify({ status: "waiting", runId }),
+          ),
+        );
+        const waitPayload = await expectOpenAiNonStreamingResponsesJson(
+          server,
+          withDeclarationSurface(restartCheckpointTools, input),
+        );
+        const waitCall = outputToolCall(waitPayload, "wait");
+        expect(outputToolArgsFromItem(waitCall)).toEqual({ runId });
+        input.push(waitCall, makeUserInput(restartRecoveryPrompt));
+      }
+
+      const finalPayload = await expectOpenAiNonStreamingResponsesJson(
+        server,
+        withDeclarationSurface(restartCheckpointTools, input),
+      );
+      expect(outputText(finalPayload)).toBe("unsafeVisible=false\nRESTART-CODE-MODE-WAIT-OK");
+
+      const unsafePayload = await expectOpenAiNonStreamingResponsesJson(
+        server,
+        withDeclarationSurface(
+          [
+            ...restartCheckpointTools,
+            {
+              type: "function",
+              name: "qa_restart_unsafe_probe",
+              parameters: { type: "object" },
+            },
+          ],
+          input,
         ),
       );
-      const waitPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
-      const waitCall = outputToolCall(waitPayload, "wait");
-      expect(outputToolArgsFromItem(waitCall)).toEqual({ runId });
-      input.push(waitCall, makeUserInput(restartRecoveryPrompt));
-    }
+      expect(
+        outputToolArgsFromItem(outputToolCall(unsafePayload, "qa_restart_unsafe_probe")),
+      ).toEqual({});
+      expect(outputItems(unsafePayload).map((item) => item.type)).toEqual(["function_call"]);
 
-    const finalPayload = await expectOpenAiNonStreamingResponsesJson(server, { tools, input });
-    expect(outputText(finalPayload)).toBe("unsafeVisible=false\nRESTART-CODE-MODE-WAIT-OK");
-
-    const freshPayload = await expectOpenAiNonStreamingResponsesJson(server, {
-      tools,
-      input: [makeUserInput(prompt)],
-    });
-    expect(outputToolArgsFromItem(outputToolCall(freshPayload, "exec")).code).toContain(
-      "CHECKPOINT-1",
-    );
-  });
+      const freshPayload = await expectOpenAiNonStreamingResponsesJson(
+        server,
+        withDeclarationSurface(restartCheckpointTools, [makeUserInput(prompt)]),
+      );
+      expect(outputToolArgsFromItem(outputToolCall(freshPayload, "exec")).code).toContain(
+        "CHECKPOINT-1",
+      );
+    },
+  );
 
   it("routes Anthropic image generation through Code Mode when only exec and wait are visible", async () => {
     const server = await startMockServer();

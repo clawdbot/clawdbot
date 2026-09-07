@@ -225,10 +225,13 @@ describe("qa scenario catalog causality", () => {
     expect(contract.match(/"sendInbound"/gu)).toHaveLength(1);
     expect(contract).not.toContain("startAgentRun");
     expect(contract).not.toContain("chat.send");
-    expect(contract).toContain(
+    expect(contract).toContain("pendingCodeModeExecNeedle: `CHECKPOINT-${checkpoint}`");
+    expect(contract).toContain("summary.hasPendingCodeModeWait");
+    expect(contract).toContain("checkpointTranscript.hasPendingCodeModeWait");
+    expect(contract).not.toContain(
       "assistantToolCallCounts.wait ?? 0) > (summary.completedToolCallCounts.wait ?? 0)",
     );
-    expect(contract).toContain(
+    expect(contract).not.toContain(
       "checkpointTranscript.assistantToolCallCounts.wait ?? 0) > (checkpointTranscript.completedToolCallCounts.wait ?? 0)",
     );
     expect(contract).toContain("probeText: config.promptMarker");
