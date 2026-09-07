@@ -97,7 +97,9 @@ function mockGeneratedPngResponse() {
   postMultipartRequestMock.mockResolvedValue(generatedPngRequest);
 }
 
-function mockCodexImageStream(params: { imageData?: string; revisedPrompt?: string } = {}) {
+function mockCodexImageStream(
+  params: { imageData?: string; revisedPrompt?: string; size?: string; quality?: string } = {},
+) {
   const image = Buffer.from(params.imageData ?? "codex-png-bytes").toString("base64");
   const events = [
     {
@@ -389,6 +391,7 @@ describe("openai image generation provider", () => {
   });
 
   it("preserves provider-returned size and quality metadata", async () => {
+    mockCodexAuthOnly();
     mockCodexImageStream({ size: "941x1672", quality: "medium" });
     const result = await generateOpenAIImage("A cat wearing sunglasses", {
       size: "2160x3840",
