@@ -92,6 +92,7 @@ openclaw_resolve_frozen_core_harness_capabilities() {
     OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE="required" \
     OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_MODE="current" \
     OPENCLAW_FROZEN_TARGET_MCP_MEMORY_CONFIG_MODE="current" \
+    OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE="current" \
     OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE="sqlite"
 
   openclaw_prepare_frozen_target_context "$source_root" || authorization_status=$?
