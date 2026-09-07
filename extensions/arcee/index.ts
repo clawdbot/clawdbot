@@ -10,8 +10,8 @@ import {
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import {
-  applyArceeConfig,
-  applyArceeOpenRouterConfig,
+  applyArceeOnboardConfig,
+  applyArceeOpenRouterOnboardConfig,
   ARCEE_DEFAULT_MODEL_REF,
   ARCEE_OPENROUTER_DEFAULT_MODEL_REF,
 } from "./onboard.js";
@@ -87,7 +87,7 @@ export default defineSingleProviderPluginEntry({
         envVar: "ARCEEAI_API_KEY",
         promptMessage: "Enter Arcee AI API key",
         defaultModel: ARCEE_DEFAULT_MODEL_REF,
-        applyConfig: applyArceeConfig,
+        applyConfig: applyArceeOnboardConfig,
         wizard: {
           choiceId: "arceeai-api-key",
           choiceLabel: "Arcee AI API key",
@@ -106,7 +106,7 @@ export default defineSingleProviderPluginEntry({
         profileId: "openrouter:default",
         defaultModel: ARCEE_OPENROUTER_DEFAULT_MODEL_REF,
         expectedProviders: [PROVIDER_ID, "openrouter"],
-        applyConfig: applyArceeOpenRouterConfig,
+        applyConfig: applyArceeOpenRouterOnboardConfig,
         wizard: {
           choiceId: "arceeai-openrouter",
           choiceLabel: "OpenRouter API key",
