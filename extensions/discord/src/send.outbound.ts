@@ -1,5 +1,6 @@
 import type { APIChannel, APIGuildForumChannel, APIGuildMediaChannel } from "discord-api-types/v10";
 import { ChannelType } from "discord-api-types/v10";
+import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OutboundMediaAccess, PollInput } from "openclaw/plugin-sdk/media-runtime";
@@ -191,9 +192,11 @@ export async function sendMessageDiscord(
       ? Math.max(1, Math.min(Math.floor(opts.textLimit), 2000))
       : undefined;
   const mediaMaxBytes =
-    typeof accountInfo.config.mediaMaxMb === "number"
-      ? accountInfo.config.mediaMaxMb * 1024 * 1024
-      : DEFAULT_DISCORD_MEDIA_MAX_MB * 1024 * 1024;
+    resolveChannelMediaMaxBytes({
+      cfg,
+      accountId: accountInfo.accountId,
+      resolveChannelLimitMb: () => accountInfo.config.mediaMaxMb,
+    }) ?? DEFAULT_DISCORD_MEDIA_MAX_MB * 1024 * 1024;
   const { renderedText, textWithMentions } = prepareDiscordOutboundText(text ?? "", {
     cfg,
     account: accountInfo,
