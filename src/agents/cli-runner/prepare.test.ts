@@ -40,6 +40,8 @@ import type {
   CliBackendPlugin,
 } from "../../plugins/cli-backend.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { createHookRunner } from "../../plugins/hooks.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import {
   clearMemoryPluginState,
   registerTestMemoryPromptBuilder,
@@ -121,11 +123,13 @@ import { prepareCliBundleMcpCaptureAttempt, prepareCliBundleMcpConfig } from "./
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
+import { cliBackendLog } from "./log.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
   setCliRunnerPrepareTestDeps,
 } from "./prepare.test-support.js";
+import * as sessionHistoryModule from "./session-history.js";
 import type { RunCliAgentParams } from "./types.js";
 
 function registerTestContextEngine(
@@ -2603,22 +2607,92 @@ describe("prepareCliRunContext", () => {
     );
   });
 
-  it("preserves the base prompt when prompt-build hooks fail", async () => {
+  it("preserves the base prompt and marks the drop when prompt-build hooks fail", async () => {
+    const secret = "AUTH_TOKEN=sk-live-9f3c https://internal.example/v1/queue";
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
       runBeforePromptBuild: vi.fn(async () => {
-        throw new Error("hook exploded");
+        throw new Error(`hook exploded: ${secret}`);
       }),
     };
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
 
     const context = await fixture.prepare({});
 
-    expect(context.params.prompt).toBe("latest ask");
+    // The base ask survives, and the lost contribution is named in the prompt so
+    // the agent cannot read its absence as "nothing to report".
+    expect(context.params.prompt).toContain("latest ask");
+    expect(context.params.prompt).toContain('<dropped_plugin_context hook="before_prompt_build">');
+    expect(context.params.prompt).toContain("unknown plugin (dispatch-failed)");
+    // The thrown text is a diagnostic: it stays in the logs, not the prompt.
+    expect(context.params.prompt).not.toContain("hook exploded");
+    expect(context.params.prompt).not.toContain("sk-live-9f3c");
+    expect(context.params.prompt).not.toContain("internal.example");
     expect(context.systemPrompt).toContain("You are a personal assistant running inside OpenClaw.");
     expect(context.systemPrompt).toContain("Current model identity: test-cli/test-model.");
     expect(context.systemPrompt).not.toContain("hook exploded");
     expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
+    // Exactly one marker: the dispatch boundary owns it, so no consumer-level
+    // catch can add a second one.
+    expect(context.params.prompt.match(/<dropped_plugin_context/gu)).toHaveLength(1);
+  });
+
+  it("does not mark a drop when preparation fails before hook dispatch", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+      runBeforePromptBuild: vi.fn(async () => undefined),
+    };
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    const historySpy = vi
+      .spyOn(sessionHistoryModule, "loadCliSessionHistoryMessages")
+      .mockRejectedValue(new Error("session history read failed"));
+    const warnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => {});
+
+    try {
+      const context = await fixture.prepare({});
+
+      // The history load never reached the dispatcher, so nothing was dropped:
+      // claiming otherwise would hand the model a false recovery instruction.
+      expect(hookRunner.runBeforePromptBuild).not.toHaveBeenCalled();
+      expect(context.params.prompt).toBe("latest ask");
+      expect(context.params.prompt).not.toContain("dropped_plugin_context");
+      expect(context.params.prompt).not.toContain("dispatch-failed");
+      expect(context.systemPrompt).not.toContain("dropped_plugin_context");
+      // The failure is still an operator-visible diagnostic.
+      expect(
+        warnSpy.mock.calls.some(
+          ([message]) =>
+            message.includes("cli prompt-build hook preparation failed") &&
+            message.includes("session history read failed"),
+        ),
+      ).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+      historySpy.mockRestore();
+    }
+  });
+
+  it("bounds the CLI drop marker when many prompt-build handlers fail", async () => {
+    const registryHooks = Array.from({ length: 30 }, (_unused, index) => ({
+      hookName: "before_prompt_build" as const,
+      pluginId: `bulk-plugin-${index}`,
+      handler: () => {
+        throw new Error(`handler ${index} exploded`);
+      },
+    }));
+    mockGetGlobalHookRunner.mockReturnValue(
+      createHookRunner(createMockPluginRegistry(registryHooks)) as never,
+    );
+
+    const context = await fixture.prepare({});
+
+    const marker = context.params.prompt.slice(
+      context.params.prompt.indexOf('<dropped_plugin_context hook="before_prompt_build">'),
+    );
+    expect(marker.match(/\(handler-failed\)/gu)).toHaveLength(5);
+    expect(marker).toContain("+25 more");
+    expect(new TextEncoder().encode(marker).length).toBeLessThanOrEqual(640);
+    expect(context.params.prompt).not.toContain("exploded");
   });
 
   it("does not allocate a non-legacy context engine before fallible CLI preparation finishes", async () => {

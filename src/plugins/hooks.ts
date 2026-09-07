@@ -93,6 +93,7 @@ import type {
   PluginHookSkillProposalEvaluateResult,
   PluginHookSkillProposalEvaluationOutcome,
 } from "./hook-types.js";
+import { buildPromptBuildDropResult, type PromptBuildDrop } from "./prompt-build-drop.js";
 import {
   type PluginSubagentRequesterContext,
   withPluginSubagentRequesterContext,
@@ -203,6 +204,12 @@ type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
     next: TResult,
     registration: PluginHookRegistration<K>,
   ) => TResult;
+  /**
+   * Called when a handler's contribution is discarded (throw or timeout) and the
+   * runner continues without it. Lets a caller surface the loss instead of
+   * shipping a result that merely looks complete.
+   */
+  onHandlerDropped?: (params: { hookName: K; pluginId: string; error: unknown }) => void;
   isolateEventPerHandler?: boolean;
   mergeNullResults?: boolean;
   shouldStop?: (result: TResult) => boolean;
@@ -886,6 +893,8 @@ export function createHookRunner(
         if (err instanceof HookIsolationError) {
           throw err;
         }
+        // Report before handleHookError, which rethrows under a fail-closed policy.
+        policy.onHandlerDropped?.({ hookName, pluginId: hook.pluginId, error: err });
         handleHookError({ hookName, pluginId: hook.pluginId, error: err });
       }
       policy.assertHandlerBoundaryActive?.();
@@ -1062,10 +1071,30 @@ export function createHookRunner(
     ctx: PluginHookAgentContext,
   ): Promise<PluginHookBeforePromptBuildResult | undefined> {
     if (beforePromptBuildDispatch.getStore()?.active) {
-      return undefined;
+      // The whole chain is skipped so nested prompt builds cannot recurse. Name
+      // the plugins whose contributions this prompt is missing rather than
+      // returning a prompt that reads as if they had nothing to add.
+      const skippedPluginIds = [
+        ...new Set(
+          getHooksForName(registry, "before_prompt_build")
+            .filter((hook) => hook.requiresToolAuthority !== true)
+            .map((hook) => hook.pluginId),
+        ),
+      ];
+      if (skippedPluginIds.length === 0) {
+        return undefined;
+      }
+      logger?.warn(
+        `[hooks] before_prompt_build skipped for a nested prompt build; ` +
+          `contributions from ${skippedPluginIds.join(", ")} are missing from this turn`,
+      );
+      return buildPromptBuildDropResult(
+        skippedPluginIds.map((pluginId) => ({ pluginId, reason: "nested-prompt-build" as const })),
+      );
     }
     const token = { active: true };
-    return await beforePromptBuildDispatch.run(token, async () => {
+    const drops: PromptBuildDrop[] = [];
+    const result = await beforePromptBuildDispatch.run(token, async () => {
       try {
         return await runModifyingHook<"before_prompt_build", PluginHookBeforePromptBuildResult>(
           "before_prompt_build",
@@ -1073,6 +1102,11 @@ export function createHookRunner(
           ctx,
           {
             mergeResults: mergeBeforePromptBuild,
+            onHandlerDropped: ({ pluginId }) => {
+              // Reason code only: the error itself is model-visible nowhere.
+              // handleHookError already logged it for operators.
+              drops.push({ pluginId, reason: "handler-failed" });
+            },
             includeRegistration: (registration) => registration.requiresToolAuthority !== true,
           },
         );
@@ -1080,6 +1114,11 @@ export function createHookRunner(
         token.active = false;
       }
     });
+    const dropMarker = buildPromptBuildDropResult(drops);
+    if (!dropMarker) {
+      return result;
+    }
+    return mergeBeforePromptBuild(result, dropMarker);
   }
 
   /** Runs context enrichment only after the host has finalized the turn's tool surface. */
@@ -1119,6 +1158,7 @@ export function createHookRunner(
       },
       assertActive,
     });
+    const drops: PromptBuildDrop[] = [];
     try {
       const result = await runModifyingHook<
         "before_prompt_build",
@@ -1131,15 +1171,19 @@ export function createHookRunner(
           mergeResults: mergeBeforePromptBuild,
           includeRegistration: (registration) => registration.requiresToolAuthority === true,
           assertHandlerBoundaryActive: assertActive,
+          onHandlerDropped: ({ pluginId }) => {
+            drops.push({ pluginId, reason: "handler-failed" });
+          },
         },
       );
-      if (!result) {
-        return undefined;
-      }
-      return {
-        ...(result.prependContext ? { prependContext: result.prependContext } : {}),
-        ...(result.appendContext ? { appendContext: result.appendContext } : {}),
-      };
+      const projectedResult = result
+        ? {
+            ...(result.prependContext ? { prependContext: result.prependContext } : {}),
+            ...(result.appendContext ? { appendContext: result.appendContext } : {}),
+          }
+        : undefined;
+      const dropMarker = buildPromptBuildDropResult(drops);
+      return dropMarker ? mergeBeforePromptBuild(projectedResult, dropMarker) : projectedResult;
     } finally {
       token.active = false;
     }

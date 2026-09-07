@@ -133,6 +133,8 @@ const repositoryScriptEntries = [
   "scripts/oxlint-boundary-guards.mjs!",
   "scripts/plugin-prerelease-liveish-matrix.mts!",
   "scripts/pre-commit/guard-staged-content.mjs!",
+  // Maintainer proof harnesses are invoked manually from PR evidence.
+  "scripts/proof-prompt-build-drop-marker.ts!",
   // Generates the checked-in native protocol models from core descriptor metadata.
   "scripts/protocol-gen.ts!",
   "scripts/pr-lib/ci-dispatch.mjs!",

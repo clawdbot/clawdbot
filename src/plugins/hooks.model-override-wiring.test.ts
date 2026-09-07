@@ -159,7 +159,7 @@ describe("model override pipeline wiring", () => {
       });
     });
 
-    it("skips timed-out handlers and continues", async () => {
+    it("skips timed-out handlers, continues, and marks the dropped contribution", async () => {
       vi.useFakeTimers();
       try {
         addBeforePromptBuildHook(
@@ -186,13 +186,120 @@ describe("model override pipeline wiring", () => {
         );
         await vi.advanceTimersByTimeAsync(5);
 
-        await expect(resultPromise).resolves.toEqual({ prependContext: "fast" });
+        const result = await resultPromise;
+        expect(result?.prependContext).toBe("fast");
+        // A dropped contribution must be visible in the prompt, not merely logged:
+        // absence alone reads to the agent as "the plugin had nothing to say".
+        expect(result?.appendContext).toContain(
+          '<dropped_plugin_context hook="before_prompt_build">',
+        );
+        expect(result?.appendContext).toContain("slow-plugin (handler-failed)");
+        expect(result?.appendContext).not.toContain("fast-plugin");
+        // The timeout text is a diagnostic, so it belongs in the operator log and
+        // nowhere near the prompt.
+        expect(result?.appendContext).not.toContain("timed out after 5ms");
         expect(logger.error).toHaveBeenCalledWith(
           "[hooks] before_prompt_build handler from slow-plugin failed: timed out after 5ms",
         );
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it("marks the skipped chain when a nested prompt build re-enters the dispatch", async () => {
+      const logger = {
+        error: vi.fn(),
+        warn: vi.fn(),
+        info: vi.fn(),
+        debug: vi.fn(),
+      };
+      const runner = createHookRunner(registry, { logger });
+      let nested: PluginHookBeforePromptBuildResult | undefined;
+      registry.typedHooks.push({
+        pluginId: "authority-only-plugin",
+        hookName: "before_prompt_build",
+        handler: () => ({ prependContext: "authorized" }),
+        requiresToolAuthority: true,
+        source: "test",
+      });
+      addBeforePromptBuildHook(registry, "nesting-plugin", async () => {
+        // A plugin that starts an agent run from inside its own handler: the
+        // nested prompt build hits the re-entrancy guard.
+        nested = await runner.runBeforePromptBuild({ prompt: "nested", messages: [] }, stubCtx);
+        return { prependContext: "outer" };
+      });
+
+      const outer = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, stubCtx);
+
+      expect(outer?.prependContext).toBe("outer");
+      expect(outer?.appendContext).toBeUndefined();
+      expect(nested?.appendContext).toContain("nesting-plugin (nested-prompt-build)");
+      expect(nested?.appendContext).not.toContain("authority-only-plugin");
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("[hooks] before_prompt_build skipped for a nested prompt build"),
+      );
+    });
+
+    it("keeps secret-like thrown error text out of the marker and only in the log", async () => {
+      const secret = "AUTH_TOKEN=sk-live-9f3c https://internal.example/v1/queue";
+      const logger = {
+        error: vi.fn(),
+        warn: vi.fn(),
+        info: vi.fn(),
+        debug: vi.fn(),
+      };
+      addBeforePromptBuildHook(registry, "leaky-plugin", () => {
+        throw new Error(`bd ready failed: ${secret}`);
+      });
+      addBeforePromptBuildHook(registry, "healthy-plugin", () => ({ prependContext: "healthy" }));
+      const runner = createHookRunner(registry, { logger });
+
+      const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, stubCtx);
+
+      expect(result?.prependContext).toBe("healthy");
+      expect(result?.appendContext).toContain("leaky-plugin (handler-failed)");
+      // The whole point of the reason-code contract: nothing error-derived can
+      // cross the model/provider boundary, however the handler failed.
+      expect(result?.appendContext).not.toContain(secret);
+      expect(result?.appendContext).not.toContain("sk-live-9f3c");
+      expect(result?.appendContext).not.toContain("internal.example");
+      expect(result?.appendContext).not.toContain("bd ready failed");
+      // ...while the operator still gets the diagnostic, through the log path's
+      // own secret redaction (`formatHookErrorForLog` masks the token value).
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("leaky-plugin failed: bd ready failed:"),
+      );
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("https://internal.example/v1/queue"),
+      );
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("AUTH_TOKEN=***"));
+    });
+
+    it("caps the marker when a nested prompt build skips many registered hooks", async () => {
+      const logger = {
+        error: vi.fn(),
+        warn: vi.fn(),
+        info: vi.fn(),
+        debug: vi.fn(),
+      };
+      for (let index = 0; index < 30; index += 1) {
+        addBeforePromptBuildHook(registry, `bulk-plugin-${index}`, () => ({}));
+      }
+      const runner = createHookRunner(registry, { logger });
+      let nested: PluginHookBeforePromptBuildResult | undefined;
+      addBeforePromptBuildHook(registry, "nesting-plugin", async () => {
+        nested = await runner.runBeforePromptBuild({ prompt: "nested", messages: [] }, stubCtx);
+        return {};
+      });
+
+      await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, stubCtx);
+
+      const marker = nested?.appendContext ?? "";
+      expect(marker).toContain('<dropped_plugin_context hook="before_prompt_build">');
+      // 31 registered hooks were skipped; the marker names 5 and counts the rest.
+      expect(marker.match(/\(nested-prompt-build\)/gu)).toHaveLength(5);
+      expect(marker).toContain("+26 more");
+      expect(new TextEncoder().encode(marker).length).toBeLessThanOrEqual(640);
     });
 
     it("honors per-hook registration timeouts over the default modifying hook timeout", async () => {

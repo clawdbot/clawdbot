@@ -331,6 +331,33 @@ describe("phase hooks merger", () => {
     await expect(run).rejects.toThrow("host turn authority is no longer active");
   });
 
+  it("marks a failed authorized enrichment as dropped model context", async () => {
+    registry.typedHooks.push({
+      pluginId: "failing-enricher",
+      hookName: "before_prompt_build",
+      handler: () => {
+        throw new Error("authorized enrichment failed");
+      },
+      requiresToolAuthority: true,
+      source: "test",
+    });
+    const runner = createHookRunner(registry);
+
+    const result = await runner.runAuthorizedPromptBuild(
+      { prompt: "test", messages: [] },
+      {},
+      {
+        toolAuthorityFingerprint: "turn-authority",
+        activeToolNames: ["memory_search"],
+        assertHostActive: () => undefined,
+      },
+    );
+
+    expect(result?.appendContext).toContain("failing-enricher (handler-failed)");
+    expect(result?.systemPrompt).toBeUndefined();
+    expect(result?.toolsAllow).toBeUndefined();
+  });
+
   it("does not start a later authorized handler after host authority closes", async () => {
     let hostActive = true;
     const firstEnrichment = vi.fn(async () => {

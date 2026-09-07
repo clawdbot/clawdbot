@@ -317,4 +317,62 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     expect(handler).not.toHaveBeenCalled();
     expect(result.prompt).toBe("hello");
   });
+
+  it("marks a failed handler in the assembled prompt without leaking its error text", async () => {
+    const secret = "AUTH_TOKEN=sk-live-9f3c https://internal.example/v1/queue";
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          pluginId: "leaky-plugin",
+          handler: () => {
+            throw new Error(`bd ready failed: ${secret}`);
+          },
+        },
+      ]),
+    );
+
+    const result = await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: "hello",
+      developerInstructions: "base instructions",
+      messages: [],
+      ctx: { trigger: "user", agentId: "agent-1", sessionKey: "session-1" },
+    });
+
+    expect(result.prompt).toContain("hello");
+    expect(result.prompt).toContain('<dropped_plugin_context hook="before_prompt_build">');
+    expect(result.prompt).toContain("leaky-plugin (handler-failed)");
+    expect(result.prompt).not.toContain("sk-live-9f3c");
+    expect(result.prompt).not.toContain("internal.example");
+    expect(result.prompt).not.toContain("bd ready failed");
+  });
+
+  it("bounds the marker in the assembled prompt when many handlers fail", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry(
+        Array.from({ length: 30 }, (_unused, index) => ({
+          hookName: "before_prompt_build",
+          pluginId: `bulk-plugin-${index}`,
+          handler: () => {
+            throw new Error(`handler ${index} exploded`);
+          },
+        })),
+      ),
+    );
+
+    const result = await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: "hello",
+      developerInstructions: "base instructions",
+      messages: [],
+      ctx: { trigger: "user", agentId: "agent-1", sessionKey: "session-1" },
+    });
+
+    const marker = result.prompt.slice(
+      result.prompt.indexOf('<dropped_plugin_context hook="before_prompt_build">'),
+    );
+    expect(marker.match(/\(handler-failed\)/gu)).toHaveLength(5);
+    expect(marker).toContain("+25 more");
+    expect(new TextEncoder().encode(marker).length).toBeLessThanOrEqual(640);
+    expect(result.prompt).not.toContain("exploded");
+  });
 });

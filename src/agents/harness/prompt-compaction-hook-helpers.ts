@@ -6,6 +6,7 @@
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { buildPromptBuildDropResult } from "../../plugins/prompt-build-drop.js";
 import type { PluginHookBeforePromptBuildResult } from "../../plugins/types.js";
 import { joinPresentTextSegments } from "../../shared/text/join-segments.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
@@ -88,7 +89,11 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     hookRunner && hasPromptBuildHooks
       ? await hookRunner.runBeforePromptBuild(promptEvent, hookCtx).catch((error: unknown) => {
           log.warn(`before_prompt_build hook failed: ${String(error)}`);
-          return undefined;
+          // The contribution is gone; say so in the prompt rather than handing
+          // the agent a context that only looks complete (openclaw-beads-201).
+          // The error stays in the warn above: the marker carries a bounded reason
+          // code, never error-derived text.
+          return buildPromptBuildDropResult([{ reason: "dispatch-failed" }]);
         })
       : undefined;
   const developerInstructions = resolveDeveloperInstructions(
