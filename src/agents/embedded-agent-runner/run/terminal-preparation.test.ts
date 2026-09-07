@@ -354,6 +354,66 @@ describe("prepareEmbeddedRunTerminal", () => {
     },
   );
 
+  it("keeps legacy CLI aggregates while marking latest context usage unavailable", async () => {
+    const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
+    const assistant = {
+      ...assistantMessage("stop"),
+      api: "cli",
+      usage: {
+        input: 128_814,
+        output: 3_000,
+        cacheRead: 992_953,
+        cacheWrite: 0,
+        totalTokens: 1_124_767,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    } satisfies AssistantMessage;
+    const aggregate = {
+      input: 128_814,
+      output: 3_000,
+      cacheRead: 992_953,
+      total: 1_124_767,
+    };
+    const usageAccumulator = Object.assign(createUsageAccumulator(), aggregate);
+    const prepared = prepareEmbeddedRunTerminal({
+      runParams: {
+        admittedRunContext: createTestAdmittedRunContext("run-cli-usage"),
+        sessionId: "session-cli-usage",
+        runId: "run-cli-usage",
+        workspaceDir: "/tmp/openclaw-test",
+        prompt: "hi",
+        trigger: "user",
+        timeoutMs: 60_000,
+      },
+      attempt: attemptResult({
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        currentAttemptCompletedAssistant: assistant,
+      }),
+      currentAttemptCompletedAssistant: assistant,
+      provider: "openai",
+      model: "gpt-5.4",
+      activeErrorContext: { provider: "openai", model: "gpt-5.4" },
+      authProfileStore: { version: 1, profiles: {} },
+      sessionIdUsed: "session-cli-usage",
+      outerContextTokenMeta: {},
+      usageAccumulator,
+      lastRunPromptUsage: { input: 42_000, output: 1_000, total: 43_000 },
+      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
+      resolvedToolResultFormat: "markdown",
+      terminalState: {
+        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+        signalOwnedInterruption: false,
+      },
+    });
+
+    expect(prepared.agentMeta.usage).toEqual(aggregate);
+    expect(prepared.agentMeta.lastCallUsage).toEqual({
+      contextUsage: { state: "unavailable" },
+    });
+    expect(prepared.agentMeta.promptTokens).toBeUndefined();
+  });
+
   it("projects a Code Mode cron tool failure into terminal metadata", async () => {
     const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
     const assistant = assistantMessage("stop");

@@ -1791,7 +1791,7 @@ src/agents/embedded-agent-runner/run/session-bootstrap.ts	2
 src/agents/embedded-agent-runner/run/session-prompt-state.ts	1
 src/agents/embedded-agent-runner/run/setup.ts	2
 src/agents/embedded-agent-runner/run/stream-wrapper.ts	1
-src/agents/embedded-agent-runner/run/terminal-preparation.ts	2
+src/agents/embedded-agent-runner/run/terminal-preparation.ts	1
 src/agents/embedded-agent-runner/run/terminal-resolution.ts	1
 src/agents/embedded-agent-runner/run/tool-activity-heartbeat.ts	2
 src/agents/embedded-agent-runner/runs.ts	2

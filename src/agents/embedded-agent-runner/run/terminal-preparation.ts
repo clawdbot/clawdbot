@@ -6,7 +6,7 @@ import type { AgentRunTerminalReceipt } from "../../agent-run-terminal-receipt.j
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-provenance.js";
-import type { NormalizedUsage, UsageLike } from "../../usage.js";
+import type { NormalizedUsage } from "../../usage.js";
 import { hasMessagingToolDeliveryEvidence } from "../delivery-evidence.js";
 import { resolveEmbeddedRunFailureSignal } from "../failure-signal.js";
 import { resolveEmbeddedRunTerminalToolFailure } from "../terminal-tool-failure.js";
@@ -16,6 +16,7 @@ import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js"
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import {
   buildUsageAgentMetaFields,
+  normalizeAssistantUsageForContext,
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
   resolveReportedModelRef,
@@ -78,7 +79,7 @@ export function prepareEmbeddedRunTerminal(input: {
   const terminalAssistant = input.currentAttemptCompletedAssistant;
   const usageMeta = buildUsageAgentMetaFields({
     usageAccumulator: input.usageAccumulator,
-    latestUsage: terminalAssistant?.usage as UsageLike | undefined,
+    latestUsage: normalizeAssistantUsageForContext(terminalAssistant),
     lastRunPromptUsage: input.lastRunPromptUsage,
   });
   // A runtime can observe its model without emitting message_end. That scoped
