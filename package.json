@@ -1880,6 +1880,7 @@
     "release:version": "node --import ./scripts/tsx.mjs scripts/release-version.ts",
     "runtime-sidecars:check": "node --import ./scripts/tsx.mjs scripts/generate-runtime-sidecar-paths-baseline.ts --check",
     "runtime-sidecars:gen": "node --import ./scripts/tsx.mjs scripts/generate-runtime-sidecar-paths-baseline.ts --write",
+    "sessions:retention:benchmark": "node --import ./scripts/tsx.mjs scripts/session-retention-analysis/benchmark.ts",
     "sqlite:sessions-schema:check": "node --import ./scripts/tsx.mjs scripts/generate-sqlite-session-schema-baseline.ts --check",
     "sqlite:sessions-schema:gen": "node --import ./scripts/tsx.mjs scripts/generate-sqlite-session-schema-baseline.ts --write",
     "start": "node openclaw.mjs",
