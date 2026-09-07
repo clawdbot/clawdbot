@@ -2446,6 +2446,19 @@
                   "plugins/sdk-subpaths",
                   "plugins/sdk-entrypoints",
                   "plugins/sdk-runtime",
+                  {
+                    "group": "Plugin runtime helpers",
+                    "pages": [
+                      "plugins/sdk-runtime/config-and-utilities",
+                      "plugins/sdk-runtime/agent",
+                      "plugins/sdk-runtime/models",
+                      "plugins/sdk-runtime/background-work",
+                      "plugins/sdk-runtime/gateway-and-nodes",
+                      "plugins/sdk-runtime/media",
+                      "plugins/sdk-runtime/state-and-system",
+                      "plugins/sdk-runtime/channel"
+                    ]
+                  },
                   "plugins/sdk-agent-harness",
                   "plugins/sdk-setup",
                   "plugins/sdk-testing"
