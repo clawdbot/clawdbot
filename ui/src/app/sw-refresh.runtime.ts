@@ -1,8 +1,9 @@
 import { controlUiWorkerActivationRetires } from "../build-info.ts";
+import { scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
 
-function waitForReplacementWorker(worker: ServiceWorker): Promise<boolean> {
+function waitForReplacementWorker(worker: ServiceWorker): Promise<void> {
   if (worker.state === "activated" || worker.state === "redundant") {
-    return Promise.resolve(worker.state === "activated");
+    return Promise.resolve();
   }
   return new Promise((resolve) => {
     const onStateChange = () => {
@@ -10,19 +11,56 @@ function waitForReplacementWorker(worker: ServiceWorker): Promise<boolean> {
         return;
       }
       worker.removeEventListener("statechange", onStateChange);
-      resolve(worker.state === "activated");
+      resolve();
     };
     worker.addEventListener("statechange", onStateChange);
     onStateChange();
   });
 }
 
-/**
- * Reports whether a service worker update retires this document, so callers can
- * hold work back for the reload it is about to take. A deployment can restart
- * the Gateway without changing the package version, so the socket's version
- * handshake alone cannot retire an already-open document.
- */
+async function readWorkerBuild(worker: ServiceWorker): Promise<unknown> {
+  const channel = new MessageChannel();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await new Promise<unknown>((resolve) => {
+      // Older workers do not answer probes. Bound the wait and release both
+      // ports so an unavailable worker cannot strand terminal reconnect work.
+      timeout = setTimeout(() => resolve(null), 1_000);
+      channel.port1.addEventListener("message", (event) => resolve(event.data), { once: true });
+      channel.port1.start();
+      worker.postMessage({ type: "sw-version-probe" }, [channel.port2]);
+    });
+  } finally {
+    clearTimeout(timeout);
+    channel.port1.close();
+    channel.port2.close();
+  }
+}
+
+async function reconcileActiveWorker(registration: ServiceWorkerRegistration): Promise<boolean> {
+  while (registration.active) {
+    const worker = registration.active;
+    const message = await readWorkerBuild(worker);
+    // Activation can replace the worker during either the query or the document
+    // probe. Reconcile that new owner rather than declaring the document fresh.
+    if (registration.active !== worker) {
+      continue;
+    }
+    if (!controlUiWorkerActivationRetires(message)) {
+      return false;
+    }
+    // A worker must not supersede a target established by the Gateway handshake.
+    const reloaded = await scheduleStaleChunkReload({
+      canReload: () => registration.active === worker,
+    });
+    if (reloaded || registration.active === worker) {
+      return reloaded;
+    }
+  }
+  return false;
+}
+
+/** Returns true only when recovery actually admitted a document reload. */
 export async function refreshControlUiServiceWorker(): Promise<boolean> {
   const serviceWorker =
     typeof navigator !== "undefined" && "serviceWorker" in navigator
@@ -35,43 +73,25 @@ export async function refreshControlUiServiceWorker(): Promise<boolean> {
   if (!registration) {
     return false;
   }
-  // `registration.update()` is not a synchronization primitive: when an
-  // install is already in flight it may reject or briefly hide that worker.
-  // Fence against the document's controller before starting another check.
-  const incumbent = serviceWorker.controller ?? registration.active;
-  const pendingReplacement =
-    registration.installing ??
-    registration.waiting ??
-    (registration.active && registration.active !== incumbent ? registration.active : null);
-  if (pendingReplacement) {
-    return replacementRetiresDocument(serviceWorker, pendingReplacement);
+  // A freshly loaded document can already be newer than the active worker.
+  // Let its installing replacement settle before comparing build identities.
+  let replacement = registration.installing ?? registration.waiting;
+  if (!replacement) {
+    try {
+      await registration.update();
+    } catch (error) {
+      // A failed update check must not hide a replacement that already activated
+      // while the page slept. Preserve the failure unless recovery can proceed.
+      if (await reconcileActiveWorker(registration)) {
+        return true;
+      }
+      throw error;
+    }
+    replacement = registration.installing ?? registration.waiting;
   }
-  await registration.update();
-  const replacement =
-    registration.installing ??
-    registration.waiting ??
-    (registration.active !== incumbent ? registration.active : null);
-  return replacement ? replacementRetiresDocument(serviceWorker, replacement) : false;
-}
-
-async function replacementRetiresDocument(
-  serviceWorker: ServiceWorkerContainer,
-  worker: ServiceWorker,
-): Promise<boolean> {
-  // `activate` announces the served build before the worker reports `activated`
-  // (ui/public/sw.js), so listening from here catches the only signal that
-  // separates a replacement which reloads this document from one that does not.
-  // Activation alone cannot: a worker serving this document's own build
-  // activates whenever the document reloaded onto the new bundle first, and
-  // calling that a pending reload strands every fenced caller for good.
-  let retiresDocument = false;
-  const onWorkerMessage = (event: MessageEvent) => {
-    retiresDocument ||= controlUiWorkerActivationRetires(event.data);
-  };
-  serviceWorker.addEventListener("message", onWorkerMessage);
-  try {
-    return (await waitForReplacementWorker(worker)) && retiresDocument;
-  } finally {
-    serviceWorker.removeEventListener("message", onWorkerMessage);
+  if (replacement) {
+    await waitForReplacementWorker(replacement);
   }
+  // Query even when no update was discovered: activation may be long finished.
+  return reconcileActiveWorker(registration);
 }

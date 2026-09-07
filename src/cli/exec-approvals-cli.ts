@@ -43,6 +43,7 @@ import {
   type ExecApprovalsDefaults,
   type ExecApprovalsFile,
 } from "../infra/exec-approvals.js";
+import { classifyExecAllowlistScope } from "../infra/exec-command-resolution.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import { rethrowExpectedCliError } from "./failure-output.js";
@@ -749,15 +750,11 @@ async function resolvePendingApproval(
     }
   }
 
-  const expiresInDaysRaw =
-    opts.expiresInDays === undefined ? undefined : Number.parseInt(opts.expiresInDays, 10);
-  if (
-    expiresInDaysRaw !== undefined &&
-    (!Number.isInteger(expiresInDaysRaw) || expiresInDaysRaw < 1 || expiresInDaysRaw > 3650)
-  ) {
+  const expiresInDays = parseStrictPositiveInteger(opts.expiresInDays);
+  if (opts.expiresInDays !== undefined && (expiresInDays === undefined || expiresInDays > 3650)) {
     exitWithError("--expires-in-days must be a whole number of days between 1 and 3650.");
   }
-  if (expiresInDaysRaw !== undefined && decision !== "allow-always") {
+  if (expiresInDays !== undefined && decision !== "allow-always") {
     exitWithError("--expires-in-days only applies to allow-always.");
   }
   const result = (await callGatewayFromCli(
@@ -767,7 +764,7 @@ async function resolvePendingApproval(
       id,
       kind: current.presentation.kind,
       decision,
-      ...(expiresInDaysRaw !== undefined ? { grantExpiresInDays: expiresInDaysRaw } : {}),
+      ...(expiresInDays !== undefined ? { grantExpiresInDays: expiresInDays } : {}),
     },
     approvalCallOptions,
   )) as ApprovalResolveResult;
@@ -952,8 +949,13 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
       : null,
   ].filter((part): part is string => part != null);
   const agents = file.agents ?? {};
-  const allowlistRows: Array<{ Target: string; Agent: string; Pattern: string; LastUsed: string }> =
-    [];
+  const allowlistRows: Array<{
+    Target: string;
+    Agent: string;
+    Pattern: string;
+    Scope: string;
+    LastUsed: string;
+  }> = [];
   const now = Date.now();
   for (const [agentId, agent] of Object.entries(agents)) {
     const allowlist = Array.isArray(agent.allowlist) ? agent.allowlist : [];
@@ -967,10 +969,19 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
         Target: targetLabel,
         Agent: agentId,
         Pattern: pattern,
+        Scope: classifyExecAllowlistScope(entry),
         LastUsed: lastUsedAt ? formatTimeAgo(Math.max(0, now - lastUsedAt)) : muted("unknown"),
       });
     }
   }
+  const mcpToolRows = Object.entries(agents).flatMap(([agentId, agent]) =>
+    (agent.mcpTools ?? []).map((grant) => ({
+      Agent: agentId,
+      Server: grant.server,
+      Tool: grant.tool,
+      Added: formatTimeAgo(Math.max(0, now - grant.addedAt)),
+    })),
+  );
 
   const summaryRows = [
     { Field: "Target", Value: targetLabel },
@@ -985,6 +996,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
     { Field: "Defaults", Value: defaultsParts.length > 0 ? defaultsParts.join(", ") : "none" },
     { Field: "Agents", Value: String(Object.keys(agents).length) },
     { Field: "Allowlist", Value: String(allowlistRows.length) },
+    { Field: "MCP tool grants", Value: String(mcpToolRows.length) },
   ];
 
   defaultRuntime.log(heading("Approvals"));
@@ -999,24 +1011,40 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
     }).trimEnd(),
   );
 
-  if (allowlistRows.length === 0) {
-    defaultRuntime.log("");
+  defaultRuntime.log("");
+  if (allowlistRows.length > 0) {
+    defaultRuntime.log(heading("Allowlist"));
+    defaultRuntime.log(
+      renderTerminalSafeTable({
+        width: tableWidth,
+        columns: [
+          { key: "Target", header: "Target", minWidth: 10 },
+          { key: "Agent", header: "Agent", minWidth: 8 },
+          { key: "Pattern", header: "Pattern", minWidth: 20, flex: true },
+          { key: "Scope", header: "Scope", minWidth: 10 },
+          { key: "LastUsed", header: "Last Used", minWidth: 10 },
+        ],
+        rows: allowlistRows,
+      }).trimEnd(),
+    );
+  } else {
     defaultRuntime.log(muted("No allowlist entries."));
+  }
+  if (mcpToolRows.length === 0) {
     return;
   }
-
   defaultRuntime.log("");
-  defaultRuntime.log(heading("Allowlist"));
+  defaultRuntime.log(heading("MCP tool grants"));
   defaultRuntime.log(
     renderTerminalSafeTable({
       width: tableWidth,
       columns: [
-        { key: "Target", header: "Target", minWidth: 10 },
         { key: "Agent", header: "Agent", minWidth: 8 },
-        { key: "Pattern", header: "Pattern", minWidth: 20, flex: true },
-        { key: "LastUsed", header: "Last Used", minWidth: 10 },
+        { key: "Server", header: "Server", minWidth: 16, flex: true },
+        { key: "Tool", header: "Tool", minWidth: 16, flex: true },
+        { key: "Added", header: "Added", minWidth: 10 },
       ],
-      rows: allowlistRows,
+      rows: mcpToolRows,
     }).trimEnd(),
   );
 }
@@ -1095,13 +1123,6 @@ function normalizeAllowlistEntry(entry: { pattern?: string } | null): string | n
   return pattern ? pattern : null;
 }
 
-function ensureAgent(file: ExecApprovalsFile, agentKey: string): ExecApprovalsAgent {
-  const agents = file.agents ?? {};
-  const entry = agents[agentKey] ?? {};
-  file.agents = agents;
-  return entry;
-}
-
 function isEmptyAgent(agent: ExecApprovalsAgent): boolean {
   const allowlist = Array.isArray(agent.allowlist) ? agent.allowlist : [];
   return (
@@ -1109,20 +1130,12 @@ function isEmptyAgent(agent: ExecApprovalsAgent): boolean {
     !agent.ask &&
     !agent.askFallback &&
     agent.autoAllowSkills === undefined &&
+    !agent.mcpTools?.length &&
     allowlist.length === 0
   );
 }
 
-async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts): Promise<{
-  nodeId: string | null;
-  source: "gateway" | "node" | "local";
-  targetLabel: string;
-  baseHash: string;
-  file: ExecApprovalsFile;
-  agentKey: string;
-  agent: ExecApprovalsAgent;
-  allowlistEntries: NonNullable<ExecApprovalsAgent["allowlist"]>;
-}> {
+async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts) {
   const agentKey = resolveAgentKey(opts.agent);
   if (agentKey !== "*") {
     const source = !opts.gateway && !opts.node ? "local" : opts.gateway ? "gateway" : "node";
@@ -1132,8 +1145,8 @@ async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts): Promise<{
     }
     resolveConfiguredAgentId(config, agentKey);
   }
-  const { snapshot, nodeId, source, targetLabel, baseHash, kind } =
-    await loadWritableSnapshotTarget(opts);
+  const target = await loadWritableSnapshotTarget(opts);
+  const { snapshot, kind } = target;
   if (kind === "native" || !isFileApprovalsSnapshot(snapshot)) {
     exitWithError(
       "Host-native node approvals do not support allowlist mutations; use approvals set --node with host-native JSON.",
@@ -1142,10 +1155,10 @@ async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts): Promise<{
   const file = snapshot.file;
   file.version = 1;
 
-  const agent = ensureAgent(file, agentKey);
+  const agent: ExecApprovalsAgent = file.agents?.[agentKey] ?? {};
   const allowlistEntries = Array.isArray(agent.allowlist) ? agent.allowlist : [];
 
-  return { nodeId, source, targetLabel, baseHash, file, agentKey, agent, allowlistEntries };
+  return { ...target, snapshot, file, agentKey, agent, allowlistEntries };
 }
 
 type WritableAllowlistAgentContext = Awaited<ReturnType<typeof loadWritableAllowlistAgent>> & {
@@ -1163,16 +1176,12 @@ async function runAllowlistMutation(
     const context = await loadWritableAllowlistAgent(opts);
     const shouldSave = await mutate({ ...context, trimmedPattern });
     if (!shouldSave) {
+      if (opts.json) {
+        defaultRuntime.writeJson(redactExecApprovals(context.snapshot), 0);
+      }
       return;
     }
-    await saveSnapshotTargeted({
-      opts,
-      source: context.source,
-      nodeId: context.nodeId,
-      file: context.file,
-      baseHash: context.baseHash,
-      targetLabel: context.targetLabel,
-    });
+    await saveSnapshotTargeted({ ...context, opts });
   } catch (err) {
     failApprovalsCommand(err, opts);
   }

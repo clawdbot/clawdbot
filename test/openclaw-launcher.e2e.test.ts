@@ -194,7 +194,7 @@ describe("openclaw launcher", () => {
       } else {
         expect(result.status, version).toBe(1);
         expect(result.stderr, version).toContain(
-          `openclaw: Node.js >=22.22.3 <23, >=24.15.0 <25, or >=25.9.0 is required (current: v${version}).`,
+          `openclaw: Node.js >=24.16.0 <25, or >=26.1.0 is required (current: v${version}).`,
         );
       }
     }
@@ -225,7 +225,7 @@ describe("openclaw launcher", () => {
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain(
-      "openclaw: Node.js >=22.22.3 <23, >=24.15.0 <25, or >=25.9.0 is required (current: v20.0.0).",
+      "openclaw: Node.js >=24.16.0 <25, or >=26.1.0 is required (current: v20.0.0).",
     );
     expect(result.stderr).toContain("nvm install 26");
     expect(result.stderr).not.toContain("TypeError");
@@ -1034,6 +1034,33 @@ describe("openclaw launcher", () => {
 
       expect(result.status).toBe(0);
       expect(result.stdout).toBe("cache:disabled;respawn:1");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves a packaged pnpm project path through compile-cache respawn",
+    async () => {
+      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+      await fs.writeFile(path.join(fixtureRoot, "package.json"), '{"version":"2026.8.1"}\n');
+      await fs.writeFile(
+        path.join(fixtureRoot, "dist", "entry.js"),
+        'process.stdout.write(process.argv[1] ?? "");\n',
+        "utf8",
+      );
+      const globalRoot = makeTempDir(fixtureRoots, "openclaw-pnpm-global-");
+      const packageRoot = path.join(globalRoot, "v11", "active", "node_modules", "openclaw");
+      await fs.mkdir(path.dirname(packageRoot), { recursive: true });
+      await fs.symlink(fixtureRoot, packageRoot, "dir");
+      const launcher = path.join(packageRoot, "openclaw.mjs");
+
+      const result = spawnSync(process.execPath, [launcher], {
+        cwd: globalRoot,
+        env: launcherEnv({ NODE_COMPILE_CACHE: path.join(globalRoot, ".node-compile-cache") }),
+        encoding: "utf8",
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe(launcher);
     },
   );
 

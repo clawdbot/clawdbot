@@ -77,10 +77,9 @@ function resolveSessionEntryForKey(params: {
   let store = params.cache.get(storePath);
   if (!store) {
     store = Object.fromEntries(
-      listSessionEntriesReadOnly({ storePath, clone: false }).map(({ sessionKey, entry }) => [
-        sessionKey,
-        entry,
-      ]),
+      listSessionEntriesReadOnly({ storePath, clone: false, projection: "list" }).map(
+        ({ sessionKey, entry }) => [sessionKey, entry],
+      ),
     );
     params.cache.set(storePath, store);
   }

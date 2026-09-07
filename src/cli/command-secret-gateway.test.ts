@@ -688,17 +688,21 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     const envKey = "TALK_API_KEY_FAILFAST";
     await withEnvValue(envKey, undefined, async () => {
       callGateway.mockRejectedValueOnce(new Error("gateway closed"));
-      await expect(
-        resolveCommandSecretRefsViaGateway({
-          config: buildTalkTestProviderConfig({
-            source: "env",
-            provider: "default",
-            id: envKey,
-          }),
-          commandName: "memory status",
-          targetIds: new Set(["talk.providers.*.apiKey"]),
+      const resolution = resolveCommandSecretRefsViaGateway({
+        config: buildTalkTestProviderConfig({
+          source: "env",
+          provider: "default",
+          id: envKey,
         }),
-      ).rejects.toThrow(/failed to resolve secrets from the active gateway snapshot/i);
+        commandName: "memory status",
+        targetIds: new Set(["talk.providers.*.apiKey"]),
+      });
+      await expect(resolution).rejects.toThrow(
+        /failed to resolve secrets from the active gateway snapshot/i,
+      );
+      await expect(resolution).rejects.toThrow(/local resolution also failed/i);
+      await expect(resolution).rejects.toThrow(/check the configured secret sources/i);
+      await expect(resolution).rejects.not.toThrow(envKey);
     });
   });
 
@@ -729,6 +733,28 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       expect(
         result.diagnostics.some((entry) => entry.includes("resolved command secrets locally")),
       ).toBe(true);
+    });
+  });
+
+  it("falls back to local resolution when the gateway stalls secrets.resolve past the caller's budget", async () => {
+    await withEnvValue("TALK_API_KEY", "local-fallback-key", async () => {
+      callGateway.mockImplementation(
+        (request: { timeoutMs: number }) =>
+          new Promise((_resolve, reject) => {
+            // A reachable gateway that never replies fails only at the request deadline it was given.
+            setTimeout(() => reject(new Error("gateway timeout")), request.timeoutMs);
+          }),
+      );
+      const result = await resolveCommandSecretRefsViaGateway({
+        config: makeTalkProviderApiKeySecretRefConfig("TALK_API_KEY"),
+        commandName: "status",
+        targetIds: new Set(["talk.providers.*.apiKey"]),
+        gatewaySecretResolveTimeoutMs: 50,
+      });
+
+      expect(callGateway.mock.calls[0]?.[0]).toMatchObject({ timeoutMs: 50 });
+      expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("local-fallback-key");
+      expectGatewayUnavailableLocalFallbackDiagnostics(result);
     });
   });
 

@@ -352,6 +352,7 @@ describe("node workspace transfer service", () => {
               direction: "upload",
               token,
               baseManifestRef: prepared.snapshot.manifestRef,
+              referenceManifestRef: prepared.snapshot.manifestRef,
             },
           },
           undefined,
@@ -409,7 +410,9 @@ describe("node workspace transfer service", () => {
         "environment-1",
         prepared.snapshot.manifestRef,
       );
-      await expect(uploadResult(failedUploadToken)).rejects.toThrow("workspace-transfer-failed");
+      await expect(uploadResult(failedUploadToken)).rejects.toThrow(
+        "workspace-transfer-invalid: gateway rejected workspace transfer payload (staging)",
+      );
       expect(writeFaults.lastStagingRoot()).toBeDefined();
       await expect(fs.stat(writeFaults.lastStagingRoot()!)).rejects.toMatchObject({
         code: "ENOENT",

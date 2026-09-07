@@ -1,11 +1,4 @@
-import fsSync from "node:fs";
-import fs from "node:fs/promises";
-import * as readline from "node:readline";
-import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
-import {
-  readSessionTranscriptRawDelta,
-  type SessionTranscriptTargetParams,
-} from "openclaw/plugin-sdk/session-transcript-runtime";
+import { readSessionTranscriptRawDelta } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
@@ -58,77 +51,8 @@ function resolveTranscriptReadLimits(
   };
 }
 
-async function streamBoundedTranscriptJsonl(params: {
-  sessionFile: string;
-  limits?: TranscriptReadLimits;
-  onRecord: (record: unknown) => boolean | void;
-}): Promise<void> {
-  const limits = resolveTranscriptReadLimits(params.limits);
-  try {
-    const stats = await fs.stat(params.sessionFile);
-    if (!stats.isFile() || stats.size > limits.maxBytes) {
-      return;
-    }
-  } catch {
-    return;
-  }
-  const stream = fsSync.createReadStream(params.sessionFile, {
-    encoding: "utf8",
-  });
-  const rl = readline.createInterface({
-    input: stream,
-    crlfDelay: Infinity,
-  });
-  let seenLines = 0;
-  try {
-    for await (const line of rl) {
-      seenLines += 1;
-      if (seenLines > limits.maxLines) {
-        break;
-      }
-      const trimmed = line.trim();
-      if (!trimmed) {
-        continue;
-      }
-      try {
-        if (params.onRecord(JSON.parse(trimmed) as unknown)) {
-          break;
-        }
-      } catch {}
-    }
-  } catch {
-    // Treat transcript recovery as best-effort on timeout/abort paths.
-  } finally {
-    rl.close();
-    stream.destroy();
-  }
-}
-
-function fileTranscriptSource(sessionFile: string): ActiveMemoryTranscriptSource {
-  return { kind: "file", sessionFile };
-}
-
-function transcriptSourceFromReturnedSessionFile(params: {
-  sessionFile: string;
-  sessionKey: string;
-}): ActiveMemoryTranscriptSource {
-  const marker = parseSqliteSessionFileMarker(normalizeOptionalString(params.sessionFile));
-  if (!marker) {
-    return fileTranscriptSource(params.sessionFile);
-  }
-  return {
-    kind: "runtime",
-    target: {
-      agentId: marker.agentId,
-      sessionId: marker.sessionId,
-      sessionKey: params.sessionKey,
-      storePath: marker.storePath,
-    },
-  };
-}
-
-async function streamRuntimeTranscriptEvents(params: {
-  target: SessionTranscriptTargetParams;
+async function streamActiveMemoryTranscriptRecords(params: {
+  source: ActiveMemoryTranscriptSource;
   limits?: TranscriptReadLimits;
   onRecord: (record: unknown) => boolean | void;
 }): Promise<void> {
@@ -136,7 +60,7 @@ async function streamRuntimeTranscriptEvents(params: {
   let page: Awaited<ReturnType<typeof readSessionTranscriptRawDelta>>;
   try {
     page = await readSessionTranscriptRawDelta({
-      ...params.target,
+      ...params.source,
       maxBytes: limits.maxBytes,
       maxEvents: limits.maxLines,
     });
@@ -153,26 +77,6 @@ async function streamRuntimeTranscriptEvents(params: {
       }
     } catch {}
   }
-}
-
-async function streamActiveMemoryTranscriptRecords(params: {
-  source: ActiveMemoryTranscriptSource;
-  limits?: TranscriptReadLimits;
-  onRecord: (record: unknown) => boolean | void;
-}): Promise<void> {
-  if (params.source.kind === "runtime") {
-    await streamRuntimeTranscriptEvents({
-      target: params.source.target,
-      limits: params.limits,
-      onRecord: params.onRecord,
-    });
-    return;
-  }
-  await streamBoundedTranscriptJsonl({
-    sessionFile: params.source.sessionFile,
-    limits: params.limits,
-    onRecord: params.onRecord,
-  });
 }
 
 function resolveToolResultMessage(value: unknown): Record<string, unknown> | undefined {
@@ -399,12 +303,10 @@ export {
   createActiveMemoryHookDeadline,
   extractActiveMemorySearchDebugFromSessionRecord,
   extractToolResultNameFromSessionRecord,
-  fileTranscriptSource,
   hasTerminalUnavailableMemoryResultInSessionRecord,
   hasUnavailableMemoryResultInSessionRecord,
   hasUsableMemoryResultInSessionRecord,
   isUnavailableMemorySearchDebug,
   resolveTranscriptReadLimits,
   streamActiveMemoryTranscriptRecords,
-  transcriptSourceFromReturnedSessionFile,
 };

@@ -114,7 +114,7 @@ const JOURNAL_MAX_LIMIT = 5000;
 const JOURNAL_MAX_BYTES = 1_000_000;
 
 function parsePositiveInt(value: string | undefined, fallback: number, flag: string): number {
-  if (!value) {
+  if (value === undefined) {
     return fallback;
   }
   const parsed = parseStrictPositiveInteger(value);
@@ -392,11 +392,7 @@ function isTransientFollowError(error: unknown): boolean {
   return isPlainGatewayRequestCloseError(message) || isPlainGatewayRequestTimeoutError(message);
 }
 
-export function formatLogTimestamp(
-  value?: string,
-  mode: "pretty" | "plain" = "plain",
-  localTime = true,
-) {
+function formatLogTimestamp(value?: string, mode: "pretty" | "plain" = "plain", localTime = true) {
   if (!value) {
     return "";
   }
@@ -489,7 +485,6 @@ async function emitGatewayError(
   emitJsonLine: (payload: Record<string, unknown>, toStdErr?: boolean) => boolean,
   errorLine: (text: string) => boolean,
 ) {
-  const message = "Gateway not reachable. Is it running and accessible?";
   const hint = `Hint: run \`${formatCliCommand("openclaw doctor")}\`.`;
   const errorText = redactSensitiveUrlLikeString(formatErrorMessage(err));
 
@@ -497,20 +492,16 @@ async function emitGatewayError(
     isGatewayTransportError(err) ? err.connectionDetails : opts.connection,
   );
   if (mode === "json") {
-    if (
-      !emitJsonLine(
-        {
-          type: "error",
-          message,
-          error: errorText,
-          details,
-          hint,
-        },
-        true,
-      )
-    ) {
-      return;
-    }
+    emitJsonLine(
+      {
+        type: "error",
+        message: errorText,
+        error: errorText,
+        details,
+        hint,
+      },
+      true,
+    );
     return;
   }
 

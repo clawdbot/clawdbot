@@ -1,5 +1,6 @@
 /** CLI entrypoint for non-mutating doctor lint health checks. */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { createConfigIO, readConfigFileSnapshot } from "../config/config.js";
@@ -15,6 +16,7 @@ import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-co
 import {
   exitCodeFromFindings,
   runDoctorLintChecks,
+  selectUpdateReadinessChecks,
   type DoctorLintRunOptions,
 } from "../flows/doctor-lint-flow.js";
 import { listExtensionHealthChecksForDoctor } from "../flows/health-check-registry.js";
@@ -32,6 +34,7 @@ import {
 } from "../plugins/install-root-context.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { isPostCoreConvergencePass } from "./doctor/shared/update-phase.js";
 
 interface DoctorLintCliOptions {
   readonly json?: boolean;
@@ -41,6 +44,7 @@ interface DoctorLintCliOptions {
   readonly allowExec?: boolean;
   readonly deep?: boolean;
   readonly includeAllChecks?: boolean;
+  readonly updateReadiness?: "post-plugin";
 }
 
 type DoctorLintStateView = {
@@ -57,6 +61,11 @@ type DoctorLintExecution = {
   findings: readonly HealthFinding[];
   writeOutput: () => void;
 };
+
+type DoctorLintStateRunner = <T>(run: () => Promise<T>) => Promise<T>;
+
+const RUNTIME_TOOL_SCHEMA_CHECK_ID = "core/doctor/runtime-tool-schemas";
+const AUTH_PROFILE_CHECK_ID = "core/doctor/auth-profiles";
 
 class DoctorLintStateSnapshotError extends Error {
   constructor(cause: unknown) {
@@ -109,55 +118,40 @@ async function prepareDoctorLintExecution(
   }
   maybeLoadDotEnvForConfig(process.env);
   const sourceEnv = { ...process.env };
-  const pluginStateMode = resolveBundledHealthCheckPluginStateMode(opts);
-  let execution: DoctorLintExecution;
-  if (pluginStateMode === "direct") {
-    execution = await executeDoctorLint(runtime, opts, sevMin, {
-      pluginMetadataEnv: sourceEnv,
-      readConfigSnapshot: () => readConfigFileSnapshot({ observe: false }),
-      sourceEnv,
-      runWithPluginStateSnapshot: async (run) =>
-        await withReadOnlyPluginStateSnapshot(sourceEnv, run),
-    });
-  } else if (pluginStateMode === "deferred") {
-    const sourceConfigPath = resolveConfigPath(sourceEnv, resolveStateDir(sourceEnv));
-    const configIo = createConfigIO({
-      env: sourceEnv,
-      configPath: sourceConfigPath,
-      observe: false,
-      pluginValidation: "core-only",
-    });
-    execution = await executeDoctorLint(runtime, opts, sevMin, {
-      pluginMetadataEnv: sourceEnv,
-      readConfigSnapshot: () => configIo.readConfigFileSnapshot(),
-      sourceEnv,
-      runWithPluginStateSnapshot: async (run) =>
-        await withReadOnlyPluginStateSnapshot(sourceEnv, run),
-    });
-  } else {
-    try {
-      execution = await withReadOnlyPluginStateSnapshot(sourceEnv, async (pluginMetadataEnv) => {
-        const sourceConfigPath = resolveConfigPath(sourceEnv, resolveStateDir(sourceEnv));
-        const configIo = createConfigIO({
-          env: sourceEnv,
-          configPath: sourceConfigPath,
-          observe: false,
-        });
-        return await executeDoctorLint(runtime, opts, sevMin, {
-          pluginMetadataEnv,
-          readConfigSnapshot: () => configIo.readConfigFileSnapshot(),
-          sourceEnv,
-          runWithPluginStateSnapshot: async (run) => await run(pluginMetadataEnv),
-        });
-      });
-    } catch (error) {
-      if (!(error instanceof DoctorLintStateSnapshotError)) {
-        throw error;
-      }
-      execution = createStateSnapshotFailureExecution(runtime, opts, sevMin, error);
-    }
+  const updateReadiness = isPostCoreConvergencePass(sourceEnv) ? "post-plugin" : undefined;
+  const effectiveOpts: DoctorLintCliOptions = updateReadiness ? { ...opts, updateReadiness } : opts;
+  const pluginStateMode = resolveBundledHealthCheckPluginStateMode(effectiveOpts);
+  const stateView: DoctorLintStateView = {
+    pluginMetadataEnv: sourceEnv,
+    sourceEnv,
+    readConfigSnapshot: () =>
+      pluginStateMode === "direct"
+        ? readConfigFileSnapshot({ observe: false })
+        : createConfigIO({
+            env: sourceEnv,
+            configPath: resolveConfigPath(sourceEnv, resolveStateDir(sourceEnv)),
+            observe: false,
+            pluginValidation: pluginStateMode === "deferred" ? "core-only" : undefined,
+          }).readConfigFileSnapshot(),
+    runWithPluginStateSnapshot: async (run) => withReadOnlyPluginStateSnapshot(sourceEnv, run),
+  };
+  if (pluginStateMode !== "isolated") {
+    return await executeDoctorLint(runtime, effectiveOpts, sevMin, stateView);
   }
-  return execution;
+  try {
+    return await withReadOnlyPluginStateSnapshot(sourceEnv, async (pluginMetadataEnv) =>
+      executeDoctorLint(runtime, effectiveOpts, sevMin, {
+        ...stateView,
+        pluginMetadataEnv,
+        runWithPluginStateSnapshot: async (run) => run(pluginMetadataEnv),
+      }),
+    );
+  } catch (error) {
+    if (!(error instanceof DoctorLintStateSnapshotError)) {
+      throw error;
+    }
+    return createStateSnapshotFailureExecution(runtime, effectiveOpts, sevMin, error);
+  }
 }
 
 async function executeDoctorLint(
@@ -208,6 +202,7 @@ async function executeDoctorLint(
     cwd: ctx.cwd,
     env: stateView.pluginMetadataEnv,
     runWithPluginStateSnapshot: stateView.runWithPluginStateSnapshot,
+    updateReadiness: opts.updateReadiness,
   });
   const registeredExtensionChecks = listExtensionHealthChecksForDoctor([]);
   const onlyRegisteredExtensionChecks =
@@ -220,11 +215,27 @@ async function executeDoctorLint(
   const extensionChecks = onlyRegisteredExtensionChecks
     ? registeredExtensionChecks
     : listExtensionHealthChecksForDoctor(coreChecks);
-  const coreCtx = { ...ctx, deep: opts.deep === true };
+  const runWithPrivateStateSnapshot: DoctorLintStateRunner = async (run) =>
+    await stateView.runWithPluginStateSnapshot(async () => await run());
+  // Update readiness keeps every declared check private until restart.
+  const runWithSourceState: DoctorLintStateRunner = async (run) =>
+    opts.updateReadiness ? run() : withDoctorLintStateEnv(sourceEnv, run);
+  const coreCtx = {
+    ...ctx,
+    deep: opts.deep === true,
+    runWithPrivateStateSnapshot,
+    runWithSourceState,
+  };
 
+  const checks = [
+    ...coreChecks.map((check) => withCoreLintContext(check, coreCtx)),
+    ...extensionChecks,
+  ];
   const runOpts: DoctorLintRunOptions = {
-    checks: [...coreChecks.map((check) => withCoreLintContext(check, coreCtx)), ...extensionChecks],
-    includeAllChecks: opts.includeAllChecks === true,
+    checks: opts.updateReadiness
+      ? selectUpdateReadinessChecks(checks, opts.updateReadiness)
+      : checks,
+    includeAllChecks: opts.updateReadiness !== undefined || opts.includeAllChecks === true,
     ...(opts.skipIds && opts.skipIds.length > 0 ? { skipIds: opts.skipIds } : {}),
     ...(opts.onlyIds && opts.onlyIds.length > 0 ? { onlyIds: opts.onlyIds } : {}),
   };
@@ -269,28 +280,43 @@ async function withReadOnlyPluginStateSnapshot<T>(
   run: (pluginMetadataEnv: NodeJS.ProcessEnv) => Promise<T>,
 ): Promise<T> {
   const sourceDatabasePath = resolveOpenClawStateSqlitePath(sourceEnv);
-  if (!fs.existsSync(sourceDatabasePath)) {
-    return await run(sourceEnv);
-  }
-  let prepared: ReturnType<typeof prepareSqliteReadOnlyLocationSync>;
+  let cleanup: () => boolean;
+  let privateRoot: string;
+  let prepared: ReturnType<typeof prepareSqliteReadOnlyLocationSync> | undefined;
   try {
-    prepared = prepareSqliteReadOnlyLocationSync(sourceDatabasePath);
+    if (fs.existsSync(sourceDatabasePath)) {
+      prepared = prepareSqliteReadOnlyLocationSync(sourceDatabasePath);
+      privateRoot = path.dirname(prepared.location);
+      cleanup = prepared.cleanup;
+    } else {
+      privateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-lint-state-"));
+      cleanup = () => {
+        try {
+          fs.rmSync(privateRoot, { force: true, recursive: true });
+          return true;
+        } catch {
+          return false;
+        }
+      };
+    }
   } catch (error) {
     throw new DoctorLintStateSnapshotError(error);
   }
   let outcome: { ok: true; value: T } | { ok: false; error: unknown };
   let runStarted = false;
   try {
-    const privateStateDir = path.join(path.dirname(prepared.location), "openclaw-state");
+    const privateStateDir = path.join(privateRoot, "openclaw-state");
     const privateDatabasePath = resolveOpenClawStateSqlitePath({
       ...sourceEnv,
       OPENCLAW_STATE_DIR: privateStateDir,
     });
     fs.mkdirSync(path.dirname(privateDatabasePath), { recursive: true, mode: 0o700 });
-    for (const suffix of ["", "-journal", "-shm", "-wal"]) {
-      const sourcePath = `${prepared.location}${suffix}`;
-      if (fs.existsSync(sourcePath)) {
-        fs.renameSync(sourcePath, `${privateDatabasePath}${suffix}`);
+    if (prepared) {
+      for (const suffix of ["", "-journal", "-shm", "-wal"]) {
+        const sourcePath = `${prepared.location}${suffix}`;
+        if (fs.existsSync(sourcePath)) {
+          fs.renameSync(sourcePath, `${privateDatabasePath}${suffix}`);
+        }
       }
     }
     const sourceConfigPath = resolveConfigPath(sourceEnv, resolveStateDir(sourceEnv));
@@ -300,20 +326,20 @@ async function withReadOnlyPluginStateSnapshot<T>(
       OPENCLAW_STATE_DIR: privateStateDir,
     };
     const installRoots = resolvePluginInstallRoots(sourceEnv);
+    // Global readers and OAuth refresh/challenge writers share the private state view.
     outcome = {
       ok: true,
-      value: await withPluginInstallRoots(
-        { ...installRoots, stateDir: privateStateDir },
-        async () => {
+      value: await withDoctorLintStateEnv(privateEnv, () =>
+        withPluginInstallRoots({ ...installRoots, stateDir: privateStateDir }, async () => {
           runStarted = true;
           return await run(privateEnv);
-        },
+        }),
       ),
     };
   } catch (error) {
     outcome = { ok: false, error };
   }
-  if (!prepared.cleanup()) {
+  if (!cleanup()) {
     throw new DoctorLintStateSnapshotError(
       new Error("Temporary doctor lint state snapshot cleanup did not complete."),
     );
@@ -322,6 +348,32 @@ async function withReadOnlyPluginStateSnapshot<T>(
     throw runStarted ? outcome.error : new DoctorLintStateSnapshotError(outcome.error);
   }
   return outcome.value;
+}
+
+async function withDoctorLintStateEnv<T>(
+  env: NodeJS.ProcessEnv,
+  run: () => Promise<T>,
+): Promise<T> {
+  const stateDir = resolveStateDir(env);
+  const overrides = {
+    OPENCLAW_CONFIG_PATH: resolveConfigPath(env, stateDir),
+    OPENCLAW_STATE_DIR: stateDir,
+  };
+  const previous = Object.keys(overrides).map((key) => [key, process.env[key]] as const);
+  // Doctor checks run serially. Scope ambient auth/global-store owners together,
+  // restoring the enclosing private view even when a detector throws.
+  Object.assign(process.env, overrides);
+  try {
+    return await run();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
 }
 
 function createStateSnapshotFailureExecution(
@@ -364,12 +416,21 @@ function createStateSnapshotFailureExecution(
 
 function withCoreLintContext(
   check: HealthCheck,
-  ctx: HealthCheckContext & { readonly deep?: boolean },
+  ctx: HealthCheckContext & {
+    readonly deep?: boolean;
+    readonly runWithPrivateStateSnapshot: DoctorLintStateRunner;
+    readonly runWithSourceState: DoctorLintStateRunner;
+  },
 ): HealthCheck {
   return {
     ...check,
     detect(_ctx, scope) {
-      return check.detect(ctx, scope);
+      const detect = async () => await check.detect(ctx, scope);
+      if (check.id === RUNTIME_TOOL_SCHEMA_CHECK_ID) {
+        return ctx.runWithPrivateStateSnapshot(detect);
+      }
+      // Auth health uses read-only loaders but needs uncopied agent stores and source paths.
+      return check.id === AUTH_PROFILE_CHECK_ID ? ctx.runWithSourceState(detect) : detect();
     },
   };
 }

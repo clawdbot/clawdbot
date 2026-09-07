@@ -188,7 +188,7 @@ describe("status-overview-rows", () => {
   it("shows update restart state in fast status output", () => {
     const rows = buildStatusCommandOverviewRows(
       createStatusCommandOverviewRowsParams({
-        updateRestartValue: "failed · managed-service-handoff-failed",
+        updateRows: [{ Item: "Update restart", Value: "failed · managed-service-handoff-failed" }],
       }),
     );
 
@@ -218,6 +218,22 @@ describe("status-overview-rows", () => {
     expect(findRowValue(rows, "Degraded plugins")).toBe("warn(1 configured-unavailable · discord)");
   });
 
+  it.each(["default", "all"])("surfaces startup migration warnings in %s output", (mode) => {
+    const params = createStatusCommandOverviewRowsParams();
+    params.summary.startupMigrationWarning = "Retained legacy state. Run openclaw doctor --fix.";
+    const rows =
+      mode === "default"
+        ? buildStatusCommandOverviewRows(params)
+        : buildStatusAllOverviewRows({
+            ...params,
+            configPath: "/tmp/openclaw.json",
+            secretDiagnosticsCount: 0,
+          });
+    expect(findRowValue(rows, "Startup migrations")).toContain(
+      params.summary.startupMigrationWarning,
+    );
+  });
+
   it("builds status-all overview rows from the shared surface", () => {
     const summary = createStatusCommandOverviewRowsParams().summary;
     const rows = buildStatusAllOverviewRows({
@@ -229,6 +245,12 @@ describe("status-overview-rows", () => {
       },
       summary: {
         ...summary,
+        secretEgressProxy: {
+          state: "degraded",
+          caExpiresAt: "2036-09-01T00:00:00.000Z",
+          failedCertificates: 1,
+          message: "Check OpenSSL, then retry the request.",
+        },
         degradedSecretOwners: [
           {
             ownerKind: "capability",
@@ -253,7 +275,7 @@ describe("status-overview-rows", () => {
       osLabel: "macOS",
       configPath: "/tmp/openclaw.json",
       secretDiagnosticsCount: 2,
-      updateRestartValue: "restart pending health verification",
+      updateRows: [{ Item: "Update restart", Value: "restart pending health verification" }],
       agentStatus: {
         bootstrapPendingCount: 1,
         totalSessions: 2,
@@ -265,8 +287,12 @@ describe("status-overview-rows", () => {
     expect(findRowValue(rows, "Version")).toBe(VERSION);
     expect(findRowValue(rows, "OS")).toBe("macOS");
     expect(findRowValue(rows, "Config")).toBe("/tmp/openclaw.json");
+    expect(findRowValue(rows, "Update")).toContain("behind 2");
     expect(findRowValue(rows, "Update restart")).toBe("restart pending health verification");
     expect(findRowValue(rows, "Security")).toBe("Run: openclaw security audit --deep");
+    expect(findRowValue(rows, "Secret egress proxy")).toBe(
+      "Check OpenSSL, then retry the request.",
+    );
     expect(findRowValue(rows, "Degraded secrets")).toBe("1 degraded · capability:tts");
     expect(findRowValue(rows, "Degraded plugins")).toBe("1 configured-unavailable · discord");
     expect(findRowValue(rows, "Secrets")).toBe("2 diagnostics");

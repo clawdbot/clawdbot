@@ -451,12 +451,14 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
               ${refreshLoading ? t("dreaming.header.refreshing") : t("dreaming.header.refresh")}
             </button>
             <span class="muted">
-              ${configuredDreaming.engineOff
-                ? t("dreaming.header.engineOff")
-                : renderSettingsDefaultDescription(
-                    t("common.enabled"),
-                    configuredDreaming.overridden,
-                  )}
+              ${
+                configuredDreaming.engineOff
+                  ? t("dreaming.header.engineOff")
+                  : renderSettingsDefaultDescription(
+                      t("common.enabled"),
+                      configuredDreaming.overridden,
+                    )
+              }
             </span>
             <button
               class="dreams__phase-toggle ${dreamingOn ? "dreams__phase-toggle--on" : ""}"

@@ -140,6 +140,17 @@ vi.mock("../../sessions/background-session-result.js", () => ({
   commitBackgroundResultToSession: commitBackgroundResultToSessionMock,
 }));
 
+vi.mock("../../gateway/server-methods/chat-assistant-content.js", () => ({
+  buildAssistantReplyContent: vi.fn(),
+  hasAssistantDisplayMediaContent: vi.fn(),
+  hasManagedOutgoingAssistantContent: vi.fn(),
+}));
+
+vi.mock("../../gateway/managed-image-attachments.js", () => ({
+  attachManagedOutgoingMediaToMessage: vi.fn(),
+  removeManagedOutgoingMediaBlocks: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("./session.js", () => ({
   loadCronSessionEntryLatest: loadCronSessionEntryLatestMock,
 }));
@@ -191,7 +202,9 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { logError } from "../../logger.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { withTempCronHome } from "../isolated-agent.test-harness.js";
+import type { CronDelivery } from "../types.js";
 import {
   dispatchCronDelivery,
   queueCronMessageToolDeliveryAwareness,
@@ -251,6 +264,10 @@ function makeBaseParams(overrides: {
     ...makeResolvedDelivery(),
     mode: overrides.resolvedDeliveryMode ?? "explicit",
   } satisfies Extract<DeliveryTargetResolution, { ok: true }>;
+  const delivery: CronDelivery = {
+    mode: "announce",
+    bestEffort: overrides.deliveryBestEffort,
+  };
   const runStartedAt = overrides.runStartedAt ?? Date.now();
   return {
     cfg: {} as never,
@@ -263,7 +280,7 @@ function makeBaseParams(overrides: {
       sessionKey:
         overrides.sessionTarget === "current" ? "agent:main:webchat:direct:owner" : undefined,
       deleteAfterRun: false,
-      delivery: { mode: "announce", bestEffort: overrides.deliveryBestEffort },
+      delivery,
       payload: { kind: "agentTurn", message: "hello" },
     } as never,
     agentId: "main",
@@ -282,6 +299,7 @@ function makeBaseParams(overrides: {
     runEndedAt: runStartedAt,
     timeoutMs: 30_000,
     resolvedDelivery,
+    deliveryPlan: resolveCronDeliveryPlan({ delivery }),
     deliveryRequested: overrides.deliveryRequested ?? true,
     undeliveredRunStatus: "ok",
     skipDelivery: undefined,
@@ -2136,11 +2154,14 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     );
   });
 
-  it("skips stale cron deliveries while still suppressing fallback main summary", async () => {
+  it("retains a stale one-shot transcript without delivery or a fallback summary", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-18T17:00:00.000Z"));
 
     const params = makeBaseParams({ synthesizedText: "Yesterday's morning briefing." });
+    params.agentSessionKey = "agent:main:cron:test-job";
+    params.job.deleteAfterRun = true;
+    params.beforeSessionDelete = vi.fn();
     (params.job as { state?: { nextRunAtMs?: number } }).state = {
       nextRunAtMs: Date.now() - (3 * 60 * 60_000 + 1),
     };
@@ -2158,6 +2179,12 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
     expect(state.deliveryError).toEqual(deliveryError);
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(state.deliveryState.status).toBe("not-delivered");
+    expect(state.deliveryState.delivered).toBe(false);
+    expect(state.deliveryState.error).toEqual(deliveryError);
+    expect(state.deliveryState.deliverySuppressionReason).toBeUndefined();
+    expect(params.beforeSessionDelete).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("still delivers when the run started on time but finished more than three hours later", async () => {
@@ -3455,19 +3482,21 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expect(state.result).toBeUndefined();
     expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
-    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith({
-      agentId: "main",
-      sessionKey: "agent:main:webchat:direct:owner",
-      expectedGeneration: {
-        sessionId: "source-session-id",
-        lifecycleRevision: "source-lifecycle-revision",
-      },
-      text: "durable WebChat completion",
-      idempotencyKey: "cron-current-completion:cron:test-job:1000",
-      provenance: { kind: "cron", jobId: "test-job", runId: "cron:test-job:1000" },
-      config: params.cfgWithAgentDefaults,
-      signal: undefined,
-    });
+    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "agent:main:webchat:direct:owner",
+        expectedGeneration: {
+          sessionId: "source-session-id",
+          lifecycleRevision: "source-lifecycle-revision",
+        },
+        text: "durable WebChat completion",
+        idempotencyKey: "cron-current-completion:cron:test-job:1000",
+        provenance: { kind: "cron", jobId: "test-job", runId: "cron:test-job:1000" },
+        config: params.cfgWithAgentDefaults,
+        signal: undefined,
+      }),
+    );
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
@@ -3604,12 +3633,35 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
     expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "report.png" }),
+      expect.objectContaining({
+        text: "report.png",
+      }),
     );
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expectDeliveryCall(0, {
       payloads: [{ mediaUrl: "https://example.com/report.png?token=redacted" }],
     });
+  });
+
+  it("uses the finalized descendant payload set when a final reply supersedes media", async () => {
+    vi.mocked(expectsSubagentFollowup).mockReturnValue(true);
+    vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue("Final descendant reply");
+
+    const params = makeBaseParams({ sessionTarget: "current", runStartedAt: 3_500 });
+    params.synthesizedText = "Example report";
+    params.summary = "Example report";
+    params.outputText = "Example report";
+    params.deliveryPayloads = [
+      { text: "Example report", mediaUrl: "/tmp/allowed-media/report.png" },
+    ];
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
+    const commitCall = vi.mocked(commitBackgroundResultToSessionMock).mock.calls.at(-1)?.[0];
+    expect(commitCall).toMatchObject({ text: "Final descendant reply" });
+    expect(state.deliveryPayloads).toEqual([{ text: "Final descendant reply" }]);
+    expectDeliveryCall(0, { payloads: [{ text: "Final descendant reply" }] });
   });
 
   it("does not mark or send a current-target delivery when its session commit fails", async () => {

@@ -23,28 +23,31 @@ export {
   pauseVirtualClock,
 };
 
-export const managedImageCacheProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "managed-image-cache",
-);
-export const channelStopProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "channel-stop",
-);
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const sessionAccessibilityProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "session-accessibility",
-);
 
-export function createChatFlowE2eSuite() {
+export async function captureUiProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  directory: string,
+  fileName: string,
+): Promise<void> {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  const artifactDir = path.join(owner.artifactDir, directory);
+  await mkdir(artifactDir, { recursive: true });
+  await page.screenshot({
+    animations: "disabled",
+    fullPage: true,
+    path: path.join(artifactDir, fileName),
+  });
+}
+
+export function createChatFlowE2eSuite(
+  browserLaunchOptions?: Parameters<typeof createControlUiE2eSuite>[0]["browserLaunchOptions"],
+) {
   return createControlUiE2eSuite({
+    browserLaunchOptions,
     name: "Control UI mocked Gateway E2E",
     trackBrowserContexts: true,
     unavailableMessage: (executablePath) =>
@@ -81,10 +84,11 @@ export async function waitForRequests(
   gateway: Awaited<ReturnType<typeof installMockGateway>>,
   method: string,
   count: number,
+  match?: Record<string, unknown>,
 ): Promise<MockGatewayRequest[]> {
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
-    const requests = await gateway.getRequests(method);
+    const requests = await gateway.getRequests(method, match);
     if (requests.length >= count) {
       return requests;
     }
@@ -100,10 +104,11 @@ export async function expectRequestCountStable(
   method: string,
   count: number,
   durationMs = 500,
+  match?: Record<string, unknown>,
 ): Promise<void> {
   const deadline = Date.now() + durationMs;
   do {
-    expect(await gateway.getRequests(method)).toHaveLength(count);
+    expect(await gateway.getRequests(method, match)).toHaveLength(count);
     await new Promise((resolve) => {
       setTimeout(resolve, 50);
     });
@@ -178,11 +183,15 @@ export async function scrollChatThreadToTop(page: Page): Promise<void> {
   });
 }
 
-export async function captureSessionAccessibilityProof(page: Page, name: string): Promise<void> {
+export async function captureSessionAccessibilityProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  name: string,
+): Promise<void> {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(sessionAccessibilityProofDir, { recursive: true });
+  const sessionAccessibilityProofDir = path.join(owner.artifactDir, "session-accessibility");
   const sidebar = page.locator("openclaw-app-sidebar");
   await page.screenshot({
     fullPage: true,

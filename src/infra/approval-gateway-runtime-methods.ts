@@ -5,6 +5,7 @@ export const GATEWAY_NATIVE_APPROVAL_METHODS = [
   "exec.approval.resolve",
   "plugin.approval.list",
   "plugin.approval.resolve",
+  "openclaw.approval.list",
 ] as const;
 
 export type GatewayNativeApprovalMethod = (typeof GATEWAY_NATIVE_APPROVAL_METHODS)[number];

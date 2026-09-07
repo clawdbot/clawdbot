@@ -1,8 +1,9 @@
 // Real-browser proof for native-host link routing and the bridge-free browser path.
-import fs from "node:fs";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import type { NativeBrowserMessage, NativeBrowserReply } from "../app/native-browser-bridge.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -15,7 +16,10 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/native-link-routing");
+let artifactDir: string;
+beforeEach(() => {
+  artifactDir = createControlUiE2eArtifactDir("native-link-routing");
+});
 
 let server: ControlUiE2eServer;
 // Browser contexts preserve test isolation; keep one process warm for this file.
@@ -43,7 +47,6 @@ describeControlUiE2e("native link routing", () => {
     if (!chromiumAvailable) {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
     }
-    fs.mkdirSync(artifactDir, { recursive: true });
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     try {
       server = await startControlUiE2eServer();
@@ -61,7 +64,7 @@ describeControlUiE2e("native link routing", () => {
 
   afterEach(closeContexts);
 
-  it("shows native actions and posts inline or external targets", async () => {
+  it("opens native Browser panel tabs and keeps external link actions", async () => {
     const context = await newBrowserContext();
     await context.grantPermissions(["clipboard-read", "clipboard-write"], {
       origin: new URL(server.baseUrl).origin,
@@ -71,14 +74,30 @@ describeControlUiE2e("native link routing", () => {
     );
     await context.addInitScript(() => {
       const messages: unknown[] = [];
+      const browserMessages: NativeBrowserMessage[] = [];
       const host = window as Window & {
         openclawNativeLinkMessages?: unknown[];
-        webkit?: unknown;
+        openclawNativeBrowserMessages?: NativeBrowserMessage[];
+        webkit?: {
+          messageHandlers?: {
+            openclawLink?: { postMessage: (message: unknown) => void };
+            openclawBrowser?: {
+              postMessage: (message: NativeBrowserMessage) => Promise<NativeBrowserReply>;
+            };
+          };
+        };
       };
       host.openclawNativeLinkMessages = messages;
+      host.openclawNativeBrowserMessages = browserMessages;
       host.webkit = {
         messageHandlers: {
           openclawLink: { postMessage: (message: unknown) => messages.push(message) },
+          openclawBrowser: {
+            postMessage: async (message) => {
+              browserMessages.push(message);
+              return message.type === "open" ? { ok: true, tabId: message.tabId } : { ok: true };
+            },
+          },
         },
       };
     });
@@ -108,11 +127,26 @@ describeControlUiE2e("native link routing", () => {
       .poll(() =>
         page.evaluate(
           () =>
+            (window as Window & { openclawNativeBrowserMessages?: NativeBrowserMessage[] })
+              .openclawNativeBrowserMessages,
+        ),
+      )
+      .toContainEqual(
+        expect.objectContaining({
+          type: "open",
+          url: "https://example.com/report",
+          tabId: expect.stringMatching(/^mac-/),
+        }),
+      );
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
             (window as Window & { openclawNativeLinkMessages?: unknown[] })
               .openclawNativeLinkMessages,
         ),
       )
-      .toEqual([{ type: "open-link", url: "https://example.com/report", target: "inline" }]);
+      .toEqual([]);
 
     await page.evaluate(() => {
       const anchor = document.createElement("a");
@@ -175,7 +209,7 @@ describeControlUiE2e("native link routing", () => {
     await expect.poll(() => replyMenu.count()).toBe(0);
     await expect
       .poll(() => page.locator("openclaw-native-link-menu .session-menu__text").allTextContents())
-      .toEqual(["Open in Sidebar", "Open in Default Browser", "Copy Link"]);
+      .toEqual(["Open in Browser Panel", "Open in Default Browser", "Copy Link"]);
     await page.screenshot({
       path: path.join(artifactDir, "01-native-link-menu-page.jpg"),
       type: "jpeg",
@@ -191,7 +225,6 @@ describeControlUiE2e("native link routing", () => {
         ),
       )
       .toEqual([
-        { type: "open-link", url: "https://example.com/report", target: "inline" },
         { type: "open-link", url: "mailto:hello@example.com", target: "external" },
         { type: "open-link", url: "https://example.com/report", target: "external" },
       ]);
@@ -234,7 +267,7 @@ describeControlUiE2e("native link routing", () => {
           (window as Window & { openclawNativeLinkMessages?: unknown[] })
             .openclawNativeLinkMessages,
       ),
-    ).toHaveLength(3);
+    ).toHaveLength(2);
 
     await page.evaluate(async () => {
       await customElements.whenDefined("openclaw-modal-dialog");
@@ -263,22 +296,31 @@ describeControlUiE2e("native link routing", () => {
       )
       .toBe(true);
     await modalLink.click({ button: "right" });
-    const modalSidebarItem = menuHost.getByRole("menuitem", { name: "Open in Sidebar" });
-    await expect.poll(() => modalSidebarItem.isVisible()).toBe(true);
-    await modalSidebarItem.click();
+    const modalBrowserItem = menuHost.getByRole("menuitem", { name: "Open in Browser Panel" });
+    await expect.poll(() => modalBrowserItem.isVisible()).toBe(true);
+    await modalBrowserItem.click();
     await expect
       .poll(() =>
         page.evaluate(
           () =>
-            (window as Window & { openclawNativeLinkMessages?: unknown[] })
-              .openclawNativeLinkMessages,
+            (window as Window & { openclawNativeBrowserMessages?: NativeBrowserMessage[] })
+              .openclawNativeBrowserMessages,
         ),
       )
-      .toContainEqual({
-        type: "open-link",
-        url: "https://example.com/modal-report",
-        target: "inline",
-      });
+      .toContainEqual(
+        expect.objectContaining({
+          type: "open",
+          url: "https://example.com/modal-report",
+          tabId: expect.stringMatching(/^mac-/),
+        }),
+      );
+    expect(
+      await page.evaluate(
+        () =>
+          (window as Window & { openclawNativeLinkMessages?: unknown[] })
+            .openclawNativeLinkMessages,
+      ),
+    ).toHaveLength(2);
     await page.evaluate(() => {
       document.querySelector("#native-link-routing-modal")?.remove();
     });

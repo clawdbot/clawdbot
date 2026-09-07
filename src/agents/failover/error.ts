@@ -1,5 +1,6 @@
-// Error identity and timeout recognition must not load provider classification.
-import { readErrorName } from "../../infra/errors.js";
+// Error identity and timeout recognition must not load logging or provider runtime.
+import { readErrorName } from "@openclaw/normalization-core/error-coercion";
+import type { AgentRunTerminalOutcome } from "../agent-run-terminal-outcome.types.js";
 import { isProviderRequestSizeCeilingError, isTimeoutErrorMessage } from "./message-patterns.js";
 import type { FailoverReason } from "./signal.js";
 
@@ -42,6 +43,8 @@ export class FailoverError extends Error {
   readonly lane?: string;
   readonly suspend?: boolean;
   readonly cliTimeout?: CliTimeoutContext;
+  // Actual timeout presence is independent of both its phase and the retry category.
+  readonly timeout?: Pick<AgentRunTerminalOutcome, "timeoutPhase" | "providerStarted">;
   readonly attempts?: readonly FallbackAttemptRecord[];
   readonly soonestCooldownExpiry?: number | null;
 
@@ -62,6 +65,7 @@ export class FailoverError extends Error {
       cause?: unknown;
       suspend?: boolean;
       cliTimeout?: CliTimeoutContext;
+      timeout?: FailoverError["timeout"];
       attempts?: readonly FallbackAttemptRecord[];
       soonestCooldownExpiry?: number | null;
     },
@@ -82,6 +86,7 @@ export class FailoverError extends Error {
     this.lane = params.lane;
     this.suspend = params.suspend;
     this.cliTimeout = params.cliTimeout;
+    this.timeout = params.timeout;
     this.attempts = params.attempts;
     this.soonestCooldownExpiry = params.soonestCooldownExpiry;
   }
@@ -124,6 +129,36 @@ export function findErrorProperty<T>(
     findErrorProperty(candidate.error, reader, seen) ??
     findErrorProperty(candidate.cause, reader, seen)
   );
+}
+
+export function readDirectErrorCode(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  // SAFETY: The object guard permits probing code; its value remains unknown.
+  const directCode = (err as { code?: unknown }).code;
+  if (typeof directCode === "string") {
+    const trimmed = directCode.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  // SAFETY: Optional chaining handles absent details; only string codes are accepted.
+  const detailCode = (err as { detail?: { code?: unknown } }).detail?.code;
+  if (typeof detailCode === "string") {
+    const trimmed = detailCode.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  // SAFETY: The object guard permits probing status; its type is checked below.
+  const status = (err as { status?: unknown }).status;
+  if (typeof status !== "string" || /^\d+$/.test(status)) {
+    return undefined;
+  }
+  const trimmed = status.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+export function getFailoverErrorCode(err: unknown): string | undefined {
+  // A typed failure owns its code, including absence; only raw errors search causes.
+  return isFailoverError(err) ? err.code : findErrorProperty(err, readDirectErrorCode);
 }
 
 export function readDirectErrorMessage(err: unknown): string | undefined {
@@ -186,5 +221,9 @@ export function isTimeoutError(err: unknown): boolean {
 
 /** Return true when an abort-signal reason is an intentional timeout; plain AbortError is a cancellation, not a timeout. */
 export function isSignalTimeoutReason(reason: unknown): boolean {
-  return readErrorName(reason) === "TimeoutError";
+  try {
+    return readErrorName(reason) === "TimeoutError";
+  } catch {
+    return false;
+  }
 }

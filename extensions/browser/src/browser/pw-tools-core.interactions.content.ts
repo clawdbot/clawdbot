@@ -2,8 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { detectMime } from "openclaw/plugin-sdk/media-mime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { FileChooser, Page } from "playwright-core";
+import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { FileChooser, Locator, Page } from "playwright-core";
+import { getImageMetadata } from "../media/media-services.js";
 import { ACT_MAX_WAIT_TIME_MS, resolveActWaitTimeoutMs } from "./act-policy.js";
+import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./constants.js";
 import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
 import { resolveStrictExistingUploadPaths } from "./paths.js";
 import {
@@ -22,9 +25,10 @@ import {
   type NavigationTargetOptions,
   reconcileRemoteDialogAfterActionSettled,
   resolveBoundedDelayMs,
+  runCancellablePageInteraction,
   throwIfInteractionAborted,
-  toFriendlyInteractionError,
 } from "./pw-tools-core.interactions.navigation.js";
+import { runPageEmulationTransition } from "./pw-tools-core.state.js";
 import {
   ANNOTATION_MAX_LABELS_DEFAULT,
   type AnnotationItem,
@@ -33,6 +37,7 @@ import {
   type CoordinateSpace,
   planAnnotations,
   type RawAnnotationInput,
+  scaleAnnotations,
 } from "./screenshot-annotate.js";
 
 const DEFAULT_UPLOAD_MIME_TYPE = "application/octet-stream";
@@ -70,6 +75,26 @@ function shouldUsePlaywrightFilePayloads(
   opts: Pick<NavigationTargetOptions, "browserFilesystemLocal" | "ssrfPolicy">,
 ): boolean {
   return Boolean(opts.ssrfPolicy) && opts.browserFilesystemLocal !== true;
+}
+
+async function resolvePlaywrightUploadFiles(opts: GuardedInteractionOptions & { paths: string[] }) {
+  const { abortPromise, cleanup } = createAbortPromiseWithListener(opts.signal);
+  try {
+    return await awaitActionWithAbort(
+      (async () => {
+        const resolved = await resolveStrictExistingUploadPaths({ requestedPaths: opts.paths });
+        if (!resolved.ok) {
+          throw new Error(resolved.error);
+        }
+        return shouldUsePlaywrightFilePayloads(opts)
+          ? await toPlaywrightFilePayloads(resolved.paths)
+          : resolved.paths;
+      })(),
+      abortPromise,
+    );
+  } finally {
+    cleanup();
+  }
 }
 
 type BrowserWaitPredicateState = {
@@ -229,59 +254,166 @@ export async function waitForViaPlaywright(
   }
 }
 
-export async function takeScreenshotViaPlaywright(
-  opts: InteractionTargetOptions & {
-    ref?: string;
-    element?: string;
-    fullPage?: boolean;
-    type?: "png" | "jpeg";
-    timeoutMs?: number;
-  },
-): Promise<{ buffer: Buffer }> {
-  const page = await getPageForTargetId(opts);
-  ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
-  const type = opts.type ?? "png";
-  const elementLocator = opts.ref
-    ? refLocator(page, opts.ref)
-    : opts.element
-      ? page.locator(opts.element).first()
-      : undefined;
-  if (elementLocator) {
-    if (opts.fullPage) {
-      throw new Error("fullPage is not supported for element screenshots");
-    }
-    const buffer = await elementLocator.screenshot({ type, timeout: opts.timeoutMs });
-    return { buffer };
-  }
-  const buffer = await page.screenshot({
-    type,
-    fullPage: Boolean(opts.fullPage),
-    timeout: opts.timeoutMs,
-  });
-  return { buffer };
+type ScreenshotOptions = {
+  fullPage?: boolean;
+  type?: "png" | "jpeg";
+  timeoutMs?: number;
+  signal?: AbortSignal;
+};
+
+async function runScreenshotOperation<T>(
+  page: Page,
+  opts: ScreenshotOptions,
+  run: (signal: AbortSignal) => Promise<T>,
+) {
+  const controller = new AbortController();
+  const signal = opts.signal
+    ? AbortSignal.any([opts.signal, controller.signal])
+    : controller.signal;
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
+  return await withTimeout(
+    runPageEmulationTransition({ state: ensurePageState(page), signal, run: () => run(signal) }),
+    timeoutMs,
+    {
+      createError: () => {
+        const error = new Error(`Screenshot via Playwright timed out after ${timeoutMs}ms`);
+        controller.abort(error);
+        return error;
+      },
+    },
+  );
 }
 
-export async function screenshotWithLabelsViaPlaywright(
-  opts: InteractionTargetOptions & {
+function screenshotLocator(page: Page, ref?: string, element?: string): Locator | undefined {
+  return ref ? refLocator(page, ref) : element ? page.locator(element).first() : undefined;
+}
+
+async function capturePageScreenshot(
+  page: Page,
+  opts: ScreenshotOptions,
+  locator?: Locator,
+): Promise<{ buffer: Buffer; clip?: { x: number; y: number; width: number } }> {
+  opts.signal?.throwIfAborted();
+  if (locator && opts.fullPage) {
+    throw new Error("fullPage is not supported for element screenshots");
+  }
+  const type = opts.type ?? "png";
+  const emulation = ensurePageState(page).emulation;
+  const owner = emulation?.metricsOwner;
+  const preparation = {
+    timeout: opts.timeoutMs ?? DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS,
+    signal: opts.signal,
+  };
+  // Resolve a fixed handle with a bounded wait: an unbounded Locator screenshot
+  // could keep retrying a missing selector after the caller has already timed out.
+  const element = await locator?.elementHandle({ timeout: preparation.timeout });
+  try {
+    await element?.scrollIntoViewIfNeeded(preparation);
+    opts.signal?.throwIfAborted();
+    if (!owner) {
+      // The outer deadline owns cancellation. Playwright's timeout rejects
+      // before native capture/restoration finishes, releasing the queue too early.
+      return {
+        buffer: await (element
+          ? element.screenshot({ type, timeout: 0 })
+          : page.screenshot({ type, fullPage: Boolean(opts.fullPage), timeout: 0 })),
+      };
+    }
+
+    const box = element ? await element.boundingBox() : undefined;
+    if (locator && (!box || !box.width || !box.height)) {
+      throw new Error("Cannot take a screenshot of an element that is not visible or has no size");
+    }
+    const metrics = await owner.session.send("Page.getLayoutMetrics");
+    const visual = metrics.cssVisualViewport;
+    let clip = { ...metrics.cssContentSize, scale: 1 };
+    if (box) {
+      const x = Math.floor(box.x + visual.pageX);
+      const y = Math.floor(box.y + visual.pageY);
+      clip = {
+        x,
+        y,
+        width: Math.ceil(box.x + visual.pageX + box.width) - x,
+        height: Math.ceil(box.y + visual.pageY + box.height) - y,
+        scale: 1,
+      };
+    } else if (!opts.fullPage) {
+      clip = {
+        x: visual.pageX,
+        y: visual.pageY,
+        width: Math.ceil(owner.viewport.width / visual.scale),
+        height: Math.ceil(owner.viewport.height / visual.scale),
+        scale: visual.scale,
+      };
+    }
+    const captureBeyondViewport = Boolean(
+      (opts.fullPage || locator) &&
+      (clip.width > owner.viewport.width || clip.height > owner.viewport.height),
+    );
+    opts.signal?.throwIfAborted();
+    // Chromium restores the capturing session's metrics. A new session or
+    // Playwright's own session would replace this device owner's DPR and screen.
+    const result = await owner.session.send("Page.captureScreenshot", {
+      format: type,
+      clip,
+      captureBeyondViewport,
+    });
+    return { buffer: Buffer.from(result.data, "base64"), clip };
+  } finally {
+    try {
+      if (emulation?.touch) {
+        // Full-page and oversized element captures can reset touch emulation.
+        // Both screenshot backends restore the value set by this page's owner.
+        await emulation.touch.session.send("Emulation.setTouchEmulationEnabled", {
+          enabled: emulation.touch.enabled,
+        });
+      }
+    } finally {
+      await element?.dispose();
+    }
+  }
+}
+
+export async function takeScreenshotViaPlaywright(
+  opts: InteractionTargetOptions & ScreenshotOptions & { ref?: string; element?: string },
+): Promise<{ buffer: Buffer }> {
+  const page = await getPageForTargetId(opts);
+  return await runScreenshotOperation(page, opts, async (signal) => {
+    restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+    const { buffer } = await capturePageScreenshot(
+      page,
+      { ...opts, signal },
+      screenshotLocator(page, opts.ref, opts.element),
+    );
+    return { buffer };
+  });
+}
+
+type LabeledScreenshotOptions = InteractionTargetOptions &
+  ScreenshotOptions & {
     refs: Record<string, { role: string; name?: string; nth?: number }>;
     maxLabels?: number;
-    type?: "png" | "jpeg";
-    timeoutMs?: number;
-    fullPage?: boolean;
     ref?: string;
     element?: string;
-  },
+  };
+
+export async function screenshotWithLabelsViaPlaywright(opts: LabeledScreenshotOptions) {
+  const page = await getPageForTargetId(opts);
+  return await runScreenshotOperation(page, opts, (signal) =>
+    screenshotWithLabelsOnPage(page, { ...opts, signal }),
+  );
+}
+
+async function screenshotWithLabelsOnPage(
+  page: Page,
+  opts: LabeledScreenshotOptions,
 ): Promise<{
   buffer: Buffer;
   labels: number;
   skipped: number;
   annotations: AnnotationItem[];
 }> {
-  const page = await getPageForTargetId(opts);
-  ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
-  const type = opts.type ?? "png";
   const maxLabels =
     typeof opts.maxLabels === "number" && Number.isFinite(opts.maxLabels)
       ? Math.max(1, Math.floor(opts.maxLabels))
@@ -289,27 +421,39 @@ export async function screenshotWithLabelsViaPlaywright(
 
   const refKey = normalizeOptionalString(opts.ref) ?? undefined;
   const elementSelector = normalizeOptionalString(opts.element) ?? undefined;
+  const locator = screenshotLocator(page, refKey, elementSelector);
   const space: CoordinateSpace = opts.fullPage
     ? "fullpage"
     : refKey || elementSelector
       ? "element"
       : "viewport";
 
-  // Read scroll + viewport size. Scroll converts Playwright's viewport-space
-  // boundingBoxes into document-space inputs; the viewport size lets the helper
-  // restore the shipped `labelsSkipped` semantics by counting off-viewport refs
-  // as skipped (in viewport capture mode).
-  const view = await page.evaluate(() => ({
-    x: window.scrollX || 0,
-    y: window.scrollY || 0,
-    width: window.innerWidth || 0,
-    height: window.innerHeight || 0,
-  }));
-  const scroll = { x: view.x, y: view.y };
+  // DOM boxes use the visual viewport, including pan during mobile zoom.
+  // Mixing the layout viewport here can produce negative element clips.
+  const view = await page.evaluate(
+    (viewportWidth) => ({
+      x: window.visualViewport!.pageLeft,
+      y: window.visualViewport!.pageTop,
+      width: window.visualViewport!.width,
+      height: window.visualViewport!.height,
+      nativeCaptureWidth: Math.floor(
+        (viewportWidth ?? window.innerWidth) / window.visualViewport!.scale + 1e-3,
+      ),
+      fullWidth: Math.max(
+        document.body?.scrollWidth ?? 0,
+        document.documentElement.scrollWidth,
+        document.body?.offsetWidth ?? 0,
+        document.documentElement.offsetWidth,
+        document.body?.clientWidth ?? 0,
+        document.documentElement.clientWidth,
+      ),
+    }),
+    page.viewportSize()?.width,
+  );
 
   let elementRect: { x: number; y: number; width: number; height: number } | undefined;
   if (space === "element") {
-    const box = await resolveElementBoundingBoxForLabels(page, refKey, elementSelector);
+    const box = await locator?.boundingBox().catch(() => null);
     if (!box) {
       throw new Error(
         `screenshotWithLabelsViaPlaywright: element not found for ${
@@ -319,8 +463,8 @@ export async function screenshotWithLabelsViaPlaywright(
     }
     // Convert viewport-space bbox to document space.
     elementRect = {
-      x: box.x + scroll.x,
-      y: box.y + scroll.y,
+      x: box.x + view.x,
+      y: box.y + view.y,
       width: box.width,
       height: box.height,
     };
@@ -328,17 +472,21 @@ export async function screenshotWithLabelsViaPlaywright(
 
   const refKeys = Object.keys(opts.refs ?? {});
   const inputs: RawAnnotationInput[] = [];
-  let bboxFailures = 0;
+  let skippedRefs = 0;
   for (const ref of refKeys) {
     const refInfo = opts.refs[ref];
     if (refInfo === undefined) {
       continue;
     }
-    const box = await refLocator(page, ref)
-      .boundingBox()
-      .catch(() => null);
+    const target = refLocator(page, ref);
+    // Full-page tail refs cannot contribute annotations after the label budget fills.
+    if (space === "fullpage" && inputs.length >= maxLabels) {
+      skippedRefs += 1;
+      continue;
+    }
+    const box = await target.boundingBox().catch(() => null);
     if (!box) {
-      bboxFailures += 1;
+      skippedRefs += 1;
       continue;
     }
     inputs.push({
@@ -346,124 +494,85 @@ export async function screenshotWithLabelsViaPlaywright(
       role: refInfo.role,
       name: refInfo.name,
       doc: {
-        x: box.x + scroll.x,
-        y: box.y + scroll.y,
+        x: box.x + view.x,
+        y: box.y + view.y,
         width: box.width,
         height: box.height,
       },
     });
   }
 
+  const origin = space === "element" ? elementRect! : space === "viewport" ? view : { x: 0, y: 0 };
   const plan = planAnnotations({
     inputs,
     space,
-    scroll,
-    viewport: { width: view.width, height: view.height },
+    scroll: origin,
+    viewport: view,
     elementRect,
     maxLabels,
   });
 
   try {
+    opts.signal?.throwIfAborted();
     if (plan.overlayItems.length > 0) {
-      const captureY = space === "element" ? elementRect?.y : space === "viewport" ? scroll.y : 0;
-      await page.evaluate(buildOverlayInjectionScript({ items: plan.overlayItems, captureY }));
+      await page.evaluate(
+        buildOverlayInjectionScript({ items: plan.overlayItems, captureY: origin.y }),
+      );
     }
-    const buffer =
-      space === "element"
-        ? await captureElementScreenshotForLabels(
-            page,
-            refKey,
-            elementSelector,
-            type,
-            opts.timeoutMs,
-          )
-        : await page.screenshot({
-            type,
-            fullPage: Boolean(opts.fullPage),
-            timeout: opts.timeoutMs,
+    const capture = await capturePageScreenshot(page, opts, locator);
+    // Native viewport captures include classic scrollbars and use page scale;
+    // the visual viewport still owns element positioning and visibility.
+    const clip =
+      capture.clip ??
+      (space === "viewport"
+        ? { ...view, width: view.nativeCaptureWidth }
+        : {
+            x: Math.floor(origin.x + 1e-3),
+            y: Math.floor(origin.y + 1e-3),
+            width: elementRect
+              ? Math.ceil(elementRect.x + elementRect.width - 1e-3) - Math.floor(origin.x + 1e-3)
+              : view.fullWidth,
           });
+    const image = await getImageMetadata(capture.buffer);
+    if (!image) {
+      throw new Error("Cannot determine screenshot dimensions for label annotations");
+    }
+    // Attached Playwright sessions can capture at a different density from
+    // window.devicePixelRatio. The actual image and clip own this transform.
+    const scale = image.width / clip.width;
     return {
       // `labels` reports overlay boxes actually drawn on the captured image
       // (in-viewport, within budget); off-viewport refs are surfaced via
       // `annotations` but not drawn, and are reflected in `skipped`.
-      buffer,
+      buffer: capture.buffer,
       labels: plan.overlayItems.length,
-      skipped: plan.skipped + bboxFailures,
-      annotations: plan.annotations,
+      skipped: plan.skipped + skippedRefs,
+      annotations: scaleAnnotations(plan.annotations, scale, scale, {
+        x: clip.x - origin.x,
+        y: clip.y - origin.y,
+      }),
     };
   } finally {
     await page.evaluate(buildOverlayClearScript()).catch(() => {});
   }
 }
 
-async function resolveElementBoundingBoxForLabels(
-  page: Page,
-  refKey: string | undefined,
-  cssSelector: string | undefined,
-): Promise<{ x: number; y: number; width: number; height: number } | null> {
-  if (refKey) {
-    try {
-      return await refLocator(page, refKey).boundingBox();
-    } catch {
-      return null;
-    }
-  }
-  if (cssSelector) {
-    try {
-      return await page.locator(cssSelector).first().boundingBox();
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
-async function captureElementScreenshotForLabels(
-  page: Page,
-  refKey: string | undefined,
-  cssSelector: string | undefined,
-  type: "png" | "jpeg",
-  timeoutMs: number | undefined,
-): Promise<Buffer> {
-  if (refKey) {
-    return await refLocator(page, refKey).screenshot({ type, timeout: timeoutMs });
-  }
-  if (cssSelector) {
-    return await page.locator(cssSelector).first().screenshot({ type, timeout: timeoutMs });
-  }
-  throw new Error("captureElementScreenshotForLabels: requires refKey or cssSelector");
-}
-
 export async function setFileChooserFilesViaPlaywright(
-  opts: NavigationTargetOptions & {
+  opts: GuardedInteractionOptions & {
     page: Page;
     fileChooser: FileChooser;
     paths: string[];
     timeoutMs: number;
   },
 ): Promise<void> {
-  const resolvedResult = await resolveStrictExistingUploadPaths({ requestedPaths: opts.paths });
-  if (!resolvedResult.ok) {
-    throw new Error(resolvedResult.error);
-  }
-  const resolvedPaths = resolvedResult.paths;
-  const resolvedFiles = shouldUsePlaywrightFilePayloads(opts)
-    ? await toPlaywrightFilePayloads(resolvedPaths)
-    : resolvedPaths;
-
-  await awaitNavigationGuardedInteraction({
-    action: async () => {
-      await opts.fileChooser.setFiles(resolvedFiles, { timeout: opts.timeoutMs });
-    },
-    cdpUrl: opts.cdpUrl,
-    page: opts.page,
-    ...interactionNavigationPolicy(opts),
-    targetId: opts.targetId,
+  const resolvedFiles = await resolvePlaywrightUploadFiles(opts);
+  await runCancellablePageInteraction(opts.page, opts, async (signal) => {
+    await opts.fileChooser.setFiles(resolvedFiles, { timeout: opts.timeoutMs, signal });
   });
 }
 
 export async function setInputFilesViaPlaywright(
-  opts: NavigationTargetOptions & {
+  opts: GuardedInteractionOptions & {
     inputRef?: string;
     element?: string;
     paths: string[];
@@ -485,26 +594,11 @@ export async function setInputFilesViaPlaywright(
   }
 
   const locator = inputRef ? refLocator(page, inputRef) : page.locator(element).first();
-  const resolvedResult = await resolveStrictExistingUploadPaths({ requestedPaths: opts.paths });
-  if (!resolvedResult.ok) {
-    throw new Error(resolvedResult.error);
-  }
-  const resolvedPaths = resolvedResult.paths;
-  const resolvedFiles = shouldUsePlaywrightFilePayloads(opts)
-    ? await toPlaywrightFilePayloads(resolvedPaths)
-    : resolvedPaths;
-
-  try {
-    await awaitNavigationGuardedInteraction({
-      action: async () => {
-        await locator.setInputFiles(resolvedFiles);
-      },
-      cdpUrl: opts.cdpUrl,
-      page,
-      ...interactionNavigationPolicy(opts),
-      targetId: opts.targetId,
-    });
-  } catch (err) {
-    throw toFriendlyInteractionError(err, inputRef || element);
-  }
+  const resolvedFiles = await resolvePlaywrightUploadFiles(opts);
+  await runCancellablePageInteraction(
+    page,
+    opts,
+    async (signal) => await locator.setInputFiles(resolvedFiles, { signal }),
+    inputRef || element,
+  );
 }

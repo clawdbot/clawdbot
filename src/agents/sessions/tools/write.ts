@@ -14,6 +14,7 @@ import { Container, Text } from "@earendil-works/pi-tui";
 import { structuredPatch } from "diff";
 import { Type } from "typebox";
 import { isMissingPathError } from "../../../infra/errors.js";
+import { captureAgentToolSourceExecutionGuard } from "../../agent-tool-source-execution-guard.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { getLanguageFromPath, highlightCode } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
@@ -30,6 +31,7 @@ import {
   invalidArgText,
   normalizeDisplayText,
   replaceTabs,
+  reuseTextComponent,
   shortenPath,
   str,
   trimTrailingEmptyLines,
@@ -535,6 +537,7 @@ export function createWriteToolDefinition(
       void toolCallId;
       void onUpdate;
       void ctx;
+      const assertCurrent = captureAgentToolSourceExecutionGuard();
       const absolutePath = resolvePath(path, cwd);
       const dir = dirname(absolutePath);
       const queueKey = resolveFileMutationQueueKey(absolutePath, ops.resolveQueueKey, signal);
@@ -543,32 +546,36 @@ export function createWriteToolDefinition(
         if (signal?.aborted) {
           throw new Error("Operation aborted");
         }
-        // Terminal no-op: file already has identical content.
+        assertCurrent();
+        // No-op: file already has identical content. Not terminal — the model
+        // may still be mid-task and needs a continuation, not an ended turn.
         if (precheck.state === "same") {
-          return {
-            ...textResult(`No changes made to ${path}. The file already has identical content.`, {
-              changed: false,
-            } satisfies WriteToolDetails),
-            terminate: true,
-          };
+          return textResult(`No changes made to ${path}. The file already has identical content.`, {
+            changed: false,
+          } satisfies WriteToolDetails);
         }
         const details = await resolveWriteDetails({ absolutePath, content, ops, path, precheck });
         try {
+          assertCurrent();
           await ops.mkdir(dir);
           if (signal?.aborted) {
             throw new Error("Operation aborted");
           }
+          assertCurrent();
           await ops.writeFile(absolutePath, content);
           if (signal?.aborted) {
             throw new Error("Operation aborted");
           }
+          assertCurrent();
           if (!(await verifyPersistedUtf8File(absolutePath, content, ops))) {
             throw new Error(
               `Write verification failed for ${path}: the persisted regular file does not match the requested content. Inspect the target and retry.`,
             );
           }
+          assertCurrent();
           return successfulWriteResult(path, content, details);
         } catch (error: unknown) {
+          assertCurrent();
           const recovered = await recoverSuccessfulWrite({
             absolutePath,
             content,
@@ -580,6 +587,7 @@ export function createWriteToolDefinition(
             signal,
           });
           if (recovered) {
+            assertCurrent();
             return recovered;
           }
           throw error;
@@ -620,9 +628,7 @@ export function createWriteToolDefinition(
         component.clear();
         return component;
       }
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(output);
-      return text;
+      return reuseTextComponent(context.lastComponent, output);
     },
   };
 }

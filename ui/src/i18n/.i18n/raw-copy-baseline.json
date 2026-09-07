@@ -27,13 +27,6 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
-      "text": "custodian panel"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/app/lazy-custom-element.ts",
       "text": "dashboard document"
     },
     {
@@ -42,6 +35,13 @@
       "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
       "text": "desktop panel"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/lazy-custom-element.ts",
+      "text": "login screen"
     },
     {
       "count": 1,
@@ -207,23 +207,9 @@
     {
       "count": 1,
       "kind": "html-attribute",
-      "name": "alt",
-      "path": "ui/src/components/login-gate.ts",
-      "text": "OpenClaw"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
       "name": "placeholder",
       "path": "ui/src/components/login-gate.ts",
-      "text": "OPENCLAW_GATEWAY_TOKEN ("
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "placeholder",
-      "path": "ui/src/components/login-gate.ts",
-      "text": "ws://127.0.0.1:18789"
+      "text": "wss://gateway.example:443"
     },
     {
       "count": 1,
@@ -290,41 +276,6 @@
     },
     {
       "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/agents/github-identity-view.ts",
-      "text": "agentTools.githubStateConfiguredUnavailable"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/agents/github-identity-view.ts",
-      "text": "agentTools.githubStateRateLimited"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/agents/github-identity-view.ts",
-      "text": "agentTools.githubStateUnavailable"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/agents/github-identity-view.ts",
-      "text": "agentTools.githubStateUnverified"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/agents/github-identity-view.ts",
-      "text": "agentTools.githubStateVerified"
-    },
-    {
-      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/agents/memory/view.ts",
@@ -350,13 +301,6 @@
       "name": "text",
       "path": "ui/src/pages/agents/memory/view.ts",
       "text": "Z"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/agents/panels-overview.ts",
-      "text": "&times;"
     },
     {
       "count": 1,
@@ -426,7 +370,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/updates.ts",
-      "text": "openclaw update status --json openclaw update"
+      "text": "openclaw triage"
     },
     {
       "count": 1,
@@ -447,14 +391,7 @@
       "kind": "html-attribute",
       "name": "placeholder",
       "path": "ui/src/pages/connection/view.ts",
-      "text": "ws://100.x.y.z:18789"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "placeholder",
-      "path": "ui/src/pages/connection/view.ts",
-      "text": "OPENCLAW_GATEWAY_TOKEN"
+      "text": "wss://gateway.example:443"
     },
     {
       "count": 1,
@@ -502,15 +439,29 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/profile/profile-page.ts",
+      "path": "ui/src/pages/profile/profile-hero.ts",
       "text": "OpenClaw"
     },
     {
-      "count": 2,
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/skill-workshop/view.ts",
       "text": "v"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/skills/library-detail.ts",
+      "text": "SKILL.md"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/skills/library-view.ts",
+      "text": "SKILL.md"
     },
     {
       "count": 1,

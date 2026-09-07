@@ -120,6 +120,7 @@ describe("session sharing sandbox requirements", () => {
         "sessions.send",
         "sessions.steer",
         "talk.client.create",
+        "talk.client.toolCall",
         "talk.session.create",
         "tools.invoke",
         "wake",

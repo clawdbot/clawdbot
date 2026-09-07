@@ -20,7 +20,6 @@ type FinalizeAgentToolsOptions = {
   emitBeforeToolCallDiagnostics?: boolean;
   approvalMode?: "request" | "report" | "deny";
   abortSignal?: AbortSignal;
-  agentId?: string;
   recordToolPrepStage?: (name: string) => void;
 };
 
@@ -52,9 +51,7 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
     ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, abortSignal))
     : withHooks;
   options.recordToolPrepStage?.("abort-wrappers");
-  const finalized = applyToolAvailabilityDescriptions(withAbort, {
-    agentId: options.agentId,
-  });
+  const finalized = applyToolAvailabilityDescriptions(withAbort);
   options.recordToolPrepStage?.("deferred-followup-descriptions");
   return finalized;
 }

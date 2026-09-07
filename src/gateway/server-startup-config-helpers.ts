@@ -166,6 +166,7 @@ export function assertRuntimeGatewayAuthNotKnownWeak(config: OpenClawConfig): vo
       env: process.env,
       tailscaleMode: config.gateway?.tailscale?.mode ?? "off",
     }),
+    config.gateway?.auth?.token,
   );
 }
 

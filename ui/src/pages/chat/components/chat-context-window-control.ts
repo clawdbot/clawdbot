@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import type { GatewayContextWindowOption } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
+import { renderSettingsSegmented } from "../../../components/settings-ui.ts";
 import { t } from "../../../i18n/index.ts";
 
 export type ChatContextWindowControlParams = {
@@ -56,37 +57,24 @@ export function renderContextWindowControl(
       </button>
     `;
   } else {
-    control = html`
-      <div
-        class="settings-segmented chat-controls__context-window-options"
-        role="group"
-        aria-label=${ariaLabel}
-      >
-        ${contextWindow.options.map(
-          (option) => html`
-            <button
-              class="settings-segmented__btn ${option.id === selectedOption.id
-                ? "settings-segmented__btn--active"
-                : ""}"
-              data-chat-context-window-option=${option.id}
-              type="button"
-              aria-pressed=${option.id === selectedOption.id ? "true" : "false"}
-              ?disabled=${contextWindow.disabled}
-              @click=${(event: MouseEvent) => {
-                event.stopPropagation();
-                if (contextWindow.disabled || option.id === selectedOption.id) {
-                  event.preventDefault();
-                  return;
-                }
-                void contextWindow.onSelect(option.id, sessionKey);
-              }}
-            >
-              ${option.label}
-            </button>
-          `,
-        )}
-      </div>
-    `;
+    control = renderSettingsSegmented({
+      mode: "buttons",
+      variant: "compact",
+      className: "chat-controls__context-window-options",
+      value: selectedOption.id,
+      ariaLabel,
+      disabled: contextWindow.disabled,
+      options: contextWindow.options.map((option) => ({ value: option.id, label: option.label })),
+      onClick: (event, value) => {
+        event.stopPropagation();
+        if (contextWindow.disabled || value === selectedOption.id) {
+          event.preventDefault();
+        }
+      },
+      onChange: (value) => {
+        void contextWindow.onSelect(value, sessionKey);
+      },
+    });
   }
   return html`
     <div class="chat-controls__fast-mode-row chat-controls__context-window-row">

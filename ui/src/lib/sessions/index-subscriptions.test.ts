@@ -4,8 +4,9 @@ import {
   GatewayProtocolRequestTimeoutError,
 } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { createSessionCapability } from "./index.ts";
+import { createTestSessionCapability } from "./session-capability.test-support.ts";
 import { createSessionScopedOperations } from "./session-scoped-operations.ts";
 
 const subscriptionRequestOptions = { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS };
@@ -41,7 +42,7 @@ describe("createSessionCapability message subscriptions", () => {
       throw new Error(`Unexpected request: ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const sessions = createSessionCapability(createGateway(client));
+    const sessions = createTestSessionCapability(createGateway(client));
     const subscription = await sessions.subscribeMessages("agent:main:main");
 
     await expect(sessions.unsubscribeMessages(subscription)).rejects.toThrow(
@@ -75,8 +76,8 @@ describe("createSessionCapability message subscriptions", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const gateway = createGateway(client);
-    const first = createSessionCapability(gateway);
-    const second = createSessionCapability(gateway);
+    const first = createTestSessionCapability(gateway);
+    const second = createTestSessionCapability(gateway);
 
     const [firstLease, secondLease] = await Promise.all([
       first.subscribeMessages("main"),
@@ -115,7 +116,7 @@ describe("createSessionCapability message subscriptions", () => {
       throw new Error(`Unexpected request: ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const sessions = createSessionCapability(createGateway(client));
+    const sessions = createTestSessionCapability(createGateway(client));
 
     const plain = await sessions.subscribeMessages("main");
     const approval = await sessions.subscribeMessages("main", { includeApprovals: true });
@@ -141,42 +142,70 @@ describe("createSessionCapability message subscriptions", () => {
     sessions.dispose();
   });
 
-  it("isolates targeted global observers by the selected canonical agent", async () => {
-    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-      if (method === "sessions.messages.subscribe") {
-        return { key: params?.key };
-      }
-      if (method === "sessions.messages.unsubscribe") {
-        return {};
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const sessions = createSessionCapability(createGateway(client));
+  it.each(["global", "qualified main alias"])(
+    "retains each global observer owner through %s acknowledgment and release",
+    async (keyForm) => {
+      const observers = new Map<string, boolean>();
+      const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+        const key = params?.key;
+        const agentId =
+          params?.agentId ??
+          (key === "agent:main:main" ? "main" : key === "agent:work:main" ? "work" : null);
+        if (agentId !== "main" && agentId !== "work") {
+          throw new Error("Canonical global observer requires its owner");
+        }
+        if (method === "sessions.messages.subscribe") {
+          observers.set(agentId, params?.includeApprovals === true);
+          return { key: "global" };
+        }
+        if (method === "sessions.messages.unsubscribe") {
+          observers.delete(agentId);
+          return {};
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const client = { request } as unknown as GatewayBrowserClient;
+      const sessions = createTestSessionCapability(createGateway(client));
 
-    const [main, research] = await Promise.all([
-      sessions.subscribeMessages("global", { agentId: "main" }),
-      sessions.subscribeMessages("global", { agentId: "research" }),
-    ]);
+      const keyFor = (agentId: string) =>
+        keyForm === "global" ? "global" : `agent:${agentId}:main`;
+      const [main, work] = await Promise.all([
+        sessions.subscribeMessages(keyFor("main"), { agentId: " Main " }),
+        sessions.subscribeMessages(keyFor("work"), { agentId: " Work " }),
+      ]);
 
-    expect(main).toEqual({ key: "global", agentId: "main" });
-    expect(research).toEqual({ key: "global", agentId: "research" });
-    expect(request).toHaveBeenNthCalledWith(
-      1,
-      "sessions.messages.subscribe",
-      { key: "global", agentId: "main" },
-      subscriptionRequestOptions,
-    );
-    expect(request).toHaveBeenNthCalledWith(
-      2,
-      "sessions.messages.subscribe",
-      { key: "global", agentId: "research" },
-      subscriptionRequestOptions,
-    );
-    await sessions.unsubscribeMessages(main);
-    await sessions.unsubscribeMessages(research);
-    sessions.dispose();
-  });
+      await sessions.unsubscribeMessages(main);
+      expect([...observers]).toEqual([["work", false]]);
+      const approval = await sessions.subscribeMessages(keyFor("work"), {
+        agentId: "work",
+        includeApprovals: true,
+      });
+      await sessions.unsubscribeMessages(work);
+      expect([...observers]).toEqual([["work", true]]);
+      await sessions.unsubscribeMessages(approval);
+      expect(observers.size).toBe(0);
+      expect(main).toEqual({ key: "global", agentId: "main" });
+      expect(work).toEqual({ key: "global", agentId: "work" });
+      expect(request).toHaveBeenNthCalledWith(
+        1,
+        "sessions.messages.subscribe",
+        { key: keyFor("main"), agentId: "main" },
+        subscriptionRequestOptions,
+      );
+      expect(request).toHaveBeenNthCalledWith(
+        2,
+        "sessions.messages.subscribe",
+        { key: keyFor("work"), agentId: "work" },
+        subscriptionRequestOptions,
+      );
+      expect(request).toHaveBeenLastCalledWith(
+        "sessions.messages.unsubscribe",
+        { key: "global", agentId: "work" },
+        subscriptionRequestOptions,
+      );
+      sessions.dispose();
+    },
+  );
 
   it("retires the current Gateway generation when a sent subscription cannot be recovered", async () => {
     const timeout = new GatewayProtocolRequestTimeoutError({
@@ -194,8 +223,8 @@ describe("createSessionCapability message subscriptions", () => {
     const forceReconnect = vi.fn();
     const client = { request, forceReconnect } as unknown as GatewayBrowserClient;
     const gateway = createGateway(client);
-    const sessions = createSessionCapability(gateway);
-    const anotherOwner = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
+    const anotherOwner = createTestSessionCapability(gateway);
 
     const failures = await Promise.allSettled([
       sessions.subscribeMessages("main", { includeApprovals: true }),
@@ -231,7 +260,7 @@ describe("createSessionCapability message subscriptions", () => {
     });
     const forceReconnect = vi.fn();
     const client = { request, forceReconnect } as unknown as GatewayBrowserClient;
-    const sessions = createSessionCapability(createGateway(client));
+    const sessions = createTestSessionCapability(createGateway(client));
 
     await expect(sessions.subscribeMessages("main")).rejects.toBe(timeout);
     expect(request).toHaveBeenCalledTimes(2);
@@ -245,20 +274,14 @@ describe("createSessionCapability message subscriptions", () => {
       timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
       requestSent: true,
     });
-    let recoveryStarted: () => void = () => undefined;
-    let rejectRecovery: (error: Error) => void = () => undefined;
-    const recovering = new Promise<void>((resolve) => {
-      recoveryStarted = resolve;
-    });
-    const recovery = new Promise<never>((_resolve, reject) => {
-      rejectRecovery = reject;
-    });
+    const recovering = createDeferred();
+    const recovery = createDeferred<never>();
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.messages.subscribe") {
         throw timeout;
       }
-      recoveryStarted();
-      return await recovery;
+      recovering.resolve();
+      return await recovery.promise;
     });
     const forceReconnect = vi.fn();
     const client = { request, forceReconnect } as unknown as GatewayBrowserClient;
@@ -271,14 +294,14 @@ describe("createSessionCapability message subscriptions", () => {
         isCurrent: () => current,
       },
       agentId: () => null,
-      refreshReplacement: async () => undefined,
+      refreshReplacement: async () => null,
     });
     const failure = operations.subscribeMessages("main").catch((error: unknown) => error);
 
-    await recovering;
+    await recovering.promise;
     current = false;
     operations.retireConnection(client);
-    rejectRecovery(new Error("retired Gateway connection"));
+    recovery.reject(new Error("retired Gateway connection"));
 
     await expect(failure).resolves.toBe(timeout);
     expect(forceReconnect).not.toHaveBeenCalled();

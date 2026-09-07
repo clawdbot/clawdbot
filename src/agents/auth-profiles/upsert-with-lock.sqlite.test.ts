@@ -15,7 +15,7 @@ import {
   inspectPersistedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
 } from "./sqlite.js";
-import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
+import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store-runtime.js";
 import type { ApiKeyCredential } from "./types.js";
 import {
   persistAuthProfileBatch,

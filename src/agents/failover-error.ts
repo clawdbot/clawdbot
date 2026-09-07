@@ -6,7 +6,9 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
+import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
 import { collectErrorGraphCandidates, formatErrorMessage, readErrorName } from "../infra/errors.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { failoverReasonFromClassification } from "./failover/classification-rules.js";
 import {
   classifyFailoverSignal,
@@ -20,11 +22,15 @@ import {
   getErrorMessage,
   isFailoverError,
   isTimeoutError,
+  readDirectErrorCode,
   readDirectErrorMessage,
   type CliTimeoutContext,
 } from "./failover/error.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./failover/signal.js";
-import { AgentHarnessSessionSupersededError } from "./harness/errors.js";
+import {
+  AgentHarnessSessionSupersededError,
+  isAgentHarnessPreflightError,
+} from "./harness/errors.js";
 
 export {
   FailoverError,
@@ -43,7 +49,27 @@ const RUNTIME_COORDINATION_ERROR_NAMES = new Set([
   "WorkerRunnerUnavailableError",
   "WorkerRunnerCapacityError",
   "WorkerWorkspaceReconciliationError",
+  "ActiveTurnClaimError",
 ]);
+
+// Failed owned cleanup stops replay even for frozen errors crossing bundled chunks.
+// Keep the fact weakly keyed to the original error, never inferred from display text.
+const modelFallbackStops = resolveGlobalSingleton(
+  Symbol.for("openclaw.modelFallbackStops"),
+  () => new WeakSet<Error>(),
+);
+
+export function recordModelFallbackStop(error: Error): void {
+  modelFallbackStops.add(error);
+}
+
+export function hasModelFallbackStop(error: unknown): boolean {
+  return collectErrorGraphCandidates(error, resolveNestedErrors).some(
+    (candidate) =>
+      (candidate instanceof Error && modelFallbackStops.has(candidate)) ||
+      (isFailoverError(candidate) && isCliTerminalStopCode(candidate.code)),
+  );
+}
 
 function resolveNestedErrors(candidate: Record<string, unknown>): unknown[] {
   const errors = candidate.errors;
@@ -87,10 +113,18 @@ function findCliFailoverError<T extends FailoverError>(
   return undefined;
 }
 
-export function findCliMaxTurnsError(err: unknown): FailoverError | undefined {
+// Codes for turns the CLI backend ended itself. Their tool effects already ran,
+// so replay, model rotation, and generic failure copy must all defer to them.
+const CLI_TERMINAL_STOP_CODES = new Set(["cli_max_turns", "cli_turn_stopped"]);
+
+export function isCliTerminalStopCode(code: string | undefined): boolean {
+  return code !== undefined && CLI_TERMINAL_STOP_CODES.has(code);
+}
+
+export function findCliTerminalStopError(err: unknown): FailoverError | undefined {
   return findCliFailoverError(
     err,
-    (error) => (error.code === "cli_max_turns" ? error : undefined),
+    (error) => (isCliTerminalStopCode(error.code) ? error : undefined),
     new Set(),
   );
 }
@@ -172,32 +206,6 @@ function readDirectStatusCode(err: unknown): number | undefined {
 
 function getStatusCode(err: unknown): number | undefined {
   return findErrorProperty(err, readDirectStatusCode);
-}
-
-function readDirectErrorCode(err: unknown): string | undefined {
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const directCode = (err as { code?: unknown }).code;
-  if (typeof directCode === "string") {
-    const trimmed = directCode.trim();
-    return trimmed ? trimmed : undefined;
-  }
-  const detailCode = (err as { detail?: { code?: unknown } }).detail?.code;
-  if (typeof detailCode === "string") {
-    const trimmed = detailCode.trim();
-    return trimmed ? trimmed : undefined;
-  }
-  const status = (err as { status?: unknown }).status;
-  if (typeof status !== "string" || /^\d+$/.test(status)) {
-    return undefined;
-  }
-  const trimmed = status.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function getErrorCode(err: unknown): string | undefined {
-  return findErrorProperty(err, readDirectErrorCode);
 }
 
 function isStableProviderErrorType(value: string): boolean {
@@ -397,7 +405,7 @@ function normalizeErrorSignal(err: unknown, providerHint?: string): FailoverSign
   const message = getErrorMessage(err);
   return {
     status: getStatusCode(err),
-    code: getErrorCode(err),
+    code: findErrorProperty(err, readDirectErrorCode),
     errorType: getErrorType(err),
     message: message || undefined,
     provider: getProvider(err) ?? providerHint,
@@ -530,6 +538,11 @@ function resolveFailoverClassificationFromError(
   err: unknown,
   providerHint?: string,
 ): FailoverClassification | null {
+  // A direct preflight owns the refusal; its cause is diagnostic, not a failed
+  // provider attempt that may rotate credentials or replay the turn.
+  if (isAgentHarnessPreflightError(err)) {
+    return null;
+  }
   return resolveFailoverClassificationFromErrorInternal(err, new Set<object>(), 0, providerHint);
 }
 
@@ -614,6 +627,9 @@ export function describeFailoverError(err: unknown): {
   sessionId?: string;
   lane?: string;
 } {
+  if (isAgentHarnessPreflightError(err)) {
+    return { message: err.message };
+  }
   if (isFailoverError(err)) {
     return {
       message: err.message,
@@ -647,6 +663,7 @@ type FailoverErrorContext = {
   authMode?: string;
   sessionId?: string;
   lane?: string;
+  timeout?: FailoverError["timeout"];
 };
 
 type ModelFallbackErrorResolution =
@@ -661,14 +678,14 @@ export function coerceToFailoverError(
   context?: FailoverErrorContext,
 ): FailoverError | null {
   if (isFailoverError(err)) {
-    if (context?.authMode && !err.authMode) {
+    if ((context?.authMode && !err.authMode) || (context?.timeout && !err.timeout)) {
       const message = typeof err.message === "string" ? err.message : String(err);
-      return new FailoverError(message, {
+      const enriched = new FailoverError(message, {
         reason: err.reason,
         provider: err.provider,
         model: err.model,
         profileId: err.profileId,
-        authMode: context.authMode,
+        authMode: err.authMode ?? context.authMode,
         status: err.status,
         code: err.code,
         rawError: err.rawError,
@@ -678,9 +695,12 @@ export function coerceToFailoverError(
         cause: err.cause,
         suspend: err.suspend,
         cliTimeout: err.cliTimeout,
+        timeout: err.timeout ?? context.timeout,
         attempts: err.attempts,
         soonestCooldownExpiry: err.soonestCooldownExpiry,
       });
+      copyErrorDiagnostic(err, enriched);
+      return enriched;
     }
     return err;
   }
@@ -710,6 +730,7 @@ export function coerceToFailoverError(
     code,
     rawError: message,
     cause: err instanceof Error ? err : undefined,
+    timeout: context?.timeout,
     suspend: shouldSuspend,
   });
 }
@@ -741,8 +762,11 @@ export function resolveModelFallbackError(
   }
   // Recorded terminal stops prohibit replay regardless of provider policy.
   // Keep the wrapper identity before coercion can discard the terminal fact.
-  if (findCliMaxTurnsError(err)) {
+  if (hasModelFallbackStop(err)) {
     return { kind: "terminal", error: err };
+  }
+  if (isAgentHarnessPreflightError(err)) {
+    return { kind: "coordination", error: err };
   }
   const failoverError = coerceToFailoverError(err, context);
   if (failoverError) {

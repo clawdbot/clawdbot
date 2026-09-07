@@ -13,7 +13,6 @@ const suite = createControlUiE2eSuite({
 });
 const now = Date.now();
 const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
-const artifactDir = path.resolve(".artifacts/control-ui-e2e/model-providers");
 const unavailableMessage =
   "Provider usage is unavailable; the last request failed. Refresh to retry.";
 
@@ -38,7 +37,7 @@ function providerUsageResponses(usageStatus: unknown) {
 }
 
 suite.define(() => {
-  it("shows a visible warning when the provider usage request fails", async () => {
+  it("shows usage request failures with no configured providers", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -53,19 +52,22 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}settings/model-providers`);
-        await page.locator('[data-provider-id="openai"]').waitFor();
         await expect
           .poll(async () => (await gateway.getRequests("usage.status")).length)
           .toBeGreaterThan(0);
         await expect
           .poll(() => page.locator(".settings-page").textContent())
           .toContain(unavailableMessage);
+        expect(await page.locator("[data-provider-id]").count()).toBe(0);
         if (recordVisuals) {
-          await mkdir(artifactDir, { recursive: true });
+          await mkdir(path.join(suite.artifactDir, "model-providers"), { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
-            path: path.join(artifactDir, "provider-usage-request-failed.png"),
+            path: path.join(
+              path.join(suite.artifactDir, "model-providers"),
+              "provider-usage-request-failed.png",
+            ),
           });
         }
       },
@@ -105,10 +107,13 @@ suite.define(() => {
           .poll(() => page.locator(".settings-page").textContent())
           .not.toContain(unavailableMessage);
         if (recordVisuals) {
-          await mkdir(artifactDir, { recursive: true });
+          await mkdir(path.join(suite.artifactDir, "model-providers"), { recursive: true });
           await card.screenshot({
             animations: "disabled",
-            path: path.join(artifactDir, "provider-usage-provider-error.png"),
+            path: path.join(
+              path.join(suite.artifactDir, "model-providers"),
+              "provider-usage-provider-error.png",
+            ),
           });
         }
       },
@@ -167,13 +172,16 @@ suite.define(() => {
           .toBeGreaterThan(0);
 
         if (recordVisuals) {
-          await mkdir(artifactDir, { recursive: true });
+          await mkdir(path.join(suite.artifactDir, "model-providers"), { recursive: true });
           const phase =
             (await page.locator(".provider-usage-error").count()) === 0 ? "before" : "after";
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
-            path: path.join(artifactDir, `model-catalog-request-failure-${phase}.png`),
+            path: path.join(
+              path.join(suite.artifactDir, "model-providers"),
+              `model-catalog-request-failure-${phase}.png`,
+            ),
           });
         }
 
@@ -208,7 +216,10 @@ suite.define(() => {
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
-            path: path.join(artifactDir, "model-catalog-request-recovered.png"),
+            path: path.join(
+              path.join(suite.artifactDir, "model-providers"),
+              "model-catalog-request-recovered.png",
+            ),
           });
         }
       },
@@ -277,9 +288,12 @@ suite.define(() => {
         await expect.poll(async () => openaiCard.textContent()).toContain("Credentials for Main");
         await openaiCard.getByRole("button", { name: "Replace key" }).click();
         if (recordVisuals) {
-          await mkdir(artifactDir, { recursive: true });
+          await mkdir(path.join(suite.artifactDir, "model-providers"), { recursive: true });
           await page.screenshot({
-            path: path.join(artifactDir, "provider-credential-scope-before.png"),
+            path: path.join(
+              path.join(suite.artifactDir, "model-providers"),
+              "provider-credential-scope-before.png",
+            ),
             fullPage: true,
           });
         }
@@ -293,7 +307,10 @@ suite.define(() => {
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         if (recordVisuals) {
           await page.screenshot({
-            path: path.join(artifactDir, "provider-credential-scope-inline-cleared.png"),
+            path: path.join(
+              path.join(suite.artifactDir, "model-providers"),
+              "provider-credential-scope-inline-cleared.png",
+            ),
             fullPage: true,
           });
         }
@@ -312,7 +329,10 @@ suite.define(() => {
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         if (recordVisuals) {
           await page.screenshot({
-            path: path.join(artifactDir, "provider-credential-scope-after.png"),
+            path: path.join(
+              path.join(suite.artifactDir, "model-providers"),
+              "provider-credential-scope-after.png",
+            ),
             fullPage: true,
           });
         }

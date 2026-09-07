@@ -79,23 +79,23 @@ function activeProbePortStatus(status: DaemonStatus): DaemonStatus["port"] {
   return status.port;
 }
 
-function gatewayIsReady(status: DaemonStatus, options: { readyWhenReachable?: boolean }): boolean {
+function gatewayIsReady(status: DaemonStatus, readyWhenReachable?: boolean): boolean {
   // A busy port alone is not enough: pair it with probe evidence so another
   // local service on the same port cannot satisfy gateway readiness.
   return (
     status.rpc?.ok === true ||
-    (options.readyWhenReachable === true &&
+    (readyWhenReachable === true &&
       activeProbePortStatus(status)?.status === "busy" &&
       Boolean(status.rpc && gatewayProbeResultSawGateway(status.rpc)))
   );
 }
 
 function gatewayLooksStopped(status: DaemonStatus): boolean {
-  if (status.rpc?.ok === true) {
+  if (status.rpc && gatewayProbeResultSawGateway(status.rpc)) {
     return false;
   }
   const port = activeProbePortStatus(status);
-  if (port?.status === "busy" || (status.rpc && gatewayProbeResultSawGateway(status.rpc))) {
+  if (port?.status === "busy") {
     return false;
   }
   if (port?.status === "free") {
@@ -169,8 +169,7 @@ async function waitForGatewayReady(params: {
   let latest = await params.gatherStatus();
   for (
     let attempt = 1;
-    attempt < attempts &&
-    !gatewayIsReady(latest, { readyWhenReachable: params.readyWhenReachable });
+    attempt < attempts && !gatewayIsReady(latest, params.readyWhenReachable);
     attempt += 1
   ) {
     await new Promise((resolve) => {
@@ -204,7 +203,7 @@ export async function ensureGatewayReadyForOperation(
     });
 
   const initialStatus = await gatherStatus();
-  if (gatewayIsReady(initialStatus, { readyWhenReachable: options.readyWhenReachable })) {
+  if (gatewayIsReady(initialStatus, options.readyWhenReachable)) {
     return { ready: true, status: initialStatus, recovered: false };
   }
 
@@ -215,8 +214,7 @@ export async function ensureGatewayReadyForOperation(
     return { ready: false, status: initialStatus, reason, recoverable: false };
   }
 
-  const serviceInstalled = gatewayServiceIsInstalled(initialStatus);
-  const shouldInstall = !serviceInstalled;
+  const shouldInstall = !gatewayServiceIsInstalled(initialStatus);
   if (shouldInstall && options.allowInstall === false) {
     printGatewayNotReadyHints(options.runtime, reason);
     return { ready: false, status: initialStatus, reason, recoverable: false };
@@ -246,7 +244,7 @@ export async function ensureGatewayReadyForOperation(
     gatherStatus,
     readyWhenReachable: options.readyWhenReachable,
   });
-  if (gatewayIsReady(recoveredStatus, { readyWhenReachable: options.readyWhenReachable })) {
+  if (gatewayIsReady(recoveredStatus, options.readyWhenReachable)) {
     return { ready: true, status: recoveredStatus, recovered: true };
   }
 

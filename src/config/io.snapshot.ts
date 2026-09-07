@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "../infra/errors.js";
+import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
   includeContributionOwnsAgentRoster,
@@ -61,7 +62,7 @@ export async function readConfigFileSnapshotInternal(
   context: ConfigIoContext,
   options: InternalReadOptions = {},
 ): Promise<ReadConfigFileSnapshotInternalResult> {
-  const { deps, configPath } = context;
+  const { deps, configPath, pathResolution } = context;
   maybeLoadDotEnvForConfig(deps.env);
   const envBeforeRead = snapshotEnv(deps.env);
   if (!deps.fs.existsSync(configPath)) {
@@ -85,12 +86,12 @@ export async function readConfigFileSnapshotInternal(
         // Missing config is the fresh-install default path: materialize the
         // same runtime defaults an existing empty {} config gets, so snapshot
         // consumers see identical out-of-box behavior either way.
-        runtimeConfig: materializeRuntimeConfig(
-          config,
-          coreOnly
+        runtimeConfig: materializeRuntimeConfig(config, {
+          ...pathResolution,
+          ...(coreOnly
             ? { manifestRegistry: { plugins: [] } }
-            : { loadManifestRegistry: () => metadata.load(config).manifestRegistry },
-        ),
+            : { loadManifestRegistry: () => metadata.load(config).manifestRegistry }),
+        }),
         hash: hashConfigRaw(null),
         issues: [],
         warnings: [],
@@ -198,7 +199,10 @@ export async function readConfigFileSnapshotInternal(
     const contextBudgetMigration = migrateLegacyContextBudgetConfig(
       readResolution.resolvedConfigRaw,
     );
-    const rosterMigration = migratePersistedImplicitMainRoster(contextBudgetMigration.config);
+    const rosterMigration = migratePersistedImplicitMainRoster(contextBudgetMigration.config, {
+      env: deps.env,
+      homedir: deps.homedir,
+    });
     envVarWarnings.push(
       ...contextBudgetMigration.changes,
       ...contextBudgetMigration.warnings,
@@ -217,7 +221,7 @@ export async function readConfigFileSnapshotInternal(
     });
     const validated = await deps.measure("config.snapshot.read.validate", () =>
       validateConfigObjectWithPlugins(validationConfigRaw, {
-        env: deps.env,
+        ...pathResolution,
         pluginValidation: context.options.pluginValidation,
         loadPluginMetadataSnapshot: pluginMetadata.load,
         sourceRaw: effectiveParsed,
@@ -320,6 +324,7 @@ export async function readConfigFileSnapshotInternal(
     }
     const snapshotConfig = await deps.measure("config.snapshot.read.materialize", () =>
       materializeRuntimeConfig(validated.config, {
+        ...pathResolution,
         manifestRegistry:
           pluginMetadata.getSnapshot()?.manifestRegistry ??
           (context.options.pluginValidation === "core-only" ? { plugins: [] } : undefined),
@@ -357,6 +362,9 @@ export async function readConfigFileSnapshotInternal(
       ),
     );
   } catch (error) {
+    if (findStartupMaintenanceRequiredError(error)) {
+      throw error;
+    }
     const nodeError = error as NodeJS.ErrnoException;
     let message: string;
     if (nodeError?.code === "EACCES") {

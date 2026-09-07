@@ -9,6 +9,11 @@ import { createColdPluginFixture } from "../../plugins/test-helpers/cold-plugin-
 import { invokePluginArtifactInstallMock } from "../../plugins/test-helpers/install-fixtures.js";
 
 const installPluginFromNpmSpec = vi.fn();
+const resolveNpmSpecMetadata = vi.hoisted(() => vi.fn());
+vi.mock("../../infra/install-source-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/install-source-utils.js")>()),
+  resolveNpmSpecMetadata,
+}));
 const applyPluginAutoEnable = vi.fn();
 vi.mock("../../plugins/install.js", () => ({
   installPluginFromNpmSpec: (params: Parameters<typeof invokePluginArtifactInstallMock>[1]) =>
@@ -87,6 +92,7 @@ vi.mock("../../plugins/discovery.js", async (importOriginal) => ({
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginCandidate } from "../../plugins/discovery.js";
+import { PLUGIN_INSTALL_ERROR_CODE } from "../../plugins/install-types.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
@@ -204,6 +210,7 @@ function expectSetupSnapshotDoesNotScopeToPlugin(params: {
 }
 
 beforeEach(() => {
+  resolveNpmSpecMetadata.mockReset().mockRejectedValue(new Error("Unseeded npm metadata query"));
   clearPluginMetadataLifecycleCaches();
   vi.clearAllMocks();
   applyPluginAutoEnable.mockImplementation((params: { config: unknown }) => ({
@@ -428,50 +435,63 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(await runInitialValueForChannel("beta")).toBe("npm");
   });
 
-  it("installs npm beta on the beta channel without persisting the beta tag", async () => {
-    const runtime = makeRuntime();
-    const { prompter, select } = makeSkipInstallPrompter(true);
-    const cfg: OpenClawConfig = { update: { channel: "beta" } };
-    installPluginFromNpmSpec.mockResolvedValue({
-      ok: true,
-      pluginId: "wecom-openclaw-plugin",
-      targetDir: "/tmp/wecom-openclaw-plugin",
-      version: "2026.5.4-beta.1",
-      npmResolution: {
-        name: "@openclaw/wecom",
-        version: "2026.5.4-beta.1",
-        resolvedSpec: "@openclaw/wecom@2026.5.4-beta.1",
-      },
-    });
-
-    const result = await ensureChannelSetupPluginInstalled({
-      cfg,
-      entry: {
-        id: "wecom",
+  it.each([
+    { beta: "2026.5.4-beta.1", latest: "2026.5.4", selected: "2026.5.4" },
+    { beta: "2026.5.5-beta.1", latest: "2026.5.4", selected: "2026.5.5-beta.1" },
+  ])(
+    "installs $selected on beta while preserving npm intent",
+    async ({ beta, latest, selected }) => {
+      const runtime = makeRuntime();
+      const { prompter, select } = makeSkipInstallPrompter(true);
+      const cfg: OpenClawConfig = { update: { channel: "beta" } };
+      resolveNpmSpecMetadata.mockImplementation(async ({ spec }: { spec: string }) => {
+        const version = spec === "@openclaw/wecom@beta" ? beta : latest;
+        expect(["@openclaw/wecom@beta", "@openclaw/wecom@latest"]).toContain(spec);
+        const name = "@openclaw/wecom";
+        const metadata = { name, version, resolvedSpec: `${name}@${version}` };
+        return { ok: true, metadata };
+      });
+      installPluginFromNpmSpec.mockResolvedValue({
+        ok: true,
         pluginId: "wecom-openclaw-plugin",
-        meta: {
-          id: "wecom",
-          label: "WeCom",
-          selectionLabel: "WeCom",
-          docsPath: "/channels/wecom",
-          blurb: "WeCom channel",
+        targetDir: "/tmp/wecom-openclaw-plugin",
+        version: selected,
+        npmResolution: {
+          name: "@openclaw/wecom",
+          version: selected,
+          resolvedSpec: `@openclaw/wecom@${selected}`,
         },
-        install: {
-          npmSpec: "@openclaw/wecom",
-        },
-      },
-      prompter,
-      runtime,
-      promptInstall: false,
-    });
+      });
 
-    expect(select).not.toHaveBeenCalled();
-    expectRecordFields(requireMockCallArg(installPluginFromNpmSpec, 0), "npm install args", {
-      spec: "@openclaw/wecom@beta",
-      expectedPluginId: "wecom-openclaw-plugin",
-    });
-    expect(result.cfg.plugins?.installs?.["wecom-openclaw-plugin"]?.spec).toBe("@openclaw/wecom");
-  });
+      const result = await ensureChannelSetupPluginInstalled({
+        cfg,
+        entry: {
+          id: "wecom",
+          pluginId: "wecom-openclaw-plugin",
+          meta: {
+            id: "wecom",
+            label: "WeCom",
+            selectionLabel: "WeCom",
+            docsPath: "/channels/wecom",
+            blurb: "WeCom channel",
+          },
+          install: {
+            npmSpec: "@openclaw/wecom",
+          },
+        },
+        prompter,
+        runtime,
+        promptInstall: false,
+      });
+
+      expect(select).not.toHaveBeenCalled();
+      expectRecordFields(requireMockCallArg(installPluginFromNpmSpec, 0), "npm install args", {
+        spec: `@openclaw/wecom@${selected}`,
+        expectedPluginId: "wecom-openclaw-plugin",
+      });
+      expect(result.cfg.plugins?.installs?.["wecom-openclaw-plugin"]?.spec).toBe("@openclaw/wecom");
+    },
+  );
 
   it("defaults to bundled local path on beta channel when available", async () => {
     const runtime = makeRuntime();
@@ -598,7 +618,32 @@ describe("ensureChannelSetupPluginInstalled", () => {
     });
   });
 
-  it("falls back to local path after npm install failure", async () => {
+  it.each([
+    {
+      scenario: "falls back to local path when the npm target is not published",
+      code: PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND,
+      error: "Package not found on npm: @openclaw/bundled-chat@1.2.3",
+      fallback: true,
+    },
+    {
+      scenario: "refuses local fallback for an untyped npm error mentioning E404",
+      code: undefined,
+      error: "E404 while installing a dependency",
+      fallback: false,
+    },
+    {
+      scenario: "refuses local fallback after an npm integrity failure",
+      code: undefined,
+      error: "aborted: npm package integrity drift",
+      fallback: false,
+    },
+    {
+      scenario: "refuses local fallback after an npm policy failure",
+      code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED,
+      error: "Plugin install blocked by policy",
+      fallback: false,
+    },
+  ])("$scenario", async ({ code, error, fallback }) => {
     const runtime = makeRuntime();
     const note = vi.fn(async () => {});
     const confirm = vi.fn(async () => true);
@@ -611,7 +656,8 @@ describe("ensureChannelSetupPluginInstalled", () => {
     const { workspaceDir, localPath } = createLocalPluginFixture();
     installPluginFromNpmSpec.mockResolvedValue({
       ok: false,
-      error: "nope",
+      code,
+      error,
     });
 
     const result = await ensureChannelSetupPluginInstalled({
@@ -622,9 +668,17 @@ describe("ensureChannelSetupPluginInstalled", () => {
       workspaceDir,
     });
 
-    expectPluginLoadedFromLocalPath(result, localPath);
     expect(note).toHaveBeenCalled();
-    expect(runtime.error).not.toHaveBeenCalled();
+    expect(installPluginFromNpmSpec).toHaveBeenCalledOnce();
+    if (fallback) {
+      expectPluginLoadedFromLocalPath(result, localPath);
+      expect(result.cfg.plugins?.installs?.["bundled-chat"]?.acceptedSurface).toBeDefined();
+      expect(runtime.error).not.toHaveBeenCalled();
+    } else {
+      expect(result).toEqual({ cfg, installed: false, pluginId: "bundled-chat", status: "failed" });
+      expect(confirm).not.toHaveBeenCalled();
+      expect(runtime.error).toHaveBeenCalledWith(`Plugin install failed: ${error}`);
+    }
   });
 
   it.each([true, false])(

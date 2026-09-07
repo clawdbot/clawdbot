@@ -10,13 +10,22 @@ import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
-import { resetPluginRuntimeStateForTest } from "./runtime.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
+import { withPluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
 
 // Mock the persisted-registry loaders so direct metadata loads are observable.
 // Provider hot paths should reuse a compatible current snapshot and only fall
 // back to the loader when no compatible lifecycle-owned snapshot exists.
-const loadPluginRegistrySnapshotWithMetadata = vi.hoisted(() => vi.fn());
-const loadPluginManifestRegistryForInstalledIndex = vi.hoisted(() => vi.fn());
+const { loadPluginRegistrySnapshotWithMetadata, loadPluginManifestRegistryForInstalledIndex } =
+  vi.hoisted(() => {
+    // Shared plugin workers must load this graph after this file's mocks are installed.
+    vi.resetModules();
+    return {
+      loadPluginRegistrySnapshotWithMetadata: vi.fn(),
+      loadPluginManifestRegistryForInstalledIndex: vi.fn(),
+    };
+  });
 
 vi.mock("./plugin-registry-snapshot.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./plugin-registry-snapshot.js")>();
@@ -138,6 +147,31 @@ describe("provider runtime consults the current plugin metadata snapshot", () =>
   });
 
   describe("resolvePluginProvidersCore", () => {
+    it("keeps prepared provider discovery scoped to its exact generation and requested owners", () => {
+      const config: OpenClawConfig = { plugins: { entries: { demo: { enabled: true } } } };
+      const metadataSnapshot = registerCurrentSnapshot(config);
+      const pluginRegistry = createEmptyPluginRegistry();
+      pluginRegistry.providers = ["demo", "unrelated"].map((pluginId) => ({
+        pluginId,
+        provider: { id: pluginId, label: "prepared", auth: [] },
+        source: `/plugins/${pluginId}/index.js`,
+      }));
+      const activeRegistry = createEmptyPluginRegistry();
+      activeRegistry.providers = [
+        { ...pluginRegistry.providers[0]!, provider: { id: "demo", label: "active", auth: [] } },
+      ];
+      setActivePluginRegistry(activeRegistry, undefined, "default", WORKSPACE);
+      const resolve = (onlyPluginIds = ["demo"]) =>
+        resolvePluginProvidersCore({ config, env: {}, workspaceDir: WORKSPACE, onlyPluginIds });
+
+      withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, () => {
+        expect(resolve()).toEqual([{ id: "demo", label: "prepared", auth: [], pluginId: "demo" }]);
+        expect(resolve([])).toEqual([]);
+        expect(withPluginRuntimeGenerationScope({ metadataSnapshot }, resolve)).toEqual([]);
+      });
+      expect(resolve()).toEqual([{ id: "demo", label: "active", auth: [], pluginId: "demo" }]);
+    });
+
     it("reuses a compatible current snapshot without a direct disk load", () => {
       const config: OpenClawConfig = {};
       registerCurrentSnapshot(config);

@@ -43,6 +43,7 @@ const {
   getLastProxyAgent,
   resolveDebugProxySettingsMock,
   resetLastAgent,
+  MockWebSocket,
   webSocketSpy,
   httpsAgentSpy,
   wsProxyAgentSpy,
@@ -52,6 +53,12 @@ const {
   const globalFetchMockLocal = vi.fn();
   const baseRegisterClientSpyLocal = vi.fn();
   const webSocketSpyLocal = vi.fn();
+  function MockWebSocketLocal(
+    url: string,
+    options?: { agent?: unknown; handshakeTimeout?: number; maxPayload?: number },
+  ) {
+    webSocketSpyLocal(url, options);
+  }
   const captureHttpExchangeSpyLocal = vi.fn();
   const captureWsEventSpyLocal = vi.fn();
   const resolveDebugProxySettingsMockLocal = vi.fn(() => ({ enabled: false }));
@@ -141,6 +148,7 @@ const {
       HttpsProxyAgentLocal.lastCreated = undefined;
     },
     webSocketSpy: webSocketSpyLocal,
+    MockWebSocket: MockWebSocketLocal,
     wsProxyAgentSpy: wsProxyAgentSpyLocal,
   };
 });
@@ -156,14 +164,11 @@ vi.mock("node:https", () => ({
   Agent: HttpsAgent,
 }));
 
-vi.mock("ws", () => ({
-  default: function MockWebSocket(
-    url: string,
-    options?: { agent?: unknown; handshakeTimeout?: number; maxPayload?: number },
-  ) {
-    webSocketSpy(url, options);
-  },
+vi.mock("../internal/ws-runtime.js", () => ({
+  WebSocket: MockWebSocket,
 }));
+
+import { WebSocket } from "../internal/ws-runtime.js";
 
 vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
   captureHttpExchange: captureHttpExchangeSpy,
@@ -379,6 +384,7 @@ describe("createDiscordGatewayPlugin", () => {
   });
 
   it("uses ws for gateway sockets even without proxy", () => {
+    expect(WebSocket).toBe(MockWebSocket);
     const runtime = createRuntime();
     const plugin = createDiscordGatewayPlugin({
       discordConfig: {},
@@ -404,6 +410,7 @@ describe("createDiscordGatewayPlugin", () => {
   });
 
   it("allocates a fresh websocket flow id for each gateway socket", () => {
+    expect(WebSocket).toBe(MockWebSocket);
     const runtime = createRuntime();
     const plugin = createDiscordGatewayPlugin({
       discordConfig: {},
@@ -569,6 +576,7 @@ describe("createDiscordGatewayPlugin", () => {
   });
 
   it("keeps gateway WebSocket direct when only ambient proxy env is configured", () => {
+    expect(WebSocket).toBe(MockWebSocket);
     vi.stubEnv("https_proxy", "env-proxy.test:8080");
     const runtime = createRuntime();
     const plugin = createDiscordGatewayPlugin({

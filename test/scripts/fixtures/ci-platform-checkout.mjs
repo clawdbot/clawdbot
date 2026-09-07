@@ -4,12 +4,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import {
+  createWindowsProcessCensus,
+  requestWindowsProcessCensus,
+} from "./ci-windows-process-census.mjs";
 
 const [mode, root, policyScenario, ...args] = process.argv.slice(2);
 const linux = policyScenario.startsWith("linux:");
 const scenario = linux ? policyScenario.slice("linux:".length) : policyScenario;
 const fixture = fileURLToPath(import.meta.url);
 const instance = randomUUID();
+let ownWindowsCreationTime;
+let census;
+let actorLease;
 const workspace = path.join(root, "workspace");
 const runnerTemp = path.join(root, "temp");
 const lease = path.join(root, "lease");
@@ -18,17 +25,73 @@ const eventsFile = path.join(root, "events.jsonl");
 const commandsFile = path.join(root, "commands.jsonl");
 const optionsFile = path.join(root, "fixture-options.json");
 const options = fs.existsSync(optionsFile) ? JSON.parse(fs.readFileSync(optionsFile, "utf8")) : {};
+const localGit = options.localGit ?? options.performance;
 // Preload identity support before the cleanup handshake; its TypeScript graph
 // uses .js specifiers that native Node type stripping cannot resolve.
 let getFileLockProcessStartTime;
 if (options.cancelDuringCleanup && ["supervise", "git"].includes(mode)) {
-  const { tsImport } = await import("tsx/esm/api");
-  ({ getFileLockProcessStartTime } = await tsImport(
-    "../../../src/shared/pid-alive.ts",
-    import.meta.url,
-  ));
+  if (process.versions.bun) {
+    ({ getFileLockProcessStartTime } = await import("../../../src/shared/pid-alive.ts"));
+  } else {
+    const { tsImport } = await import("tsx/esm/api");
+    ({ getFileLockProcessStartTime } = await tsImport(
+      "../../../src/shared/pid-alive.ts",
+      import.meta.url,
+    ));
+  }
 }
 const refsFile = path.join(root, "refs.json");
+
+function docsPublisherPackages() {
+  const name = "@sindresorhus/slugify";
+  const source = JSON.parse(
+    fs.readFileSync(new URL("../../../package.json", import.meta.url), "utf8"),
+  );
+  const version = source.devDependencies[name];
+  const devDependencies = { [name]: version, "markdown-it": "15.0.0" };
+  return {
+    "package.json": { name: "docs-fixture", private: true, devDependencies },
+    "package-lock.json": {
+      name: "docs-fixture",
+      lockfileVersion: 3,
+      packages: {
+        "": { name: "docs-fixture", devDependencies },
+        [`node_modules/${name}`]: { version },
+        "node_modules/markdown-it": { version: "15.0.0" },
+      },
+    },
+  };
+}
+
+function prepareDocsPublisher() {
+  const source = fileURLToPath(new URL("../../../", import.meta.url));
+  const target = path.join(workspace, "publish");
+  // Model the earlier sync step, but execute the real validator from the source
+  // checkout. Package files remain independent of the remote baseline objects.
+  fs.symlinkSync(path.join(source, "scripts"), path.join(workspace, "scripts"), "junction");
+  for (const [name, value] of Object.entries(docsPublisherPackages())) {
+    fs.writeFileSync(path.join(target, name), JSON.stringify(value));
+  }
+  for (const name of [
+    "lib/docs-markdown.mjs",
+    "lib/docs-redirects.mjs",
+    "check-docs-mdx.mjs",
+    "check-docs-mdx.mts",
+    "lib/arg-utils.runtime.mjs",
+    "lib/tsx-cli-shim.mjs",
+    "lib/local-check-runtime.mts",
+    "tsx.mjs",
+    "lib/mintlify-accordion.mjs",
+    "docs-mdx-repair.md",
+  ]) {
+    const output = path.join(target, ".openclaw-sync", name);
+    fs.mkdirSync(path.dirname(output), { recursive: true });
+    fs.copyFileSync(
+      path.join(source, name === "docs-mdx-repair.md" ? ".github/codex/prompts" : "scripts", name),
+      output,
+    );
+  }
+}
 
 function resolveRef(cwd, ref) {
   const refs = fs.existsSync(refsFile) ? JSON.parse(fs.readFileSync(refsFile, "utf8")) : {};
@@ -78,8 +141,37 @@ function stall(attempt) {
   }
 }
 
-function record(pid, role, attempt = 0) {
-  publish(`pids/${pid}.json`, { pid, role, attempt, instance: `${instance}-${pid}` });
+function assertActorLease() {
+  if (mode !== "supervise" && fs.readFileSync(lease, "utf8") !== actorLease) {
+    throw new Error("Fixture actor lease retired");
+  }
+}
+
+function readWindowsProcessCensus(pids) {
+  return mode === "supervise"
+    ? census.read(pids)
+    : requestWindowsProcessCensus(root, actorLease, pids);
+}
+
+async function record(pid, role, attempt = 0) {
+  if (process.platform === "win32" && pid === process.pid && !ownWindowsCreationTime) {
+    const identity = (await readWindowsProcessCensus([pid])).get(pid);
+    if (!identity.alive || !identity.creationTime) {
+      throw new Error("Fixture actor could not capture its own Windows birth");
+    }
+    ownWindowsCreationTime = identity.creationTime;
+  }
+  // Registration cannot outlive the exact lease held before the native await.
+  assertActorLease();
+  publish(`pids/${pid}.json`, {
+    pid,
+    role,
+    attempt,
+    instance: `${instance}-${pid}`,
+    ...(process.platform === "win32" && pid === process.pid
+      ? { creationTime: ownWindowsCreationTime }
+      : {}),
+  });
 }
 
 function records() {
@@ -91,38 +183,40 @@ function records() {
     .map((file) => JSON.parse(fs.readFileSync(path.join(recordsDir, file), "utf8")));
 }
 
-function liveRecords() {
+async function liveRecords() {
   const owned = records().filter(
-    (entry) => !fs.existsSync(path.join(recordsDir, `${entry.instance}.dead`)),
+    (entry) =>
+      !fs.existsSync(path.join(recordsDir, `${entry.instance}.dead`)) &&
+      // The creator owns this shell through track(close), not a later PID lookup.
+      !(process.platform === "win32" && entry.role === "shell"),
   );
   if (owned.length === 0) {
     return [];
   }
   const alive = new Set();
   const pids = new Set(owned.map((entry) => entry.pid));
-  if (process.platform === "win32") {
-    for (const pid of pids) {
-      try {
-        process.kill(pid, 0);
-        alive.add(pid);
-      } catch (error) {
-        if (error.code === "EPERM") {
-          alive.add(pid);
-        } else if (error.code !== "ESRCH") {
-          throw error;
-        }
+  const windowsCensus =
+    process.platform === "win32" ? await readWindowsProcessCensus([...pids]) : undefined;
+  if (windowsCensus) {
+    for (const entry of owned) {
+      if (typeof entry.creationTime !== "string" || !/^\d+$/.test(entry.creationTime)) {
+        throw new Error("Fixture Windows actor is missing its registered birth");
       }
     }
+    for (const identity of windowsCensus.values()) {
+      if (identity.alive) alive.add(identity.pid);
+    }
   } else {
-    // Apple ps uses KERN_PROC_ALL for multiple PIDs, including an observer anchor.
-    // Singleton queries avoid that host-wide scan and share one census budget.
+    // Linux can census the owned PID set in one ps call. Apple ps scans the
+    // whole host for multiple PIDs; keep its singleton queries under one budget.
+    const pidLists = process.platform === "linux" ? [[...pids]] : [...pids].map((pid) => [pid]);
     const deadline = Date.now() + 1_000;
-    for (const pid of pids) {
+    for (const selectedPids of pidLists) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) {
         throw new Error("Fixture process census failed (ETIMEDOUT)");
       }
-      const result = spawnSync("/bin/ps", ["-o", "pid=,stat=", "-p", String(pid)], {
+      const result = spawnSync("/bin/ps", ["-o", "pid=,stat=", "-p", selectedPids.join(",")], {
         encoding: "utf8",
         timeout: remaining,
       });
@@ -131,25 +225,32 @@ function liveRecords() {
           `Fixture process census failed (${result.error?.code ?? result.signal ?? "unverified"})`,
         );
       }
-      // Apple ps and procps exit 1 without output when the selected PID is absent.
+      // Apple ps and procps exit 1 without output when all selected PIDs are absent.
       if (result.status === 1 && result.stdout === "") {
         continue;
       }
-      // Darwin can expose ?E during exit. Count it as live until a later census
-      // proves termination; never turn that transient state into a dead receipt.
-      const row = /^(\d+)\s+([RSDTtXZxKWPIU?][<+NLlsEVWX]*)$/u.exec(result.stdout.trim());
-      if (result.status !== 0 || !row || Number(row[1]) !== pid) {
-        throw new Error(
-          `Fixture process census returned an invalid row (exit ${result.status}, pid ${pid}, stdout ${JSON.stringify(result.stdout)})`,
-        );
-      }
-      if (!row[2].startsWith("Z")) {
-        alive.add(pid);
+      const remainingPids = new Set(selectedPids);
+      for (const line of result.stdout.trim().split("\n")) {
+        // Darwin can expose ?E during exit. Count it as live until a later census
+        // proves termination; never turn that transient state into a dead receipt.
+        const row = /^(\d+)\s+([RSDTtXZxKWPIU?][<+NLlsEVWX]*)$/u.exec(line.trim());
+        if (result.status !== 0 || !row || !remainingPids.delete(Number(row[1]))) {
+          throw new Error(
+            `Fixture process census returned an invalid row (exit ${result.status}, pids ${selectedPids.join(",")}, stdout ${JSON.stringify(result.stdout)})`,
+          );
+        }
+        if (!row[2].startsWith("Z")) {
+          alive.add(Number(row[1]));
+        }
       }
     }
   }
+  assertActorLease();
   return owned.filter((entry) => {
-    if (alive.has(entry.pid)) {
+    if (
+      alive.has(entry.pid) &&
+      (!windowsCensus || windowsCensus.get(entry.pid).creationTime === entry.creationTime)
+    ) {
       return true;
     }
     // Separate command processes share this observed-dead fact. PID reuse cannot
@@ -183,8 +284,9 @@ function isWorkflowDescendant(pid, shellPid) {
   return false;
 }
 
-function boundary(name) {
-  const alive = liveRecords();
+async function boundary(name) {
+  const alive = await liveRecords();
+  assertActorLease();
   fs.appendFileSync(
     eventsFile,
     `${JSON.stringify({
@@ -195,13 +297,18 @@ function boundary(name) {
   );
 }
 
-async function until(predicate, label, timeout = 4_000) {
-  const deadline = Date.now() + timeout;
-  while (!predicate()) {
+async function until(predicate, label, deadline) {
+  for (;;) {
     if (Date.now() >= deadline) {
       throw new Error(`Timed out waiting for ${label}`);
     }
-    await delay(10);
+    const satisfied = await predicate();
+    // Truthful completion after expiry cannot authorize namespace release.
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for ${label}`);
+    }
+    if (satisfied) return;
+    await delay(Math.max(0, Math.min(10, deadline - Date.now())));
   }
 }
 
@@ -219,7 +326,7 @@ async function waitForReady(predicate, child, stopped = () => !fs.existsSync(lea
 
 function launch(role, attempt) {
   const child = spawn(process.execPath, [fixture, role, root, policyScenario, String(attempt)], {
-    stdio: "ignore",
+    stdio: ["ignore", "ignore", "inherit"],
   });
   child.on("error", (error) => {
     throw error;
@@ -229,15 +336,24 @@ function launch(role, attempt) {
 }
 
 function holdLease() {
+  actorLease = fs.readFileSync(lease, "utf8");
+  const isLive = () => {
+    try {
+      return fs.readFileSync(lease, "utf8") === actorLease;
+    } catch (error) {
+      if (error.code === "ENOENT") return false;
+      throw error;
+    }
+  };
   // Orphans stop themselves when the supervisor releases the lease; no PID discovery/kills.
   // The independent ceiling also covers a supervisor killed before it can unlink the lease.
   const deadline = Date.now() + 60_000;
   setInterval(() => {
-    if (!fs.existsSync(lease) || Date.now() >= deadline) {
+    if (!isLive() || Date.now() >= deadline) {
       process.exit(0);
     }
   }, 20);
-  if (!fs.existsSync(lease)) {
+  if (!isLive()) {
     process.exit(0);
   }
 }
@@ -266,16 +382,16 @@ function writeConsumer(target, tool) {
 
 async function command() {
   holdLease();
-  if (!options.performance || mode !== "observe") record(process.pid, mode);
+  if (!options.performance || mode !== "observe") await record(process.pid, mode);
   if (mode === "sentinel") {
     return;
   }
   if (mode === "observe") {
-    boundary(args[0]);
+    await boundary(args[0]);
     process.exit(0);
   }
   if (options.performance && ["curl", "tar", "sha256sum", "npm"].includes(mode)) {
-    boundary(`consumer:${mode}`);
+    await boundary(`consumer:${mode}`);
     recordCommand(mode, process.cwd(), args);
     if (mode === "tar") {
       const directory = insideOwnedPath(args[args.indexOf("-C") + 1]);
@@ -290,14 +406,14 @@ async function command() {
   if (mode === "find") {
     insideOwnedPath(args[0]);
     // Observe before the real deletion, while prior Git children can still write.
-    boundary("delete");
+    await boundary("delete");
     const result = spawnSync("/usr/bin/find", args, { stdio: "inherit" });
     process.exit(result.status ?? 1);
   }
   if (mode === "rm") {
     const target = insideOwnedPath(args.at(-1));
     if (target === path.join(workspace, "publish")) {
-      boundary("delete");
+      await boundary("delete");
     }
     recordCommand(mode, process.cwd(), args);
     const result = spawnSync("/bin/rm", args, { stdio: "inherit" });
@@ -317,7 +433,7 @@ async function command() {
         process.exit(0);
       }
     });
-    record(process.pid, mode, attempt);
+    await record(process.pid, mode, attempt);
     if (mode === "child") {
       // Startup faults belong to the caller, not every consumer of this shared fixture.
       const startDelay = path.join(root, `tree-start-delay-${attempt}.json`);
@@ -334,7 +450,7 @@ async function command() {
     const cwd = insideOwnedPath(process.cwd());
     recordCommand(mode, cwd, args);
     if (options.performance && mode === "node") {
-      boundary("consumer:node");
+      await boundary("consumer:node");
       const allowed = [
         options.env.PERFORMANCE_REPORT_SELECTOR,
         options.env.PERFORMANCE_PUBLISHER_HELPER,
@@ -355,7 +471,24 @@ async function command() {
       // The workflow's package-script capability probe; never evaluate candidate code.
       process.exit(0);
     }
-    boundary(`consumer:${mode}`);
+    await boundary(`consumer:${mode}`);
+    if (mode === "node" && options.docsPublish && args[0] === "--input-type=module") {
+      const validator =
+        "import fs from 'node:fs'; " +
+        "import { validateDocsSyncDependencies } from './scripts/docs-sync-publish.mjs'; " +
+        "validateDocsSyncDependencies(process.argv[1], JSON.parse(fs.readFileSync(0, 'utf8')));";
+      if (
+        cwd !== workspace ||
+        args.length !== 4 ||
+        args[1] !== "-e" ||
+        args[2] !== validator ||
+        args[3] !== path.join(workspace, "publish")
+      ) {
+        throw new Error("Unexpected docs dependency validator command");
+      }
+      const result = spawnSync(process.execPath, args, { stdio: "inherit" });
+      process.exit(result.status ?? 1);
+    }
     if (mode === "go") {
       const [build, changeDirectory, source, outputFlag, output, target] = args;
       if (
@@ -427,8 +560,10 @@ async function command() {
     if (count === (fault.occurrence ?? 1)) commandResult = fault;
   }
   const operation = args.shift();
-  if (operation === "init" && !options.performance) {
-    boundary("init");
+  if (operation === "rev-parse" && args.join(" ") === "--git-path info/exclude" && !localGit) {
+    fs.writeSync(1, `${path.join(cwd, ".git/info/exclude")}\n`);
+  } else if (operation === "init" && !localGit) {
+    await boundary("init");
     const config = path.join(root, "fixture-config.json");
     if (fs.existsSync(config)) {
       await delay(JSON.parse(fs.readFileSync(config, "utf8")).initDelayMs);
@@ -461,7 +596,7 @@ async function command() {
     }
   } else if (
     options.publisher ||
-    options.performance ||
+    localGit ||
     options.pluginRelease ||
     options.releaseAdmission ||
     commandResult ||
@@ -475,8 +610,7 @@ async function command() {
     // independent results but share unique tree identities with those transports.
     const counterName =
       commandResult ||
-      ((options.performance || options.pluginRelease || options.releaseAdmission) &&
-        operation !== "fetch") ||
+      ((localGit || options.pluginRelease || options.releaseAdmission) && operation !== "fetch") ||
       ["rebase", "push", "rev-parse"].includes(operation)
         ? `${operation}-attempt.json`
         : "attempt.json";
@@ -489,9 +623,9 @@ async function command() {
     const attempt = fs.existsSync(treeCounter)
       ? JSON.parse(fs.readFileSync(treeCounter, "utf8")) + 1
       : 1;
-    boundary(`${operation}:${resultAttempt}`);
+    await boundary(`${operation}:${resultAttempt}`);
     publish("tree-attempt.json", attempt);
-    record(process.pid, "parent", attempt);
+    await record(process.pid, "parent", attempt);
     if (operation === "clone" || operation === "worktree") {
       const directory = insideOwnedPath(operation === "clone" ? args.at(-1) : args.at(-2));
       if (operation === "clone" && options.docsPublish && fs.existsSync(directory)) {
@@ -502,7 +636,7 @@ async function command() {
         flag: "wx",
       });
     }
-    if (["fetch", "rebase", "push"].includes(operation) && !options.performance) {
+    if (["fetch", "rebase", "push"].includes(operation) && !localGit) {
       const lock = path.join(cwd, operation === "fetch" ? ".git/shallow.lock" : ".git/index.lock");
       fs.mkdirSync(path.dirname(lock), { recursive: true });
       try {
@@ -527,7 +661,7 @@ async function command() {
     if (options.cancelDuringCleanup) {
       const pid = process.ppid;
       publish("owner.json", { pid, startTime: getFileLockProcessStartTime(pid) });
-      record(pid, "owner");
+      await record(pid, "owner");
       if (
         options.cleanupCancelMatch &&
         new RegExp(options.cleanupCancelMatch).test([operation, ...args].join(" "))
@@ -544,7 +678,7 @@ async function command() {
       );
     }
     if (scenario.startsWith("cancel-") || commandResult?.code === "cancel") {
-      const owned = liveRecords();
+      const owned = await liveRecords();
       const alive = owned.filter((entry) => entry.attempt === attempt);
       if (
         !["parent", "child", "grandchild"].every((role) =>
@@ -608,7 +742,7 @@ async function command() {
                 ? options.pushResults
                 : operation === "rev-parse" && options.revParseResult !== undefined
                   ? [options.revParseResult]
-                  : (options.performance || options.pluginRelease || options.releaseAdmission) &&
+                  : (localGit || options.pluginRelease || options.releaseAdmission) &&
                       operation !== "fetch"
                     ? undefined
                     : options.fetchResults;
@@ -620,7 +754,7 @@ async function command() {
       if (remoteResult) {
         fs.writeSync(1, remoteResult.output);
       }
-      if (options.performance && ["fetch", "push"].includes(operation) && result !== 0) {
+      if (localGit && ["fetch", "push"].includes(operation) && result !== 0) {
         const lock = path.join(cwd, ".git/shallow.lock");
         fs.writeFileSync(lock, "owned fixture lock\n", { flag: "wx" });
         process.on("SIGTERM", () => {});
@@ -644,16 +778,16 @@ async function command() {
         stall(attempt);
         return;
       }
-      if (result === 0 && options.performance && commandResult?.output === undefined) {
+      if (result === 0 && localGit && commandResult?.output === undefined) {
         const commandArgs = [...args];
         if (["fetch", "push"].includes(operation)) {
           const index = commandArgs.indexOf("origin");
-          if (index < 0) throw new Error("Unexpected performance transport remote");
-          commandArgs[index] = options.performance.remote;
+          if (index < 0) throw new Error("Unexpected local Git transport remote");
+          commandArgs[index] = localGit.remote;
         }
         // Only local file transport is allowed; never fall through to a live URL.
         const result = spawnSync(
-          options.performance.git,
+          localGit.git,
           [
             "-C",
             cwd,
@@ -670,6 +804,15 @@ async function command() {
         if (operation === "init" && result.status === 0) {
           const directory = args.at(-1) === "main" ? cwd : insideOwnedPath(args.at(-1));
           fs.writeFileSync(path.join(directory, ".git/preexisting.lock"), "not invocation-owned\n");
+        }
+        if (
+          options.localGit &&
+          operation === "checkout" &&
+          cwd === workspace &&
+          result.status === 0
+        ) {
+          // Capture the candidate index at its producer, before harness materialization.
+          fs.copyFileSync(path.join(workspace, ".git/index"), path.join(root, "candidate-index"));
         }
         process.exit(result.status ?? 1);
       }
@@ -737,7 +880,7 @@ async function command() {
     stall(attempt);
     return;
   } else if (operation === "checkout") {
-    boundary(cwd === path.join(workspace, ".ci-harness") ? "harness-checkout" : "checkout");
+    await boundary(cwd === path.join(workspace, ".ci-harness") ? "harness-checkout" : "checkout");
     if (scenario === "checkout-failure") {
       process.exit(23);
     }
@@ -761,35 +904,44 @@ async function command() {
     }
   } else if (
     operation === "diff" &&
-    (args.join(" ") === "--quiet -- docs .openclaw-sync" ||
+    ((options.docsPublish &&
+      args.join(" ") === "--quiet -- docs .openclaw-sync package.json package-lock.json") ||
       (options.docsAgent && args.join(" ") === "--quiet") ||
       options.maturity)
   ) {
-    boundary("diff");
+    await boundary("diff");
     process.exit(options.diffResult ?? (options.maturity ? 0 : 1));
   } else if (
     ["add", "commit"].includes(operation) ||
     (operation === "config" && (options.docsPublish || options.docsAgent)) ||
     (operation === "rebase" && args[0] === "--abort")
   ) {
-    boundary(operation === "rebase" ? "rebase-abort" : operation);
+    await boundary(operation === "rebase" ? "rebase-abort" : operation);
     // An abort without an active rebase is an ordinary ignored Git failure.
     process.exit(operation === "rebase" ? 128 : 0);
   } else if (options.docsAgent && ["ls-files", "diff"].includes(operation)) {
-    boundary(operation);
+    await boundary(operation);
   } else if (operation === "cat-file" || (operation === "show" && options.objects)) {
-    boundary(`${operation}:${args.at(-1)}`);
+    await boundary(`${operation}:${args.at(-1)}`);
     const spec = args.at(-1);
     if (spec.endsWith("^{commit}")) {
       process.exit(options.baseAvailableAfter === 0 ? 0 : 1);
     }
-    const object = options.objects?.[spec];
+    const packages = options.docsPublish
+      ? Object.fromEntries(
+          Object.entries(docsPublisherPackages()).map(([name, value]) => [
+            `refs/remotes/origin/main:${name}`,
+            { text: JSON.stringify(value) },
+          ]),
+        )
+      : {};
+    const object = options.objects?.[spec] ?? packages[spec];
     if (operation === "show" && object) {
       fs.writeSync(1, object.text);
     }
     process.exit(object ? ((operation === "cat-file" ? object.probe : object.code) ?? 0) : 1);
   } else if (operation === "rev-parse") {
-    boundary("rev-parse");
+    await boundary("rev-parse");
     if (args[0] === "--verify") {
       fs.writeSync(1, "fixture quiet probe stdout\n");
       fs.writeSync(2, "fixture quiet probe stderr\n");
@@ -801,22 +953,22 @@ async function command() {
     }
     fs.writeSync(1, `${args.map((ref) => resolveRef(cwd, ref)).join("\n")}\n`);
   } else if (operation === "tag" && args[0] === "--points-at") {
-    boundary("tag");
+    await boundary("tag");
   } else if (operation === "merge-base" && options.mergeBase) {
-    boundary("merge-base");
+    await boundary("merge-base");
     if (args[0] === "--is-ancestor") {
       process.exit(options.mergeBase.ancestor ? 0 : 1);
     }
     fs.writeSync(1, `${options.mergeBase.revision}\n`);
   } else if (operation === "check-ref-format") {
-    boundary("check-ref-format");
+    await boundary("check-ref-format");
     fs.writeSync(1, "fixture quiet probe stdout\n");
     fs.writeSync(2, "fixture quiet probe stderr\n");
     process.exit(options.invalidRef ? 1 : 0);
   } else if (operation === "remote" && args[0] === "get-url") {
     fs.writeSync(1, "https://example.invalid/fixture.git\n");
   } else if (operation === "show" && args.join(" ").startsWith("-s --format=%P ")) {
-    boundary("show-parents");
+    await boundary("show-parents");
     const snapshot = options.mergeSnapshots?.find((entry) => entry.sha === args.at(-1));
     const head = snapshot?.head ?? "a".repeat(40);
     fs.writeSync(1, `${"c".repeat(40)} ${head}\n`);
@@ -827,10 +979,13 @@ async function command() {
 }
 
 async function supervise() {
+  if (options.docsPublish && options.workingDirectory === "publish") {
+    prepareDocsPublisher();
+  }
   fs.mkdirSync(recordsDir);
   fs.writeFileSync(eventsFile, "");
   fs.writeFileSync(commandsFile, "");
-  fs.writeFileSync(lease, "owned\n");
+  fs.writeFileSync(lease, instance);
   const bin = path.join(root, "bin");
   const commandPath = `${bin}${path.delimiter}${process.env.PATH}`;
   const home = path.join(runnerTemp, "home");
@@ -860,7 +1015,12 @@ async function supervise() {
   for (const tool of extraTools) {
     writeConsumer(path.join(bin, tool), tool);
   }
-  if (options.performance || options.pluginRelease || options.releaseAdmission) {
+  if (
+    options.performance ||
+    options.pluginRelease ||
+    options.releaseAdmission ||
+    options.publisher
+  ) {
     fs.writeFileSync(
       path.join(bin, "timeout"),
       '#!/bin/bash\nwhile [[ "$1" == --* ]]; do shift; done\nshift\nexec "$@"\n',
@@ -881,6 +1041,7 @@ async function supervise() {
   let sentinel;
   let shell;
   let stopping;
+  let censusFailed = false;
   const pendingChildren = new Set();
   const track = (child) => {
     pendingChildren.add(child);
@@ -909,7 +1070,24 @@ async function supervise() {
       if (error) {
         report.error = String(error);
       }
-      const deadline = Date.now() + 4_000;
+      const cleanupEnd = Date.now() + 4_000;
+      const actorEnd = census ? cleanupEnd - 1_000 : cleanupEnd;
+      let cleanupError;
+      let retirement;
+      const retireCensus = () => (retirement ??= census.close());
+      // Reserve the last second for the Windows helper. Closing at the actor cutoff
+      // also cancels an in-flight census instead of waiting beyond the shared budget.
+      const actorCutoff = census
+        ? setTimeout(
+            () => {
+              cleanupError ??= new Error("Timed out waiting for fixture actors");
+              void retireCensus().catch((err) => {
+                cleanupError ??= err;
+              });
+            },
+            Math.max(0, actorEnd - Date.now()),
+          )
+        : undefined;
       try {
         fs.rmSync(lease, { force: true });
         sentinel?.kill("SIGKILL");
@@ -933,56 +1111,76 @@ async function supervise() {
           }
         }
         // Empty registration does not prove a spawned writer has closed.
+        await until(() => pendingChildren.size === 0, "direct child close", actorEnd);
         await until(
-          () => pendingChildren.size === 0,
-          "direct child close",
-          Math.max(0, deadline - Date.now()),
-        );
-        await until(
-          () => {
-            report.cleanupRemaining = liveRecords();
+          async () => {
+            report.cleanupRemaining = await liveRecords();
             return report.cleanupRemaining.length === 0;
           },
           "fixture cleanup",
-          Math.max(0, deadline - Date.now()),
+          actorEnd,
         );
       } catch (err) {
+        cleanupError ??= err;
+      } finally {
+        clearTimeout(actorCutoff);
+        if (census) {
+          // Always join the same raw retirement, including one started by the cutoff.
+          // A missing native close keeps ownership until the existing outer termination.
+          try {
+            await retireCensus();
+          } catch (err) {
+            cleanupError ??= err;
+          }
+          if (censusFailed) report.error = census.diagnostics();
+        }
+      }
+      if (!cleanupError) {
+        report.ownedProcesses = records();
+        report.boundaries = fs
+          .readFileSync(eventsFile, "utf8")
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map(JSON.parse);
+        report.readyAttempts = fs
+          .readdirSync(root)
+          .filter((name) => /^ready-\d+\.json$/u.test(name))
+          .map((name) => JSON.parse(fs.readFileSync(path.join(root, name), "utf8")))
+          .toSorted((left, right) => left - right);
+        report.commands = fs
+          .readFileSync(commandsFile, "utf8")
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map(JSON.parse);
+        report.output = fs.readFileSync(path.join(root, "workflow.log"), "utf8");
+        if (options.publisher || options.performance) {
+          // Model Actions masking, including the mask-registration line itself.
+          const masks = [...report.output.matchAll(/^::add-mask::(.+)$/gm)].map(
+            (match) => match[1],
+          );
+          for (const value of [
+            ...masks,
+            options.env.CONTENTS_TOKEN,
+            options.env.GH_TOKEN,
+            options.env.CLAWGRIT_REPORTS_APP_TOKEN,
+          ]) {
+            if (value) report.output = report.output.replaceAll(value, "[redacted]");
+          }
+        }
+      }
+      // Report assembly is synchronous, but it must still finish within the original budget.
+      if (Date.now() >= cleanupEnd) {
+        cleanupError ??= new Error("Timed out waiting for fixture cleanup");
+      }
+      if (cleanupError) {
         // Only the completed report releases the namespace; exit alone does not.
-        const detail = err instanceof Error ? err.message : String(err);
+        const detail = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
         console.error(`Fixture cleanup unverified; retaining ${root}: ${detail}`);
+        if (censusFailed) console.error(census.diagnostics());
         fs.closeSync(output);
         process.exit(1);
-      }
-      report.ownedProcesses = records();
-      report.boundaries = fs
-        .readFileSync(eventsFile, "utf8")
-        .trim()
-        .split("\n")
-        .filter(Boolean)
-        .map(JSON.parse);
-      report.readyAttempts = fs
-        .readdirSync(root)
-        .filter((name) => /^ready-\d+\.json$/u.test(name))
-        .map((name) => JSON.parse(fs.readFileSync(path.join(root, name), "utf8")))
-        .toSorted((left, right) => left - right);
-      report.commands = fs
-        .readFileSync(commandsFile, "utf8")
-        .trim()
-        .split("\n")
-        .filter(Boolean)
-        .map(JSON.parse);
-      report.output = fs.readFileSync(path.join(root, "workflow.log"), "utf8");
-      if (options.publisher || options.performance) {
-        // Model Actions masking, including the mask-registration line itself.
-        const masks = [...report.output.matchAll(/^::add-mask::(.+)$/gm)].map((match) => match[1]);
-        for (const value of [
-          ...masks,
-          options.env.CONTENTS_TOKEN,
-          options.env.GH_TOKEN,
-          options.env.CLAWGRIT_REPORTS_APP_TOKEN,
-        ]) {
-          if (value) report.output = report.output.replaceAll(value, "[redacted]");
-        }
       }
       publish("report.json", report);
       fs.closeSync(output);
@@ -996,6 +1194,22 @@ async function supervise() {
   }
   setTimeout(() => void stop("fixture deadline exceeded"), 45_000);
   try {
+    if (process.platform === "win32") {
+      census = createWindowsProcessCensus({
+        root,
+        token: instance,
+        onFailure: (error) => {
+          censusFailed = true;
+          void stop(error);
+        },
+      });
+      // Interpreter startup belongs to the existing supervisor watchdog, not a query deadline.
+      await census.ready;
+      if (stopping) {
+        await stopping;
+        return;
+      }
+    }
     if (process.platform !== "win32") {
       // A noexec mount can make PATH skip mocks and select real tools. Verify
       // resolution and executability before the workflow gets any chance to run.
@@ -1032,8 +1246,9 @@ async function supervise() {
       );
     }
     sentinel = spawn(process.execPath, [fixture, "sentinel", root, policyScenario], {
-      // Parent teardown owns this group even before sentinel self-registration.
-      stdio: "ignore",
+      // Parent teardown owns this group before self-registration. Keep startup
+      // errors in the existing report so census failures do not become opaque exits.
+      stdio: ["ignore", output, output],
     });
     // stop() joins the sentinel's actual close through pendingChildren before reporting.
     void track(sentinel);
@@ -1091,7 +1306,7 @@ async function supervise() {
     });
     const closed = track(shell);
     if (shell.pid) {
-      record(shell.pid, "shell");
+      await record(shell.pid, "shell");
     }
     const ready = (name) =>
       waitForReady(
@@ -1134,23 +1349,26 @@ async function supervise() {
         () => Boolean(stopping),
       ))
     ) {
-      boundary("backoff-cancel");
+      await boundary("backoff-cancel");
       shell.kill("SIGTERM");
     }
     const code = await closed;
     if (stopping) {
+      // A signal can start cleanup while the supervised shell is closing. Keep
+      // the top-level module alive until that cleanup publishes report.json.
+      await stopping;
       return;
     }
     report.code = code;
     if (options.docsAgent && fs.readFileSync(path.join(root, "github-output"), "utf8")) {
-      boundary("output");
+      await boundary("output");
     }
     if (
       options.objects &&
       fs.existsSync(path.join(root, "github-env")) &&
       fs.readFileSync(path.join(root, "github-env"), "utf8").includes("PRE_COMMIT_CONFIG_PATH=")
     ) {
-      boundary("config-publication");
+      await boundary("config-publication");
     }
     for (const [name, file] of options.publisher || options.maturity || options.performance
       ? [
@@ -1159,9 +1377,9 @@ async function supervise() {
         ]
       : []) {
       if (fs.existsSync(path.join(root, file)) && fs.readFileSync(path.join(root, file), "utf8"))
-        boundary(name);
+        await boundary(name);
     }
-    boundary("exit");
+    await boundary("exit");
     await stop();
   } catch (error) {
     await stop(error);

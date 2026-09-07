@@ -45,7 +45,7 @@ Or set `APP_STORE_CONNECT_API_KEY_PATH`.
 ## Notes
 
 - Locale files live under `metadata/<locale>/`, for example `metadata/en-US/` and `metadata/sv-SE/`. Each locale directory should use the public metadata filenames consumed by the `ios metadata` lane.
-- Release notes are generated from `apps/ios/CHANGELOG.md` into temporary Fastlane metadata during upload; use `pnpm ios:release:plan -- --json` and `pnpm ios:release:cut` to prepare the exact encoded section.
+- Release notes are generated from `apps/ios/CHANGELOG.md` into temporary Fastlane metadata during upload; use the `scripts/mobile-release-version.ts` prepare/plan/finalize flow to prepare the exact encoded section and the other four mobile release outputs.
 - Do not check in `release_notes.txt` under locale metadata directories; the lane strips copied release-note files and writes the current generated en-US release notes when requested.
 - `apps/ios/APP-REVIEW-NOTES.md` is rendered to `apps/ios/build/app-review/APP-REVIEW-NOTES.pdf` and uploaded as the App Review attachment when metadata is uploaded.
 - Production release notes require the exact encoded App Store heading, such as `## 2026.7.21`; they do not fall back to the gateway or `## Unreleased` section.

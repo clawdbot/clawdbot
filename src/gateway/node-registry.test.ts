@@ -4040,13 +4040,15 @@ describe("gateway/node-registry", () => {
       command: "demo.echo",
       description: "Registered description",
     });
-    registry.refreshNodePluginTools();
+    registry.refreshRuntimePolicy();
 
     expect(registry.get("node-1")?.nodePluginTools[0]?.description).toBe("Registered description");
   });
 
   it("ignores published node tools when gateway publication is disabled", () => {
-    const registry = createNodeRegistry({ nodePluginToolsEnabled: false });
+    const registry = createNodeRegistry({
+      getConfig: () => ({ gateway: { nodes: { pluginTools: { enabled: false } } } }),
+    });
     registerNodeSession(
       registry,
       makeClient("conn-1", "node-1", [], {
@@ -4064,7 +4066,7 @@ describe("gateway/node-registry", () => {
       },
     ]);
 
-    expect(updated?.declaredNodePluginTools).toEqual([]);
+    expect(updated?.declaredNodePluginTools.map((tool) => tool.name)).toEqual(["demo_echo"]);
     expect(updated?.nodePluginTools).toEqual([]);
     expect(listConnectedNodePluginTools()).toEqual([]);
   });
@@ -4136,7 +4138,9 @@ describe("gateway/node-registry", () => {
   });
 
   it("ignores node skills when publication is disabled or the connection is stale", () => {
-    const disabled = createNodeRegistry({ nodeSkillsEnabled: false });
+    const disabled = createNodeRegistry({
+      getConfig: () => ({ gateway: { nodes: { allowSkills: false } } }),
+    });
     registerNodeSession(disabled, makeClient("conn-1", "node-1"), {});
     expect(publishNodeSkills(disabled, [nodeSkill("disabled")])?.nodeSkills).toEqual([]);
 

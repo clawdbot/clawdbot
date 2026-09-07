@@ -1,6 +1,11 @@
 // Commands gateway methods expose validated command listing for a resolved
 // agent, provider, scope, and argument-detail request.
-import { validateCommandsListParams } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  validateCommandsListParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import { authorizeSessionSharingTarget, resolveSessionSharingTarget } from "../session-sharing.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { buildCommandsListResult } from "./commands-list-result.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -13,7 +18,7 @@ export const commandsHandlers: GatewayRequestHandlers = {
   "commands.list": defineValidatedGatewayMethod(
     "commands.list",
     validateCommandsListParams,
-    ({ params, respond, context }) => {
+    ({ params, respond, context, client }) => {
       const resolved = resolveAgentIdOrRespondError({
         rawAgentId: params.agentId,
         respond,
@@ -23,6 +28,24 @@ export const commandsHandlers: GatewayRequestHandlers = {
       if (!resolved) {
         return;
       }
+      const target = params.sessionKey
+        ? resolveSessionSharingTarget({
+            cfg: resolved.cfg,
+            sessionKey: params.sessionKey,
+            agentId: resolved.agentId,
+          })
+        : null;
+      if (params.sessionKey && !target) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "Session not found."));
+        return;
+      }
+      if (target) {
+        const error = authorizeSessionSharingTarget({ cfg: resolved.cfg, client, target });
+        if (error) {
+          respond(false, undefined, error);
+          return;
+        }
+      }
       respond(
         true,
         buildCommandsListResult({
@@ -31,6 +54,8 @@ export const commandsHandlers: GatewayRequestHandlers = {
           provider: params.provider,
           scope: params.scope,
           includeArgs: params.includeArgs,
+          sessionKey: params.sessionKey,
+          sessionEntry: target?.entry,
         }),
         undefined,
       );

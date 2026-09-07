@@ -1,19 +1,13 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import {
-  canonicalizeMainSessionAlias,
-  resolveMainSessionKey,
-} from "../../config/sessions/main-session.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { toErrorObject } from "../../infra/errors.js";
-import {
-  normalizeAgentId,
-  normalizeMainKey,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 /** Shared ACP manager normalization, resolution, and error helpers. */
 import { ACP_ERROR_CODES, AcpRuntimeError } from "../runtime/errors.js";
-import type { AcpSessionResolution } from "./manager.types.js";
+import { buildAcpDatabaseSessionKey } from "../runtime/session-meta-keys.js";
+import { resolveSessionStorePathForAcp } from "../runtime/session-meta-store.js";
+import type { AcpSessionResolution, AcpSessionTarget } from "./manager.types.js";
 
 /** Resolves the agent id encoded in an ACP session key. */
 export function resolveAcpAgentFromSessionKey(sessionKey: string, fallback = "main"): string {
@@ -53,41 +47,29 @@ export function requireReadySessionMeta(resolution: AcpSessionResolution): Sessi
   throw toErrorObject(resolveAcpSessionResolutionError(resolution), "Non-Error thrown");
 }
 
-function normalizeSessionKey(sessionKey: string): string {
-  return sessionKey.trim();
-}
-
-/** Canonicalizes aliases and main-session keys before ACP metadata lookup. */
-export function canonicalizeAcpSessionKey(params: {
+/** Resolve ownership before main aliases can erase the encoded agent namespace. */
+export function resolveAcpSessionTarget(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
-}): string {
-  const normalized = normalizeSessionKey(params.sessionKey);
+  agentId?: string;
+}): AcpSessionTarget {
+  const normalized = normalizeLowercaseStringOrEmpty(params.sessionKey);
   if (!normalized) {
-    return "";
+    throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
   }
-  const lowered = normalizeLowercaseStringOrEmpty(normalized);
-  if (lowered === "global" || lowered === "unknown") {
-    return lowered;
-  }
-  const parsed = parseAgentSessionKey(lowered);
-  if (parsed) {
-    return canonicalizeMainSessionAlias({
-      cfg: params.cfg,
-      agentId: parsed.agentId,
-      sessionKey: lowered,
-    });
-  }
-  const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
-  if (lowered === "main" || lowered === mainKey) {
-    return resolveMainSessionKey(params.cfg);
-  }
-  return lowered;
+  const { agentId, storeSessionKey: sessionKey } = resolveSessionStorePathForAcp({
+    ...params,
+    sessionKey: normalized,
+  });
+  return { agentId, sessionKey };
 }
 
-/** Normalizes session keys for process-local actor maps. */
-export function normalizeActorKey(sessionKey: string): string {
-  return normalizeLowercaseStringOrEmpty(sessionKey);
+/** Components normalize before encoding; base64url itself is case-sensitive. */
+export function acpSessionActorKey(target: AcpSessionTarget): string {
+  return buildAcpDatabaseSessionKey(
+    normalizeLowercaseStringOrEmpty(target.sessionKey),
+    target.agentId,
+  );
 }
 
 /** Restricts runtime-provided error codes to the ACP error-code enum. */

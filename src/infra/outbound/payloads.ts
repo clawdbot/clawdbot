@@ -40,11 +40,14 @@ export type NormalizedOutboundPayload = {
   location?: ReplyPayload["location"];
   /** Hook-only content for audio-only TTS payloads. Never used as channel text/caption. */
   hookContent?: string;
+  /** Preserves the status/answer distinction through delivery hooks. */
+  isStatusNotice?: boolean;
 };
 
 /** JSON-safe outbound payload projection used for envelopes and diagnostics. */
 export type OutboundPayloadJson = {
   text: string;
+  isError?: boolean;
   mediaUrl: string | null;
   mediaUrls?: string[];
   audioAsVoice?: boolean;
@@ -319,6 +322,7 @@ export function projectOutboundPayloadPlanForOutbound(
       ...(entry.hasInteractive ? { interactive: payload.interactive } : {}),
       ...(entry.hasChannelData ? { channelData: payload.channelData } : {}),
       ...(payload.location ? { location: payload.location } : {}),
+      ...(payload.isStatusNotice === true ? { isStatusNotice: true } : {}),
     });
   }
   return normalizedPayloads;
@@ -333,6 +337,7 @@ export function projectOutboundPayloadPlanForJson(
     const payload = entry.payload;
     normalized.push({
       text: entry.parts.text,
+      isError: payload.isError,
       mediaUrl: payload.mediaUrl ?? null,
       mediaUrls: entry.parts.mediaUrls.length ? entry.parts.mediaUrls : undefined,
       audioAsVoice: payload.audioAsVoice === true ? true : undefined,
@@ -384,6 +389,7 @@ export function summarizeOutboundPayloadForTransport(
     channelData: payload.channelData,
     ...(payload.location ? { location: payload.location } : {}),
     ...(text || !spokenText ? {} : { hookContent: spokenText }),
+    ...(payload.isStatusNotice === true ? { isStatusNotice: true } : {}),
   };
 }
 
@@ -392,13 +398,6 @@ export function normalizeReplyPayloadsForDelivery(
   payloads: readonly ReplyPayload[],
 ): ReplyPayload[] {
   return projectOutboundPayloadPlanForDelivery(createOutboundPayloadPlan(payloads));
-}
-
-/** Normalizes reply payloads into JSON-safe outbound envelope payloads. */
-export function normalizeOutboundPayloadsForJson(
-  payloads: readonly ReplyPayload[],
-): OutboundPayloadJson[] {
-  return projectOutboundPayloadPlanForJson(createOutboundPayloadPlan(payloads));
 }
 
 /** Formats normalized outbound payload text and attachments for logs. */

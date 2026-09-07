@@ -381,14 +381,19 @@ private fun classifyTranscriptMessage(
           metric = saved?.let { nativeString("saved \$count tokens", formatCompactTokenCount(it)) },
         )
       }
-      "reset" ->
+
+      "reset" -> {
         ChatTimelineItem.SystemDivider(
           key = "divider:reset:$keySuffix",
           kind = SystemDividerKind.Reset,
           label = nativeString("Session reset"),
           secondary = nativeString("The earlier conversation was cleared."),
         )
-      else -> null
+      }
+
+      else -> {
+        null
+      }
     }
   }
 
@@ -402,10 +407,12 @@ private fun classifyTranscriptMessage(
         label = nativeString("System · restart recovery")
         body = nativeString("Turn interrupted by a gateway restart — asked the agent to resume and finish the response.")
       }
+
       "restart-sentinel" -> {
         label = nativeString("System · gateway restarted")
         body = rawBody
       }
+
       else -> {
         label = nativeString("System")
         body = rawBody

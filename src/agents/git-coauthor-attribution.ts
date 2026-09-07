@@ -90,7 +90,8 @@ export function resolveGitCoauthorAttribution(params: {
       continue;
     }
     const noreplyEmail = `${identity.accountId}+${identity.login}@users.noreply.github.com`;
-    if (noreplyEmail.toLowerCase() === primaryEmail) {
+    // An explicit publisher replaces the configured primary; the other account may deserve credit.
+    if (params.excludeAccountId === undefined && noreplyEmail.toLowerCase() === primaryEmail) {
       primaryAuthor += 1;
       continue;
     }

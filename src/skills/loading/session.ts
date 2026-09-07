@@ -1,9 +1,9 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../../agents/config.js";
 import type { ResourceDiagnostic } from "../../agents/sessions/diagnostics.js";
-import { createSyntheticSourceInfo, type SourceInfo } from "../../agents/sessions/source-info.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import {
   addIgnoreRules,
   normalizeNativePathSeparators,
@@ -11,8 +11,9 @@ import {
 } from "../../shared/ignore-rules.js";
 // Session skill helpers resolve skills attached to a session and its transcript state.
 import { expandTildePath } from "../../shared/tilde-path.js";
-import { parseSkillFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
-import { resolveSkillDisplayName } from "./skill-contract.js";
+import { parseSkillFrontmatter } from "./frontmatter.js";
+import type { Skill } from "./skill-contract.js";
+import { materializeSkill } from "./skill-materializer.js";
 import { formatSkillsForPromptBounded } from "./skill-prompt-limits.js";
 
 /** Max name length per spec */
@@ -21,19 +22,7 @@ const MAX_NAME_LENGTH = 64;
 /** Max description length per spec */
 const MAX_DESCRIPTION_LENGTH = 1024;
 
-export interface Skill {
-  name: string;
-  /** Human-readable title from the first Markdown H1, falling back to the identifier. */
-  displayName?: string;
-  description: string;
-  filePath: string;
-  baseDir: string;
-  /** @deprecated Ignored; retained for API compatibility until the next Plugin SDK major. */
-  promptVersion?: string;
-  source: string;
-  sourceInfo: SourceInfo;
-  disableModelInvocation: boolean;
-}
+export type { Skill } from "./skill-contract.js";
 
 interface LoadSkillsResult {
   skills: Skill[];
@@ -81,28 +70,13 @@ function validateDescription(description: string | undefined): string[] {
   return errors;
 }
 
-function createSkillSourceInfo(filePath: string, baseDir: string, source: string): SourceInfo {
-  switch (source) {
-    case "user":
-      return createSyntheticSourceInfo(filePath, {
-        source: "local",
-        scope: "user",
-        baseDir,
-      });
-    case "project":
-      return createSyntheticSourceInfo(filePath, {
-        source: "local",
-        scope: "project",
-        baseDir,
-      });
-    case "path":
-      return createSyntheticSourceInfo(filePath, {
-        source: "local",
-        baseDir,
-      });
-    default:
-      return createSyntheticSourceInfo(filePath, { source, baseDir });
+function resolveSkillSourceOptions(
+  source: string,
+): Parameters<typeof materializeSkill>[0]["sourceOptions"] {
+  if (source === "user" || source === "project") {
+    return { source: "local", scope: source };
   }
+  return { source: source === "path" ? "local" : source };
 }
 
 function loadSkillsFromDirInternal(
@@ -222,7 +196,6 @@ function loadSkillFromFile(
   try {
     const rawContent = readFileSync(filePath, "utf-8");
     const frontmatter = parseSkillFrontmatter(rawContent);
-    const invocation = resolveSkillInvocationPolicy(frontmatter);
     const skillDir = dirname(filePath);
     const parentDirName = basename(skillDir);
 
@@ -247,16 +220,16 @@ function loadSkillFromFile(
     }
 
     return {
-      skill: {
+      skill: materializeSkill({
+        content: rawContent,
+        frontmatter,
         name,
-        displayName: resolveSkillDisplayName(rawContent, name),
         description: frontmatter.description,
         filePath,
         baseDir: skillDir,
         source,
-        sourceInfo: createSkillSourceInfo(filePath, skillDir, source),
-        disableModelInvocation: invocation.disableModelInvocation,
-      },
+        sourceOptions: resolveSkillSourceOptions(source),
+      }),
       diagnostics,
     };
   } catch (error) {
@@ -349,21 +322,12 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
   const userSkillsDir = join(resolvedAgentDir, "skills");
   const projectSkillsDir = resolve(cwd, CONFIG_DIR_NAME, "skills");
 
-  const isUnderPath = (target: string, root: string): boolean => {
-    const normalizedRoot = resolve(root);
-    if (target === normalizedRoot) {
-      return true;
-    }
-    const prefix = normalizedRoot.endsWith(sep) ? normalizedRoot : `${normalizedRoot}${sep}`;
-    return target.startsWith(prefix);
-  };
-
   const getSource = (resolvedPath: string): "user" | "project" | "path" => {
     if (!includeDefaults) {
-      if (isUnderPath(resolvedPath, userSkillsDir)) {
+      if (isPathInside(userSkillsDir, resolvedPath)) {
         return "user";
       }
-      if (isUnderPath(resolvedPath, projectSkillsDir)) {
+      if (isPathInside(projectSkillsDir, resolvedPath)) {
         return "project";
       }
     }

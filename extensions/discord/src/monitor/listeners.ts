@@ -20,6 +20,7 @@ import {
 import { canViewDiscordGuildChannel } from "../send.permissions.js";
 import { type DiscordGuildEntryResolved, resolveDiscordGuildEntry } from "./allow-list.js";
 import { discordEventQueueLog, runDiscordListenerWithSlowLog } from "./listeners.queue.js";
+import type { DiscordLivePolicyReader } from "./live-policy.js";
 import { clearPresences, setPresence } from "./presence-cache.js";
 import { openDiscordPresenceCooldownStore } from "./presence-cooldown-store.js";
 import {
@@ -109,6 +110,7 @@ type GuildPresenceState = { generation: number; inferUnknownAsNewlyAvailable: bo
 export class DiscordPresenceListener extends PresenceUpdateListener {
   private readonly presenceBaseline: DiscordPresenceBaselineCache;
   private readonly pendingByGuildUser = new Map<string, Promise<void>>();
+  private readonly pendingGuildSeeds = new Map<string, Promise<boolean>>();
   private readonly guildPresenceState = new Map<string, GuildPresenceState>();
   private gatewayGeneration = 0;
   private readonly cooldownStore: PluginStateSyncKeyedStore<number>;
@@ -120,6 +122,7 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       logger?: Logger;
       accountId: string;
       botUserId?: string;
+      readPolicy?: DiscordLivePolicyReader;
       guildEntries?: Record<string, DiscordGuildEntryResolved>;
       nowMs?: () => number;
       cooldownStore?: PluginStateSyncKeyedStore<number>;
@@ -133,10 +136,42 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
     this.emissionGate = params.emissionGate ?? new DiscordPresenceEmissionGate();
   }
 
-  seedGuildSnapshot(data: GuildCreateEvent): void {
+  async seedGuildSnapshot(data: GuildCreateEvent): Promise<void> {
+    if (!this.params.readPolicy) {
+      this.seedGuildSnapshotWithPolicy(data, this.params.guildEntries);
+      return;
+    }
+    this.invalidateGuild(data.id);
+    const gatewayGeneration = this.gatewayGeneration;
+    const guildGeneration = this.guildPresenceState.get(data.id)!.generation;
+    const seed = (async () => {
+      const policy = await this.params.readPolicy!();
+      if (
+        !this.isCurrentGeneration(data.id, gatewayGeneration, guildGeneration) ||
+        !policy.isCurrent()
+      ) {
+        return false;
+      }
+      this.seedGuildSnapshotWithPolicy(data, policy.guildEntries);
+      return true;
+    })();
+    this.pendingGuildSeeds.set(data.id, seed);
+    try {
+      await seed;
+    } finally {
+      if (this.pendingGuildSeeds.get(data.id) === seed) {
+        this.pendingGuildSeeds.delete(data.id);
+      }
+    }
+  }
+
+  private seedGuildSnapshotWithPolicy(
+    data: GuildCreateEvent,
+    guildEntries: Record<string, DiscordGuildEntryResolved> | undefined,
+  ): void {
     const config = resolveDiscordGuildEntry({
       guildId: data.id,
-      guildEntries: this.params.guildEntries,
+      guildEntries,
     })?.presenceEvents;
     if (!config || config.enabled === false) {
       return;
@@ -172,6 +207,10 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
   }
 
   async handle(data: PresenceUpdateEvent, client: Client) {
+    const pendingSeed = this.pendingGuildSeeds.get(data.guild_id);
+    if (pendingSeed && !(await pendingSeed)) {
+      return;
+    }
     const userId = data.user?.id;
     if (!userId) {
       return;
@@ -207,6 +246,7 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
     this.emissionGate.noteGatewaySessionReset(this.params.nowMs?.() ?? Date.now());
     this.presenceBaseline.clear();
     this.guildPresenceState.clear();
+    this.pendingGuildSeeds.clear();
     // Generations make old REST results inert. Detach their chains so a hung lookup cannot block
     // presence delivery from the replacement gateway session.
     this.pendingByGuildUser.clear();
@@ -214,6 +254,7 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
   }
 
   invalidateGuild(guildId: string): void {
+    this.pendingGuildSeeds.delete(guildId);
     const keyPrefix = `${this.params.accountId}:${guildId}:`;
     const generation = (this.guildPresenceState.get(guildId)?.generation ?? 0) + 1;
     this.guildPresenceState.set(guildId, { generation, inferUnknownAsNewlyAvailable: false });
@@ -240,9 +281,17 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
     if (!this.isCurrentGeneration(data.guild_id, gatewayGeneration, guildGeneration)) {
       return;
     }
+    const policy = await this.params.readPolicy?.();
+    const cfg = policy?.cfg ?? this.params.cfg;
+    if (
+      !this.isCurrentGeneration(data.guild_id, gatewayGeneration, guildGeneration) ||
+      policy?.isCurrent() === false
+    ) {
+      return;
+    }
     const config = resolveDiscordGuildEntry({
       guildId: data.guild_id,
-      guildEntries: this.params.guildEntries,
+      guildEntries: policy ? policy.guildEntries : this.params.guildEntries,
     })?.presenceEvents;
     if (!config || config.enabled === false) {
       return;
@@ -335,12 +384,16 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
         presenceEvent.channelId,
         userId,
         {
-          cfg: this.params.cfg,
+          cfg,
           accountId: this.params.accountId,
           rest: client.rest,
         },
       );
-      if (!this.isCurrentGeneration(data.guild_id, gatewayGeneration, guildGeneration)) {
+      // Permission lookup cannot authorize an event under a replaced account policy.
+      if (
+        !this.isCurrentGeneration(data.guild_id, gatewayGeneration, guildGeneration) ||
+        policy?.isCurrent() === false
+      ) {
         return;
       }
       if (!canViewTargetChannel) {
@@ -350,7 +403,7 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
         return;
       }
       const route = resolveAgentRoute({
-        cfg: this.params.cfg,
+        cfg,
         channel: "discord",
         accountId: this.params.accountId,
         guildId: data.guild_id,
@@ -445,8 +498,8 @@ export class DiscordPresenceGuildCreateListener extends GuildCreateListener {
     super();
   }
 
-  handle(data: GuildCreateEvent): void {
-    this.presenceListener.seedGuildSnapshot(data);
+  async handle(data: GuildCreateEvent): Promise<void> {
+    await this.presenceListener.seedGuildSnapshot(data);
   }
 }
 

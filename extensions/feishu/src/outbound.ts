@@ -9,7 +9,6 @@ import {
   attachChannelToResult,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-import { resolveLegacyInteractiveTextFallback } from "openclaw/plugin-sdk/interactive-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import {
@@ -43,18 +42,19 @@ import {
   shouldSuppressFeishuTextForVoiceMedia,
   type SendMediaResult,
 } from "./media.js";
-import {
-  readNativeFeishuCardJson,
-  resolveFeishuCardTemplate,
-  sanitizeNativeFeishuCard,
-} from "./native-card.js";
+import { readNativeFeishuCardJson } from "./native-card.js";
 import {
   assertFeishuCardWithinEnvelope,
   buildFeishuPresentationFallback,
-  buildFeishuPresentationCardElements,
-  isFeishuCardWithinEnvelope,
+  buildFeishuPayloadCard,
+  consumeFeishuPresentationFallbackMarker,
+  FEISHU_PRESENTATION_CAPABILITIES,
+  markRenderedFeishuCard,
+  readNativeFeishuCard,
+  renderFeishuPresentationPayload,
   renderFeishuPresentationFallbackText,
   resolveFeishuRichReply,
+  withinCardTableLimit,
 } from "./presentation-card.js";
 import {
   createFeishuPartialReplyDeliveryError,
@@ -69,8 +69,6 @@ import {
   type CardHeaderConfig,
 } from "./send.js";
 
-const RENDERED_FEISHU_CARD = Symbol("openclaw.renderedFeishuCard");
-const FEISHU_PRESENTATION_FALLBACK_MARKER = "__openclawPresentationFallback";
 // Carries the direct-send upload-failure policy through the presentation
 // fallback delivery path. The normal `sendMedia` branch sets
 // `propagateMediaUploadFailure` directly; the presentation-fallback branch
@@ -134,30 +132,6 @@ function normalizePossibleLocalImagePath(text: string | undefined): string | nul
 
 function shouldUseCard(text: string): boolean {
   return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
-}
-
-function markRenderedFeishuCard(card: Record<string, unknown>): Record<string, unknown> {
-  Object.defineProperty(card, RENDERED_FEISHU_CARD, {
-    value: true,
-    enumerable: false,
-  });
-  return card;
-}
-
-function readNativeFeishuCard(payload: { channelData?: Record<string, unknown> }) {
-  const feishuData = payload.channelData?.feishu;
-  if (!isRecord(feishuData)) {
-    return undefined;
-  }
-  const card = feishuData.card ?? feishuData.interactiveCard;
-  if (!isRecord(card)) {
-    return undefined;
-  }
-  if ((card as { [RENDERED_FEISHU_CARD]?: true })[RENDERED_FEISHU_CARD] === true) {
-    return card;
-  }
-  const sanitizedCard = sanitizeNativeFeishuCard(card);
-  return sanitizedCard ? markRenderedFeishuCard(sanitizedCard) : undefined;
 }
 
 type FeishuOutboundPayload = Parameters<
@@ -224,35 +198,6 @@ function partialFeishuSendError(error: unknown, results: readonly FeishuReplyDel
   });
 }
 
-function consumeFeishuPresentationFallbackMarker(payload: FeishuOutboundPayload): {
-  payload: FeishuOutboundPayload;
-  presentationFallback?: { hasVisibleContent: boolean };
-} {
-  const feishuData = isRecord(payload.channelData?.feishu) ? payload.channelData.feishu : undefined;
-  const presentationFallback = feishuData?.[FEISHU_PRESENTATION_FALLBACK_MARKER];
-  if (
-    !isRecord(presentationFallback) ||
-    typeof presentationFallback.hasVisibleContent !== "boolean"
-  ) {
-    return { payload };
-  }
-  const nextFeishuData = { ...feishuData };
-  delete nextFeishuData[FEISHU_PRESENTATION_FALLBACK_MARKER];
-  const nextChannelData = { ...payload.channelData };
-  if (Object.keys(nextFeishuData).length > 0) {
-    nextChannelData.feishu = nextFeishuData;
-  } else {
-    delete nextChannelData.feishu;
-  }
-  return {
-    payload: {
-      ...payload,
-      channelData: Object.keys(nextChannelData).length > 0 ? nextChannelData : undefined,
-    },
-    presentationFallback: { hasVisibleContent: presentationFallback.hasVisibleContent },
-  };
-}
-
 // Reads (without consuming) the direct-send upload-failure policy stamped on
 // the payload by the presentation-fallback branch. Unlike the presentation
 // fallback marker this is not consumed: a fallback payload may fan out
@@ -260,136 +205,6 @@ function consumeFeishuPresentationFallbackMarker(payload: FeishuOutboundPayload)
 function readFeishuPropagateMediaUploadFailure(payload: FeishuOutboundPayload): boolean {
   const feishuData = isRecord(payload.channelData?.feishu) ? payload.channelData.feishu : undefined;
   return feishuData?.[FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER] === true;
-}
-
-// Builds a `channelData.feishu` that carries only the direct-send upload-failure
-// policy marker. The document-comment branch strips native card / interactive
-// channelData before fallback delivery (those cannot render in comments), but
-// it must not drop the propagation marker the direct `send` action stamped —
-// otherwise a media-upload failure on a comment target degrades to a
-// fallback-text `ok:true` receipt again (issue #112244, ClawSweeper P1).
-function buildFeishuPropagationOnlyChannelData(
-  payload: FeishuOutboundPayload,
-): { feishu: Record<string, unknown> } | undefined {
-  const feishuData = isRecord(payload.channelData?.feishu) ? payload.channelData.feishu : undefined;
-  if (feishuData?.[FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER] !== true) {
-    return undefined;
-  }
-  return {
-    feishu: { [FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER]: true },
-  };
-}
-
-function buildFeishuPayloadCard(params: {
-  payload: Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0]["payload"];
-  text?: string;
-  identity?: Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0]["identity"];
-}): Record<string, unknown> | undefined {
-  const nativeCard = readNativeFeishuCard(params.payload);
-  if (nativeCard) {
-    assertFeishuCardWithinEnvelope(nativeCard, "Feishu native card");
-    return nativeCard;
-  }
-
-  const rawText = params.text ?? params.payload.text;
-  const textCard = readNativeFeishuCardJson(rawText);
-  const { interactive, presentation } = resolveFeishuRichReply(params.payload);
-  if (!presentation) {
-    if (!textCard) {
-      return undefined;
-    }
-    assertFeishuCardWithinEnvelope(textCard, "Feishu native card");
-    return markRenderedFeishuCard(textCard);
-  }
-
-  const text = textCard
-    ? undefined
-    : resolveLegacyInteractiveTextFallback({
-        text: rawText,
-        interactive,
-      });
-  const elements = buildFeishuPresentationCardElements({ presentation, fallbackText: text });
-
-  const identityTitle = resolveFeishuIdentityHeaderTitle(params.identity);
-  const title = presentation?.title ?? identityTitle;
-  const template = resolveFeishuCardTemplate(
-    presentation?.tone === "danger"
-      ? "red"
-      : presentation?.tone === "warning"
-        ? "orange"
-        : presentation?.tone === "success"
-          ? "green"
-          : "blue",
-  );
-
-  const card = markRenderedFeishuCard({
-    schema: "2.0",
-    config: { width_mode: "fill" },
-    ...(title
-      ? {
-          header: {
-            title: { tag: "plain_text", content: title },
-            template: template ?? "blue",
-          },
-        }
-      : {}),
-    body: { elements },
-  });
-  return isFeishuCardWithinEnvelope(card) ? card : undefined;
-}
-
-function renderFeishuPresentationPayload({
-  payload,
-  presentation,
-  ctx,
-}: Parameters<NonNullable<ChannelOutboundAdapter["renderPresentation"]>>[0]) {
-  const textCard = readNativeFeishuCardJson(payload.text);
-  const { fallbackText, fallbackHasCommand } = buildFeishuPresentationFallback({
-    text: textCard ? undefined : payload.text,
-    presentation,
-    textFormat: parseFeishuCommentTarget(ctx.to) ? "plain" : "markdown",
-  });
-  const card = buildFeishuPayloadCard({
-    payload,
-    text: payload.text,
-    identity: ctx.identity,
-  });
-  const existingFeishuData = isRecord(payload.channelData?.feishu)
-    ? payload.channelData.feishu
-    : undefined;
-  if (!card) {
-    // Core strips presentation from this post-queue transport copy. Preserve its
-    // own visible contribution separately from prose already delivered by streaming.
-    return {
-      ...payload,
-      text: fallbackText,
-      channelData: {
-        ...payload.channelData,
-        feishu: {
-          ...existingFeishuData,
-          [FEISHU_PRESENTATION_FALLBACK_MARKER]: {
-            hasVisibleContent: Boolean(
-              renderFeishuPresentationFallbackText({ presentation }).trim(),
-            ),
-          },
-          ...(fallbackHasCommand ? { fallbackHasCommand: true } : {}),
-        },
-      },
-    };
-  }
-  // Core consumes presentation before sendPayload; carry the fallback fact.
-  return {
-    ...payload,
-    text: fallbackText,
-    channelData: {
-      ...payload.channelData,
-      feishu: {
-        ...existingFeishuData,
-        card,
-        ...(fallbackHasCommand ? { fallbackHasCommand: true } : {}),
-      },
-    },
-  };
 }
 
 type FeishuReplyMode =
@@ -488,7 +303,9 @@ async function sendOutboundText(params: {
   // Decide card routing on the original text so card content is never
   // modified by post-md newline normalization. Only the post path below
   // materializes CommonMark soft breaks for Feishu rendering.
-  const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+  const useCard =
+    (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) &&
+    withinCardTableLimit(text);
 
   // Tables need contiguous source rows, so convert them before the parser
   // materializes prose soft breaks for Feishu post rendering.
@@ -682,26 +499,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   chunker: chunkFeishuMarkdown,
   chunkerMode: "markdown",
   textChunkLimit: FEISHU_TEXT_CHUNK_LIMIT,
-  presentationCapabilities: {
-    supported: true,
-    buttons: true,
-    selects: false,
-    context: true,
-    divider: true,
-    limits: {
-      actions: {
-        maxActions: 20,
-        maxActionsPerRow: 5,
-        maxLabelLength: 40,
-        maxValueBytes: 1024,
-      },
-      text: {
-        maxLength: FEISHU_TEXT_CHUNK_LIMIT,
-        encoding: "characters",
-        markdownDialect: "markdown",
-      },
-    },
-  },
+  presentationCapabilities: FEISHU_PRESENTATION_CAPABILITIES,
   renderPresentation: renderFeishuPresentationPayload,
   sendPayload: async (ctx) => {
     const { payload, presentationFallback } = consumeFeishuPresentationFallbackMarker(ctx.payload);
@@ -734,12 +532,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         text,
         interactive: undefined,
         presentation: undefined,
-        // Strip native card / interactive channelData (comments cannot render
-        // them) but preserve the direct-send upload-failure propagation marker
-        // so a media-upload failure on a comment target stays visible instead
-        // of degrading to a fallback-text `ok:true` receipt (issue #112244,
-        // ClawSweeper P1).
-        channelData: buildFeishuPropagationOnlyChannelData(payload),
+        channelData: undefined,
       };
       return await sendFeishuFallbackPayload({
         ctx,
@@ -1027,18 +820,8 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       };
       const deliveryOptions = { replyToIdSource, replyToMode, onDeliveryResult };
       if (parseFeishuCommentTarget(to)) {
-        // Feishu document comments cannot host a media attachment; the mediaUrl
-        // is rendered as a fallback text link instead. This visible-link
-        // fallback is the established comment-target behavior on main and is
-        // NOT the silent text-only `ok:true` drop issue #112244 removes — the
-        // recipient sees the media URL as a clickable link, so the attachment
-        // intent is visibly delivered even though the comment cannot render the
-        // media inline. The direct-send upload-failure propagation policy
-        // therefore does not apply here: it targets actual media-upload failures
-        // (the `sendMediaFeishu` catch below), and a comment target never
-        // reaches that upload path. Keep the fallback for both `send` and
-        // thread-reply so comment targets retain their visible media-link
-        // delivery (issue #112244, ClawSweeper fourteenth-review P1).
+        // Document comments deliver media as visible links; they never enter
+        // the upload path or use its failure-propagation policy.
         const commentText = mediaUrl?.trim()
           ? await buildFeishuMediaFallbackText({
               text,

@@ -34,7 +34,7 @@ import { withLegacySessionParticipantsSchema } from "../state/openclaw-agent-par
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import { VERSION } from "../version.js";
-import { repairGatewayAgentMediaMigrationStartupFailures } from "./gateway-boot-lifecycle.js";
+import { formatErrorMessage } from "./errors.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -356,6 +356,12 @@ function createMigrationDatabaseHandle(
   };
 }
 
+function refreshAgentDatabasePlannerStatistics(database: DatabaseSync): void {
+  // Doctor owns a stopped-writer maintenance window here. Explicitly analyze every
+  // table because the supported pre-3.46 SQLite floor lacks optimize's all-table bit.
+  database.exec("PRAGMA analysis_limit=1000; ANALYZE main;");
+}
+
 function migrateAgentDatabase(params: {
   agentId: string;
   beforeTransaction?: () => void;
@@ -423,6 +429,7 @@ function migrateAgentDatabase(params: {
         { databaseLabel: params.pathname, operationLabel: "media-persistence-detection" },
       );
       if (detected.rewrittenSessions === 0 && detected.rewrittenTrajectoryRows === 0) {
+        refreshAgentDatabasePlannerStatistics(database);
         return { ...detected, initialVersion, finalVersion: userVersion };
       }
     }
@@ -473,6 +480,7 @@ function migrateAgentDatabase(params: {
       },
     );
     ensureOpenClawAgentDatabaseSchema(database, { agentId: params.agentId, path: params.pathname });
+    refreshAgentDatabasePlannerStatistics(database);
     return {
       ...rewritten,
       initialVersion,
@@ -614,18 +622,19 @@ export async function migrateLegacyMediaPersistence(
   const env = params.env ?? process.env;
   const changes: string[] = [];
   const warnings: string[] = [];
+  let recoverableWarningCount = 0;
   try {
     await withAgentDatabaseMaintenanceLease({ env }, async () => {
-      const targets = resolveAgentDatabaseMigrationTargets({
+      const discovery = resolveAgentDatabaseMigrationTargets({
         changes,
         configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],
         env,
         warnings,
       });
+      recoverableWarningCount = discovery.recoverableWarningCount;
       const seenPaths = new Set<string>();
-      let databaseMigrationFailed = false;
       const archiveDirectories = new Set<string>();
-      for (const entry of targets) {
+      for (const entry of discovery.targets) {
         const pathname = entry.path;
         archiveDirectories.add(
           resolveSqliteTranscriptArchiveDirectory({
@@ -660,20 +669,7 @@ export async function migrateLegacyMediaPersistence(
             );
           }
         } catch (error) {
-          databaseMigrationFailed = true;
           warnings.push(`Skipped agent database migration for ${pathname}: ${String(error)}`);
-        }
-      }
-
-      if (!databaseMigrationFailed && seenPaths.size > 0) {
-        const repairedFailures = repairGatewayAgentMediaMigrationStartupFailures({
-          databasePaths: [...seenPaths],
-          env,
-        });
-        if (repairedFailures > 0) {
-          changes.push(
-            `Repaired ${repairedFailures} gateway startup failure ${repairedFailures === 1 ? "record" : "records"} after media migration.`,
-          );
         }
       }
 
@@ -707,7 +703,13 @@ export async function migrateLegacyMediaPersistence(
       }
     });
   } catch (error) {
-    warnings.push(`Agent database maintenance deferred: ${String(error)}`);
+    warnings.push(`Agent database maintenance deferred: ${formatErrorMessage(error)}`);
   }
-  return { changes, warnings };
+  return {
+    changes,
+    warnings,
+    ...(warnings.length > 0 && warnings.length === recoverableWarningCount
+      ? { warningDisposition: "recoverable" as const }
+      : {}),
+  };
 }

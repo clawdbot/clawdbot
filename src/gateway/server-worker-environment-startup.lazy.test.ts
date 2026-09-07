@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
@@ -52,13 +53,9 @@ describe("gateway worker session-tool startup", () => {
     const stateDir = tempDirs.make("openclaw-worker-session-tool-lazy-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const startup = await loadGatewayWorkerEnvironmentStartupState();
+      const registry = createEmptyPluginRegistry();
       await createGatewayWorkerEnvironmentRuntime({
-        getPluginRegistry: () => ({
-          workerProviders: new Map(),
-          plugins: [],
-          agentHarnesses: [],
-          nodeHostCommands: [],
-        }),
+        getPluginRegistry: () => registry,
         getPortalRuntime: () => undefined,
         resolveGatewayContext: () => undefined,
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),

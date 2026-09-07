@@ -36,10 +36,12 @@ export const PLUGIN_NPM_RELEASE_AUTHORITY_PATHS = [
   "scripts/plugin-npm-release-check.ts",
   "scripts/plugin-npm-release-plan.ts",
   "scripts/plugin-publication-artifact.mjs",
+  "scripts/plugin-npm-bootstrap-approval.mjs",
   "scripts/release-tooling-identity.d.mts",
   "scripts/release-tooling-identity.mjs",
   "scripts/verify-plugin-npm-published-runtime.mts",
   "src/plugins/package-entrypoints.ts",
+  "src/utils/run-with-concurrency.ts",
 ] as const;
 
 function hasAuthorityPathChanges(

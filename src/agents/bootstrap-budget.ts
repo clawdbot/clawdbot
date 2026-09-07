@@ -73,25 +73,20 @@ export function resolveBootstrapWarningSignaturesSeen(report?: {
   return single ? [single] : [];
 }
 
-/** Compares raw bootstrap files with the injected context files the agent received. */
+/**
+ * Matches injected content by source path, because basenames can repeat even
+ * when the total budget drops one of those files. Account before remapping
+ * source paths into the prompt workspace.
+ */
 export function buildBootstrapInjectionStats(params: {
   bootstrapFiles: WorkspaceBootstrapFile[];
   injectedFiles: EmbeddedContextFile[];
 }): BootstrapInjectionStat[] {
   const injectedByPath = new Map<string, string>();
-  const injectedByBaseName = new Map<string, string>();
   for (const file of params.injectedFiles) {
     const pathValue = normalizeOptionalString(file.path) ?? "";
-    if (!pathValue) {
-      continue;
-    }
-    if (!injectedByPath.has(pathValue)) {
+    if (pathValue && !injectedByPath.has(pathValue)) {
       injectedByPath.set(pathValue, file.content);
-    }
-    const normalizedPath = pathValue.replace(/\\/g, "/");
-    const baseName = path.posix.basename(normalizedPath);
-    if (!injectedByBaseName.has(baseName)) {
-      injectedByBaseName.set(baseName, file.content);
     }
   }
   return params.bootstrapFiles.map((file) => {
@@ -104,10 +99,7 @@ export function buildBootstrapInjectionStats(params: {
       normalizeOptionalString(file.name) ??
       (normalizedPath ? path.posix.basename(normalizedPath) : "bootstrap");
     const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
-    const injected =
-      (pathValue ? injectedByPath.get(pathValue) : undefined) ??
-      injectedByPath.get(name) ??
-      injectedByBaseName.get(name);
+    const injected = pathValue ? injectedByPath.get(pathValue) : undefined;
     const injectedChars = injected ? injected.length : 0;
     const truncated = !file.missing && injectedChars < rawChars;
     return {
@@ -137,10 +129,8 @@ export function analyzeBootstrapBudget(params: {
     params.nearLimitRatio < 1
       ? params.nearLimitRatio
       : DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO;
-  const nonMissing = params.files.filter((file) => !file.missing);
-  const rawChars = nonMissing.reduce((sum, file) => sum + file.rawChars, 0);
-  const injectedChars = nonMissing.reduce((sum, file) => sum + file.injectedChars, 0);
-  const totalNearLimit = injectedChars >= Math.ceil(bootstrapTotalMaxChars * nearLimitRatio);
+  let rawChars = 0;
+  let injectedChars = 0;
   let remainingTotalChars = bootstrapTotalMaxChars;
   const files = params.files.map((file) => {
     const effectiveFileLimit = effectiveBootstrapFileLimit(file.name, bootstrapMaxChars);
@@ -149,6 +139,9 @@ export function analyzeBootstrapBudget(params: {
     if (file.missing) {
       return { ...file, effectiveFileLimit, nearLimit: false, causes: [] };
     }
+    // Missing-file markers consume budget above but do not enter reported file totals.
+    rawChars += file.rawChars;
+    injectedChars += file.injectedChars;
     const perFileOverLimit = file.rawChars > effectiveFileLimit;
     const nearLimit = file.rawChars >= Math.ceil(effectiveFileLimit * nearLimitRatio);
     const causes: BootstrapTruncationCause[] = [];
@@ -170,7 +163,7 @@ export function analyzeBootstrapBudget(params: {
     files,
     truncatedFiles,
     nearLimitFiles,
-    totalNearLimit,
+    totalNearLimit: injectedChars >= Math.ceil(bootstrapTotalMaxChars * nearLimitRatio),
     hasTruncation: truncatedFiles.length > 0,
     totals: {
       rawChars,

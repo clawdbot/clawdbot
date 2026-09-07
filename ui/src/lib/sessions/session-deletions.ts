@@ -4,6 +4,7 @@ import { formatUiError } from "../format-error.ts";
 import { showToast } from "../toast.ts";
 import type { readSessionChangedEvent } from "./reconcile.ts";
 import type {
+  SessionCapability,
   SessionConnectionOwner,
   SessionDeleteBatchResult,
   SessionDeleteOptions,
@@ -47,7 +48,7 @@ type DeletionHost = {
   ) => GatewaySessionRow | undefined;
   redecorateLists: () => void;
   invalidateLists: () => void;
-  refreshReplacement: (agentId?: string | null) => Promise<void>;
+  refreshReplacement: SessionCapability["refreshReplacement"];
   reconcilePreviousConnection: (
     scope: NonNullable<ReturnType<SessionConnectionOwner["capture"]>>,
     agentId?: string | null,

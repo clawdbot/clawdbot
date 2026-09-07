@@ -88,13 +88,33 @@ describe("plugin install plan helpers", () => {
   it("resolves exact official external plugin ids before npm fallback", () => {
     const result = resolveCatalogOfficialExternalInstallPlan("wecom-openclaw-plugin");
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       pluginId: "wecom-openclaw-plugin",
-      npmSpec: "@wecom/wecom-openclaw-plugin@2026.7.2",
-      expectedIntegrity:
-        "sha512-7kqdBIOF3SgDDoBoFtO6jxnxofbYSgbKdxZDNabD0y0jg2xKcVqlXZOOJ9+XQho/QOtIFrnRH2IRnPukFEYwJg==",
+      spec: "@wecom/wecom-openclaw-plugin@2026.7.2",
+      installSources: [
+        expect.objectContaining({
+          source: "npm",
+          spec: "@wecom/wecom-openclaw-plugin@2026.7.2",
+          expectedIntegrity:
+            "sha512-7kqdBIOF3SgDDoBoFtO6jxnxofbYSgbKdxZDNabD0y0jg2xKcVqlXZOOJ9+XQho/QOtIFrnRH2IRnPukFEYwJg==",
+        }),
+      ],
     });
   });
+
+  it.each(["matrix@latest", "@openclaw/matrix@latest"])(
+    "uses declared sources and retains default intent for %s",
+    (rawSpec) => {
+      expect(resolveCatalogOfficialExternalInstallPlan(rawSpec)).toEqual({
+        pluginId: "matrix",
+        spec: "@openclaw/matrix@latest",
+        installSources: [
+          { source: "npm", spec: "@openclaw/matrix@latest" },
+          { source: "clawhub", spec: "clawhub:@openclaw/matrix@latest" },
+        ],
+      });
+    },
+  );
 
   it("skips official external plan for explicit npm selectors", () => {
     expect(resolveCatalogOfficialExternalInstallPlan("wecom-openclaw-plugin@beta")).toBeNull();

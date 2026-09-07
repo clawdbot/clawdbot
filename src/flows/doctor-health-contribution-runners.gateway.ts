@@ -21,6 +21,9 @@ export async function runClaudeCliHealth(ctx: DoctorHealthFlowContext): Promise<
 }
 
 export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (ctx.gatewayMaintenanceActive) {
+    return;
+  }
   if (!isDefaultInstallIdentity(ctx.env ?? process.env)) {
     note(NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON, "Gateway");
     return;
@@ -118,20 +121,27 @@ export async function runOpenAIOAuthTlsHealth(ctx: DoctorHealthFlowContext): Pro
 export async function runWhatsappResponsivenessHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteWhatsappResponsivenessHealth } =
     await import("../commands/doctor-whatsapp-responsiveness.js");
-  await noteWhatsappResponsivenessHealth({
+  noteWhatsappResponsivenessHealth({
     cfg: ctx.cfg,
     status: ctx.gatewayStatus,
-    shouldRepair: ctx.prompter.shouldRepair,
   });
 }
 
 export async function runDevicePairingHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteDevicePairingHealth } = await import("../commands/doctor-device-pairing.js");
-  await noteDevicePairingHealth({ cfg: ctx.cfg, healthOk: ctx.healthOk ?? false });
+  await noteDevicePairingHealth({ cfg: ctx.cfg, healthOk: ctx.healthOk ?? false, env: ctx.env });
 }
 
 export async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   if (!isDefaultInstallIdentity(ctx.env ?? process.env)) {
+    return;
+  }
+  if (ctx.cfg.gateway?.mode !== "remote") {
+    const { noteMacDisabledGatewayLaunchAgent } =
+      await import("../commands/doctor-platform-notes.js");
+    await noteMacDisabledGatewayLaunchAgent(ctx.env ?? process.env);
+  }
+  if (ctx.gatewayMaintenanceActive) {
     return;
   }
   const { maybeRepairGatewayDaemon } = await import("../commands/doctor-gateway-daemon-flow.js");

@@ -572,7 +572,7 @@ describe("edit tool", () => {
     );
   });
 
-  it("returns terminal no-op when oldText equals newText", async () => {
+  it("returns a non-terminal no-op when oldText equals newText", async () => {
     const filePath = await createTempFile("unchanged content\n");
     const tool = createEditTool(tmpDir);
 
@@ -587,7 +587,7 @@ describe("edit tool", () => {
 
     const tc0 = expectDefined(result.content[0], "result.content[0] test invariant");
     expect("text" in tc0 ? tc0.text : "").toContain("No changes made");
-    expect((result as { terminate?: boolean }).terminate).toBe(true);
+    expect((result as { terminate?: boolean }).terminate).toBeUndefined();
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("unchanged content\n");
   });
 
@@ -718,7 +718,7 @@ describe("edit tool", () => {
       undefined,
     );
 
-    expect((result as { terminate?: boolean }).terminate).toBe(true);
+    expect((result as { terminate?: boolean }).terminate).toBeUndefined();
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("foo\n");
   });
 

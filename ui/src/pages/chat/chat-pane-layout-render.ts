@@ -1,3 +1,4 @@
+import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 import { html, nothing } from "lit";
 import "./chat-outbox-recovery.ts";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/index.js";
@@ -6,10 +7,11 @@ import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
+import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
+import "../../plugins/control-ui-contributions.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   availableSidebarSlots,
-  sidebarPanelActions,
   sidebarPanelDefinitions,
   sidebarPanelTemplates,
 } from "./chat-pane-embedded-panels.ts";
@@ -18,9 +20,10 @@ import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { renderSidebarRegion, sidebarRegionCallbacks } from "./chat-pane-sidebar-layout.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { renderChat, type ChatProps } from "./chat-view.ts";
+import { publishChatWorkContext } from "./chat-work-context.ts";
 import { renderBackgroundTasksRail } from "./components/chat-background-tasks-render.ts";
 import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
-import { detailSlotOpen, renderChatDetailSlot } from "./components/chat-detail-slot.ts";
+import { renderChatDetailSlot } from "./components/chat-detail-slot.ts";
 import { renderChatImageLightbox } from "./components/chat-image-lightbox.ts";
 import {
   renderSessionWorkspaceRail,
@@ -52,6 +55,12 @@ type ChatPaneLayoutRenderParams = {
 };
 
 export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRender {
+  private desktopFocus: {
+    key: string;
+    client: ChatPageHost["client"];
+    href: string;
+  } | null = null;
+
   protected renderChatPaneLayout(params: ChatPaneLayoutRenderParams) {
     const {
       state,
@@ -70,15 +79,32 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       openPanelSlot,
       closePanelSlot,
     } = params;
-    const header = this.renderPaneHeader(
-      sessionWorkspace,
-      backgroundTasks,
-      selectedSession,
-      catalog,
-      agentWorkspace,
-      workspaceGit,
-      sidebarLayout,
-    );
+    if (this.inputRegion === "page") {
+      const file =
+        state.sidebarContent?.kind === "file" && isSidebarSlotVisible(sidebarLayout, "detail")
+          ? state.sidebarContent
+          : undefined;
+      const workspace = resolveSessionWorkspace({
+        session: selectedSession,
+        agentWorkspace,
+        worktreePath: selectedSession?.worktree
+          ? this.headerWorktreePaths.get(selectedSession.worktree.id)?.path
+          : undefined,
+      });
+      publishChatWorkContext(
+        this.context,
+        this,
+        this.presented && this.selected
+          ? {
+              sessionKey: state.sessionKey,
+              sessionId: state.currentSessionId ?? undefined,
+              agentId: currentAgentId,
+              workspace: file?.root ?? workspace.root ?? undefined,
+              file: file?.path,
+            }
+          : undefined,
+      );
+    }
     const recovery = html`<openclaw-chat-outbox-recovery
       .host=${state}
       .identity=${JSON.stringify([
@@ -93,16 +119,16 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     ></openclaw-chat-outbox-recovery>`;
     const chat = renderChat({
       ...chatProps,
+      presented: this.active && this.presented,
+      transcriptVisible:
+        this.presented &&
+        this.visuallyPresented &&
+        isSidebarSlotVisible(sidebarLayout, "conversation"),
       browserTabPreviewsActive: this.active && this.presented,
       historyState: catalog ? undefined : state,
-      header: board.face === "dashboard" ? nothing : html`${header}${recovery}`,
+      header: nothing,
     });
-    // Keep this root stable across board face changes so the guarded board runtime
-    // remains connected while Chat is active.
-    const primary = html`<div class="chat-pane-primary-column">
-      ${board.face === "dashboard" ? html`${header}${recovery}` : nothing}
-      ${this.renderBoardPrimary(board, chat)}
-    </div>`;
+    const primary = html`<div class="chat-pane-primary-column">${chat}</div>`;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
     const discussionState = this.sessionDiscussionStates.get(state.sessionKey.trim());
     const discussionAvailable = discussionState === "available" || discussionState === "open";
@@ -113,6 +139,25 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const desktopPresented =
       this.active && this.presented && isSidebarSlotVisible(sidebarLayout, "desktop");
     const desktopRefreshOnPresentation = !this.pendingPanelToggleRequests.has("desktop");
+    const desktopSource = resolveChatPaneDesktopTarget(selectedSession);
+    const desktopFocusKey = JSON.stringify([
+      state.sessionKey,
+      this.connectionGeneration,
+      desktopAvailable,
+      desktopPresented,
+      state.basePath,
+    ]);
+    if (this.desktopFocus?.key !== desktopFocusKey || this.desktopFocus.client !== state.client) {
+      this.desktopFocus = {
+        key: desktopFocusKey,
+        client: state.client,
+        href: buildControlUiFocusPath(
+          { kind: "desktop", session: state.sessionKey },
+          state.basePath,
+        ),
+      };
+    }
+    const desktopFocus = this.desktopFocus;
     const panelDefinitions = sidebarPanelDefinitions({
       state,
       themeMode: this.context.theme.resolvedMode,
@@ -125,12 +170,19 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       desktopPresented,
       desktopRefreshOnPresentation,
       desktopAvailable,
-      desktopSource: resolveChatPaneDesktopTarget(selectedSession),
-      hasBoard: board.hasBoard,
-      chat,
+      desktopSource,
+      desktopFocusHref: desktopFocus.href,
+      onDesktopFocusTargetChange: (target) => {
+        // A retained callback cannot publish a previous presentation's source or control state.
+        const href = buildControlUiFocusPath(target, state.basePath);
+        if (this.desktopFocus === desktopFocus && desktopFocus.href !== href) {
+          desktopFocus.href = href;
+          this.requestUpdate();
+        }
+      },
+      dashboard: !this.compact ? this.renderBoardPanel(board, sidebarLayout) : nothing,
       workspace: renderSessionWorkspaceRail(sessionWorkspace, { embedded: true }),
       tasks: renderBackgroundTasksRail(backgroundTasks, { embedded: true }),
-      detailOpen: this.presented && sidebarLayout.open === true && detailSlotOpen(sidebarLayout),
       renderDetail: (content) =>
         renderChatDetailSlot({
           backgroundTasks,
@@ -153,14 +205,39 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       connected: state.connected,
       pendingQuestion: companionThread.pendingQuestion,
       onClearCompanion: () => void this.clearSessionCompanion(),
+      onRefreshTasks: backgroundTasks.onRefresh,
+      tasksLoading: backgroundTasks.loading,
       discussion,
       discussionAvailable,
       discussionOpenUrl: discussion?.openUrl ?? null,
       discussionSourceGeneration: this.connectionGeneration,
+      pluginPanels: this.context.plugins.registrations("panels"),
+      isPluginPanelPresented: (slot) =>
+        this.active && this.presented && isSidebarSlotVisible(sidebarLayout, slot),
     });
     const availableSlots = availableSidebarSlots(panelDefinitions);
     const panelTemplates = sidebarPanelTemplates(panelDefinitions);
-    const panelActions = sidebarPanelActions(panelDefinitions);
+    const panelActions = sidebarPanelTemplates(panelDefinitions, "headerAction");
+    // Main panel actions share the task toolbar. Content roots stay in the
+    // sidebar region so changing their presentation never reconnects them.
+    const header = this.compact
+      ? nothing
+      : html`${this.renderPaneHeader(
+            sessionWorkspace,
+            backgroundTasks,
+            selectedSession,
+            catalog,
+            agentWorkspace,
+            workspaceGit,
+            chatProps.placementStartup,
+            sidebarLayout,
+            panelDefinitions,
+          )}<openclaw-plugin-contributions
+            .kind=${"session-header"}
+            .sessionKey=${state.sessionKey}
+            .agentId=${currentAgentId}
+            .presented=${this.visuallyPresented}
+          ></openclaw-plugin-contributions>`;
     const content = renderSidebarRegion({
       availableWidth: this.paneWidth,
       availableSlots,
@@ -169,7 +246,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         layout: sidebarLayout,
         closePanelSlot,
         openPanelSlot,
-        hideBoard: () => this.handleBoardDockChange("hidden"),
         forgetDiscussionUrl: () => this.sessionDiscussionOpenUrls.delete(state.sessionKey.trim()),
         resizePanel: (columnId, size) =>
           this.commitSidebarPanelResize(sidebarLayout, columnId, size),
@@ -180,10 +256,12 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       panelActions,
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
       panelTemplates,
+      header: html`${header}${recovery}`,
       primary,
       requestUpdate: state.requestUpdate!,
     });
-    return html`${content}${renderChatImageLightbox(
+    return html`${content}
+    ${renderChatImageLightbox(
       state.imageLightbox,
       state.handleCloseImage,
     )}${this.renderResetConfirmation()}`;

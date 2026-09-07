@@ -6,7 +6,6 @@ import {
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import type { AgentPlanStep } from "../channels/streaming.js";
 import { consumeRootOptionToken } from "../infra/cli-root-options.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import {
@@ -14,10 +13,6 @@ import {
   parseJsonMessageParam,
 } from "../infra/outbound/message-action-params.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
-import {
-  normalizeProgressCardInput,
-  ProgressCardInputError,
-} from "../session-cards/progress-card-input.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { hasTopLevelShellControlOperator, splitShellArgs } from "../utils/shell-argv.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
@@ -28,7 +23,10 @@ import {
   filterToolResultMediaUrls,
 } from "./embedded-agent-tool-media.js";
 import { extractToolResultText, truncateLiveExecOutput } from "./embedded-agent-tool-results.js";
-import type { ProcessTerminalDiagnostic } from "./tool-error-summary.js";
+import {
+  hasTerminalControlCharacter,
+  type ProcessTerminalDiagnostic,
+} from "./tool-error-summary.js";
 import { readToolResultDetails } from "./tool-result-error.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 import { getCoreTtsToolResultMediaUrls } from "./tools/tts-tool-result-provenance.js";
@@ -60,24 +58,6 @@ export function resolveFallbackToolTerminalObserver(ctx: ToolHandlerContext) {
   return created;
 }
 
-export function readProgressCardPlanInput(args: unknown): { steps: AgentPlanStep[] } | undefined {
-  const params = readRecordField(args);
-  if (!params) {
-    return undefined;
-  }
-  try {
-    return {
-      steps:
-        normalizeProgressCardInput({ markdown: params.markdown, plan: params.plan }).steps ?? [],
-    };
-  } catch (error) {
-    if (error instanceof ProgressCardInputError) {
-      return undefined;
-    }
-    throw error;
-  }
-}
-
 export function isMiddlewareToolResultError(result: unknown): boolean {
   if (!result || typeof result !== "object") {
     return false;
@@ -89,16 +69,6 @@ export function isMiddlewareToolResultError(result: unknown): boolean {
     !Array.isArray(details) &&
     (details as { middlewareError?: unknown }).middlewareError === true,
   );
-}
-
-export function hasTerminalControlCharacter(value: string): boolean {
-  for (const char of value) {
-    const code = char.charCodeAt(0);
-    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 const PROCESS_TERMINATION_REASONS = new Set([

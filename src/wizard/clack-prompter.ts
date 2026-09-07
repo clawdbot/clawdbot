@@ -214,7 +214,10 @@ export function tokenizedOptionFilter<T>(search: string, option: Option<T>): boo
 
 // Public factory used by setup/onboard commands. Keep side effects inside method
 // calls so tests can import the module without starting prompts.
-export function createClackPrompter(output: NodeJS.WriteStream = process.stdout): WizardPrompter {
+export function createClackPrompter(
+  output: NodeJS.WriteStream = process.stdout,
+  signal?: AbortSignal,
+): WizardPrompter {
   return {
     intro: async (title) => {
       intro(stylePromptTitle(title) ?? title, { output });
@@ -237,7 +240,7 @@ export function createClackPrompter(output: NodeJS.WriteStream = process.stdout)
         async () =>
           await runPromptWithNavigation(
             params.navigation,
-            async (signal) => {
+            async (promptSignal) => {
               if (params.searchable) {
                 return params.navigation
                   ? await autocompleteWithNavigationFooter({
@@ -245,7 +248,7 @@ export function createClackPrompter(output: NodeJS.WriteStream = process.stdout)
                       options,
                       initialValue: params.initialValue,
                       filter: tokenizedOptionFilter,
-                      signal,
+                      signal: promptSignal,
                       navigation: params.navigation,
                       output,
                     })
@@ -254,7 +257,7 @@ export function createClackPrompter(output: NodeJS.WriteStream = process.stdout)
                       options,
                       initialValue: params.initialValue,
                       filter: tokenizedOptionFilter,
-                      signal,
+                      signal: promptSignal,
                       output,
                     });
               }
@@ -263,7 +266,7 @@ export function createClackPrompter(output: NodeJS.WriteStream = process.stdout)
                     message,
                     options,
                     initialValue: params.initialValue,
-                    signal,
+                    signal: promptSignal,
                     navigation: params.navigation,
                     output,
                   })
@@ -271,11 +274,12 @@ export function createClackPrompter(output: NodeJS.WriteStream = process.stdout)
                     message,
                     options,
                     initialValue: params.initialValue,
-                    signal,
+                    signal: promptSignal,
                     output,
                   });
             },
             output,
+            signal,
           ),
       );
     },
@@ -288,7 +292,7 @@ export function createClackPrompter(output: NodeJS.WriteStream = process.stdout)
         async () =>
           await runPromptWithNavigation(
             params.navigation,
-            async (signal) => {
+            async (promptSignal) => {
               if (params.searchable) {
                 return params.navigation
                   ? await autocompleteMultiselectWithNavigationFooter({
@@ -296,7 +300,7 @@ export function createClackPrompter(output: NodeJS.WriteStream = process.stdout)
                       options,
                       initialValues: params.initialValues,
                       filter: tokenizedOptionFilter,
-                      signal,
+                      signal: promptSignal,
                       navigation: params.navigation,
                       output,
                     })
@@ -305,7 +309,7 @@ export function createClackPrompter(output: NodeJS.WriteStream = process.stdout)
                       options,
                       initialValues: params.initialValues,
                       filter: tokenizedOptionFilter,
-                      signal,
+                      signal: promptSignal,
                       output,
                     });
               }
@@ -314,7 +318,7 @@ export function createClackPrompter(output: NodeJS.WriteStream = process.stdout)
                     message,
                     options,
                     initialValues: params.initialValues,
-                    signal,
+                    signal: promptSignal,
                     navigation: params.navigation,
                     output,
                   })
@@ -322,11 +326,12 @@ export function createClackPrompter(output: NodeJS.WriteStream = process.stdout)
                     message,
                     options,
                     initialValues: params.initialValues,
-                    signal,
+                    signal: promptSignal,
                     output,
                   });
             },
             output,
+            signal,
           ),
       );
     },
@@ -337,7 +342,7 @@ export function createClackPrompter(output: NodeJS.WriteStream = process.stdout)
         async () =>
           await runPromptWithNavigation(
             params.navigation,
-            async (signal) => {
+            async (promptSignal) => {
               const message = stylePromptMessage(params.message);
               const validateInput = validate
                 ? (value: string | undefined) => validate(value ?? "")
@@ -348,10 +353,15 @@ export function createClackPrompter(output: NodeJS.WriteStream = process.stdout)
                       message,
                       validate: validateInput,
                       navigation: params.navigation,
-                      signal,
+                      signal: promptSignal,
                       output,
                     })
-                  : await password({ message, validate: validateInput, signal, output });
+                  : await password({
+                      message,
+                      validate: validateInput,
+                      signal: promptSignal,
+                      output,
+                    });
               }
               return params.navigation
                 ? await textWithNavigationFooter({
@@ -360,7 +370,7 @@ export function createClackPrompter(output: NodeJS.WriteStream = process.stdout)
                     placeholder: params.placeholder,
                     validate: validateInput,
                     navigation: params.navigation,
-                    signal,
+                    signal: promptSignal,
                     output,
                   })
                 : await text({
@@ -368,12 +378,14 @@ export function createClackPrompter(output: NodeJS.WriteStream = process.stdout)
                     initialValue: params.initialValue,
                     placeholder: params.placeholder,
                     validate: validateInput,
-                    signal,
+                    signal: promptSignal,
                     output,
                   });
             },
             output,
-            params.signal,
+            params.signal && signal
+              ? AbortSignal.any([params.signal, signal])
+              : (params.signal ?? signal),
           ),
       );
     },
@@ -383,7 +395,7 @@ export function createClackPrompter(output: NodeJS.WriteStream = process.stdout)
         async () =>
           await runPromptWithNavigation(
             params.navigation,
-            async (signal) => {
+            async (promptSignal) => {
               const message = stylePromptMessage(params.message);
               if (params.navigation) {
                 return await confirmWithNavigationFooter({
@@ -391,7 +403,7 @@ export function createClackPrompter(output: NodeJS.WriteStream = process.stdout)
                   initialValue: params.initialValue,
                   vertical: params.layout === "vertical",
                   navigation: params.navigation,
-                  signal,
+                  signal: promptSignal,
                   output,
                 });
               }
@@ -399,11 +411,12 @@ export function createClackPrompter(output: NodeJS.WriteStream = process.stdout)
                 message,
                 initialValue: params.initialValue,
                 vertical: params.layout === "vertical",
-                signal,
+                signal: promptSignal,
                 output,
               });
             },
             output,
+            signal,
           ),
       ),
     progress: (label: string): WizardProgress => {

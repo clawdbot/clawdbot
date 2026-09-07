@@ -1,6 +1,6 @@
 // Covers logging max-file-size config validation.
 import { describe, expect, it } from "vitest";
-import { validateConfigObject } from "./validation.js";
+import { validateConfigObject } from "./validation-core.js";
 
 describe("logging.maxFileBytes config", () => {
   it("accepts a positive maxFileBytes", () => {

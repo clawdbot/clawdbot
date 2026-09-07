@@ -64,11 +64,10 @@ describe("buildDeveloperInstructions delegation guidance", () => {
     expect(instructions).toContain("## Delegation");
     expect(instructions).toContain("delegate via native `spawn_agent`");
     expect(instructions).toContain("spawn `sessions_spawn` with `visible=true`");
+    expect(instructions).toContain("Announcing spawns notify when the run ends");
+    expect(instructions).toContain("Collectors require explicit result collection instead.");
     expect(instructions.indexOf("## Delegation")).toBeGreaterThan(
       instructions.indexOf("When a native child's result belongs in a later turn"),
-    );
-    expect(instructions.indexOf("## Delegation")).toBeLessThan(
-      instructions.indexOf("For the current source conversation"),
     );
   });
 
@@ -137,7 +136,7 @@ describe("buildDeveloperInstructions credential guidance", () => {
       expect(instructions).toContain("Native shell/sandbox/node: no protected injection");
       expect(instructions).toContain("late saves need next turn");
       expect(instructions).toContain(
-        "no_answer: report blocker or continue with best judgment; never ask in chat",
+        "no_answer: continue independent work; if the credential blocks progress, explain the missing setup",
       );
     },
   );
@@ -156,5 +155,106 @@ describe("buildDeveloperInstructions credential guidance", () => {
     expect(instructions).not.toContain("SecretRef");
     expect(instructions).toContain("host-owned masked credential entry");
     expect(instructions).toContain("safe external setup");
+  });
+});
+
+describe("buildDeveloperInstructions UI presentation guidance", () => {
+  const uiTools = ["show_widget", "dashboard", "portal"].map(
+    (name) =>
+      ({
+        type: "function",
+        name,
+        description: `Use ${name}`,
+        inputSchema: { type: "object" },
+      }) satisfies CodexDynamicToolSpec,
+  );
+
+  it.each([
+    { name: "direct", dynamicTools: uiTools, prefix: "" },
+    {
+      name: "deferred",
+      dynamicTools: uiTools.map((tool) => ({ ...tool, deferLoading: true })),
+      prefix: "",
+    },
+    {
+      name: "namespaced deferred",
+      dynamicTools: [
+        {
+          type: "namespace",
+          name: "openclaw",
+          description: "OpenClaw tools",
+          tools: uiTools.map((tool) => ({ ...tool, deferLoading: true })),
+        },
+      ],
+      prefix: "openclaw.",
+    },
+  ] satisfies { name: string; dynamicTools: CodexDynamicToolSpec[]; prefix: string }[])(
+    "explains the actual $name presentation routes",
+    ({ dynamicTools, prefix }) => {
+      const instructions = buildDeveloperInstructions(createParams(), { dynamicTools });
+
+      expect(instructions).toContain("## UI Presentation");
+      for (const tool of uiTools) {
+        expect(instructions).toContain(`\`${prefix}${tool.name}\``);
+      }
+      expect(instructions).toContain("pin=true");
+      expect(instructions).toContain("publicUrl");
+      expect(instructions).toContain("result.presentation");
+      expect(instructions).toContain("inline support varies by surface");
+    },
+  );
+
+  it("distinguishes unavailable custom authoring from dashboard and portal support", () => {
+    const instructions = buildDeveloperInstructions(createParams(), {
+      dynamicTools: uiTools.filter((tool) => tool.name !== "show_widget"),
+    });
+
+    expect(instructions).toContain("`dashboard`");
+    expect(instructions).toContain("`portal`");
+    expect(instructions).toContain(
+      "Custom authoring is unavailable this turn, not unsupported by dashboards.",
+    );
+    expect(instructions).not.toContain("`show_widget`");
+  });
+
+  it.each([
+    { name: "absent", dynamicTools: [], overrides: {} },
+    { name: "unsupplied", dynamicTools: undefined, overrides: {} },
+    { name: "disabled", dynamicTools: uiTools, overrides: { disableTools: true } },
+    { name: "minimal", dynamicTools: uiTools, overrides: { promptMode: "minimal" } },
+    { name: "none", dynamicTools: uiTools, overrides: { promptMode: "none" } },
+  ] satisfies {
+    name: string;
+    dynamicTools: CodexDynamicToolSpec[] | undefined;
+    overrides: Partial<EmbeddedRunAttemptParams>;
+  }[])("omits presentation guidance when $name", ({ dynamicTools, overrides }) => {
+    const instructions = buildDeveloperInstructions(createParams(overrides), { dynamicTools });
+
+    expect(instructions).not.toContain("## UI Presentation");
+  });
+});
+
+describe("buildDeveloperInstructions delivery-mode stability", () => {
+  it.each([false, true])("keeps thread policy stable with message available=%s", (available) => {
+    const dynamicTools: CodexDynamicToolSpec[] = available
+      ? [
+          {
+            type: "function",
+            name: "message",
+            description: "Send messages",
+            inputSchema: { type: "object" },
+          },
+        ]
+      : [];
+    const instructions = (["automatic", "message_tool_only", "automatic"] as const).map(
+      (sourceReplyDeliveryMode) =>
+        buildDeveloperInstructions(createParams({ sourceReplyDeliveryMode }), { dynamicTools }),
+    );
+
+    expect(instructions[1]).toBe(instructions[0]);
+    expect(instructions[2]).toBe(instructions[0]);
+    if (!available) {
+      expect(instructions[0]).not.toContain("message(action=send)");
+    }
   });
 });

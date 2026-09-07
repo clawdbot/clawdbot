@@ -21,7 +21,6 @@ import {
   PAIRING_APPROVED_MESSAGE,
   buildTokenChannelStatusSummary,
   projectCredentialSnapshotFields,
-  resolveConfiguredFromCredentialStatuses,
 } from "openclaw/plugin-sdk/channel-status";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
@@ -37,6 +36,11 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  findTelegramTokenOwnerAccountId,
+  formatDuplicateTelegramTokenReason,
+  inspectTelegramAccount,
+} from "./account-inspect.js";
 import {
   mergeTelegramAccountConfig,
   resolveDefaultTelegramAccountId,
@@ -55,12 +59,7 @@ import {
 import type { TelegramBotInfo } from "./bot-info.js";
 import { buildTelegramRoutingTarget, type TelegramThreadSpec } from "./bot/helpers.js";
 import { telegramMessageActions } from "./channel-actions.js";
-import {
-  findTelegramTokenOwnerAccountId,
-  formatDuplicateTelegramTokenReason,
-  resolveTelegramConfigAccessorAccount,
-  telegramConfigAdapter,
-} from "./config-adapter.js";
+import { resolveTelegramConfigAccessorAccount, telegramConfigAdapter } from "./config-adapter.js";
 import { inspectTelegramConversationRouteOwner } from "./conversation-route-owner.js";
 import { resolveTelegramConversationBaseSessionKey } from "./conversation-route.js";
 import {
@@ -998,38 +997,18 @@ export const telegramPlugin = createChatChannelPlugin({
         return { ...audit, unresolvedGroups, hasWildcardUnmentionedGroups };
       },
       resolveAccountSnapshot: ({ account, cfg, runtime, audit }) => {
-        const configuredFromStatus = resolveConfiguredFromCredentialStatuses(account);
-        const ownerAccountId = findTelegramTokenOwnerAccountId({
-          cfg,
-          accountId: account.accountId,
-        });
-        const duplicateTokenReason = ownerAccountId
-          ? formatDuplicateTelegramTokenReason({
-              accountId: account.accountId,
-              ownerAccountId,
-            })
-          : null;
-        const configured =
-          (configuredFromStatus ?? Boolean(account.token?.trim())) && !ownerAccountId;
-        const groups =
-          cfg.channels?.telegram?.accounts?.[account.accountId]?.groups ??
-          cfg.channels?.telegram?.groups;
-        const allowUnmentionedGroups =
-          groups?.["*"]?.requireMention === false ||
-          Object.entries(groups ?? {}).some(
-            ([key, value]) => key !== "*" && value?.requireMention === false,
-          );
+        const inspected = inspectTelegramAccount({ cfg, accountId: account.accountId });
         return {
           accountId: account.accountId,
           name: account.name,
           enabled: account.enabled,
-          configured,
+          configured: inspected.configured,
           extra: {
             ...projectCredentialSnapshotFields(account),
-            lastError: runtime?.lastError ?? duplicateTokenReason,
-            mode: runtime?.mode ?? (account.config.webhookUrl ? "webhook" : "polling"),
+            lastError: runtime?.lastError ?? inspected.stateReason ?? null,
+            mode: runtime?.mode ?? inspected.mode,
             audit,
-            allowUnmentionedGroups,
+            allowUnmentionedGroups: inspected.allowUnmentionedGroups,
           },
         };
       },

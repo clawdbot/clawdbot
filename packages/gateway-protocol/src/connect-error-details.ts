@@ -4,22 +4,11 @@
  * These details cross client/server boundaries, so readers normalize untrusted
  * payloads before using them in reconnect decisions or user-facing messages.
  */
+import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   isProtocolRecord,
   normalizeOptionalProtocolString,
 } from "./protocol-value-normalization.js";
-
-function normalizeOptionalConnectDetailStringList(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const values = value
-    .map((entry) => normalizeOptionalProtocolString(entry))
-    .filter((entry): entry is string => Boolean(entry));
-  // Pairing details omit absent lists. Emitting empty arrays makes clients think
-  // the gateway intentionally supplied scope/role context when it did not.
-  return values.length > 0 ? values : undefined;
-}
 
 /** Structured connect-error codes carried in gateway error `details.code`. */
 export const ConnectErrorDetailCodes = {
@@ -40,6 +29,8 @@ export const ConnectErrorDetailCodes = {
   AUTH_TAILSCALE_WHOIS_FAILED: "AUTH_TAILSCALE_WHOIS_FAILED",
   AUTH_TAILSCALE_IDENTITY_MISMATCH: "AUTH_TAILSCALE_IDENTITY_MISMATCH",
   AUTH_IDENTITY_HEADER_REQUIRED: "AUTH_IDENTITY_HEADER_REQUIRED",
+  AUTH_VERIFIED_USER_REQUIRED: "AUTH_VERIFIED_USER_REQUIRED",
+  AUTHENTICATED_PROFILE_UNAVAILABLE: "AUTHENTICATED_PROFILE_UNAVAILABLE",
   CONTROL_UI_BUILD_MISMATCH: "CONTROL_UI_BUILD_MISMATCH",
   CONTROL_UI_ORIGIN_NOT_ALLOWED: "CONTROL_UI_ORIGIN_NOT_ALLOWED",
   PROTOCOL_MISMATCH: "PROTOCOL_MISMATCH",
@@ -233,7 +224,7 @@ export function readConnectErrorDetailCode(details: unknown): string | null {
   if (!isProtocolRecord(details)) {
     return null;
   }
-  const code = (details as { code?: unknown }).code;
+  const code = details.code;
   return typeof code === "string" && code.trim().length > 0 ? code.trim() : null;
 }
 
@@ -259,13 +250,11 @@ export function readConnectErrorRecoveryAdvice(details: unknown): ConnectErrorRe
   if (!isProtocolRecord(details)) {
     return {};
   }
-  const raw = details as {
-    canRetryWithDeviceToken?: unknown;
-    recommendedNextStep?: unknown;
-  };
   const canRetryWithDeviceToken =
-    typeof raw.canRetryWithDeviceToken === "boolean" ? raw.canRetryWithDeviceToken : undefined;
-  const normalizedNextStep = normalizeOptionalProtocolString(raw.recommendedNextStep) ?? "";
+    typeof details.canRetryWithDeviceToken === "boolean"
+      ? details.canRetryWithDeviceToken
+      : undefined;
+  const normalizedNextStep = normalizeOptionalProtocolString(details.recommendedNextStep) ?? "";
   const recommendedNextStep = CONNECT_RECOVERY_NEXT_STEP_VALUES.has(
     normalizedNextStep as ConnectRecoveryNextStep,
   )
@@ -290,23 +279,9 @@ export function normalizePairingConnectRequestId(value: unknown): string | undef
   return normalized && PAIRING_CONNECT_REQUEST_ID_PATTERN.test(normalized) ? normalized : undefined;
 }
 
-function normalizeStringArray(value: unknown): string[] | undefined {
-  return normalizeOptionalConnectDetailStringList(value);
-}
-
-function createPairingConnectErrorDetails(params: {
-  reason?: ConnectPairingRequiredReason;
-  requestId?: string;
-  remediationHint?: string;
-  recommendedNextStep?: ConnectRecoveryNextStep;
-  retryable?: boolean;
-  pauseReconnect?: boolean;
-  deviceId?: string;
-  requestedRole?: string;
-  requestedScopes?: string[];
-  approvedRoles?: string[];
-  approvedScopes?: string[];
-}): PairingConnectErrorDetails {
+function createPairingConnectErrorDetails(
+  params: Omit<PairingConnectErrorDetails, "code">,
+): PairingConnectErrorDetails {
   return {
     code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
     ...(params.reason ? { reason: params.reason } : {}),
@@ -359,28 +334,20 @@ export function buildPairingConnectRecoveryTitle(
 }
 
 /** Builds sanitized structured details for a pairing-required connect failure. */
-export function buildPairingConnectErrorDetails(params: {
-  reason: ConnectPairingRequiredReason | undefined;
-  requestId?: string;
-  remediationHint?: string;
-  recommendedNextStep?: ConnectRecoveryNextStep;
-  retryable?: boolean;
-  pauseReconnect?: boolean;
-  deviceId?: string;
-  requestedRole?: string;
-  requestedScopes?: string[];
-  approvedRoles?: string[];
-  approvedScopes?: string[];
-}): PairingConnectErrorDetails {
+export function buildPairingConnectErrorDetails(
+  params: Omit<PairingConnectErrorDetails, "code" | "reason"> & {
+    reason: ConnectPairingRequiredReason | undefined;
+  },
+): PairingConnectErrorDetails {
   const requestId = normalizePairingConnectRequestId(params.requestId);
   const remediationHint =
     normalizeOptionalProtocolString(params.remediationHint) ??
     buildPairingConnectRemediationHint(params.reason);
   const deviceId = normalizeOptionalProtocolString(params.deviceId);
   const requestedRole = normalizeOptionalProtocolString(params.requestedRole);
-  const requestedScopes = normalizeStringArray(params.requestedScopes);
-  const approvedRoles = normalizeStringArray(params.approvedRoles);
-  const approvedScopes = normalizeStringArray(params.approvedScopes);
+  const requestedScopes = normalizeOptionalTrimmedStringList(params.requestedScopes);
+  const approvedRoles = normalizeOptionalTrimmedStringList(params.approvedRoles);
+  const approvedScopes = normalizeOptionalTrimmedStringList(params.approvedScopes);
   return createPairingConnectErrorDetails({
     reason: params.reason,
     requestId,
@@ -416,42 +383,30 @@ export function readPairingConnectErrorDetails(
   if (!isProtocolRecord(details)) {
     return null;
   }
-  const raw = details as {
-    reason?: unknown;
-    requestId?: unknown;
-    remediationHint?: unknown;
-    recommendedNextStep?: unknown;
-    retryable?: unknown;
-    pauseReconnect?: unknown;
-    deviceId?: unknown;
-    requestedRole?: unknown;
-    requestedScopes?: unknown;
-    approvedRoles?: unknown;
-    approvedScopes?: unknown;
-  };
-  const reason = normalizePairingConnectReason(raw.reason);
-  const requestId = normalizePairingConnectRequestId(raw.requestId);
+  const reason = normalizePairingConnectReason(details.reason);
+  const requestId = normalizePairingConnectRequestId(details.requestId);
   const remediationHint =
-    normalizeOptionalProtocolString(raw.remediationHint) ??
+    normalizeOptionalProtocolString(details.remediationHint) ??
     buildPairingConnectRemediationHint(reason);
-  const normalizedNextStep = normalizeOptionalProtocolString(raw.recommendedNextStep) ?? "";
+  const normalizedNextStep = normalizeOptionalProtocolString(details.recommendedNextStep) ?? "";
   const recommendedNextStep = CONNECT_RECOVERY_NEXT_STEP_VALUES.has(
     normalizedNextStep as ConnectRecoveryNextStep,
   )
     ? (normalizedNextStep as ConnectRecoveryNextStep)
     : undefined;
-  const deviceId = normalizeOptionalProtocolString(raw.deviceId);
-  const requestedRole = normalizeOptionalProtocolString(raw.requestedRole);
-  const requestedScopes = normalizeStringArray(raw.requestedScopes);
-  const approvedRoles = normalizeStringArray(raw.approvedRoles);
-  const approvedScopes = normalizeStringArray(raw.approvedScopes);
+  const deviceId = normalizeOptionalProtocolString(details.deviceId);
+  const requestedRole = normalizeOptionalProtocolString(details.requestedRole);
+  const requestedScopes = normalizeOptionalTrimmedStringList(details.requestedScopes);
+  const approvedRoles = normalizeOptionalTrimmedStringList(details.approvedRoles);
+  const approvedScopes = normalizeOptionalTrimmedStringList(details.approvedScopes);
   return createPairingConnectErrorDetails({
     reason,
     requestId,
     remediationHint,
     recommendedNextStep,
-    retryable: typeof raw.retryable === "boolean" ? raw.retryable : undefined,
-    pauseReconnect: typeof raw.pauseReconnect === "boolean" ? raw.pauseReconnect : undefined,
+    retryable: typeof details.retryable === "boolean" ? details.retryable : undefined,
+    pauseReconnect:
+      typeof details.pauseReconnect === "boolean" ? details.pauseReconnect : undefined,
     deviceId,
     requestedRole,
     requestedScopes,

@@ -6,6 +6,7 @@ import {
   isBlockedHostnameOrIp,
   isPrivateIpAddress,
   isSameSsrFPolicy,
+  mergeSsrFPolicies,
   resolveSsrFPolicyForUrl,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
@@ -355,6 +356,7 @@ describe("isSameSsrFPolicy", () => {
           allowedOrigins: ["https://A.example.com/v1", "https://b.example.com"],
           allowedHostnames: ["b.example.com", "A.example.com"],
           hostnameAllowlist: ["*.example.com", "api.example.com"],
+          blockedHostnames: ["tracker.example.com", " *.ADS.example.com. ", "tracker.example.com"],
         },
         {
           allowPrivateNetwork: true,
@@ -362,9 +364,19 @@ describe("isSameSsrFPolicy", () => {
           allowedOrigins: ["https://b.example.com", "https://a.example.com/other"],
           allowedHostnames: ["a.example.com", "B.EXAMPLE.COM"],
           hostnameAllowlist: ["api.example.com", "*.example.com"],
+          blockedHostnames: ["*.ads.example.com", "TRACKER.example.com"],
         },
       ),
     ).toBe(true);
+
+    expect(isSameSsrFPolicy({}, { blockedHostnames: [] })).toBe(true);
+    expect(isSameSsrFPolicy({}, { blockedHostnames: ["tracker.example.com"] })).toBe(false);
+    expect(
+      isSameSsrFPolicy(
+        { blockedHostnames: ["tracker.example.com"] },
+        { blockedHostnames: ["*.example.com"] },
+      ),
+    ).toBe(false);
 
     expect(
       isSameSsrFPolicy(
@@ -386,5 +398,25 @@ describe("isSameSsrFPolicy", () => {
     expect(
       isSameSsrFPolicy({ allowIpv6UniqueLocalRange: true }, { allowIpv6UniqueLocalRange: true }),
     ).toBe(true);
+  });
+});
+
+describe("mergeSsrFPolicies", () => {
+  it("retains every configured block when combining policies and trust exceptions", () => {
+    const policy = mergeSsrFPolicies(
+      { blockedHostnames: ["tracker.example.com"] },
+      undefined,
+      { blockedHostnames: [] },
+      {
+        blockedHostnames: ["*.ads.example.com", "tracker.example.com"],
+        allowedHostnames: ["tracker.example.com"],
+      },
+    );
+    expect(policy?.blockedHostnames).toEqual(["tracker.example.com", "*.ads.example.com"]);
+    for (const hostname of ["tracker.example.com", "pixel.ads.example.com"]) {
+      expect(() => assertHostnameAllowedWithPolicy(hostname, policy)).toThrow(
+        /configured blocklist/,
+      );
+    }
   });
 });

@@ -33,12 +33,14 @@ export function renderRealtimeTalkConversation(props: ChatRealtimeTalkConversati
             >
               <span class="agent-chat__voice-turn-speaker">${label}</span>
               <span class="agent-chat__voice-turn-text">${entry.text}</span>
-              ${entry.isStreaming
-                ? html`<span
-                    class="agent-chat__voice-turn-stream"
-                    aria-label=${t("chat.composer.stillListening")}
-                  ></span>`
-                : nothing}
+              ${
+                entry.isStreaming
+                  ? html`<span
+                      class="agent-chat__voice-turn-stream"
+                      aria-label=${t("chat.composer.stillListening")}
+                    ></span>`
+                  : nothing
+              }
             </div>
           `;
         },

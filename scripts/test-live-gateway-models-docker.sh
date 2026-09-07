@@ -11,6 +11,8 @@ if [[ -z "$TRUSTED_HARNESS_DIR" || ! -d "$TRUSTED_HARNESS_DIR" ]]; then
 fi
 TRUSTED_HARNESS_DIR="$(cd "$TRUSTED_HARNESS_DIR" && pwd)"
 source "$TRUSTED_HARNESS_DIR/scripts/lib/live-docker-auth.sh"
+source "$TRUSTED_HARNESS_DIR/scripts/lib/frozen-target-compat.sh"
+openclaw_resolve_frozen_live_cli_backend_package_mode "$ROOT_DIR"
 IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
 LIVE_IMAGE_NAME="${OPENCLAW_LIVE_IMAGE:-${IMAGE_NAME}-live}"
 CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
@@ -54,12 +56,9 @@ openclaw_live_link_runtime_tree "$tmp_dir"
 openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 openclaw_live_prepare_staged_config
 cd "$tmp_dir"
-docker_packages="$(node --import tsx scripts/print-cli-backend-live-metadata.ts \
-  --docker-packages "${OPENCLAW_LIVE_GATEWAY_PROVIDERS:-}" "${OPENCLAW_LIVE_GATEWAY_MODELS:-}")"
-while IFS= read -r docker_package; do
-  [ -n "$docker_package" ] || continue
-  openclaw_live_run_setup_command 180 "live CLI backend setup" npm install -g "$docker_package"
-done <<<"$docker_packages"
+openclaw_live_prepare_cli_backend_docker_packages \
+  "${OPENCLAW_LIVE_GATEWAY_PROVIDERS:-}" \
+  "${OPENCLAW_LIVE_GATEWAY_MODELS:-}"
 openclaw_live_stage_gemini_auth
 openclaw_live_run_staged_script scripts/test-live -- src/gateway/gateway-models.profiles.live.test.ts
 EOF
@@ -80,6 +79,10 @@ echo "==> Profile file: $PROFILE_STATUS"
 echo "==> External auth dirs: ${AUTH_DIRS_CSV:-none}"
 echo "==> External auth files: ${AUTH_FILES_CSV:-none}"
 DOCKER_RUN_ARGS=()
+FROZEN_TARGET_DOCKER_ENV=()
+if [[ "${OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE:-current}" == "legacy" ]]; then
+  FROZEN_TARGET_DOCKER_ENV+=( -e "OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE=legacy" )
+fi
 openclaw_live_init_docker_run_args DOCKER_RUN_ARGS "${OPENCLAW_LIVE_GATEWAY_DOCKER_RUN_TIMEOUT:-2100s}"
 DOCKER_RUN_ARGS+=(--rm -t \
   -u "$DOCKER_USER" \
@@ -119,6 +122,7 @@ DOCKER_RUN_ARGS+=(--rm -t \
   -e OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS="$LIVE_GATEWAY_STEP_TIMEOUT_MS" \
   -e OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS="$LIVE_GATEWAY_MODEL_TIMEOUT_MS" \
   -e OPENCLAW_VITEST_FS_MODULE_CACHE=0)
+openclaw_live_append_array DOCKER_RUN_ARGS FROZEN_TARGET_DOCKER_ENV
 openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_HOME_MOUNT
 openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_TRUSTED_HARNESS_MOUNT
 DOCKER_RUN_ARGS+=(\

@@ -11,9 +11,12 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
     }
 
     private let manager = CLLocationManager()
-    private var authWaitID: UUID?
-    private var authWaitRequiresDeterminedStatus = false
-    private var authContinuation: CheckedContinuation<CLAuthorizationStatus, Never>?
+    private struct AuthorizationWait {
+        let requiresDeterminedStatus: Bool
+        let continuation: CheckedContinuation<CLAuthorizationStatus, Never>
+    }
+
+    private var authorizationWaits: [UUID: AuthorizationWait] = [:]
     private var locationContinuation: CheckedContinuation<CLLocation, Swift.Error>?
     var locationRequestContinuations: [UUID: CheckedContinuation<CLLocation, Swift.Error>] = [:]
     private var cachedAuthorizationSnapshot = LocationAuthorizationSnapshot.undetermined
@@ -37,6 +40,13 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
         self.configureLocationManager()
     }
 
+    static func servicesEnabled() async -> Bool {
+        // The global service check performs blocking XPC; keep it off the UI actor.
+        await Task.detached(priority: .utility) {
+            CLLocationManager.locationServicesEnabled()
+        }.value
+    }
+
     func authorizationStatus() -> CLAuthorizationStatus {
         self.cachedAuthorizationSnapshot.authorizationStatus
     }
@@ -49,12 +59,16 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
         self.cachedAuthorizationSnapshot
     }
 
-    func ensureAuthorization(mode: OpenClawLocationMode) async -> CLAuthorizationStatus {
+    func ensureAuthorization(
+        mode: OpenClawLocationMode,
+        isCurrent: @MainActor () -> Bool) async -> CLAuthorizationStatus
+    {
+        guard !Task.isCancelled, isCurrent() else { return self.authorizationStatus() }
         guard CLLocationManager.locationServicesEnabled() else { return .denied }
 
         let status = self.authorizationStatus()
         if status == .notDetermined {
-            let updated = await self.requestAuthorization(requiresDeterminedStatus: true) {
+            let updated = await self.requestAuthorization(requiresDeterminedStatus: true, isCurrent: isCurrent) {
                 self.manager.requestWhenInUseAuthorization()
             }
             if mode != .always { return updated }
@@ -63,7 +77,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
         if mode == .always {
             let current = self.authorizationStatus()
             if current == .authorizedWhenInUse {
-                return await self.requestAuthorization(requiresDeterminedStatus: false) {
+                return await self.requestAuthorization(requiresDeterminedStatus: false, isCurrent: isCurrent) {
                     self.manager.requestAlwaysAuthorization()
                 }
             }
@@ -93,13 +107,20 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
 
     private func requestAuthorization(
         requiresDeterminedStatus: Bool,
+        isCurrent: @MainActor () -> Bool,
         request: () -> Void) async -> CLAuthorizationStatus
     {
         await withCheckedContinuation { cont in
+            // Revalidate before each OS prompt, including Always escalation after an awaited grant.
+            guard !Task.isCancelled, isCurrent() else {
+                cont.resume(returning: self.authorizationStatus())
+                return
+            }
             let waitID = UUID()
-            self.authWaitID = waitID
-            self.authWaitRequiresDeterminedStatus = requiresDeterminedStatus
-            self.authContinuation = cont
+            // A replacement document can request permission while a retired request still awaits the OS.
+            self.authorizationWaits[waitID] = AuthorizationWait(
+                requiresDeterminedStatus: requiresDeterminedStatus,
+                continuation: cont)
             // Install the waiter before requesting permission so a fast delegate callback cannot be lost.
             request()
             Task { @MainActor in
@@ -109,7 +130,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
                 var observedPrompt = UIApplication.shared.applicationState != .active
                 // A slow system prompt must not trigger the no-callback fallback. Once iOS makes
                 // the app inactive, wait until the user dismisses the prompt and the app returns.
-                while self.authWaitID == waitID, self.authContinuation != nil {
+                while self.authorizationWaits[waitID] != nil {
                     try? await Task.sleep(for: .milliseconds(100))
                     let applicationIsActive = UIApplication.shared.applicationState == .active
                     if !applicationIsActive {
@@ -153,16 +174,14 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
         status: CLAuthorizationStatus,
         allowUndeterminedFallback: Bool = false)
     {
-        guard self.authWaitID == waitID, let cont = self.authContinuation else { return }
+        guard let wait = self.authorizationWaits[waitID] else { return }
         guard Self.shouldCompleteAuthorizationWait(
             status: status,
-            requiresDeterminedStatus: self.authWaitRequiresDeterminedStatus,
+            requiresDeterminedStatus: wait.requiresDeterminedStatus,
             allowUndeterminedFallback: allowUndeterminedFallback)
         else { return }
-        self.authWaitID = nil
-        self.authWaitRequiresDeterminedStatus = false
-        self.authContinuation = nil
-        cont.resume(returning: status)
+        self.authorizationWaits.removeValue(forKey: waitID)
+        wait.continuation.resume(returning: status)
     }
 
     private func withTimeout<T: Sendable>(
@@ -204,8 +223,9 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
         Task { @MainActor in
             self.cachedAuthorizationSnapshot = snapshot
             self.authorizationChangeHandler?(snapshot)
-            guard let waitID = self.authWaitID else { return }
-            self.finishAuthorizationWait(waitID: waitID, status: snapshot.authorizationStatus)
+            for waitID in Array(self.authorizationWaits.keys) {
+                self.finishAuthorizationWait(waitID: waitID, status: snapshot.authorizationStatus)
+            }
         }
     }
 
@@ -213,16 +233,10 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
         let locs = locations
         Task { @MainActor in
             // Resolve all one-shot requests first so overlapping callers share this update.
-            let continuations = Array(self.locationRequestContinuations.values) + [self.locationContinuation]
-                .compactMap(\.self)
-            self.locationRequestContinuations.removeAll()
-            self.locationContinuation = nil
-            for continuation in continuations {
-                if let latest = locs.last {
-                    continuation.resume(returning: latest)
-                } else {
-                    continuation.resume(throwing: Error.unavailable)
-                }
+            if let latest = locs.last {
+                self.completeLocationRequests(with: .success(latest))
+            } else {
+                self.completeLocationRequests(with: .failure(Error.unavailable))
             }
             // Don't return — also forward to significant-change consumers below.
             if let callback = self.significantLocationCallback, let latest = locs.last {
@@ -234,13 +248,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Swift.Error) {
         let err = error
         Task { @MainActor in
-            let continuations = Array(self.locationRequestContinuations.values) + [self.locationContinuation]
-                .compactMap(\.self)
-            self.locationRequestContinuations.removeAll()
-            self.locationContinuation = nil
-            for continuation in continuations {
-                continuation.resume(throwing: err)
-            }
+            self.completeLocationRequests(with: .failure(err))
         }
     }
 }

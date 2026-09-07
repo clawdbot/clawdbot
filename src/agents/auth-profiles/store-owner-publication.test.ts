@@ -10,10 +10,12 @@ import {
   AuthProfileMigrationRequiredError,
   markAuthProfileMigrationRequired,
 } from "./legacy-source-diagnostic.js";
-import { loadPersistedSharedAuthProfileStore } from "./persisted.js";
 import {
   getRuntimeAuthProfileStoreCredentialMutationToken,
   getRuntimeAuthProfileStoreStateMutationToken,
+} from "./mutation-lineage.js";
+import { loadPersistedSharedAuthProfileStore } from "./persisted.js";
+import {
   replaceRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
 } from "./runtime-snapshots.js";
@@ -22,15 +24,17 @@ import {
   runAuthProfileWriteTransaction,
   writePersistedAuthProfileStoreRaw,
 } from "./sqlite.js";
-import { createAuthOwnerTestFixtures } from "./store-state-owner.test-support.js";
 import {
-  captureAuthProfileStorePersistenceSnapshot,
   ensureAuthProfileStoreWithoutExternalProfiles,
   loadAuthProfileStoreWithoutExternalProfiles,
-  restoreAuthProfileStorePersistenceSnapshot,
   saveAuthProfileStore,
   saveAuthProfileStoreIfPersistenceSnapshotMatches,
   updateAuthProfileStoreWithLock,
+} from "./store-runtime.js";
+import { createAuthOwnerTestFixtures } from "./store-state-owner.test-support.js";
+import {
+  captureAuthProfileStorePersistenceSnapshot,
+  restoreAuthProfileStorePersistenceSnapshot,
   withAuthProfileStoreAgentDir,
 } from "./store.js";
 import type { AuthProfileCredential } from "./types.js";

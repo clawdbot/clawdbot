@@ -13,7 +13,7 @@ function createStateStore() {
   const values = new Map<string, StoredCodexManagedThread>();
   const state: Pick<
     PluginStateSyncKeyedStore<StoredCodexManagedThread>,
-    "entries" | "registerIfAbsent"
+    "entries" | "lookup" | "registerIfAbsent"
   > = {
     registerIfAbsent(key, value) {
       if (values.has(key)) {
@@ -22,6 +22,7 @@ function createStateStore() {
       values.set(key, value);
       return true;
     },
+    lookup: (key) => values.get(key),
     entries: () => [...values].map(([key, value]) => ({ key, value, createdAt: 0 })),
   };
   return { state, values };
@@ -36,6 +37,9 @@ describe("Codex managed thread store", () => {
     await store.mark({ sourceHomeId, threadId: "thread-1", rolloutPath: "/rollout.jsonl" });
     await store.mark({ sourceHomeId, threadId: "thread-1", rolloutPath: "/new-path.jsonl" });
 
+    await expect(store.has(sourceHomeId, "thread-1")).resolves.toBe(true);
+    await expect(store.has("other-home", "thread-1")).resolves.toBe(false);
+    await expect(store.has(sourceHomeId, "missing-thread")).resolves.toBe(false);
     expect(values.size).toBe(1);
     expect([...values.values()][0]).toMatchObject({
       kind: "managed-thread",

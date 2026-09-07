@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
+import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+
+type WorkerNodeRuntimeIdentity = NonNullable<
+  NonNullable<Parameters<WorkerProvider["provision"]>[2]>["nodeRuntimeIdentity"]
+>;
 
 export type WarmImageRecord = {
   checkpointId: string;
@@ -9,6 +14,8 @@ export type WarmImageRecord = {
   createdAtMs: number;
   lastUsedAtMs: number;
   baseCommit?: string;
+  /** Runtime content attested by successful preparation before this capture. */
+  runtimeIdentity?: WorkerNodeRuntimeIdentity;
 };
 
 export type WarmAllocationRecord = {
@@ -16,6 +23,8 @@ export type WarmAllocationRecord = {
   machineClass: string;
   phase: "pending" | "prepared" | "enrolled";
   baseCommit?: string;
+  /** Frozen target; preparation/enrollment must verify it before capture can publish it. */
+  runtimeIdentity?: WorkerNodeRuntimeIdentity;
 };
 
 export type WarmProfileRecord = {
@@ -106,7 +115,7 @@ export function openCrabboxWarmImageStore(env?: NodeJS.ProcessEnv) {
       key: string,
       update: (current: WarmProfileRecord | undefined) => WarmProfileRecord | undefined,
     ) {
-      return store.update!(key, (current) => update(requireCanonicalProfile(current)));
+      return store.update(key, (current) => update(requireCanonicalProfile(current)));
     },
   };
 }
@@ -153,6 +162,7 @@ export function listCrabboxWarmImages(env?: NodeJS.ProcessEnv) {
       createdAtMs: value.image?.createdAtMs,
       lastUsedAtMs: value.image?.lastUsedAtMs,
       baseCommit: value.image?.baseCommit,
+      runtimeIdentity: value.image?.runtimeIdentity,
       allocations: value.allocations,
       capture: crabboxWarmImageCaptureStatus(key, value),
       retirement:
@@ -168,7 +178,7 @@ export function clearCrabboxWarmImageCapture(key: string, selector: string): boo
   const matches = (current: WarmProfileRecord) =>
     current.operation?.type === "capture" && current.operation.id === selector;
   if (
-    store.deleteIf?.(
+    store.deleteIf(
       key,
       (current) =>
         !current.image && Object.keys(current.allocations).length === 0 && matches(current),
@@ -197,7 +207,7 @@ export function recoverCrabboxWarmImageCapture(
       .find(({ key, value }) => legacyLeaseSelector(key, value) === selector);
     if (
       !entry ||
-      !store.deleteIf?.(entry.key, (value) => legacyLeaseSelector(entry.key, value) === selector)
+      !store.deleteIf(entry.key, (value) => legacyLeaseSelector(entry.key, value) === selector)
     ) {
       throw new Error(
         "Legacy allocation selector is absent or changed; rerun openclaw crabbox warm-images --json. No state was changed.",

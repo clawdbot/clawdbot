@@ -3,15 +3,15 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   resolveAccessStorePath,
   loadSessionEntry,
-  listSessionEntriesCore,
   patchSessionEntryCore,
-  resolveSessionEntryFromStore,
 } from "./session-accessor.entry.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
+import { readSessionCreationSnapshot } from "./session-accessor.sqlite-creation-read.js";
 import {
   recordInboundSessionMeta,
   updateSessionLastRoute,
@@ -21,7 +21,12 @@ import {
   forkSessionTranscriptFromParent,
   resolveSessionParentForkDecision,
 } from "./session-accessor.sqlite-parent-session.js";
-import { appendTranscriptEvent } from "./session-accessor.sqlite-transcript-write.js";
+import {
+  resolveSqliteTranscriptScope,
+  runExclusiveSqliteSessionWrite,
+  toDatabaseOptions,
+} from "./session-accessor.sqlite-scope.js";
+import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-store.js";
 import type {
   SessionAccessScope,
   SessionEntryUpdateOptions,
@@ -37,7 +42,6 @@ import type {
   SessionEntryCreateWithTranscriptOptions,
 } from "./session-accessor.types.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
-import { createSessionTranscriptHeader } from "./transcript-header.js";
 import type { GroupKeyResolution, InternalSessionEntry as SessionEntry } from "./types.js";
 
 export async function forkSessionFromParentTranscript(
@@ -69,36 +73,34 @@ export async function createSessionEntryWithTranscript<TError = string>(
 ): Promise<SessionEntryCreateWithTranscriptResult<TError>> {
   const storePath = resolveAccessStorePath(scope);
   const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
-  const store = Object.fromEntries(
-    listSessionEntriesCore({ agentId, storePath }).map(({ sessionKey, entry }) => [
-      sessionKey,
-      entry,
-    ]),
-  );
-  const resolved = resolveSessionEntryFromStore({ store, sessionKey: scope.sessionKey });
-  const created = await createEntry({
-    existingEntry: resolved.existing ? { ...resolved.existing } : undefined,
-    sessionEntries: cloneSessionEntries(store),
+  // The incognito sentinel is scoped to env; its path alone cannot identify the memory store.
+  const storeScope = { agentId, env: scope.env, storePath };
+  const { normalizedKey, legacyKeys, ...context } = readSessionCreationSnapshot({
+    ...storeScope,
+    sessionKey: scope.sessionKey,
   });
+  const created = await createEntry(context);
   if (!created.ok) {
     return { ok: false, error: created.error, phase: "entry" };
   }
+  const { cwd, commitGuard } = options;
 
   try {
-    await appendTranscriptEvent(
-      {
-        agentId,
-        sessionId: created.entry.sessionId,
-        sessionKey: resolved.normalizedKey,
-        storePath,
-      },
-      createSessionTranscriptHeader({ cwd: options.cwd, sessionId: created.entry.sessionId }),
-      options.commitGuard ? { beforeCommitInTransaction: options.commitGuard } : undefined,
-    );
+    const transcriptScope = resolveSqliteTranscriptScope({
+      ...storeScope,
+      sessionId: created.entry.sessionId,
+      sessionKey: normalizedKey,
+    });
+    await runExclusiveSqliteSessionWrite(transcriptScope, async () => {
+      runOpenClawAgentWriteTransaction((database) => {
+        commitGuard?.();
+        ensureTranscriptHeader(database, transcriptScope, cwd);
+      }, toDatabaseOptions(transcriptScope));
+    });
   } catch (err) {
     // Preserve authority errors from the commit guard instead of projecting
     // them as transcript failures at the Gateway boundary.
-    options.commitGuard?.();
+    commitGuard?.();
     return {
       ok: false,
       error: formatErrorMessage(err),
@@ -108,14 +110,13 @@ export async function createSessionEntryWithTranscript<TError = string>(
 
   const entry = created.entry;
   await applySessionEntryLifecycleMutation({
-    agentId,
-    storePath,
-    removals: resolved.legacyKeys.map((sessionKey) => ({ sessionKey })),
-    upserts: [{ sessionKey: resolved.normalizedKey, entry }],
+    ...storeScope,
+    removals: legacyKeys.map((sessionKey) => ({ sessionKey })),
+    upserts: [{ sessionKey: normalizedKey, entry }],
     skipMaintenance: true,
-    ...(options.commitGuard ? { beforeCommitInTransaction: options.commitGuard } : {}),
+    ...(commitGuard ? { beforeCommitInTransaction: commitGuard } : {}),
   });
-  return { ok: true, entry, sessionFile: resolved.normalizedKey };
+  return { ok: true, entry, sessionFile: normalizedKey };
 }
 
 export function cloneSessionEntries(
@@ -127,13 +128,7 @@ export function cloneSessionEntries(
 }
 
 function collectSessionEntryKeys(...entries: SessionEntry[]): Array<keyof SessionEntry> {
-  const keys = new Set<keyof SessionEntry>();
-  for (const entry of entries) {
-    for (const key of Object.keys(entry) as Array<keyof SessionEntry>) {
-      keys.add(key);
-    }
-  }
-  return [...keys];
+  return [...new Set(entries.flatMap((entry) => Object.keys(entry) as Array<keyof SessionEntry>))];
 }
 
 function sessionEntryFieldEqual(
@@ -214,11 +209,7 @@ export function mergeConcurrentReplySessionMetadata(params: {
   return merged;
 }
 
-export function createReplySessionInitializationRevision(params: {
-  entry: SessionEntry | undefined;
-  storePath: string;
-}): string {
-  const { entry } = params;
+export function createReplySessionInitializationRevision(entry: SessionEntry | undefined): string {
   if (!entry) {
     return JSON.stringify(null);
   }
@@ -226,15 +217,6 @@ export function createReplySessionInitializationRevision(params: {
   // activity/context writes are merged below; comparing them here would reject
   // before the merge can preserve the concurrent metadata.
   return JSON.stringify({ sessionId: entry.sessionId });
-}
-
-export function resolveInitializedReplySessionEntry(params: {
-  agentId: string;
-  currentEntry?: SessionEntry;
-  sessionEntry: SessionEntry;
-  storePath: string;
-}): SessionEntry {
-  return params.sessionEntry;
 }
 
 /** Updates an existing entry only; returns null when the session is absent. */
@@ -306,6 +288,7 @@ export function resolveSessionAbortTarget(
  * storage-sized operation. Runtime abort side effects remain with callers.
  */
 export async function markSessionAbortTarget(params: {
+  isCurrent?: () => boolean;
   resolveAbortCutoff?: (context: SessionAbortTargetContext) => SessionAbortTargetCutoff | undefined;
   scope: SessionAccessScope;
   now?: () => number;
@@ -316,6 +299,9 @@ export async function markSessionAbortTarget(params: {
     const updated = await patchSessionEntryCore(
       params.scope,
       (currentEntry) => {
+        if (params.isCurrent?.() === false) {
+          return null;
+        }
         resolution.target = {
           entry: { ...currentEntry },
           persisted: false,
@@ -339,9 +325,16 @@ export async function markSessionAbortTarget(params: {
       {
         replaceEntry: true,
         skipMaintenance: true,
+        // The patch callback yields before BEGIN; the conversation can move without
+        // changing this session row, so its snapshot comparison cannot fence Stop.
+        assertCommitAllowed: () => {
+          if (resolution.target && params.isCurrent?.() === false) {
+            throw new Error("The selected session changed before it could be stopped.");
+          }
+        },
       },
     );
-    return updated
+    return updated && resolution.target
       ? {
           entry: { ...updated },
           persisted: true,

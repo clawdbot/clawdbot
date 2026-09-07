@@ -11,12 +11,11 @@ import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachment
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
-  buildAssistantDisplayContentFromReplyPayloads,
+  buildAssistantReplyContent,
   extractAssistantDisplayTextFromContent,
   hasAssistantDisplayMediaContent,
   hasManagedOutgoingAssistantContent,
   hasVisibleAssistantFinalMessage,
-  replaceAssistantContentTextBlocks,
   stripManagedOutgoingAssistantContentBlocks,
   type AssistantDisplayContentBlock,
 } from "./chat-assistant-content.js";
@@ -47,17 +46,10 @@ function selectChatSendAgentReplyPayloads(params: {
   return params.deliveredReplies
     .filter((entry) => {
       const { payload } = entry;
-      if (getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority) {
-        return entry.kind === "final" && payload.isError !== true;
-      }
-      if (isSourceReplyTranscriptMirrorPayload(payload)) {
-        return entry.kind === "final" && payload.isError !== true;
-      }
-      return (
-        !params.hasReturnedAgentErrorPayloads &&
-        (entry.kind === "block" || entry.kind === "final") &&
-        isReplyPayloadStatusNotice(payload)
-      );
+      return getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority ||
+        isSourceReplyTranscriptMirrorPayload(payload)
+        ? entry.kind === "final" && payload.isError !== true
+        : !params.hasReturnedAgentErrorPayloads && isReplyPayloadStatusNotice(payload);
     })
     .map((entry) => entry.payload);
 }
@@ -130,32 +122,26 @@ async function finalizeChatSendAgentReplyPayloads(
     getAgentScopedMediaLocalRoots(cfg, agentId),
     latestStorePath ? [latestStorePath] : undefined,
   );
-  const buildReplyAssistantContent = async (
-    payloads: typeof finalPayloads,
-  ): Promise<AssistantDisplayContentBlock[] | undefined> =>
-    await buildAssistantDisplayContentFromReplyPayloads({
+  const buildReplyContent = async (payloads: typeof finalPayloads) => {
+    const mediaMessage = await buildWebchatAssistantMessageFromReplyPayloads(payloads, {
+      localRoots: mediaLocalRoots,
+      onLocalAudioAccessDenied: (err) => {
+        context.logGateway.warn(`webchat audio embedding denied local path: ${formatForLog(err)}`);
+      },
+    });
+    const content = await buildAssistantReplyContent({
       sessionKey,
       agentId,
       payloads,
+      transcriptMediaMessage: mediaMessage,
       managedMediaLocalRoots: mediaLocalRoots,
       includeSensitiveMedia: false,
       onManagedMediaPrepareError: (message) => {
         context.logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
       },
     });
-  const buildReplyMediaMessage = async (payloads: typeof finalPayloads) =>
-    await buildWebchatAssistantMessageFromReplyPayloads(payloads, {
-      localRoots: mediaLocalRoots,
-      onLocalAudioAccessDenied: (err) => {
-        context.logGateway.warn(`webchat audio embedding denied local path: ${formatForLog(err)}`);
-      },
-    });
-  const combinedAssistantContent =
-    agentRunReplyPayloads.length === 1
-      ? await buildReplyAssistantContent(finalPayloads)
-      : undefined;
-  const combinedMediaMessage =
-    agentRunReplyPayloads.length === 1 ? await buildReplyMediaMessage(finalPayloads) : undefined;
+    return { ...content, mediaMessage };
+  };
   const sourceReplyContentStates: SourceReplyContentState[] = [];
   const sourceReplyBroadcastContent: AssistantDisplayContentBlock[] = [];
   for (const [replyIndex] of agentRunReplyPayloads.entries()) {
@@ -163,23 +149,16 @@ async function finalizeChatSendAgentReplyPayloads(
     if (!finalPayload) {
       continue;
     }
-    const replyAssistantContent =
-      agentRunReplyPayloads.length === 1
-        ? combinedAssistantContent
-        : await buildReplyAssistantContent([finalPayload]);
-    const replyMediaMessage =
-      agentRunReplyPayloads.length === 1
-        ? combinedMediaMessage
-        : await buildReplyMediaMessage([finalPayload]);
+    const {
+      assistantContent: replyAssistantContent,
+      persistedAssistantContent: persistedContent,
+      mediaMessage: replyMediaMessage,
+    } = await buildReplyContent([finalPayload]);
     const replyBroadcastContent = hasAssistantDisplayMediaContent(replyAssistantContent)
       ? replyAssistantContent
       : hasAssistantDisplayMediaContent(replyMediaMessage?.content)
         ? replyMediaMessage?.content
         : replyAssistantContent;
-    const persistedContent = replaceAssistantContentTextBlocks(
-      replyAssistantContent,
-      replyMediaMessage ?? null,
-    );
     const state: SourceReplyContentState = {
       broadcastContent: replyBroadcastContent ? [...replyBroadcastContent] : [],
       persistedContent: persistedContent ? [...persistedContent] : [],

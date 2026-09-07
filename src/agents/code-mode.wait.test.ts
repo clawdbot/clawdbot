@@ -1,6 +1,7 @@
 /** Tests Code Mode wait, scope, and suspended runs. */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -10,6 +11,7 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "./admitted-run-context.js";
+import * as worker from "./code-mode-worker.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
   resetCodeModeTestState,
@@ -19,7 +21,7 @@ import {
   createCodeModeHarness,
   testing,
 } from "./code-mode.test-support.js";
-import { createToolSearchCatalogRef } from "./tool-search.js";
+import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search.js";
 import { jsonResult } from "./tools/common.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -88,78 +90,151 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     expect(resumed.output).toEqual([{ type: "text", text: "after" }]);
   });
 
-  it("keeps inline nested approval inside the original admitted run beyond the Code Mode budget", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    const runId = "run-code-mode-inline-approval";
-    const sessionId = "session-inline-approval";
-    const sessionKey = "agent:main:inline-approval";
-    const requested = createDeferred();
-    const decision = createDeferred();
-    const admission = prepareAgentRunAdmission({
-      cfg: {},
-      facts: {
-        runId,
+  it.each([
+    { mode: "inline", outcome: "approve" },
+    { mode: "yield", outcome: "approve" },
+    { mode: "yield", outcome: "cancel" },
+    { mode: "yield", outcome: "close" },
+  ] as const)(
+    "keeps $mode nested approval paused until $outcome without extending its budget",
+    async ({ mode, outcome }) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+      const runId = "run-code-mode-inline-approval";
+      const sessionId = "session-inline-approval";
+      const sessionKey = "agent:main:inline-approval";
+      const callAbort = new AbortController();
+      const requested = createDeferred();
+      const decision = createDeferred();
+      const resumed = createDeferred();
+      const runWorker = worker.runCodeModeWorker;
+      const continuationBudgets: number[] = [];
+      let restoreCharged = false;
+      const workerSpy = vi
+        .spyOn(worker, "runCodeModeWorker")
+        .mockImplementation(async (...args) => {
+          const inlineHost = args[4];
+          if (!inlineHost) {
+            return await runWorker(...args);
+          }
+          const isResume = isRecord(args[0]) && args[0].kind === "resume";
+          return await runWorker(args[0], args[1], args[2], args[3], {
+            ...inlineHost,
+            onBoundary: async (...boundaryArgs) => {
+              if (mode === "yield" && isResume && !restoreCharged) {
+                // Charge active restore/guest time before entering the blocked host wait.
+                restoreCharged = true;
+                await vi.advanceTimersByTimeAsync(100);
+                resumed.resolve();
+              }
+              const command = await inlineHost.onBoundary(...boundaryArgs);
+              if (command.kind === "continue") {
+                continuationBudgets.push(command.timeoutMs);
+              }
+              return command;
+            },
+          });
+        });
+      const admission = prepareAgentRunAdmission({
+        cfg: {},
+        facts: {
+          runId,
+          agentId: "main",
+          ingress: { kind: "system", boundary: "code-mode-approval", state: "present" },
+        },
+        operationalRunInstance: createOperationalRunInstanceRef(runId),
+      });
+      const admittedRunContext = await admission.admit("embedded");
+      const identity = createAdmittedGatewayToolCallerIdentity({
+        admittedRunContext,
         agentId: "main",
-        ingress: { kind: "system", boundary: "code-mode-approval", state: "present" },
-      },
-      operationalRunInstance: createOperationalRunInstanceRef(runId),
-    });
-    const admittedRunContext = await admission.admit("embedded");
-    const identity = createAdmittedGatewayToolCallerIdentity({
-      admittedRunContext,
-      agentId: "main",
-      sessionKey,
-      turnSourceChannel: "telegram",
-    });
-    const timeoutMs = 1_000;
-    const config = { tools: { codeMode: { enabled: true, timeoutMs } } } as never;
-    const catalogRef = createToolSearchCatalogRef();
-    const context = { config, runtimeConfig: config, sessionId, sessionKey, runId, catalogRef };
-    const controls = createCodeModeTools(context);
-    const shell = pluginToolWithExecute("exec", "Run shell", async (toolCallId) => {
-      const event = { runId, sessionId, stream: "lifecycle" as const };
-      emitAgentEvent({
-        ...event,
-        data: { phase: "waiting-approval", approvalId: "approval-inline", toolCallId },
+        sessionKey,
+        turnSourceChannel: "telegram",
       });
-      requested.resolve();
-      await decision.promise;
-      emitAgentEvent({
-        ...event,
-        data: { phase: "approval-resolved", approvalId: "approval-inline", toolCallId },
+      const timeoutMs = 1_000;
+      const config = { tools: { codeMode: { enabled: true, timeoutMs } } } as never;
+      const catalogRef = createToolSearchCatalogRef();
+      const context = { config, runtimeConfig: config, sessionId, sessionKey, runId, catalogRef };
+      const controls = createCodeModeTools(context);
+      const shell = pluginToolWithExecute("exec", "Run shell", async (toolCallId) => {
+        const event = { runId, sessionId, stream: "lifecycle" as const };
+        emitAgentEvent({
+          ...event,
+          data: { phase: "waiting-approval", approvalId: "approval-inline", toolCallId },
+        });
+        requested.resolve();
+        await decision.promise;
+        emitAgentEvent({
+          ...event,
+          data: { phase: "approval-resolved", approvalId: "approval-inline", toolCallId },
+        });
+        return jsonResult({ status: "completed", aggregated: "approved" });
       });
-      return jsonResult({ status: "completed", aggregated: "approved" });
-    });
-    applyCodeModeCatalog({ tools: [...controls, shell], ...context });
+      applyCodeModeCatalog({ tools: [...controls, shell], ...context });
 
-    let settled = false;
-    try {
-      const execution = withGatewayToolCallerIdentity(identity, async () => {
-        const result = await expectDefined(controls[0], "Code Mode exec test invariant").execute(
-          "inline-approval",
-          { code: `return await exec({ value: "approval" });` },
+      let settled = false;
+      try {
+        const execution = withGatewayToolCallerIdentity(identity, async () => {
+          let result = await expectDefined(controls[0], "Code Mode exec test invariant").execute(
+            "inline-approval",
+            {
+              code:
+                mode === "inline"
+                  ? `return await exec({ value: "approval" });`
+                  : `const pending = exec({ value: "approval" }); await yield_control(); return await pending;`,
+            },
+          );
+          if (mode === "yield") {
+            expect(resultDetails(result)).toMatchObject({ status: "waiting" });
+            // Force the approval event to precede the next wait subscription.
+            await requested.promise;
+            // Parked approval time must not be credited to this next call.
+            await vi.advanceTimersByTimeAsync(5_000);
+            result = await expectDefined(controls[1], "Code Mode wait test invariant").execute(
+              "yielded-approval",
+              { runId: resultDetails(result).runId },
+              callAbort.signal,
+            );
+          }
+          settled = true;
+          return result;
+        });
+        await requested.promise;
+        // The real restore runs outside the fake host clock. Wait until it has
+        // returned before advancing the pending-bridge deadline.
+        if (mode === "yield") {
+          await resumed.promise;
+        }
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(timeoutMs + 1);
+
+        expect(settled).toBe(false);
+        expect(getAdmittedRunDelegatedAuthority(admittedRunContext)).toBeDefined();
+
+        if (outcome === "cancel") {
+          callAbort.abort();
+        } else if (outcome === "close") {
+          clearToolSearchCatalog(context);
+        } else {
+          decision.resolve();
+        }
+        expect(resultDetails(await execution)).toMatchObject(
+          outcome === "approve"
+            ? { status: "completed", value: { status: "completed", aggregated: "approved" } }
+            : { status: "failed", code: "aborted" },
         );
-        settled = true;
-        return result;
-      });
-      await requested.promise;
-      await vi.advanceTimersByTimeAsync(timeoutMs + 1);
-
-      expect(settled).toBe(false);
-      expect(getAdmittedRunDelegatedAuthority(admittedRunContext)).toBeDefined();
-
-      decision.resolve();
-      expect(resultDetails(await execution)).toMatchObject({
-        status: "completed",
-        value: { status: "completed", aggregated: "approved" },
-      });
-      expect(getAdmittedRunDelegatedAuthority(admittedRunContext)).toBeDefined();
-    } finally {
-      decision.resolve();
-      admission.close();
-    }
-    expect(getAdmittedRunDelegatedAuthority(admittedRunContext)).toBeUndefined();
-  });
+        expect(testing.activeRuns.size).toBe(0);
+        expect(getAdmittedRunDelegatedAuthority(admittedRunContext)).toBeDefined();
+        if (outcome === "approve") {
+          expect(continuationBudgets).toContain(mode === "yield" ? timeoutMs - 100 : timeoutMs);
+        }
+      } finally {
+        decision.resolve();
+        workerSpy.mockRestore();
+        admission.close();
+      }
+      expect(getAdmittedRunDelegatedAuthority(admittedRunContext)).toBeUndefined();
+    },
+  );
 
   it("retains terminal bridge evidence until a yielded run completes through wait", async () => {
     const { config, catalogRef, tools } = createTerminalBridgeHarness();
@@ -504,35 +579,58 @@ describe("Code Mode wait, scope, and suspended runs", () => {
     expect(new Set([...testing.activeRuns.values()].map((state) => state.replayId)).size).toBe(2);
   });
 
-  it("fails yield suspension when snapshot expiry would exceed the Date range", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
-    let details: Record<string, unknown>;
-    try {
-      details = resultDetails(
-        await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
-          "code-call-yield-overflow",
-          {
-            code: 'await yield_control("pause"); return "done";',
-          },
-        ),
-      );
-    } finally {
-      nowSpy.mockRestore();
-    }
+  it.each(["exec", "wait"])(
+    "preserves accepted output when %s snapshot expiry would exceed the Date range",
+    async (mode) => {
+      const { ctx } = createCodeModeHarness();
+      const config = { tools: { codeMode: { enabled: true, snapshotTtlSeconds: 1 } } };
+      const tools = createCodeModeTools({ ...ctx, config, runtimeConfig: config });
+      const fixture = pluginTool("expiry_fixture", "Expiry fixture");
+      applyCodeModeCatalog({ ...ctx, config, tools: [...tools, fixture] });
+      const exec = expectDefined(tools[0], "exec");
+      const wait = expectDefined(tools[1], "wait");
+      const dateLimit = 8_640_000_000_000_000;
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(dateLimit - 1_000);
+      let details: Record<string, unknown>;
+      try {
+        const input = {
+          code: `${mode === "wait" ? 'text("delivered"); await yield_control();' : ""}
+            text("accepted first");
+            await expiry_fixture({});
+            text("accepted inline");
+            await yield_control("pause");
+            return "done";`,
+        };
+        const first =
+          mode === "wait" ? resultDetails(await exec.execute("park", input)) : undefined;
+        if (first) {
+          expect(first).toMatchObject({
+            status: "waiting",
+            output: [{ type: "text", text: "delivered" }],
+          });
+        }
+        // Admit wait before the parked run expires. Renewal overflows without
+        // consuming the new call's execution budget before its guest resumes.
+        nowSpy.mockReturnValue(dateLimit - 1);
+        details = resultDetails(
+          await (first
+            ? wait.execute("resume", { runId: first.runId })
+            : exec.execute("code-call-yield-overflow", input)),
+        );
+      } finally {
+        nowSpy.mockRestore();
+      }
 
-    expect(details.status).toBe("failed");
-    expect(details.error).toBe("code mode run expiry is unavailable.");
-    expect(testing.activeRuns.size).toBe(0);
-  });
+      expect(details.status).toBe("failed");
+      expect(details.error).toBe("code mode run expiry is unavailable.");
+      expect(details.output).toEqual([
+        { type: "text", text: "accepted first" },
+        { type: "text", text: "accepted inline" },
+      ]);
+      expect(fixture.execute).toHaveBeenCalledOnce();
+      expect(testing.activeRuns.size).toBe(0);
+    },
+  );
 
   it("expires suspended runs with invalid expiry timestamps", async () => {
     const { tools: codeModeTools } = createCodeModeHarness();

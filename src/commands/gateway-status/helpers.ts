@@ -307,10 +307,6 @@ export function isProbeReachable(probe: GatewayProbeResult): boolean {
   return probe.ok || probe.gatewayReached === true;
 }
 
-function getGatewayProbeCapability(probe: GatewayProbeResult): GatewayProbeCapability {
-  return probe.auth.capability;
-}
-
 export function summarizeGatewayProbeCapability(
   probes: GatewayProbeResult[],
 ): GatewayProbeCapability {
@@ -324,7 +320,7 @@ export function summarizeGatewayProbeCapability(
     "unknown",
   ];
   for (const capability of priority) {
-    if (probes.some((probe) => getGatewayProbeCapability(probe) === capability)) {
+    if (probes.some((probe) => probe.auth.capability === capability)) {
       return capability;
     }
   }
@@ -363,7 +359,7 @@ function colorForGatewayProbeCapability(capability: GatewayProbeCapability) {
 }
 
 function renderProbeCapabilityLine(probe: GatewayProbeResult, rich: boolean) {
-  const capability = getGatewayProbeCapability(probe);
+  const capability = probe.auth.capability;
   return colorize(
     rich,
     colorForGatewayProbeCapability(capability),
@@ -389,7 +385,7 @@ export function renderProbeSummaryLine(probe: GatewayProbeResult, rich: boolean)
     return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${capability} · ${readStatus}${detail}`;
   }
 
-  if (getGatewayProbeCapability(probe) === "pairing_pending") {
+  if (probe.auth.capability === "pairing_pending") {
     return `${colorize(rich, theme.warn, "Connect: blocked")}${detail} · ${capability}`;
   }
 

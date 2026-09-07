@@ -13,6 +13,7 @@ import {
   stripInterSessionPromptPrefixForDisplay,
 } from "../sessions/input-provenance.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { projectAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { extractChatHistoryBlockText } from "./chat-display-projection.canvas.js";
 import {
@@ -157,7 +158,10 @@ export function mergeTtsSupplementMessages(
 
 function isSubagentAnnounceInterSessionUserMessage(message: Record<string, unknown>): boolean {
   const provenance = normalizeInputProvenance(message.provenance);
-  if (provenance?.kind === "inter_session" && provenance.sourceTool === "subagent_announce") {
+  if (
+    provenance?.kind === "inter_session" &&
+    (provenance.sourceTool === "subagent_announce" || provenance.sourceTool === "subagent_settle")
+  ) {
     return true;
   }
   const text = extractProjectedText(message.content ?? message.text);
@@ -177,7 +181,10 @@ function isSubagentAnnounceInterSessionUserChatHistoryMessage(message: unknown):
     return false;
   }
   const provenance = normalizeInputProvenance(record.provenance);
-  if (provenance?.kind === "inter_session" && provenance.sourceTool === "subagent_announce") {
+  if (
+    provenance?.kind === "inter_session" &&
+    (provenance.sourceTool === "subagent_announce" || provenance.sourceTool === "subagent_settle")
+  ) {
     return true;
   }
   const text = extractChatHistoryBlockText(record);
@@ -361,10 +368,10 @@ function isDuplicateChannelFinalDeliveryMirror(
 }
 
 export function toProjectedMessages(messages: unknown[]): Array<Record<string, unknown>> {
-  return messages.filter(
-    (message): message is Record<string, unknown> =>
-      Boolean(message) && typeof message === "object" && !Array.isArray(message),
-  );
+  return messages.flatMap((message) => {
+    const record = readRecord(message);
+    return record ? [projectAssistantDisplayContent(record)] : [];
+  });
 }
 
 export function filterVisibleProjectedHistoryMessages(

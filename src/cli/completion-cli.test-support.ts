@@ -5,8 +5,41 @@ import path from "node:path";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { Command } from "commander";
 import { expect, it, type TestAPI } from "vitest";
-import { getCompletionScript } from "./completion-cli.js";
+import { getCompletionScript, registerCompletionCli } from "./completion-cli.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
+
+export function createCompletionProgram(): Command {
+  const program = new Command();
+  program.name("openclaw");
+  program.description("CLI root");
+  program.option("-v, --verbose", "Verbose output");
+  program.option(
+    "--status-json",
+    "Output JSON (alias for `models status --json`) in $OPENCLAW_STATE_DIR",
+  );
+
+  const gateway = program.command("gateway").description("Gateway commands");
+  gateway.option("--force", "Force the action");
+  gateway.option("-t, --token <token>", "Gateway token");
+
+  gateway.command("status").description("Show gateway status").option("--json", "JSON output");
+  gateway.command("restart").description("Restart gateway");
+  program
+    .command("agent")
+    .description("Agent commands")
+    .option("--verbose <on|off>", "Set verbosity");
+  const sessions = program.command("sessions").description("Session commands");
+  sessions.option("--verbose", "Verbose output");
+  sessions.command("cleanup").description("Clean sessions").option("--dry-run", "Preview cleanup");
+
+  return program;
+}
+
+export function createDocumentedCompletionProgram(): Command {
+  const program = createCompletionProgram();
+  registerCompletionCli(program);
+  return program;
+}
 
 export function createAliasedCompletionProgram(): Command {
   const program = new Command();
@@ -23,22 +56,35 @@ export function createAliasedCompletionProgram(): Command {
   return program;
 }
 
-export function runGeneratedBashCompletion(program: Command, words: readonly string[]): string[] {
+export function runGeneratedBashCompletion(
+  program: Command,
+  words: readonly string[],
+  input: {
+    line?: string;
+    word?: string;
+    point?: number;
+    cword?: number;
+    bashPath?: string;
+    env?: NodeJS.ProcessEnv;
+  } = {},
+): string[] {
   const script = getCompletionScript("bash", program);
   const result = spawnSync(
-    "bash",
+    input.bashPath ?? "bash",
     [
       "--noprofile",
       "--norc",
       "-c",
       `${script}
 COMP_WORDS=(${words.map(quoteCliArg).join(" ")})
-COMP_CWORD=${words.length - 1}
-_openclaw_completion
+COMP_CWORD=${input.cword ?? words.length - 1}
+COMP_LINE=${quoteCliArg(input.line ?? words.join(" "))}
+COMP_POINT=${input.point ?? "${#COMP_LINE}"}
+_openclaw_completion openclaw ${quoteCliArg(input.word ?? words.at(-1) ?? "")}
 printf '%s\\n' "\${COMPREPLY[@]}"
 `,
     ],
-    { encoding: "utf8" },
+    { encoding: "utf8", env: input.env },
   );
 
   if (result.error) {
@@ -315,11 +361,16 @@ export class PowerShellCompletionRunner {
     child.stderr.setEncoding("utf8");
     this.stdoutLines = createInterface({ input: child.stdout });
     this.readyPromise = new Promise<void>((resolve, reject) => {
-      const readyTimeout = setTimeout(() => {
-        const error = new Error("PowerShell completion runner did not become ready");
+      const readyTimeout = setTimeout(
+        () => fail(new Error("PowerShell completion runner did not become ready")),
+        POWERSHELL_CASE_TIMEOUT_MS,
+      );
+      // Before READY there are no pending requests; poisoning alone would strand the queue.
+      const fail = (error: Error) => {
+        clearTimeout(readyTimeout);
         reject(error);
         this.poison(error);
-      }, POWERSHELL_CASE_TIMEOUT_MS);
+      };
       this.stdoutLines?.on("line", (line) => {
         if (line === `${this.framePrefix}READY`) {
           clearTimeout(readyTimeout);
@@ -327,14 +378,14 @@ export class PowerShellCompletionRunner {
           return;
         }
         if (!line.startsWith(this.framePrefix)) {
-          this.poison(new Error(`Unexpected PowerShell completion stdout: ${line}`));
+          fail(new Error(`Unexpected PowerShell completion stdout: ${line}`));
           return;
         }
         try {
           const response = decodePowerShellCompletionResponse(line.slice(this.framePrefix.length));
           const pending = this.pending.get(response.id);
           if (!pending) {
-            this.poison(new Error(`Unexpected PowerShell completion response id: ${response.id}`));
+            fail(new Error(`Unexpected PowerShell completion response id: ${response.id}`));
             return;
           }
           clearTimeout(pending.timeout);
@@ -347,25 +398,21 @@ export class PowerShellCompletionRunner {
             );
           }
         } catch (error) {
-          this.poison(error instanceof Error ? error : new Error(String(error)));
+          fail(error instanceof Error ? error : new Error(String(error)));
         }
       });
-      child.once("error", (error) => {
-        reject(error);
-        this.poison(error);
-      });
+      child.once("error", fail);
       child.stderr.on("data", (chunk: string) => {
         const stderr = chunk.trim();
         if (stderr) {
-          this.poison(new Error(`Unexpected PowerShell completion stderr: ${stderr}`));
+          fail(new Error(`Unexpected PowerShell completion stderr: ${stderr}`));
         }
       });
       this.exitPromise = new Promise((exitResolve) => {
         child.once("exit", (code, signal) => {
-          clearTimeout(readyTimeout);
           exitResolve({ code, signal });
           if (!this.closing || code !== 0 || signal !== null) {
-            this.poison(
+            fail(
               new Error(
                 `PowerShell completion runner exited unexpectedly with code ${String(code)} signal ${String(signal)}`,
               ),

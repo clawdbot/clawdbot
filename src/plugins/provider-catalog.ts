@@ -6,6 +6,7 @@ import type {
   ModelCatalogMediaInputConfig,
   ModelCatalogModel,
   ModelCatalogTieredCost,
+  NormalizedModelCatalogRow,
 } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
@@ -43,6 +44,20 @@ export function findCatalogTemplate(params: {
       ),
     )
     .find((entry) => entry !== undefined);
+}
+
+/** Selects one complete auth result in caller-defined order, including unresolved secret markers. */
+export function resolveFirstProviderCatalogAuth(
+  resolveProviderApiKey: ProviderCatalogContext["resolveProviderApiKey"],
+  providerIds: readonly string[],
+): ReturnType<ProviderCatalogContext["resolveProviderApiKey"]> | undefined {
+  for (const providerId of providerIds) {
+    const auth = resolveProviderApiKey(providerId);
+    if (auth.apiKey || auth.discoveryApiKey) {
+      return auth;
+    }
+  }
+  return undefined;
 }
 
 /** Builds a provider catalog result for providers that share one API key. */
@@ -147,8 +162,11 @@ function cloneManifestCatalogCost(cost: ModelCatalogCost): ModelDefinitionConfig
   };
 }
 
-function buildManifestCatalogModelInput(model: ModelCatalogModel): ModelDefinitionConfig["input"] {
-  if (model.input?.includes("document")) {
+function buildManifestCatalogModelInput(
+  model: ModelCatalogModel,
+  filterDocument = false,
+): ModelDefinitionConfig["input"] {
+  if (!filterDocument && model.input?.includes("document")) {
     throw new Error(
       `Manifest modelCatalog row ${model.id} uses unsupported runtime input document`,
     );
@@ -168,8 +186,8 @@ function cloneManifestCatalogMediaInput(
 }
 
 function buildManifestCatalogModel(
-  providerId: string,
   model: ModelCatalogModel,
+  options: { providerId?: string; filterDocument?: boolean } = {},
 ): ModelDefinitionConfig {
   if (model.contextWindow === undefined) {
     throw new Error(`Manifest modelCatalog row ${model.id} is missing contextWindow`);
@@ -177,14 +195,16 @@ function buildManifestCatalogModel(
   if (model.maxTokens === undefined) {
     throw new Error(`Manifest modelCatalog row ${model.id} is missing maxTokens`);
   }
-  const id = normalizeConfiguredProviderCatalogModelId(providerId, model.id, new Map());
+  const id = options.providerId
+    ? normalizeConfiguredProviderCatalogModelId(options.providerId, model.id, new Map())
+    : model.id;
   return {
     id,
     name: model.name ?? id,
     ...(model.api ? { api: model.api } : {}),
     ...(model.baseUrl ? { baseUrl: model.baseUrl } : {}),
     reasoning: model.reasoning ?? false,
-    input: buildManifestCatalogModelInput(model),
+    input: buildManifestCatalogModelInput(model, options.filterDocument),
     cost: cloneManifestCatalogCost(model.cost ?? {}),
     contextWindow: model.contextWindow,
     ...(model.contextTokens !== undefined ? { contextTokens: model.contextTokens } : {}),
@@ -223,8 +243,26 @@ export function buildManifestModelProviderConfig(params: {
     baseUrl: catalog.baseUrl,
     ...(catalog.api ? { api: catalog.api } : {}),
     ...(catalog.headers ? { headers: { ...catalog.headers } } : {}),
-    models: catalog.models.map((model) => buildManifestCatalogModel(params.providerId, model)),
+    models: catalog.models.map((model) =>
+      buildManifestCatalogModel(model, { providerId: params.providerId }),
+    ),
   };
+}
+
+/** Builds runtime provider config from planner-normalized manifest rows. */
+export function buildEffectiveManifestProviderConfig(
+  rows: readonly NormalizedModelCatalogRow[],
+): ModelProviderConfig | undefined {
+  const firstRow = rows[0];
+  if (!firstRow?.baseUrl || !firstRow.api) {
+    return undefined;
+  }
+  const models = rows.flatMap((row) =>
+    !row.contextWindow || !row.maxTokens
+      ? []
+      : [buildManifestCatalogModel(row, { filterDocument: true })],
+  );
+  return models.length > 0 ? { baseUrl: firstRow.baseUrl, api: firstRow.api, models } : undefined;
 }
 
 export type ManifestProviderCatalogSurface = {

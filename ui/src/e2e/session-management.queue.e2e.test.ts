@@ -8,7 +8,6 @@ import {
   createSessionManagementE2eSuite,
   installMockGateway,
   sessionsListResponse,
-  uiProofArtifactDir,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
@@ -26,7 +25,7 @@ suite.define(() => {
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       recordVideo: captureUiProofEnabled
-        ? { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } }
+        ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
         : undefined,
     });
     const page = await context.newPage();
@@ -52,21 +51,22 @@ suite.define(() => {
         0,
       );
       expect(await row.locator(".sidebar-recent-session__subtitle").count()).toBe(0);
-      const spinner = row.locator(".session-run-spinner");
-      expect(await spinner.count()).toBe(1);
-      expect(await spinner.getAttribute("aria-label")).toBe(label);
-      expect(await row.locator(".session-row-state").getAttribute("aria-label")).toBe(label);
-      expect(await spinner.evaluate((element) => getComputedStyle(element).animationName)).toBe(
+      const ring = row.locator(".sidebar-session-indicator .session-glyph__ring");
+      expect(await ring.count()).toBe(1);
+      expect(await ring.getAttribute("aria-label")).toBe(label);
+      expect(
+        await row.getByRole("link", { name: `${label} Queued repair`, exact: true }).count(),
+      ).toBe(1);
+      expect(await ring.evaluate((element) => getComputedStyle(element).animationName)).toBe(
         "session-run-spin",
       );
-      expect(
-        await spinner.evaluate((element) => getComputedStyle(element).animationPlayState),
-      ).toBe(playState);
-      await captureUiProof(page, `${status}-session-ring.png`);
+      expect(await ring.evaluate((element) => getComputedStyle(element).animationPlayState)).toBe(
+        playState,
+      );
+      await captureUiProof(suite, page, `${status}-session-ring.png`);
 
       const listRequests = (await gateway.getRequests("sessions.list")).length;
-      await gateway.setMethodResponse(
-        "sessions.list",
+      await gateway.setSessionsListResponse(
         sessionsListResponse([
           sessionRow(mainKey, "Main", 2),
           sessionRow(queuedKey, "Queued repair", 1, {
@@ -86,19 +86,41 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("sessions.list")).length)
         .toBeGreaterThan(listRequests);
       await expect
-        .poll(() => row.locator(".session-row-state").getAttribute("aria-label"))
-        .toBe("Active run · Unread");
-      expect(await row.locator(".sidebar-recent-session__subtitle").count()).toBe(0);
-      expect(await spinner.count()).toBe(1);
-      expect(await spinner.getAttribute("aria-label")).toBe("Active run");
+        .poll(() =>
+          row.locator(".sidebar-recent-session__link").evaluate((link) => {
+            const descriptionId = link.getAttribute("aria-describedby");
+            return descriptionId
+              ? link.ownerDocument.getElementById(descriptionId)?.textContent
+              : null;
+          }),
+        )
+        .toBe("Unread");
+      expect(await row.locator(".session-row-state").count()).toBe(0);
+      expect(await row.getByRole("img", { name: "Unread", exact: true }).count()).toBe(0);
+      const accessibility = await context.newCDPSession(page);
+      const { nodes } = await accessibility.send("Accessibility.getFullAXTree");
+      const linkNode = nodes.find(
+        (node) => node.role?.value === "link" && node.name?.value === "Active run Queued repair",
+      );
+      expect(linkNode?.description?.value).toBe("Unread");
       expect(
-        await spinner.evaluate((element) => getComputedStyle(element).animationPlayState),
-      ).toBe("running");
-      await captureUiProof(page, `${status}-session-running.png`);
+        `${linkNode?.name?.value} ${linkNode?.description?.value}`.match(/Unread/g),
+      ).toHaveLength(1);
+      await accessibility.detach();
+      expect(
+        await row.getByRole("link", { name: "Active run Queued repair", exact: true }).count(),
+      ).toBe(1);
+      expect(await row.locator(".sidebar-recent-session__subtitle").count()).toBe(0);
+      expect(await ring.count()).toBe(1);
+      expect(await ring.getAttribute("aria-label")).toBe("Active run");
+      expect(await ring.evaluate((element) => getComputedStyle(element).animationPlayState)).toBe(
+        "running",
+      );
+      await captureUiProof(suite, page, `${status}-session-running.png`);
     } finally {
       await context.close();
       if (proofVideo) {
-        await proofVideo.saveAs(path.join(uiProofArtifactDir, `${status}-session-ring.webm`));
+        await proofVideo.saveAs(path.join(suite.artifactDir, `${status}-session-ring.webm`));
       }
     }
   });

@@ -1,29 +1,35 @@
 ---
-summary: "Run OpenClaw on local LLMs (LM Studio, vLLM, LiteLLM, custom OpenAI endpoints)"
+summary: "Run OpenClaw with hardware-aware local model setup or an existing model server"
 read_when:
+  - You want OpenClaw to recommend and install a model for your Gateway hardware
   - You want to serve models from your own GPU box
   - You are wiring LM Studio or an OpenAI-compatible proxy
   - You need the safest local model guidance
 title: "Local models"
 ---
 
-Local models work, but they raise the bar on hardware, context size, and prompt-injection defense: small or aggressively quantized models truncate context and skip provider-side safety filters. This page covers higher-end local stacks and custom OpenAI-compatible servers. For the lowest-friction path, start with [LM Studio](/providers/lmstudio) or [Ollama](/providers/ollama) and `openclaw onboard`.
+OpenClaw can install and manage a local model or connect to a server you already run. For a hardware-aware recommendation, install the [llama.cpp plugin](/plugins/llama-cpp), run `openclaw onboard`, and choose **Managed local server**. Setup shows the Gateway host, model, download size, and execution backend before downloading, then verifies a real tool call before changing the default model. [LM Studio](/providers/lmstudio) and [Ollama](/providers/ollama) remain options when you want to manage the model separately.
+
+This page also covers larger local stacks and custom OpenAI-compatible servers. Local models do not provide hosted providers' safety filters; keep tool permissions and prompt-injection defenses appropriate for the model and task.
 
 For local servers that should start only when a selected model needs them, see [Local model services](/gateway/local-model-services).
 
 ## Hardware floor
 
-Aim for **2+ maxed-out Mac Studios or an equivalent GPU rig (~$30k+)** for a comfortable agent loop. A single **24 GB** GPU only handles lighter prompts at higher latency. Always run the **largest / full-size variant you can host** - small or heavily quantized checkpoints raise prompt-injection risk (see [Security](/gateway/security)).
+Memory requirements depend on the model weights, context size, runtime, and other work on the host. Managed llama.cpp setup checks available RAM, supported GPU memory, and disk space instead of assuming a particular machine. Its curated recipes use a 64K context; the smallest has an 8 GiB host-memory floor, while larger recipes need more memory. These floors do not guarantee fit or speed. See [model recommendations](/plugins/llama-cpp#model-recommendations) for the current catalog.
+
+For custom servers, leave room for the full OpenClaw prompt, tools, history, and model output. A model that loads or answers a short prompt may still fail an agent turn. Test actual tasks before making it your default, and review [local-model security](/gateway/security).
 
 ## Pick a backend
 
-| Backend                                              | Use when                                                                    |
-| ---------------------------------------------------- | --------------------------------------------------------------------------- |
-| [ds4](/providers/ds4)                                | Local DeepSeek V4 Flash on macOS Metal with OpenAI-compatible tool calls    |
-| [LM Studio](/providers/lmstudio)                     | First-time local setup, GUI loader, native Responses API                    |
-| LiteLLM / OAI-proxy / custom OpenAI-compatible proxy | You front another model API and need OpenClaw to treat it as OpenAI         |
-| MLX / vLLM / SGLang                                  | High-throughput self-hosted serving with an OpenAI-compatible HTTP endpoint |
-| [Ollama](/providers/ollama)                          | CLI workflow, model library, hands-off systemd service                      |
+| Backend                                              | Use when                                                                           |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| [ds4](/providers/ds4)                                | Local DeepSeek V4 Flash on macOS Metal with OpenAI-compatible tool calls           |
+| LiteLLM / OAI-proxy / custom OpenAI-compatible proxy | You front another model API and need OpenClaw to treat it as OpenAI                |
+| [llama.cpp](/plugins/llama-cpp)                      | Hardware-aware model selection, verified downloads, and an OpenClaw-managed server |
+| [LM Studio](/providers/lmstudio)                     | First-time local setup, GUI loader, native Responses API                           |
+| MLX / vLLM / SGLang                                  | High-throughput self-hosted serving with an OpenAI-compatible HTTP endpoint        |
+| [Ollama](/providers/ollama)                          | CLI workflow, model library, hands-off systemd service                             |
 
 Use `api: "openai-responses"` when the backend supports it (LM Studio does). Otherwise use `api: "openai-completions"`. If `api` is omitted on a custom provider with a `baseUrl`, OpenClaw defaults to `openai-completions`.
 
@@ -33,7 +39,7 @@ Use `api: "openai-responses"` when the backend supports it (LM Studio does). Oth
 
 ## LM Studio + large local model (Responses API)
 
-This is the best current local stack. Load a large model in LM Studio (a full-size Qwen, DeepSeek, or Llama build), enable the local server (default `http://127.0.0.1:1234`), and use the Responses API to keep reasoning separate from final text.
+For a separately managed local server, load a model that fits your hardware in LM Studio, enable the local server (default `http://127.0.0.1:1234`), and use the Responses API to keep reasoning separate from final text.
 
 ```json5
 {
@@ -251,7 +257,7 @@ Compat overrides for stricter OpenAI-compatible backends:
 
 ## Smaller or stricter backends
 
-If the model loads cleanly but full agent turns misbehave, work top-down: confirm transport first, then narrow the surface.
+If the model loads cleanly but full agent turns misbehave, confirm transport first, then inspect tool use and the context budget.
 
 1. **Confirm the local model responds** - no tools, no agent context:
 
@@ -265,11 +271,11 @@ If the model loads cleanly but full agent turns misbehave, work top-down: confir
    openclaw infer model run --gateway --model <provider/model> --prompt "Reply with exactly: pong" --json
    ```
 
-3. **Try lean mode** if both probes pass but real agent turns fail with malformed tool calls or oversized prompts: set `agents.defaults.experimental.localModelLean: true`. It drops heavyweight browser, cron, message, media-generation, voice, and PDF tools unless explicitly required, and defaults larger tool catalogs behind structured Tool Search controls while keeping `exec` directly visible. See [Experimental Features -> Local model lean mode](/concepts/experimental-features#local-model-lean-mode) for details and how to confirm it's on.
+3. **Check Tool Search** if both probes pass but real agent turns fail with malformed tool calls or oversized prompts. Local Ollama models, LM Studio, and managed local services automatically use structured [Tool Search](/tools/tool-search) when `tools.toolSearch` is unset. Other backends can enable it with `tools.toolSearch: { mode: "tools" }`. This defers schemas while preserving policy-approved capabilities. Leave `localModelLean` unset or set it to `false` so optional tools remain available. Check the server's actual context allocation and memory use as well.
 
 4. **Disable tools entirely as a last resort** by setting `models.providers.<provider>.models[].compat.supportsTools: false` for that model - the agent then runs without tool calls.
 
-5. **Past that, the bottleneck is upstream.** If the backend still fails only on larger OpenClaw runs after lean mode and `supportsTools: false`, the remaining issue is usually the model or server itself - context window, GPU memory, kv-cache eviction, or a backend bug - not OpenClaw's transport layer.
+5. **Inspect the failing request and server logs.** Check the chat template, context window, memory pressure, and server errors. A successful text-only probe does not prove that the model can reliably complete a multi-step agent task.
 
 ## Troubleshooting
 
@@ -279,7 +285,7 @@ If the model loads cleanly but full agent turns misbehave, work top-down: confir
 - **Context errors?** OpenClaw derives context-window preflight thresholds from the detected model window or the per-model `models.providers.<provider>.models[].contextTokens` cap, warning below 20% with an **8k** floor and hard-blocking below 10% with a **4k** floor. Lower that model entry's `contextTokens` or raise the server/model context limit.
 - **`messages[].content ... expected a string`?** Add `compat.requiresStringContent: true` on that model entry.
 - **`validation.keys`, or "message entries only allow `role` and `content`"?** Add `compat.strictMessageKeys: true` on that model entry.
-- **Direct `/v1/chat/completions` calls work, but `openclaw infer model run --local` fails on Gemma or another local model?** Check the provider URL, model ref, auth marker, and server logs first - `model run` skips agent tools entirely. If `model run` succeeds but larger agent turns fail, reduce the tool surface with `localModelLean` or `compat.supportsTools: false`.
+- **Direct `/v1/chat/completions` calls work, but `openclaw infer model run --local` fails on Gemma or another local model?** Check the provider URL, model ref, auth marker, and server logs first - `model run` skips agent tools entirely. If `model run` succeeds but larger agent turns fail, check Tool Search and the allocated context. Use `compat.supportsTools: false` only for a model that cannot reliably call tools.
 - **Tool calls show up as raw JSON/XML/ReAct text, or the provider returns an empty `tool_calls` array?** Do not add a proxy that blindly converts assistant text into tool execution - fix the server's chat template/parser first. If the model only works when tool use is forced, add the `params.extra_body.tool_choice: "required"` override above and use that model entry only for sessions where a tool call is expected every turn.
 - **Safety**: local models skip provider-side filters. Keep agents narrow and compaction on to limit prompt-injection blast radius.
 

@@ -15,7 +15,9 @@ import {
   resolveGitHubToolIdentityStatus,
   resolveManagedGitHubProfileDir,
 } from "../../agents/github-tool-identity.js";
+import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { consumeGitHubSetupHandoff } from "../../secrets/store/secret-store.js";
+import { GitHubCliUnavailableError } from "../github-cli-preflight.js";
 import { updateGitHubToolIdentityConfig } from "../github-tool-identity-config.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -40,7 +42,8 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
     respond(
       true,
       await resolveGitHubToolIdentityStatus({
-        config: context.getRuntimeConfig(),
+        config: resolved.cfg,
+        sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? resolved.cfg,
         agentId: resolved.agentId,
         selectedScope: params.selectedScope,
       }),
@@ -174,11 +177,16 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
         true,
         await service.startAuthorization({ scope: params.scope, agentId: resolved.agentId }),
       );
-    } catch {
+    } catch (error) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "GitHub authorization could not start"),
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          error instanceof GitHubCliUnavailableError
+            ? error.message
+            : "GitHub authorization could not start",
+        ),
       );
     }
   },

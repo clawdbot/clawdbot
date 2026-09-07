@@ -10,12 +10,13 @@ import {
 import { sanitizeApprovalScope, type ApprovalScope } from "../../infra/approval-scope.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
+  exceedsApprovalTextLimit,
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalWarningText,
 } from "../../infra/exec-approval-text-sanitize.js";
+import { takeMcpToolApprovalBinding } from "../../infra/mcp-tool-approval-binding.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../../infra/plugin-approval-canonical-decisions.js";
 import type {
-  PluginApprovalRequest,
   PluginApprovalRequestPayload,
   PluginApprovalResolved,
 } from "../../infra/plugin-approvals.js";
@@ -28,30 +29,23 @@ import {
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
-import { runApprovalRequestDeliveries } from "./approval-request-delivery.js";
 import {
   bindApprovalRequesterMetadata,
   bindApprovalReviewerDeviceIds,
-  buildRequestedApprovalEvent,
   handleApprovalResolve,
   handleApprovalWaitDecision,
-  handlePendingApprovalRequest,
   listVisiblePendingApprovalRequests,
   registerPendingApprovalRecord,
   resolveApprovalDecisionParams,
 } from "./approval-shared.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import { handlePendingPluginApprovalRequest } from "./plugin-approval-request-delivery.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-type PluginApprovalIosPushDelivery = {
-  handleRequested?: (
-    request: PluginApprovalRequest,
-    opts?: {
-      isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
-    },
-  ) => Promise<boolean>;
+type PluginApprovalIosPushDelivery = NonNullable<
+  GatewayRequestContext["pluginApprovalIosPushDelivery"]
+> & {
   handleResolved?: (resolved: PluginApprovalResolved) => Promise<void>;
-  handleExpired?: (request: PluginApprovalRequest) => Promise<void>;
 };
 
 /** Create plugin approval handlers backed by the shared approval manager. */
@@ -92,6 +86,7 @@ export function createPluginApprovalHandlers(
         scope?: ApprovalScope | null;
         toolName?: string | null;
         toolCallId?: string | null;
+        mcpTool?: { server: string; tool: string };
         allowedDecisions?: string[] | null;
         agentId?: string | null;
         sessionKey?: string | null;
@@ -165,8 +160,8 @@ export function createPluginApprovalHandlers(
       const sanitizedTitle = sanitizeExecApprovalDisplayText(p.title);
       const sanitizedDescription = sanitizeExecApprovalWarningText(p.description);
       if (
-        Array.from(sanitizedTitle).length > PLUGIN_APPROVAL_TITLE_MAX_LENGTH ||
-        Array.from(sanitizedDescription).length > PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH
+        exceedsApprovalTextLimit(sanitizedTitle, PLUGIN_APPROVAL_TITLE_MAX_LENGTH) ||
+        exceedsApprovalTextLimit(sanitizedDescription, PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH)
       ) {
         respond(
           false,
@@ -198,6 +193,7 @@ export function createPluginApprovalHandlers(
         severity: (p.severity as PluginApprovalRequestPayload["severity"]) ?? null,
         toolName: sanitizeMeta(p.toolName),
         toolCallId: p.toolCallId ?? null,
+        ...(trustedAgentRuntime && p.mcpTool ? { mcpTool: { ...p.mcpTool } } : {}),
         ...(Array.isArray(p.allowedDecisions)
           ? {
               allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions({
@@ -229,6 +225,14 @@ export function createPluginApprovalHandlers(
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
       if (trustedAgentRuntime) {
         record.agentRuntimeDelegatedAuthority = trustedAgentRuntime.delegatedAuthority;
+        if (request.mcpTool && request.toolCallId) {
+          record.mcpToolApprovalActive = takeMcpToolApprovalBinding({
+            authority: trustedAgentRuntime.delegatedAuthority,
+            agentId: trustedAgentRuntime.agentId,
+            toolCallId: request.toolCallId,
+            ...request.mcpTool,
+          });
+        }
       }
       if (
         trustedAgentRuntime?.executionIdentity &&
@@ -255,41 +259,16 @@ export function createPluginApprovalHandlers(
         return;
       }
 
-      const requestEvent = buildRequestedApprovalEvent(record, "plugin");
-      const forwardRequest = opts?.forwarder?.handlePluginApprovalRequested?.bind(opts.forwarder);
-      const iosPushRequest = opts?.iosPushDelivery?.handleRequested?.bind(opts.iosPushDelivery);
-
-      await handlePendingApprovalRequest({
+      await handlePendingPluginApprovalRequest({
         manager,
         record,
-        decisionPromise,
         respond,
         context,
         clientConnId: client?.connId,
-        requestEventName: "plugin.approval.requested",
-        requestEvent,
         twoPhase,
-        approvalKind: "plugin",
-        deliverRequest: () =>
-          runApprovalRequestDeliveries({
-            context,
-            record,
-            forward: forwardRequest
-              ? [() => forwardRequest(requestEvent), "plugin approvals: forward request failed"]
-              : undefined,
-            iosPush: iosPushRequest
-              ? [
-                  (isTargetVisible) => iosPushRequest(requestEvent, { isTargetVisible }),
-                  "plugin approvals: iOS push request failed",
-                ]
-              : undefined,
-          }),
-        afterDecision: async (decision) => {
-          if (decision === null) {
-            await opts?.iosPushDelivery?.handleExpired?.(requestEvent);
-          }
-        },
-        afterDecisionErrorLabel: "plugin approvals: iOS push expire failed",
+        forwardRequest: opts?.forwarder?.handlePluginApprovalRequested?.bind(opts.forwarder),
+        getIosPushDelivery: () => opts?.iosPushDelivery,
+        source: "rpc",
       });
     },
 

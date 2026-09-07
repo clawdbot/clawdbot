@@ -106,9 +106,11 @@ export function renderChannelFacts(rows: readonly ChannelStatusRow[]) {
         (row) => html`
           <dt>${row.label}</dt>
           <dd>
-            ${row.kind !== undefined
-              ? renderSettingsStatus({ kind: row.kind, label: row.value })
-              : row.value}
+            ${
+              row.kind !== undefined
+                ? renderSettingsStatus({ kind: row.kind, label: row.value })
+                : row.value
+            }
           </dd>
         `,
       )}
@@ -199,16 +201,20 @@ export function renderChannelAccountRow(params: {
       <div class="settings-row__text">
         <span class="settings-row__title">${params.title}</span>
         <span class="settings-row__desc">${factLine}</span>
-        ${params.lastError
-          ? html`<span class="settings-row__desc">${formatUiExternalText(params.lastError)}</span>`
-          : nothing}
+        ${
+          params.lastError
+            ? html`<span class="settings-row__desc"
+                >${formatUiExternalText(params.lastError)}</span
+              >`
+            : nothing
+        }
       </div>
       <div class="settings-row__control">
         ${renderSettingsStatus(params.status)}
         <span class="settings-row__value"
-          >${params.lastInboundAt
-            ? formatRelativeTimestamp(params.lastInboundAt)
-            : t("common.na")}</span
+          >${
+            params.lastInboundAt ? formatRelativeTimestamp(params.lastInboundAt) : t("common.na")
+          }</span
         >
       </div>
     </div>

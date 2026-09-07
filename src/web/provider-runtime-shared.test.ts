@@ -1,10 +1,9 @@
-// Web provider runtime tests cover shared config, credential, and definition resolution.
+// Web provider runtime tests cover shared config and credential resolution.
 import { describe, expect, it } from "vitest";
 import {
   hasWebProviderEntryCredential,
   readWebProviderEnvValue,
   resolveWebProviderConfig,
-  resolveWebProviderDefinition,
 } from "./provider-runtime-shared.js";
 
 describe("resolveWebProviderConfig", () => {
@@ -147,34 +146,5 @@ describe("hasWebProviderEntryCredential", () => {
         resolveProviderAuthValue: (providerId) => providerId === "custom-auth",
       }),
     ).toBe(true);
-  });
-});
-
-describe("resolveWebProviderDefinition", () => {
-  it("falls back to auto-detect when runtime metadata has no selected provider", () => {
-    const resolved = resolveWebProviderDefinition({
-      config: {},
-      toolConfig: { enabled: true },
-      runtimeMetadata: {},
-      providers: [
-        {
-          id: "custom",
-        },
-      ],
-      resolveEnabled: () => true,
-      resolveAutoProviderId: () => "custom",
-      createTool: ({ provider }) => ({
-        name: provider.id,
-      }),
-    });
-
-    expect(resolved).toEqual({
-      provider: {
-        id: "custom",
-      },
-      definition: {
-        name: "custom",
-      },
-    });
   });
 });

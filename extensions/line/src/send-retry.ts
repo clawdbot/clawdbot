@@ -1,10 +1,12 @@
 // Line plugin module implements push retry policy behavior.
 import { HTTPFetchError } from "@line/bot-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   classifyTransientNetworkErrorCode,
   createChannelApiRetryRunner,
 } from "openclaw/plugin-sdk/retry-runtime";
+import { readLineAccountMessageQuota } from "./probe.js";
 
 /** The LINE HTTP response carried by an error graph, when the request reached LINE. */
 export function findLineHttpError(error: unknown): HTTPFetchError | undefined {
@@ -98,3 +100,24 @@ export const runLinePushWithRetries: typeof runLinePushAttempts = (fn, label) =>
     throw error;
   });
 };
+
+export async function explainLineRefusal(params: {
+  error: unknown;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): Promise<{ retryable: boolean | undefined; reason: string }> {
+  const retryable = resolveLineNonDispatchRetryable(params.error);
+  const quota =
+    retryable === true && findLineHttpError(params.error)?.status === 429
+      ? await readLineAccountMessageQuota(params)
+      : undefined;
+  const exhausted = quota?.kind === "limited" && quota.used >= quota.limit;
+  return {
+    retryable: exhausted ? false : retryable,
+    reason: exhausted
+      ? `LINE refused the push: ${quota.used}/${quota.limit} monthly messages used. Check the account allowance or plan before retrying.`
+      : params.error instanceof Error
+        ? params.error.message
+        : "LINE rejected the message",
+  };
+}

@@ -5,7 +5,7 @@
  * descriptions that match runtime validation.
  */
 import { Type } from "typebox";
-import { optionalStringEnum } from "./schema/typebox.js";
+import { executionTitleSchema, optionalStringEnum } from "./schema/typebox.js";
 
 const EXEC_TOOL_HOST_VALUES = ["auto", "sandbox", "gateway", "node"] as const;
 const PROCESS_TOOL_ACTIONS = [
@@ -23,6 +23,7 @@ const PROCESS_TOOL_ACTIONS = [
 
 /** Parameters accepted by the exec tool. */
 export const execSchema = Type.Object({
+  title: executionTitleSchema(),
   command: Type.String({ description: "Shell command." }),
   workdir: Type.Optional(
     Type.String({
@@ -31,7 +32,7 @@ export const execSchema = Type.Object({
   ),
   env: Type.Optional(
     Type.Record(Type.String(), Type.String(), {
-      description: "Env overrides. Literal values; no expansion. Omit to inherit.",
+      description: "Literal overrides; no expansion. Omit to inherit.",
     }),
   ),
   yieldMs: Type.Optional(
@@ -39,20 +40,24 @@ export const execSchema = Type.Object({
       description: "Milliseconds before backgrounding; default 10000.",
     }),
   ),
-  background: Type.Optional(Type.Boolean({ description: "Background now." })),
+  background: Type.Optional(
+    Type.Boolean({
+      description: "Background now; timeoutSeconds applies.",
+    }),
+  ),
   timeoutSeconds: Type.Optional(
     Type.Number({
-      description: "Timeout in seconds.",
+      description: "Process lifetime in seconds; 0 disables.",
     }),
   ),
   pty: Type.Optional(
     Type.Boolean({
-      description: "Use PTY for TTY-required CLIs and coding agents.",
+      description: "PTY for TTY-required CLIs/coding agents.",
     }),
   ),
   elevated: Type.Optional(
     Type.Boolean({
-      description: "Run on host with elevated permissions if allowed.",
+      description: "Host elevation if allowed.",
     }),
   ),
   host: optionalStringEnum(EXEC_TOOL_HOST_VALUES, {
@@ -76,6 +81,7 @@ export const execCompletionSchema = Type.Omit(execSchema, ["yieldMs", "backgroun
 
 /** Parameters exposed by node-only exec surfaces. */
 export const nodeExecSchema = Type.Object({
+  title: execSchema.properties.title,
   command: execSchema.properties.command,
   workdir: execSchema.properties.workdir,
   env: execSchema.properties.env,

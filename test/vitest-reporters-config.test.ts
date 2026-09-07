@@ -1,8 +1,5 @@
-import fs from "node:fs";
-import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.js";
-import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest/vitest.timeouts.ts";
 
 const reporterConfigs = [
@@ -25,38 +22,34 @@ type ReporterResolution = {
 };
 
 describe("Vitest reporter contracts", () => {
-  const dirs = useAutoCleanupTempDirTracker(afterEach);
   it.each(["false", "true"])(
     "reports completed agent tests and preserves overrides with GITHUB_ACTIONS=%s",
     (githubActions) => {
-      // Vite's bundled loader writes beside the config's nearest node_modules.
-      // Own that lifetime instead of writing into the installed dependency tree.
-      const configRoot = dirs.make("oc-reporter-config-");
-      fs.mkdirSync(path.join(configRoot, "node_modules"));
-      const configFiles = reporterConfigs.map((config, index) => {
-        const file = path.join(configRoot, `${index}.mts`);
-        fs.writeFileSync(
-          file,
-          `export { default } from ${JSON.stringify(path.resolve(config))};\n`,
-        );
-        return file;
-      });
-      // Resolve in a fresh process: shared config and std-env capture their environment on import.
-      // This starts no test workers and leaves the enclosing Vitest module/cache ownership alone.
+      // Resolve imported configs in a fresh process: shared config and std-env
+      // capture their environment on import.
       const result = spawnNodeEvalSync(
         `
           import path from "node:path";
+          import { pathToFileURL } from "node:url";
           import { parseCLI, resolveConfig } from "vitest/node";
           import { sharedVitestConfig } from "./test/vitest/vitest.shared.config.ts";
           import { createTuiPtyVitestConfig } from "./test/vitest/vitest.tui-pty.config.ts";
           const defaults = [];
-          for (const [index, config] of ${JSON.stringify(reporterConfigs)}.entries()) {
+          for (const config of ${JSON.stringify(reporterConfigs)}) {
             const root = config.startsWith("ui/") ? path.resolve("ui") : process.cwd();
-            const options = { root, config: ${JSON.stringify(configFiles)}[index] };
-            const normal = await resolveConfig(options);
+            const imported = (await import(pathToFileURL(path.resolve(config)).href)).default;
+            const options = { root, config: false };
+            const normal = await resolveConfig(options, imported);
             const cli = parseCLI(["vitest", "--reporter=json"]).options;
-            const override = await resolveConfig({ ...cli, ...options });
-            defaults.push({ config, reporters: normal.vitestConfig.reporters, cli: override.vitestConfig.reporters });
+            let cliConfig = imported;
+            if (config === "vitest.config.ts") {
+              // The default resolution validates the full matrix in both environments.
+              // Reporter CLI overrides do not propagate to child projects.
+              cliConfig = { ...imported, test: { ...imported.test } };
+              delete cliConfig.test.projects;
+            }
+            const override = await resolveConfig({ ...cli, ...options }, cliConfig);
+            defaults.push({ config, reporters: normal.test.reporters, cli: override.test.reporters });
           }
           const customConfig = {
             ...sharedVitestConfig,
@@ -75,9 +68,9 @@ describe("Vitest reporter contracts", () => {
           }));
           console.log("REPORTER_RESOLUTION " + JSON.stringify({
             defaults,
-            custom: custom.vitestConfig.reporters,
-            customCli: customCli.vitestConfig.reporters,
-            injectedPty: injectedPty.vitestConfig.reporters,
+            custom: custom.test.reporters,
+            customCli: customCli.test.reporters,
+            injectedPty: injectedPty.test.reporters,
           }));
         `,
         {
@@ -101,7 +94,13 @@ describe("Vitest reporter contracts", () => {
         expect(
           reporters.map(([name]) => name),
           config,
-        ).toEqual(expected);
+        ).toEqual(
+          ["test/vitest/vitest.ui-e2e.config.ts", "test/vitest/vitest.e2e.config.ts"].includes(
+            config,
+          )
+            ? [...expected, "default"]
+            : expected,
+        );
         expect(cli, `${config} CLI override`).toEqual([["json", {}]]);
       }
       expect(resolved.defaults).toHaveLength(reporterConfigs.length);

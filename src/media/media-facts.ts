@@ -282,7 +282,7 @@ export function readRuntimePromptImageOrder(message: object): PromptImageOrderEn
 }
 
 /** Returns whether a declared MIME only describes otherwise unclassified binary bytes. */
-export function isGenericBinaryMediaContentType(contentType?: string | null): boolean {
+function isGenericBinaryMediaContentType(contentType?: string | null): boolean {
   const normalizedContentType = normalizeMimeType(contentType);
   return (
     normalizedContentType === "application/octet-stream" ||

@@ -1,25 +1,36 @@
-// Code span tests cover CommonMark block ownership and streamed lookup behavior.
 import { describe, expect, it } from "vitest";
+import { buildCodeSpanIndex } from "./code-spans.js";
 import { findMarkdownCodeSpans } from "./reasoning-tags.js";
+
+describe("buildCodeSpanIndex", () => {
+  it("supports backward queries over inline code that encloses a fence", () => {
+    const text = "`open\n~~~\ninside\n~~~\nafter` tail";
+    const index = buildCodeSpanIndex(text);
+
+    expect(
+      [text.length, text.indexOf("after"), text.indexOf("~~~"), 0, text.indexOf("tail")].map(
+        index.isInside,
+      ),
+    ).toEqual([false, true, true, true, false]);
+  });
+
+  it("includes opening delimiters and excludes ends in either query direction", () => {
+    const text = "~~~\nfenced\n~~~\n`inline` tail";
+    const index = buildCodeSpanIndex(text);
+
+    expect(
+      [text.lastIndexOf("`") + 1, 0, text.indexOf("`"), text.lastIndexOf("~~~") + 3, 0].map(
+        index.isInside,
+      ),
+    ).toEqual([false, true, true, false, true]);
+  });
+});
 
 describe("markdown-core code spans", () => {
   function expectCodeRegionSlices(text: string, expectedSlices: readonly string[]) {
     const regions = findMarkdownCodeSpans(text);
     expect(regions).toHaveLength(expectedSlices.length);
     expect(regions.map(([start, end]) => text.slice(start, end))).toEqual(expectedSlices);
-  }
-
-  function expectInsideCodeCase(params: {
-    positionSelector: (text: string, regionEnd: number) => number;
-    expected: boolean;
-  }) {
-    const text = "plain `code` done";
-    const regions = findMarkdownCodeSpans(text);
-    const regionEnd = regions[0]?.[1] ?? -1;
-    const position = params.positionSelector(text, regionEnd);
-    expect(regions.some(([start, end]) => position >= start && position < end)).toBe(
-      params.expected,
-    );
   }
 
   it.each([
@@ -122,26 +133,6 @@ describe("markdown-core code spans", () => {
     },
   ] as const)("follows CommonMark block ownership: $name", ({ text, expectedSlices }) => {
     expectCodeRegionSlices(text, expectedSlices);
-  });
-
-  it.each([
-    {
-      name: "inside code",
-      positionSelector: (text: string) => text.indexOf("code"),
-      expected: true,
-    },
-    {
-      name: "outside code",
-      positionSelector: (text: string) => text.indexOf("plain"),
-      expected: false,
-    },
-    {
-      name: "at region end",
-      positionSelector: (_text: string, regionEnd: number) => regionEnd,
-      expected: false,
-    },
-  ] as const)("reports whether positions are inside discovered regions: $name", (testCase) => {
-    expectInsideCodeCase(testCase);
   });
 
   it("walks deeply nested Markdown without exhausting the JavaScript stack", () => {

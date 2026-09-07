@@ -538,6 +538,7 @@ describe("pushServerUiPrefs", () => {
 
   it("retains rejected appearance edits as device-local state with local-only reset", async () => {
     const scope = "ws://gw";
+    patchSettings({ gatewayUrl: scope });
     const config = configWithPrefs({
       theme: "claw",
       locale: "de",

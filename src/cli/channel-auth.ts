@@ -9,6 +9,7 @@ import {
   normalizeChannelId,
 } from "../channels/plugins/index.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
+import { assertAccountSelectorForMutation } from "../commands/channels/account-selector.js";
 import { requireValidConfigFileSnapshot } from "../commands/config-validation.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
@@ -24,6 +25,7 @@ import { formatCliCommand } from "./command-format.js";
 import { formatUnsupportedChannelActionMessage } from "./error-format.js";
 
 type ChannelAuthOptions = {
+  agent?: string;
   channel?: string;
   account?: string;
   verbose?: boolean;
@@ -102,6 +104,7 @@ async function resolveChannelPluginForMode(
   channelId: string;
   plugin: ChannelPlugin;
 } | null> {
+  assertAccountSelectorForMutation(opts.account);
   const snapshot = await requireValidConfigFileSnapshot(runtime);
   if (!snapshot) {
     return null;
@@ -116,6 +119,7 @@ async function resolveChannelPluginForMode(
   const resolved = await resolveInstallableChannelPlugin({
     cfg,
     runtime,
+    agentId: opts.agent,
     rawChannel: channelInput,
     ...(normalizedChannelId ? { channelId: normalizedChannelId } : {}),
     allowInstall: true,

@@ -1,25 +1,32 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { setManagedCodexPluginRoot } from "./managed-binary.js";
 import { createIsolatedCodexAppServerClient } from "./shared-client.js";
 import {
-  createAppServerOptions,
   createParams,
   resetThreadLifecycleTestFixtures,
   startOrResumeThread,
 } from "./thread-lifecycle.test-fixtures.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 const LIVE =
   process.env.OPENCLAW_LIVE_TEST === "1" && process.env.OPENCLAW_LIVE_CODEX_RESTRICTED_MCP === "1";
 const describeLive = LIVE ? describe : describe.skip;
 
-afterEach(() => {
-  resetThreadLifecycleTestFixtures();
-});
-
 describeLive("Codex restricted MCP real-binary lifecycle", () => {
+  beforeEach(() => {
+    setManagedCodexPluginRoot(fileURLToPath(new URL("../../", import.meta.url)));
+  });
+
+  afterEach(() => {
+    resetThreadLifecycleTestFixtures();
+    setManagedCodexPluginRoot(undefined);
+  });
+
   it("starts with inherited MCP disabled and exposes no tools", async () => {
     await withTempDir("openclaw-codex-restricted-mcp-", async (root) => {
       const agentDir = path.join(root, "agent");
@@ -37,9 +44,18 @@ describeLive("Codex restricted MCP real-binary lifecycle", () => {
       });
       const request = vi.spyOn(client, "request");
       try {
+        expect(client.getServerVersion()).toBe(CODEX_APP_SERVER_VERSION);
         const signal = AbortSignal.timeout(60_000);
         const params = createParams(path.join(root, "session.jsonl"), workspace);
         params.toolsAllow = ["openclaw"];
+        params.provider = "openai";
+        params.modelId = "gpt-5.6-luna";
+        params.model = {
+          ...params.model,
+          id: params.modelId,
+          name: params.modelId,
+          provider: params.provider,
+        };
         const binding = await startOrResumeThread({
           client,
           params,
@@ -56,7 +72,7 @@ describeLive("Codex restricted MCP real-binary lifecycle", () => {
               },
             },
           },
-          appServer: { ...createAppServerOptions(), start: runtime.start },
+          appServer: runtime,
           nativeCodeModeEnabled: false,
           userMcpServersEnabled: false,
           hostSystemAgentActive: true,

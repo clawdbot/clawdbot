@@ -33,7 +33,7 @@ if (
 const { isSupportedOpenClawNodeVersion } = await import("./node-version.mjs");
 
 const RECOMMENDED_NODE_MAJOR = 26;
-const SUPPORTED_NODE_RANGE = ">=22.22.3 <23, >=24.15.0 <25, or >=25.9.0";
+const SUPPORTED_NODE_RANGE = ">=24.16.0 <25, or >=26.1.0";
 const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
 
 const ensureSupportedRuntimeVersion = () => {
@@ -277,7 +277,8 @@ const respawnWithPackagedCompileCacheIfNeeded = () => {
   };
   return runRespawnedChild(
     process.execPath,
-    [...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)],
+    // pnpm's lexical hash link owns the install; its realpath is only shared package content.
+    [...process.execArgv, process.argv[1], ...process.argv.slice(2)],
     env,
   );
 };

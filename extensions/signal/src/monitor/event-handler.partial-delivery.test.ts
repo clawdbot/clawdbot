@@ -2,12 +2,15 @@
 import { buildExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import {
   createTestRegistry,
+  readQueuedDeliveryEntriesForTest,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -18,13 +21,20 @@ import { signalPlugin } from "../channel.js";
 import { maybeResolveSignalQuestionReaction } from "../question-reactions.js";
 import type { SignalIngressLifecycle } from "../signal-ingress.js";
 
-const { getReplyFromConfigMock, resolveQuestionReactionMock, sendMessageSignalMock } = vi.hoisted(
-  () => ({
-    getReplyFromConfigMock: vi.fn(),
-    resolveQuestionReactionMock: vi.fn(),
-    sendMessageSignalMock: vi.fn(),
-  }),
-);
+const {
+  getReplyFromConfigMock,
+  registerQuestionDeliveryMock,
+  resolveQuestionReactionMock,
+  sendMessageSignalMock,
+} = vi.hoisted(() => ({
+  getReplyFromConfigMock: vi.fn(),
+  registerQuestionDeliveryMock:
+    vi.fn<
+      typeof import("openclaw/plugin-sdk/question-gateway-runtime").questionGatewayRuntime.registerChannelDelivery
+    >(),
+  resolveQuestionReactionMock: vi.fn(),
+  sendMessageSignalMock: vi.fn(),
+}));
 
 vi.mock("openclaw/plugin-sdk/question-gateway-runtime", async (importOriginal) => {
   const actual =
@@ -33,6 +43,8 @@ vi.mock("openclaw/plugin-sdk/question-gateway-runtime", async (importOriginal) =
     ...actual,
     questionGatewayRuntime: {
       ...actual.questionGatewayRuntime,
+      // The fixture supplies a pending host question alongside its answer endpoint.
+      registerChannelDelivery: registerQuestionDeliveryMock,
       resolveReaction: resolveQuestionReactionMock,
     },
   };
@@ -104,6 +116,7 @@ describe("Signal partial final delivery ingress boundary", () => {
     );
     clearSignalApprovalReactionTargetsForTest();
     getReplyFromConfigMock.mockReset();
+    registerQuestionDeliveryMock.mockReset();
     resolveQuestionReactionMock.mockReset().mockResolvedValue({
       status: "answered",
       questionId: "ask-partial",
@@ -288,6 +301,11 @@ describe("Signal partial final delivery ingress boundary", () => {
 
     expect(sendMessageSignalMock).toHaveBeenCalledOnce();
     expect(await queue.listPending({ limit: "all" })).toEqual([]);
+    expect(registerQuestionDeliveryMock).toHaveBeenCalledExactlyOnceWith({
+      questionId,
+      deliveryId: "signal-reaction:default:+15550001111:1700000006000",
+      finalize: expect.any(Function),
+    });
     await expect(
       maybeResolveSignalQuestionReaction({
         cfg,
@@ -318,7 +336,105 @@ describe("Signal partial final delivery ingress boundary", () => {
     }
   });
 
-  it("retries only a proven pre-dispatch failure after a fresh monitor restart", async () => {
+  it.each([false, true])(
+    "recovers an unsent final without replaying ingress (successful block: %s)",
+    async (sendBlock) => {
+      const timestamp = sendBlock ? 1_700_000_005_005 : 1_700_000_005_004;
+      const cfg = {
+        session: { store: state.statePath("sessions") },
+        channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+      } as OpenClawConfig;
+      getReplyFromConfigMock.mockImplementation(async (_ctx, options: GetReplyOptions) => {
+        if (sendBlock) {
+          await options.onBlockReply?.({ text: "Delivered block" });
+        }
+        return { text: "Distinct final" };
+      });
+      if (sendBlock) {
+        sendMessageSignalMock.mockResolvedValueOnce({ messageId: "1700000006002" });
+      }
+      sendMessageSignalMock.mockRejectedValueOnce(
+        new PlatformMessageNotDispatchedError("Signal offline before final dispatch", {
+          cause: new Error("offline"),
+        }),
+      );
+      const handler = eventHandlerModule.createSignalEventHandler(
+        harnessModule.createBaseSignalEventHandlerDeps({
+          cfg,
+          blockStreaming: true,
+          deliverReplies: async (params) =>
+            await deliverReplies({ ...params, cfg, chunkMode: "length" }),
+        }),
+      );
+      const createMonitor = async () =>
+        await startSignalIngressMonitor({
+          accountId: "default",
+          queue: queue as Parameters<typeof startSignalIngressMonitor>[0]["queue"],
+          dispatch: async (event, lifecycle) => await handler(event, lifecycle),
+          runtime: { error: vi.fn(), log: vi.fn() },
+        });
+      const event = harnessModule.createSignalReceiveEvent({
+        timestamp,
+        dataMessage: { timestamp, message: "send a block and a final", attachments: [] },
+      });
+      const monitor = await createMonitor();
+      const initialTexts = [...(sendBlock ? ["Delivered block"] : []), "Distinct final"];
+      try {
+        await monitor.receive(event);
+        await monitor.waitForIdle();
+        expect(sendMessageSignalMock.mock.calls.map(([, text]) => text)).toEqual(initialTexts);
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        expect(readQueuedDeliveryEntriesForTest(state.stateDir)).toMatchObject([
+          {
+            channel: "signal",
+            preparedBatch: {
+              sourcePayloadCount: 1,
+              entries: [{ status: "accepted", payload: { text: "Distinct final" } }],
+            },
+            lastError: expect.stringContaining("Signal offline before final dispatch"),
+          },
+        ]);
+      } finally {
+        await monitor.stop();
+      }
+
+      const restarted = await createMonitor();
+      try {
+        await restarted.receive(event);
+        await restarted.waitForIdle();
+        expect(getReplyFromConfigMock).toHaveBeenCalledOnce();
+        expect(sendMessageSignalMock).toHaveBeenCalledTimes(initialTexts.length);
+        expect(readQueuedDeliveryEntriesForTest(state.stateDir)).toHaveLength(1);
+        sendMessageSignalMock.mockResolvedValueOnce({ messageId: "1700000006003" });
+        const drain = async () =>
+          await drainPendingDeliveries({
+            cfg,
+            stateDir: state.stateDir,
+            drainKey: "signal:test-recovery",
+            logLabel: "Signal recovery",
+            log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+            selectEntry: (entry) => ({ match: entry.channel === "signal", bypassBackoff: true }),
+          });
+        await drain();
+        expect(sendMessageSignalMock.mock.calls.map(([, text]) => text)).toEqual([
+          ...initialTexts,
+          "Distinct final",
+        ]);
+        expect(readQueuedDeliveryEntriesForTest(state.stateDir)).toEqual([]);
+
+        await drain();
+        await restarted.receive(event);
+        await restarted.waitForIdle();
+        expect(getReplyFromConfigMock).toHaveBeenCalledOnce();
+        expect(sendMessageSignalMock).toHaveBeenCalledTimes(initialTexts.length + 1);
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+      } finally {
+        await restarted.stop();
+      }
+    },
+  );
+
+  it("retries an unqueued final after a fresh monitor restart when durable text is unsupported", async () => {
     const timestamp = 1_700_000_005_003;
     const error = new PlatformMessageNotDispatchedError("Signal offline before dispatch", {
       cause: new Error("offline"),
@@ -329,9 +445,28 @@ describe("Signal partial final delivery ingress boundary", () => {
       session: { store: state.statePath("sessions") },
       channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
     } as OpenClawConfig;
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "signal",
+          plugin: {
+            ...signalPlugin,
+            message: {
+              ...signalPlugin.message!,
+              durableFinal: { capabilities: { text: false } },
+            },
+          },
+          source: "test-direct-delivery",
+        },
+      ]),
+    );
     const createMonitor = async () => {
       const handler = eventHandlerModule.createSignalEventHandler(
-        harnessModule.createBaseSignalEventHandlerDeps({ cfg }),
+        harnessModule.createBaseSignalEventHandlerDeps({
+          cfg,
+          deliverReplies: async (params) =>
+            await deliverReplies({ ...params, cfg, chunkMode: "length" }),
+        }),
       );
       return await startSignalIngressMonitor({
         accountId: "default",
@@ -349,7 +484,9 @@ describe("Signal partial final delivery ingress boundary", () => {
     await first.receive(event);
     await first.waitForIdle();
     await first.stop();
+    expect(sendMessageSignalMock.mock.calls.map(([, text]) => text)).toEqual(["retry me"]);
     expect(sendMessageSignalMock).toHaveBeenCalledOnce();
+    expect(readQueuedDeliveryEntriesForTest(state.stateDir)).toEqual([]);
     const [pending] = await queue.listPending({ limit: "all" });
     expect(pending).toMatchObject({
       attempts: 1,
@@ -385,11 +522,25 @@ describe("Signal partial final delivery ingress boundary", () => {
     freshReplyRuntime.resetInboundDedupe();
     freshPluginRuntime.setActivePluginRegistry(
       freshPluginRuntime.createTestRegistry([
-        { pluginId: "signal", plugin: freshChannel.signalPlugin, source: "test-restart" },
+        {
+          pluginId: "signal",
+          plugin: {
+            ...freshChannel.signalPlugin,
+            message: {
+              ...freshChannel.signalPlugin.message!,
+              durableFinal: { capabilities: { text: false } },
+            },
+          },
+          source: "test-restart",
+        },
       ]),
     );
     const retryHandler = freshHandlerModule.createSignalEventHandler(
-      freshHarness.createBaseSignalEventHandlerDeps({ cfg }),
+      freshHarness.createBaseSignalEventHandlerDeps({
+        cfg,
+        deliverReplies: async (params) =>
+          await deliverReplies({ ...params, cfg, chunkMode: "length" }),
+      }),
     );
     const retryMonitor = await freshIngress.startSignalIngressMonitor({
       accountId: "default",
@@ -402,6 +553,12 @@ describe("Signal partial final delivery ingress boundary", () => {
       await retryMonitor.receive(event);
       await retryMonitor.waitForIdle();
       expect(sendMessageSignalMock).toHaveBeenCalledTimes(2);
+      expect(getReplyFromConfigMock).toHaveBeenCalledTimes(2);
+      expect(sendMessageSignalMock.mock.calls.map(([, text]) => text)).toEqual([
+        "retry me",
+        "retry me",
+      ]);
+      expect(readQueuedDeliveryEntriesForTest(state.stateDir)).toEqual([]);
       expect(await queue.listPending({ limit: "all" })).toEqual([]);
       expect(
         await queue.enqueue(pending.id, pending.payload, {

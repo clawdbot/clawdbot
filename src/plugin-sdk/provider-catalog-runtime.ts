@@ -7,5 +7,5 @@ export {
 } from "../plugins/providers.js";
 export {
   isPluginProvidersLoadInFlight,
-  resolvePluginProvidersCore,
+  resolvePluginProvidersCore as resolvePluginProviders,
 } from "../plugins/providers.runtime.js";

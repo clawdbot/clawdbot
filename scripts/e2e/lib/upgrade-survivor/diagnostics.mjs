@@ -245,6 +245,69 @@ export function readPostCoreSnapshot(artifactRoot) {
   return { childExitCode: snapshot.childExitCode, result: postCoreResult(snapshot.result) };
 }
 
+function armUpgradeProcessCapture() {
+  const command = process.argv[2];
+  const artifactRoot = process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT;
+  if (!isMainThread || !artifactRoot || !["update", "doctor"].includes(command)) {
+    return;
+  }
+  try {
+    let directory = path.dirname(fs.realpathSync(process.argv[1]));
+    let version;
+    // CLI entrypoints live at the package root or in dist. Do not resolve the
+    // version again at exit: an old updater can have replaced its own files.
+    for (let depth = 0; depth < 3; depth++) {
+      try {
+        const raw = readOwned(directory, "package.json", "process identity");
+        const manifest = JSON.parse(raw);
+        if (manifest?.name === "openclaw") {
+          version = manifest.version;
+          break;
+        }
+      } catch {}
+      directory = path.dirname(directory);
+    }
+    if (
+      typeof version !== "string" ||
+      !/^\d{4}\.\d{1,2}\.\d{1,3}(?:-(?:\d+|(?:alpha|beta)\.\d+))?$/.test(version)
+    ) {
+      return;
+    }
+    const identity = {
+      role:
+        command === "update" && process.env.OPENCLAW_UPDATE_POST_CORE === "1"
+          ? "post-core"
+          : command,
+      packageVersion: version,
+      pid: process.pid,
+      parentPid: process.ppid,
+    };
+    const destination = path.join(artifactRoot, "diagnostics");
+    writeReport(
+      artifactRoot,
+      destination,
+      `process-${process.pid}-started.json`,
+      { ...identity, event: "started" },
+      1024,
+    );
+    process.once("exit", (exitCode) => {
+      try {
+        writeReport(
+          artifactRoot,
+          destination,
+          `process-${process.pid}-exited.json`,
+          { ...identity, event: "exited", exitCode },
+          1024,
+        );
+      } catch {
+        // Missing exit evidence stays unknown; never alter the observed process.
+      }
+    });
+  } catch {
+    // No argv, environment values, paths, or candidate-provided error text.
+  }
+}
+
 function armPostCoreCapture() {
   if (
     !isMainThread ||
@@ -811,5 +874,6 @@ if (import.meta.main) {
     process.exitCode = 1;
   }
 } else {
+  armUpgradeProcessCapture();
   armPostCoreCapture();
 }

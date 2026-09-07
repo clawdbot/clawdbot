@@ -7,6 +7,8 @@ export const SessionsListParamsSchema = closedObject({
   limit: Type.Optional(Type.Integer({ minimum: 1 })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
   activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
+  /** Select sessions with current direct running or queued work before pagination. */
+  activeOnly: Type.Optional(Type.Boolean()),
   /** Require a real user/channel interaction; excludes synthetic isolated heartbeat rows. */
   requireLastInteraction: Type.Optional(Type.Boolean()),
   sortBy: Type.Optional(Type.Union([Type.Literal("updatedAt"), Type.Literal("lastInteractionAt")])),
@@ -27,6 +29,8 @@ export const SessionsListParamsSchema = closedObject({
   label: Type.Optional(SessionLabelString),
   /** Limit rows to sessions with an explicitly stored Control UI face preference. */
   boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
+  /** Limit rows by whether a persisted session dashboard exists. */
+  hasBoard: Type.Optional(Type.Boolean()),
   /** Filter rows by their immutable creator provenance. */
   creatorId: Type.Optional(NonEmptyString),
   /** Filter rows by their current assignable owner identity. */

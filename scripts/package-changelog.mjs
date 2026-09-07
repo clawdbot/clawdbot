@@ -40,18 +40,12 @@ function splitLines(content) {
   return content.replace(/^\uFEFF/u, "").split(/\r?\n/u);
 }
 
-function parseLevelTwoHeading(line) {
-  const releaseMatch = RELEASE_HEADING_PATTERN.exec(line);
-  if (releaseMatch) {
-    return releaseMatch[1];
-  }
-  return /^##\s+Unreleased(?:\s+.*)?$/u.test(line) ? UNRELEASED_HEADING : null;
-}
-
 function findLevelTwoHeadings(lines) {
   return lines.flatMap((line, index) => {
-    const version = parseLevelTwoHeading(line);
-    return version ? [{ index, version }] : [];
+    const version =
+      RELEASE_HEADING_PATTERN.exec(line)?.[1] ??
+      (/^##\s+Unreleased(?:\s+.*)?$/u.test(line) ? UNRELEASED_HEADING : null);
+    return version ? [{ index, version, unreleased: /\s+\(Unreleased\)$/u.test(line) }] : [];
   });
 }
 
@@ -76,8 +70,14 @@ export function extractCurrentPackageChangelog(content, packageVersion, options 
   const targetVersions = resolvePackageChangelogVersions(packageVersion, options);
   const lines = splitLines(content);
   const headings = findLevelTwoHeadings(lines);
+  // Keep numbered drafts exact-matchable; their marker only widens the allowed draft fallback.
   const heading = targetVersions
-    .map((version) => headings.find((entry) => entry.version === version))
+    .map((version) =>
+      headings.find(
+        (entry) =>
+          entry.version === version || (version === UNRELEASED_HEADING && entry.unreleased),
+      ),
+    )
     .find((entry) => entry !== undefined);
   if (!heading) {
     throw new Error(

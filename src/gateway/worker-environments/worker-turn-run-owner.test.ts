@@ -25,6 +25,7 @@ import {
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { createWorkerLiveEventReceiver } from "./live-events.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
+import { getWorkerTurnExecutionIdentityCapability } from "./placement-turn-claim-events.js";
 import {
   ENVIRONMENT_ID,
   OWNER_EPOCH,
@@ -126,6 +127,10 @@ describe("cloud worker run ownership", () => {
       if (!turnClaim) {
         throw new Error("expected admitted worker turn");
       }
+      const turnCapability = getWorkerTurnExecutionIdentityCapability(placements, turnClaim);
+      if (!turnCapability) {
+        throw new Error("expected worker turn capability");
+      }
       const identity: WorkerConnectionIdentity = {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
@@ -201,6 +206,8 @@ describe("cloud worker run ownership", () => {
         ).resolves.toMatchObject({ queued: false, reason: "not_streaming" });
         if (cancellation === "user") {
           expect(resolveActiveEmbeddedRunOwner(SESSION_ID)?.abort()).toBe(true);
+          expect(placements.validateTurnClaim(turnClaim)).toBe(true);
+          await expect(turnCapability.run(async () => "late effect")).rejects.toThrow();
         } else {
           expect(
             receiver.apply({

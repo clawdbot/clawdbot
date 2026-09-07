@@ -1,9 +1,13 @@
 // Codex tests cover dynamic tool execution plugin behavior.
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  embeddedAgentLog,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   handleDynamicToolCallWithTimeout,
   resolveDynamicToolCallTimeoutMs,
+  resolveDynamicToolServerRequestTimeoutMs,
   resolveTerminalDynamicToolBatchAction,
   shouldBlockTerminalReleaseForNonTerminalDynamicToolResult,
   shouldReleaseTurnAfterTerminalDynamicTool,
@@ -412,6 +416,7 @@ describe("dynamic tool execution helpers", () => {
   it.each([
     { tool: "session_status", deadlineMs: 600_000 },
     { tool: "agents_wait", deadlineMs: 630_000 },
+    { tool: "openclaw", deadlineMs: 930_000 },
   ])("enforces the resolved $tool cap at $deadlineMs ms", async ({ tool, deadlineMs }) => {
     vi.useFakeTimers();
     const call = {
@@ -420,6 +425,7 @@ describe("dynamic tool execution helpers", () => {
       tool,
       arguments: { timeoutSeconds: 1_000 },
     };
+    expect(resolveDynamicToolServerRequestTimeoutMs(call)).toBeGreaterThan(deadlineMs);
     const onTimeout = vi.fn();
     const response = handleDynamicToolCallWithTimeout({
       call,
@@ -561,6 +567,7 @@ describe("dynamic tool execution helpers", () => {
     { tool: "sessions_send", timeoutSeconds: 1, completionMs: 6_000 },
     { tool: "agents_wait", timeoutSeconds: 600, completionMs: 600_000 },
     { tool: "agents_wait", timeoutSeconds: 600, completionMs: 605_000 },
+    { tool: "openclaw", timeoutSeconds: 1, completionMs: 600_000 },
   ])(
     "preserves the $tool result after $completionMs ms",
     async ({ tool, timeoutSeconds, completionMs }) => {
@@ -694,26 +701,29 @@ describe("dynamic tool execution helpers", () => {
     expect(result.diagnosticTerminalReason).toBe("failed");
   });
 
-  it("preserves enclosing timeout provenance for active tool aborts", async () => {
-    const controller = new AbortController();
-    const resultPromise = handleDynamicToolCallWithTimeout({
-      call: {
-        ...dynamicCallContext,
-        callId: "call-active-timeout-abort",
-        tool: "memory_search",
-        arguments: {},
-      },
-      toolBridge: { handleToolCall: vi.fn(() => new Promise<never>(() => {})) },
-      signal: controller.signal,
-      timeoutMs: 1_000,
-    });
-    controller.abort(Object.assign(new Error("gateway timeout"), { name: "TimeoutError" }));
+  it.each(["memory_search", "openclaw"])(
+    "preserves enclosing timeout provenance for active %s aborts",
+    async (tool) => {
+      const controller = new AbortController();
+      const resultPromise = handleDynamicToolCallWithTimeout({
+        call: {
+          ...dynamicCallContext,
+          callId: "call-active-timeout-abort",
+          tool,
+          arguments: {},
+        },
+        toolBridge: { handleToolCall: vi.fn(() => new Promise<never>(() => {})) },
+        signal: controller.signal,
+        timeoutMs: 1_000,
+      });
+      controller.abort(Object.assign(new Error("gateway timeout"), { name: "TimeoutError" }));
 
-    await expect(resultPromise).resolves.toMatchObject({
-      success: false,
-      diagnosticTerminalReason: "timed_out",
-    });
-  });
+      await expect(resultPromise).resolves.toMatchObject({
+        success: false,
+        diagnosticTerminalReason: "timed_out",
+      });
+    },
+  );
 
   it("preserves timeout provenance when the dynamic tool bridge rejects", async () => {
     const timeoutError = Object.assign(new Error("tool deadline elapsed"), {
@@ -752,6 +762,52 @@ describe("dynamic tool execution helpers", () => {
     });
   });
 
+  it("preserves a successful bridge result when its observer throws an unreadable error", async () => {
+    const observerError = Object.defineProperty(new Error(), "message", {
+      get() {
+        throw new Error("observer message getter escaped");
+      },
+    });
+    const onAgentToolResult = vi.fn(() => {
+      throw observerError;
+    });
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+    warn.mockClear();
+    const successful = {
+      success: true,
+      contentItems: [{ type: "inputText" as const, text: "committed effect" }],
+      executionStarted: true,
+      sideEffectEvidence: true,
+    };
+    const completedAction = vi.fn(async () => successful);
+    const result = await handleDynamicToolCallWithTimeout({
+      call: { ...dynamicCallContext, callId: "observer-success", tool: "exec", arguments: {} },
+      toolBridge: {
+        handleToolCall: async (_call, options) => {
+          const response = await completedAction();
+          options?.onAgentToolResult?.({
+            toolName: "exec",
+            result: { content: [{ type: "text", text: "committed effect" }], details: {} },
+            isError: false,
+          });
+          return response;
+        },
+      },
+      signal: new AbortController().signal,
+      timeoutMs: 1000,
+      onAgentToolResult,
+    });
+    expect(completedAction).toHaveBeenCalledOnce();
+    expect(onAgentToolResult).toHaveBeenCalledOnce();
+    expect(result).toBe(successful);
+    expect(result.success).toBe(true);
+    expect(result.sideEffectEvidence).toBe(true);
+    expect(result.diagnosticTerminalReason).toBeUndefined();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "onAgentToolResult handler failed: tool=exec error=Error",
+    );
+  });
+
   it("contains hostile rejected values while notifying the private observer", async () => {
     const hostileError = Object.defineProperty(new Error(), "message", {
       get() {
@@ -777,12 +833,26 @@ describe("dynamic tool execution helpers", () => {
       onAgentToolResult,
     });
 
-    expect(result).toMatchObject({
+    const protocolResponse = {
       success: false,
-      diagnosticTerminalReason: "failed",
-      contentItems: [{ type: "inputText", text: "OpenClaw dynamic tool call failed." }],
+      contentItems: [{ type: "inputText", text: "Error" }],
+    };
+    expect(result.diagnosticTerminalReason).toBe("failed");
+    expect(result).toMatchObject({
+      ...protocolResponse,
+      diagnosticTerminalType: "error",
+      executionStarted: true,
+      sideEffectEvidence: true,
     });
-    expect(onAgentToolResult).toHaveBeenCalledOnce();
+    expect(toCodexDynamicToolProtocolResponse(result)).toEqual(protocolResponse);
+    expect(onAgentToolResult).toHaveBeenCalledExactlyOnceWith({
+      toolName: "memory_search",
+      result: {
+        content: [{ type: "text", text: "Error" }],
+        details: { status: "failed", error: "Error" },
+      },
+      isError: true,
+    });
   });
 
   it("contains hostile abort reasons while notifying the private observer", async () => {

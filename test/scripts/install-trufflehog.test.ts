@@ -36,7 +36,7 @@ describe("scripts/install-trufflehog.sh", () => {
     ]) {
       const text = readFileSync(workflow, "utf8");
       const install = text.indexOf('install-trufflehog: "true"');
-      const handoff = text.indexOf("uses: useblacksmith/run-testbox@");
+      const handoff = text.indexOf("- name: Run Testbox");
 
       expect(install, `${workflow} must provision TruffleHog`).toBeGreaterThanOrEqual(0);
       expect(handoff, `${workflow} must hand off to run-testbox`).toBeGreaterThan(install);

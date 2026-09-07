@@ -24,11 +24,11 @@ const service = {
   stop: vi.fn(),
 };
 
-const runServiceStart = vi.fn();
-const runServiceRestart = vi.fn();
-const runServiceStop = vi.fn();
-const waitForGatewayHealthyListener = vi.fn();
-const waitForGatewayHealthyRestart = vi.fn();
+const runServiceStart = vi.fn(),
+  runServiceRestart = vi.fn(),
+  runServiceStop = vi.fn();
+const waitForGatewayHealthyListener = vi.fn(),
+  waitForGatewayHealthyRestart = vi.fn();
 const terminateStaleGatewayPids = vi.fn();
 const renderGatewayPortHealthDiagnostics = vi.fn(() => ["diag: unhealthy port"]);
 const renderRestartDiagnostics = vi.fn(() => ["diag: unhealthy runtime"]);
@@ -136,10 +136,10 @@ vi.mock("../../daemon/service.js", () => ({
 
 vi.mock("../../daemon/systemd.js", () => ({
   findInstalledSystemdGatewayScope: () => findInstalledSystemdGatewayScope(),
+  refreshLegacySystemdServiceMetadata: vi.fn(async () => false),
   restartSystemdService: () => restartSystemdService(),
   stopSystemdService: () => stopSystemdService(),
 }));
-
 vi.mock("./launchd-recovery.js", () => ({
   recoverInstalledLaunchAgent: (args: { result: "started" | "restarted" }) =>
     recoverInstalledLaunchAgent(args),
@@ -165,7 +165,8 @@ vi.mock("../../daemon/gateway-service-probe-hosts.js", () => ({ resolveGatewaySe
 
 vi.mock("../../infra/ports-probe.js", () => ({ probePortUsage }));
 
-vi.mock("./restart-health.js", () => ({
+vi.mock("./restart-health.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./restart-health.js")>()),
   DEFAULT_RESTART_HEALTH_ATTEMPTS: 120,
   DEFAULT_RESTART_HEALTH_DELAY_MS: 500,
   waitForGatewayHealthyListener,
@@ -188,6 +189,12 @@ describe("runDaemonRestart health checks", () => {
   let runDaemonStop: typeof import("./lifecycle.js").runDaemonStop;
   let envSnapshot: ReturnType<typeof captureEnv>;
 
+  function failRestartCheck(message: string, hints?: string[]) {
+    const err = new Error(message) as Error & { hints?: string[] };
+    err.hints = hints;
+    throw err;
+  }
+
   function mockUnmanagedRestart({
     runPostRestartCheck = false,
   }: {
@@ -195,15 +202,14 @@ describe("runDaemonRestart health checks", () => {
   } = {}) {
     runServiceRestart.mockImplementation(
       async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
-        await params.onNotLoaded?.();
+        const activationAccepted = Boolean(await params.onNotLoaded?.());
         if (runPostRestartCheck) {
           await params.postRestartCheck?.({
+            activationAccepted,
             json: Boolean(params.opts?.json),
             stdout: process.stdout,
             warnings: [],
-            fail: (message: string) => {
-              throw new Error(message);
-            },
+            fail: failRestartCheck,
           });
         }
         return true;
@@ -287,16 +293,12 @@ describe("runDaemonRestart health checks", () => {
     stopSystemdService.mockReset().mockResolvedValue(undefined);
 
     runServiceRestart.mockImplementation(async (params: RestartParams) => {
-      const fail = (message: string, hints?: string[]) => {
-        const err = new Error(message) as Error & { hints?: string[] };
-        err.hints = hints;
-        throw err;
-      };
       await params.postRestartCheck?.({
+        activationAccepted: true,
         json: Boolean(params.opts?.json),
         stdout: process.stdout,
         warnings: [],
-        fail,
+        fail: failRestartCheck,
       });
       return true;
     });
@@ -435,12 +437,11 @@ describe("runDaemonRestart health checks", () => {
         issues: [{ code: "port-mismatch", message: "service port is stale" }],
       });
       await params.postRestartCheck?.({
+        activationAccepted: false,
         json: true,
         stdout: process.stdout,
         warnings: [],
-        fail: (message: string) => {
-          throw new Error(message);
-        },
+        fail: failRestartCheck,
       });
       return true;
     });
@@ -981,14 +982,13 @@ describe("runDaemonRestart health checks", () => {
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
     runServiceRestart.mockImplementation(
       async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
-        await params.onNotLoaded?.();
+        const activationAccepted = Boolean(await params.onNotLoaded?.());
         await params.postRestartCheck?.({
+          activationAccepted,
           json: Boolean(params.opts?.json),
           stdout: process.stdout,
           warnings: [],
-          fail: (message: string) => {
-            throw new Error(message);
-          },
+          fail: failRestartCheck,
         });
         return true;
       },

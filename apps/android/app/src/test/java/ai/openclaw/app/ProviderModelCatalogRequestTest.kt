@@ -25,13 +25,36 @@ class ProviderModelCatalogRequestTest {
   }
 
   @Test
+  fun preservesKnownAvailabilityReasonsAndFailsOpenForUnknownReasons() {
+    val models =
+      parseGatewayModels(
+        Json
+          .parseToJsonElement(
+            """
+            [
+              {"id":"missing","provider":"synthetic","available":false,"unavailableReason":"missing-auth"},
+              {"id":"failed","provider":"synthetic","available":false,"unavailableReason":"auth-failed"},
+              {"id":"cooling","provider":"synthetic","available":false,"unavailableReason":"cooldown"},
+              {"id":"future","provider":"synthetic","available":false,"unavailableReason":"future-reason"}
+            ]
+            """.trimIndent(),
+          ).jsonArray,
+      )
+
+    assertEquals(GatewayModelUnavailableReason.MissingAuth, models[0].unavailableReason)
+    assertEquals(GatewayModelUnavailableReason.AuthFailed, models[1].unavailableReason)
+    assertEquals(GatewayModelUnavailableReason.Cooldown, models[2].unavailableReason)
+    assertEquals(null, models[3].unavailableReason)
+  }
+
+  @Test
   fun reportsProviderConfigUnsupportedWithoutSubstitutingConfiguredView() =
     runBlocking {
       val requests = mutableListOf<String>()
       var actual: Throwable? = null
 
       try {
-        requestProviderModelConfig { paramsJson ->
+        requestProviderModelConfig(agentId = "beta", refresh = true) { paramsJson ->
           requests += paramsJson
           throw GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "unsupported view"))
         }
@@ -40,7 +63,10 @@ class ProviderModelCatalogRequestTest {
       }
 
       assertTrue(actual is ProviderModelConfigUnsupported)
-      assertEquals(listOf("""{"view":"provider-config"}"""), requests)
+      assertEquals(
+        listOf(Json.parseToJsonElement("""{"view":"provider-config","agentId":"beta","refresh":true}""")),
+        requests.map(Json::parseToJsonElement),
+      )
     }
 
   @Test
@@ -50,7 +76,7 @@ class ProviderModelCatalogRequestTest {
       var actual: Throwable? = null
 
       try {
-        requestProviderModelConfig { throw expected }
+        requestProviderModelConfig(agentId = "beta") { throw expected }
       } catch (err: Throwable) {
         actual = err
       }
