@@ -126,6 +126,19 @@ describe("terminal main session transcript freshness", () => {
     expect(check(entry, sessionKey)).toBe(true);
   });
 
+  it("keeps a yielded running main session reusable after a child transcript admission", async () => {
+    // A yielded parent is persisted as status "running" plus the settled run's
+    // endedAt; a later child transcript write must not rotate it.
+    const { entry, sessionKey } = await createEntry({
+      status: "running",
+      endedAt: Date.now() - 20_000,
+      updatedAt: Date.now() - 10_000,
+    });
+
+    expect(entry.endedAt).toBeDefined();
+    expect(check(entry, sessionKey)).toBe(false);
+  });
+
   it("uses SQLite freshness for entries that still contain legacy transcript paths", async () => {
     const { entry, sessionKey } = await createEntry({
       sessionFile: path.join(stateDir, "legacy-session.jsonl"),

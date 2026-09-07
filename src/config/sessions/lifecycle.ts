@@ -238,6 +238,13 @@ function resolveTerminalMainSessionTranscriptRegistryCheck(
   if (candidateSessionKey !== configuredMainSessionKey) {
     return undefined;
   }
+  if (params.entry.status === "running") {
+    // A yielded parent keeps status "running" next to the settled run's endedAt
+    // (see deriveGatewaySessionLifecycleSnapshot). That timestamp records run
+    // timing, not a terminal session: sibling completions must keep reusing the
+    // same session generation instead of rotating the parent mid-preparation.
+    return undefined;
+  }
   const hasTerminalLifecycle =
     isTerminalSessionStatus(params.entry.status) ||
     resolvePositiveTimestamp(params.entry.endedAt) !== undefined;
