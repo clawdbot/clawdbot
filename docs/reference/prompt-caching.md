@@ -136,6 +136,7 @@ cache billing are described in [Model Studio context caching](https://www.alibab
 ### Amazon Bedrock
 
 - Anthropic Claude model refs (`amazon-bedrock/*anthropic.claude*`, plus AWS system inference profile prefixes `us.`/`eu.`/`global.anthropic.claude*`) support explicit `cacheRetention` pass-through.
+- The stable system prefix is checkpointed separately from dynamic runtime additions. Conversation checkpoints advance through retained history, including tool results; transient runtime-context carriers remain outside the cached prefix. Bedrock Mantle's Anthropic Messages transport also preserves the separate stable system boundary.
 - Non-Anthropic Bedrock models (for example `amazon.nova-*`) resolve to no cache retention at runtime, regardless of any configured `cacheRetention` value.
 - Opaque Bedrock application inference profile ARNs (profile IDs that do not contain `claude`) also resolve to no cache retention unless `cacheRetention` is set explicitly, since the model family cannot be inferred from the ARN alone.
 

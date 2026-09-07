@@ -3,8 +3,11 @@ import {
   BedrockRuntimeClient,
   CacheTTL,
   ConversationRole,
+  ConverseStreamCommand,
   StopReason as BedrockStopReason,
 } from "@aws-sdk/client-bedrock-runtime";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BedrockOptions } from "./bedrock-options.js";
 import { streamSimpleBedrock } from "./stream.runtime.js";
@@ -60,11 +63,11 @@ function streamBedrockForTest(
   return streamSimpleBedrock(model, context, options as never);
 }
 
-async function captureMessages(
+async function capturePayload(
   model: Parameters<typeof streamSimpleBedrock>[0],
   context: Parameters<typeof streamSimpleBedrock>[1],
   options: BedrockOptions = {},
-): Promise<Array<{ content?: unknown; role?: unknown }>> {
+) {
   const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
     $metadata: { httpStatusCode: 200 },
     stream: streamEvents([
@@ -73,13 +76,19 @@ async function captureMessages(
     ]),
   } as never);
   await streamBedrockForTest(model, context, options).result();
-  const command = send.mock.calls.at(-1)?.[0] as {
-    input?: { messages?: Array<{ content?: unknown; role?: unknown }> };
-  };
-  if (!command.input || !Array.isArray(command.input.messages)) {
-    throw new Error("expected ConverseStreamCommand messages");
+  const command = send.mock.calls.at(-1)?.[0];
+  if (!(command instanceof ConverseStreamCommand)) {
+    throw new Error("expected ConverseStreamCommand");
   }
-  return command.input.messages;
+  return command.input;
+}
+
+async function captureMessages(
+  model: Parameters<typeof streamSimpleBedrock>[0],
+  context: Context,
+  options: BedrockOptions = {},
+) {
+  return (await capturePayload(model, context, options)).messages ?? [];
 }
 
 afterEach(() => {
@@ -295,6 +304,128 @@ describe("Bedrock reasoning replay", () => {
 });
 
 describe("Bedrock prompt cache ownership", () => {
+  it.each(["direct", "application-profile"])(
+    "advances the retained-carrier checkpoint through a tool loop (%s)",
+    async (route) => {
+      const canonicalModelId = "claude-fable-5-1";
+      const model: Model<"bedrock-converse-stream"> = bedrockModel({
+        id:
+          route === "direct"
+            ? `anthropic.${canonicalModelId}-v1:0`
+            : "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/cache-test",
+        name: "Test deployment",
+        ...(route === "application-profile" ? { params: { canonicalModelId } } : {}),
+      });
+      const context: Context = {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "First request" },
+              { type: "text", text: "Retained context one" },
+            ],
+            runtimeContextCarrier: true,
+            timestamp: 0,
+          },
+          {
+            role: "assistant",
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            content: [{ type: "text", text: "First answer" }],
+            stopReason: "stop",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            timestamp: 1,
+          },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Second request" },
+              { type: "text", text: "Retained context two" },
+            ],
+            runtimeContextCarrier: true,
+            timestamp: 2,
+          },
+        ],
+      };
+      const first = await captureMessages(model, context, { cacheRetention: "short" });
+      expect(first[2]?.content?.at(-1)).toEqual({ cachePoint: { type: "default" } });
+      const previousAssistant = context.messages[1];
+      if (previousAssistant?.role !== "assistant") throw new Error("missing assistant fixture");
+      context.messages.push(
+        {
+          ...previousAssistant,
+          content: [{ type: "toolCall", id: "read_1", name: "read", arguments: {} }],
+          stopReason: "toolUse",
+          timestamp: 3,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "read_1",
+          toolName: "read",
+          content: [{ type: "text", text: "Tool output" }],
+          isError: false,
+          timestamp: 4,
+        },
+      );
+      const second = await captureMessages(model, context, { cacheRetention: "short" });
+      expect(second[2]?.content).toEqual([
+        { text: "Second request" },
+        { text: "Retained context two" },
+      ]);
+      expect(second[4]?.content?.at(-1)).toEqual({ cachePoint: { type: "default" } });
+      expect(second.slice(0, 2)).toEqual(first.slice(0, 2));
+    },
+  );
+
+  it.each(["short", "long", "none"] as const)(
+    "keeps stable system bytes and checkpoint position across suffix changes (%s)",
+    async (cacheRetention) => {
+      const requests = [];
+      for (const suffix of ["Today: Monday", "Today: Tuesday"]) {
+        requests.push(
+          await capturePayload(
+            bedrockModel({
+              id: "anthropic.claude-haiku-4-5-20251001-v1:0",
+              name: "Claude Haiku 4.5",
+            }),
+            {
+              systemPrompt: `Stable workspace${SYSTEM_PROMPT_CACHE_BOUNDARY}${suffix}`,
+              messages: [{ role: "user", content: "Hello", timestamp: 0 }],
+            },
+            { cacheRetention },
+          ),
+        );
+      }
+      for (const [index, payload] of requests.entries()) {
+        const suffix = index === 0 ? "Today: Monday" : "Today: Tuesday";
+        expect(JSON.stringify(payload)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
+        if (cacheRetention === "none") {
+          expect(JSON.stringify(payload)).not.toContain("cachePoint");
+          expect(payload.system).toEqual([{ text: `Stable workspace\n${suffix}` }]);
+        } else {
+          expect(payload.system).toEqual([
+            { text: "Stable workspace" },
+            {
+              cachePoint: { type: "default", ...(cacheRetention === "long" ? { ttl: "1h" } : {}) },
+            },
+            { text: suffix },
+          ]);
+          expect(JSON.stringify(payload).match(/"cachePoint"/g)).toHaveLength(2);
+        }
+      }
+      if (cacheRetention !== "none")
+        expect(requests[0]?.system?.slice(0, 2)).toEqual(requests[1]?.system?.slice(0, 2));
+    },
+  );
+
   const model = () =>
     bedrockModel({ id: "anthropic.claude-haiku-4-5-20251001-v1:0", name: "Claude Haiku 4.5" });
 
