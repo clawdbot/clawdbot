@@ -52,6 +52,8 @@ export type TelegramSendOpts = {
   forceDocument?: boolean;
   /** Persist each concrete platform send before any later chunk can fail. */
   onDeliveryResult?: (result: TelegramSendResult) => Promise<void> | void;
+  /** @internal Cancel remaining physical sends for the current delivery. */
+  signal?: AbortSignal;
   /** @internal Revalidate durable custody before a send operation, not after throttle waits. */
   onPlatformSendDispatch?: () => Promise<void>;
   /** @internal Synchronously fence custody after refresh and immediately before Telegram I/O. */

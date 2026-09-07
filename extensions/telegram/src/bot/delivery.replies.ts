@@ -440,7 +440,7 @@ async function deliverMediaReply(params: {
                 message: part.result,
                 messageId: part.result.message_id,
                 fallbackChatId: params.chatId,
-                successfulSendThread: params.thread,
+                ...(params.thread ? { successfulSendThread: params.thread } : {}),
                 kind: "media",
               }),
             ),

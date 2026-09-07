@@ -457,6 +457,33 @@ describe("telegramOutbound", () => {
     );
   });
 
+  it("does not publish a reaction or album after cancellation during dispatch", async () => {
+    const abort = new AbortController();
+    const failure = new Error("turn canceled");
+    reactMessageTelegramMock.mockResolvedValueOnce({ ok: true });
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-photo", chatId: "12345" });
+    await expect(
+      telegramOutbound.sendPayload!({
+        cfg: {},
+        to: "12345",
+        text: "Photos",
+        replyToId: "777",
+        signal: abort.signal,
+        onPlatformSendDispatch: async () => {
+          abort.abort(failure);
+        },
+        payload: {
+          text: "Photos",
+          mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
+          channelData: { telegram: { reaction: { emoji: "✅" } } },
+        },
+        deps: { sendTelegram: sendMessageTelegramMock },
+      }),
+    ).rejects.toBe(failure);
+    expect(reactMessageTelegramMock).not.toHaveBeenCalled();
+    expect(sendMessageTelegramMock).not.toHaveBeenCalled();
+  });
+
   it("rejects text plus reaction payloads without a reply target", async () => {
     await expect(
       telegramOutbound.sendPayload!({

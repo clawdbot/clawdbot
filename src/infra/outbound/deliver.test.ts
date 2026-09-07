@@ -1607,7 +1607,11 @@ describe("deliverOutboundPayloads", () => {
           },
           send: { text: vi.fn(), media: messageSendMedia, payload: sendPayload },
         },
-        { sendPayload, deliveryCapabilities: { durableFinal: { payload: true } } },
+        {
+          sendPayload,
+          sendPayloadGroupsMedia: true,
+          deliveryCapabilities: { durableFinal: { payload: true } },
+        },
       );
 
       await expect(
@@ -1623,12 +1627,12 @@ describe("deliverOutboundPayloads", () => {
         }),
       ).resolves.toHaveLength(2);
       expect(messageSendMedia.mock.calls.map(([ctx]) => ctx.deliveryPartIndex)).toEqual([0, 1]);
-      expect(
-        messageSendMedia.mock.calls.map(([ctx]) => [ctx.kind, ctx.text, ctx.deliveryPartCount]),
-      ).toEqual([
-        ["media", "caption", 2],
-        ["media", "", 2],
-      ]);
+      expect(messageSendMedia.mock.calls.map(([ctx]) => [ctx.text, ctx.deliveryPartCount])).toEqual(
+        [
+          ["caption", 2],
+          ["", 2],
+        ],
+      );
       expect(sendPayload).not.toHaveBeenCalled();
     },
   );
@@ -1641,11 +1645,13 @@ describe("deliverOutboundPayloads", () => {
         results: [{ messageId: "media-1" }, { messageId: "media-2" }],
         kind: "media",
       });
-      const sendPayload = vi.fn<OutboundPayloadSender>(async () => ({
-        channel: "matrix",
-        messageId: "media-2",
-        receipt,
-      }));
+      const sendPayload = vi.fn(
+        async (_ctx: Pick<Parameters<OutboundPayloadSender>[0], "payload">) => ({
+          channel: "matrix" as const,
+          messageId: "media-2",
+          receipt,
+        }),
+      );
       const sendMedia = vi.fn<OutboundMediaSender>(async () => ({
         channel: "matrix",
         messageId: "single",
@@ -1654,6 +1660,7 @@ describe("deliverOutboundPayloads", () => {
       const outbound = {
         sendPayload,
         sendMedia,
+        sendPayloadGroupsMedia: true,
         deliveryCapabilities: { durableFinal: capabilities },
       };
       if (adapter === "message") {
@@ -1697,6 +1704,74 @@ describe("deliverOutboundPayloads", () => {
       await deliverMatrix({ payloads: [{ text: "single caption", mediaUrl: mediaUrls[0] }] });
       expect(sendPayload).toHaveBeenCalledOnce();
       expect(sendMedia).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["cancellation", "owner loss"])(
+    "stops a payload-capable channel's media sequence after %s without group opt-in",
+    async (stop) => {
+      const firstSendStarted = createDeferredCore();
+      const finishFirstSend = createDeferredCore();
+      const abortController = new AbortController();
+      let ownerIsCurrent = true;
+      let acceptedUploads = 0;
+      const sendMedia = vi.fn<OutboundMediaSender>(async ({ mediaUrl }) => {
+        if (mediaUrl === "https://example.com/first.png") {
+          firstSendStarted.resolve();
+          await finishFirstSend.promise;
+        }
+        return { channel: "msteams", messageId: `media-${++acceptedUploads}` };
+      });
+      const sendPayload = vi.fn<OutboundPayloadSender>(async (ctx) => {
+        const first = await sendMedia({ ...ctx, mediaUrl: "https://example.com/first.png" });
+        await ctx.onDeliveryResult?.(first);
+        return await sendMedia({ ...ctx, text: "", mediaUrl: "https://example.com/second.png" });
+      });
+      setTestOutbound(
+        {
+          sendMedia,
+          sendPayload,
+          deliveryCapabilities: { durableFinal: { text: true, media: true, payload: true } },
+        },
+        "msteams",
+      );
+      const delivery = deliverOutboundPayloads({
+        cfg: {},
+        channel: "msteams",
+        to: "conversation:test",
+        payloads: [
+          {
+            text: "caption",
+            mediaUrls: ["https://example.com/first.png", "https://example.com/second.png"],
+          },
+        ],
+        skipQueue: true,
+        abortSignal: abortController.signal,
+        assertDirectAdapterHandoff: () => {
+          if (!ownerIsCurrent) {
+            throw new Error("delivery owner closed");
+          }
+        },
+      });
+      const outcome = delivery.then(
+        () => "sent",
+        (error: unknown) => error,
+      );
+      await firstSendStarted.promise;
+      if (stop === "cancellation") {
+        abortController.abort();
+      } else {
+        ownerIsCurrent = false;
+      }
+      finishFirstSend.resolve();
+
+      expect(await outcome).toMatchObject({
+        message: expect.stringContaining(
+          stop === "cancellation" ? "Operation aborted" : "delivery owner closed",
+        ),
+      });
+      expect(sendMedia).toHaveBeenCalledOnce();
+      expect(sendPayload).not.toHaveBeenCalled();
     },
   );
 

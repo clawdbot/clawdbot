@@ -182,7 +182,10 @@ export async function sendMessageTelegram(
         await opts.onPlatformSendDispatch?.();
         return requestWithChatNotFound(send, label, options);
       },
-      assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
+      assertPlatformSendAuthorized: () => {
+        opts.signal?.throwIfAborted();
+        opts.assertPlatformSendAuthorized?.();
+      },
     });
     const buildMediaReceipt = () => {
       const deliveries = new Map(deliveryResults.map((delivery) => [delivery.messageId, delivery]));
@@ -586,7 +589,7 @@ export async function sendMessageTelegram(
         opts.promptContextProjectionPlan?.cursor.invalidate();
         return sender.fail(error, 0, {
           receipt: buildMediaReceipt(),
-          visibleReplySent: sender.parts.length > 0,
+          visibleReplySent: true,
         });
       }
     }

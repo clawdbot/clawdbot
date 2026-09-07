@@ -409,6 +409,16 @@ inbound context. When a plugin must authorize local media reads, import
 
 ### Native payload shaping
 
+Set `outbound.sendPayloadGroupsMedia: true` only when the payload sender owns
+multi-attachment grouping. Core then preserves a multi-media list for that
+sender when its durable payload and reconciliation capabilities permit it.
+Without this explicit opt-in, ordinary attachments keep per-item delivery.
+
+Grouped senders must check the outbound context's `signal` before each physical
+send and after awaited preparation, and retain the platform-dispatch and
+current-owner callbacks at each send boundary. Declaring general payload
+support alone does not opt a plugin into this responsibility.
+
 If your channel needs provider-specific shaping for `message(action="send")`,
 prefer `actions.prepareSendPayload(...)`. Put native cards, blocks, embeds, or
 other durable data under `payload.channelData.<channel>` and let core send

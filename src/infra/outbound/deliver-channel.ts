@@ -323,8 +323,10 @@ function createPluginHandler(
     // Whole media payloads are optional; keep exact media-only reconciliation
     // on its declared transport even when a fallback payload method exists.
     supportsMediaPayload:
+      outbound?.sendPayloadGroupsMedia === true &&
       (durableFinal?.capabilities ?? outbound?.deliveryCapabilities?.durableFinal)?.payload ===
-        true && supportsUnknownSendKind("payload"),
+        true &&
+      supportsUnknownSendKind("payload"),
     sanitizeText: outbound?.sanitizeText
       ? (payload) =>
           outbound.sanitizeText!({

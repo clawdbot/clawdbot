@@ -79,6 +79,7 @@ async function resolveTelegramSendContext(params: {
   threadId?: string | number | null;
   formatting?: OutboundDeliveryFormattingOptions;
   silent?: boolean;
+  signal?: AbortSignal;
   gatewayClientScopes?: readonly string[];
   onDeliveryResult?: Parameters<
     NonNullable<ChannelOutboundAdapter["sendText"]>
@@ -99,6 +100,7 @@ async function resolveTelegramSendContext(params: {
     replyToMode?: TelegramSendOpts["replyToMode"];
     accountId?: string;
     silent?: boolean;
+    signal?: AbortSignal;
     gatewayClientScopes?: readonly string[];
     onDeliveryResult?: TelegramSendOpts["onDeliveryResult"];
     onPlatformSendDispatch?: TelegramSendOpts["onPlatformSendDispatch"];
@@ -117,6 +119,7 @@ async function resolveTelegramSendContext(params: {
       ...(params.replyToMode !== undefined ? { replyToMode: params.replyToMode } : {}),
       accountId: params.accountId ?? undefined,
       silent: params.silent,
+      signal: params.signal,
       gatewayClientScopes: params.gatewayClientScopes,
       onDeliveryResult: params.onDeliveryResult
         ? async (result) => {
@@ -387,6 +390,7 @@ export async function sendTelegramPayloadMessages(params: {
       throw new Error("Telegram reaction requires a reply target");
     }
     await params.baseOpts.onPlatformSendDispatch?.();
+    params.baseOpts.signal?.throwIfAborted();
     params.baseOpts.assertPlatformSendAuthorized?.();
     const reactionResult = await params.react(params.to, replyToMessageId, reactionEmoji, {
       cfg: params.baseOpts.cfg,
@@ -422,6 +426,7 @@ export function createTelegramOutboundAdapter(
 
   return {
     deliveryMode: "direct",
+    sendPayloadGroupsMedia: true,
     chunker: chunkTelegramOutboundText,
     chunkerMode: "markdown",
     extractMarkdownImages: true,

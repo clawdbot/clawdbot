@@ -2442,6 +2442,64 @@ describe("sendMessageTelegram", () => {
     expect(result.receipt?.parts.at(-1)?.replyToId).toBeUndefined();
   });
 
+  it.each([
+    "active",
+    "aborted after album",
+    "aborted during dispatch",
+    "owner lost during dispatch",
+  ])("sends the next album batch only while authority remains %s", async (state) => {
+    const mediaUrls = Array.from({ length: 11 }, (_, index) => `https://example.com/${index}.jpg`);
+    mediaUrls.forEach(() => mockLoadedMedia({ contentType: "image/jpeg" }));
+    const ids = Array.from({ length: 10 }, (_, index) => String(100 + index));
+    const sendMediaGroup = vi
+      .fn()
+      .mockResolvedValue(ids.map((id) => ({ message_id: Number(id), chat: { id: 123 } })));
+    const sendPhoto = vi.fn().mockResolvedValue({ message_id: 110, chat: { id: 123 } });
+    const controller = new AbortController();
+    let ownsSend = true;
+    let delivered = 0;
+    const onDeliveryResult = vi.fn(() => {
+      delivered += 1;
+      if (delivered === 10 && state === "aborted after album") {
+        controller.abort();
+      }
+    });
+    const sending = sendMessageTelegram("123", "caption", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      mediaUrls,
+      signal: controller.signal,
+      api: makeTelegramApiTestMock({ sendMediaGroup, sendPhoto }),
+      onDeliveryResult,
+      onPlatformSendDispatch: async () => {
+        await Promise.resolve();
+        if (delivered === 10 && state === "aborted during dispatch") {
+          controller.abort();
+        }
+        if (delivered === 10 && state === "owner lost during dispatch") {
+          ownsSend = false;
+        }
+      },
+      assertPlatformSendAuthorized: () => {
+        if (!ownsSend) {
+          throw new Error("Send owner lost authority");
+        }
+      },
+    });
+    if (state === "active") {
+      expect(await sending).toMatchObject({ receipt: { platformMessageIds: [...ids, "110"] } });
+      expect(sendPhoto).toHaveBeenCalledTimes(1);
+      expect(onDeliveryResult).toHaveBeenCalledTimes(11);
+    } else {
+      await expect(sending).rejects.toMatchObject({
+        deliveryResult: { messageIds: ids, receipt: { platformMessageIds: ids } },
+      });
+      expect(sendPhoto).not.toHaveBeenCalled();
+      expect(onDeliveryResult).toHaveBeenCalledTimes(10);
+    }
+    expect(sendMediaGroup).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["observer", "later load", "later send"])(
     "retains all album IDs after a %s failure",
     async (failure) => {
