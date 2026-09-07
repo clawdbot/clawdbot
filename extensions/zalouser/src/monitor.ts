@@ -45,6 +45,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import {
   buildZalouserGroupCandidates,
   findZalouserGroupEntry,
@@ -746,8 +747,12 @@ async function deliverZalouserReply(params: {
   const { payload, profile, chatId, isGroup, runtime, core, config, accountId } = params;
   const tableMode = params.tableMode ?? "code";
   let visibleReplySent = false;
+  // message_sending runs after preparePayload, so this private transport boundary owns the final
+  // sanitizer pass; moving it earlier lets hook rewrites reintroduce internal scaffolding.
   const reply = resolveSendableOutboundReplyParts(payload, {
-    text: core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
+    text: sanitizeAssistantVisibleText(
+      core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
+    ),
   });
   const chunkMode = core.channel.text.resolveChunkMode(config, "zalouser", accountId);
   const textChunkLimit = core.channel.text.resolveTextChunkLimit(config, "zalouser", accountId, {
