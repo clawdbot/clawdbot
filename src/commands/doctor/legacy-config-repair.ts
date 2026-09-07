@@ -13,11 +13,7 @@ export async function repairLegacyConfigForUpdateChannel(params: {
   jsonMode: boolean;
 }): Promise<{ snapshot: ConfigSnapshot; repaired: boolean }> {
   const hasAuthoredIncludes = containsAuthoredInclude(params.configSnapshot.parsed);
-  const migrated = migrateLegacyConfig(params.configSnapshot.sourceConfig, {
-    authoredRaw: params.configSnapshot.parsed,
-    resolvedRaw: params.configSnapshot.sourceConfig,
-    sourceConfigBeforeMigrations: params.configSnapshot.sourceConfigBeforeMigrations,
-  });
+  const migrated = migrateLegacyConfig(params.configSnapshot.sourceConfig);
   if (!migrated.config) {
     return { snapshot: params.configSnapshot, repaired: false };
   }

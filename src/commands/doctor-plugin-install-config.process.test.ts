@@ -43,7 +43,7 @@ async function createDoctorFixture() {
   const config: OpenClawConfig = {
     gateway: { mode: "local", auth: { mode: "none" } },
     plugins: { enabled: false },
-    agents: { defaults: { systemAgent: { agentId: "main" } }, entries: { main: {} } },
+    agents: { entries: { main: {} } },
     meta: { migrations: { modelPolicyAllowlist: true } },
   };
   fs.writeFileSync(configPath, JSON.stringify(config));

@@ -2690,7 +2690,6 @@ describe("legacy migrate sandbox scope aliases", () => {
     const raw = {
       agents: {
         defaults: {
-          systemAgent: { agentId: "main" },
           sandbox: {
             browser: {
               enabled: true,
@@ -2773,7 +2772,6 @@ describe("legacy migrate sandbox scope aliases", () => {
   it("disables explicit per-agent network none in keyed rosters", () => {
     const raw = {
       agents: {
-        defaults: { systemAgent: { agentId: "main" } },
         entries: {
           main: {
             default: true,
@@ -2806,7 +2804,6 @@ describe("legacy migrate sandbox scope aliases", () => {
   it("disables explicit per-agent network none in legacy list rosters", () => {
     const raw = {
       agents: {
-        defaults: { systemAgent: { agentId: "legacy" } },
         list: [
           {
             id: "legacy",
@@ -2842,7 +2839,6 @@ describe("legacy migrate sandbox scope aliases", () => {
   it("leaves supported sandbox browser networks unchanged", () => {
     const raw = {
       agents: {
-        defaults: { systemAgent: { agentId: "main" } },
         entries: {
           main: {
             default: true,

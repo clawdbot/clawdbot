@@ -13,12 +13,7 @@ describe("per-agent legacy migrations after roster normalization", () => {
         ],
       },
     });
-    expect(result.next).toEqual({
-      agents: {
-        entries: { main: { name: "canonical" } },
-        defaults: { systemAgent: { agentId: "main" } },
-      },
-    });
+    expect(result.next).toEqual({ agents: { entries: { main: { name: "canonical" } } } });
   });
 
   it.each(["entries", "list"])("preserves migrated values in a %s roster", (shape) => {

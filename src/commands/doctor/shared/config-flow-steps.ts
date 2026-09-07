@@ -74,7 +74,6 @@ export function applyLegacyCompatibilityStep(params: {
   } = migrateLegacyConfig(params.snapshot.sourceConfig, {
     authoredRaw: params.snapshot.parsed,
     resolvedRaw: params.snapshot.sourceConfig,
-    sourceConfigBeforeMigrations: params.snapshot.sourceConfigBeforeMigrations,
   });
   const migrationCandidate = hasAuthoredIncludes && migratedSource ? migratedSource : migrated;
   // Read-time normalization still needs persistence; unresolved advice alone does not.

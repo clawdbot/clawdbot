@@ -637,10 +637,6 @@ describe("gateway startup-migration refusal", () => {
       const { runDoctorConfigPreflight } = await import(${JSON.stringify(preflightUrl)});
       const { hasActiveStartupMigrationLease } = await import(${JSON.stringify(checkpointUrl)});
       const expectedPluginConfig = ${JSON.stringify(pluginConfig)};
-      const expectedAgents = ${JSON.stringify({
-        ...config.agents,
-        defaults: { ...config.agents.defaults, systemAgent: { agentId: "main" } },
-      })};
       const retiredKeys = ${JSON.stringify(Object.keys(retiredSettings))};
       const initial = await readConfigFileSnapshot({ observe: false });
       assert.equal(initial.valid, false);
@@ -662,7 +658,7 @@ describe("gateway startup-migration refusal", () => {
         const persistedConfig = JSON.parse(persisted);
         for (const source of [result.snapshot.sourceConfig, persistedConfig]) {
           assert.deepEqual(source.plugins.entries.codex.config, expectedPluginConfig);
-          assert.deepEqual(source.agents, expectedAgents);
+          assert.deepEqual(source.agents, ${JSON.stringify(config.agents)});
         }
         const runtime = result.snapshot.config;
         const runtimeAppServer = runtime.plugins.entries.codex.config.appServer;

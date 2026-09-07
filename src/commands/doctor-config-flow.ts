@@ -49,7 +49,6 @@ import {
 import { listDoctorConfiguredChannelIds } from "./doctor/shared/configured-channel-ids.js";
 import { containsAuthoredInclude } from "./doctor/shared/include-migration-ownership.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
-import { seedLegacyAmbientOwners } from "./doctor/shared/legacy-config-migrations.runtime.system-agent.js";
 import type { DoctorPluginMetadataSnapshotState } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
 
 function collectInvalidHookTransformsDirWarnings(
@@ -317,8 +316,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         ),
       ],
     };
-    // A newly persisted main roster must not require another Doctor pass to gain its owner.
-    seedLegacyAmbientOwners(rosterRepair.config, rosterRepair.changes);
     applyConfigMutation(rosterRepair, {
       fixHint: `Run "${doctorFixCommand}" to persist the explicit agent roster.`,
     });

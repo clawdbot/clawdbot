@@ -35,7 +35,12 @@ function resolveMissingLegacySystemAgent(raw: Record<string, unknown>) {
     return config && id.trim() ? [{ id: normalizeAgentId(id), config }] : [];
   });
   const marked = entries.filter((entry) => entry.config.default === true);
-  if (marked.length > 1) {
+  // The runtime already resolves sole agents and honored legacy default markers.
+  if (
+    entries.length < 2 ||
+    marked.length > 1 ||
+    (marked.length === 1 && agents.ownership !== "explicit")
+  ) {
     return undefined;
   }
   const selected = marked[0] ?? entries.find((entry) => entry.id === "main");
@@ -44,10 +49,7 @@ function resolveMissingLegacySystemAgent(raw: Record<string, unknown>) {
   }
   // Shared defaults and per-agent heartbeat blocks already enroll agents explicitly.
   const heartbeatUnresolved =
-    entries.length > 1 &&
-    (marked.length === 0 || agents.ownership === "explicit") &&
-    defaults?.heartbeat === undefined &&
-    !entries.some((entry) => entry.config.heartbeat);
+    defaults?.heartbeat === undefined && !entries.some((entry) => entry.config.heartbeat);
   return { agentId: selected.id, heartbeatUnresolved };
 }
 
@@ -61,24 +63,6 @@ export function findLegacySystemAgentOwnerIssue(raw: unknown) {
           'Legacy ambient operations have no system-agent owner; run "openclaw doctor --fix" to set agents.defaults.systemAgent.agentId from the default agent.',
       }
     : undefined;
-}
-
-/** Complete ambient ownership when Doctor persists a legacy or newly materialized roster. */
-export function seedLegacyAmbientOwners(raw: Record<string, unknown>, changes: string[]): void {
-  const owner = resolveMissingLegacySystemAgent(raw);
-  if (!owner) {
-    return;
-  }
-  const { agentId, heartbeatUnresolved } = owner;
-  const defaults = ensureRecord(ensureRecord(raw, "agents"), "defaults");
-  ensureRecord(defaults, "systemAgent").agentId = agentId;
-  changes.push(
-    `Set agents.defaults.systemAgent.agentId to ${agentId} for legacy ambient operations.`,
-  );
-  if (heartbeatUnresolved) {
-    ensureRecord(defaults, "heartbeat").agentId = agentId;
-    changes.push(`Set agents.defaults.heartbeat.agentId to ${agentId} for legacy heartbeats.`);
-  }
 }
 
 const LEGACY_SYSTEM_AGENT_CONFIG_RULE: LegacyConfigRule = {
@@ -103,20 +87,21 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SYSTEM_AGENT: LegacyConfigMigratio
   defineLegacyConfigMigration({
     id: "runtime.legacy-system-agent-owner",
     describe: "Restore the legacy default agent for ambient operations",
-    apply: (raw, changes, context) => {
-      if (context?.sourceConfigBeforeMigrations !== undefined) {
-        const sourceAgents = getRecord(getRecord(context.sourceConfigBeforeMigrations)?.agents);
-        const sourceRoster = sourceAgents?.entries ?? sourceAgents?.list;
-        // The reader synthesizes main for an absent/empty roster; that is not a legacy owner.
-        if (
-          !sourceRoster ||
-          typeof sourceRoster !== "object" ||
-          Object.keys(sourceRoster).length === 0
-        ) {
-          return;
-        }
+    apply: (raw, changes) => {
+      const owner = resolveMissingLegacySystemAgent(raw);
+      if (!owner) {
+        return;
       }
-      seedLegacyAmbientOwners(raw, changes);
+      const { agentId, heartbeatUnresolved } = owner;
+      const defaults = ensureRecord(ensureRecord(raw, "agents"), "defaults");
+      ensureRecord(defaults, "systemAgent").agentId = agentId;
+      changes.push(
+        `Set agents.defaults.systemAgent.agentId to ${agentId} for legacy ambient operations.`,
+      );
+      if (heartbeatUnresolved) {
+        ensureRecord(defaults, "heartbeat").agentId = agentId;
+        changes.push(`Set agents.defaults.heartbeat.agentId to ${agentId} for legacy heartbeats.`);
+      }
     },
   }),
 ];

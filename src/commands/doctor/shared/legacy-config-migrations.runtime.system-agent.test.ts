@@ -10,7 +10,10 @@ import type {
 import { resolveHeartbeatAgents } from "../../../infra/heartbeat-config.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
-import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_SYSTEM_AGENT } from "./legacy-config-migrations.runtime.system-agent.js";
+import {
+  findLegacySystemAgentOwnerIssue,
+  LEGACY_CONFIG_MIGRATIONS_RUNTIME_SYSTEM_AGENT,
+} from "./legacy-config-migrations.runtime.system-agent.js";
 
 const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_SYSTEM_AGENT[0];
 
@@ -75,15 +78,51 @@ describe("legacy ambient owner migration", () => {
     },
   );
 
-  it.each(["entries", "list"])("prefers the marked default over main in %s", (shape) => {
-    const result = applyLegacyDoctorMigrations({
-      agents:
-        shape === "entries"
-          ? { entries: { main: {}, ops: { default: true } } }
-          : { list: [{ id: "main" }, { id: "ops", default: true }] },
+  describe.each(["entries", "list"])("already resolved %s rosters", (shape) => {
+    it.each<{ label: string; entries: Record<string, AgentEntryConfig>; owner: string }>([
+      { label: "sole main", entries: { main: {} }, owner: "main" },
+      { label: "sole custom agent", entries: { ops: {} }, owner: "ops" },
+      {
+        label: "honored legacy default",
+        entries: { main: {}, ops: { default: true } },
+        owner: "ops",
+      },
+    ])("keeps $label quiet", ({ entries, owner }) => {
+      const raw: OpenClawConfig = {
+        agents:
+          shape === "entries"
+            ? { entries }
+            : {
+                list: Object.entries(entries).map(([id, config]) => Object.assign({ id }, config)),
+              },
+      };
+      expect(resolveAmbientOwnerAgentId(raw)).toBe(owner);
+      expect(findLegacySystemAgentOwnerIssue(raw)).toBeUndefined();
+      const result = applyLegacyDoctorMigrations(raw);
+      const migrated = (result.next ?? raw) as OpenClawConfig;
+      expect(migrated.agents?.defaults?.systemAgent).toBeUndefined();
+      expect(migrated.agents?.defaults?.heartbeat).toBeUndefined();
+      expect(resolveAmbientOwnerAgentId(migrated)).toBe(owner);
+      expect(applyLegacyDoctorMigrations(migrated)).toEqual({ next: null, changes: [] });
     });
-    expect(result.next).toHaveProperty("agents.defaults.systemAgent.agentId", "ops");
   });
+
+  it.each(["entries", "list"])(
+    "seeds a marked default ignored by explicit %s ownership",
+    (shape) => {
+      const raw: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          ...(shape === "entries"
+            ? { entries: { main: {}, ops: { default: true } } }
+            : { list: [{ id: "main" }, { id: "ops", default: true }] }),
+        },
+      };
+      expect(() => resolveAmbientOwnerAgentId(raw)).toThrow("no explicit owner");
+      const result = applyLegacyDoctorMigrations(raw);
+      expect(result.next).toHaveProperty("agents.defaults.systemAgent.agentId", "ops");
+    },
+  );
 
   it.each<{
     label: string;
@@ -91,12 +130,6 @@ describe("legacy ambient owner migration", () => {
     entries: Record<string, AgentEntryConfig>;
     owners: string[];
   }>([
-    {
-      label: "sole agent fallback",
-      defaults: {},
-      entries: { main: {} },
-      owners: ["main"],
-    },
     {
       label: "explicit owner",
       defaults: { heartbeat: { agentId: "ops" } },

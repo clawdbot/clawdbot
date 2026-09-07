@@ -49,7 +49,7 @@ describe("automatic startup config repair", () => {
     expect(snapshot.sourceConfig.session).toEqual({ idleMinutes: 45 });
   });
 
-  it("plans retired-key removal and ambient ownership for stable-authored config", () => {
+  it("plans removal of the stable-authored retired keys without changing other config", () => {
     const snapshot = invalidSnapshot({
       config: {
         meta: {
@@ -69,10 +69,7 @@ describe("automatic startup config repair", () => {
 
     expect(plan?.config).toEqual({
       meta: { lastTouchedVersion: "2026.7.1-2" },
-      agents: {
-        defaults: { heartbeat: { every: "30m" }, systemAgent: { agentId: "main" } },
-        entries: { main: {} },
-      },
+      agents: { defaults: { heartbeat: { every: "30m" } }, entries: { main: {} } },
       gateway: { mode: "local" },
     });
     expect(plan?.snapshot.valid).toBe(true);
@@ -100,10 +97,7 @@ describe("automatic startup config repair", () => {
         lastTouchedVersion: VERSION,
         migrations: { modelPolicyAllowlist: true },
       },
-      agents: {
-        defaults: { workspace: "/tmp/workspace", systemAgent: { agentId: "main" } },
-        entries: { main: {} },
-      },
+      agents: { defaults: { workspace: "/tmp/workspace" }, entries: { main: {} } },
       gateway: { mode: "local" },
     } as OpenClawConfig;
     const after: ConfigFileSnapshot = {

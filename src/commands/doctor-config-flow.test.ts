@@ -1678,8 +1678,7 @@ describe("doctor config flow", () => {
     // Repair panels defer to the atomic write runner; the flow itself must not
     // claim the roster change happened before anything reached disk.
     expect(result.pendingChangePanels).toContain(
-      "Prepared the canonical agent roster without retired default markers for persistence.\n" +
-        "Set agents.defaults.systemAgent.agentId to main for legacy ambient operations.",
+      "Prepared the canonical agent roster without retired default markers for persistence.",
     );
     expect(terminalNoteMock.mock.calls.some(([, title]) => title === "Doctor changes")).toBe(false);
     expect(terminalNoteMock.mock.calls.some(([message]) => message.includes("Persisted"))).toBe(
@@ -2052,7 +2051,7 @@ describe("doctor config flow", () => {
 
     expect(result.shouldWriteConfig).toBe(true);
     expect(result.cfg.agents).toEqual({
-      defaults: { workspace: "/tmp/ops", systemAgent: { agentId: "main" } },
+      defaults: { workspace: "/tmp/ops" },
       entries: { main: {} },
     });
   });

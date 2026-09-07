@@ -26,10 +26,7 @@ describe("doctor --fix include write ownership", () => {
     await withTempHome(async (home) => {
       await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const configPath = await writeOpenClawConfig(home, {
-          agents: {
-            defaults: { systemAgent: { agentId: "main" } },
-            entries: { main: { $include: "./config/main-parent.json5" } },
-          },
+          agents: { entries: { main: { $include: "./config/main-parent.json5" } } },
           gateway: { mode: "local" },
         });
         const fragmentDir = path.join(path.dirname(configPath), "config");
