@@ -147,7 +147,7 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
     await withSocketServer(server, async (socketPath) => {
       closedSocketPath = socketPath;
       await expect(
-        requestJsonlSocket({
+        requestJsonlSocket<number | { kind: "timeout" }>({
           socketPath,
           requestLine: "{}",
           timeoutMs: 50,
@@ -163,6 +163,61 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
         accept: () => undefined,
       }),
     ).resolves.toBeNull();
+  });
+
+  it("returns the caller's typed timeout result when provided", async () => {
+    const server = net.createServer({ allowHalfOpen: true }, (socket) => {
+      socket.resume();
+    });
+    await withSocketServer(server, async (socketPath) => {
+      await expect(
+        requestJsonlSocket({
+          socketPath,
+          requestLine: "{}",
+          timeoutMs: 50,
+          onTimeout: () => ({ kind: "timeout" as const }),
+          accept: () => undefined,
+        }),
+      ).resolves.toEqual({ kind: "timeout" });
+    });
+  });
+
+  it("returns the caller's typed response-loss result after submission", async () => {
+    const server = net.createServer((socket) => {
+      socket.on("data", () => {
+        socket.destroy();
+      });
+    });
+    await withSocketServer(server, async (socketPath) => {
+      await expect(
+        requestJsonlSocket({
+          socketPath,
+          requestLine: "{}",
+          timeoutMs: 500,
+          onResponseLost: () => ({ kind: "response-lost" as const }),
+          accept: () => undefined,
+        }),
+      ).resolves.toEqual({ kind: "response-lost" });
+    });
+  });
+
+  it("can wait without a transport deadline when timeoutMs is zero", async () => {
+    const server = net.createServer((socket) => {
+      socket.on("data", () => {
+        socket.end('{"type":"done","value":7}\n');
+      });
+    });
+    await withSocketServer(server, async (socketPath) => {
+      await expect(
+        requestJsonlSocket<number | { kind: "timeout" }>({
+          socketPath,
+          requestLine: "{}",
+          timeoutMs: 0,
+          onTimeout: () => ({ kind: "timeout" as const }),
+          accept: acceptDoneValue,
+        }),
+      ).resolves.toBe(7);
+    });
   });
 
   it("returns null when the socket closes without an accepted response", async () => {

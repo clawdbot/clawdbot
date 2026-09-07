@@ -122,7 +122,15 @@ describe.runIf(process.platform !== "win32")("enforced exec host transport bound
                   request,
                   timeoutMs: 2_000,
                 });
-                expect(response).toBeNull();
+                expect(response).toEqual({
+                  ok: false,
+                  error: {
+                    code: "UNKNOWN",
+                    reason: "response-lost",
+                    message:
+                      "UNKNOWN: macOS app exec host response was lost; execution outcome is unknown",
+                  },
+                });
                 order.push("client-null");
                 return response;
               },

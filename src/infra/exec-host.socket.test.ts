@@ -162,7 +162,7 @@ describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () =
   );
 
   it.each(["close", "malformed matching response", "timeout"] as const)(
-    "characterizes null after a signed request starts a child and then %s",
+    "characterizes the outcome after a signed request starts a child and then %s",
     async (fault) => {
       await withExecPeer(async ({ dir, socketPath, markers, order, children, onRequest }) => {
         const command = [
@@ -212,10 +212,33 @@ describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () =
           order.push("child-completed");
         });
         try {
-          // Characterization only: null currently conflates no delivery with lost outcome.
-          await expect(
-            requestExecHostViaSocket({ socketPath, token, request, timeoutMs: 1_000 }),
-          ).resolves.toBeNull();
+          const result = await requestExecHostViaSocket({
+            socketPath,
+            token,
+            request,
+            timeoutMs: 1_000,
+          });
+          if (fault === "close") {
+            expect(result).toEqual({
+              ok: false,
+              error: {
+                code: "UNKNOWN",
+                reason: "response-lost",
+                message:
+                  "UNKNOWN: macOS app exec host response was lost; execution outcome is unknown",
+              },
+            });
+          } else {
+            expect(result).toEqual({
+              ok: false,
+              error: {
+                code: "TIMEOUT",
+                reason: "timeout",
+                message:
+                  "TIMEOUT: macOS app exec host response timed out; execution outcome is unknown",
+              },
+            });
+          }
           order.push("client-null");
           expect(await fs.readFile(markers, "utf8")).toBe("START\n");
         } finally {
