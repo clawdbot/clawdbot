@@ -600,9 +600,9 @@ export function createReadToolDefinition(
                   }
                 }
               }
-              if (textDetails?.kind === "text") {
-                // Full-fit custom decoder text can borrow a larger source. Copy both bounded channels,
-                // preserving UTF-16 code units from custom decoders, including lone surrogates.
+              if (textDetails) {
+                // A full-fit selection can still have a continuation and borrow the decoded file.
+                // Detach both bounded channels regardless of EOF, preserving exact UTF-16 units.
                 outputText = Buffer.from(outputText, "utf16le").toString("utf16le");
                 textDetails.content = Buffer.from(textDetails.content, "utf16le").toString(
                   "utf16le",
