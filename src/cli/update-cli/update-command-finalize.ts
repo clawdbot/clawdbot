@@ -250,7 +250,11 @@ async function updateFinalizeCommandInternal(
     async () =>
       opts.deferCompletionCache
         ? ("deferred" as const)
-        : await tryWriteCompletionCache(root, Boolean(opts.json)),
+        : await tryWriteCompletionCache(
+            root,
+            Boolean(opts.json),
+            lifecycle.budget("completionCache"),
+          ),
     (result) => result,
   );
 

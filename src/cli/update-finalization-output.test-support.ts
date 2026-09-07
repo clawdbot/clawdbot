@@ -7,9 +7,15 @@ import { pathToFileURL } from "node:url";
 
 const require = createRequire(import.meta.url);
 const root = process.env.HOME!;
-// Keep real install discovery inside the fixture; no openclaw.mjs means no completion-cache write.
+// Keep real install discovery inside the fixture; only the completion case has a CLI binary.
 await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
 const [scenario, ...args] = process.argv.slice(2);
+if (scenario === "completion-hang") {
+  await fs.writeFile(
+    path.join(root, "openclaw.mjs"),
+    "process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 10_000);",
+  );
+}
 const sourceUrl = (relative: string) => new URL(relative, import.meta.url).href;
 const doctorSource = `
 import { intro, note, outro } from ${JSON.stringify(pathToFileURL(require.resolve("@clack/prompts")).href)};

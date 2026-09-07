@@ -27,10 +27,11 @@ const scenarios = [
   "human-plugin-error",
   "human-plugin-warning",
 ];
+const finalizeScenarios = ["json", "phase-hang", "completion-hang", "handle-hang"];
 
 describe.each(["repair", "finalize"])("update %s process output", (command) => {
   // Both spellings share the finalization action; one matrix covers its output modes.
-  it.each(command === "repair" ? scenarios : ["json", "phase-hang", "handle-hang"])(
+  it.each(command === "repair" ? scenarios : finalizeScenarios)(
     "%s preserves the output and exit contract without restarting",
     async (scenario) => {
       const root = tempDirs.make("openclaw-update-json-");
@@ -62,6 +63,12 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         }),
       );
       const json = !scenario.startsWith("human");
+      const stuckPhase =
+        scenario === "phase-hang"
+          ? "configSnapshot"
+          : scenario === "completion-hang"
+            ? "completionCache"
+            : undefined;
       const args = [
         "update",
         ...(scenario === "inherited-json" ? ["--json"] : []),
@@ -71,7 +78,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         "--yes",
         "--no-restart",
         "--timeout",
-        scenario === "phase-hang" ? "1" : "9",
+        stuckPhase ? "1" : "9",
         ...(json && scenario !== "inherited-json" ? ["--json"] : []),
       ];
       const readRun = () =>
@@ -128,36 +135,36 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       });
       const failure = formatCliProcessFailure({ reason: `${command} ${scenario}`, ...result });
       expect(result.signal, failure).toBeNull();
-      expect(result.code, failure).toBe(
-        scenario.endsWith("error") || scenario === "phase-hang" ? 1 : 0,
-      );
-      if (scenario === "phase-hang") {
-        expect(observedPhaseStart?.steps).toContainEqual(
-          expect.objectContaining({
-            step: "finalize:configSnapshot",
-            status: "in_progress",
-            startedAtMs: expect.any(Number),
-          }),
-        );
+      expect(result.code, failure).toBe(scenario.endsWith("error") || stuckPhase ? 1 : 0);
+      if (stuckPhase) {
+        if (scenario === "phase-hang") {
+          expect(observedPhaseStart?.steps).toContainEqual(
+            expect.objectContaining({
+              step: "finalize:configSnapshot",
+              status: "in_progress",
+              startedAtMs: expect.any(Number),
+            }),
+          );
+        }
         const output = JSON.parse(result.stdout);
         expect(output).toMatchObject({
           status: "failed",
-          stuckPhase: "configSnapshot",
+          stuckPhase,
           restart: false,
         });
         expect(output.phaseTimings).toContainEqual(
           expect.objectContaining({
-            phase: "configSnapshot",
+            phase: stuckPhase,
             outcome: "failed",
             durationMs: expect.any(Number),
           }),
         );
-        expect(result.stderr).toContain("fixture configSnapshot entered");
+        expect(result.stderr).toContain(`finalize:${stuckPhase}`);
         expect(readRun()).toMatchObject({
           status: "failed",
           steps: expect.arrayContaining([
             expect.objectContaining({
-              step: "finalize:configSnapshot",
+              step: `finalize:${stuckPhase}`,
               status: "failed",
               startedAtMs: expect.any(Number),
               endedAtMs: expect.any(Number),
