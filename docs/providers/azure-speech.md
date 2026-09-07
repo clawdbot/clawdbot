@@ -15,7 +15,7 @@ output format through the `X-Microsoft-OutputFormat` header.
 | Detail                  | Value                                                                                                          |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------- |
 | Provider ID             | `azure-speech` (alias: `azure`)                                                                                |
-| Website                 | [Azure AI Speech](https://azure.microsoft.com/products/ai-services/ai-speech)                                  |
+| Website                 | [Azure Speech Service](https://learn.microsoft.com/azure/ai-services/speech-service/)                          |
 | Docs                    | [Speech REST text-to-speech](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech) |
 | Auth                    | `AZURE_SPEECH_KEY` plus `AZURE_SPEECH_REGION`                                                                  |
 | Default voice           | `en-US-JennyNeural`                                                                                            |
