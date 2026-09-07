@@ -16,9 +16,12 @@ import {
   assertRestartRecoverySnapshotCurrent,
   buildRestartRecoveryIdempotencyKey,
   buildRestartRecoveryResumeMessage,
+  captureShippedRestartTimeout,
   getRestartRecoveryReplayError,
   isRetiredSubagentExecution,
   isRestartRecoveryLifecycleCurrent,
+  reclassifyShippedRestartTimeout,
+  restoreShippedRestartTimeout,
 } from "./subagent-registry-restart-recovery-helpers.js";
 import { readSubagentRecoveryTranscriptMessage } from "./subagent-registry-restart-recovery-message.js";
 import {
@@ -219,24 +222,14 @@ export async function recoverInterruptedSubagentRow(
     if (typeof params.entry.execution.endedAt === "number" && !legacyRestartTimeout) {
       return { status: "ignored" };
     }
-    if (legacyRestartTimeout) {
-      const interruptedAt = params.entry.execution.endedAt;
-      params.entry.execution = {
-        ...params.entry.execution,
-        status: "interrupted",
-        interruptedAt,
-        interruptionReason: "gateway-restart",
-        endedAt: undefined,
-        outcome: undefined,
-      };
-      params.entry.endedReason = undefined;
-      params.entry.terminalOwner = undefined;
-    }
+    const timeoutSnapshot = captureShippedRestartTimeout(params.entry);
+    reclassifyShippedRestartTimeout(params.entry);
     // The abort marker records the interruption, not the age of useful work.
     // A long-running child must survive a brief planned Gateway update.
     const interruptedForMs =
       params.now - (params.entry.execution.interruptedAt ?? sessionEntry.updatedAt);
     if (interruptedForMs > MAX_INTERRUPTION_AGE_MS) {
+      restoreShippedRestartTimeout(params.entry, timeoutSnapshot);
       return {
         status: "terminal",
         error: `stale aborted subagent run not resumed (${Math.round(interruptedForMs / 1_000)}s interrupted, exceeds stale-run window)`,
@@ -301,6 +294,7 @@ export async function recoverInterruptedSubagentRow(
         childSessionKey,
         reason: blockedReason,
       });
+      restoreShippedRestartTimeout(params.entry, timeoutSnapshot);
       return { status: "handled" };
     }
     if (!params.gatewayRuntime) {

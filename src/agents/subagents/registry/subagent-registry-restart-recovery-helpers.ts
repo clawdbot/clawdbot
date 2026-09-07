@@ -81,3 +81,59 @@ export function assertRestartRecoverySnapshotCurrent(params: {
     throw new Error("subagent restart recovery session snapshot changed before dispatch");
   }
 }
+
+type ShippedRestartTimeoutSnapshot = {
+  execution: SubagentRunRecord["execution"];
+  endedReason: SubagentRunRecord["endedReason"];
+  terminalOwner: SubagentRunRecord["terminalOwner"];
+};
+
+export function captureShippedRestartTimeout(
+  entry: SubagentRunRecord,
+): ShippedRestartTimeoutSnapshot | undefined {
+  if (
+    entry.execution.outcome?.status !== "timeout" ||
+    typeof entry.execution.endedAt !== "number"
+  ) {
+    return undefined;
+  }
+  return {
+    execution: entry.execution,
+    endedReason: entry.endedReason,
+    terminalOwner: entry.terminalOwner,
+  };
+}
+
+export function reclassifyShippedRestartTimeout(entry: SubagentRunRecord): void {
+  if (
+    entry.execution.outcome?.status !== "timeout" ||
+    typeof entry.execution.endedAt !== "number"
+  ) {
+    return;
+  }
+  const interruptedAt = entry.execution.endedAt;
+  entry.execution = {
+    ...entry.execution,
+    status: "interrupted",
+    interruptedAt,
+    interruptionReason: "gateway-restart",
+    endedAt: undefined,
+    outcome: undefined,
+  };
+  entry.endedReason = undefined;
+  entry.terminalOwner = undefined;
+}
+
+// Resume reclassifies a shipped timeout as live interrupted so the session
+// can be wedged. Restore that timeout when resume is blocked.
+export function restoreShippedRestartTimeout(
+  entry: SubagentRunRecord,
+  snapshot: ShippedRestartTimeoutSnapshot | undefined,
+): void {
+  if (!snapshot) {
+    return;
+  }
+  entry.execution = snapshot.execution;
+  entry.endedReason = snapshot.endedReason;
+  entry.terminalOwner = snapshot.terminalOwner;
+}
