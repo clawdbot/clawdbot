@@ -687,7 +687,7 @@ describe("plugin authoring commands", () => {
       const originalPackage = fs.readFileSync(packagePath);
       const originalMode = fs.statSync(packagePath).mode & 0o7777;
       const originalDirectoryMode = fs.statSync(tmpDir).mode & 0o7777;
-      const originalEntries = fs.readdirSync(tmpDir).sort();
+      const originalEntries = fs.readdirSync(tmpDir).toSorted();
       const error = Object.assign(new Error("publication failed"), {
         code: failure === "write" ? "ENOSPC" : "EPERM",
       });
@@ -734,7 +734,7 @@ describe("plugin authoring commands", () => {
         expect(fs.readFileSync(packagePath)).toEqual(originalPackage);
         expect(fs.statSync(packagePath).mode & 0o7777).toBe(originalMode);
         expect(fs.statSync(tmpDir).mode & 0o7777).toBe(originalDirectoryMode);
-        expect(fs.readdirSync(tmpDir).sort()).toEqual(originalEntries);
+        expect(fs.readdirSync(tmpDir).toSorted()).toEqual(originalEntries);
         expect(log).not.toHaveBeenCalled();
       } finally {
         vi.restoreAllMocks();
