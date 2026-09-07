@@ -85,6 +85,7 @@ async function finalizeMigratedUpdate(): Promise<void> {
       : undefined;
   let result;
   let exitCode = 0;
+  let automaticTriage: MigratedUpdateFinalizationResult["automaticTriage"];
   try {
     result = await finishUpdate({
       ...input.params,
@@ -99,6 +100,7 @@ async function finalizeMigratedUpdate(): Promise<void> {
     }
     result = error.result;
     exitCode = error.exitCode;
+    automaticTriage = error.automaticTriage;
   } finally {
     await windowsRecovery?.complete(result?.status === "ok");
   }
@@ -110,6 +112,7 @@ async function finalizeMigratedUpdate(): Promise<void> {
     result,
     exitCode,
     terminalRunId: terminal.runId,
+    automaticTriage,
   };
   await fs.writeFile(input.resultPath, JSON.stringify(response), { mode: 0o600 });
 }

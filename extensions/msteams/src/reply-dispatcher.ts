@@ -179,6 +179,7 @@ export function createMSTeamsReplyDispatcher(params: {
     (hookRunner?.hasHooks("message_sending") ?? false)
   );
   const streamController = createTeamsReplyStreamController({
+    tableMode,
     allowProviderPreview,
     conversationType,
     context: params.context,

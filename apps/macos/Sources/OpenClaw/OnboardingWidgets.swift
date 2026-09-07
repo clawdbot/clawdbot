@@ -94,7 +94,6 @@ extension OnboardingView {
         }
         return aiSetup.detectError != nil ||
             aiSetup.configuredGatewayAuthIssue != nil ||
-            aiSetup.exhaustedAutoCandidates ||
             aiSetup.manualError != nil ||
             candidateFailed
     }

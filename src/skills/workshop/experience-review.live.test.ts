@@ -184,7 +184,7 @@ describe("skill experience review transcript fixture", () => {
   });
 });
 
-describeLive("skill experience review live OpenAI eval", () => {
+describeLive("skill experience draft-only review live OpenAI eval", () => {
   beforeAll(async () => {
     // Warm the plugin runtime outside the review lane: the first load compiles
     // extensions synchronously and can exceed the lane's no-progress watchdog
@@ -211,9 +211,7 @@ describeLive("skill experience review live OpenAI eval", () => {
       const before = await listSkillProposals({ config: reviewCandidate.config, agentId: "main" });
       const startedAt = Date.now();
       const observation = await observeExperienceReview(() =>
-        runSkillExperienceReview(reviewCandidate, {
-          getCurrentConfig: () => reviewCandidate.config,
-        }),
+        runSkillExperienceReview(reviewCandidate),
       );
       const { proposals } = await listSkillProposals({
         config: reviewCandidate.config,

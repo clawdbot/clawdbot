@@ -142,7 +142,7 @@ describe("chat pane embedded panels", () => {
       browser: "browser",
       companion: "chat",
       conversation: "chat",
-      dashboard: "review",
+      dashboard: "board",
       desktop: "desktop",
       detail: "review",
       discussion: "discussion",

@@ -187,7 +187,7 @@ The common plugin config shape is:
     enabled: true,
     allow: ["voice-call"],
     deny: ["untrusted-plugin"],
-    load: { paths: ["~/Projects/oss/voice-call-plugin"] },
+    load: { paths: ["~/path/to/oss/voice-call-plugin"] },
     slots: { memory: "memory-core" },
     entries: {
       "voice-call": { enabled: true, config: { provider: "twilio" } },

@@ -155,13 +155,18 @@ describe("markdownToTelegramHtml", () => {
     expect(withInvisible?.replace("\u200B", "")).toBe(reference);
   });
 
-  it("keeps raw HTML tables escaped inside legacy HTML code blocks", () => {
+  it.each([
+    ["code", "<code>", "</code>"],
+    ["pre", "<pre>", "</pre>"],
+    ["pre/code", "<pre><code>", "</code></pre>"],
+  ])("keeps only the table inside %s escaped between rendered tables", (_name, open, close) => {
     expect(
-      renderTelegramHtmlText("<pre><code><table><tr><td>A</td></tr></table></code></pre>", {
-        textMode: "html",
-      }),
+      renderTelegramHtmlText(
+        `<table><tr><td>A</td></tr></table>${open}<table><tr><td>B</td></tr></table>${close}<table><tr><td>C</td></tr></table>`,
+        { textMode: "html" },
+      ),
     ).toBe(
-      "<pre><code>&lt;table&gt;&lt;tr&gt;&lt;td&gt;A&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;</code></pre>",
+      `<pre><code>| A   |</code></pre>\n\n${open}&lt;table&gt;&lt;tr&gt;&lt;td&gt;B&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;${close}<pre><code>| C   |</code></pre>\n\n`,
     );
   });
 

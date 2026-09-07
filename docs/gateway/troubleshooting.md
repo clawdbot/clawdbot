@@ -144,8 +144,8 @@ If the target is intentional, configure both the direct skill root and the allow
 {
   skills: {
     load: {
-      extraDirs: ["~/Projects/manager/skills"],
-      allowSymlinkTargets: ["~/Projects/manager/skills"],
+      extraDirs: ["~/path/to/skills"],
+      allowSymlinkTargets: ["~/path/to/skills"],
     },
   },
 }
@@ -227,7 +227,7 @@ A successful minimal `curl` does not guarantee that real SDK-style requests will
 
 Related:
 
-- [OpenAI-compatible endpoints](/gateway/configuration-reference#openai-compatible-endpoints)
+- [OpenAI-compatible endpoints](/gateway/config-gateway#openai-compatible-endpoints)
 - [Provider configuration](/providers)
 - [Logs](/logging)
 
@@ -279,7 +279,7 @@ Related:
 
 - [Configuration](/gateway/configuration)
 - [Local models](/gateway/local-models)
-- [OpenAI-compatible endpoints](/gateway/configuration-reference#openai-compatible-endpoints)
+- [OpenAI-compatible endpoints](/gateway/config-gateway#openai-compatible-endpoints)
 
 ## Agent run failed with a storage error
 

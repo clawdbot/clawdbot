@@ -18,6 +18,11 @@ alias `OPENCODE_ZEN_API_KEY`). Go still requires its own paid subscription;
 having a Zen key does not by itself grant Go access. OpenClaw keeps the runtime
 provider ids split so upstream per-model routing stays correct.
 
+OpenClaw sends a stable `x-opencode-session` conversation header on requests to
+`https://opencode.ai` across the Anthropic, Gemini, OpenAI Chat Completions, and
+OpenAI Responses transports. This header remains enabled when prompt caching is
+disabled. Direct SDK callers should supply `sessionId` in their stream options.
+
 ## Getting started
 
 <Tabs>

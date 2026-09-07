@@ -234,6 +234,7 @@ function resolveRecentHistoryStart(
   history: VisibleHistoryProjection,
   maxBytes: number,
   maxMessages: number,
+  allowOversizedFirst = true,
 ): number {
   const { boundedEnd, boundedStart, boundaries, messageEnd, messageStart } =
     resolveVisibleHistoryRange(history, start, endExclusive);
@@ -266,7 +267,7 @@ function resolveRecentHistoryStart(
     if (serializedBytes === undefined) {
       continue;
     }
-    if (selectedCount > 0 && bytes + serializedBytes > maxBytes) {
+    if ((!allowOversizedFirst || selectedCount > 0) && bytes + serializedBytes > maxBytes) {
       break;
     }
     selectedStart = displayPosition;
@@ -479,7 +480,7 @@ export function readRecentSessionTranscriptHistoryEvents(
 
 export function readSessionTranscriptHistoryEventPage(
   scope: SessionTranscriptReadScope,
-  options: { maxMessages: number; offset: number },
+  options: { maxMessages: number; offset: number; maxBytes?: number },
 ): SessionTranscriptMessageEventPage {
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const history = resolveVisibleHistoryProjection(projection);
@@ -492,12 +493,35 @@ export function readSessionTranscriptHistoryEventPage(
       Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 0),
     );
     const endExclusive = Math.max(0, history.total - offset);
-    const start = Math.max(0, endExclusive - maxMessages);
+    const requestedStart = Math.max(0, endExclusive - maxMessages);
+    const boundedStart =
+      options.maxBytes === undefined
+        ? requestedStart
+        : resolveRecentHistoryStart(
+            projection,
+            requestedStart,
+            endExclusive,
+            history,
+            Math.max(
+              1024,
+              Math.floor(Number.isFinite(options.maxBytes) ? options.maxBytes : 1024 * 1024),
+            ),
+            maxMessages,
+            false,
+          );
+    // A single oversized event must not defeat the hard limit or trap pagination.
+    // Skip its source position explicitly; callers disclose the omission to readers.
+    const omittedOversized = maxMessages > 0 && endExclusive > 0 && boundedStart === endExclusive;
+    const consumedStart = omittedOversized ? endExclusive - 1 : boundedStart;
     return {
       activeLeafEntryId: projection.state.leafEventId,
-      events: readVisibleHistoryRange(projection, start, endExclusive, history),
+      events: readVisibleHistoryRange(projection, boundedStart, endExclusive, history),
       displaySource: history.displaySource,
       totalMessages: history.total,
+      ...(options.maxBytes !== undefined && maxMessages > 0 && consumedStart > 0
+        ? { olderOffset: history.total - consumedStart }
+        : {}),
+      ...(omittedOversized ? { omittedOversized: true } : {}),
     };
   });
 }

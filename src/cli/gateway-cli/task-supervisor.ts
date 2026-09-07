@@ -25,8 +25,6 @@ export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
   const managed = await getProcessSupervisor().spawn({
     mode: "anchored-shell",
     command: renderGatewayTaskCommand(),
-    sessionId: "gateway-task-supervisor",
-    backendId: "gateway-task-supervisor",
     scopeKey: `gateway-task-supervisor:${process.pid}`,
     captureOutput: false,
   });

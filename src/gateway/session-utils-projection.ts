@@ -226,12 +226,13 @@ export function populateSessionListAcpMetadata(params: {
   const entries = params.entries
     .filter(([, entry]) => !metadataByEntry.has(entry))
     .map(([key, entry]) => {
-      const agentId = expectDefined(params.targetsBySessionKey.get(key), "ACP row owner").agentId;
+      const target = expectDefined(params.targetsBySessionKey.get(key), "ACP row owner");
+      const agentId = target.agentId;
       return {
         sessionKey: resolveStoredSessionKeyForAgentStore({
           cfg: params.cfg,
           agentId,
-          sessionKey: key,
+          sessionKey: target.storeKey ?? key,
         }),
         agentId,
         entry,

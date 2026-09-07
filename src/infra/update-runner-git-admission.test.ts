@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { resolveStableNodePath } from "./stable-node-path.js";
 import { buildUpdateCommandRunner } from "./update-runner-command.js";
 import { updateGitCheckout } from "./update-runner-git.js";
 import type { CommandRunner, UpdateRunnerOptions } from "./update-runner-types.js";
@@ -35,7 +36,7 @@ function fixture(relativeRemote = false) {
   git(source, "init", "-b", "main");
   git(source, "config", "user.name", "Update fixture");
   git(source, "config", "user.email", "fixture@example.invalid");
-  fs.writeFileSync(path.join(source, ".gitignore"), "node_modules/\ndist/\n.artifacts/\n*.tmp\n");
+  fs.writeFileSync(path.join(source, ".gitignore"), "node_modules/\ndist/\n.artifacts/\n");
   fs.writeFileSync(path.join(source, "openclaw.mjs"), "export {};\n");
   const commit = (version: string, agentSchema: number) => {
     fs.writeFileSync(
@@ -61,7 +62,7 @@ function fixture(relativeRemote = false) {
   const target = commit("2026.7.2", 14);
   const calls: string[][] = [];
   const runCommand: CommandRunner = async (argv, options) => {
-    if (argv[0] === process.execPath && argv.includes("doctor")) {
+    if (argv.includes("doctor") && argv[0] === (await resolveStableNodePath(process.execPath))) {
       return { code: 0, stdout: "", stderr: "" };
     }
     if (argv[0] === "pnpm") {

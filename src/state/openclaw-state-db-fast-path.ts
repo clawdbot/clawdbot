@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
   collectSqliteSchemaIssues,
@@ -6,18 +7,41 @@ import {
   type SqliteTableContractReader,
 } from "../infra/sqlite-schema-contract.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { hasLegacyCronRunLogs } from "../infra/state-migrations.cron-run-logs.js";
 import { VERSION } from "../version.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { assertOpenClawStateDatabaseForMaintenance } from "./openclaw-state-db-maintenance.js";
-import { assertCanonicalStateSchemaShape } from "./openclaw-state-db-schema-repair.js";
+import {
+  assertCanonicalStateSchemaShape,
+  detectOpenClawStateDatabaseSchemaMigrationsFromDatabase,
+} from "./openclaw-state-db-schema-repair.js";
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 import {
   getOpenClawStateRuntimeSchema,
   isOpenClawStateStartupRepairableSchemaIssue,
   STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
 } from "./openclaw-state-schema-compatibility.js";
+import { readStateSchemaContentVersion } from "./openclaw-state-schema-publication.js";
+
+export function needsOpenClawStateDatabaseSchemaRepair(pathname: string): boolean {
+  let database: DatabaseSync | undefined;
+  try {
+    database = openNodeSqliteDatabase(pathname, { readOnly: true });
+    assertSupportedStateSchemaVersion(database, pathname);
+    const needsRepair =
+      readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION ||
+      detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(database, pathname).length > 0;
+    if (!needsRepair) {
+      assertCurrentStateRuntimeSchema(database, pathname);
+    }
+    return needsRepair;
+  } catch {
+    // Preserve the repair path's existing diagnostics for unreadable or noncanonical databases.
+    return true;
+  } finally {
+    database?.close();
+  }
+}
 
 export function assertCurrentStateRuntimeSchema(
   database: DatabaseSync,
@@ -34,7 +58,7 @@ export function isOpenClawStateSchemaFastPathEligible(
 ): boolean {
   return runSqliteDeferredTransactionSync(database, () => {
     assertSupportedStateSchemaVersion(database, pathname);
-    if (readSqliteUserVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
+    if (readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
       return false;
     }
     assertSqliteIntegrity(database, pathname);

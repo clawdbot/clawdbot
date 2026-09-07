@@ -35,6 +35,14 @@ describe("Control UI credentials", () => {
       expected: ["same-token", "password"],
     },
     {
+      name: "uses one Bearer candidate when both fields carry the Gateway secret",
+      source: {
+        settings: { token: "gateway-secret" },
+        password: "gateway-secret",
+      },
+      expected: ["gateway-secret"],
+    },
+    {
       name: "rejects embedded header newlines before selecting a credential",
       source: {
         hello: { auth: { deviceToken: "bad\ndevice" } },

@@ -46,6 +46,8 @@ type GatewaySessionEntryProjection = NonNullable<SessionEntryListScope["projecti
 
 type GatewayStoredSessionTarget = {
   agentId: string;
+  /** Exact stored key when a list uses an internal key to retain sentinel owners. */
+  storeKey?: string;
   storeTarget: SessionStoreTarget;
 };
 
@@ -70,6 +72,8 @@ type GatewaySessionStoreOptions = {
   configuredAgentsOnly?: boolean;
   includeIncognito?: boolean;
   projection?: SessionEntryListScope["projection"];
+  /** Keep per-agent sentinel rows distinct internally; public reads restore their raw key. */
+  preserveSentinelOwners?: boolean;
 };
 
 type ResolvedGatewaySessionStoreTargets = {
@@ -168,9 +172,11 @@ function mergeSessionEntryIntoCombined(params: {
   entry: SessionEntry;
   target: GatewayStoredSessionTarget;
   canonicalKey: string;
+  projectedKey?: string;
 }) {
   const { cfg, combined, entry, target, canonicalKey } = params;
-  const existing = combined[canonicalKey];
+  const projectedKey = params.projectedKey ?? canonicalKey;
+  const existing = combined[projectedKey];
   if (existing && (canonicalKey === "global" || canonicalKey === "unknown")) {
     // Reserved sentinels remain per-store federation state until goal 3 decides
     // how multi-store ownership composes; target order owns the projection.
@@ -203,8 +209,8 @@ function mergeSessionEntryIntoCombined(params: {
       }
     }
   }
-  combined[canonicalKey] = projected;
-  params.targetsBySessionKey.set(canonicalKey, target);
+  combined[projectedKey] = projected;
+  params.targetsBySessionKey.set(projectedKey, target);
 }
 
 function mergeOpenIncognitoStores(params: {
@@ -260,9 +266,10 @@ function filterCombinedStoreToConfiguredAgents(params: {
     return params.configuredAgentIds.has(normalizeAgentId(agentId));
   };
   for (const [key, entry] of Object.entries(params.store)) {
+    const storeKey = params.targetsBySessionKey.get(key)?.storeKey ?? key;
     const keep =
-      key === "global" ||
-      key === "unknown" ||
+      storeKey === "global" ||
+      storeKey === "unknown" ||
       isConfiguredSessionKey(key) ||
       isConfiguredSessionKey(entry.spawnedBy) ||
       isConfiguredSessionKey(entry.parentSessionKey);
@@ -510,13 +517,25 @@ export function loadCombinedSessionStoreForGatewayCore(
       if (requestedAgentId && canonicalAgentId !== requestedAgentId) {
         continue;
       }
+      // Canonical stored keys are agent-prefixed or raw sentinels; this private
+      // pair cannot collide with a literal agent:<id>:global or :unknown session.
+      const projectedKey =
+        opts.preserveSentinelOwners === true &&
+        (canonicalKey === "global" || canonicalKey === "unknown")
+          ? JSON.stringify([canonicalKey, canonicalAgentId])
+          : canonicalKey;
       mergeSessionEntryIntoCombined({
         cfg,
         combined,
         targetsBySessionKey,
         entry,
-        target: { agentId: canonicalAgentId, storeTarget },
+        target: {
+          agentId: canonicalAgentId,
+          storeTarget,
+          ...(projectedKey !== canonicalKey ? { storeKey: canonicalKey } : {}),
+        },
         canonicalKey,
+        projectedKey,
       });
     }
   }

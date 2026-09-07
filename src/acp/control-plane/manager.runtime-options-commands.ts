@@ -1,8 +1,8 @@
 /** Command handlers for changing ACP runtime mode and config options on live sessions. */
-import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
+import { resolveManagerRuntimeCapabilities } from "./manager.runtime-controls.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import type {
   AcpSessionRuntimeOptions,
@@ -25,11 +25,6 @@ export type RuntimeOptionCommandServices = {
   runtimeHandles: ManagerRuntimeHandleCache;
   resolveSession: ResolveManagerSession;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
-  resolveRuntimeCapabilities: (params: {
-    runtime: AcpRuntime;
-    handle: AcpRuntimeHandle;
-    includeStatusConfigOptionKeys?: boolean;
-  }) => Promise<{ controls: string[]; configOptionKeys?: string[] }>;
   writeSessionMeta: WriteManagerSessionMeta;
 };
 
@@ -55,7 +50,7 @@ export async function runSetManagerSessionRuntimeMode(
     agentId: params.agentId,
     meta: resolvedMeta,
   });
-  const capabilities = await params.resolveRuntimeCapabilities({ runtime, handle });
+  const capabilities = await resolveManagerRuntimeCapabilities({ runtime, handle });
   if (!capabilities.controls.includes("session/set_mode") || !runtime.setMode) {
     throw createUnsupportedControlError({
       backend: handle.backend || meta.backend,
@@ -101,7 +96,7 @@ export async function runSetManagerSessionConfigOption(
     meta: resolvedMeta,
   });
   const inferredPatch = inferRuntimeOptionPatchFromConfigOption(params.key, params.value);
-  const capabilities = await params.resolveRuntimeCapabilities({
+  const capabilities = await resolveManagerRuntimeCapabilities({
     runtime,
     handle,
     includeStatusConfigOptionKeys: true,

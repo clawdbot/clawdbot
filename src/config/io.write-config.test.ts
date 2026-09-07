@@ -267,6 +267,47 @@ describe("config io write", () => {
       ...options,
     });
 
+  const expectKeyedAgentSiblingWriteRefused = async (params: {
+    home: string;
+    authored: unknown;
+    includeFiles: Record<string, string>;
+    env?: NodeJS.ProcessEnv;
+  }) => {
+    const configPath = configPathForHome(params.home);
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    for (const [relativePath, raw] of Object.entries(params.includeFiles)) {
+      const includePath = path.join(params.home, relativePath);
+      await fs.mkdir(path.dirname(includePath), { recursive: true });
+      await fs.writeFile(includePath, raw, "utf-8");
+    }
+    const rootRaw = formatConfig(params.authored);
+    await fs.writeFile(configPath, rootRaw, "utf-8");
+    const io = createFastConfigIO(params.home, {
+      env: { OPENCLAW_TEST_FAST: "1", ...params.env } as NodeJS.ProcessEnv,
+    });
+    const snapshot = await io.readConfigFileSnapshot();
+    expect(snapshot.valid).toBe(true);
+
+    await expect(
+      io.writeConfigFile({
+        ...snapshot.config,
+        agents: {
+          ...snapshot.config.agents,
+          ownership: "explicit",
+          entries: {
+            ...snapshot.config.agents?.entries,
+            worker: { workspace: "/w/worker" },
+          },
+        },
+      }),
+    ).rejects.toThrow("Config write would flatten $include-owned config at agents");
+
+    await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(rootRaw);
+    for (const [relativePath, raw] of Object.entries(params.includeFiles)) {
+      await expect(fs.readFile(path.join(params.home, relativePath), "utf-8")).resolves.toBe(raw);
+    }
+  };
+
   const writeGatewayPortAndReadConfig = async (home: string, configPath: string) => {
     const io = createFastConfigIO(home);
 
@@ -1937,6 +1978,122 @@ describe("config io write", () => {
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(`${JSON.stringify(authored)}\n`);
     },
   );
+
+  itWithHome(
+    "adds a root-owned agent beside a keyed include without rewriting the include file",
+    async (home) => {
+      const configPath = configPathForHome(home);
+      const tonyPath = path.join(home, ".openclaw", "tony.json5");
+      const tonyRaw = `{
+  // Keep operator comments and references byte-identical.
+  workspace: "/w/tony",
+  model: { primary: "\${TONY_MODEL}" },
+}\n`;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(tonyPath, tonyRaw, "utf-8");
+      await writeConfigJson(configPath, {
+        agents: {
+          ownership: "explicit",
+          entries: { tony: { $include: "./tony.json5" } },
+        },
+      });
+      const io = createFastConfigIO(home, {
+        env: {
+          OPENCLAW_TEST_FAST: "1",
+          TONY_MODEL: "openai/gpt-5.4",
+        } as NodeJS.ProcessEnv,
+      });
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(true);
+
+      await io.writeConfigFile({
+        ...snapshot.config,
+        agents: {
+          ...snapshot.config.agents,
+          ownership: "explicit",
+          entries: {
+            ...snapshot.config.agents?.entries,
+            worker: { workspace: "/w/worker" },
+          },
+        },
+      });
+
+      const rootAfter = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        agents?: {
+          ownership?: string;
+          entries?: Record<string, { $include?: string; workspace?: string }>;
+        };
+      };
+      expect(rootAfter.agents?.ownership).toBe("explicit");
+      expect(rootAfter.agents?.entries).toEqual({
+        tony: { $include: "./tony.json5" },
+        worker: { workspace: "/w/worker" },
+      });
+      await expect(fs.readFile(tonyPath, "utf-8")).resolves.toBe(tonyRaw);
+    },
+  );
+
+  itWithHome("rejects multiple include targets for one keyed agent entry", async (home) => {
+    await expectKeyedAgentSiblingWriteRefused({
+      home,
+      authored: {
+        agents: {
+          ownership: "explicit",
+          entries: { tony: { $include: ["./tony-base.json5", "./tony-extra.json5"] } },
+        },
+      },
+      includeFiles: {
+        ".openclaw/tony-base.json5": `{ workspace: "/w/tony" }\n`,
+        ".openclaw/tony-extra.json5": `{ name: "Tony" }\n`,
+      },
+    });
+  });
+
+  itWithHome("rejects a keyed agent include carrying a root-authored override", async (home) => {
+    await expectKeyedAgentSiblingWriteRefused({
+      home,
+      authored: {
+        agents: {
+          ownership: "explicit",
+          entries: {
+            tony: { $include: "./tony.json5", workspace: "/w/tony" },
+          },
+        },
+      },
+      includeFiles: { ".openclaw/tony.json5": `{ name: "Tony" }\n` },
+    });
+  });
+
+  itWithHome("rejects a delegated keyed agent include", async (home) => {
+    await expectKeyedAgentSiblingWriteRefused({
+      home,
+      authored: {
+        agents: {
+          ownership: "explicit",
+          entries: { tony: { $include: "./tony-delegate.json5" } },
+        },
+      },
+      includeFiles: {
+        ".openclaw/tony-delegate.json5": `{ $include: "./tony.json5" }\n`,
+        ".openclaw/tony.json5": `{ workspace: "/w/tony" }\n`,
+      },
+    });
+  });
+
+  itWithHome("rejects a keyed agent include outside the config directory", async (home) => {
+    const sharedDir = path.join(home, "shared");
+    await expectKeyedAgentSiblingWriteRefused({
+      home,
+      authored: {
+        agents: {
+          ownership: "explicit",
+          entries: { tony: { $include: "../shared/tony.json5" } },
+        },
+      },
+      includeFiles: { "shared/tony.json5": `{ workspace: "/w/tony" }\n` },
+      env: { OPENCLAW_INCLUDE_ROOTS: sharedDir } as NodeJS.ProcessEnv,
+    });
+  });
 
   itWithHome(
     "rejects repairs that would flatten a valid outer include with a broken nested include",

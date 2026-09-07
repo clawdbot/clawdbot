@@ -39,6 +39,12 @@ Exec approvals are enforced locally on the execution host:
 - **Gateway host** -> `openclaw` process on the gateway machine.
 - **Node host** -> node runner (macOS companion app or headless node host).
 
+The `claude-cli` backend also checks native Bash commands against the agent's
+exec allowlist when `ask: "on-miss"`. This authorizes command arguments while
+Claude Code owns execution; it does not provide OpenClaw sandboxing. See
+[Native Bash and the exec allowlist](/gateway/cli-backends#native-bash-and-the-exec-allowlist)
+for matching, prompting, and binding restrictions.
+
 ### Trust model
 
 - Gateway-authenticated callers are trusted operators for that Gateway.
@@ -150,14 +156,14 @@ Example schema:
       "allowlist": [
         {
           "id": "B0C8C0B3-2C2D-4F8A-9A3C-5A4B3C2D1E0F",
-          "pattern": "~/Projects/**/bin/rg",
+          "pattern": "~/path/to/**/bin/rg",
           "argPattern": "sha256:argv:...",
           "source": "allow-always",
           "lastUsedAt": 1737150000000,
           "lastResolvedPath": "/Users/user/Projects/.../bin/rg"
         },
         {
-          "pattern": "~/Projects/**/bin/git"
+          "pattern": "~/path/to/**/bin/git"
         }
       ],
       "mcpTools": [
@@ -404,7 +410,7 @@ to satisfy allowlist rules.
 Examples:
 
 - `rg`
-- `~/Projects/**/bin/peekaboo`
+- `~/path/to/**/bin/peekaboo`
 - `~/.local/bin/*`
 - `/opt/homebrew/bin/rg`
 

@@ -714,10 +714,7 @@ describe("startGatewayPostAttachRuntime", () => {
   });
 
   it("gates main-session recovery behind post-ready work", async () => {
-    let releasePostReadyWork!: () => void;
-    const postReadyWork = new Promise<void>((resolve) => {
-      releasePostReadyWork = resolve;
-    });
+    const { promise: postReadyWork, resolve: releasePostReadyWork } = createDeferred();
     let waitForStart: (() => Promise<void>) | undefined;
     hoisted.scheduleRestartAbortedMainSessionRecovery.mockImplementationOnce(
       (params: { waitForStart?: () => Promise<void> }) => {
@@ -897,10 +894,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("keeps delayed restart sentinel recovery admitted until wake work completes", async () => {
     vi.useFakeTimers();
-    let finishWake: (() => void) | undefined;
-    const wake = new Promise<void>((resolve) => {
-      finishWake = resolve;
-    });
+    const { promise: wake, resolve: finishWake } = createDeferred();
     hoisted.scheduleRestartSentinelWake.mockReturnValueOnce(wake);
 
     const sidecar = testing.scheduleRestartSentinelWakeAfterReady({
@@ -1572,10 +1566,7 @@ describe("startGatewayPostAttachRuntime", () => {
   ])(
     "starts and can cancel Control UI assets for $name roots while plugins are pending",
     async ({ state }) => {
-      let finishPluginStartup: (() => void) | undefined;
-      const pluginStartup = new Promise<void>((resolve) => {
-        finishPluginStartup = resolve;
-      });
+      const { promise: pluginStartup, resolve: finishPluginStartup } = createDeferred();
       const buildController = new AbortController();
       const buildSignal = buildController.signal;
       const startControlUiBuild = vi.fn(
@@ -1771,10 +1762,7 @@ describe("startGatewayPostAttachRuntime", () => {
       typedHooks: [],
     } as never;
     let startupClaimCurrent = true;
-    let releasePluginLoad: (() => void) | undefined;
-    const pluginLoadReady = new Promise<void>((resolve) => {
-      releasePluginLoad = resolve;
-    });
+    const { promise: pluginLoadReady, resolve: releasePluginLoad } = createDeferred();
     const pluginRuntimeClaim = {
       isCurrent: () => startupClaimCurrent,
       waitForUnblocked: async () => true,
@@ -2321,10 +2309,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("releases startup account starts before awaiting channel handoff", async () => {
     const events: string[] = [];
-    let releaseAccountStarts!: () => void;
-    const accountStartsReady = new Promise<void>((resolve) => {
-      releaseAccountStarts = resolve;
-    });
+    const { promise: accountStartsReady, resolve: releaseAccountStarts } = createDeferred();
     const startChannels = vi.fn(async () => {
       events.push("channels-start");
       await accountStartsReady;
@@ -2669,7 +2654,7 @@ describe("startGatewayPostAttachRuntime", () => {
         .catch((error: unknown) => error);
       await vi.advanceTimersByTimeAsync(actualServices.PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS);
       expect(await replacing).toBeInstanceOf(AggregateError);
-      expect(serviceStop).toHaveBeenCalledOnce();
+      expect(serviceStop).not.toHaveBeenCalled();
       reservation.reject();
       startup.resolve();
 
@@ -2679,6 +2664,7 @@ describe("startGatewayPostAttachRuntime", () => {
       });
       await vi.advanceTimersByTimeAsync(0);
       expect(drained).toBe(true);
+      expect(serviceStop).toHaveBeenCalledOnce();
       expect(generation.currentServices()).toBe(owner);
 
       let cleanupSettled = false;
@@ -2822,10 +2808,7 @@ describe("startGatewayPostAttachRuntime", () => {
     const registry = createEmptyPluginRegistry();
     const broadcastPluginEvent = vi.fn();
     let context: OpenClawPluginServiceContext | undefined;
-    let releaseCleanup: (() => void) | undefined;
-    const cleanupReleased = new Promise<void>((resolve) => {
-      releaseCleanup = resolve;
-    });
+    const { promise: cleanupReleased, resolve: releaseCleanup } = createDeferred();
     registry.services.push({
       pluginId: "deferred-deadline",
       source: "test",
@@ -3018,6 +3001,42 @@ describe("startGatewayPostAttachRuntime", () => {
       "skipping channel start (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
     );
     expect(onChannelsStarted).toHaveBeenCalledOnce();
+  });
+
+  it("continues startup tracing after a recovered channel startup error", async () => {
+    const trace = createStartupTraceRecorder();
+    const logChannels = { info: vi.fn(), error: vi.fn() };
+
+    await withEnvAsync(
+      { OPENCLAW_SKIP_CHANNELS: undefined, OPENCLAW_SKIP_PROVIDERS: undefined },
+      async () => {
+        await startGatewaySidecars({
+          cfg: { hooks: { internal: { enabled: false } } } as never,
+          pluginRegistry: createPostAttachParams().pluginRegistry,
+          defaultWorkspaceDir: testState.workspaceDir,
+          deps: {} as never,
+          startChannels: vi.fn(async () => {
+            throw new Error("channel unavailable");
+          }),
+          log: { warn: vi.fn() },
+          logHooks: {
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: vi.fn(),
+          },
+          logChannels,
+          startupTrace: trace.startupTrace,
+        });
+      },
+    );
+
+    expect(logChannels.error).toHaveBeenCalledWith(
+      "channel startup failed: Error: channel unavailable",
+    );
+    expect(trace.measures.indexOf("sidecars.channel-start")).toBeGreaterThanOrEqual(0);
+    expect(trace.measures.indexOf("sidecars.plugin-services")).toBeGreaterThan(
+      trace.measures.indexOf("sidecars.channel-start"),
+    );
   });
 
   it("records prepared runtime build grouping in the startup trace", async () => {
@@ -4017,14 +4036,8 @@ describe("startGatewayPostAttachRuntime", () => {
   });
 
   it("warms the CA cache before worker placement and sidecar startup", async () => {
-    let finishWarmup: (() => void) | undefined;
-    const warmupReady = new Promise<void>((resolve) => {
-      finishWarmup = resolve;
-    });
-    let finishReconcile: (() => void) | undefined;
-    const reconcileReady = new Promise<void>((resolve) => {
-      finishReconcile = resolve;
-    });
+    const { promise: warmupReady, resolve: finishWarmup } = createDeferred();
+    const { promise: reconcileReady, resolve: finishReconcile } = createDeferred();
     const startupOrder: string[] = [];
     const warmSystemCa = vi.fn(async () => {
       startupOrder.push("ca-warmup");
@@ -4139,14 +4152,8 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("stops worker placement once when close begins while it starts", async () => {
     let closeStarted = false;
-    let releaseWorkerStart: (() => void) | undefined;
-    const workerStartBlocked = new Promise<void>((resolve) => {
-      releaseWorkerStart = resolve;
-    });
-    let markWorkerStart: (() => void) | undefined;
-    const workerStartReached = new Promise<void>((resolve) => {
-      markWorkerStart = resolve;
-    });
+    const { promise: workerStartBlocked, resolve: releaseWorkerStart } = createDeferred();
+    const { promise: workerStartReached, resolve: markWorkerStart } = createDeferred();
     const workerSidecar = { stop: vi.fn(async () => {}) };
     const startGatewaySidecarsValue = vi.fn();
     const runtimePromise = startGatewayPostAttachRuntime(
@@ -4268,14 +4275,8 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("does not activate restored recovery when close begins during activation loading", async () => {
     let closeStarted = false;
-    let releaseRecoveryLoad: (() => void) | undefined;
-    const recoveryLoadReady = new Promise<void>((resolve) => {
-      releaseRecoveryLoad = resolve;
-    });
-    let markRecoveryLoadStarted: (() => void) | undefined;
-    const recoveryLoadStarted = new Promise<void>((resolve) => {
-      markRecoveryLoadStarted = resolve;
-    });
+    const { promise: recoveryLoadReady, resolve: releaseRecoveryLoad } = createDeferred();
+    const { promise: recoveryLoadStarted, resolve: markRecoveryLoadStarted } = createDeferred();
     const pluginServices: PluginServicesHandle = {
       reload: vi.fn(async () => {}),
       stop: vi.fn(async () => {}),
@@ -4341,10 +4342,7 @@ describe("startGatewayPostAttachRuntime", () => {
       typedHooks: [],
     } as never;
     const loaded = { pluginRegistry, gatewayMethods: ["core.ping"] };
-    let releasePluginLoad: (() => void) | undefined;
-    const pluginLoadReady = new Promise<void>((resolve) => {
-      releasePluginLoad = resolve;
-    });
+    const { promise: pluginLoadReady, resolve: releasePluginLoad } = createDeferred();
     const loadStartupPlugins = vi.fn(async () => {
       await pluginLoadReady;
       return loaded;
@@ -4443,10 +4441,7 @@ describe("startGatewayPostAttachRuntime", () => {
     vi.useFakeTimers();
     hoisted.hasInternalHookListeners.mockReturnValue(true);
     const trace = createStartupTraceRecorder();
-    let releasePostReadyWork!: () => void;
-    const postReadyWork = new Promise<void>((resolve) => {
-      releasePostReadyWork = resolve;
-    });
+    const { promise: postReadyWork, resolve: releasePostReadyWork } = createDeferred();
 
     const result = await startGatewaySidecars({
       cfg: {} as never,

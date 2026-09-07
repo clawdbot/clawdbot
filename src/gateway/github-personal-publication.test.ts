@@ -31,6 +31,7 @@ import {
   createForeignPublicationSession,
   createPersonalPublicationFixture,
   personalPublicationAccount as account,
+  expectPersonalPublicationReplay,
 } from "./github-personal-publication.test-support.js";
 import {
   BRANCH,
@@ -451,6 +452,13 @@ describe("personal publication authority and recovery", () => {
     expect(openOpenClawStateDatabase().db.prepare("PRAGMA integrity_check").get()).toEqual({
       integrity_check: "ok",
     });
+  });
+
+  it("replays only the original personal selection and content without new publication work", async () => {
+    await expectPersonalPublicationReplay({ generation, coordinator, action }, (requestId) => ({
+      receipt: readPersonalGitHubPublication(owner, { requestId }),
+      commandCount: commands.length,
+    }));
   });
 
   it("keeps credential locations out of publication errors when refresh materialization fails", async () => {

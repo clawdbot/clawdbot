@@ -410,17 +410,13 @@ actor VoiceWakeRuntime {
             triggers: triggers,
             segments: segments)
         let matchSummary = VoiceWakeRecognitionDebugSupport.matchSummary(match)
-        let segmentSummary = segments.map { seg in
-            let start = String(format: "%.2f", seg.start)
-            let end = String(format: "%.2f", seg.end)
-            return "\(seg.text)@\(start)-\(end)"
-        }.joined(separator: ", ")
 
         self.logger.debug(
             "voicewake runtime transcript='\(transcript, privacy: .private)' textOnly=\(summary.textOnly) " +
                 "isFinal=\(isFinal) timing=\(summary.timingCount)/\(segments.count) " +
                 "capturing=\(capturing) fallback=\(usedFallback) " +
-                "\(matchSummary) segments=[\(segmentSummary, privacy: .private)]")
+                "\(matchSummary) " +
+                "segments=[\(VoiceWakeRecognitionDebugSupport.segmentSummary(segments), privacy: .private)]")
     }
 
     private func noteAudioTap(rms: Double) {

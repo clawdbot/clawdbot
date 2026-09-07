@@ -91,6 +91,7 @@ vi.mock("../process/supervisor/index.js", () => ({
       mocks.spawnInputs.push({ env: input.env ? { ...input.env } : undefined });
       input.onStdout?.("ok\n");
       return {
+        activity: { resultSettled: true, lastOutputAtMs: Date.now() },
         runId: "mock-run",
         startedAtMs: Date.now(),
         stdin: undefined,
@@ -109,7 +110,6 @@ vi.mock("../process/supervisor/index.js", () => ({
     },
     cancel: vi.fn(),
     cancelScope: vi.fn(),
-    getRecord: vi.fn(),
   }),
 }));
 
@@ -258,6 +258,7 @@ describe("exec store environment", () => {
   });
 
   beforeEach(() => {
+    vi.stubEnv("AWS_REGION", undefined);
     mocks.egressActive = false;
     mocks.gatewayParams.length = 0;
     mocks.nodeHostParams.length = 0;

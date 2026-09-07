@@ -787,7 +787,7 @@ describe("application update overlays", () => {
 
     await overlays.runUpdate();
 
-    expect(request).not.toHaveBeenCalledWith("update.run", {});
+    expect(request.mock.calls.filter(([method]) => method === "update.run")).toEqual([]);
     expect(drainConfigWrites).not.toHaveBeenCalled();
     expect(overlays.snapshot.updateRunning).toBe(false);
     overlays.dispose();
@@ -820,9 +820,9 @@ describe("application update overlays", () => {
     ]);
     // Suspension publishes first so no NEW write can start while draining.
     expect(updateRunningWhenDrained).toBe(true);
-    expect(request).toHaveBeenCalledWith("update.run", {
-      sessionKey: "agent:main:originating-chat",
-    });
+    expect(
+      request.mock.calls.filter(([method]) => method === "update.run").map(([, params]) => params),
+    ).toEqual([{ sessionKey: "agent:main:originating-chat" }]);
     overlays.dispose();
   });
 
@@ -852,7 +852,11 @@ describe("application update overlays", () => {
     try {
       await overlays.runUpdate(options);
       const sessionKey = options?.sessionKey ?? activeSessionKey;
-      expect(request).toHaveBeenCalledWith("update.run", sessionKey ? { sessionKey } : {});
+      expect(
+        request.mock.calls
+          .filter(([method]) => method === "update.run")
+          .map(([, params]) => params),
+      ).toEqual([sessionKey ? { sessionKey } : {}]);
       expect(overlays.snapshot.updateRun).toEqual(run);
       expect(overlays.snapshot.updateRunning || overlays.snapshot.updateReconciliationPending).toBe(
         true,

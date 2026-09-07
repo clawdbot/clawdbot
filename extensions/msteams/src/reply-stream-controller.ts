@@ -8,8 +8,10 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { MSTeamsConfig, ReplyPayload } from "../runtime-api.js";
+import type { MarkdownTableMode, MSTeamsConfig, ReplyPayload } from "../runtime-api.js";
+import { formatMSTeamsMarkdown } from "./format.js";
 import { extractMessageId } from "./media-helpers.js";
+import { buildMSTeamsMessageActivity } from "./message-activity.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
@@ -72,6 +74,7 @@ export function createTeamsReplyStreamController(params: {
   feedbackLoopEnabled: boolean;
   log?: MSTeamsMonitorLogger;
   msteamsConfig?: MSTeamsConfig;
+  tableMode?: MarkdownTableMode;
   /**
    * Seed for the random label rotation so the same conversation gets the same
    * "Thinking..." flavor across reconnects. Typically `${accountId}:${convId}`.
@@ -107,13 +110,14 @@ export function createTeamsReplyStreamController(params: {
   // pipeline normalizes trailing whitespace between cumulative snapshots.
   let emittedText = "";
   let acknowledgedText = "";
+  let acknowledgedLogicalText = "";
   let acknowledgedStreamId: string | undefined;
   let replacementFinalPending = false;
   let replacementEmitFailed = false;
   let replacementSettlementPending = false;
-  let replacementTextAwaitingAcknowledgement: string | undefined;
+  let replacementTextAwaitingAcknowledgement: { text: string; logicalText: string } | undefined;
   let deferredReplacementEntries: DeferredReplacementEntry[] = [];
-  let finalMetadataQueued = false;
+  let queuedFinalActivity: ReturnType<typeof finalStreamActivity> | undefined;
   let failedSegmentFallbackPrepared = false;
   const streamEvents = (stream as { events?: TeamsStreamChunkEvents } | undefined)?.events;
   let streamChunkSubscription: number | undefined;
@@ -127,7 +131,7 @@ export function createTeamsReplyStreamController(params: {
       const replacementAcknowledgement =
         typeof activity.text === "string" &&
         replacementAcknowledgementPending &&
-        activity.text === replacementTextAwaitingAcknowledgement;
+        activity.text === replacementTextAwaitingAcknowledgement?.text;
       if (
         activity.type !== "typing" ||
         activity.channelData?.streamType !== "streaming" ||
@@ -137,13 +141,16 @@ export function createTeamsReplyStreamController(params: {
         (replacementAcknowledgementPending
           ? !replacementAcknowledgement
           : !activity.text.startsWith(acknowledgedText)) ||
-        !emittedText.startsWith(activity.text)
+        (!replacementAcknowledgement && !emittedText.startsWith(activity.text))
       ) {
         return;
       }
       acknowledgedStreamId = activity.id;
       acknowledgedText = activity.text;
-      if (activity.text === replacementTextAwaitingAcknowledgement) {
+      acknowledgedLogicalText = replacementAcknowledgement
+        ? replacementTextAwaitingAcknowledgement!.logicalText
+        : activity.text;
+      if (replacementAcknowledgement) {
         replacementTextAwaitingAcknowledgement = undefined;
       }
     });
@@ -172,13 +179,13 @@ export function createTeamsReplyStreamController(params: {
 
   const fallbackPayloadAfterAcknowledgedText = (payload: ReplyPayload): Maybe<ReplyPayload> => {
     if (
-      !acknowledgedText ||
+      !acknowledgedLogicalText ||
       typeof payload.text !== "string" ||
-      !payload.text.startsWith(acknowledgedText)
+      !payload.text.startsWith(acknowledgedLogicalText)
     ) {
       return payload;
     }
-    const remainingText = payload.text.slice(acknowledgedText.length);
+    const remainingText = payload.text.slice(acknowledgedLogicalText.length);
     const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
     if (!remainingText && !hasMedia) {
       return undefined;
@@ -192,17 +199,9 @@ export function createTeamsReplyStreamController(params: {
   };
 
   const finalStreamActivity = (text?: string) => ({
-    type: "message" as const,
-    ...(text ? { text } : {}),
-    entities: [
-      {
-        type: "https://schema.org/Message",
-        "@type": "Message",
-        "@context": "https://schema.org",
-        "@id": "",
-        additionalType: ["AIGeneratedContent"],
-      },
-    ],
+    ...buildMSTeamsMessageActivity(
+      text === undefined ? undefined : formatMSTeamsMarkdown(text, params.tableMode ?? "code"),
+    ),
     channelData: params.feedbackLoopEnabled ? { feedbackLoopEnabled: true } : {},
   });
 
@@ -404,9 +403,13 @@ export function createTeamsReplyStreamController(params: {
         deferredReplacementEntries.push({ kind: "replacement", payload });
         pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
         try {
-          replacementTextAwaitingAcknowledgement = payload.text;
-          stream.emit(finalStreamActivity(payload.text));
-          finalMetadataQueued = true;
+          const activity = finalStreamActivity(payload.text);
+          replacementTextAwaitingAcknowledgement = {
+            text: activity.text!,
+            logicalText: payload.text,
+          };
+          stream.emit(activity);
+          queuedFinalActivity = activity;
           emittedText = payload.text;
           tokensEmitted = false;
           // Replacement delivery owns all later payloads until close() proves
@@ -461,6 +464,7 @@ export function createTeamsReplyStreamController(params: {
       if (streamMode === "progress" && payload.text) {
         try {
           stream.emit(payload.text);
+          emittedText = payload.text;
           nativeDispatchStarted = true;
           pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
           streamFinalizationPending = true;
@@ -514,21 +518,36 @@ export function createTeamsReplyStreamController(params: {
             kind: "replacement",
             payload: pendingFinalPayload,
           });
-          replacementTextAwaitingAcknowledgement = pendingFinalPayload.text;
+          const activity = finalStreamActivity(pendingFinalPayload.text);
+          replacementTextAwaitingAcknowledgement = {
+            text: activity.text!,
+            logicalText: pendingFinalPayload.text,
+          };
           logicalContent = deferredReplacementLogicalContent();
-          stream.emit(finalStreamActivity(pendingFinalPayload.text));
-          finalMetadataQueued = true;
+          stream.emit(activity);
+          queuedFinalActivity = activity;
           emittedText = pendingFinalPayload.text;
         }
         logicalContent ??= replacementSettlementPending
           ? deferredReplacementLogicalContent()
           : undefined;
-        const content = pendingFinalPayload?.text ?? (emittedText || undefined);
+        const logicalText = pendingFinalPayload?.text ?? (emittedText || undefined);
+        const finalActivity = queuedFinalActivity ?? finalStreamActivity(logicalText);
+        const content = finalActivity.text;
+        logicalContent ??= content !== logicalText ? logicalText : undefined;
         // The replacement path already queued text and final metadata as one
         // activity. Other paths add metadata here so the SDK can merge it into
         // the closing activity without duplicating the replacement chunk.
-        if (!finalMetadataQueued) {
-          stream.emit(finalStreamActivity());
+        if (!queuedFinalActivity) {
+          if (content !== undefined && content !== emittedText) {
+            // The SDK appends text. Replace its buffer once the complete Markdown
+            // is known; retain logical text separately for acknowledged fallback.
+            stream.clearText();
+            replacementTextAwaitingAcknowledgement = { text: content, logicalText: logicalText! };
+            stream.emit(finalActivity);
+          } else {
+            stream.emit({ ...finalActivity, text: undefined });
+          }
         }
         const result = await stream.close();
         streamFinalizationPending = false;
@@ -611,7 +630,7 @@ export function createTeamsReplyStreamController(params: {
           ...(postNativePayloads.length > 0 ? { postNativePayloads } : {}),
         };
       } finally {
-        finalMetadataQueued = false;
+        queuedFinalActivity = undefined;
         replacementEmitFailed = false;
         replacementFinalPending = false;
         replacementSettlementPending = false;

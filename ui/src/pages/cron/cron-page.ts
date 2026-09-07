@@ -69,6 +69,7 @@ class CronPage extends OpenClawLightDomElement {
   private pendingRunScroll = false;
   private modelSuggestionsRequest: { state: CronState; agentId: string } | null = null;
   private heartbeatScratchRequest = 0;
+  private pageHidden = document.visibilityState === "hidden";
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     invalidateRequests: (change) => this.resetGatewayState(change.snapshot),
@@ -80,6 +81,14 @@ class CronPage extends OpenClawLightDomElement {
       }
     },
     ensureInitialData: () => this.ensureInitialData(),
+    onPageActivation: () => {
+      const hidden = document.visibilityState === "hidden";
+      const resumed = this.pageHidden && !hidden;
+      this.pageHidden = hidden;
+      if (resumed) {
+        this.ensureInitialData(true);
+      }
+    },
   });
   private readonly observeAgentScope = watchAgentScope((scopeId) => {
     this.pendingRouteData = null;
@@ -145,10 +154,13 @@ class CronPage extends OpenClawLightDomElement {
     this.clearHeartbeatScratch();
     invalidateCronRefresh(this.cron);
     const connected = snapshot?.phase === "connected";
-    this.cron = createInitialCronState({
+    const cron = createInitialCronState({
       client: snapshot?.client ?? null,
       connected,
     });
+    cron.canRefresh = () => this.canRefreshCron(cron);
+    this.cron = cron;
+    this.pageHidden = document.visibilityState === "hidden";
     this.cron.cronAgentId = this.context.agentSelection.state.scopeId;
     this.agentsList = connected ? this.context.agents.state.agentsList : null;
     this.cronModelSuggestions = [];
@@ -160,14 +172,18 @@ class CronPage extends OpenClawLightDomElement {
     this.agentsList = this.context.agents.state.agentsList;
   }
 
-  private ensureInitialData() {
-    if (!this.cron.connected || !this.cron.client) {
+  private canRefreshCron(cron: CronState = this.cron) {
+    return this.isConnected && this.cron === cron && document.visibilityState !== "hidden";
+  }
+
+  private ensureInitialData(forceRefresh = false) {
+    if (!this.canRefreshCron() || !this.cron.connected || !this.cron.client) {
       return;
     }
     if (!this.agentsList && !this.context.agents.state.agentsLoading) {
       void this.context.agents.ensureList();
     }
-    if (!this.cron.cronStatus && !this.cron.cronLoading) {
+    if (forceRefresh || (!this.cron.cronStatus && !this.cron.cronLoading)) {
       void this.refreshCron({ tableFilters: true, coalesce: true });
     } else if (!this.cron.cronRuns.length && !this.cron.cronRunsLoadingMore) {
       void this.loadRuns(this.cron.cronRunsScope === "all" ? null : this.cron.cronRunsJobId);
@@ -242,7 +258,7 @@ class CronPage extends OpenClawLightDomElement {
 
   private async refreshCron(options: { tableFilters: boolean; coalesce?: boolean }) {
     const cronState = this.cron;
-    if (!cronState.connected || !cronState.client) {
+    if (!this.canRefreshCron(cronState) || !cronState.connected || !cronState.client) {
       return;
     }
     const activeCronJobId = cronState.cronRunsScope === "job" ? cronState.cronRunsJobId : null;

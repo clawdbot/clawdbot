@@ -4,6 +4,7 @@ import { SessionManager } from "../agents/sessions/session-manager.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
   readRecentSessionTranscriptMessageEvents,
+  readSessionTranscriptBoundedMessageTailPage,
   readSessionTranscriptMessageEvents,
   resolveConcreteSessionStorePath,
   resolveSessionTranscriptReadTarget,
@@ -22,6 +23,8 @@ import {
   readSessionTranscriptHistoryEvents,
 } from "../config/sessions/session-accessor.sqlite-history-events.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { readSessionTranscriptRunId } from "../sessions/transcript-events.js";
+import { projectSessionDisplayMessage } from "./session-display-projection.js";
 import { aggregateSessionTranscriptUsage } from "./session-transcript-derived-readers.js";
 import { projectTranscriptEntryMessage } from "./session-transcript-message.js";
 import type {
@@ -44,6 +47,8 @@ export { readSessionTranscriptVisibleMessageDeltaCore } from "../config/sessions
 export type { SessionTranscriptReadScope };
 
 export type ReadRecentSessionMessagesResult = {
+  olderOffset?: number;
+  omittedOversized?: boolean;
   activeLeafEntryId?: string | null;
   deltaCursor?: string;
   displaySource?: string;
@@ -369,7 +374,12 @@ export async function readRecentSessionMessagesWithStatsAsync(
 /** Reads one offset page with total-count metadata through the reader seam. */
 export async function readSessionMessagesPageWithStatsAsync(
   scope: SessionTranscriptReadScope,
-  opts: { offset: number; maxMessages: number; allowResetArchiveFallback?: boolean },
+  opts: {
+    offset: number;
+    maxMessages: number;
+    maxBytes?: number;
+    allowResetArchiveFallback?: boolean;
+  },
 ): Promise<ReadRecentSessionMessagesResult> {
   const target = resolveTranscriptReadTarget(scope);
   const page = readSessionTranscriptHistoryEventPage(toTranscriptReadScope(target), opts);
@@ -380,6 +390,8 @@ export async function readSessionMessagesPageWithStatsAsync(
     ...(Object.hasOwn(page, "activeLeafEntryId")
       ? { activeLeafEntryId: page.activeLeafEntryId }
       : {}),
+    ...(page.olderOffset !== undefined ? { olderOffset: page.olderOffset } : {}),
+    ...(page.omittedOversized ? { omittedOversized: true } : {}),
     messages: projectSqliteHistoryEvents(page.events),
     transcriptEvents: page.events.map((entry) => entry.event),
     displaySource: page.displaySource,
@@ -428,6 +440,35 @@ export function readRecentSessionUsageFromTranscript(
     maxMessages: 1000,
   });
   return aggregateSessionTranscriptUsage(extractMessagePayloads(page.events));
+}
+
+/** Reads the answering model only when the latest visible message belongs to this settled run. */
+export function readSessionTerminalModelFromTranscript(
+  scope: SessionTranscriptReadScope,
+  runId: string,
+): { modelProvider: string; model: string } | undefined {
+  try {
+    const page = readSessionTranscriptBoundedMessageTailPage(scope, {
+      maxBytes: 256 * 1024,
+      maxMessages: 1,
+      offset: 0,
+    });
+    const message = asOptionalRecord(asOptionalRecord(page.events[0]?.event)?.message);
+    if (
+      (message?.stopReason === "stop" || message?.stopReason === "length") &&
+      readSessionTranscriptRunId(message) === runId &&
+      projectSessionDisplayMessage(message)?.role === "assistant" &&
+      typeof message.provider === "string" &&
+      typeof message.model === "string"
+    ) {
+      return { modelProvider: message.provider, model: message.model };
+    }
+  } catch (error) {
+    if (!isSessionTranscriptProjectionUnavailableError(error)) {
+      throw error;
+    }
+  }
+  return undefined;
 }
 
 /** Reads a bounded display or canonical model-context preview before discarding metadata. */

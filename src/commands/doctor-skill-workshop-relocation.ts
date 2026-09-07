@@ -157,7 +157,6 @@ function retargetWorkshopProposal(
       skillFile: target.skillFile,
       source: "openclaw-workshop",
     },
-    updatedAt: new Date().toISOString(),
   };
 }
 
@@ -291,7 +290,11 @@ export async function planWorkshopRelocation(
       continue;
     }
     try {
-      assertWorkspaceStateMigrationReady({ workspaceDirs: [workspaceDir], env });
+      assertWorkspaceStateMigrationReady({
+        workspaceDirs: [workspaceDir],
+        env,
+        operation: "doctor",
+      });
     } catch (error) {
       // Doctor owns legacy-file import. Leave every proposal for this workspace
       // unchanged until that import and its source cleanup have both finished.

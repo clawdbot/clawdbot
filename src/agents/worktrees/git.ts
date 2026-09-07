@@ -4,10 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import {
   createGitCommandError,
+  enqueueGitRefMutation,
   executeGitCommand,
   normalizeGitPathForFilesystem,
-  requireGitCommand,
   requireGitCommandBuffer,
+  requireGitCommandOutput,
   requireGitCommandRaw,
 } from "../../infra/git-exec.js";
 import { mergeProcessEnv, resolveEnvironmentValue } from "../../infra/process-env.js";
@@ -75,7 +76,33 @@ export async function runGit(
     signal?: AbortSignal;
   } = {},
 ): Promise<GitResult> {
-  return await executeGitCommand(cwd, args, { ...options, env: gitEnvironment(options.env, args) });
+  const baseEnv = { ...process.env };
+  const env = gitEnvironment(options.env, args, process.platform, baseEnv);
+  // Fetch can prune refs and start maintenance; keep its follow-on writes owned.
+  const fetchesRefs = args[0] === "fetch";
+  const run = (gitArgs: string[]) =>
+    executeGitCommand(cwd, gitArgs, {
+      ...options,
+      baseEnv,
+      env,
+      input: gitArgs === args ? options.input : undefined,
+      killProcessTree: fetchesRefs && gitArgs === args,
+    });
+  const mutatesRefs =
+    fetchesRefs ||
+    args[0] === "update-ref" ||
+    (args[0] === "branch" &&
+      args.some((arg) => arg === "-d" || arg === "-D" || arg === "--delete"));
+  if (!mutatesRefs) {
+    return await run(args);
+  }
+  // Discovery and the queued mutation share one captured environment. The
+  // executor still checks cancellation when the queued command actually starts.
+  const resolved = await run(["rev-parse", "--git-common-dir"]);
+  if (resolved.termination !== "exit" || resolved.code !== 0) {
+    return resolved;
+  }
+  return await enqueueGitRefMutation(cwd, resolved.stdout.trim(), () => run(args));
 }
 
 export function commandError(command: string, result: GitResult): Error {
@@ -85,14 +112,10 @@ export function commandError(command: string, result: GitResult): Error {
 export async function requireGit(
   cwd: string,
   args: string[],
-  options: {
-    env?: NodeJS.ProcessEnv;
-    input?: string | Uint8Array;
-    timeoutMs?: number;
-    signal?: AbortSignal;
-  } = {},
+  options: Parameters<typeof runGit>[2] = {},
 ): Promise<string> {
-  return await requireGitCommand(cwd, args, { ...options, env: gitEnvironment(options.env, args) });
+  const result = await runGit(cwd, args, options);
+  return requireGitCommandOutput(`git ${args.join(" ")}`, result).trim();
 }
 
 export async function requireGitRaw(cwd: string, args: string[]): Promise<string> {

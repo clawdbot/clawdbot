@@ -1,5 +1,6 @@
 const UPGRADE_SURVIVOR_SCENARIOS = Object.freeze([
   "base",
+  "legacy-operator-state",
   "mobile-pairing-reconnect",
   "acpx-openclaw-tools-bridge",
   "feishu-channel",
@@ -18,6 +19,9 @@ const UPGRADE_SURVIVOR_SCENARIOS = Object.freeze([
   "auth-profile-v2026-7-2-beta-5",
   "watchos-direct-node",
 ]);
+
+// Oldest release line supported by the operator-state upgrade regression gate.
+export const OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE = "2026.6.34";
 
 // These black-box scenarios are implemented entirely by the current trusted
 // release harness and treat the selected tree only as the package under test.
@@ -170,8 +174,18 @@ function supportsUpgradeSurvivorMobilePairingReconnect(baselineSpec) {
   return comparePublishedReleaseVersion(version, { year: 2026, month: 7, patch: 1 }) >= 0;
 }
 
+function supportsUpgradeSurvivorLegacyOperatorState(baselineSpec) {
+  const version = parsePublishedReleaseVersion(baselineSpec);
+  const floor = parsePublishedReleaseVersion(
+    `openclaw@${OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE}`,
+  );
+  return !version || comparePublishedReleaseVersion(version, floor) >= 0;
+}
+
 export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec) {
   return (
+    (scenario !== "legacy-operator-state" ||
+      supportsUpgradeSurvivorLegacyOperatorState(baselineSpec)) &&
     (scenario !== "plugin-deps-cleanup" ||
       supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec)) &&
     (scenario !== "acpx-openclaw-tools-bridge" ||

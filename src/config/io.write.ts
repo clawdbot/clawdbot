@@ -6,6 +6,8 @@ import { isVerbose } from "../global-state.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
+import { recordUpdateDoctorConfigWrite } from "../infra/update-doctor-result.js";
+import { initializeNativeSessionCatalogPreferences } from "../plugins/native-session-catalog-config.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
 import { collectChangedPaths } from "./config-change-paths.js";
 import {
@@ -24,6 +26,7 @@ import {
   restoreEnvRefsFromMap,
   restoreEnvVarRefs,
 } from "./env-preserve.js";
+import { resolveKeyedAgentEntryIncludePreservation } from "./include-write-boundary.js";
 import { readConfigIncludeFileWithGuards, resolveConfigIncludes } from "./includes.js";
 import {
   appendConfigAuditRecord,
@@ -139,6 +142,10 @@ export async function writeConfigFileFromContext(
   // Doctor repairs need the same authored projection so roster moves preserve nested includes.
   // Missing snapshots also use this owner; exact bootstrap rosters carry explicitSetPaths.
   if (snapshot.valid || (snapshot.exists && hasAuthoredIncludes)) {
+    const keyedAgentEntryIncludes = resolveKeyedAgentEntryIncludePreservation({
+      configPath: snapshot.path,
+      provenance: snapshot.includeProvenance,
+    });
     persistCandidate = resolvePersistCandidateForWrite({
       runtimeConfig: snapshot.config,
       sourceConfig: snapshot.resolved,
@@ -147,6 +154,7 @@ export async function writeConfigFileFromContext(
       nextConfig,
       rootAuthoredConfig: snapshot.parsed,
       agentRosterIncludeOwned: snapshot.agentRosterIncludeOwned,
+      keyedAgentEntryIncludePaths: keyedAgentEntryIncludes?.includePaths,
       unsetPaths,
       explicitSetPaths,
       explicitSetValueSource,
@@ -207,9 +215,12 @@ export async function writeConfigFileFromContext(
   };
   // Validate authored structure before stamping can replace malformed parents.
   validateCandidate(validationCandidate);
+  // SAFETY: the original resolved input was just validated; retain raw values, not parser defaults.
+  const validatedCandidate = validationCandidate as OpenClawConfig;
   const materialized = stampConfigVersion(
-    // SAFETY: the original resolved input was just validated; retain raw values, not parser defaults.
-    validationCandidate as OpenClawConfig,
+    snapshot.exists
+      ? validatedCandidate
+      : initializeNativeSessionCatalogPreferences(validatedCandidate),
     options.lastTouchedVersionOverride,
     snapshot.exists ? (snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig) : null,
   );
@@ -461,6 +472,7 @@ export async function writeConfigFileFromContext(
         });
       },
     });
+    recordUpdateDoctorConfigWrite(configPath, previousHash, nextHash);
     try {
       options.assertConfigPathForWrite?.();
     } catch (error) {

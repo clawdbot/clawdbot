@@ -170,11 +170,11 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             sessionTarget,
           });
       compactionSessionManager = sessionManager;
-      const recordUsage = accountingRecorder
+      const recordUsage = accountingRecorder?.recordUsage
         ? (usage: UsageLike) => {
             const normalized = normalizeUsage(usage);
             if (normalized) {
-              accountingRecorder.recordUsage(normalized);
+              accountingRecorder.recordUsage?.(normalized);
             }
           }
         : undefined;
@@ -495,7 +495,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                 enabled: compactionReplayEnabled,
               },
             });
-            accountingRecorder?.recordCompaction(serverTokensAfter);
+            accountingRecorder?.recordCompaction?.(serverTokensAfter);
           };
           const serverResult = params.transcriptBytePreflightAuthority
             ? undefined
@@ -525,13 +525,16 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             try {
               // The client watchdog starts here; refresh the delegated host watchdog with it.
               params.compactionTimeoutReset?.();
-              clientResult = await compactWithSafetyTimeout(
-                (_signal, resetTimeout) => {
+              const outcome = await compactWithSafetyTimeout(
+                async (_signal, resetTimeout) => {
                   resetCompactionTimeout = resetTimeout;
                   setCompactionSafeguardCancellation(compactionSessionManager, undefined);
                   const requestState = trigger === "overflow" ? ("unresolved" as const) : undefined;
                   if (trigger === "manual") {
-                    return activeSession.compact(params.customInstructions);
+                    return {
+                      status: "completed" as const,
+                      result: await activeSession.compact(params.customInstructions),
+                    };
                   }
                   return activeSession[agentSessionAutomaticCompaction](
                     params.customInstructions,
@@ -539,6 +542,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                     resolveEffectiveCompactionMode(params.config) === "default"
                       ? undefined
                       : "none",
+                    {
+                      requestBudget: accountingRecorder?.requestBudget,
+                      pendingUserEntryId: accountingRecorder?.pendingUserEntryId,
+                    },
                   );
                 },
                 compactionTimeoutMs,
@@ -547,6 +554,11 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                   onCancel: () => activeSession.abortCompaction(),
                 },
               );
+              if (outcome.status === "skipped") {
+                assertActive();
+                return { ok: true, compacted: false, reason: outcome.reason };
+              }
+              clientResult = outcome.result;
             } finally {
               resetCompactionTimeout = undefined;
             }
@@ -562,6 +574,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                 observedTokenCount,
                 fullSessionTokensBefore: limitedTranscriptTokensBefore ?? 0,
                 estimateTokensFn: estimateTokens,
+                requestBudget: accountingRecorder?.requestBudget,
               });
           const messageCountAfter = session.messages.length;
           const compactedCount = Math.max(0, messageCountOriginal - messageCountAfter);

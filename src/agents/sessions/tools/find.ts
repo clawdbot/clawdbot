@@ -139,9 +139,8 @@ function buildFindResult(params: {
         : relativePath;
     })
     .join("\n");
-  const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
-  let resultOutput = truncation.content;
-  const details: Omit<FindToolDetails, "content"> = {};
+  const { content, ...truncation } = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
+  const details: FindToolDetails = { content };
   const notices: string[] = [];
   if (resultLimitReached) {
     notices.push(params.limitNotice);
@@ -152,11 +151,11 @@ function buildFindResult(params: {
     details.truncation = truncation;
   }
   if (notices.length > 0) {
-    resultOutput += `\n\n[${notices.join(". ")}]`;
+    details.content += `\n\n[${notices.join(". ")}]`;
   }
   return {
-    content: [{ type: "text", text: resultOutput }],
-    details: { ...details, content: resultOutput },
+    content: [{ type: "text", text: details.content }],
+    details,
   };
 }
 

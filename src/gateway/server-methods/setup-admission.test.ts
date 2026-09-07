@@ -271,6 +271,65 @@ describe("setup admission", () => {
     },
   );
 
+  it.each(["credentials", "provider note", "final commit"])(
+    "finishes the protected preparation artifact but stops before %s after shutdown",
+    async (checkpoint) => {
+      const finishArtifact = createDeferred();
+      const artifactPath = path.join(mocks.stateDir, "reviewed-provider.txt");
+      let promoted = false;
+      const session = await runWithGatewayIndependentRootWorkAdmission(() =>
+        createAdmittedWizardSession(
+          () =>
+            new WizardSession(async (prompter, signal, owner) => {
+              owner.lockCancellationForPreparation();
+              await finishArtifact.promise;
+              signal.throwIfAborted();
+              await fs.writeFile(artifactPath, "reviewed fixture artifact");
+              if (checkpoint === "credentials") {
+                await prompter.text({ message: "Provider API key", sensitive: true });
+              } else if (checkpoint === "provider note") {
+                await prompter.note("Provider installed. Continue to connect your account.");
+              }
+              owner.lockCancellation();
+              promoted = true;
+              owner.setPreparedModelRef("fixture/demo-model");
+            }),
+        ),
+      );
+      if (!session) {
+        throw new Error("expected an admitted wizard");
+      }
+      try {
+        markGatewayRestartDraining();
+        expect(session.signal.aborted).toBe(false);
+        expect(session.cancel()).toBe(false);
+        expect(session.isSettled()).toBe(false);
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+        finishArtifact.resolve();
+        await whenAdmittedWizardSessionSettled(session);
+        expect(await fs.readFile(artifactPath, "utf8")).toBe("reviewed fixture artifact");
+        expect(promoted).toBe(false);
+        expect(session.signal.aborted).toBe(true);
+        expect(session.getCurrentStep()).toBeUndefined();
+        const done = await session.next();
+        expect(done).toMatchObject({
+          done: true,
+          status: "error",
+          error: expect.stringContaining("Gateway is shutting down"),
+        });
+        expect(done).not.toHaveProperty("preparedModelRef");
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+      } finally {
+        finishArtifact.resolve();
+        const pending = session.getCurrentStep();
+        if (pending) {
+          await session.answer(pending.id, "fixture-cleanup");
+        }
+        await whenAdmittedWizardSessionSettled(session);
+      }
+    },
+  );
+
   it("keeps a prompt resumable across disconnect and reversible admission fences", async () => {
     const work = new GatewayConnectionWork();
     const disconnect = work.registerConnection(() => {});

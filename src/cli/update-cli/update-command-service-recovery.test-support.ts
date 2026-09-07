@@ -1,17 +1,70 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { expect, it, vi, type Mock } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { stampConfigWriteMetadata } from "../../config/io.meta.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
+import { captureEnv } from "../../test-utils/env.js";
 import * as runtimeUtils from "../../utils.js";
 import { VERSION } from "../../version.js";
+import type { UpdateCommandOptions } from "./shared.js";
 import {
   maybeRestartService,
   maybeStopManagedServiceBeforeMutableUpdate,
   maybeRestartServiceAfterFailedMutableUpdate,
 } from "./update-command-service.js";
+
+export async function createServiceActivationFixture() {
+  const root = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-activation-")),
+  );
+  vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: root });
+  const keys = [
+    "HOME",
+    "OPENCLAW_HOME",
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_CONFIG_PATH",
+    "OPENCLAW_PROFILE",
+    "OPENCLAW_GATEWAY_PORT",
+    "OPENCLAW_SERVICE_MARKER",
+    "OPENCLAW_SERVICE_KIND",
+    "OPENCLAW_SUPERVISOR_MODE",
+    "OPENCLAW_SYSTEMD_UNIT",
+    "OPENCLAW_LAUNCHD_LABEL",
+    "OPENCLAW_UPDATE_IN_PROGRESS",
+    "OPENCLAW_UPDATE_RUN_HANDOFF",
+    "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR",
+    "OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS",
+  ];
+  const envSnapshot = captureEnv(keys);
+  for (const key of keys) {
+    delete process.env[key];
+  }
+  process.env.HOME = root;
+  // This fixture models an installed service even though its manager calls are simulated.
+  const unitPath = path.join(root, ".config/systemd/user/openclaw-gateway.service");
+  await fs.mkdir(path.dirname(unitPath), { recursive: true });
+  await fs.writeFile(unitPath, "[Service]\nExecStart=/fixture/openclaw gateway\n");
+  const configPath = path.join(root, ".openclaw", "openclaw.json");
+  await fs.mkdir(path.dirname(configPath));
+  await fs.mkdir(path.join(root, "dist"));
+  await fs.writeFile(
+    path.join(root, "package.json"),
+    JSON.stringify({ name: "openclaw", version: VERSION, type: "module" }),
+  );
+  await fs.writeFile(path.join(root, "dist", "index.js"), "export {};\n");
+  const worker = "dist/infra/update-candidate-state.worker.js";
+  await fs.mkdir(path.dirname(path.join(root, worker)), { recursive: true });
+  await fs.writeFile(
+    path.join(root, worker),
+    `import ${JSON.stringify(pathToFileURL(path.resolve(worker)).href)};\n`,
+  );
+  await writeRecoveryConfig(configPath, VERSION);
+  return { root, configPath, envSnapshot };
+}
 
 export function readyRecoveryHealth(
   port: number,
@@ -39,6 +92,7 @@ export async function writeRecoveryConfig(configPath: string, version: string) {
 export function registerRecoveryTests(params: {
   root: () => string;
   configPath: () => string;
+  run: () => NonNullable<UpdateCommandOptions["run"]>;
   mocks: {
     health: Mock<typeof import("../daemon-cli/restart-health.js").waitForGatewayHealthyRestart>;
     capability: Mock<
@@ -114,6 +168,7 @@ export function registerRecoveryTests(params: {
           server: {
             version: startup === "wrong version" && !recovering ? "2026.1.1" : VERSION,
             connId: "fixture",
+            bootId: "service-boot",
           },
         })(opts),
       );
@@ -129,7 +184,6 @@ export function registerRecoveryTests(params: {
       });
 
       const activated = await maybeRestartService({
-        channel: "stable",
         shouldRestart: true,
         result: {
           status: "ok",
@@ -140,7 +194,7 @@ export function registerRecoveryTests(params: {
           before: { version: "2026.1.1" },
           after: { version: VERSION },
         },
-        opts: { json: true },
+        opts: { json: true, run: params.run() },
         refreshServiceEnv: true,
         serviceInstallEnv: process.env,
         serviceUpdateVerdict: before.serviceUpdateVerdict,
@@ -150,7 +204,7 @@ export function registerRecoveryTests(params: {
         timeoutMs: 1_000,
       });
 
-      expect(activated).toBe(true);
+      expect(activated).toBe("ok");
       expect(mocks.events).toEqual([
         "native stop",
         "refresh activation",

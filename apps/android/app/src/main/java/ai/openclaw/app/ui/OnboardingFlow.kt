@@ -134,8 +134,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -1428,19 +1426,19 @@ private fun SetupScanErrorDialog(
   onChooseAnotherImage: () -> Unit,
   onEnterSetupCode: () -> Unit,
 ) {
-  Dialog(
+  FoldAwareDialog(
     onDismissRequest = onDismiss,
-    properties = DialogProperties(usePlatformDefaultWidth = false),
+    title = nativeString("QR code not accepted"),
   ) {
     Surface(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 26.dp),
+      modifier = Modifier.fillMaxWidth(),
       shape = RoundedCornerShape(ClawTheme.radii.sheet),
       color = ClawTheme.colors.surfaceRaised,
       contentColor = ClawTheme.colors.text,
       border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
     ) {
       Column(
-        modifier = Modifier.fillMaxWidth().padding(18.dp),
+        modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
       ) {
         Row(
@@ -1481,13 +1479,13 @@ private fun SetupScanErrorDialog(
             text = nativeString("Choose another image"),
             icon = Icons.Default.Image,
             onClick = onChooseAnotherImage,
-            modifier = Modifier.onboardingActionButton(),
+            modifier = Modifier.fillMaxWidth().heightIn(min = OnboardingButtonHeight),
           )
           ClawSecondaryButton(
             text = nativeString("Enter setup code"),
             icon = Icons.Default.QrCode2,
             onClick = onEnterSetupCode,
-            modifier = Modifier.onboardingActionButton(),
+            modifier = Modifier.fillMaxWidth().heightIn(min = OnboardingButtonHeight),
           )
         }
       }

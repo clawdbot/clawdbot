@@ -579,40 +579,6 @@ it("fetches a protected hero avatar with the current Control UI credential", asy
   expect(revokeObjectURL).toHaveBeenCalledWith("blob:hero-avatar");
 });
 
-it("retries the identity bootstrap when users.self returns no profile", async () => {
-  const profile = { ...modelAccountProfile };
-  let identityRequests = 0;
-  const request = vi.fn(async (method: string) => {
-    if (method === "users.self") {
-      identityRequests += 1;
-      return identityRequests === 1 ? {} : { profile };
-    }
-    throw new Error(`unexpected method: ${method}`);
-  });
-  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
-    id: "profile-1",
-    email: "ada@example.test",
-    name: "Ada",
-  });
-  const page = mountProfilePage(harness.context);
-
-  await waitForFast(() => expect(page.querySelector(".profile-identity-empty")).not.toBeNull());
-  const emptyState = page.querySelector<HTMLElement>(".profile-identity-empty");
-  const setIdentityButton = emptyState?.querySelector<HTMLButtonElement>("button");
-  expect(emptyState?.textContent).toContain(t("profilePage.identity.notSet"));
-  expect(setIdentityButton?.textContent?.trim()).toBe(t("profilePage.identity.setIdentity"));
-  expect(page.textContent).not.toContain("Cannot read properties of undefined");
-
-  setIdentityButton?.click();
-
-  await waitForFast(() =>
-    expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(2),
-  );
-  await waitForFast(() =>
-    expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe("Ada"),
-  );
-});
-
 it("keeps identity refresh single-flight and allows retry after settlement", async () => {
   const profile = { ...modelAccountProfile };
   let rejectIdentity: ((reason: Error) => void) | undefined;
@@ -725,13 +691,8 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     ...modelAccountProfile,
     emails: ["ada@example.test", "ada@work.test"],
   };
-  let omitNextProfile = false;
   const request = vi.fn(async (method: string, params?: unknown) => {
     if (method === "users.self") {
-      if (omitNextProfile) {
-        omitNextProfile = false;
-        return {};
-      }
       return { profile };
     }
     if (method === "users.listModelAccounts") {
@@ -850,7 +811,6 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     ).toContain(`/api/users/profile-1/avatar?v=${avatarRevision}`),
   );
 
-  omitNextProfile = true;
   request.mockClear();
   page.querySelector<HTMLButtonElement>(".profile-refresh")?.click();
   await waitForFast(() =>
@@ -864,8 +824,6 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
   expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe(
     "Unsaved draft",
   );
-  expect(page.querySelector(".profile-identity-empty")).toBeNull();
-
   const pageWithState = page as ProfilePageElement & {
     identityBusy: "display-name" | "avatar" | null;
   };

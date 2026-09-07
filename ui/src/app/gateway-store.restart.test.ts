@@ -70,6 +70,105 @@ describe("createApplicationGateway restart state", () => {
     expect(gateway.snapshot.restartPending).toBe(false);
   });
 
+  it.each(["preparing", "draining", "prepared", undefined, "unknown"])(
+    "retains reported suspension phase %s while reconnecting and replaces it on hello",
+    async (phase) => {
+      vi.useFakeTimers();
+      const { gateway, current } = createStore();
+      gateway.start();
+      current().opts.onHello?.(HELLO);
+      try {
+        current().opts.onClose?.({
+          code: 1013,
+          reason: "gateway suspended",
+          willRetry: true,
+          error: {
+            code: "UNAVAILABLE",
+            message: "connect unavailable during gateway suspension",
+            retryable: true,
+            details: { reason: "gateway-suspending", phase },
+          },
+        });
+        const expected = phase === undefined || phase === "unknown" ? "prepared" : phase;
+        expect(gateway.snapshot.phase).toBe("reconnecting");
+        expect(gateway.snapshot.suspensionPhase).toBe(expected);
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(gateway.snapshot.offlineStable).toBe(true);
+        expect(gateway.snapshot.suspensionPhase).toBe(expected);
+
+        current().opts.onHello?.(HELLO);
+        expect(gateway.snapshot.suspensionPhase).toBeUndefined();
+        current().opts.onEvent?.(createGatewayEvent("gateway.suspension", { phase: "prepared" }));
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(gateway.snapshot.suspensionPhase).toBe("prepared");
+      } finally {
+        gateway.stop();
+      }
+    },
+  );
+
+  it("expires suspension evidence 15 seconds after the latest connect rejection", async () => {
+    vi.useFakeTimers();
+    const { gateway, current } = createStore();
+    gateway.start();
+    const rejectConnect = () =>
+      current().opts.onClose?.({
+        code: 1013,
+        reason: "gateway suspended",
+        willRetry: true,
+        error: {
+          code: "UNAVAILABLE",
+          message: "connect unavailable during gateway suspension",
+          retryable: true,
+          details: { reason: "gateway-suspending", phase: "prepared" },
+        },
+      });
+    try {
+      rejectConnect();
+      expect(gateway.snapshot.phase).toBe("connecting");
+      expect(gateway.snapshot.suspensionPhase).toBe("prepared");
+      await vi.advanceTimersByTimeAsync(10_000);
+      rejectConnect();
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(gateway.snapshot.suspensionPhase).toBe("prepared");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(gateway.snapshot.suspensionPhase).toBeUndefined();
+      expect(gateway.snapshot.offlineStable).toBe(true);
+    } finally {
+      gateway.stop();
+    }
+  });
+
+  it.each(["close", "connect", "stop"] as const)(
+    "clears suspension evidence on an unrelated %s transition",
+    (transition) => {
+      vi.useFakeTimers();
+      const { gateway, current } = createStore();
+      gateway.start();
+      try {
+        current().opts.onClose?.({
+          code: 1013,
+          reason: "gateway suspended",
+          willRetry: true,
+          error: {
+            code: "UNAVAILABLE",
+            message: "connect unavailable during gateway suspension",
+            details: { reason: "gateway-suspending", phase: "prepared" },
+          },
+        });
+        expect(gateway.snapshot.suspensionPhase).toBe("prepared");
+        if (transition === "close") {
+          current().opts.onClose?.({ code: 1006, reason: "offline", willRetry: true });
+        } else {
+          gateway[transition]();
+        }
+        expect(gateway.snapshot.suspensionPhase).toBeUndefined();
+      } finally {
+        gateway.stop();
+      }
+    },
+  );
+
   it.each([
     { restartExpectedMs: 1_000, deadlineMs: 15_000 },
     { restartExpectedMs: 8_000, deadlineMs: 24_000 },

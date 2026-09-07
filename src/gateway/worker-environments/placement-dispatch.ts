@@ -65,7 +65,7 @@ type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers &
     | "publishAcceptedWorkspace"
   > & {
     environments: WorkerDispatchEnvironmentService &
-      Pick<WorkerEnvironmentService, "recordError"> &
+      Pick<WorkerEnvironmentService, "recordError" | "requestDestroy"> &
       Partial<Pick<WorkerEnvironmentService, "requiresNodeEnrollment">>;
     isShuttingDown?: () => boolean;
     runnerAvailability: WorkerPlacementRunnerAvailabilityReader;
@@ -93,9 +93,13 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     reportTransition: reportPlacementTransition,
   });
 
+  // Background recovery observes previously requested cleanup; explicit Stop and
+  // Move retain their retry contract. Pending-result recovery must inherit this too.
+  const recoveryEnvironments = { ...environments, destroy: environments.requestDestroy };
   const recovery = createPlacementRecoveryActions({
     ...options,
-    failure,
+    environments: recoveryEnvironments,
+    failure: createPlacementFailureActions({ environments: recoveryEnvironments, placements }),
     recoverPlacementMoves: (environmentId) => moveService.recoverAll(environmentId),
   });
 

@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayUpdateAvailableEventPayload } from "../../../src/gateway/events.js";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.js";
 import { isReportableUpdateRun } from "../../../src/shared/update-outcome.js";
+import { GatewayRequestError } from "../api/gateway.ts";
 import type { UpdateHoldResult } from "../api/types.ts";
 import { controlUiBuildDiffersFrom } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
@@ -45,6 +46,9 @@ export type ApplicationUpdateOverlayHooks = {
   onUpdateFailure?: (failure: UpdateFailureTriage, admission: UpdateTriageAdmission) => void;
 };
 
+type UpdateHistory = { kind: "unknown" } | { kind: "known"; runId: string | null };
+type UpdateAdmissionAttempt = { history: UpdateHistory; requestSent: boolean };
+
 export function createApplicationUpdateOverlays(
   gateway: ApplicationGateway,
   onChange: () => void,
@@ -82,6 +86,8 @@ export function createApplicationUpdateOverlays(
   let updateReadGeneration = 0;
   let updateHoldInFlight = false;
   let runId: string | null = null;
+  let updateHistory: UpdateHistory = { kind: "unknown" };
+  let updateAttempt: UpdateAdmissionAttempt | null = null;
   let currentFailure: UpdateFailureTriage | null = null;
   let presentedFailure: UpdateFailureTriage | null = null;
 
@@ -192,10 +198,11 @@ export function createApplicationUpdateOverlays(
     presentFailureTriage();
   }
 
-  const publishError = (error: unknown) => {
+  const publishError = (error: unknown, source?: "read") => {
     snapshot = {
       ...snapshot,
       updateStatusBanner: {
+        ...(source ? { source } : {}),
         tone: "danger",
         text: t("updates.error", { error: formatUiError(error) }),
       },
@@ -214,6 +221,7 @@ export function createApplicationUpdateOverlays(
       invalidateFailureReport();
     }
     runId = run.runId;
+    updateAttempt = null;
     const failure = projectUpdateRunFailure(run);
     setCurrentFailure(failure);
     snapshot = {
@@ -251,7 +259,7 @@ export function createApplicationUpdateOverlays(
         if (response.run.status !== "running") {
           // Refresh the install owner's availability after completion so closing
           // the report cannot re-offer the just-installed target.
-          void refreshUpdateStatus();
+          void refreshUpdateStatus("completion");
         }
       } else {
         // A missing row is an explicit unknown outcome, never inferred success.
@@ -266,33 +274,40 @@ export function createApplicationUpdateOverlays(
       }
     } catch (error) {
       if (isCurrent()) {
-        publishError(error);
+        publishError(error, "read");
       }
     }
   };
 
   const applyUpdateStatusResponse = (response: UpdateRestartStatusResponse) => {
-    const { failure, ...status } = projectUpdateStatusResponse(response, snapshot);
-    snapshot = { ...snapshot, ...status, updateCampaignStatusHydrated: true };
+    const { failure, updateStatusBanner, recordedUpdateAttempt, ...status } =
+      projectUpdateStatusResponse(response, snapshot);
     const run = response.activeRun ?? response.lastRun;
+    const history = updateAttempt?.history;
+    // A failed history read is not an empty baseline. Until a current identity
+    // is observed, a status check cannot certify terminal history as this attempt.
+    const previousOutcome =
+      history !== undefined &&
+      (!run ||
+        (history.kind === "known" && run.runId === history.runId) ||
+        (history.kind === "unknown" && run.status !== "running" && run.runId !== runId));
+    updateHistory = { kind: "known", runId: run?.runId ?? null };
+    // Availability may refresh independently. Only the selected outcome owner
+    // can replace a run report or its current read error.
+    snapshot = { ...snapshot, ...status, updateCampaignStatusHydrated: true };
     if (
       run &&
+      !previousOutcome &&
       (!snapshot.updateRun ||
         run.runId === snapshot.updateRun.runId ||
         run.createdAtMs >= snapshot.updateRun.createdAtMs)
     ) {
       applyRun(run);
-    } else if (!snapshot.updateRun) {
-      setCurrentFailure(failure);
-      publish();
     } else {
-      // Schedule refreshes must not replace a run report with a retained sentinel.
-      const runFailure = projectUpdateRunFailure(snapshot.updateRun);
-      snapshot = {
-        ...snapshot,
-        updateStatusBanner: runFailure?.banner ?? null,
-        recordedUpdateAttempt: runFailure?.attempt ?? null,
-      };
+      if (!snapshot.updateRun && !previousOutcome) {
+        setCurrentFailure(failure);
+        snapshot = { ...snapshot, updateStatusBanner, recordedUpdateAttempt };
+      }
       publish();
     }
   };
@@ -307,7 +322,7 @@ export function createApplicationUpdateOverlays(
       publish();
     },
     onStatus: applyUpdateStatusResponse,
-    onError: publishError,
+    onError: (error) => publishError(error, "read"),
   });
   const updateCampaignPoller = createUpdateCampaignStatusPoller({
     canPoll: () =>
@@ -335,6 +350,8 @@ export function createApplicationUpdateOverlays(
       updateReadGeneration++;
       updateStatusRevision++;
       runId = null;
+      updateHistory = { kind: "unknown" };
+      updateAttempt = null;
       updateRequestRunning = false;
       setCurrentFailure(null);
       snapshot = {
@@ -361,6 +378,14 @@ export function createApplicationUpdateOverlays(
     if (connectedSourceChanged) {
       updateFailureReporter.invalidate();
       snapshot = { ...snapshot, updateFailureReportBusy: false };
+      if (
+        updateAttempt?.requestSent &&
+        !runId &&
+        !snapshot.updateRun &&
+        !snapshot.updateStatusBanner
+      ) {
+        snapshot = { ...snapshot, updateStatusBanner: resolveUnknownUpdateOutcomeBanner() };
+      }
       connectedEpoch++;
       updateReadGeneration++;
       updateStatusRevision++;
@@ -417,9 +442,12 @@ export function createApplicationUpdateOverlays(
     },
     synchronizeGateway,
     handleUpdateRunChanged(payload: unknown) {
+      const history = updateAttempt?.history;
       if (
         !isRecord(payload) ||
         typeof payload.runId !== "string" ||
+        (history?.kind === "known" && payload.runId === history.runId) ||
+        (!runId && history?.kind === "unknown" && payload.status !== "running") ||
         typeof payload.updatedAtMs !== "number" ||
         !activeClient ||
         !isCurrentClient(activeClient)
@@ -481,6 +509,13 @@ export function createApplicationUpdateOverlays(
       const sessionKey = options?.sessionKey ?? hooks.getActiveSessionKey?.();
       updateStatusRevision++;
       updateReadGeneration++;
+      const attempt: UpdateAdmissionAttempt = {
+        history: snapshot.updateRun
+          ? { kind: "known", runId: snapshot.updateRun.runId }
+          : updateHistory,
+        requestSent: false,
+      };
+      updateAttempt = attempt;
       runId = null;
       updateRequestRunning = true;
       setCurrentFailure(null);
@@ -502,6 +537,11 @@ export function createApplicationUpdateOverlays(
         const response = await client.request<UpdateRunResponse>(
           "update.run",
           sessionKey ? { sessionKey } : {},
+          {
+            onSent: () => {
+              attempt.requestSent = true;
+            },
+          },
         );
         if (!isCurrent()) {
           return;
@@ -526,9 +566,11 @@ export function createApplicationUpdateOverlays(
       } catch (error) {
         if (isCurrent()) {
           publishError(error);
-          // Admission may have succeeded before the response was lost. Discover
-          // its durable identity now, or in the next connection's bootstrap.
-          await refreshUpdateStatus("completion");
+          // A correlated rejection is the outcome of this request. Only transport
+          // loss after send needs discovery; retained history cannot replace a refusal.
+          if (attempt.requestSent && !(error instanceof GatewayRequestError)) {
+            await refreshUpdateStatus("completion");
+          }
         }
       } finally {
         if (isCurrent()) {

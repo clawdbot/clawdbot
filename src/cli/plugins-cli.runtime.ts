@@ -11,7 +11,6 @@ import {
   assertConfigWriteAllowedInCurrentMode,
   getRuntimeConfig,
   readConfigFileSnapshot,
-  replaceConfigFile,
 } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -47,13 +46,8 @@ function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
   return () => (promise ??= load());
 }
 
-const loadPluginsConfigState = createModuleLoader(() => import("../plugins/config-state.js"));
 const loadPluginsStatus = createModuleLoader(() => import("../plugins/status.js"));
-const loadPluginSlotSelection = createModuleLoader(() => import("../plugins/slot-selection.js"));
 const loadPluginsCommandHelpers = createModuleLoader(() => import("./plugins-command-helpers.js"));
-const loadPluginsRegistryRefresh = createModuleLoader(
-  () => import("../plugins/registry-refresh.js"),
-);
 
 function countEnabledPlugins(plugins: readonly { enabled: boolean }[]): number {
   return plugins.filter((plugin) => plugin.enabled).length;
@@ -183,58 +177,49 @@ function collectConfiguredRuntimePluginWarnings(params: {
 
 /** Enable a plugin in config and refresh the registry snapshot for the changed policy. */
 export async function runPluginsEnableCommand(
-  idInput: string,
+  id: string,
   opts: { acceptCapabilities?: boolean } = {},
 ): Promise<void> {
-  assertConfigWriteAllowedInCurrentMode();
-  return await withPluginLifecycleLease(
-    {},
-    async () => await runPluginsEnableCommandUnlocked(idInput, opts),
-  );
+  await runPluginPolicyCommand(id, true, opts.acceptCapabilities);
 }
 
-async function runPluginsEnableCommandUnlocked(
-  idInput: string,
-  opts: { acceptCapabilities?: boolean },
-): Promise<void> {
-  let id = idInput;
-  assertConfigWriteAllowedInCurrentMode();
+/** Disable a plugin in config and refresh the registry snapshot for the changed policy. */
+export async function runPluginsDisableCommand(id: string): Promise<void> {
+  await runPluginPolicyCommand(id, false);
+}
 
-  const { enableExplicitlySelectedPluginInConfig } = await import("../plugins/enable.js");
-  const { normalizePluginId } = await loadPluginsConfigState();
-  const { buildPluginRegistrySnapshotReport } = await loadPluginsStatus();
-  const snapshot = await readConfigFileSnapshot();
-  const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
-  const report = buildPluginRegistrySnapshotReport({ config: cfg });
-  id = normalizePluginId(id);
-  const plugin = report.plugins.find((entry) => entry.id === id);
-  if (!plugin) {
-    return reportMissingPlugin(id);
-  }
-  const enableResult = enableExplicitlySelectedPluginInConfig(cfg, id, {
-    updateChannelConfig: false,
-  });
-  // A blocked request must not displace the active slot or rewrite persisted state.
-  if (!enableResult.enabled) {
-    defaultRuntime.error(
-      `Plugin "${id}" could not be enabled (${enableResult.reason ?? "unknown reason"}).`,
-    );
-    return defaultRuntime.exit(1);
-  }
-  if (!plugin.enabled || opts.acceptCapabilities) {
-    const { resolvePluginCapabilityConsent } = await import("../plugins/capability-consent.js");
-    const { ManagedPluginLifecycleError } =
-      await import("../plugins/management-lifecycle-error.js");
-    const consent = resolvePluginCapabilityConsentCliOptions({
-      acceptCapabilities: opts.acceptCapabilities,
-      action: "enable",
-    });
+async function runPluginPolicyCommand(
+  id: string,
+  enabled: boolean,
+  acceptCapabilities?: boolean,
+): Promise<void> {
+  assertConfigWriteAllowedInCurrentMode();
+  const { mutateManagedPluginEnabled } = await import("../plugins/management-mutations.js");
+  const { ManagedPluginLifecycleError } = await import("../plugins/management-lifecycle-error.js");
+  await withPluginLifecycleLease({}, async () => {
     try {
-      await resolvePluginCapabilityConsent({
-        config: cfg,
+      const result = await mutateManagedPluginEnabled({
         pluginId: id,
-        ...consent,
+        enabled,
+        caller: "cli",
+        requestCapabilityConsent: acceptCapabilities,
+        ...resolvePluginCapabilityConsentCliOptions({ acceptCapabilities, action: "enable" }),
       });
+      if (result.status === "missing") {
+        return reportMissingPlugin(result.pluginId);
+      }
+      if (result.status === "blocked") {
+        defaultRuntime.error(
+          `Plugin "${result.pluginId}" could not be enabled (${result.reason ?? "unknown reason"}).`,
+        );
+        return defaultRuntime.exit(1);
+      }
+      for (const warning of result.warnings) {
+        defaultRuntime.log(theme.warn(warning));
+      }
+      defaultRuntime.log(
+        `${enabled ? "Enabled" : "Disabled"} plugin "${result.pluginId}". Restart the gateway to apply.`,
+      );
     } catch (error) {
       if (!(error instanceof ManagedPluginLifecycleError) || !error.capabilityConsent) {
         throw error;
@@ -242,82 +227,7 @@ async function runPluginsEnableCommandUnlocked(
       defaultRuntime.error(error.message);
       return defaultRuntime.exit(1);
     }
-  }
-
-  const { applySlotSelectionForPlugin } = await loadPluginSlotSelection();
-  const { logSlotWarnings } = await loadPluginsCommandHelpers();
-  const { refreshPluginRegistryAfterConfigMutation } = await loadPluginsRegistryRefresh();
-  let next: OpenClawConfig = enableResult.config;
-  const slotResult = applySlotSelectionForPlugin(next, id);
-  next = slotResult.config;
-  await replaceConfigFile({
-    nextConfig: next,
-    ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-    // Source/runtime projection must retain the explicitly merged canonical
-    // entry; otherwise compatibility-only nested settings are silently lost.
-    writeOptions: {
-      explicitSetPaths: [["plugins", "entries", enableResult.pluginId]],
-    },
   });
-  await refreshPluginRegistryAfterConfigMutation({
-    config: next,
-    reason: "policy-changed",
-    invalidateRuntimeCache: false,
-    policyPluginIds: [enableResult.pluginId],
-    logger: {
-      warn: (message) => defaultRuntime.log(theme.warn(message)),
-    },
-  });
-  logSlotWarnings(slotResult.warnings);
-  defaultRuntime.log(`Enabled plugin "${id}". Restart the gateway to apply.`);
-}
-
-/** Disable a plugin in config and refresh the registry snapshot for the changed policy. */
-export async function runPluginsDisableCommand(idInput: string): Promise<void> {
-  assertConfigWriteAllowedInCurrentMode();
-  return await withPluginLifecycleLease(
-    {},
-    async () => await runPluginsDisableCommandUnlocked(idInput),
-  );
-}
-
-async function runPluginsDisableCommandUnlocked(idInput: string): Promise<void> {
-  let id = idInput;
-  assertConfigWriteAllowedInCurrentMode();
-
-  const { normalizePluginId } = await loadPluginsConfigState();
-  const { buildPluginRegistrySnapshotReport } = await loadPluginsStatus();
-  const { setPluginEnabledInConfig } = await import("./plugins-config.js");
-  const { refreshPluginRegistryAfterConfigMutation } = await loadPluginsRegistryRefresh();
-  const snapshot = await readConfigFileSnapshot();
-  const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
-  const report = buildPluginRegistrySnapshotReport({ config: cfg });
-  id = normalizePluginId(id);
-  if (!report.plugins.some((plugin) => plugin.id === id)) {
-    return reportMissingPlugin(id);
-  }
-  const next = setPluginEnabledInConfig(cfg, id, false, {
-    updateChannelConfig: false,
-  });
-  await replaceConfigFile({
-    nextConfig: next,
-    ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-    // `id` was normalized before discovery; persist that same canonical entry
-    // so alias invocations cannot lose settings during source projection.
-    writeOptions: {
-      explicitSetPaths: [["plugins", "entries", id]],
-    },
-  });
-  await refreshPluginRegistryAfterConfigMutation({
-    config: next,
-    reason: "policy-changed",
-    invalidateRuntimeCache: false,
-    policyPluginIds: [id],
-    logger: {
-      warn: (message) => defaultRuntime.log(theme.warn(message)),
-    },
-  });
-  defaultRuntime.log(`Disabled plugin "${id}". Restart the gateway to apply.`);
 }
 
 export async function runPluginsInstallAction(

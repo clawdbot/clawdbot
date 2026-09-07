@@ -1,4 +1,3 @@
-// Media Core module implements inline image data url behavior.
 import { canonicalizeBase64 } from "./base64.js";
 
 /** Prefix used to distinguish inline data URLs from remote/local image references. */

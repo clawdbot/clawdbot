@@ -12,6 +12,7 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { readPendingUserTurnTranscriptAdmission } from "./user-turn-transcript-admission.js";
 import {
   buildLateMediaAttachedProjection,
   createUserTurnTranscriptRecorder,
@@ -538,31 +539,45 @@ describe("user turn transcript persistence", () => {
       ]);
     });
 
-    it("records the exact self-persisted admission identity", async () => {
-      const dir = tempDirs.make("openclaw-user-turn-recorder-receipt-");
-      const target = createSqliteTranscriptTarget({ dir });
-      const recorder = createUserTurnTranscriptRecorder({
-        input: {
-          text: "admit exactly once",
+    it.each(["sent", "blocked"] as const)(
+      "retires the pending admission view when %s",
+      async (state) => {
+        const dir = tempDirs.make("openclaw-user-turn-recorder-receipt-");
+        const target = createSqliteTranscriptTarget({ dir });
+        const recorder = createUserTurnTranscriptRecorder({
+          input: {
+            text: "admit exactly once",
+            idempotencyKey: "receipt:user",
+          },
+          target,
+        });
+
+        const persisted = await recorder.persistApproved();
+
+        expect(persisted).toBeDefined();
+        expect(recorder.getAdmissionReceipt()).toBe(persisted?.admission);
+        expect(recorder.getAdmissionReceipt()).toMatchObject({
+          entryId: persisted?.messageId,
+          agentId: target.agentId,
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
           idempotencyKey: "receipt:user",
-        },
-        target,
-      });
+          logicalTurnId: expect.any(String),
+          role: "user",
+        });
 
-      const persisted = await recorder.persistApproved();
-
-      expect(persisted).toBeDefined();
-      expect(recorder.getAdmissionReceipt()).toBe(persisted?.admission);
-      expect(recorder.getAdmissionReceipt()).toMatchObject({
-        entryId: persisted?.messageId,
-        agentId: target.agentId,
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-        idempotencyKey: "receipt:user",
-        logicalTurnId: expect.any(String),
-        role: "user",
-      });
-    });
+        const pending = readPendingUserTurnTranscriptAdmission(recorder);
+        expect(pending).toEqual(persisted?.admission);
+        expect(pending).not.toBe(recorder.getAdmissionReceipt());
+        expect(readPendingUserTurnTranscriptAdmission({ ...recorder })).toBeUndefined();
+        if (state === "sent") {
+          recorder.markSentToProvider?.();
+        } else {
+          recorder.markBlocked();
+        }
+        expect(readPendingUserTurnTranscriptAdmission(recorder)).toBeUndefined();
+      },
+    );
 
     it("adds confirmed steering provenance after runtime persistence", async () => {
       const dir = tempDirs.make("openclaw-user-turn-recorder-confirm-steer-");

@@ -44,8 +44,7 @@ export async function releaseManagedRepairInference(
 export function managedRepairConfig(baseUrl: string): OpenClawConfig {
   const modelRef = "repair-test/repair-model";
   return {
-    commands: { ownerAllowFrom: ["slack:owner"] },
-    channels: { slack: { enabled: true } },
+    commands: { ownerAllowFrom: ["owner"] },
     plugins: { slots: { memory: "none" } },
     agents: {
       defaults: {
@@ -292,7 +291,7 @@ export async function runManagedRepairAuthorityBoundary(
         result = await runBoundary("systemd", {
           controlDisconnect: "transferred",
           validationResult: "skipped",
-          requester: { channel: "slack", accountId: "primary", senderId: "owner" },
+          requester: { channel: "synthetic", accountId: "primary", senderId: "owner" },
           ledger: true,
           helperExitCode: revoke ? 1 : 0,
           repair: { phase, baseUrl, revoke, inferencePending, releaseInference },

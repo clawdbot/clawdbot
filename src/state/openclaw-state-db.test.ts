@@ -43,10 +43,7 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "./openclaw-state-db-contract.js";
 import { ensureGitHubPublicationSchema } from "./openclaw-state-db-schema-additive.js";
-import {
-  findOpenClawStateDatabaseSchemaMigrationRequiredError,
-  OpenClawStateDatabaseSchemaMigrationRequiredError,
-} from "./openclaw-state-db-schema-migration-required.js";
+import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
@@ -188,7 +185,7 @@ function expectStateSchemaMigrationRequired(
     caught = error;
   }
   expect(caught).toBeInstanceOf(OpenClawStateDatabaseSchemaMigrationRequiredError);
-  expect(findOpenClawStateDatabaseSchemaMigrationRequiredError(caught)).toMatchObject(expected);
+  expect(caught).toMatchObject(expected);
 }
 
 function replaceManagedImageRecordsWithLegacyTable(
@@ -5303,7 +5300,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     } catch (error) {
       caught = error;
     }
-    expect(findOpenClawStateDatabaseSchemaMigrationRequiredError(caught)).toBeUndefined();
+    expect(caught).not.toBeInstanceOf(OpenClawStateDatabaseSchemaMigrationRequiredError);
     expect(caught).toBeInstanceOf(Error);
     expect((caught as Error).message).toContain(
       "noncanonical agent database registry schema that cannot be repaired automatically",

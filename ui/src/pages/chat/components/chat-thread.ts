@@ -86,7 +86,7 @@ function renderTranscriptShell(
   return html`
     <div
       class="chat-thread ${projection.isDirectThread ? "chat-thread--direct" : ""}"
-      ${markdownBlocks()}
+      ${markdownBlocks(props.transcriptVisible ?? true)}
       ${ref((element) => {
         if (element instanceof HTMLElement) {
           hydrateLinkFavicons(element, props.fetchLinkFavicon);

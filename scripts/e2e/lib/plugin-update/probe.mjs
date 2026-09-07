@@ -323,21 +323,6 @@ function collectPluginEvidence(plugins, pluginId) {
   };
 }
 
-function assertLegacyPostUpdatePluginFailure(updateJsonPath) {
-  const payload = readJson(updateJsonPath);
-  if (payload.status !== "error" || payload.reason !== "post-update-plugins") {
-    throw new Error(
-      `expected legacy post-update plugin failure, got ${JSON.stringify({
-        status: payload.status,
-        reason: payload.reason,
-      })}`,
-    );
-  }
-  if (!payload.after?.version) {
-    throw new Error(`expected core update to install a new version: ${JSON.stringify(payload)}`);
-  }
-}
-
 function assertCorruptPluginPolicyPreserved(configPath, pluginId) {
   const config = readJson(configPath);
   const allow = config.plugins?.allow;
@@ -370,7 +355,6 @@ const commands = {
   "assert-output": () => assertOutput(arg),
   "assert-corrupt-update": () => assertCorruptUpdate(arg, arg2),
   "assert-corrupt-plugin-result": () => assertCorruptPluginResult(arg, arg2),
-  "assert-legacy-post-update-plugin-failure": () => assertLegacyPostUpdatePluginFailure(arg),
   "assert-corrupt-policy-preserved": () => assertCorruptPluginPolicyPreserved(arg, arg2),
 };
 const run = commands[command];

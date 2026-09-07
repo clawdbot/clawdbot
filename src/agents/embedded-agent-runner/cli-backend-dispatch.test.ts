@@ -595,24 +595,18 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     expect(observed).toHaveLength(2);
   });
 
-  it("retires only the run's session MCP runtime instead of the process-wide server", async () => {
-    runCliAgent.mockResolvedValue(cliRunResult());
-    const params = baseRunParams({ cleanupBundleMcpOnRunEnd: true });
-    await runEmbeddedAgentViaCliBackendIfEligible(params);
-    // The CLI runner's flag would close the shared loopback MCP server, which
-    // concurrent turns may still be using; it must never be forwarded.
-    expect(runCliAgent.mock.calls[0]?.[0]).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
-    expect(retireSessionMcpRuntimeForSessionKey).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionKey: params.sessionKey }),
-    );
-    expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
-  });
-
-  it("skips MCP runtime cleanup when the caller did not request it", async () => {
-    runCliAgent.mockResolvedValue(cliRunResult());
-    await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams());
-    expect(retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
-  });
+  it.each([true, undefined])(
+    "delegates MCP lifetime policy %s to the CLI settlement owner",
+    async (cleanupBundleMcpOnRunEnd) => {
+      runCliAgent.mockResolvedValue(cliRunResult());
+      await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams({ cleanupBundleMcpOnRunEnd }));
+      expect(runCliAgent.mock.calls[0]?.[0]?.cleanupBundleMcpOnRunEnd).toBe(
+        cleanupBundleMcpOnRunEnd,
+      );
+      expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
+      expect(retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
+    },
+  );
 
   it("mirrors the run into the transcript recorder", async () => {
     runCliAgent.mockImplementation(async (cliParams: { runId: string }) => {

@@ -1496,6 +1496,36 @@ describe("promptModelAllowlist", () => {
     expect(result.scopeKeys).toEqual(["anthropic/claude-opus-4-6"]);
   });
 
+  it("seeds scoped choices with a fallback-only agent's inherited primary", async () => {
+    const multiselect = createSelectAllMultiselect();
+    const config = {
+      agents: {
+        defaults: {
+          model: "openai/global-model",
+          models: { "anthropic/outside-scope": {} },
+        },
+        entries: { ops: { model: { fallbacks: ["openai/backup-model"] } } },
+      },
+    } satisfies OpenClawConfig;
+    const before = structuredClone(config);
+    const allowedKeys = ["openai/global-model", "openai/backup-model"];
+
+    const result = await promptModelAllowlist({
+      config,
+      prompter: makePrompter({ multiselect }),
+      agentId: "ops",
+      agentDir: "/tmp/ops-agent",
+      allowedKeys,
+      loadCatalog: false,
+    });
+
+    const prompt = multiselect.mock.calls[0]?.[0];
+    expect(optionValues(prompt.options)).toEqual(allowedKeys);
+    expect(prompt.initialValues).toEqual(allowedKeys);
+    expect(result).toEqual({ models: allowedKeys, scopeKeys: allowedKeys });
+    expect(config).toEqual(before);
+  });
+
   it("localizes the model allowlist picker", async () => {
     process.env.OPENCLAW_LOCALE = "zh-CN";
     loadModelCatalog.mockResolvedValue([catalogModel("openai", "gpt-5.5", "GPT-5.5")]);

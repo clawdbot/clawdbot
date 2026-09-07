@@ -130,10 +130,22 @@ type PreparedCliRunInternalParams = PreparedCliRunContext["params"] & {
 
 /** Executes a prepared CLI run context and returns normalized CLI output. */
 export async function executePreparedCliRun(
-  context: PreparedCliRunContext,
+  inputContext: PreparedCliRunContext,
   cliSessionIdToUse?: string,
   options?: ExecutePreparedCliRunOptions,
 ): Promise<CliOutput> {
+  // Fresh recovery retains its exact account/read authority across every await
+  // and through the process/plugin execution callbacks, not just preparation.
+  const context =
+    !cliSessionIdToUse && inputContext.openClawHistoryPrompt && inputContext.cliHistoryWriter
+      ? {
+          ...inputContext,
+          params: {
+            ...inputContext.params,
+            assertCurrent: inputContext.cliHistoryWriter.assertReadable,
+          },
+        }
+      : inputContext;
   const params = context.params as PreparedCliRunInternalParams;
   const assertCurrent = createCliRunCurrentAssertion(params);
   assertCurrent();

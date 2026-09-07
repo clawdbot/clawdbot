@@ -22,6 +22,7 @@ import {
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
 import type { AssistantErrorTranscript } from "./assistant-error-transcript.js";
+import { isMidTurnPrecheckAssistantError } from "./embedded-agent-runner/run/midturn-precheck.js";
 import type { EmbeddedRunTrigger } from "./embedded-agent-runner/run/params.js";
 import { resolveLiveToolResultMaxChars } from "./embedded-agent-runner/tool-result-truncation.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
@@ -127,6 +128,10 @@ export function guardSessionManager(
     event: { message: AgentMessage },
     sourceAppend?: CodeModeSourceAppend,
   ) => {
+    // Persisting a routing signal would force recovery to rewrite the whole archive to remove it.
+    if (isMidTurnPrecheckAssistantError(event.message)) {
+      return { block: true };
+    }
     const runtimeUserMessage = runtimeUserMessageByPersistedMessage.get(event.message);
     let message = event.message;
     let changed = false;

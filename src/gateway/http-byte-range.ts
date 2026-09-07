@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
 import type { FileHandle } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { parseRetryAfterHttpDateMs } from "@openclaw/ai/internal/retry-after";
-import { matchesHttpIfNoneMatch } from "./http-conditional.js";
+import { matchesHttpIfModifiedSince, matchesHttpIfNoneMatch } from "./http-conditional.js";
 
 type FileIdentity = {
   size: number;
@@ -102,19 +101,13 @@ export function resolveByteResponse(params: {
     lastModifiedMs === undefined ? undefined : new Date(lastModifiedMs).toUTCString();
   const headers = params.request?.headers;
   const ifNoneMatch = headers?.["if-none-match"];
-  const ifModifiedSinceValues = params.request?.headersDistinct["if-modified-since"];
-  // Node drops duplicate singleton fields from headers; only the distinct list is authoritative.
-  const ifModifiedSince =
-    ifModifiedSinceValues?.length === 1 ? ifModifiedSinceValues[0] : undefined;
   // Any If-None-Match field supersedes If-Modified-Since, even when no ETag matches.
   if (
     (params.method === "GET" || params.method === "HEAD") &&
     (matchesHttpIfNoneMatch(ifNoneMatch, etag) ||
       (ifNoneMatch === undefined &&
         lastModifiedMs !== undefined &&
-        typeof ifModifiedSince === "string" &&
-        (parseRetryAfterHttpDateMs(ifModifiedSince, originatedAtMs) ?? Number.NEGATIVE_INFINITY) >=
-          lastModifiedMs))
+        matchesHttpIfModifiedSince(params.request, lastModifiedMs, originatedAtMs)))
   ) {
     // RFC 9110 evaluates representation validators before Range or If-Range.
     return { kind: "not-modified", statusCode: 304, etag, lastModified };

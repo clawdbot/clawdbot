@@ -146,7 +146,15 @@ function readSessionIdentityEvidenceRows(
     [...new Set(items.flatMap((item) => (item.sessionKey ? [item.sessionKey] : [])))],
     "session_key",
   );
-  readChunks([...new Set(items.map((item) => item.sessionId))], "current_session_id");
+  // Matching headers only avoid redundant reads; the full validator below still owns
+  // validity. Other probes may require the same identity and replace this snapshot.
+  const fallbackIds = items.flatMap((item) => {
+    const exactRow = item.sessionKey ? rowsByKey.get(item.sessionKey) : undefined;
+    return exactRow?.entry_valid === 1 && exactRow.current_session_id === item.sessionId
+      ? []
+      : [item.sessionId];
+  });
+  readChunks([...new Set(fallbackIds)], "current_session_id");
 
   const rowsBySessionId = new Map<string, SessionIdentityEvidenceRow[]>();
   const readableKeys = new Set<string>();

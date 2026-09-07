@@ -177,9 +177,7 @@ describe("bounded agent exec", () => {
                process.stdout.write("ready");
                setInterval(() => {}, 1000);`,
             ],
-            sessionId: String(opts.sessionId),
             scopeKey: String(opts.sessionKey),
-            backendId: "budget-test",
             timeoutMs: 30_000,
             onStdout: (chunk) => {
               output += chunk;

@@ -17,7 +17,7 @@ import {
 } from "discord-api-types/v10";
 import { asSafeIntegerInRange, MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import * as ws from "ws";
+import type * as ws from "ws";
 import { Plugin, type Client } from "./client.js";
 import { canResumeAfterGatewayClose, isFatalGatewayCloseCode } from "./gateway-close-codes.js";
 import { dispatchVoiceGatewayEvent, mapGatewayDispatchData } from "./gateway-dispatch.js";
@@ -27,6 +27,7 @@ import { decodeGatewayMessage, ensureGatewayParams } from "./gateway-payload.js"
 import { GatewaySendLimiter } from "./gateway-rate-limit.js";
 import { DiscordGatewayVoiceStateCache } from "./gateway-voice-state-cache.js";
 import type { DiscordGatewayVoiceStateTransition } from "./gateway-voice-state-cache.js";
+import { WebSocket } from "./ws-runtime.js";
 
 export { GatewayCloseCodes };
 export const GatewayIntents = GatewayIntentBits;
@@ -196,7 +197,7 @@ export class GatewayPlugin extends Plugin {
   }
 
   protected createWebSocket(url: string): ws.WebSocket {
-    return new ws.WebSocket(url, DISCORD_GATEWAY_WS_CLIENT_OPTIONS);
+    return new WebSocket(url, DISCORD_GATEWAY_WS_CLIENT_OPTIONS);
   }
 
   private setupWebSocket(resume: boolean): void {

@@ -334,11 +334,12 @@ describe("projectProviderError", () => {
     expect(JSON.stringify(projected)).not.toContain(leaked);
   });
 
-  it("preserves a harmless JSON response-body string byte-for-byte", () => {
-    const body = '{"message": "safe", "nested": [1, 2]}';
-
-    expect(projectProviderError({ status: 500, body }).errorBody).toBe(body);
-  });
+  it.each(['{"message": "safe", "nested": [1, 2]}', 'prefix "notjson[1]" middle {"a":1} suffix'])(
+    "preserves harmless diagnostic JSON byte-for-byte: %s",
+    (body) => {
+      expect(projectProviderError({ status: 500, body }).errorBody).toBe(body);
+    },
+  );
 
   it.each([
     {

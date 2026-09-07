@@ -2,7 +2,11 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AGENT_SCHEMA_WITHOUT_PROGRESS_CARD_SQL } from "../state/openclaw-agent-progress-card-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
-import { readSessionProgressCard, writeSessionProgressCard } from "./progress-card-store.js";
+import {
+  clearSessionProgressCardForReset,
+  readSessionProgressCard,
+  writeSessionProgressCard,
+} from "./progress-card-store.js";
 
 const SESSION_KEY = "agent:main:main";
 const STEPS = [
@@ -73,6 +77,7 @@ describe("session progress card store", () => {
     db = new DatabaseSync(":memory:");
     db.exec(AGENT_SCHEMA_WITHOUT_PROGRESS_CARD_SQL);
 
+    expect(clearSessionProgressCardForReset(db, SESSION_KEY)).toBe(false);
     expect(readSessionProgressCard(db, SESSION_KEY)).toBeNull();
     expect(
       db

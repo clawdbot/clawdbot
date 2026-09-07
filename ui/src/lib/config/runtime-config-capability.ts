@@ -1,6 +1,9 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
+import { t } from "../../i18n/index.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../gateway-methods.ts";
+import { showToast } from "../toast.ts";
 import { createAppliedConfigRefreshController } from "./applied-refresh.ts";
 import { clearConfigDraftTracking } from "./config-draft-model.ts";
 import {
@@ -73,6 +76,12 @@ export function createRuntimeConfigCapability(
   gateway: RuntimeConfigGateway,
 ): RuntimeConfigCapability {
   const state = createInitialConfigState(gateway.snapshot);
+  // Raw edits never autosave; form edits and outstanding writes also remain
+  // owned by this capability when a worker update or reconnect wants to reload.
+  const stopReloadGuard = registerControlUiReloadGuard(
+    () => !state.configFormDirty && !state.configSaving && !state.configApplying,
+    () => showToast({ message: t("configView.reloadBlocked") }),
+  );
   const listeners = new Set<(state: RuntimeConfigState) => void>();
   let configLoad: Promise<void> | null = null;
   let schemaLoad: Promise<void> | null = null;
@@ -266,6 +275,7 @@ export function createRuntimeConfigCapability(
       return () => listeners.delete(listener);
     },
     dispose() {
+      stopReloadGuard();
       disposed = true;
       writes.dispose();
       listeners.clear();

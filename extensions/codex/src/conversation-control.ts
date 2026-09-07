@@ -9,15 +9,17 @@ import {
   patchSessionEntry,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  isCodexAppServerNativeAuthProfile,
+  normalizeCodexAppServerBindingModelProvider,
+  type CodexAppServerAuthProfileLookup,
+} from "./app-server/auth-profile.js";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
 import type { CodexAppServerClient } from "./app-server/client.js";
 import { isCodexFastServiceTier } from "./app-server/config.js";
 import type { CodexServiceTier } from "./app-server/protocol.js";
 import {
   bindingStoreKey,
-  isCodexAppServerNativeAuthProfile,
-  normalizeCodexAppServerBindingModelProvider,
-  type CodexAppServerAuthProfileLookup,
   type CodexAppServerBindingIdentity,
   type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,

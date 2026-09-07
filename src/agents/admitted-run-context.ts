@@ -36,6 +36,8 @@ export type PreparedAgentRunAdmission = Readonly<{
     runtimeKind: ExecutionIdentityAdmissionFacts["runtime"]["kind"],
     runtimeInstanceId?: string,
   ) => Promise<AdmittedRunContext>;
+  /** Checks latched source revocation after normal close; never grants execution authority. */
+  assertSourceCurrent: () => void;
   /** Idempotently closes the exact delegated approval lease, if admission occurred. */
   close: () => void;
 }>;
@@ -244,6 +246,7 @@ export function prepareAgentRunAdmission(params: {
   let closed = false;
   return Object.freeze({
     operationalRunInstance,
+    assertSourceCurrent: () => assertSourceCurrent?.(),
     close: () => {
       closed = true;
       if (admittedContext) {

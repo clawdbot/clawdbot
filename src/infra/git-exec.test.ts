@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as execRunner from "../process/exec-runner.js";
 import * as processExec from "../process/exec.js";
 import type { SpawnResult } from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
@@ -168,6 +169,13 @@ describe.each([
     },
     {
       termination: "signal",
+      signal: null,
+      code: 0,
+      killed: false,
+      expected: "terminated",
+    },
+    {
+      termination: "signal",
       signal: "SIGKILL",
       outputLimitExceeded: true,
       code: null,
@@ -216,6 +224,17 @@ describe("required Git output", () => {
       await expect(requireGitCommandRaw(root, args)).resolves.toBe(stdout);
       await expect(requireGitCommand(root, args)).resolves.toBe(stdout.trim());
     });
+  });
+
+  it("rejects buffered I/O failures after a zero exit", async () => {
+    const error = Object.assign(new Error("stdout read failed"), {
+      exitCode: 0,
+      outputErrorStream: "stdout",
+    });
+    vi.spyOn(execRunner, "runCommandWithTimeout").mockRejectedValueOnce(error);
+    await expect(
+      requireGitCommandBuffer("/repo", ["cat-file", "blob", "HEAD:file"]),
+    ).rejects.toThrow("git cat-file blob HEAD:file failed");
   });
 
   it("keeps binary output including invalid UTF-8 and terminal control bytes", async () => {

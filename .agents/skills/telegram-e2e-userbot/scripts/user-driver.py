@@ -15,6 +15,7 @@ import platform
 import re
 import secrets
 import select
+import signal
 import shutil
 import stat
 import subprocess
@@ -250,7 +251,30 @@ def default_chat(config, bot_config):
 
 
 class TdClient:
-    def __init__(self, config):
+    def __init__(self, config, deadline_unix_ms=None):
+        self.deadline_unix_ms = deadline_unix_ms
+        self.proof_authority_file = os.environ.get("TELEGRAM_PROOF_AUTHORITY_FILE")
+        self.proof_authority_invalid = False
+        self.proof_clock_wall = time.time() * 1000
+        self.proof_clock_monotonic = time.monotonic()
+        self.deadline_monotonic = (
+            time.monotonic() + (deadline_unix_ms / 1000 - time.time())
+            if deadline_unix_ms is not None else None
+        )
+        if self.proof_authority_file:
+            # Applies to every credentialed proof client, including status/auth
+            # before the recorder exists. Arm before creating native threads.
+            try:
+                parent_pid = int(os.environ.get("TELEGRAM_PROOF_PARENT_PID", ""))
+            except ValueError:
+                raise DriverError("Missing trusted proof owner.") from None
+            if sys.platform != "linux" or parent_pid <= 1:
+                raise DriverError("Trusted proof ownership requires a Linux controller.")
+            if ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGKILL, 0, 0, 0) != 0:
+                raise DriverError("Unable to arm proof parent-death cleanup.")
+            if os.getppid() != parent_pid:
+                raise DriverError("Trusted proof owner is no longer active.")
+            self.assert_proof_authority()
         lib_path = find_tdjson(config)
         if not lib_path:
             raise DriverError(
@@ -282,7 +306,30 @@ class TdClient:
         raw = self.lib.td_json_client_execute(self.client, json.dumps(payload).encode())
         return json.loads(raw.decode()) if raw else None
 
+    def assert_proof_authority(self):
+        authority_file = getattr(self, "proof_authority_file", None)
+        if authority_file:
+            # Only the trusted controller can refresh this private atomic file.
+            # Check at the native-send boundary, before any queued action escapes.
+            try:
+                deadline = int(Path(authority_file).read_text())
+                now = max(time.time() * 1000, self.proof_clock_wall +
+                          (time.monotonic() - self.proof_clock_monotonic) * 1000)
+                if getattr(self, "proof_authority_invalid", False) or now >= deadline:
+                    raise ValueError("expired")
+            except (OSError, ValueError):
+                self.proof_authority_invalid = True
+                raise DriverError("Trusted review authority expired.") from None
+
     def send(self, payload):
+        self.assert_proof_authority()
+        # Check at the native send boundary, before a resumed process can emit
+        # a queued action. Background TDLib transport traffic is not an action.
+        if self.deadline_unix_ms is not None and (
+            time.time() * 1000 >= self.deadline_unix_ms
+            or time.monotonic() >= self.deadline_monotonic
+        ):
+            raise DriverError("Trusted proof action deadline expired.")
         self.extra += 1
         extra = str(self.extra)
         payload = dict(payload)
@@ -335,10 +382,10 @@ class TdClient:
 
 
 class UserDriver:
-    def __init__(self, config, bot_config):
+    def __init__(self, config, bot_config, deadline_unix_ms=None):
         self.config = config
         self.bot_config = bot_config
-        self.client = TdClient(config)
+        self.client = TdClient(config) if deadline_unix_ms is None else TdClient(config, deadline_unix_ms)
         self.auth_state = None
         self.printed_qr_link = ""
 
@@ -513,6 +560,54 @@ class UserDriver:
                 raise DriverError(
                     f"Chat not found for tester account: {chat}. Add the QA user to the group, or configure the TDLib chat id from `user-driver.py chats --json`."
                 ) from error
+
+    def check_group_write_access(self, chat_id, tester_id):
+        def fail(reason):
+            raise DriverError(
+                f"Telegram QA tester group access failed: {reason}. "
+                "Ask the credential pool owner to repair tester membership or text permissions; no message was sent."
+            )
+
+        try:
+            chat = self.client.request({"@type": "getChat", "chat_id": chat_id})
+            chat_type = chat.get("type") or {}
+            kind = chat_type.get("@type")
+            if kind == "chatTypePrivate":
+                return False
+            if kind not in ("chatTypeBasicGroup", "chatTypeSupergroup") or chat_type.get("is_channel") is True:
+                fail("selected chat is not a test group")
+            member = self.client.request({
+                "@type": "getChatMember", "chat_id": chat_id,
+                "member_id": {"@type": "messageSenderUser", "user_id": tester_id},
+            })
+            status = member.get("status") or {}
+            member_kind = status.get("@type")
+            if member_kind not in ("chatMemberStatusCreator", "chatMemberStatusAdministrator", "chatMemberStatusMember", "chatMemberStatusRestricted"):
+                fail("tester is not an active member")
+            if member_kind in ("chatMemberStatusCreator", "chatMemberStatusRestricted") and status.get("is_member") is not True:
+                fail("tester is not an active member")
+            if kind == "chatTypeBasicGroup":
+                group = self.client.request({"@type": "getBasicGroup", "basic_group_id": chat_type["basic_group_id"]})
+                if group.get("is_active") is not True:
+                    fail("test group is inactive")
+            if member_kind in ("chatMemberStatusCreator", "chatMemberStatusAdministrator"):
+                return True
+            if member_kind == "chatMemberStatusRestricted" and (status.get("permissions") or {}).get("can_send_basic_messages") is not True:
+                fail("tester text permission is restricted")
+            if (chat.get("permissions") or {}).get("can_send_basic_messages") is True:
+                return True
+            # TDLib 1.8.67 exempts qualifying boosters from default group restrictions.
+            if kind == "chatTypeSupergroup":
+                info = self.client.request({"@type": "getSupergroupFullInfo", "supergroup_id": chat_type["supergroup_id"]})
+                required = info.get("unrestrict_boost_count")
+                count = info.get("my_boost_count")
+                if type(required) is int and required > 0 and type(count) is int and count >= required:
+                    return True
+            fail("default group text permission is unavailable or denied")
+        except DriverError as error:
+            if str(error).startswith("Telegram QA tester group access failed:"):
+                raise
+            fail("TDLib could not verify tester access")
 
     def formatted_text(self, text):
         sut = resolve_sut(self.config, self.bot_config)
@@ -804,6 +899,9 @@ def command_status(args):
         sys.exit(1)
     me = driver.client.request({"@type": "getMe"})
     version = driver.client.request({"@type": "getOption", "name": "version"})
+    group_write_access = None
+    if args.check_chat:
+        group_write_access = driver.check_group_write_access(driver.resolve_chat(args.check_chat), me["id"])
     save_tester_identity(config, me)
     print_result(
         {
@@ -811,6 +909,7 @@ def command_status(args):
             "authorized": True,
             "testDc": config.get("testDc") is True,
             "tdlibVersion": version.get("value", ""),
+            "testerGroupWriteAccess": group_write_access,
             "user": public_user(me),
         },
         args.json,
@@ -1037,6 +1136,7 @@ def command_serve(args):
     driver.authorize(argparse.Namespace(timeout_ms=args.timeout_ms))
     chat_id = driver.resolve_chat(args.chat)
     tester = driver.client.request({"@type": "getMe"})
+    driver.check_group_write_access(chat_id, tester["id"])
     write_ndjson(
         {
             "type": "ready",
@@ -1127,6 +1227,7 @@ def main():
 
     status = sub.add_parser("status")
     add_common(status)
+    status.add_argument("--check-chat", default="")
     status.set_defaults(func=command_status)
 
     confirm_qr = sub.add_parser("confirm-qr")

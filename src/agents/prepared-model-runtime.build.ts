@@ -5,6 +5,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import pLimit from "p-limit";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { Model } from "../llm/types.js";
 import { runAbortableTimeout } from "../node-host/with-timeout.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
@@ -52,7 +53,7 @@ import {
   createPreparedInboundRegistryLoader,
   preparedModelRuntimeWorkspaceFactsKey,
 } from "./prepared-model-runtime.inbound-registry.js";
-import { notifyPreparedModelRuntimePublication } from "./prepared-model-runtime.publication-events.js";
+import { createCatalogAttemptReporter } from "./prepared-model-runtime.publication-events.js";
 import type {
   PreparedModelRuntimeBuildStats,
   PreparedModelRuntimeCatalogMode,
@@ -77,7 +78,7 @@ type PreparedModelRuntimeCatalogAccess = Readonly<{
 export type PreparedModelRuntimeBuildCandidate = Readonly<{
   input: PreparedModelRuntimeInput;
   catalogOwner: PreparedModelRuntimeSnapshot["catalogOwner"];
-  inventoryOwner?: Pick<PreparedModelRuntimeOwner, "catalogInventory">;
+  inventoryOwner?: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "catalogAttemptError">;
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
   prepareInboundPluginRegistry?: boolean;
   isGenerationCurrent?: () => boolean;
@@ -164,7 +165,7 @@ function createFullModelCatalogAccess(params: {
   pluginGeneration: PreparedModelRuntimePluginGeneration;
   agentBuildCompletions: Map<string, Promise<void>>;
   isCurrent: () => boolean;
-  inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory">;
+  inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "catalogAttemptError">;
 }): PreparedModelRuntimeCatalogAccess {
   // Retain discovery, not the retired worker or its runtime capability projection.
   const project = (
@@ -215,6 +216,7 @@ function createFullModelCatalogAccess(params: {
     params.agentFacts.env,
   );
   const previousInventory = params.inventoryOwner.catalogInventory;
+  const attempt = createCatalogAttemptReporter(params.inventoryOwner, params.isCurrent);
   const pluginFingerprint = resolveInstalledManifestRegistryIndexFingerprint(
     params.pluginGeneration.pluginMetadataSnapshot.index,
   );
@@ -358,9 +360,10 @@ function createFullModelCatalogAccess(params: {
             };
             params.inventoryOwner.catalogInventory = inventory;
             fullCatalog = catalog;
-            notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
+            attempt.published();
             return fullCatalog;
           })
+          .catch(attempt.failed)
           .finally(() => {
             pending = undefined;
           });
@@ -420,6 +423,7 @@ function createSnapshot(
     configuredRuntimeModels,
     inlineProviderModels,
     createStores,
+    routeModelResolutionMemo: new Map<string, Promise<Model>>(),
   });
   setPreparedModelRuntimeAuthStore(snapshot, agentFacts.authStore);
   setPreparedModelRuntimeAuthLoader(snapshot, catalogAccess.loadAuth);

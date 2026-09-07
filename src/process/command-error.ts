@@ -7,13 +7,13 @@ import type { runCommandBuffered } from "./exec.js";
 export function formatCommandOutput(output: string | Buffer, maxChars = 800): string {
   // CR redraws replace the current frame; trim before making edge tabs visible.
   // Anchor each CR run/frame so unmatched runs do not repeatedly scan their suffixes.
-  const text = stripAnsi(output.toString())
+  const lines = stripAnsi(output.toString())
     .replace(/(^|[^\r])\r+(?=\n|$)/g, "$1")
     .replace(/(^|\n)[^\n]*\r/g, "$1")
     .trim()
-    .replace(/[^\n]+/g, sanitizeTerminalText);
-  const tail = text.split("\n").slice(-12).join("\n");
-  const omitted = tail.length < text.length || tail.length > maxChars;
+    .split("\n");
+  const tail = lines.slice(-12).map(sanitizeTerminalText).join("\n");
+  const omitted = lines.length > 12 || tail.length > maxChars;
   return `${omitted ? "…\n" : ""}${sliceUtf16Safe(tail, Math.max(0, tail.length - maxChars))}`;
 }
 

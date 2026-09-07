@@ -4,10 +4,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
+import { withTempHomeConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { setTestEnvValue } from "../test-utils/env.js";
 import { applyClawAddPlan } from "./add.js";
 import { seedClawPackageBootstrap } from "./bootstrap.js";
+import { quiescentClawMonitorGateway } from "./lifecycle-remove.test-support.js";
 import { applyClawRemovePlan, buildClawRemovePlan, readClawStatus } from "./lifecycle-state.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import {
@@ -379,15 +382,17 @@ describe("package-root BOOTSTRAP.md", () => {
       }),
     );
 
-    const removed = await applyClawRemovePlan(removePlan, {
-      env,
-      config: {},
-      consentPlanIntegrity: removePlan.planIntegrity,
-      commitConfig: async (transform) => {
-        transform({});
-      },
-      purgeSessions: async () => undefined,
-      trashPath: async () => true,
+    const removed = await withTempHomeConfig({}, async ({ configPath }) => {
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      setTestEnvValue("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+      return applyClawRemovePlan(removePlan, {
+        monitorGateway: quiescentClawMonitorGateway,
+        env,
+        config: {},
+        consentPlanIntegrity: removePlan.planIntegrity,
+        purgeSessions: async () => undefined,
+        trashPath: async () => true,
+      });
     });
 
     expect(removed).toMatchObject({
@@ -474,15 +479,17 @@ describe("package-root BOOTSTRAP.md", () => {
     expect(removePlan.actions).toContainEqual(
       expect.objectContaining({ kind: "workspace", action: "trash" }),
     );
-    const removed = await applyClawRemovePlan(removePlan, {
-      env,
-      config,
-      consentPlanIntegrity: removePlan.planIntegrity,
-      commitConfig: async (transform) => {
-        config = transform(config);
-      },
-      purgeSessions: async () => undefined,
-      trashPath: async () => true,
+    const removed = await withTempHomeConfig(config, async ({ configPath }) => {
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      setTestEnvValue("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+      return applyClawRemovePlan(removePlan, {
+        monitorGateway: quiescentClawMonitorGateway,
+        env,
+        config,
+        consentPlanIntegrity: removePlan.planIntegrity,
+        purgeSessions: async () => undefined,
+        trashPath: async () => true,
+      });
     });
 
     expect(removed).toMatchObject({
@@ -524,15 +531,17 @@ describe("package-root BOOTSTRAP.md", () => {
     expect(removePlan.actions).toContainEqual(
       expect.objectContaining({ kind: "bootstrap", action: "delete", blocked: false }),
     );
-    const removed = await applyClawRemovePlan(removePlan, {
-      env,
-      config,
-      consentPlanIntegrity: removePlan.planIntegrity,
-      commitConfig: async (transform) => {
-        config = transform(config);
-      },
-      purgeSessions: async () => undefined,
-      trashPath: async () => true,
+    const removed = await withTempHomeConfig(config, async ({ configPath }) => {
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      setTestEnvValue("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+      return applyClawRemovePlan(removePlan, {
+        monitorGateway: quiescentClawMonitorGateway,
+        env,
+        config,
+        consentPlanIntegrity: removePlan.planIntegrity,
+        purgeSessions: async () => undefined,
+        trashPath: async () => true,
+      });
     });
 
     expect(removed).toMatchObject({
@@ -573,15 +582,17 @@ describe("package-root BOOTSTRAP.md", () => {
     expect(removePlan.actions).toContainEqual(
       expect.objectContaining({ kind: "workspace", action: "retain" }),
     );
-    const removed = await applyClawRemovePlan(removePlan, {
-      env,
-      config,
-      consentPlanIntegrity: removePlan.planIntegrity,
-      commitConfig: async (transform) => {
-        config = transform(config);
-      },
-      purgeSessions: async () => undefined,
-      trashPath: async () => true,
+    const removed = await withTempHomeConfig(config, async ({ configPath }) => {
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      setTestEnvValue("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+      return applyClawRemovePlan(removePlan, {
+        monitorGateway: quiescentClawMonitorGateway,
+        env,
+        config,
+        consentPlanIntegrity: removePlan.planIntegrity,
+        purgeSessions: async () => undefined,
+        trashPath: async () => true,
+      });
     });
 
     expect(removed).toMatchObject({

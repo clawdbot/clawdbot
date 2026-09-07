@@ -281,6 +281,8 @@ export type AgentHarnessSideQuestionParamsV2 = AgentHarnessSideQuestionParams & 
 };
 export type AgentHarnessSideQuestionResult = {
   text: string;
+  /** Aggregate billed usage for the side question, including native tool-loop calls. */
+  usage?: import("../usage.js").NormalizedUsage;
 };
 export type AgentHarnessCompactParams =
   import("../embedded-agent-runner/compact.types.js").CompactEmbeddedAgentSessionParams;
@@ -405,6 +407,8 @@ type AgentHarnessRunCapability<
     sessionId: string;
     sessionKey?: string;
     storePath?: string;
+    /** Latest predecessor of this exact physical session; valid only during this invocation. */
+    readPreviousSessionId?: () => string | undefined;
     assertCurrent: () => void;
   }): AgentHarnessSessionRuntimeOwnership | undefined;
   /** Lets this harness resolve forwarded profiles or its own native credentials. */

@@ -2,7 +2,7 @@
 import type { Api, Model } from "@openclaw/llm-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
-import { isOpenAICodexResponsesModel } from "./openai-transport-params.js";
+import { isOpenAICodexResponsesModel } from "./openai-completions-compat.js";
 import {
   buildTransportAwareSimpleStreamFn,
   createBoundaryAwareStreamFnForModel,

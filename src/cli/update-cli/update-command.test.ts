@@ -644,31 +644,6 @@ describe("collectMissingPluginInstallPayloads", () => {
   });
 });
 
-describe("shouldUseLegacyProcessRestartAfterUpdate", () => {
-  it("never restarts package updates through the pre-update process", () => {
-    expect(
-      updateCommandServiceTesting.shouldUseLegacyProcessRestartAfterUpdate({ updateMode: "npm" }),
-    ).toBe(false);
-    expect(
-      updateCommandServiceTesting.shouldUseLegacyProcessRestartAfterUpdate({ updateMode: "pnpm" }),
-    ).toBe(false);
-    expect(
-      updateCommandServiceTesting.shouldUseLegacyProcessRestartAfterUpdate({ updateMode: "bun" }),
-    ).toBe(false);
-  });
-
-  it("keeps the in-process restart path for non-package updates", () => {
-    expect(
-      updateCommandServiceTesting.shouldUseLegacyProcessRestartAfterUpdate({ updateMode: "git" }),
-    ).toBe(true);
-    expect(
-      updateCommandServiceTesting.shouldUseLegacyProcessRestartAfterUpdate({
-        updateMode: "unknown",
-      }),
-    ).toBe(true);
-  });
-});
-
 describe("formatPostUpdateGatewayRecoveryInstructions", () => {
   const result: UpdateRunResult = {
     status: "error",

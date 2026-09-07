@@ -248,7 +248,8 @@ function resolveDispatchResetAdmission(params: {
   return {
     resetTriggered,
     allowRestartTombstoneParentFork,
-    allowRestartTombstoneReset: resetTriggered && isRestartRecoveryTombstone(entry),
+    // Admission rereads lifecycle state after waits; carry authority, not the earlier tombstone state.
+    allowRestartTombstoneReset: resetTriggered,
   };
 }
 
@@ -466,6 +467,7 @@ export function createDispatchReplyOperationCoordinator(params: {
       try {
         return await admitReplyTurn({
           sessionKey: dispatchOperationSessionKey,
+          agentId: params.agentId,
           resolveGatewayContext:
             readChannelContextGatewayContextResolver(params.ctx) ??
             getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext,

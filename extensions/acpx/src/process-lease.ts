@@ -2,7 +2,7 @@
  * Persistent lease store for ACPX wrapper processes. Leases let OpenClaw attach
  * gateway/session identity to spawned ACP processes and clean them up later.
  */
-import { randomUUID, createHash } from "node:crypto";
+import { createHash } from "node:crypto";
 import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
@@ -182,11 +182,6 @@ export function createAcpxProcessLeaseStore(params: {
       });
     },
   };
-}
-
-/** Create a unique lease id for one ACPX wrapper process. */
-export function createAcpxProcessLeaseId(): string {
-  return randomUUID();
 }
 
 /** Hash a wrapper command so process leases can detect command drift. */

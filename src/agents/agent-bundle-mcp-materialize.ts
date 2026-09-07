@@ -1,6 +1,6 @@
 /** Materializes configured MCP catalog entries into agent tools and runtime helpers. */
 import crypto from "node:crypto";
-import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
+import { normalizeToolParameterSchema } from "@openclaw/ai/internal/tool-schema";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -25,6 +25,7 @@ import type {
 } from "./agent-bundle-mcp-types.js";
 import {
   projectMcpCallToolResult,
+  projectMcpGetPromptResult,
   setMcpCodeModeGuestResult,
   setMcpCodeModeGuestResultFromAgentResult,
 } from "./mcp-content.js";
@@ -466,6 +467,7 @@ export async function materializeBundleMcpToolsForRun(params: {
       ? Array.from(params.reservedToolNames)
       : undefined;
     const materializedCatalog = mergeMcpConnectCatalog(catalog, runtime.requesterConnect);
+    const getPrompt = runtime.getPrompt?.bind(runtime);
     const tools = buildBundleMcpToolsFromCatalog({
       catalog: materializedCatalog,
       reservedToolNames,
@@ -548,19 +550,22 @@ export async function materializeBundleMcpToolsForRun(params: {
               });
             })
         : undefined,
-      createPromptGetExecute: runtime.getPrompt
+      createPromptGetExecute: getPrompt
         ? (serverName) => (_toolCallId: string, input: unknown, signal?: AbortSignal) =>
             runWithSessionMcpRequestSignal(signal, async () => {
               runtime.markUsed();
-              return toJsonAgentToolResult({
-                serverName,
-                operation: "prompts_get",
-                value: await runtime.getPrompt?.(
+              return projectMcpGetPromptResult(
+                await getPrompt(
                   serverName,
                   requireStringArg(input, "name"),
                   optionalStringRecordArg(input, "arguments"),
                 ),
-              });
+                {
+                  mcpServer: serverName,
+                  mcpOperation: "prompts_get",
+                  untrustedMcpOutput: true,
+                },
+              );
             })
         : undefined,
     });

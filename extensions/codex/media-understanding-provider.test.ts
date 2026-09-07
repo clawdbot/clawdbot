@@ -1,4 +1,5 @@
 // Codex tests cover media understanding provider plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
@@ -255,6 +256,7 @@ describe("codex media understanding provider", () => {
   });
 
   it("abandons app-server startup when the media request aborts", async () => {
+    const startupReady = createDeferred<void>();
     const clientFactory = vi.fn<CodexAppServerClientFactory>(
       async (options) =>
         await new Promise<never>((_, reject) => {
@@ -266,6 +268,7 @@ describe("codex media understanding provider", () => {
             },
             { once: true },
           );
+          startupReady.resolve();
         }),
     );
     const provider = buildCodexMediaUnderstandingProvider({ clientFactory });
@@ -282,9 +285,11 @@ describe("codex media understanding provider", () => {
       agentDir: "/tmp/openclaw-agent",
     });
 
-    await vi.waitFor(() => expect(clientFactory).toHaveBeenCalledOnce());
+    const rejection = expect(result).rejects.toThrow("caller cancelled Codex startup");
+    await startupReady.promise;
+    expect(clientFactory).toHaveBeenCalledOnce();
     controller.abort(new Error("caller cancelled Codex startup"));
-    await expect(result).rejects.toThrow("caller cancelled Codex startup");
+    await rejection;
     expect(clientFactory.mock.calls[0]?.[0]?.abandonSignal).toBe(controller.signal);
   });
 

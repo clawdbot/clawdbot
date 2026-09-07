@@ -6,6 +6,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import type { ProviderExternalAuthProfile } from "./provider-external-auth.types.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import {
   expectAugmentedCodexCatalog,
@@ -15,7 +16,6 @@ import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.
 import { withPluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
 import type {
   AnyAgentTool,
-  ProviderExternalAuthProfile,
   ProviderNormalizeToolSchemasContext,
   ProviderPlugin,
   ProviderSanitizeReplayHistoryContext,
@@ -304,6 +304,17 @@ describe("provider-runtime", () => {
       isPluginProvidersLoadInFlight: (params: unknown) =>
         isPluginProvidersLoadInFlightMock(params as never),
     }));
+    vi.doMock("./provider-hook-runtime.js", async () => {
+      const { createProviderHookRuntime } = await import("./provider-hook-runtime-core.js");
+      const providers = await import("./providers.runtime.js");
+      return createProviderHookRuntime(providers);
+    });
+    vi.doMock("./provider-external-auth.js", async () => {
+      const { createProviderExternalAuthResolver } =
+        await import("./provider-external-auth-core.js");
+      const hooks = await import("./provider-hook-runtime.js");
+      return createProviderExternalAuthResolver(hooks);
+    });
     vi.doMock("../logging/subsystem.js", () => ({
       createSubsystemLogger: () => ({
         debug: vi.fn(),
@@ -800,14 +811,15 @@ describe("provider-runtime", () => {
     });
     setActivePluginRegistry(registry, "startup-registry", "gateway-bindable", "/tmp/workspace");
 
-    expect(
-      getAiTransportHost().plugin.resolveProviderStream({
-        provider: DEMO_PROVIDER_ID,
-        workspaceDir: "/tmp/workspace",
-        allowRuntimePluginLoad: false,
-        context: createDemoResolvedModelContext({}),
-      }),
-    ).toBe(streamFn);
+    const registeredStream = getAiTransportHost().plugin.resolveProviderStream({
+      provider: DEMO_PROVIDER_ID,
+      workspaceDir: "/tmp/workspace",
+      allowRuntimePluginLoad: false,
+      context: createDemoResolvedModelContext({}),
+    });
+    const context = { messages: [] };
+    void registeredStream?.(MODEL, context);
+    expect(streamFn).toHaveBeenCalledWith(MODEL, context, undefined);
     expect(createStreamFn).toHaveBeenCalledOnce();
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
@@ -913,13 +925,14 @@ describe("provider-runtime", () => {
       }),
     ).toEqual({ headers: { "x-demo-turn": "turn-1" } });
     expect(resolveTransportTurnState).toHaveBeenCalledOnce();
-    expect(
-      getAiTransportHost().plugin.resolveProviderStream({
-        provider: DEMO_PROVIDER_ID,
-        allowRuntimePluginLoad: true,
-        context: createDemoResolvedModelContext({ model }),
-      }),
-    ).toBe(streamFn);
+    const registeredStream = getAiTransportHost().plugin.resolveProviderStream({
+      provider: DEMO_PROVIDER_ID,
+      allowRuntimePluginLoad: true,
+      context: createDemoResolvedModelContext({ model }),
+    });
+    const context = { messages: [] };
+    void registeredStream?.(model, context);
+    expect(streamFn).toHaveBeenCalledWith(model, context, undefined);
     expect(
       getAiTransportHost().plugin.wrapSimpleCompletionStream({
         provider: DEMO_PROVIDER_ID,
@@ -942,13 +955,14 @@ describe("provider-runtime", () => {
       modelId: MODEL.id,
       plugin: { id: DEMO_PROVIDER_ID, label: "Demo", auth: [] },
     });
-    expect(
-      getAiTransportHost().plugin.resolveProviderStream({
-        provider: "fallback",
-        allowRuntimePluginLoad: false,
-        context: createDemoResolvedModelContext({ model }),
-      }),
-    ).toBe(streamFn);
+    const registeredStream = getAiTransportHost().plugin.resolveProviderStream({
+      provider: "fallback",
+      allowRuntimePluginLoad: false,
+      context: createDemoResolvedModelContext({ model }),
+    });
+    const context = { messages: [] };
+    void registeredStream?.(model, context);
+    expect(streamFn).toHaveBeenCalledWith(model, context, undefined);
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 

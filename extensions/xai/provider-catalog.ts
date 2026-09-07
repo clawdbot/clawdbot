@@ -23,7 +23,7 @@ import { XAI_OAUTH_AUTO_MODEL_ID } from "./model-id.js";
 
 const PROVIDER_ID = "xai";
 const XAI_MODELS_ENDPOINT = `${XAI_BASE_URL}/models`;
-export const XAI_GROK_OAUTH_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
+const XAI_GROK_OAUTH_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 const XAI_GROK_OAUTH_MODELS_ENDPOINT = `${XAI_GROK_OAUTH_BASE_URL}/models`;
 const XAI_GROK_OAUTH_SETTINGS_ENDPOINT = `${XAI_GROK_OAUTH_BASE_URL}/settings`;
 const XAI_MODELS_CACHE_TTL_MS = 60_000;
@@ -38,21 +38,23 @@ const XAI_UNKNOWN_MODEL_COST = {
   cacheWrite: 0,
 } satisfies ModelDefinitionConfig["cost"];
 
+export function isXaiGrokProxyBaseUrl(baseUrl: string | undefined): boolean {
+  if (!baseUrl) {
+    return false;
+  }
+  try {
+    return new URL(baseUrl).href.replace(/\/+$/u, "") === XAI_GROK_OAUTH_BASE_URL;
+  } catch {
+    return false;
+  }
+}
+
 export function buildXaiProvider(
   api: ModelProviderConfig["api"] = "openai-responses",
 ): ModelProviderConfig {
   return {
     baseUrl: XAI_BASE_URL,
     api,
-    models: buildXaiCatalogModels(),
-  };
-}
-
-function buildXaiOAuthFallbackProvider(): ModelProviderConfig {
-  return {
-    baseUrl: XAI_GROK_OAUTH_BASE_URL,
-    api: "openai-responses",
-    auth: "oauth",
     models: buildXaiCatalogModels(),
   };
 }
@@ -108,10 +110,6 @@ function withXaiOAuthAutoModel(
   };
 }
 
-function readXaiOAuthDefaultModelId(value: unknown): string | undefined {
-  return readLiveModelCatalogStringField(value, "default_model");
-}
-
 async function fetchXaiOAuthDefaultModelId(params: {
   discoveryApiKey: string;
   fetchGuard?: LiveModelCatalogFetchGuard;
@@ -139,9 +137,9 @@ async function fetchXaiOAuthDefaultModelId(params: {
         return [body];
       },
       shouldCacheRows: (candidateRows) =>
-        readXaiOAuthDefaultModelId(candidateRows[0]) !== undefined,
+        readLiveModelCatalogStringField(candidateRows[0], "default_model") !== undefined,
     });
-    return readXaiOAuthDefaultModelId(rows[0]);
+    return readLiveModelCatalogStringField(rows[0], "default_model");
   } catch {
     // Remote settings are advisory. Catalog order remains the provider-owned fallback.
     return undefined;
@@ -246,21 +244,21 @@ function buildXaiOauthModelFromLiveRow(row: unknown): ModelDefinitionConfig | un
 
 export async function buildLiveXaiOAuthProvider(params: {
   discoveryApiKey: string;
+  authMode?: "oauth" | "token";
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
 }): Promise<ModelProviderConfig> {
-  const fallback = buildXaiOAuthFallbackProvider();
   const [provider, preferredModelId] = await Promise.all([
     buildLiveModelProviderConfig({
       discoveryMode: "strict",
       providerId: PROVIDER_ID,
       endpoint: XAI_GROK_OAUTH_MODELS_ENDPOINT,
       providerConfig: {
-        baseUrl: fallback.baseUrl,
-        api: fallback.api,
-        auth: fallback.auth,
+        baseUrl: XAI_GROK_OAUTH_BASE_URL,
+        api: "openai-responses",
+        auth: params.authMode ?? "oauth",
       },
-      models: fallback.models,
+      models: [],
       discoveryApiKey: params.discoveryApiKey,
       fetchGuard: params.fetchGuard,
       signal: params.signal,

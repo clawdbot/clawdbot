@@ -10,6 +10,7 @@ import net, { type AddressInfo } from "node:net";
 import { duplexPair, type Duplex } from "node:stream";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { type RawData, WebSocket, WebSocketServer } from "ws";
+import { mockIpv4OnlyLocalhostLookup } from "../../../test/helpers/loopback-dns.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { getFreePort } from "../../test-utils/ports.js";
 import type { PortalTarget } from "./portal-http-proxy.js";
@@ -812,6 +813,7 @@ describe("portal HTTP proxy", () => {
   );
 
   it("reaches IPv6-only targets through the localhost dual-stack dial", async () => {
+    mockIpv4OnlyLocalhostLookup();
     // Node >=17 dev servers (Vite, Next.js) often bind ::1 only on "localhost".
     // Probe IPv4 so localhost cannot reach the shared IPv4 fixture on the same port.
     const v6Port = await getFreePort();

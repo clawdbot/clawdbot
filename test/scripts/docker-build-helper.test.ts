@@ -123,6 +123,7 @@ const RELEASE_UPGRADE_USER_JOURNEY_SCENARIO_PATH =
   "scripts/e2e/lib/release-upgrade-user-journey/scenario.sh";
 const RELEASE_TYPED_ONBOARDING_SCENARIO_PATH =
   "scripts/e2e/lib/release-typed-onboarding/scenario.sh";
+const RELEASE_TYPED_ONBOARDING_DOCKER_E2E_PATH = "scripts/e2e/release-typed-onboarding-docker.sh";
 const RELEASE_USER_JOURNEY_DOCKER_E2E_PATH = "scripts/e2e/release-user-journey-docker.sh";
 const RELEASE_USER_JOURNEY_SCENARIO_PATH = "scripts/e2e/lib/release-user-journey/scenario.sh";
 const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
@@ -1033,25 +1034,7 @@ grep -q '^build -t demo-image .$' "$TMPDIR/docker-seen"
 
   it("prints heartbeat progress for long successful centralized Docker builds", () => {
     const workDir = tempDirs.make("openclaw-docker-build-heartbeat-");
-    writeExecutables(join(workDir, "bin"), {
-      timeout: `#!/bin/bash
-set -euo pipefail
-if [[ "$1" = "--kill-after=1s" ]]; then
-  exit 0
-fi
-shift 2
-"$@"
-`,
-      docker: `#!/bin/sh
-printf "captured docker build log\\n"
-/bin/sleep 0.05
-`,
-    });
-
     const script = repoShell(workDir)`
-export PATH="$TMPDIR/bin:$PATH"
-export OPENCLAW_DOCKER_BUILD_HEARTBEAT_SECONDS=1
-
 source "$ROOT_DIR/scripts/lib/docker-build.sh"
 
 printf "captured docker build log\\n" >"$TMPDIR/build.log"
@@ -1775,11 +1758,29 @@ export -f node
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 docker() {
+  local last_arg=""
+  local arg
+  for arg in "$@"; do
+    last_arg="$arg"
+  done
   if [[ "$1" == "rm" ]]; then
     shift
     test "$1" = "-f"
     shift
+    printf "rm %s\\n" "$1" >>"$TMPDIR/docker-lifecycle"
     printf "%s\\n" "$1" >>"$TMPDIR/docker-rm-seen"
+    return 0
+  fi
+  if [[ "$1" == "inspect" ]]; then
+    printf "inspect %s\\n" "$last_arg" >>"$TMPDIR/docker-lifecycle"
+    if [[ "\${DOCKER_STUB_INSPECT_STATUS:-0}" != "0" ]]; then
+      printf "%s\\n" "\${DOCKER_STUB_INSPECT_ERROR:-inspect failed}" >&2
+      return "$DOCKER_STUB_INSPECT_STATUS"
+    fi
+    printf "ExitCode=%s\\nOOMKilled=%s\\nError=%s\\n" \\
+      "\${DOCKER_STUB_EXIT_CODE:-0}" \\
+      "\${DOCKER_STUB_OOM:-false}" \\
+      "\${DOCKER_STUB_ERROR:-}"
     return 0
   fi
 
@@ -1787,8 +1788,8 @@ docker() {
   local mount_path=""
   local expect_volume_path=0
   local expect_cidfile=0
-  local arg
   for arg in "$@"; do
+    test "$arg" != "--rm"
     if [[ "$expect_cidfile" == "1" ]]; then
       cidfile="$arg"
       expect_cidfile=0
@@ -1810,7 +1811,8 @@ docker() {
 
   test -n "$cidfile"
   test ! -e "$cidfile"
-  printf "container-%s\\n" "\${DOCKER_STUB_STATUS:-}" >"$cidfile"
+  printf "container-%s\\n" "\${DOCKER_STUB_STATUS:-0}" >"$cidfile"
+  printf "run container-%s\\n" "\${DOCKER_STUB_STATUS:-0}" >>"$TMPDIR/docker-lifecycle"
   test -n "$mount_path"
   test -f "$mount_path"
   printf "%s\\n" "$mount_path" >"$TMPDIR/package-mount-seen"
@@ -1821,10 +1823,22 @@ export -f docker
 package_tgz="$(docker_e2e_prepare_package_tgz mount-cleanup)"
 pack_dir="$(dirname "$package_tgz")"
 docker_e2e_package_mount_args "$package_tgz"
-DOCKER_STUB_STATUS=7 docker_e2e_run_with_harness image-name bash -lc true || run_status="$?"
+export DOCKER_STUB_STATUS=7
+export DOCKER_STUB_EXIT_CODE=137
+export DOCKER_STUB_OOM=true
+DOCKER_STUB_ERROR="$(printf '%05000d' 0)"
+export DOCKER_STUB_ERROR
+docker_e2e_run_with_harness image-name bash -lc true 2>"$TMPDIR/failure-stderr" || run_status="$?"
 test "\${run_status:-0}" = "7"
 test "$(cat "$TMPDIR/docker-timeout-seen")" = "--kill-after=30s 3s"
 grep -qx "container-7" "$TMPDIR/docker-rm-seen"
+test "$(sed -n '1p' "$TMPDIR/docker-lifecycle")" = "run container-7"
+test "$(sed -n '2p' "$TMPDIR/docker-lifecycle")" = "inspect container-7"
+test "$(sed -n '3p' "$TMPDIR/docker-lifecycle")" = "rm container-7"
+grep -q '^Docker container state:$' "$TMPDIR/failure-stderr"
+grep -q '^ExitCode=137$' "$TMPDIR/failure-stderr"
+grep -q '^OOMKilled=true$' "$TMPDIR/failure-stderr"
+test "$(wc -c <"$TMPDIR/failure-stderr")" -lt 5000
 test -f "$TMPDIR/package-mount-seen"
 test ! -e "$pack_dir"
 test -z "$(find "$TMPDIR" -maxdepth 1 -name 'openclaw-docker-e2e-container.*' -print)"
@@ -1833,11 +1847,25 @@ external_dir="$TMPDIR/external-package"
 mkdir -p "$external_dir"
 printf fixture >"$external_dir/openclaw-current.tgz"
 docker_e2e_package_mount_args "$external_dir/openclaw-current.tgz"
+export DOCKER_STUB_STATUS=23
+export DOCKER_STUB_INSPECT_STATUS=9
+export DOCKER_STUB_INSPECT_ERROR="daemon unavailable"
+docker_e2e_run_with_harness image-name bash -lc true 2>"$TMPDIR/inspect-failure-stderr" || inspect_failure_status="$?"
+test "\${inspect_failure_status:-0}" = "23"
+grep -q "Docker container state unavailable (inspect exit 9): daemon unavailable" "$TMPDIR/inspect-failure-stderr"
+tail -n 3 "$TMPDIR/docker-lifecycle" >"$TMPDIR/inspect-failure-lifecycle"
+printf "run container-23\\ninspect container-23\\nrm container-23\\n" >"$TMPDIR/expected-inspect-failure-lifecycle"
+cmp "$TMPDIR/expected-inspect-failure-lifecycle" "$TMPDIR/inspect-failure-lifecycle"
+
+unset DOCKER_STUB_STATUS DOCKER_STUB_EXIT_CODE DOCKER_STUB_OOM DOCKER_STUB_ERROR
+unset DOCKER_STUB_INSPECT_STATUS DOCKER_STUB_INSPECT_ERROR
 unset DOCKER_COMMAND_TIMEOUT
 rm -f "$TMPDIR/docker-timeout-seen"
-docker_e2e_run_with_harness image-name bash -lc true
+docker_e2e_run_with_harness image-name bash -lc true 2>"$TMPDIR/success-stderr"
 test "$(cat "$TMPDIR/docker-timeout-seen")" = "--kill-after=30s 3600s"
-grep -qx "container-" "$TMPDIR/docker-rm-seen"
+grep -qx "container-0" "$TMPDIR/docker-rm-seen"
+test "$(tail -n 2 "$TMPDIR/docker-lifecycle")" = $'run container-0\\nrm container-0'
+test ! -s "$TMPDIR/success-stderr"
 test -f "$external_dir/openclaw-current.tgz"
 `,
     },
@@ -2967,6 +2995,17 @@ docker_e2e_docker_run_cmd run demo
     expect(script).not.toContain("/tmp/openclaw-channel-add.log");
   });
 
+  it("runs an authorized frozen target's shipped typed-onboarding journey", () => {
+    const runner = readFileSync(RELEASE_TYPED_ONBOARDING_DOCKER_E2E_PATH, "utf8");
+
+    expectTextToIncludeAll(runner, [
+      'openclaw_resolve_frozen_core_harness_capabilities "$TARGET_ROOT_DIR"',
+      'openclaw_prepare_frozen_target_context "$TARGET_ROOT_DIR"',
+      'openclaw_frozen_target_source_has_path "$TARGET_ROOT_DIR" scripts/e2e/lib/release-typed-onboarding/scenario.sh',
+      '-v "$SCENARIO_PATH:/app/scripts/e2e/lib/release-typed-onboarding/scenario.sh:ro"',
+    ]);
+  });
+
   it("keeps real-TTY onboarding drivers aligned with the guided prompt sequence", () => {
     expectOrderedScriptFragments(readFileSync(RELEASE_TYPED_ONBOARDING_SCENARIO_PATH, "utf8"), [
       'wait_for_log "Continue?"',
@@ -2985,7 +3024,9 @@ docker_e2e_docker_run_cmd run demo
       "send $'\\r'",
       'wait_for_log "How should I set things up?"',
       "send $'\\r'",
-      'wait_for_log "Use Current model?"',
+      'wait_for_log "Model/auth provider"',
+      "send $'\\r'",
+      'wait_for_log "Use which detected AI?"',
       "send $'\\r'",
     ]);
   });
@@ -4564,6 +4605,7 @@ ${storage === "wal" ? 'process.kill(process.pid, "SIGKILL");' : ""}`,
         env: {
           ...process.env,
           OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+          OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
           OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: `${shellQuote(process.execPath)} ${shellQuote(childPath)}`,
         },
         stdio: "ignore",
@@ -5190,6 +5232,7 @@ exit 0
           ...process.env,
           COUNT_FILE: countPath,
           OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+          OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
           OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: command,
         },
         stdio: "ignore",
@@ -5224,6 +5267,7 @@ exit 0
         env: {
           ...process.env,
           OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+          OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
           OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: command,
           STATE_FILE: statePath,
         },
@@ -5275,6 +5319,7 @@ process.exit(starts === 1 ? 1 : 78);
           ...process.env,
           OPENCLAW_CLAWHUB_URL: "http://127.0.0.1:43123",
           OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+          OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
           OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: `${shellQuote(process.execPath)} ${shellQuote(gatewayPath)}`,
           URLS_FILE: urlsPath,
         },
@@ -5339,6 +5384,7 @@ setInterval(() => {}, 1_000);
             DESCENDANT_PID_FILE: descendantPidPath,
             DESCENDANT_SCRIPT: descendantPath,
             OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+            OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
             OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: `${shellQuote(process.execPath)} ${shellQuote(gatewayPath)}`,
             STATE_FILE: statePath,
           },
@@ -5423,6 +5469,7 @@ if (starts === 1) {
             DESCENDANT_PID_FILE: descendantPidPath,
             DESCENDANT_SCRIPT: descendantPath,
             OPENCLAW_SYSTEMCTL_SHIM_DAEMON_LOG: logPath,
+            OPENCLAW_SYSTEMCTL_SHIM_MANAGER_ENV: "{}",
             OPENCLAW_SYSTEMCTL_SHIM_EXEC_START: `${shellQuote(process.execPath)} ${shellQuote(gatewayPath)}`,
             REPLACEMENT_FILE: replacementPath,
             STARTS_FILE: startsPath,
@@ -6127,8 +6174,15 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     );
     expect(packageRunner.match(/verify-fs-safe-native\.mjs[^\n]+--mode require/gu)).toHaveLength(3);
     expect(packageRunner).toContain("bash scripts/e2e/bun-global-install-smoke.sh");
+    expect(packageRunner.match(/-e OPENCLAW_FS_SAFE_NATIVE_CONTRACT/g)).toHaveLength(4);
+    expectTextToIncludeAll(packageRunner, [
+      'MUSL_FS_SAFE_NATIVE_OUTCOME="passed"',
+      'MUSL_FS_SAFE_NATIVE_OUTCOME="not-applicable"',
+      '--detail "musl:fsSafeNative=$MUSL_FS_SAFE_NATIVE_OUTCOME"',
+    ]);
     expect(updateRunner).toContain('mv "$platform_package" "$platform_package.omitted"');
     expect(updateRunner).toContain("--mode fallback");
+    expect(updateRunner).toContain("-e OPENCLAW_FS_SAFE_NATIVE_CONTRACT");
   });
 
   it("verifies fs-safe through a pnpm-style linked package root", () => {
@@ -6382,6 +6436,17 @@ process.exit(73);
     expect(pluginBinding).not.toContain('readFileSync(logPath, "utf8")');
   });
 
+  it("materializes legacy bundle-MCP client links before its read-only Docker mount", () => {
+    const runner = readFileSync(AGENT_BUNDLE_MCP_TOOLS_DOCKER_E2E_PATH, "utf8");
+
+    expectTextToIncludeAll(runner, [
+      'ln -s /app/dist "$LEGACY_CLIENT_SOURCE_ROOT/dist"',
+      'ln -s /app/node_modules "$LEGACY_CLIENT_SOURCE_ROOT/node_modules"',
+      '-v "$LEGACY_CLIENT_SOURCE_ROOT:$LEGACY_CLIENT_ROOT:ro"',
+    ]);
+    expect(runner).not.toContain("CLIENT_PRELUDE");
+  });
+
   it("keeps Open WebUI Docker E2E resource-guarded", () => {
     const runner = readFileSync(OPENWEBUI_DOCKER_E2E_PATH, "utf8");
     expectTextToIncludeAll(runner, [
@@ -6564,6 +6629,33 @@ process.exit(73);
       ]);
     },
   );
+
+  it("passes source-qualified overrides without leaking frozen control-plane identity", () => {
+    const runner = readFileSync(MCP_CODE_MODE_GATEWAY_DOCKER_E2E_PATH, "utf8");
+
+    expectTextToIncludeAll(runner, [
+      "MCP_CODE_MODE_SEED_ENV_ARGS=()",
+      "OPENCLAW_FROZEN_TARGET_MCP_MEMORY_CONFIG_MODE=agent",
+      "OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE=legacy",
+      '"${MCP_CODE_MODE_SEED_ENV_ARGS[@]}"',
+    ]);
+    for (const path of [
+      MCP_CODE_MODE_GATEWAY_DOCKER_E2E_PATH,
+      ONBOARD_DOCKER_E2E_PATH,
+      "scripts/e2e/session-runtime-context-docker.sh",
+    ]) {
+      const source = readFileSync(path, "utf8");
+      expect(source).not.toContain('-e "OPENCLAW_SELECTED_SHA=$OPENCLAW_SELECTED_SHA"');
+      expect(source).not.toContain('-e "OPENCLAW_TOOLING_SHA=$OPENCLAW_TOOLING_SHA"');
+    }
+    const liveGateway = readFileSync("scripts/test-live-gateway-models-docker.sh", "utf8");
+    expect(liveGateway).not.toContain("OPENCLAW_SELECTED_SHA");
+    expect(liveGateway).not.toContain("OPENCLAW_TOOLING_SHA");
+    expectTextToIncludeAll(liveGateway, [
+      'openclaw_resolve_frozen_live_cli_backend_package_mode "$ROOT_DIR"',
+      "OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE=legacy",
+    ]);
+  });
 
   it.each([
     ["timeout", "OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS", "180s"],

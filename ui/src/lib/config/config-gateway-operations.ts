@@ -1,4 +1,5 @@
 import { ErrorCodes } from "@openclaw/gateway-client/browser";
+import { err as failure, ok, type Result } from "@openclaw/normalization-core/result";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
@@ -14,11 +15,14 @@ import {
   serializeFormForSubmit,
 } from "./config-draft-model.ts";
 import {
+  beginConfigRead,
+  currentConfigRead,
   currentConfigConnectionEpoch,
   isCurrentConfigConnection,
   isCurrentRequest,
   nextRequestVersion,
   resolveEditableSnapshotConfig,
+  type ConfigRead,
   type ConfigGatewayClient,
   type LoadConfigOptions,
   type RuntimeConfigState,
@@ -157,7 +161,7 @@ export async function executeConfigExternalMutation<T>(
   connectionEpoch: number,
   task: (client: GatewayBrowserClient) => Promise<T>,
   options: RuntimeConfigExternalMutationOptions<T>,
-  refresh: () => Promise<boolean>,
+  refresh: () => Promise<Result<void, string>>,
 ): Promise<RuntimeConfigExternalMutationResult<T>> {
   if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
     return {
@@ -210,11 +214,8 @@ export async function executeConfigExternalMutation<T>(
     if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
       return refreshFailure("Connection changed before the configuration update was refreshed.");
     }
-    if (!refreshed) {
-      return refreshFailure(
-        state.lastError ??
-          "The configuration update completed, but its authoritative refresh failed.",
-      );
+    if (!refreshed.ok) {
+      return refreshFailure(refreshed.error);
     }
     return { ok: true, value, refresh: { ok: true } };
   } catch (error) {
@@ -222,17 +223,68 @@ export async function executeConfigExternalMutation<T>(
   }
 }
 
-export async function loadConfig(
+type ConfigLoadOptions = LoadConfigOptions & {
+  background?: boolean;
+  beforeApplySnapshot?: () => void;
+};
+
+function startConfigLoad(
   state: RuntimeConfigState,
-  options: LoadConfigOptions & { background?: boolean; beforeApplySnapshot?: () => void } = {},
+  options: ConfigLoadOptions = {},
   isCurrentLoad: () => boolean = () => true,
-): Promise<boolean> {
+): ConfigRead | null {
   const client = state.client;
   if (!client || !state.connected) {
-    return false;
+    return null;
   }
-  const connectionEpoch = currentConfigConnectionEpoch(state);
-  const version = nextRequestVersion(state, "config");
+  const read = beginConfigRead(state, client);
+  void readConfig(state, read, options, isCurrentLoad).then(read.completion.resolve);
+  return read;
+}
+
+export function loadConfig(
+  state: RuntimeConfigState,
+  options: ConfigLoadOptions = {},
+  isCurrentLoad: () => boolean = () => true,
+): Promise<boolean> {
+  const read = startConfigLoad(state, options, isCurrentLoad);
+  return read ? read.completion.promise.then((result) => result.ok) : Promise.resolve(false);
+}
+
+export async function refreshConfigAfterMutation(
+  state: RuntimeConfigState,
+): Promise<Result<void, string>> {
+  // A generation event can precede the RPC's final commit. Always issue a fresh
+  // read here; only actual later reads can satisfy this mutation's refresh.
+  let read = startConfigLoad(state);
+  if (!read) {
+    return failure("Configuration is unavailable; reconnect and try again.");
+  }
+  const { client, connectionEpoch } = read;
+  while (true) {
+    const result = await Promise.race([read.completion.promise, read.invalidated.promise]);
+    if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
+      return failure("Connection changed before the configuration update was refreshed.");
+    }
+    const latest = currentConfigRead(state);
+    if (!latest || !isCurrentRequest(state, "config", latest.version, client, connectionEpoch)) {
+      return failure("The configuration refresh was superseded by a configuration write.");
+    }
+    if (latest === read) {
+      return result;
+    }
+    read = latest;
+  }
+}
+
+async function readConfig(
+  state: RuntimeConfigState,
+  { client, connectionEpoch, version }: ConfigRead,
+  options: ConfigLoadOptions,
+  isCurrentLoad: () => boolean,
+): Promise<Result<void, string>> {
+  const isCurrent = () =>
+    isCurrentLoad() && isCurrentRequest(state, "config", version, client, connectionEpoch);
   if (!options.background) {
     state.configLoading = true;
   }
@@ -242,11 +294,14 @@ export async function loadConfig(
   }
   try {
     const res = await client.request<ConfigSnapshot>("config.get", {});
-    if (!isCurrentRequest(state, "config", version, client, connectionEpoch) || !isCurrentLoad()) {
-      return false;
+    if (!isCurrent()) {
+      return failure("The configuration refresh was superseded.");
     }
     // Recovery captures the latest intent before a clean draft is replaced.
     options.beforeApplySnapshot?.();
+    if (!isCurrent()) {
+      return failure("The configuration refresh was superseded.");
+    }
     applyConfigSnapshot(state, res, options);
     // An explicit reload reconciles a clean patch failure. Background applied-revision
     // polling must leave the rejected intent and its explanation visible.
@@ -256,12 +311,13 @@ export async function loadConfig(
       }
       state.lastError = null;
     }
-    return true;
-  } catch (err) {
-    if (isCurrentRequest(state, "config", version, client, connectionEpoch)) {
-      state.lastError = formatUiError(err);
+    return ok(undefined);
+  } catch (error) {
+    const message = formatUiError(error);
+    if (isCurrent()) {
+      state.lastError = message;
     }
-    return false;
+    return failure(message);
   } finally {
     if (
       !options.background &&

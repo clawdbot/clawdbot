@@ -154,14 +154,11 @@ export class ProfilePage extends OpenClawLightDomElement {
     this.identityLoading = true;
     this.identityError = null;
     try {
-      const result = await client.request<Partial<UsersSelfResult> | null>("users.self", {});
+      const result = await client.request<UsersSelfResult>("users.self", {});
       if (requestId !== this.identityRequestId) {
         return;
       }
-      const profile = result?.profile;
-      if (!profile) {
-        return;
-      }
+      const profile = result.profile;
       this.ownProfile = profile;
       this.displayName = hasUnsavedDisplayName ? displayNameDraft : (profile.displayName ?? "");
       this.gitCoauthorEnabled = true;
@@ -349,22 +346,14 @@ export class ProfilePage extends OpenClawLightDomElement {
       </div>`;
     }
     if (!this.ownProfile) {
-      // users.self is the idempotent gateway-owned profile ensure path. Retrying
-      // keeps profile ids and authenticated email linkage authoritative server-side.
-      const emptyState = this.identityError
-        ? this.identityError
-        : html`<div class="profile-identity-empty">
-            <span>${t("profilePage.identity.notSet")}</span>
-            <button type="button" class="btn btn--sm" @click=${() => void this.loadIdentity()}>
-              ${t("profilePage.identity.setIdentity")}
-            </button>
-          </div>`;
       return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.identity}>
         ${renderSettingsSection(
           { title: t("profilePage.identity.title") },
           this.identityLoading
             ? renderSettingsLoadingSkeleton({ label: t("profilePage.identity.loading"), rows: 2 })
-            : renderSettingsEmpty(emptyState),
+            : renderSettingsEmpty(
+                this.identityError ?? t("profilePage.identity.profileUnavailable"),
+              ),
         )}
       </div>`;
     }

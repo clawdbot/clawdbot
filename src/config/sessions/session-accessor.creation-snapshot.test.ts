@@ -13,8 +13,10 @@ import {
   listSessionEntriesCore,
   loadSessionEntry,
   replaceSessionEntrySync,
+  replaceTranscriptEventsSync,
 } from "./session-accessor.js";
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
+import { readTranscriptStorageRows } from "./session-accessor.sqlite-read.js";
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -25,6 +27,37 @@ afterEach(() => {
 });
 
 describe("session creation snapshot", () => {
+  it.each([undefined, 3, 4, 99])(
+    "preserves adopted history without selecting a new projection (header=%s)",
+    async (version) => {
+      const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-history-") };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:target", sessionId: "target" };
+      const entry = { sessionId: "target", updatedAt: 1 };
+      replaceSessionEntrySync(scope, entry);
+      const database = openOpenClawAgentDatabase(scope);
+      let before: ReturnType<typeof readTranscriptStorageRows> = [];
+      const result = await createSessionEntryWithTranscript(scope, async () => {
+        await Promise.resolve();
+        replaceTranscriptEventsSync(scope, [
+          ...(version === undefined
+            ? []
+            : [{ type: "session", id: "target", version, cwd: "/workspace" }]),
+          {
+            type: "message",
+            id: "user-1",
+            parentId: null,
+            timestamp: "2026-07-15T21:23:03.698Z",
+            message: { role: "user", content: "Retained text.\r\n  Keep spacing." },
+          },
+        ]);
+        before = readTranscriptStorageRows(database, "target");
+        return { ok: true, entry: { ...entry, label: "adopted" } };
+      });
+      expect(result).toMatchObject({ ok: true, entry: { ...entry, label: "adopted" } });
+      expect(readTranscriptStorageRows(database, "target")).toEqual(before);
+    },
+  );
+
   it("prepares and adopts a complete target without decoding sibling saved prompts", async () => {
     const env = { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "creation-snapshot-") };
     const scope = { agentId: "main", env, sessionKey: "agent:main:target" };

@@ -8,6 +8,7 @@ import type {
 import { request as requestHttp } from "node:http";
 import net from "node:net";
 import type { Duplex } from "node:stream";
+import { createLoopbackConnectOptions } from "../../infra/loopback-connect.js";
 
 const PORTAL_AUTH_NAME = "openclaw_portal";
 // Browser cookie jars are hostname-scoped, so the stable listener port in the
@@ -220,9 +221,7 @@ async function connectPortalTarget(target: PortalTarget): Promise<Duplex> {
   if (target.kind === "worker") {
     return await target.connect();
   }
-  // Dial "localhost", not a fixed loopback literal: Node >=17 dev servers (Vite,
-  // Next.js) often bind ::1 only, and family autoselection reaches either stack.
-  return net.connect({ host: "localhost", autoSelectFamily: true, port: target.port });
+  return net.connect(createLoopbackConnectOptions(target.port));
 }
 
 function connectionHeaderTokens(headers: IncomingHttpHeaders): Set<string> {

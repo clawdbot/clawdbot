@@ -14,7 +14,7 @@ import {
   fixedStoreRuntimeConfig,
   loadGatewaySessionRowMock,
   ownerGoal,
-  resolveEmbeddedAgentRunProgressStateMock,
+  resolveEmbeddedAgentSessionProgressStateMock,
   runtimeConfigState,
   sessionRow,
   subscribePluginSessionsChanged,
@@ -24,7 +24,7 @@ import { GatewayClientRegistry } from "./server/client-registry.js";
 describe("createLifecycleEventBroadcastHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    resolveEmbeddedAgentRunProgressStateMock.mockReturnValue(undefined);
+    resolveEmbeddedAgentSessionProgressStateMock.mockReturnValue(undefined);
     loadGatewaySessionRowMock.mockReturnValue(sessionRow);
     runtimeConfigState.value = {};
     sessionRow.key = "agent:main:main";

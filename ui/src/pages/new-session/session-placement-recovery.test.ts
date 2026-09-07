@@ -208,6 +208,50 @@ describe("session placement recovery", () => {
     },
   );
 
+  it.each([false, true])(
+    "keeps bounded pause errors on UTF-16 boundaries (persistent=%s)",
+    (persistent) => {
+      const error = `${"x".repeat(4095)}🤖`;
+      const paused = pauseSessionPlacementRecovery(recovery, error, persistent);
+
+      expect(paused.recovery.error).toBe("x".repeat(4095));
+      expect(paused.persisted).toBe(persistent);
+      expect(
+        readSessionPlacementRecovery(
+          recovery.gatewayUrl,
+          recovery.recoveryScope,
+          recovery.sessionKey,
+        ),
+      ).toEqual(persistent ? paused.recovery : null);
+    },
+  );
+
+  it("keeps storage-failure guidance on UTF-16 boundaries", () => {
+    const prefix = "Recovery could not be saved in this tab. Keep this page open.\n";
+    const error = `${"x".repeat(4095 - prefix.length)}🤖`;
+    expect(writeSessionPlacementRecovery(recovery)).toBe(true);
+    const storage = sessionStorage;
+    vi.stubGlobal("sessionStorage", {
+      getItem: storage.getItem.bind(storage),
+      removeItem: storage.removeItem.bind(storage),
+      setItem: () => {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      },
+    });
+
+    const paused = pauseSessionPlacementRecovery(recovery, error, true);
+
+    expect(paused.recovery.error).toBe(`${prefix}${"x".repeat(4095 - prefix.length)}`);
+    expect(paused.persisted).toBe(false);
+    expect(
+      readSessionPlacementRecovery(
+        recovery.gatewayUrl,
+        recovery.recoveryScope,
+        recovery.sessionKey,
+      ),
+    ).toBeNull();
+  });
+
   it("migrates only exact framed rows under a new scope", () => {
     const sourceScope = recovery.recoveryScope;
     const newScope = "gateway-principal";

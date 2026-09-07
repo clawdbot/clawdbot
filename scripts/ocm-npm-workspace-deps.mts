@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
+import { readCurrentGitCommit, resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
 
 const WORKSPACE_DIRS_ENV = "OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS";
 const REAL_NPM_ENV = "OPENCLAW_OCM_REAL_NPM_BIN";
@@ -110,13 +110,7 @@ export function resolveRuntimePackPlan(args: string[], env: NodeJS.ProcessEnv = 
 export function resolveRuntimePackEnvironment(
   env: NodeJS.ProcessEnv = process.env,
   now: () => Date = () => new Date(),
-  readGitCommit: () => string | null = () => {
-    const result = spawnSync("git", ["rev-parse", "HEAD"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return result.status === 0 ? result.stdout.trim() : null;
-  },
+  readGitCommit: () => string | null = readCurrentGitCommit,
 ) {
   return resolveBuildIdentityEnvironment({
     commitLabel: "runtime pack commit",

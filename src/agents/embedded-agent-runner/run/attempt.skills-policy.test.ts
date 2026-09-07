@@ -164,13 +164,11 @@ describe("runEmbeddedAttempt skill policy projections", () => {
     );
     reviewCandidate.ctx.foregroundPromptContext = foregroundPromptContext;
     reviewCandidate.config = { skills: { workshop: { autonomous: { mode: "propose" } } } };
-    await runSkillExperienceReview(reviewCandidate, {
-      getCurrentConfig: () => reviewCandidate.config,
-    });
+    await runSkillExperienceReview(reviewCandidate);
     expect(snapshots[1]).toEqual(snapshots[0]);
   });
 
-  it("preserves tool schemas and source bytes while hiding unreadable review skills", async () => {
+  it("preserves tool schemas and source bytes while hiding unreadable draft-review skills", async () => {
     const sessionRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-review-parity-"));
     tempPaths.push(sessionRoot);
     const transcriptFile = path.join(sessionRoot, "transcript.jsonl");
@@ -263,7 +261,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
           },
           ...(review
             ? {
-                // This override list mirrors runSkillExperienceReview.
+                // Draft-only reviews retain the foreground catalog but restrict execution.
                 sessionPersistence: "detached" as const,
                 toolExecutionAllow: ["skill_workshop"],
                 skillWorkshopProposalOnly: true,
@@ -300,7 +298,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
         status: "rejected",
         reason: {
           message:
-            "Unavailable during skill review. Do not retry this tool. Continue with skill_workshop under the review instructions.",
+            "Unavailable in this run. Continue with the tools permitted by the run's instructions.",
         },
       },
     ]);
@@ -440,7 +438,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
     expect(executed).toEqual(["skill_workshop"]);
     expect(outcomes.map((outcome) => outcome.status)).toEqual(["rejected", "fulfilled"]);
     expect(String((outcomes[0] as PromiseRejectedResult).reason)).toContain(
-      "Unavailable during skill review",
+      "Unavailable in this run",
     );
     const activities = sessionManager.getEntries().flatMap((entry) => {
       const activity = entry.type === "message" && readNestedToolActivity(entry.message);
@@ -453,7 +451,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       result: {
         details: {
           status: "error",
-          error: expect.stringContaining("Unavailable during skill review"),
+          error: expect.stringContaining("Unavailable in this run"),
         },
       },
     });

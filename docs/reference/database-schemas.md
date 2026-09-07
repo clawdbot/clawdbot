@@ -20,6 +20,22 @@ OpenClaw stores control-plane state in a global SQLite database and agent data i
 
 The task registry uses the global control-plane database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
 
+### Mentions Inbox
+
+The [mentions Inbox](/concepts/multi-user#temporary-mentions-inbox) uses existing
+`config_machine_state` rows in `state/openclaw.sqlite`.
+`notifications.mentions.source.*` records retain typed source identities,
+recipients, mention identifiers, expiry times, and dismissal bookkeeping;
+`notifications.mentions.head` records the revision and sequence. Writes use the
+existing table and primary key, with no new tables, columns, indexes, or schema
+version change.
+
+Retention remains seven days from creation, capped at 100 entries per profile,
+10,000 entries globally, and 10,000 source identities for duplicate suppression.
+Restarts preserve retained entries, dismissals, and their original expiry times.
+Loading stored state does not replay browser notifications or scan transcripts
+to reconstruct old mentions.
+
 ### ACP replay accounting
 
 The shared `acp_replay_sessions` and `acp_replay_events` tables retain bridge
@@ -68,6 +84,17 @@ lookups.
 
 Reopening an occupancy-driven capture clears `stopped_at` without changing the
 primary key, so the same meeting retains its utterances.
+New transcript admissions record `sessionIdOrigin` (`generated` or `supplied`)
+in `metadata_json`. The store preserves that value, including its absence or
+invalidity in legacy rows, on later writes to the same primary key. Occupancy
+reopening requires an explicitly generated origin; an unknown origin starts a
+fresh capture and leaves the old record intact. The existing newest-candidate
+query and ten-minute window are unchanged.
+
+This adds no schema, index, version, or backfill. Doctor metadata restoration
+preserves an explicitly recorded origin and leaves unknown origins unknown.
+Older runtimes do not enforce this rule, so downgrading also removes the fixed-ID
+history protection. See the [accepted ID-origin decision](https://github.com/openclaw/openclaw/pull/130860).
 
 #### `meeting_transcript_utterances`
 
@@ -139,12 +166,12 @@ Accepted checkpoint history and publication source artifacts remain until explic
 
 ## Versioning contract
 
-Each database records its schema in two places:
+Each database records its published schema in two places:
 
 - `PRAGMA user_version` is the SQLite schema version.
 - The primary `schema_meta` row records `role`, `agent_id`, `schema_version`, and `app_version`. `app_version` is the OpenClaw build that last wrote the schema metadata.
 
-OpenClaw applies forward-only migrations when it opens an older supported database. It refuses a database whose `user_version` is newer than the running build and reports a `newer schema version` error. The Gateway checks all registered databases before startup. `openclaw update` also refuses a package or source target whose declared schema support is older than an on-disk database. Target packages published before schema metadata was added cannot be preflighted.
+OpenClaw applies forward-only migrations when it opens an older supported database. It refuses a database whose `user_version` is newer than the running build and reports a `newer schema version` error. The Gateway checks all registered databases before startup. `openclaw update` also refuses a package or source target whose declared schema support is older than an on-disk database. Target packages published before schema metadata was added cannot be preflighted. Updates driven by the 2026.9.2 release line can temporarily defer publication of a shared-state schema version while the old updater finishes; see [Schema bumps and older updaters](#schema-bumps-and-older-updaters).
 
 When Gateway startup encounters a newer database schema, it exits with status 78 so the generated systemd service does not restart it repeatedly. On macOS, it also parks its managed LaunchAgent to stop `KeepAlive` retries. This applies to failures during CLI bootstrap as well as server startup and does not depend on the database-backed crash counter. Start the Gateway with a build that supports the existing schemas. The older install cannot repair them with `doctor --fix`; run Doctor from the compatible install if further migration is required, then restart through the service or deployment owner.
 
@@ -224,6 +251,81 @@ validity expires; later Goal writes prune expired rows. They retain the
 original result and a keyed request fingerprint, not a second raw request.
 There is no backfill or configuration switch. Downgrading preserves the table
 but disables the new structured controls; upgrading can read retained receipts.
+
+### Schema bumps and older updaters
+
+OpenClaw 2026.9.2 introduced the update ledger but reopens it with old code after
+running the target's Doctor, including a final read after recording its terminal
+outcome. The shared-state database runner lets this updater finish by applying
+migration content first and publishing the new schema version later. This rule
+applies to every writable open, including Doctor, the restarted Gateway, and
+other CLI processes.
+
+The runner records the applied content version in the existing
+`config_machine_state` key `state.schema.contentVersion`. While publication is
+deferred, new code uses that content version, and both `PRAGMA user_version` and
+`schema_meta.schema_version` retain the previous published version. Content and
+its marker commit together. Reopening skips migration steps already covered by
+the marker, including the schema-16 Skill Workshop rebuild; it does not infer
+completion from table shape or repeat the rebuild. This requires no new table,
+configuration option, or environment override.
+
+Current content is ready for readers even while its version is unpublished.
+Ordinary CLI commands can run alongside the Gateway throughout this window;
+publication alone does not trigger schema repair or require stopping the Gateway.
+
+A subsequent update can run during this window. Its migration verification and
+rollback checks compare applied content versions from private database snapshots.
+Publishing already-applied content is not another migration; applying new content
+still blocks rollback even when the published number has not changed. Managed
+service stop, activation, and Doctor maintenance keep their normal ownership rules.
+
+Publication waits until **every** update row whose `before.version` identifies
+the 2026.9.2 release line meets its applicable condition:
+
+- A terminal row's `finished_at_ms` is at least five minutes old.
+- A running row's `updated_at_ms` is more than 30 minutes old. The runner treats
+  that driver as abandoned for publication purposes; it does not rewrite the
+  run's outcome.
+
+A missing ledger or no affected rows permits immediate publication. Deadlines
+come from the rows' timestamps, never the observing process's start time. The
+new Gateway's ledger watcher schedules publication at the applicable deadline
+without jitter. Publication holds the Gateway lifecycle fence: the owning Gateway
+can publish, and a later writable open can publish when no Gateway owns the state
+directory. Other processes silently leave publication to that owner.
+Publication rereads the content marker and all affected rows inside one
+synchronous write transaction before advancing both published schema markers.
+A new or refreshed running row blocks publication again. Restarting the Gateway
+does not shorten or restart the grace period.
+
+The five-minute grace accommodates 2026.9.2's trailing ledger reads; that release
+records no driver process identity that would prove those reads have finished.
+An old CLI blocked for more than five minutes after committing its terminal row,
+for example on a stalled stdout pipe, can still fail its final render after
+publication. By then the package swap, any requested service restart, and terminal ledger
+outcome are complete. Downgrade protection for the 2026.9.2 line is delayed by the
+same grace, or by the 30-minute abandoned-driver bound. The retained version is
+not permission to run older code against migrated feature tables. Do not
+manually lower either version marker or delete the content marker.
+
+Update-time Doctor checks shared and registered agent databases before other
+repairs. A state-only migration proceeds with deferred publication and reports
+`schema content applied; version publication deferred until update run <id> finishes`.
+Publication still observes the five-minute grace after that run finishes.
+Doctor keeps the typed `update-schema-bump-unfenced` refusal when deferral cannot
+cover a pending agent-database migration, the required `config_machine_state`
+table is missing, or the state-content migration fails. A failed content
+transaction rolls back. The refusal includes the database versions, driving
+updater version, and [manual update commands](/install/updating#updating-from-2026.9.2-across-a-schema-bump).
+Package rollback cannot reverse a migration that already happened.
+
+The driver check requires a valid semantic version and includes 2026.9.2
+rebuilds. Earlier updaters, including 2026.9.1, have no ledger and keep normal
+publication behavior. Builds from 2026.9.3 onward, including prereleases, use
+transactional updates that fence old-process ledger access and let candidate
+code finish after migration; they also keep normal publication behavior.
+Same-schema repairs and ordinary Doctor runs remain available.
 
 ### Profile-owned skill library
 
@@ -367,6 +469,12 @@ the durable write succeeds. A future network-backed owner must preserve that
 ordering while awaiting its driver.
 
 Session reclamation keeps its deletion transaction on a worker connection.
+The worker opens its database under the session writer, then releases that writer
+while full integrity and foreign-key checks run on the same connection. Unrelated
+session writes can continue during those checks. It reacquires the writer and
+revalidates current authority before index repair, schema work, or deletion.
+The connection and lease remain owned throughout admission; refusal unwinds that
+owner, and final writer admission remains held until the worker exits.
 Archive publication and cascading deletion remain atomic. Before COMMIT, the
 worker publishes its authorization request in shared memory and waits for the
 parent's current owner check. Synchronous writers service that request at the shared
@@ -378,6 +486,10 @@ Only admission is retried; transaction callbacks and mutations are never replaye
 The original lock-admission deadline is retained. After granting approval,
 the parent synchronously joins transaction settlement before allowing owner retirement;
 that mandatory join cannot be abandoned at the append deadline.
+
+Periodic incremental vacuum uses the same write-admission boundary, so it can
+service reclamation approval before taking the writer lock. Its 512-page limit
+is unchanged; passive checkpoints remain outside the write transaction.
 
 Reclamation page maintenance uses a PASSIVE checkpoint and at most 512 pages of
 incremental vacuum per pass. PASSIVE does not wait for readers, but does not cap
@@ -613,6 +725,8 @@ Background verification errors retain the original name and message and append b
 Agent database maintenance fences other writers with a 60-second lease in the shared state database. A dedicated worker renews that lease during synchronous integrity scans and migration phases. Maintenance still checks the exact persisted owner before mutations and commit, and stops if the heartbeat fails or ownership expires or changes. Finishing or cancelling maintenance stops renewal before releasing the lease; process death leaves at most the remaining lease duration.
 
 Maintenance schema admission runs its initial full-file integrity check in a read-only Worker when that check is outside a write transaction. The connection and maintenance lease remain held until the Worker exits. Schema changes, index repairs, and compaction retain their synchronous phases.
+
+Startup errors containing `state lease heartbeat did not become ready` include `phase=startup`, the settlement trigger (`timeout` or `message`), and the status observed before the parent marks failure. `status=starting` distinguishes readiness still pending from `status=lost`, where loss was already recorded. `elapsedMs` measures monotonic time since heartbeat startup began; `timeoutMs` is the startup wait budget, capped at five seconds or the remaining initial lease lifetime. These fields do not establish why startup stalled or ownership was lost.
 
 The heartbeat proves ownership, not migration progress. A live but stuck maintenance process can keep its lease; stop that process before retrying Doctor.
 

@@ -16,9 +16,11 @@ export async function startDeferredNotifyRun(params: {
   notifyDeliveryContext?: DeliveryContext;
 }) {
   const exit = createDeferredCore<Awaited<ReturnType<ManagedRun["wait"]>>>();
+  const activity = { resultSettled: false, lastOutputAtMs: Date.now() };
   params.spawn.mockImplementationOnce(async (input) => {
     input.onStdout?.("producer output\n");
     return {
+      activity,
       runId: input.runId ?? "notify-on-exit",
       startedAtMs: Date.now(),
       wait: async () => await exit.promise,
@@ -43,6 +45,7 @@ export async function startDeferredNotifyRun(params: {
   return {
     run,
     finish: async () => {
+      activity.resultSettled = true;
       exit.resolve({
         reason: "exit",
         exitCode: 0,

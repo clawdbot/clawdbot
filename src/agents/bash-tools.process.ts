@@ -7,7 +7,6 @@ import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool
 import { createAbortError as createNamedAbortError } from "../infra/abort-signal.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
-import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { ManagedRunStdin } from "../process/supervisor/types.js";
 import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { cancelBackgroundExecSession } from "./bash-process-control.js";
@@ -22,7 +21,6 @@ import {
   listFinishedSessions,
   listRunningSessions,
   prepareSessionPoll,
-  setJobTtlMs,
 } from "./bash-process-registry.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
 import {
@@ -50,7 +48,6 @@ import { textResult } from "./tools/tool-results.js";
 
 /** Defaults injected by tests, agent scopes, and scoped process registries. */
 export type ProcessToolDefaults = {
-  cleanupMs?: number;
   hasCronTool?: boolean;
   inputWaitIdleMs?: number;
   scopeKey?: string;
@@ -258,16 +255,12 @@ async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void
   });
 }
 
-/** Build the process-control tool with optional cleanup, scope, and input-idle defaults. */
+/** Build the process-control tool with optional scope and input-idle defaults. */
 export function createProcessTool(
   defaults?: ProcessToolDefaults,
 ): AgentToolWithMeta<typeof processSchema, unknown> {
   const assertSourceCurrent = captureAgentToolSourceExecutionGuard();
-  if (defaults?.cleanupMs !== undefined) {
-    setJobTtlMs(defaults.cleanupMs);
-  }
   const scopeKey = defaults?.scopeKey;
-  const supervisor = getProcessSupervisor();
   const inputWaitIdleMs = clampWithDefault(
     defaults?.inputWaitIdleMs ?? readEnvInt("OPENCLAW_PROCESS_INPUT_WAIT_IDLE_MS"),
     DEFAULT_INPUT_WAIT_IDLE_MS,
@@ -278,8 +271,7 @@ export function createProcessTool(
     !scopeKey || session?.scopeKey === scopeKey;
 
   const describeRunningSession = (session: ProcessSession): RunningSessionRuntime => {
-    const record = supervisor.getRecord(session.id);
-    const lastOutputAt = record?.lastOutputAtMs ?? session.startedAt;
+    const lastOutputAt = session.processActivity?.lastOutputAtMs ?? session.startedAt;
     const idleMs = Math.max(0, Date.now() - lastOutputAt);
     const stdinWritable = isWritableStdin(session.stdin);
     return {

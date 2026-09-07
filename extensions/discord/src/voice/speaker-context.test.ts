@@ -44,7 +44,7 @@ describe("DiscordVoiceSpeakerContextResolver", () => {
     await expect(resolver.resolveContext("g1", id)).resolves.toMatchObject({ senderIsOwner });
   });
 
-  it("reuses cached speaker context for repeated speaker lookups", async () => {
+  it("preserves complete speaker context across cached lookups", async () => {
     const fetchMember = vi.fn().mockResolvedValue({
       nickname: "Ada",
       roles: [],
@@ -54,8 +54,15 @@ describe("DiscordVoiceSpeakerContextResolver", () => {
       client: createClient(fetchMember),
     });
 
-    await expect(resolver.resolveContext("g1", "u1")).resolves.toMatchObject({ label: "Ada" });
-    await expect(resolver.resolveContext("g1", "u1")).resolves.toMatchObject({ label: "Ada" });
+    const expected = {
+      id: "u1",
+      label: "Ada",
+      name: "ada",
+      tag: "ada",
+      senderIsOwner: false,
+    };
+    await expect(resolver.resolveContext("g1", "u1")).resolves.toEqual(expected);
+    await expect(resolver.resolveContext("g1", "u1")).resolves.toEqual(expected);
 
     expect(fetchMember).toHaveBeenCalledTimes(1);
   });

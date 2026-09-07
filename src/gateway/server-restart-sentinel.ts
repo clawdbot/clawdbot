@@ -196,6 +196,7 @@ export async function deliverQueuedSessionDelivery(params: {
   if (
     await deliverQueuedGeneratedMediaAgentTurn({
       entry: queuedEntry,
+      runtimeContextFragments: queuedEntry.runtimeContextFragments,
       canonicalKey,
       agentId,
       storePath,

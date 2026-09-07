@@ -1,7 +1,4 @@
-import {
-  isFastModeAutoProgressPayload,
-  resolveSendableOutboundReplyParts,
-} from "openclaw/plugin-sdk/reply-payload";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import { type AgentPlanStep, formatPlanChecklistLines } from "../../channels/streaming.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
@@ -129,9 +126,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       return payload;
     }
     if (hasAskUserPayload(payload)) {
-      return payload;
-    }
-    if (isFastModeAutoProgressPayload(payload)) {
       return payload;
     }
     // Group/native flows intentionally suppress tool summary text, but media-only

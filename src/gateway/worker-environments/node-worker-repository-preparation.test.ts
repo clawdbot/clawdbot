@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
@@ -14,14 +13,16 @@ it("prepares and reuses an exact repository commit without a Gateway workspace",
   const root = await fs.realpath(tempDirs.make("node-repository-preparation-"));
   const origin = path.join(root, "origin");
   const home = path.join(root, "node-home");
+  const gitConfig = path.join(root, "empty.gitconfig");
   await fs.mkdir(origin);
+  await fs.writeFile(gitConfig, "");
   const git = async (cwd: string, ...args: string[]) => {
     const result = await runCommandWithTimeout(["git", "-C", cwd, ...args], {
       timeoutMs: 10_000,
       baseEnv: {
         PATH: process.env.PATH,
         HOME: root,
-        GIT_CONFIG_GLOBAL: os.devNull,
+        GIT_CONFIG_GLOBAL: gitConfig,
         GIT_CONFIG_NOSYSTEM: "1",
       },
     });

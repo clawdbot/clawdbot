@@ -210,7 +210,7 @@ async function runOwnershipHelper(params: {
   deepStatePath?: boolean;
   commandDelayMs?: number;
   commandExitCode?: number;
-  runnerFault?: "closed-stdin";
+  runnerFault?: "closed-gate" | "unavailable-identity";
   whileHelperRunning?: (context: {
     env: NodeJS.ProcessEnv;
     logPath: string;
@@ -267,6 +267,9 @@ async function runOwnershipHelper(params: {
   const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
     stdio: ["pipe", "ignore", "ignore"],
   });
+  const parentClosed = new Promise<void>((resolve) => {
+    parent.once("close", () => resolve());
+  });
   const parentPid = parent.pid;
   const startIdentity = parentPid ? getFileLockProcessStartTime(parentPid) : null;
   if (!parentPid || startIdentity === null) {
@@ -276,30 +279,75 @@ async function runOwnershipHelper(params: {
   const helperParamsPath = path.join(tmpDir, "helper-params.json");
   const logPath = path.join(tmpDir, "handoff.log");
   const updaterPath = path.join(tmpDir, "updater-ran");
-  const runnerClosedPath = path.join(tmpDir, "runner-closed-stdin");
+  const runnerClosedPath = path.join(tmpDir, "runner-closed-gate");
   const preloadPath = path.join(tmpDir, "runner-fault-preload.cjs");
-  if (params.runnerFault === "closed-stdin") {
+  if (params.runnerFault) {
     await fs.writeFile(
       preloadPath,
       `const fs = require("node:fs");
 const childProcess = require("node:child_process");
+const { DatabaseSync } = require("node:sqlite");
 const originalSpawn = childProcess.spawn;
 const closedPath = ${JSON.stringify(runnerClosedPath)};
+let injected = false;
 childProcess.spawn = function(command, args, options) {
-  if (command !== process.execPath || args[0] !== "-e" ||
-      !args[1].includes('process.stdin.once("data"')) {
-    return originalSpawn.apply(this, arguments);
+  const child = originalSpawn.apply(this, arguments);
+  if (injected || command !== process.execPath || !args.includes("--import") || !options.stdio.includes("ipc")) {
+    return child;
   }
-  const runnerScript = 'const fs=require("node:fs");fs.closeSync(0);' +
-    'fs.writeFileSync(' + JSON.stringify(closedPath) + ',String(process.pid));' +
-    'setTimeout(() => process.exit(0),5000)';
-  const child = originalSpawn.call(this, command, ["-e", runnerScript, args[2]], options);
-  const deadline = Date.now() + 5000;
-  const waitWord = new Int32Array(new SharedArrayBuffer(4));
-  while (!fs.existsSync(closedPath) && Date.now() < deadline) {
-    Atomics.wait(waitWord, 0, 0, 10);
+  injected = true;
+  const input = child.stdio[4];
+  const end = input.end;
+  let leaseAtGate;
+  let watchdogKilledRunner = false;
+  let watchdog;
+  child.once("close", (code, signal) => {
+    clearTimeout(watchdog);
+    fs.writeFileSync(closedPath, JSON.stringify({ pid: child.pid, code, signal, leaseAtGate, watchdogKilledRunner }), { mode: 0o600 });
+  });
+  const captureLease = () => {
+    const db = new DatabaseSync(${JSON.stringify(helperParams.updateLeaseDatabasePath)}, { readOnly: true });
+    try {
+      leaseAtGate = db.prepare("SELECT owner, payload_json FROM managed_update_handoffs WHERE install_root = ?")
+        .get(${JSON.stringify(helperParams.updateLeaseKey)});
+    } finally {
+      db.close();
+    }
+  };
+  if (${JSON.stringify(params.runnerFault)} === "unavailable-identity") {
+    // Exercise the real identity owner while preserving all unrelated process probes.
+    const read = fs.readFileSync, execFile = childProcess.execFileSync;
+    fs.readFileSync = function(file, ...args) {
+      if (file === "/proc/" + child.pid + "/stat") {
+        captureLease();
+        throw Object.assign(new Error("fixture process identity unavailable"), {code:"EACCES"});
+      }
+      return read.call(this, file, ...args);
+    };
+    childProcess.execFileSync = function(command, args, ...rest) {
+      if (command === "/bin/ps" && args.includes("lstart=") && args.includes(String(child.pid))) {
+        captureLease();
+        return "";
+      }
+      return execFile.call(this, command, args, ...rest);
+    };
+    // Keep the regression bounded on the broken owner; a passing repair must join first.
+    watchdog = setTimeout(() => {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      watchdogKilledRunner = true;
+      try { process.kill(-child.pid, "SIGKILL"); } catch {}
+      child.kill("SIGKILL");
+    }, 3000);
+    return child;
   }
-  if (!fs.existsSync(closedPath)) throw new Error("runner did not close stdin");
+  input.end = function(...writeArgs) {
+    input.end = end;
+    captureLease();
+    // End the admission sender after
+    // lease binding, then let Node reject the original write and emit its error.
+    input.end();
+    return end.apply(this, writeArgs);
+  };
   return child;
 };
 `,
@@ -357,18 +405,14 @@ childProcess.spawn = function(command, args, options) {
   parent.stdin.end();
   await params.whileHelperRunning?.({ env, logPath });
   const result = await resultPromise;
-  if (params.runnerFault) {
-    const runnerPid = Number(await fs.readFile(runnerClosedPath, "utf8"));
-    try {
-      process.kill(runnerPid, "SIGKILL");
-    } catch {}
-  }
+  await parentClosed;
   return {
     result,
     env,
     logPath,
     stderr,
     updaterPath,
+    runnerClosedPath,
     leaseDatabasePath: String(helperParams.updateLeaseDatabasePath),
     leaseKey: String(helperParams.updateLeaseKey),
   };
@@ -551,18 +595,53 @@ describe("managed service update handoff state ownership and sentinel persistenc
     }
   });
 
-  it("reclaims the exact runner lease and records failure when its stdin closes before the update gate", async () => {
+  it.each(
+    process.platform === "win32"
+      ? (["closed-gate"] as const)
+      : (["closed-gate", "unavailable-identity"] as const),
+  )("joins the exact gated runner and records failure after %s", async (runnerFault) => {
     const { DatabaseSync } = await import("node:sqlite");
-    const { result, env, stderr, updaterPath, leaseDatabasePath, leaseKey } =
-      await runOwnershipHelper({
-        handoffId: "handoff-runner-closed-stdin",
-        metaHandoffId: "handoff-runner-closed-stdin",
-        runnerFault: "closed-stdin",
-      });
+    const handoffId = `handoff-runner-${runnerFault}`;
+    const {
+      result,
+      env,
+      stderr,
+      logPath,
+      updaterPath,
+      runnerClosedPath,
+      leaseDatabasePath,
+      leaseKey,
+    } = await runOwnershipHelper({
+      handoffId,
+      metaHandoffId: handoffId,
+      runnerFault,
+    });
 
     expect(result).toEqual({ code: 1, signal: null });
     expect(stderr).not.toMatch(/Unhandled 'error' event|Error: write EPIPE/u);
     await expect(fs.access(updaterPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+    const runner = JSON.parse(await fs.readFile(runnerClosedPath, "utf8")) as {
+      pid: number;
+      leaseAtGate: { owner: string; payload_json: string };
+      watchdogKilledRunner: boolean;
+    };
+    expect(runner.pid).toBeGreaterThan(0);
+    expect(runner.watchdogKilledRunner).toBe(false);
+    expect(runner.leaseAtGate.owner).toBe(handoffId);
+    const leaseAtGate = JSON.parse(runner.leaseAtGate.payload_json);
+    expect(leaseAtGate).toMatchObject({
+      version: 2,
+      action: { kind: "update" },
+    });
+    expect(leaseAtGate.executor.pid).toBe(
+      runnerFault === "closed-gate" ? runner.pid : leaseAtGate.helper.pid,
+    );
+    await expect(fs.readFile(logPath, "utf8")).resolves.toContain(
+      runnerFault === "closed-gate"
+        ? "ERR_STREAM_WRITE_AFTER_END"
+        : "process start identity is unavailable",
+    );
 
     const leaseDatabase = new DatabaseSync(leaseDatabasePath, { readOnly: true });
     try {
@@ -580,8 +659,8 @@ describe("managed service update handoff state ownership and sentinel persistenc
         kind: "update",
         status: "error",
         stats: {
-          handoffId: "handoff-runner-closed-stdin",
-          reason: expect.stringMatching(/^managed-service-handoff-(?:helper|spawn)-failed$/u),
+          handoffId,
+          reason: "managed-service-handoff-helper-failed",
         },
       },
     });

@@ -1008,148 +1008,102 @@ export function describeTtsProviderRuntimeContract() {
     });
 
     describe("fallback readiness errors", () => {
-      it("continues synthesize fallback when primary readiness checks throw", async () => {
-        await withIsolatedSpeechProviderEnvAsync({}, async () => {
-          const throwingPrimary: SpeechProviderPlugin = {
-            id: "openai",
-            label: "OpenAI",
-            autoSelectOrder: 10,
-            resolveConfig: () => ({}),
-            isConfigured: () => {
-              throw new Error("Authorization: Bearer sk-readiness-throw-token-1234567890\nboom");
-            },
-            synthesize: async () => {
-              throw new Error("unexpected synthesize call");
-            },
-          };
-          const fallback: SpeechProviderPlugin = {
-            id: "microsoft",
-            label: "Microsoft",
-            autoSelectOrder: 20,
-            resolveConfig: () => ({}),
-            isConfigured: () => true,
-            synthesize: async () => ({
-              audioBuffer: createAudioBuffer(2),
-              outputFormat: "mp3",
-              fileExtension: ".mp3",
-              voiceCompatible: true,
-            }),
-          };
-          const registry = createEmptyPluginRegistry();
-          registry.speechProviders = [
-            { pluginId: "openai", provider: throwingPrimary, source: "test" },
-            { pluginId: "microsoft", provider: fallback, source: "test" },
-          ];
-          setActivePluginRegistry(registry);
-
-          const result = await ttsRuntime.synthesizeSpeech({
-            text: "hello fallback",
-            cfg: {
-              tts: {
-                provider: "openai",
+      it.each([
+        {
+          name: "synthesize",
+          primaryId: "openai",
+          primaryLabel: "OpenAI",
+          token: "sk-readiness-throw-token-1234567890",
+          separator: "\n",
+          text: "hello fallback",
+        },
+        {
+          name: "telephony",
+          primaryId: "primary-throws",
+          primaryLabel: "PrimaryThrows",
+          token: "sk-telephony-throw-token-1234567890",
+          separator: "\t",
+          text: "hello telephony fallback",
+        },
+      ])(
+        "continues $name fallback when primary readiness checks throw",
+        async ({ name, primaryId, primaryLabel, token, separator, text }) => {
+          await withIsolatedSpeechProviderEnvAsync({}, async () => {
+            const throwingPrimary: SpeechProviderPlugin = {
+              id: primaryId,
+              label: primaryLabel,
+              autoSelectOrder: 10,
+              resolveConfig: () => ({}),
+              isConfigured: () => {
+                throw new Error(`Authorization: Bearer ${token}${separator}boom`);
               },
-            },
-          });
-
-          expect(result.success).toBe(true);
-          if (!result.success) {
-            throw new Error("expected fallback synthesis success");
-          }
-          expect(result.provider).toBe("microsoft");
-          expect(result.fallbackFrom).toBe("openai");
-          expect(result.attemptedProviders).toEqual(["openai", "microsoft"]);
-          expect(result.attempts).toHaveLength(2);
-          expect(result.attempts?.[0]?.provider).toBe("openai");
-          expect(result.attempts?.[0]?.outcome).toBe("failed");
-          expect(result.attempts?.[0]?.reasonCode).toBe("provider_error");
-          expect(result.attempts?.[0]?.persona).toBeUndefined();
-          expect(result.attempts?.[0]?.personaBinding).toBe("none");
-          expect(typeof result.attempts?.[0]?.latencyMs).toBe("number");
-          expect(result.attempts?.[0]?.error).toContain("openai: Authorization: Bearer");
-          expect(result.attempts?.[0]?.error).not.toContain("sk-readiness-throw-token-1234567890");
-          expect(result.attempts?.[1]?.provider).toBe("microsoft");
-          expect(result.attempts?.[1]?.outcome).toBe("success");
-          expect(result.attempts?.[1]?.reasonCode).toBe("success");
-          expect(result.attempts?.[1]?.persona).toBeUndefined();
-          expect(result.attempts?.[1]?.personaBinding).toBe("none");
-          expect(typeof result.attempts?.[1]?.latencyMs).toBe("number");
-          expect(result.attempts?.[1]?.error).toBeUndefined();
-        });
-      });
-
-      it("continues telephony fallback when primary readiness checks throw", async () => {
-        await withIsolatedSpeechProviderEnvAsync({}, async () => {
-          const throwingPrimary: SpeechProviderPlugin = {
-            id: "primary-throws",
-            label: "PrimaryThrows",
-            autoSelectOrder: 10,
-            resolveConfig: () => ({}),
-            isConfigured: () => {
-              throw new Error("Authorization: Bearer sk-telephony-throw-token-1234567890\tboom");
-            },
-            synthesize: async () => {
-              throw new Error("unexpected synthesize call");
-            },
-          };
-          const fallback: SpeechProviderPlugin = {
-            id: "microsoft",
-            label: "Microsoft",
-            autoSelectOrder: 20,
-            resolveConfig: () => ({}),
-            isConfigured: () => true,
-            synthesize: async () => ({
-              audioBuffer: createAudioBuffer(2),
-              outputFormat: "mp3",
-              fileExtension: ".mp3",
-              voiceCompatible: true,
-            }),
-            synthesizeTelephony: async () => ({
-              audioBuffer: createAudioBuffer(2),
-              outputFormat: "mp3",
-              sampleRate: 24000,
-            }),
-          };
-          const registry = createEmptyPluginRegistry();
-          registry.speechProviders = [
-            { pluginId: "primary-throws", provider: throwingPrimary, source: "test" },
-            { pluginId: "microsoft", provider: fallback, source: "test" },
-          ];
-          setActivePluginRegistry(registry);
-
-          const result = await ttsRuntime.textToSpeechTelephony({
-            text: "hello telephony fallback",
-            cfg: {
-              tts: {
-                provider: "primary-throws",
+              synthesize: async () => {
+                throw new Error("unexpected synthesize call");
               },
-            },
-          });
+            };
+            const fallback: SpeechProviderPlugin = {
+              id: "microsoft",
+              label: "Microsoft",
+              autoSelectOrder: 20,
+              resolveConfig: () => ({}),
+              isConfigured: () => true,
+              synthesize: async () => ({
+                audioBuffer: createAudioBuffer(2),
+                outputFormat: "mp3",
+                fileExtension: ".mp3",
+                voiceCompatible: true,
+              }),
+              ...(name === "telephony"
+                ? {
+                    synthesizeTelephony: async () => ({
+                      audioBuffer: createAudioBuffer(2),
+                      outputFormat: "mp3",
+                      sampleRate: 24000,
+                    }),
+                  }
+                : {}),
+            };
+            const registry = createEmptyPluginRegistry();
+            registry.speechProviders = [
+              { pluginId: primaryId, provider: throwingPrimary, source: "test" },
+              { pluginId: "microsoft", provider: fallback, source: "test" },
+            ];
+            setActivePluginRegistry(registry);
 
-          expect(result.success).toBe(true);
-          if (!result.success) {
-            throw new Error("expected telephony fallback success");
-          }
-          expect(result.provider).toBe("microsoft");
-          expect(result.fallbackFrom).toBe("primary-throws");
-          expect(result.attemptedProviders).toEqual(["primary-throws", "microsoft"]);
-          expect(result.attempts).toHaveLength(2);
-          expect(result.attempts?.[0]?.provider).toBe("primary-throws");
-          expect(result.attempts?.[0]?.outcome).toBe("failed");
-          expect(result.attempts?.[0]?.reasonCode).toBe("provider_error");
-          expect(result.attempts?.[0]?.persona).toBeUndefined();
-          expect(result.attempts?.[0]?.personaBinding).toBe("none");
-          expect(typeof result.attempts?.[0]?.latencyMs).toBe("number");
-          expect(result.attempts?.[0]?.error).toContain("primary-throws: Authorization: Bearer");
-          expect(result.attempts?.[0]?.error).not.toContain("sk-telephony-throw-token-1234567890");
-          expect(result.attempts?.[1]?.provider).toBe("microsoft");
-          expect(result.attempts?.[1]?.outcome).toBe("success");
-          expect(result.attempts?.[1]?.reasonCode).toBe("success");
-          expect(result.attempts?.[1]?.persona).toBeUndefined();
-          expect(result.attempts?.[1]?.personaBinding).toBe("none");
-          expect(typeof result.attempts?.[1]?.latencyMs).toBe("number");
-          expect(result.attempts?.[1]?.error).toBeUndefined();
-        });
-      });
+            const params = { text, cfg: { tts: { provider: primaryId } } };
+            const result =
+              name === "telephony"
+                ? await ttsRuntime.textToSpeechTelephony(params)
+                : await ttsRuntime.synthesizeSpeech(params);
+
+            expect(result.success).toBe(true);
+            if (!result.success) {
+              throw new Error(
+                `expected ${name === "telephony" ? "telephony " : ""}fallback synthesis success`,
+              );
+            }
+            expect(result.provider).toBe("microsoft");
+            expect(result.fallbackFrom).toBe(primaryId);
+            expect(result.attemptedProviders).toEqual([primaryId, "microsoft"]);
+            expect(result.attempts).toHaveLength(2);
+            expect(result.attempts?.[0]?.provider).toBe(primaryId);
+            expect(result.attempts?.[0]?.outcome).toBe("failed");
+            expect(result.attempts?.[0]?.reasonCode).toBe("provider_error");
+            expect(result.attempts?.[0]?.persona).toBeUndefined();
+            expect(result.attempts?.[0]?.personaBinding).toBe("none");
+            expect(typeof result.attempts?.[0]?.latencyMs).toBe("number");
+            expect(result.attempts?.[0]?.error).toContain(`${primaryId}: Authorization: Bearer`);
+            expect(result.attempts?.[0]?.error).not.toContain(token);
+            expect(result.attempts?.[1]?.provider).toBe("microsoft");
+            expect(result.attempts?.[1]?.outcome).toBe("success");
+            expect(result.attempts?.[1]?.reasonCode).toBe("success");
+            expect(result.attempts?.[1]?.persona).toBeUndefined();
+            expect(result.attempts?.[1]?.personaBinding).toBe("none");
+            expect(typeof result.attempts?.[1]?.latencyMs).toBe("number");
+            expect(result.attempts?.[1]?.error).toBeUndefined();
+          });
+        },
+      );
 
       it("cancels the discarded speech response body after synthesize", async () => {
         await withIsolatedSpeechProviderEnvAsync({}, async () => {

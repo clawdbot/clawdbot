@@ -591,10 +591,14 @@ describe("runCommandBuffered", () => {
     ).resolves.toMatchObject({ code: null, termination: "signal", error: new Error("stop") });
   });
 
-  it.runIf(process.platform !== "win32")(
-    "force-kills inherited-pipe descendants after the direct child exits",
+  it.runIf(process.platform !== "win32").each([
+    { exitCode: 0, escaped: false, timeoutMs: 50 },
+    { exitCode: 7, escaped: false, timeoutMs: 50 },
+    { exitCode: 0, escaped: true, timeoutMs: 250 },
+  ])(
+    "drains descendants on failure or the post-success timeout (exit $exitCode, escaped=$escaped)",
     { timeout: 5_000 },
-    async () =>
+    async ({ exitCode, escaped, timeoutMs }) =>
       withTempDir("openclaw-exec-descendant-", async (dir) => {
         const pidPath = path.join(dir, "descendant.pid");
         const termPath = path.join(dir, "sigterm");
@@ -609,12 +613,14 @@ describe("runCommandBuffered", () => {
         const parentSource = [
           "const { spawn } = require('node:child_process')",
           "const { writeFileSync } = require('node:fs')",
-          `const child = spawn(process.execPath, ['-e', ${JSON.stringify(descendantSource)}], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] })`,
-          `child.once('message', () => { writeFileSync(${JSON.stringify(pidPath)}, String(child.pid)); process.exit(0) })`,
+          `const child = spawn(process.execPath, ['-e', ${JSON.stringify(descendantSource)}], { detached: ${escaped}, stdio: ['ignore', 'inherit', 'inherit', 'ipc'] })`,
+          `writeFileSync(${JSON.stringify(pidPath)}, String(child.pid))`,
+          `child.once('message', () => process.exit(${exitCode}))`,
         ].join(";");
         const realSetTimeout = setTimeout;
         const spawnSpy = vi.spyOn(execSpawn, "spawnCommandWithInvocation");
         let parent: ChildProcess | undefined;
+        let descendantPid: number | undefined;
         let command: ReturnType<typeof runCommandBuffered> | undefined;
         // Freeze deadlines, not subprocess I/O: Node startup must not consume the
         // timeout or the 100ms inherited-pipe idle grace. Polling must stay real.
@@ -622,7 +628,7 @@ describe("runCommandBuffered", () => {
         try {
           let settled = false;
           command = runCommandBuffered([process.execPath, "-e", parentSource], {
-            timeoutMs: 50,
+            timeoutMs,
           }).then((result) => {
             settled = true;
             return result;
@@ -636,14 +642,42 @@ describe("runCommandBuffered", () => {
             throw new Error("command did not expose a child process");
           }
           expect(await once(parent, "exit", { signal: AbortSignal.timeout(2_000) })).toEqual([
-            0,
+            exitCode,
             null,
           ]);
-          const descendantPid = await readPidFile(pidPath);
+          descendantPid = await readPidFile(pidPath);
           expect(isPidAlive(descendantPid)).toBe(true);
           expect(settled).toBe(false);
 
-          await vi.advanceTimersByTimeAsync(50);
+          if (escaped) {
+            // This pipe holder has its own group: root-group termination cannot
+            // close its pipes. Quiet successful output still belongs to the deadline.
+            await vi.advanceTimersByTimeAsync(101);
+            await new Promise<void>((resolve) => {
+              setImmediate(resolve);
+            });
+            expect(parent.stdout?.destroyed).toBe(false);
+            expect(parent.stderr?.destroyed).toBe(false);
+            expect(settled).toBe(false);
+            expect(isPidAlive(descendantPid)).toBe(true);
+            expect(existsSync(termPath)).toBe(false);
+
+            // Bound the real close observation separately from the frozen policy
+            // clock so missing post-termination release still reaches test cleanup.
+            const closed = once(parent, "close", { signal: AbortSignal.timeout(1_000) });
+            await vi.advanceTimersByTimeAsync(timeoutMs - 101);
+            await vi.advanceTimersByTimeAsync(100);
+            await closed;
+            expect(await command).toMatchObject({ code: null, termination: "timeout" });
+            expect(isPidAlive(descendantPid)).toBe(true);
+            expect(existsSync(termPath)).toBe(false);
+            return;
+          }
+
+          if (exitCode === 0) {
+            expect(existsSync(termPath)).toBe(false);
+            await vi.advanceTimersByTimeAsync(50);
+          }
           for (let attempt = 0; attempt < 40 && !existsSync(termPath); attempt += 1) {
             await new Promise<void>((resolve) => {
               realSetTimeout(resolve, 25);
@@ -656,14 +690,26 @@ describe("runCommandBuffered", () => {
           await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_TREE_KILL_GRACE_MS);
           // Force delivery now has a separate bounded exit-observation phase.
           await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_TREE_KILL_GRACE_MS);
-          expect(await command).toMatchObject({ code: null, termination: "timeout" });
+          expect(await command).toMatchObject(
+            exitCode === 0
+              ? { code: null, termination: "timeout" }
+              : { code: exitCode, termination: "exit" },
+          );
           vi.useRealTimers();
           expect(await waitForPidToExit(descendantPid)).toBe(true);
         } finally {
           try {
-            if (parent?.pid) {
+            // Record the spawned descendant before its readiness acknowledgement,
+            // so even an early root/IPC failure can reap the explicitly owned group.
+            if (descendantPid === undefined && existsSync(pidPath)) {
+              descendantPid = await readPidFile(pidPath);
+            }
+            for (const groupPid of [parent?.pid, escaped ? descendantPid : undefined]) {
+              if (groupPid === undefined || !Number.isInteger(groupPid) || groupPid <= 0) {
+                continue;
+              }
               try {
-                process.kill(-parent.pid, "SIGKILL");
+                process.kill(-groupPid, "SIGKILL");
               } catch {
                 // Already gone.
               }
@@ -676,6 +722,12 @@ describe("runCommandBuffered", () => {
             spawnSpy.mockRestore();
           }
           await command;
+          if (parent?.pid) {
+            expect(await waitForPidToExit(parent.pid)).toBe(true);
+          }
+          if (descendantPid !== undefined) {
+            expect(await waitForPidToExit(descendantPid)).toBe(true);
+          }
         }
       }),
   );

@@ -3,6 +3,7 @@
  * OpenClaw session metadata, lease tracking, model scoping, and cleanup policy.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path, { resolve as resolvePath } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -23,6 +24,7 @@ import {
   type AcpRuntimeTurnResult,
   type SessionAgentOptions,
 } from "acpx/runtime";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -32,7 +34,6 @@ import { CODEX_ACP_PACKAGE, OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js
 import { renderAgentCommand, splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
 import {
   ACPX_PROBE_LEASE_SESSION_KEY,
-  createAcpxProcessLeaseId,
   hashAcpxProcessCommand,
   readAcpxProcessLeaseIdentity,
   withAcpxLeaseArgs,
@@ -86,23 +87,14 @@ type OpenClawLeaseSessionMetadata = {
   openclawGatewayInstanceId: string;
 };
 
-function withOpenClawManagedTurnTimeout<T extends object>(input: T): T & { timeoutMs: 0 } {
-  // OpenClaw owns ACP turn deadlines. acpx treats timeout after partial agent
-  // output as a completed turn, which can mark background work done early.
-  return {
-    ...input,
-    timeoutMs: 0,
-  };
-}
-
 function withOpenClawLeaseSessionMetadata<T extends object>(
   record: T,
-  metadata: OpenClawLeaseSessionMetadata,
+  lease: AcpxProcessLeaseIdentity,
 ): T & OpenClawLeaseSessionMetadata {
   return {
     ...record,
-    openclawLeaseId: metadata.openclawLeaseId,
-    openclawGatewayInstanceId: metadata.openclawGatewayInstanceId,
+    openclawLeaseId: lease.leaseId,
+    openclawGatewayInstanceId: lease.gatewayInstanceId,
   };
 }
 
@@ -140,10 +132,7 @@ function isGenericInternalAcpErrorMessage(message: string): boolean {
 }
 
 function isGenericInternalAcpError(error: unknown): error is Error {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  return isGenericInternalAcpErrorMessage(error.message);
+  return error instanceof Error && isGenericInternalAcpErrorMessage(error.message);
 }
 
 async function readCodexWrapperStderrTail(params: {
@@ -290,10 +279,7 @@ function createResetAwareSessionStore(
       if (!lease) {
         return record;
       }
-      return withOpenClawLeaseSessionMetadata(record, {
-        openclawLeaseId: lease.leaseId,
-        openclawGatewayInstanceId: lease.gatewayInstanceId,
-      });
+      return withOpenClawLeaseSessionMetadata(record, lease);
     },
     async save(record: AcpSessionRecord): Promise<void> {
       let recordToSave = record;
@@ -365,10 +351,7 @@ function createResetAwareSessionStore(
               agentCommand: renderAgentCommand(persistedCommand),
               agentArgv: Array.isArray(persistedCommand) ? persistedCommand : undefined,
             },
-            {
-              openclawLeaseId: leaseIdentity.leaseId,
-              openclawGatewayInstanceId: leaseIdentity.gatewayInstanceId,
-            },
+            leaseIdentity,
           );
         }
       }
@@ -433,13 +416,7 @@ function readAgentFromSessionKey(sessionKey: string | undefined): string | undef
 
 function readAgentFromHandle(handle: OpenClawRuntimeHandle): string | undefined {
   const decoded = decodeAcpxRuntimeHandleState(handle.runtimeSessionName);
-  if (typeof decoded === "object" && decoded !== null) {
-    const { agent } = decoded as { agent?: unknown };
-    if (typeof agent === "string") {
-      return normalizeAgentName(agent) ?? readAgentFromSessionKey(handle.sessionKey);
-    }
-  }
-  return readAgentFromSessionKey(handle.sessionKey);
+  return normalizeAgentName(decoded?.agent) ?? readAgentFromSessionKey(handle.sessionKey);
 }
 
 function basename(value: string): string {
@@ -534,31 +511,25 @@ function isClaudeAcpCommand(command: AcpxAgentCommand | undefined): boolean {
   });
 }
 
-function failUnsupportedCodexAcpModel(rawModel: string, detail?: string): never {
+function failUnsupportedCodexAcpModel(rawModel: string): never {
   throw new AcpRuntimeError(
     "ACP_INVALID_RUNTIME_OPTION",
-    detail ??
-      `Codex ACP model "${rawModel}" is not supported. Use openai/<model> or <model>/<reasoning-effort>.`,
+    `Codex ACP model "${rawModel}" is not supported. Use openai/<model> or <model>/<reasoning-effort>.`,
   );
 }
 
-// acpx's `decodeAcpxRuntimeHandleState` only accepts `persistent` and `oneshot`; any other
-// value silently round-trips through the encoded handle as `persistent` and later throws
-// `SessionResumeRequiredError` on agent restart. Fail fast at this boundary instead.
-// See openclaw/openclaw#73071.
-const SUPPORTED_RUNTIME_SESSION_MODES = new Set(["persistent", "oneshot"] as const);
 const WIRE_TIMEOUT_CONFIG_KEYS = new Set(["timeout", "timeout_seconds"]);
 
+// The handle codec coerces unknown modes to persistent; reject them before encoding.
 function assertSupportedRuntimeSessionMode(
   mode: unknown,
 ): asserts mode is "persistent" | "oneshot" {
-  if (typeof mode === "string" && SUPPORTED_RUNTIME_SESSION_MODES.has(mode as never)) {
+  if (mode === "persistent" || mode === "oneshot") {
     return;
   }
-  const supported = Array.from(SUPPORTED_RUNTIME_SESSION_MODES).join(", ");
   throw new AcpRuntimeError(
     "ACP_INVALID_RUNTIME_OPTION",
-    `Unsupported ACP runtime session mode ${JSON.stringify(mode)}. Expected one of: ${supported}.`,
+    `Unsupported ACP runtime session mode ${JSON.stringify(mode)}. Expected one of: persistent, oneshot.`,
   );
 }
 
@@ -614,10 +585,7 @@ function classifyCodexAcpModelRequest(
   }
 
   if (hadOpenAiQualifier && (!model || model.includes("/"))) {
-    failUnsupportedCodexAcpModel(
-      raw,
-      `Codex ACP model "${raw}" is not supported. Use openai/<model> or <model>/<reasoning-effort>.`,
-    );
+    failUnsupportedCodexAcpModel(raw);
   }
   if (!model || model.includes("/")) {
     return thinkingOnlyOverride
@@ -720,12 +688,8 @@ function resolveAgentCommand(params: {
   return splitCommandParts(params.agentRegistry.resolve(normalizedAgentName));
 }
 
-function shouldUseBridgeSafeDelegateForCommand(command: AcpxAgentCommand | undefined): boolean {
-  return isOpenClawBridgeCommand(command);
-}
-
 function shouldUseDistinctBridgeDelegate(options: AcpRuntimeOptions): boolean {
-  const { mcpServers } = options as { mcpServers?: unknown };
+  const { mcpServers } = options;
   return Array.isArray(mcpServers) && mcpServers.length > 0;
 }
 
@@ -797,8 +761,8 @@ export class AcpxRuntime implements CompleteAcpRuntime {
   private readonly gatewayInstanceId: string | undefined;
   private readonly processLeaseStore: AcpxProcessLeaseStore | undefined;
   private readonly launchLeaseScope = new AsyncLocalStorage<AcpxLaunchLeaseContext | undefined>();
-  private readonly ensureSessionTails = new Map<string, Promise<void>>();
-  private readonly processLeaseTransitionTails = new Map<string, Promise<void>>();
+  private readonly sessionEnsureQueue = new KeyedAsyncQueue();
+  private readonly processLeaseTransitionQueue = new KeyedAsyncQueue();
   private readonly processLeaseOperationCounts = new Map<string, number>();
   private readonly uncertainProcessLeaseIds = new Set<string>();
   private readonly cwd: string;
@@ -855,7 +819,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     });
     this.probeCommand = probeCommand;
     const useBridgeSafeProbe =
-      this.managedToolsMcpBridgeEnabled || shouldUseBridgeSafeDelegateForCommand(probeCommand);
+      this.managedToolsMcpBridgeEnabled || isOpenClawBridgeCommand(probeCommand);
     this.probeDelegate = useBridgeSafeProbe ? this.bridgeSafeDelegate : this.delegate;
   }
 
@@ -864,7 +828,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     sessionKey: string;
     agentId?: string;
   }): BaseAcpxRuntime {
-    if (shouldUseBridgeSafeDelegateForCommand(params.command)) {
+    if (isOpenClawBridgeCommand(params.command)) {
       return this.bridgeSafeDelegate;
     }
     return this.resolveManagedToolsDelegateForSession(params);
@@ -1017,7 +981,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
         ? `probe-${hashAcpxProcessCommand(
             `${this.gatewayInstanceId}\0${extractGeneratedWrapperPath(params.command)}`,
           )}`
-        : createAcpxProcessLeaseId();
+        : randomUUID();
     const leasedCommand = withAcpxLeaseArgs({
       command: params.command,
       leaseId,
@@ -1157,33 +1121,11 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     return identity;
   }
 
-  private async runSerializedProcessLeaseTransition<T>(
-    leaseId: string,
-    run: () => Promise<T>,
-  ): Promise<T> {
-    const previous = this.processLeaseTransitionTails.get(leaseId) ?? Promise.resolve();
-    let release!: () => void;
-    const current = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const tail = previous.then(() => current);
-    this.processLeaseTransitionTails.set(leaseId, tail);
-    await previous;
-    try {
-      return await run();
-    } finally {
-      release();
-      if (this.processLeaseTransitionTails.get(leaseId) === tail) {
-        this.processLeaseTransitionTails.delete(leaseId);
-      }
-    }
-  }
-
   private async retainProcessLeaseOperation(
     identity: AcpxProcessLeaseIdentity,
     prepare: () => Promise<void>,
   ): Promise<void> {
-    await this.runSerializedProcessLeaseTransition(identity.leaseId, async () => {
+    await this.processLeaseTransitionQueue.enqueue(identity.leaseId, async () => {
       await prepare();
       this.processLeaseOperationCounts.set(
         identity.leaseId,
@@ -1199,7 +1141,7 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     if (!identity) {
       return;
     }
-    await this.runSerializedProcessLeaseTransition(identity.leaseId, async () => {
+    await this.processLeaseTransitionQueue.enqueue(identity.leaseId, async () => {
       const count = this.processLeaseOperationCounts.get(identity.leaseId) ?? 0;
       if (count > 1) {
         this.processLeaseOperationCounts.set(identity.leaseId, count - 1);
@@ -1327,29 +1269,6 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       return await resultPromise;
     } finally {
       await this.finalizeProcessLeaseForOperation(handle, await identityPromise);
-    }
-  }
-
-  private async runSerializedSessionEnsure<T>(
-    sessionKey: string,
-    run: () => Promise<T>,
-  ): Promise<T> {
-    const key = sessionKey.trim() || sessionKey;
-    const previous = this.ensureSessionTails.get(key) ?? Promise.resolve();
-    let release!: () => void;
-    const current = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const tail = previous.then(() => current);
-    this.ensureSessionTails.set(key, tail);
-    await previous;
-    try {
-      return await run();
-    } finally {
-      release();
-      if (this.ensureSessionTails.get(key) === tail) {
-        this.ensureSessionTails.delete(key);
-      }
     }
   }
 
@@ -1487,7 +1406,9 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     input: Parameters<AcpRuntime["ensureSession"]>[0],
   ): Promise<OpenClawRuntimeHandle> {
     const resource = assertAcpxSessionOwnerLocator(input, this.legacyBareSessionKeys);
-    return await this.runSerializedSessionEnsure(resource, () => this.ensureSessionUnlocked(input));
+    return await this.sessionEnsureQueue.enqueue(resource.trim() || resource, () =>
+      this.ensureSessionUnlocked(input),
+    );
   }
 
   private async ensureSessionUnlocked(
@@ -1605,7 +1526,11 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       const delegate = this.resolveDelegateForOperationSnapshot(input.handle, snapshot);
       return withTurnDiagnostics(command, async () => ({
         command,
-        turn: delegate.startTurn(withOpenClawManagedTurnTimeout(toAcpxResourceInput(input))),
+        turn: delegate.startTurn({
+          ...toAcpxResourceInput(input),
+          // OpenClaw owns deadlines; acpx timeouts can report partial output as completed.
+          timeoutMs: 0,
+        }),
       }));
     });
 

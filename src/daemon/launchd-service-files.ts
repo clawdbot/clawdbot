@@ -3,11 +3,11 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
-import { GATEWAY_LAUNCH_AGENT_LABEL, resolveGatewayServiceDescription } from "./constants.js";
+import { resolveGatewayServiceDescription } from "./constants.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import {
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
-  buildLaunchAgentPlist as buildLaunchAgentPlistImpl,
+  buildLaunchAgentPlist,
   quoteLaunchAgentEnvironmentValue,
   readLaunchAgentProgramArgumentsFromFile,
 } from "./launchd-plist.js";
@@ -20,7 +20,7 @@ import type { GatewayServiceEnv, GatewayServiceInstallArgs } from "./service-typ
 const LAUNCH_AGENT_DIR_MODE = 0o755;
 // launchd rejects user LaunchAgent plists without group/other read access on
 // current macOS. Secrets stay in the separate 0600 environment file.
-export const LAUNCH_AGENT_PLIST_MODE = 0o644;
+const LAUNCH_AGENT_PLIST_MODE = 0o644;
 const LAUNCH_AGENT_PRIVATE_DIR_MODE = 0o700;
 export const LAUNCH_AGENT_ENV_FILE_MODE = 0o600;
 export const LAUNCH_AGENT_ENV_WRAPPER_MODE = 0o700;
@@ -198,33 +198,6 @@ export function resolveLaunchAgentEnvironmentReadOptions(env: GatewayServiceEnv,
   };
 }
 
-function buildLaunchAgentPlist({
-  label = GATEWAY_LAUNCH_AGENT_LABEL,
-  comment,
-  programArguments,
-  workingDirectory,
-  stdoutPath,
-  stderrPath,
-  environment,
-}: {
-  label?: string;
-  comment?: string;
-  programArguments: string[];
-  workingDirectory?: string;
-  stdoutPath: string;
-  stderrPath: string;
-  environment?: Record<string, string | undefined>;
-}): string {
-  return buildLaunchAgentPlistImpl({
-    label,
-    comment,
-    programArguments,
-    workingDirectory,
-    stdoutPath,
-    stderrPath,
-    environment,
-  });
-}
 async function ensureLaunchAgentPlistReadable(plistPath: string): Promise<void> {
   await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
 }

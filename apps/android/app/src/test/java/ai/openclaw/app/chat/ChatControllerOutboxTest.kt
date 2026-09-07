@@ -2442,12 +2442,40 @@ class ChatControllerOutboxTest {
       assertTrue(accepted)
       assertEquals(ChatOutboxStatus.Accepted, outbox.singleStatus())
 
+      chat.handleGatewayEvent(
+        "chat",
+        buildJsonObject {
+          put("sessionKey", JsonPrimitive(chat.sessionKey.value))
+          put("runId", JsonPrimitive("gw-run-777"))
+          put("state", JsonPrimitive("delta"))
+          put(
+            "message",
+            buildJsonObject {
+              put("role", JsonPrimitive("assistant"))
+              put(
+                "content",
+                JsonArray(
+                  listOf(
+                    buildJsonObject {
+                      put("type", JsonPrimitive("text"))
+                      put("text", JsonPrimitive("Original run is still working."))
+                    },
+                  ),
+                ),
+              )
+            },
+          )
+        }.toString(),
+      )
+      assertEquals("Original run is still working.", chat.streamingAssistantText.value)
+
       // A follow-up send must see the accepted head as live-owned: it dispatches directly,
-      // and the reconciliation sweep must not park the head while its run is in flight.
+      // without erasing the running turn or parking its durable row.
       val followUp = chat.sendMessageAwaitAcceptance(message = "second", thinkingLevel = "off", attachments = emptyList())
       advanceTimeBy(10_000)
       assertTrue(followUp)
       assertEquals(listOf("slow turn", "second"), gateway.sentMessages)
+      assertEquals("Original run is still working.", chat.streamingAssistantText.value)
       assertTrue(outbox.rows().values.none { it.status == ChatOutboxStatus.Failed })
     }
 

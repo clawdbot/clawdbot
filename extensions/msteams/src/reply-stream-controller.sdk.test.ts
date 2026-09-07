@@ -8,6 +8,7 @@ type TeamsLoopbackRequest = {
   type: string;
   text: string;
   status: number;
+  entities?: unknown[];
 };
 
 function createOneShot() {
@@ -32,12 +33,16 @@ const provider = createServer((request, response) => {
     const activity = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
       type?: string;
       text?: string;
+      entities?: unknown[];
     };
     const scenario = request.url?.slice(1) ?? "";
     const priorScenarioRequests = requests.filter((entry) => entry.scenario === scenario).length;
     const rejected =
       scenario === "no-ack" ||
-      (scenario === "cancel-replacement" && priorScenarioRequests > 0) ||
+      ((scenario === "cancel-replacement" || scenario === "presentation-cancel") &&
+        priorScenarioRequests > 0) ||
+      (scenario === "presentation-close-failure" && activity.type === "message") ||
+      (scenario === "presentation-timeout" && priorScenarioRequests === 2) ||
       (activity.text?.length ?? 0) > 4_000;
     const status = rejected ? 403 : 201;
     requests.push({
@@ -45,6 +50,7 @@ const provider = createServer((request, response) => {
       type: activity.type ?? "",
       text: activity.text ?? "",
       status,
+      ...(scenario.startsWith("presentation-") ? { entities: activity.entities } : {}),
     });
     response.writeHead(status, { "content-type": "application/json" });
     response.end(
@@ -52,9 +58,12 @@ const provider = createServer((request, response) => {
         rejected
           ? {
               error: {
-                message: scenario.startsWith("cancel")
-                  ? "Content stream was canceled by user"
-                  : "Message size too large",
+                message:
+                  scenario === "presentation-timeout"
+                    ? "exceeded streaming time"
+                    : scenario.startsWith("cancel") || scenario === "presentation-cancel"
+                      ? "Content stream was canceled by user"
+                      : "Message size too large",
               },
             }
           : { id: `stream-${scenario}` },
@@ -362,5 +371,108 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
       { id: "stream-cancel-replacement", text: acknowledgedPrefix },
     ]);
     expect(requests.filter((request) => request.scenario === "cancel-replacement")).toHaveLength(2);
+  });
+});
+
+describe("Teams native final text preparation", () => {
+  it("preserves required AI metadata when the SDK completes a timed-out stream by update", async () => {
+    const { controller, firstAcknowledgement } = createLoopbackController("presentation-timeout");
+    const text = "# Status";
+    controller.onPartialReply({ text });
+    await firstAcknowledgement;
+    controller.preparePayload({ text });
+    await expect(controller.finalize()).resolves.toMatchObject({ visibleReplySent: true });
+    const final = requests.findLast((request) => request.scenario === "presentation-timeout");
+    expect(final?.text).toBe("**Status**");
+    expect(final?.entities).toEqual(
+      expect.arrayContaining([
+        {
+          type: "https://schema.org/Message",
+          "@type": "Message",
+          "@context": "https://schema.org",
+          "@id": "",
+          additionalType: ["AIGeneratedContent"],
+        },
+      ]),
+    );
+    expect(
+      requests
+        .filter((request) => request.scenario === "presentation-timeout")
+        .map((request) => request.status),
+    ).toEqual([201, 201, 403, 201]);
+  });
+
+  it.each(["partial", "progress"] as const)("renders the final %s activity", async (mode) => {
+    const scenario = `presentation-${mode}`;
+    const text = "# Deployment status\n\n@[Alex](11111111-2222-3333-4444-555555555555)";
+    const { controller, firstAcknowledgement } = createLoopbackController(scenario, {
+      streaming: { mode },
+    });
+    if (mode === "partial") {
+      controller.onPartialReply({ text });
+      await firstAcknowledgement;
+    }
+    expect(controller.preparePayload({ text })).toBeUndefined();
+    const result = await controller.finalize();
+    expect(result.visibleReplySent).toBe(true);
+    const final = requests.findLast(
+      (request) => request.scenario === scenario && request.type === "message",
+    );
+    expect.soft(final?.text).toBe("**Deployment status**\n\n<at>Alex</at>");
+    expect.soft(final?.entities).toEqual(
+      expect.arrayContaining([
+        {
+          type: "mention",
+          text: "<at>Alex</at>",
+          mentioned: { id: "11111111-2222-3333-4444-555555555555", name: "Alex" },
+        },
+        {
+          type: "https://schema.org/Message",
+          "@type": "Message",
+          "@context": "https://schema.org",
+          "@id": "",
+          additionalType: ["AIGeneratedContent"],
+        },
+      ]),
+    );
+  });
+
+  it("does not redeliver logical text already acknowledged after final rendering", async () => {
+    const text = "# Deployment status\n\n@[Alex](11111111-2222-3333-4444-555555555555)";
+    const { controller, firstAcknowledgement } = createLoopbackController(
+      "presentation-close-failure",
+    );
+    controller.onPartialReply({ text });
+    await firstAcknowledgement;
+    controller.preparePayload({ text });
+    await expect(controller.finalize()).resolves.toEqual({
+      visibleReplySent: true,
+      content: "**Deployment status**\n\n<at>Alex</at>",
+      logicalContent: text,
+      messageId: "stream-presentation-close-failure",
+    });
+    expect(
+      requests
+        .filter((request) => request.scenario === "presentation-close-failure")
+        .map((request) => request.status),
+    ).toEqual([201, 201, 403]);
+  });
+
+  it("retains the acknowledged preview when final rendering discovers Stop", async () => {
+    const text = "# Deployment status";
+    const { controller, firstAcknowledgement } = createLoopbackController("presentation-cancel");
+    controller.onPartialReply({ text });
+    await firstAcknowledgement;
+    controller.preparePayload({ text });
+    await expect(controller.finalize()).resolves.toEqual({
+      visibleReplySent: true,
+      content: text,
+      messageId: "stream-presentation-cancel",
+    });
+    expect(
+      requests
+        .filter((request) => request.scenario === "presentation-cancel")
+        .map((request) => request.status),
+    ).toEqual([201, 403]);
   });
 });

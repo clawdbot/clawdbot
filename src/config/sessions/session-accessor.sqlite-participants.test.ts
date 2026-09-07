@@ -9,6 +9,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   deleteSessionEntryLifecycle,
   listSessionParticipantsReadOnly,
+  loadExactSessionEntryCandidatesReadOnlyBatch,
   loadSessionEntry,
   MAX_SESSION_PARTICIPANTS,
   recordSessionParticipant,
@@ -29,6 +30,62 @@ const remote = (id: string, domain = "workspace"): SessionParticipantIdentity =>
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
 describe("SQLite session participants", () => {
+  it("isolates an invalid participant identity to its requested session", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const scope = { agentId: "main", env: state.env };
+      const keys = ["agent:main:before", "agent:main:invalid", "agent:main:after"] as const;
+      for (const [index, sessionKey] of keys.entries()) {
+        await upsertSessionEntryCore(
+          { ...scope, sessionKey },
+          { sessionId: `session-${index}`, updatedAt: index + 1 },
+        );
+        recordSessionParticipant(
+          { ...scope, sessionKey },
+          { identity: profile(`person-${index}`), promptedAt: index + 1 },
+        );
+      }
+      const read = (sessionKeys: readonly string[], projection: "full" | "list") =>
+        loadExactSessionEntryCandidatesReadOnlyBatch(
+          sessionKeys.map((sessionKey) => ({ ...scope, sessionKeys: [sessionKey], projection })),
+        );
+      expect(read(keys, "list").every((result) => result.ok)).toBe(true);
+      const database = openOpenClawAgentDatabase(scope);
+      // Model a damaged saved namespace without changing the session row or schema.
+      database.db
+        .prepare("UPDATE session_participants SET identity_namespace = ? WHERE session_key = ?")
+        .run('{"type":"profile","extra":true}', keys[1]);
+      const expectedEntry = (index: 0 | 1 | 2) => ({
+        ok: true,
+        value: [
+          {
+            sessionKey: keys[index],
+            entry: {
+              participants: [{ identity: profile(`person-${index}`) }],
+              participantCount: 1,
+            },
+          },
+        ],
+      });
+      for (const projection of ["full", "list"] as const) {
+        expect(read([keys[0], keys[1], "agent:main:missing", keys[2]], projection)).toMatchObject([
+          expectedEntry(0),
+          {
+            ok: false,
+            error: expect.objectContaining({
+              message: "Session participant identity is invalid; run openclaw doctor --fix.",
+            }),
+          },
+          { ok: true, value: [] },
+          expectedEntry(2),
+        ]);
+        expect(read([keys[0], keys[2]], projection)).toMatchObject([
+          expectedEntry(0),
+          expectedEntry(2),
+        ]);
+      }
+    });
+  });
+
   it("does not create a missing agent database during participant reads", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       expect(listSessionParticipantsReadOnly({ agentId: "absent", env: state.env }).size).toBe(0);

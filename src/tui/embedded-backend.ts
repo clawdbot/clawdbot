@@ -71,6 +71,7 @@ import { loadGatewayModelCatalog } from "../gateway/server-model-catalog.js";
 import { createGatewaySession } from "../gateway/session-create-service.js";
 import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
 import { capArrayByJsonBytes } from "../gateway/session-transcript-readers.js";
+import { projectSessionPatchResult } from "../gateway/session-utils-model.js";
 import {
   buildGatewaySessionInfo,
   getSessionDefaults,
@@ -780,17 +781,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
       throw new Error(applied.error.message);
     }
 
-    const resolved = resolveSessionModelRef(cfg, applied.entry, target.agentId);
-    return {
-      ok: true as const,
-      path: target.storePath,
-      key: target.canonicalKey ?? opts.key,
-      entry: { ...applied.entry },
-      resolved: {
-        modelProvider: resolved.provider,
-        model: resolved.model,
-      },
-    };
+    const projected = projectSessionPatchResult({
+      canonicalKey: target.canonicalKey ?? opts.key,
+      cfg,
+      entry: applied.entry,
+      storePath: target.storePath,
+      targetAgentId: target.agentId,
+    });
+    return { ...projected, entry: { ...projected.entry } };
   }
 
   async resetSession(key: string, reason?: "new" | "reset", opts?: { agentId?: string }) {

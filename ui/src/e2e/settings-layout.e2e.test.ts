@@ -652,7 +652,7 @@ suite.define(() => {
       });
 
       expect(await page.locator(".page-subtitle").textContent()).toBe(
-        "Messages and text-to-speech settings.",
+        "Messages, text-to-speech, and meeting capture settings.",
       );
       expect(await page.locator("wa-tab-group.config-sections-hub-tabs").count()).toBe(1);
       expect((await page.locator("wa-tab").allTextContents()).map((label) => label.trim())).toEqual(

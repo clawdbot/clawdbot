@@ -50,6 +50,7 @@ const LAZY_RUNTIME_PROPERTIES = {
   worktrees: true,
   webSearch: true,
   tasks: true,
+  modelConfig: true,
 } satisfies Record<keyof PluginRuntime, true>;
 
 function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
@@ -166,12 +167,14 @@ export function createLazyPluginRuntime(params: {
   runtimeOptions?: CreatePluginRuntimeOptions;
   loadPluginModule: ReturnType<typeof createPluginModuleLoader>;
 }): PluginRuntime {
-  // Avoid loading every channel/runtime dependency tree until a plugin actually
-  // reaches a runtime API surface.
-  let createPluginRuntimeFactory: PluginRuntimeFactory | null = null;
-  const resolveCreatePluginRuntime = (): PluginRuntimeFactory => {
-    if (createPluginRuntimeFactory) {
-      return createPluginRuntimeFactory;
+  const cache = getPluginCache();
+  type RuntimeModule = {
+    createPluginRuntime?: PluginRuntimeFactory;
+  };
+  let runtimeModule: RuntimeModule | undefined;
+  const resolveRuntimeModule = (): RuntimeModule => {
+    if (runtimeModule) {
+      return runtimeModule;
     }
     const resolution = resolvePluginRuntimeModulePathWithDiagnostics({
       devSourceRoot: params.devSourceRoot,
@@ -186,34 +189,39 @@ export function createLazyPluginRuntime(params: {
       );
     }
     const resolvedPath = resolution.resolvedPath;
-    const runtimeModule = withProfile(
-      { source: resolvedPath },
-      "runtime-module",
-      () =>
-        params.loadPluginModule(resolvedPath) as {
-          createPluginRuntime?: PluginRuntimeFactory;
-        },
+    runtimeModule = withPluginCache(cache, () =>
+      withProfile(
+        { source: resolvedPath },
+        "runtime-module",
+        () => params.loadPluginModule(resolvedPath) as RuntimeModule,
+      ),
     );
-    if (typeof runtimeModule.createPluginRuntime !== "function") {
-      throw new Error("Plugin runtime module missing createPluginRuntime export");
-    }
-    createPluginRuntimeFactory = runtimeModule.createPluginRuntime;
-    return createPluginRuntimeFactory;
+    return runtimeModule;
   };
 
-  const cache = getPluginCache();
   const base = createRuntimeBase();
   let resolvedRuntime: PluginRuntime | null = null;
   const resolveRuntime = (): PluginRuntime => {
-    resolvedRuntime ??= withPluginCache(cache, () =>
-      resolveCreatePluginRuntime()(params.runtimeOptions, base),
-    );
+    resolvedRuntime ??= withPluginCache(cache, () => {
+      const { createPluginRuntime } = resolveRuntimeModule();
+      if (typeof createPluginRuntime !== "function") {
+        throw new Error("Plugin runtime module missing createPluginRuntime export");
+      }
+      return createPluginRuntime(params.runtimeOptions, base);
+    });
     return resolvedRuntime;
   };
   const getRuntimeProperty = (prop: PropertyKey, ...receiver: [] | [unknown]): unknown => {
     // Prepared metadata and host facades must not initialize broad runtime services.
     if (!resolvedRuntime) {
-      if (prop === "gateway" || prop === "hooks" || prop === "nodes" || prop === "subagent") {
+      if (
+        prop === "gateway" ||
+        prop === "hooks" ||
+        prop === "nodes" ||
+        prop === "subagent" ||
+        prop === "modelAuth" ||
+        prop === "modelConfig"
+      ) {
         const value = params.runtimeOptions?.[prop];
         if (value !== undefined) {
           return value;
@@ -235,16 +243,20 @@ export function createLazyPluginRuntime(params: {
     if (resolvedRuntime || !Object.hasOwn(LAZY_RUNTIME_PROPERTIES, prop)) {
       return Reflect.getOwnPropertyDescriptor(resolveRuntime() as object, prop);
     }
-    return {
+    const descriptor: PropertyDescriptor = {
       configurable: true,
       enumerable: true,
       get() {
         return getRuntimeProperty(prop);
       },
-      set(value: unknown) {
-        Reflect.set(resolveRuntime() as object, prop, value);
-      },
     };
+    // Policy facets match defineCachedValue's getter-only contract before loading too.
+    if (prop !== "modelAuth" && prop !== "modelConfig") {
+      descriptor.set = (value: unknown) => {
+        Reflect.set(resolveRuntime() as object, prop, value);
+      };
+    }
+    return descriptor;
   };
   return new Proxy({} as PluginRuntime, {
     get: (_target, prop, receiver) => getRuntimeProperty(prop, receiver),

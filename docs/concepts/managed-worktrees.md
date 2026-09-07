@@ -28,7 +28,7 @@ Changing `worktreeRoot` affects new allocations. Existing registered worktrees k
 
 Outside the default state-owned worktree directory, cleanup acts only on registered worktrees. It leaves unrelated, unregistered folders in your custom location alone.
 
-See [Configuration reference](/gateway/configuration-reference#worktreeroot) for the option's default and scope.
+See [Configuration reference](/gateway/config-runtime#worktreeroot) for the option's default and scope.
 
 ## Layout and names
 
@@ -109,6 +109,8 @@ Unarchiving, or an authorized human message that reopens the archived session, r
 Accepted child sessions retain their saved repository choice across parent archive, replacement, or worktree changes. A retry must still be authorized for the current child session and uses the current caller's setup permissions.
 
 ## Troubleshoot creation
+
+If creation reports `git checkout has no commits`, create an initial commit in the source repository, then retry. Running `git init` alone does not provide a commit for the new worktree.
 
 If **New session** reports `git worktree add failed`, read the termination reason and the final Git error lines. `Preparing worktree` and `Updating files` are progress, not the cause of failure. Error messages collapse carriage-return progress redraws and bound the diagnostic tail so it cannot flood the banner.
 

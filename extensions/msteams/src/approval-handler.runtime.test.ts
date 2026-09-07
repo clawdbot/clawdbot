@@ -11,10 +11,7 @@ import type {
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getMSTeamsApprovalCardBinding,
-  unregisterMSTeamsApprovalCardBindings,
-} from "./approval-card-actions.js";
+import { msTeamsApprovalControls } from "./approval-card-actions.js";
 
 const sendAdaptiveCardMSTeams = vi.hoisted(() => vi.fn());
 const editAdaptiveCardMSTeams = vi.hoisted(() => vi.fn());
@@ -289,7 +286,7 @@ describe("msTeamsApprovalNativeRuntime", () => {
     }
     expect(binding).toHaveLength(2);
     for (const [index, token] of binding.entries()) {
-      expect(getMSTeamsApprovalCardBinding(token)).toEqual({
+      expect(msTeamsApprovalControls.get(token)).toEqual({
         token,
         accountId: "default",
         approvalId: "exec-approval-1",
@@ -351,7 +348,7 @@ describe("msTeamsApprovalNativeRuntime", () => {
       approvalKind: "exec",
     });
     for (const token of binding) {
-      expect(getMSTeamsApprovalCardBinding(token)).toBeNull();
+      expect(msTeamsApprovalControls.get(token)).toBeNull();
     }
   });
 
@@ -378,7 +375,7 @@ describe("msTeamsApprovalNativeRuntime", () => {
         }),
       ).resolves.toBeNull();
       for (const { token } of pendingPayload.actionTokens) {
-        expect(getMSTeamsApprovalCardBinding(token)).toBeNull();
+        expect(msTeamsApprovalControls.get(token)).toBeNull();
       }
     },
   );
@@ -449,8 +446,8 @@ describe("msTeamsApprovalNativeRuntime", () => {
       approvalKind: "plugin",
     });
     for (const token of binding) {
-      expect(getMSTeamsApprovalCardBinding(token)).toBeNull();
+      expect(msTeamsApprovalControls.get(token)).toBeNull();
     }
-    unregisterMSTeamsApprovalCardBindings(binding);
+    msTeamsApprovalControls.unregister(binding);
   });
 });

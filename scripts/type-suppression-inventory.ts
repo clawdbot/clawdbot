@@ -11,6 +11,7 @@ import {
   listRepoFilesSync,
   toPosixPath,
 } from "./check-file-utils.js";
+import { collectTypeScriptCommentRanges } from "./lib/ts-guard-utils.mts";
 
 type TypeSuppressionKind = "as-any" | "expect-error" | "type-assertion-any";
 
@@ -138,23 +139,7 @@ function addExpectErrorFindings(
   if (!source.includes("@ts-expect-error")) {
     return;
   }
-  const comments = new Map<number, ts.CommentRange>();
-  const addComments = (ranges: readonly ts.CommentRange[] | undefined): void => {
-    for (const range of ranges ?? []) {
-      comments.set(range.pos, range);
-    }
-  };
-  const visit = (node: ts.Node): void => {
-    addComments(ts.getLeadingCommentRanges(source, node.pos));
-    addComments(ts.getTrailingCommentRanges(source, node.end));
-    for (const child of node.getChildren(sourceFile)) {
-      visit(child);
-    }
-  };
-  visit(sourceFile);
-  addComments(ts.getLeadingCommentRanges(source, sourceFile.endOfFileToken.pos));
-
-  for (const range of comments.values()) {
+  for (const range of collectTypeScriptCommentRanges(ts, sourceFile)) {
     const comment = source.slice(range.pos, range.end);
     const markerPattern = /@ts-expect-error[^\r\n]*/gu;
     for (const match of comment.matchAll(markerPattern)) {

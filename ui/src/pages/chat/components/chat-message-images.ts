@@ -6,6 +6,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { beginClipboardCopy } from "../../../lib/clipboard.ts";
 import {
   reserveExternalWindowForDeferredNavigation,
   resolveSafeExternalUrl,
@@ -656,6 +657,7 @@ function renderManagedImageActions(image: ImageBlock, opts: ImageRenderOptions |
     }
   };
   const copy = async () => {
+    beginClipboardCopy();
     try {
       if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
         throw new Error("image clipboard is unavailable");

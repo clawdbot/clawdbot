@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { formatFencedCodeBlock } from "../../../../../src/shared/markdown-code.js";
 import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
@@ -11,6 +12,7 @@ import {
   markdownFileLinkFromEvent,
   markdownFileLinkFromKeyboardEvent,
 } from "../../../components/markdown-file-links.ts";
+import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import {
   markdownSessionLinkFromEvent,
   markdownSessionLinkFromKeyboardEvent,
@@ -28,27 +30,21 @@ import { isSvgImageMediaPath } from "../../../lib/media-file-extension.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
-import { safeAttachmentHref, safeMediaAttachmentHref } from "./chat-attachment-href.ts";
+import {
+  isCrossOriginHttpSource,
+  safeAttachmentHref,
+  safeMediaAttachmentHref,
+} from "./chat-attachment-href.ts";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import "./chat-audio-player.ts";
 import "./chat-video-player.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import type { AttachmentSidebarRuntime, SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderSidebarFile, type FileViewControls } from "./chat-sidebar-file-view.ts";
+import { isTextAttachment } from "./chat-text-attachment.ts";
 import "./session-diff-panel.ts";
 
 type ChatDetailPanelContent = Exclude<SidebarContent, { kind: "task" }>;
-
-function isCrossOriginHttpSource(source: string): boolean {
-  try {
-    const url = new URL(source, window.location.href);
-    return (
-      (url.protocol === "http:" || url.protocol === "https:") && url.origin !== location.origin
-    );
-  } catch {
-    return false;
-  }
-}
 
 function renderSidebarAttachment(
   content: Extract<SidebarContent, { kind: "attachment" }>,
@@ -114,6 +110,15 @@ function renderSidebarAttachment(
   ) {
     return html`<img class="sidebar-attachment-preview__image" src=${src} alt=${content.title} />`;
   }
+  if (isTextAttachment(mimeType, content.title) && !isCrossOriginHttpSource(src)) {
+    return html`<openclaw-chat-text-attachment
+      .src=${src}
+      .sourceIdentity=${content.sourceIdentity ?? src}
+      .label=${content.title}
+      .mimeType=${content.mimeType ?? ""}
+      .sizeBytes=${source?.sizeBytes ?? content.sizeBytes}
+    ></openclaw-chat-text-attachment>`;
+  }
   return renderCompactAttachmentCard({
     kind: content.attachmentKind ?? "document",
     label: content.title,
@@ -121,10 +126,6 @@ function renderSidebarAttachment(
     sizeBytes: source?.sizeBytes ?? content.sizeBytes,
     downloadHref: src,
   });
-}
-function toPlainTextCodeFence(value: string, language = ""): string {
-  const fenceHeader = language ? `\`\`\`${language}` : "```";
-  return `${fenceHeader}\n${value}\n\`\`\``;
 }
 
 export function buildRawContent(
@@ -137,7 +138,7 @@ export function buildRawContent(
     const rawText = content.rawText ?? content.content;
     return {
       kind: "markdown",
-      content: toPlainTextCodeFence(rawText),
+      content: formatFencedCodeBlock(rawText),
       rawText,
     };
   }
@@ -145,14 +146,14 @@ export function buildRawContent(
     const rawText = content.rawText ?? content.content;
     return {
       kind: "markdown",
-      content: toPlainTextCodeFence(rawText, content.language),
+      content: formatFencedCodeBlock(rawText, content.language),
       rawText,
     };
   }
   if (content.rawText?.trim()) {
     return {
       kind: "markdown",
-      content: toPlainTextCodeFence(content.rawText, "json"),
+      content: formatFencedCodeBlock(content.rawText, "json"),
       rawText: content.rawText,
     };
   }
@@ -183,6 +184,7 @@ type MarkdownSidebarProps = {
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
+  githubRepo?: MarkdownRenderOptions["githubRepo"];
   embedded?: boolean;
   onAttachmentUpdate: () => void;
   attachmentRuntime: AttachmentSidebarRuntime;
@@ -195,6 +197,7 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
       ? toSanitizedMarkdownHtml(content.content, {
           codeBlockInteraction: "interactive",
           fileLinks: true,
+          githubRepo: props.githubRepo ?? null,
           interactiveImages: props.onOpenImage !== undefined,
           sessionLinks: true,
         })

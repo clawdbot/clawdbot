@@ -205,12 +205,6 @@ extension OnboardingView {
                 case .none:
                     break
                 }
-                // agents.list projects an effective model even when it only
-                // comes from an implicit runtime default. A label is not proof
-                // that inference is configured or usable, so first run must
-                // live-verify it before completing onboarding. A definitive
-                // verification failure falls through to normal detection.
-                await self.resumePendingSystemAgent(modelRef: modelRef, intent: intent).value
             case .missing:
                 // A route-bound activation/verification can complete while the
                 // earlier agents.list request is suspended. Never let that
@@ -238,15 +232,18 @@ extension OnboardingView {
                 case .none:
                     break
                 }
-                if intent != .inspectOnly,
-                   knownAISetupPage || self.activePageIndex == self.aiPageIndex
-                {
-                    self.aiSetup.startIfNeeded()
-                }
             case .unavailable, .authIssue:
                 self.showConfiguredGatewayProbeBlocker(outcome)
+                return
             case .superseded:
-                break
+                return
+            }
+            // Both configured and empty Gateways enter the picker only after
+            // native receipt recovery. A configured label never authorizes a live test.
+            if intent != .inspectOnly,
+               knownAISetupPage || self.activePageIndex == self.aiPageIndex
+            {
+                self.aiSetup.startIfNeeded()
             }
         }
     }

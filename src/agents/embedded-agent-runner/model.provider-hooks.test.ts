@@ -2,6 +2,8 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
+import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resolveAgentToolSurfacePlan } from "../tool-surface-plan.js";
 import { DEFAULT_PROVIDER_RUNTIME_HOOKS, normalizeResolvedModel } from "./model.provider-hooks.js";
 
@@ -13,13 +15,6 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
   prepareProviderDynamicModel: async () => {},
   runProviderDynamicModel: () => undefined,
   shouldPreferProviderRuntimeResolvedModel: () => false,
-}));
-
-vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
-  getCurrentPluginMetadataSnapshot: () => ({
-    manifestRegistry: { plugins: [] },
-    owners: { providerEndpoints: [], providerRequests: new Map() },
-  }),
 }));
 
 function model(overrides: Partial<Model> = {}): Model {
@@ -53,8 +48,12 @@ function toolSearchEnabled(resolvedModel: Model, config: OpenClawConfig = {}): b
 describe("resolved model Tool Search policy", () => {
   beforeAll(() => {
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
+    setCurrentPluginMetadataSnapshot(createPluginMetadataSnapshotFixture());
   });
-  afterAll(() => vi.unstubAllEnvs());
+  afterAll(() => {
+    setCurrentPluginMetadataSnapshot(undefined);
+    vi.unstubAllEnvs();
+  });
 
   it.each([
     { provider: "ollama", api: "ollama", id: "qwen3.5:4b", expected: true },

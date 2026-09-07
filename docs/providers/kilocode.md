@@ -47,6 +47,8 @@ openclaw gateway restart
   </Step>
 </Steps>
 
+Onboarding preserves your model entries and leaves generated catalog rows to discovery. With `models.mode: "replace"`, it also writes the built-in catalog because that mode skips discovery.
+
 ## Default model and catalog
 
 The default model is `kilocode/kilo-auto/balanced`, Kilo Gateway's balanced smart-routing tier.

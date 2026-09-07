@@ -64,8 +64,6 @@ export type {
 } from "./provider-config-context.types.js";
 export type {
   ProviderAuthOptionBag,
-  ProviderExternalAuthProfile,
-  ProviderResolveExternalAuthProfilesContext,
   ProviderResolveSyntheticAuthContext,
 } from "./provider-external-auth.types.js";
 export type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";

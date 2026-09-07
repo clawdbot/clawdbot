@@ -72,8 +72,6 @@ export const LEGACY_CONFIG_MIGRATIONS_AUDIO: LegacyConfigMigrationSpec[] = [
       delete audio.transcription;
       if (Object.keys(audio).length === 0) {
         delete raw.audio;
-      } else {
-        raw.audio = audio;
       }
     },
   }),

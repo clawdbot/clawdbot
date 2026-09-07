@@ -583,6 +583,10 @@ describe("cancelled followup compaction accounting", () => {
         ...fixture.context.activeSessionEntry!,
         compactionCount: 3,
         groupActivationNeedsSystemIntro: true,
+        inputTokens: 120,
+        outputTokens: 8,
+        cacheRead: 20,
+        cacheWrite: 4,
       };
       await fixture.replace(original);
       Object.assign(fixture.context.activeSessionEntry!, original);
@@ -596,10 +600,20 @@ describe("cancelled followup compaction accounting", () => {
         totalTokens: 40,
         totalTokensFresh: true,
         groupActivationNeedsSystemIntro: true,
-        estimatedCostUsd: 2,
         modelProvider: diagnostic.provider,
         model: diagnostic.model,
       });
+      // Cancellation preserves committed compaction, not the previous run snapshot.
+      for (const entry of [
+        fixture.read(),
+        fixture.context.activeSessionStore?.[fixture.context.sessionKey!],
+      ]) {
+        expect(entry?.inputTokens).toBeUndefined();
+        expect(entry?.outputTokens).toBeUndefined();
+        expect(entry?.cacheRead).toBeUndefined();
+        expect(entry?.cacheWrite).toBeUndefined();
+        expect(entry?.estimatedCostUsd).toBeUndefined();
+      }
       expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
     },
   );

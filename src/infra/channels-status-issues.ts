@@ -1,8 +1,11 @@
 // Collects channel account status issues for diagnostics.
+import { Value } from "typebox/value";
+import { ChannelsStatusResultSchema } from "../../packages/gateway-protocol/src/schema/channels.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type {
   ChannelAccountSnapshot,
   ChannelId,
+  ChannelPlugin,
   ChannelStatusIssue,
 } from "../channels/plugins/types.public.js";
 import {
@@ -92,10 +95,20 @@ function collectGenericRuntimeStatusIssues(
 }
 
 /** Collects generic and plugin-specific issues from a channels status payload. */
-export function collectChannelStatusIssues(payload: Record<string, unknown>): ChannelStatusIssue[] {
+export function collectChannelStatusIssues(
+  payload: Record<string, unknown>,
+  plugins?: readonly ChannelPlugin[],
+): ChannelStatusIssue[] {
+  // The Gateway owns live diagnostics, including reload state unavailable to CLI readers.
+  if (
+    Array.isArray(payload.statusIssues) &&
+    Value.Check(ChannelsStatusResultSchema.properties.statusIssues, payload.statusIssues)
+  ) {
+    return payload.statusIssues;
+  }
   const issues: ChannelStatusIssue[] = [];
   const accountsByChannel = payload.channelAccounts as Record<string, unknown> | undefined;
-  for (const plugin of listChannelPlugins()) {
+  for (const plugin of plugins ?? listChannelPlugins()) {
     const raw = accountsByChannel?.[plugin.id];
     if (!Array.isArray(raw)) {
       continue;

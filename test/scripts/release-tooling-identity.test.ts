@@ -789,10 +789,19 @@ describe.each([
     async (outcome) => {
       const manifestBytes = Buffer.from(`${JSON.stringify(manifest)}\n`);
       const tarballBytes = Buffer.from("prepared package bytes");
+      const npmLockBytes = Buffer.from(
+        `${JSON.stringify({ packages: [{ lock: "x".repeat(3 * 1024 * 1024) }] })}\n`,
+      );
       const zip = new JSZip();
       zip.file("preflight-manifest.json", manifestBytes);
       zip.file(manifest.tarballName, tarballBytes);
       zip.file("dependency-evidence/dependency-evidence-manifest.json", "{}", {
+        createFolders: false,
+      });
+      zip.file("dependency-evidence/npm-package-locks.json", npmLockBytes, {
+        createFolders: false,
+      });
+      zip.file("dependency-evidence/npm-package-locks.md", "# npm package-lock mirrors\n", {
         createFolders: false,
       });
       const archive = await zip.generateAsync({
@@ -848,6 +857,12 @@ describe.each([
             "utf8",
           ),
         ).toBe("{}");
+        expect(readFileSync(join(outputDir, "dependency-evidence/npm-package-locks.json"))).toEqual(
+          npmLockBytes,
+        );
+        expect(
+          readFileSync(join(outputDir, "dependency-evidence/npm-package-locks.md"), "utf8"),
+        ).toBe("# npm package-lock mirrors\n");
       } else {
         await expect(download).rejects.toThrow(
           outcome === "archive changed" ? "digest" : "qualified descriptor",

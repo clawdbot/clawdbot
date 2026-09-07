@@ -50,7 +50,7 @@ function completionInput(result: string, status = "completed; ready for parent r
 function settledInput(result: string, status = "ok") {
   return userInput(
     [
-      `[Inter-session message] sourceSession=${childKey} sourceTool=subagent_announce isUser=false`,
+      `[Inter-session message] sourceSession=${childKey} sourceTool=subagent_settle isUser=false`,
       "[Subagent Context] Every subagent spawned from this session has now settled.",
       "Child completion results:",
       "1. qa-fork-context",

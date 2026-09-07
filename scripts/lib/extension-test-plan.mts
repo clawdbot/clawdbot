@@ -176,7 +176,7 @@ export const GIT_LS_FILES_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 export function listTrackedTestPlanFiles(cwd: string, pathspecs: readonly string[]) {
   // Query only the planner-owned tree: a full-repo inventory can overflow
   // spawnSync's buffer and either truncate the plan or force directory walks.
-  const result = spawnSync("git", ["ls-files", "--", ...pathspecs], {
+  const result = spawnSync("git", ["ls-files", "-z", "--", ...pathspecs], {
     cwd,
     encoding: "utf8",
     maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
@@ -185,10 +185,7 @@ export function listTrackedTestPlanFiles(cwd: string, pathspecs: readonly string
   if (result.status !== 0 || result.error) {
     return null;
   }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim().replaceAll("\\", "/"))
-    .filter(Boolean);
+  return result.stdout.split("\0").filter(Boolean);
 }
 
 function loadTrackedRepoTestFiles() {

@@ -45,6 +45,7 @@ import {
   isProcessSessionIdTaken,
   markExited,
   recordNotifyOnExitRemoval,
+  resolveProcessCleanupMs,
   tail,
 } from "./bash-process-registry.js";
 import {
@@ -657,6 +658,7 @@ export async function runExecProcess({
   warnings: string[];
   maxOutput: number;
   pendingMaxOutput: number;
+  cleanupMs?: number;
   notifyOnExit: boolean;
   notifyOnExitEmptySuccess?: boolean;
   scopeKey?: string;
@@ -693,6 +695,7 @@ export async function runExecProcess({
     command: opts.command,
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
+    cleanupMs: resolveProcessCleanupMs(opts.cleanupMs),
     agentId: opts.agentId,
     eventRouting: opts.eventRouting,
     notifyDeliveryContext: normalizeDeliveryContext(opts.notifyDeliveryContext),
@@ -932,8 +935,6 @@ export async function runExecProcess({
     usingPty = spawnSpec.mode === "pty";
     const spawnBase = {
       runId: sessionId,
-      sessionId: opts.sessionKey?.trim() || sessionId,
-      backendId: opts.sandbox ? "exec-sandbox" : "exec-host",
       ...(opts.sandbox ? { cleanupOwnership: "external" as const } : {}),
       scopeKey: opts.scopeKey,
       cwd: opts.workdir,
@@ -993,6 +994,7 @@ export async function runExecProcess({
     beforeSpawn = undefined;
     assertSourceActive = undefined;
   }
+  session.processActivity = managedRun.activity;
   session.stdin = managedRun.stdin;
   session.pid = managedRun.pid;
 

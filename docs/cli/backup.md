@@ -327,7 +327,7 @@ temporary files, and downloaded runtimes rather than authoritative user state;
 reinstall or update the corresponding runtime or plugin after restore.
 Effectively activated, loadable plugins can declare additional durable or
 regenerable state- or agent-relative roots through
-[`backupResources`](/plugins/manifest#backupresources-reference). Disabled or
+[`backupResources`](/plugins/manifest/surfaces#backupresources-reference). Disabled or
 unloadable plugins cannot exclude data. Explicit config, credentials, workspace,
 agent, and plugin-included paths override exclusions, and any excluded parent
 remains traversable to reach those protected descendants. Names such as `tmp`

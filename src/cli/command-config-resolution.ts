@@ -19,6 +19,7 @@ export async function resolveCommandConfigWithSecrets<TConfig extends OpenClawCo
   optionalActivePaths?: Set<string>;
   allowLocalExecSecretRefs?: boolean;
   scrubUnresolvedSecretRefs?: boolean;
+  gatewaySecretResolveTimeoutMs?: number;
   runtime?: RuntimeEnv;
   autoEnable?: boolean;
   env?: NodeJS.ProcessEnv;
@@ -41,6 +42,9 @@ export async function resolveCommandConfigWithSecrets<TConfig extends OpenClawCo
       : {}),
     ...(params.scrubUnresolvedSecretRefs !== undefined
       ? { scrubUnresolvedSecretRefs: params.scrubUnresolvedSecretRefs }
+      : {}),
+    ...(params.gatewaySecretResolveTimeoutMs !== undefined
+      ? { gatewaySecretResolveTimeoutMs: params.gatewaySecretResolveTimeoutMs }
       : {}),
   });
   if (params.runtime) {

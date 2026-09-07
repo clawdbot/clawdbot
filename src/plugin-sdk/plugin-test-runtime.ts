@@ -70,6 +70,7 @@ export {
 } from "../plugins/hook-runner-global.js";
 export { addTestHook } from "../plugins/hooks.test-helpers.js";
 export { createPluginRecord } from "../plugins/status.test-helpers.js";
+export { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 export {
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,

@@ -111,7 +111,7 @@ suite.define(() => {
             {
               step: "verifying",
               status: "in_progress",
-              detail: "Checking channels and inference.",
+              detail: "Checking channels and readiness.",
             },
           ],
           verification: { booted: true, serviceRunning: true, runningVersion: "2.0.0" },
@@ -124,7 +124,7 @@ suite.define(() => {
         expect(
           (await gateway.waitForRequest("update.runs.get", { after: readsBeforeReconnect })).params,
         ).toEqual({ runId: run.runId });
-        await runView.getByText("Checking channels and inference.", { exact: false }).waitFor();
+        await runView.getByText("Checking channels and readiness.", { exact: false }).waitFor();
         expect(await runView.locator('[data-step="repairing"]').count()).toBe(0);
         await page.screenshot({ path: path.join(proofDir, "04-verifying.png") });
 
@@ -150,7 +150,6 @@ suite.define(() => {
             versionMatch: true,
             pluginErrors: [],
             channelsReady: true,
-            inferenceProbe: "passed",
           },
         } satisfies UpdateRunRecord;
         await gateway.setMethodResponse("update.runs.get", { run });
@@ -164,7 +163,7 @@ suite.define(() => {
         const headline = "✅ OpenClaw updated to 2.0.0 (from 1.0.0).";
         await runView.getByText(headline, { exact: true }).first().waitFor();
         await runView.getByText("Gateway downtime: 1s.", { exact: false }).waitFor();
-        expect(await runView.locator('[data-oracle][data-state="pass"]').count()).toBe(5);
+        expect(await runView.locator('[data-oracle][data-state="pass"]').count()).toBe(4);
         expect(await runView.locator('[data-step="repairing"]').getAttribute("data-status")).toBe(
           "completed",
         );

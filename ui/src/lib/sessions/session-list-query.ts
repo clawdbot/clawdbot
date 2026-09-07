@@ -1,4 +1,4 @@
-import type { SessionsListResult } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type {
   SessionGateway,
   SessionListOptions,
@@ -10,6 +10,36 @@ import {
   DEFAULT_SESSION_LIST_QUERY,
   normalizeManagedSessionListQuery,
 } from "./session-requests.ts";
+
+export type PublishedSession = {
+  row: GatewaySessionRow;
+  result: SessionsListResult;
+  agentId?: string | null;
+};
+
+// Primary rows own shared presentation when both primary and managed queries hold a session.
+export function findPublishedSession(
+  state: { result: SessionsListResult | null; agentId?: string | null },
+  managedLists: Iterable<{
+    snapshot: { result: SessionsListResult | null };
+    scope: SessionListScope;
+  }>,
+  matches: (row: GatewaySessionRow, agentId?: string | null) => boolean,
+): PublishedSession | undefined {
+  const primaryResult = state.result;
+  const primary = primaryResult?.sessions.find((row) => matches(row, state.agentId));
+  if (primary && primaryResult) {
+    return { row: primary, result: primaryResult, agentId: state.agentId };
+  }
+  for (const entry of managedLists) {
+    const result = entry.snapshot.result;
+    const row = result?.sessions.find((candidate) => matches(candidate, entry.scope.agentId));
+    if (row && result) {
+      return { row, result, agentId: entry.scope.agentId };
+    }
+  }
+  return undefined;
+}
 
 export type QueuedSessionRefresh = {
   options: SessionRefreshOptions;

@@ -158,7 +158,10 @@ export function mergeTtsSupplementMessages(
 
 function isSubagentAnnounceInterSessionUserMessage(message: Record<string, unknown>): boolean {
   const provenance = normalizeInputProvenance(message.provenance);
-  if (provenance?.kind === "inter_session" && provenance.sourceTool === "subagent_announce") {
+  if (
+    provenance?.kind === "inter_session" &&
+    (provenance.sourceTool === "subagent_announce" || provenance.sourceTool === "subagent_settle")
+  ) {
     return true;
   }
   const text = extractProjectedText(message.content ?? message.text);
@@ -178,7 +181,10 @@ function isSubagentAnnounceInterSessionUserChatHistoryMessage(message: unknown):
     return false;
   }
   const provenance = normalizeInputProvenance(record.provenance);
-  if (provenance?.kind === "inter_session" && provenance.sourceTool === "subagent_announce") {
+  if (
+    provenance?.kind === "inter_session" &&
+    (provenance.sourceTool === "subagent_announce" || provenance.sourceTool === "subagent_settle")
+  ) {
     return true;
   }
   const text = extractChatHistoryBlockText(record);

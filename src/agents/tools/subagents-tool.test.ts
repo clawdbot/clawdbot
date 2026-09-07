@@ -396,4 +396,54 @@ describe("subagents tool", () => {
       }),
     ).rejects.toThrow("recentMinutes must be a positive integer");
   });
+
+  it("lists and cancels retained policy-key tasks for a split-key caller", async () => {
+    // Regression for the ClawSweeper P2 finding on #137779: when the listing root switches to
+    // the durable key, task rows created by pre-change code still carry the policy key in
+    // owner_key. Without the fallback policy key, split-key callers (e.g. Telegram DM) lose
+    // sight of retained running tasks and cannot cancel them ("Task outside session tree").
+    const durableKey = "agent:main:telegram:direct:456";
+    const policyKey = "agent:main:telegram:default:direct:456";
+    const tasks = [
+      // Retained row from pre-change code: owner_key is the policy key.
+      task({
+        taskId: "retained-media",
+        runtime: "cli",
+        ownerKey: policyKey,
+        requesterSessionKey: policyKey,
+      }),
+      // Newly created row: owner_key is the durable key.
+      task({
+        taskId: "new-spawn",
+        runtime: "cli",
+        ownerKey: durableKey,
+        requesterSessionKey: durableKey,
+      }),
+    ];
+
+    const cancelTask = vi.fn(async () => ({ found: true, cancelled: true }));
+    const tool = createSubagentsTool({
+      agentSessionKey: durableKey,
+      callerPolicySessionKey: policyKey,
+      config: {},
+      listTasks: () => tasks,
+      cancelTask: cancelTask as never,
+    });
+
+    const result = await tool.execute("list", { action: "list" });
+    const rows = (result.details as { tasks: Array<{ taskId: string }> }).tasks;
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ taskId: "retained-media" }),
+        expect.objectContaining({ taskId: "new-spawn" }),
+      ]),
+    );
+
+    await expect(
+      tool.execute("cancel", { action: "cancel", taskId: "retained-media" }),
+    ).resolves.toEqual(
+      expect.objectContaining({ details: expect.objectContaining({ status: "cancelled" }) }),
+    );
+    expect(cancelTask).toHaveBeenCalledWith({ cfg: {}, taskId: "retained-media" });
+  });
 });

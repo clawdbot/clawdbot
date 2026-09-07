@@ -232,7 +232,8 @@ function applyOsc8Ranges(line: string, ranges: UrlRange[]): string {
       continue;
     }
 
-    for (const char of segment.value) {
+    let offset = 0;
+    while (offset < segment.value.length) {
       while (range && visiblePos >= range.end) {
         range = ranges[++rangeIndex];
       }
@@ -246,8 +247,23 @@ function applyOsc8Ranges(line: string, ranges: UrlRange[]): string {
         }
         activeUrl = targetUrl;
       }
-      result += char;
-      visiblePos += char.length;
+      let end =
+        rendererLink || !range
+          ? segment.value.length
+          : Math.min(
+              segment.value.length,
+              offset + (visiblePos < range.start ? range.start : range.end) - visiblePos,
+            );
+      // UTF-16 range boundaries must keep whole code points, even when a wrapped
+      // continuation matched only a leading surrogate.
+      const last = segment.value.charCodeAt(end - 1);
+      const next = segment.value.charCodeAt(end);
+      if (last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
+        end += 1;
+      }
+      result += segment.value.slice(offset, end);
+      visiblePos += end - offset;
+      offset = end;
     }
   }
 

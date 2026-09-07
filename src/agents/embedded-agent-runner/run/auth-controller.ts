@@ -35,10 +35,8 @@ import {
   applyPreparedRuntimeAuthToModel,
   type ModelProviderRequestTransportOverrides,
 } from "../../provider-request-config.js";
-import {
-  protectPreparedProviderRuntimeAuth,
-  unwrapSecretSentinelsForProviderEgress,
-} from "../../provider-secret-egress.js";
+import { protectPreparedProviderRuntimeAuth } from "../../provider-runtime-auth-protection.js";
+import { unwrapSecretSentinelsForProviderEgress } from "../../provider-secret-egress.js";
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
 import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";

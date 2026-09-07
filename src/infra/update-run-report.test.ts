@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import {
+  renderUpdateRunNotice,
   renderUpdateRunReport,
   updateRunReportInputFromResult,
   updateRunReportInputFromSentinel,
@@ -43,6 +44,19 @@ describe("update run report", () => {
     );
     expect(report.markdown).toContain(reason);
     expect(report.markdown).toContain(guidance);
+  });
+
+  it("limits parking notices to the pre-updater milestone without loosening phase notices", () => {
+    const requested = run({ status: "running", phase: "requested" });
+    expect(renderUpdateRunNotice(requested, "parking")).toContain("Restarting the gateway now");
+    expect(renderUpdateRunNotice(requested, "activating")).toBeNull();
+    expect(renderUpdateRunNotice(requested, "verifying")).toBeNull();
+    for (const phase of ["staging", "activating", "verifying"] as const) {
+      const progressed = run({ status: "running", phase });
+      expect(renderUpdateRunNotice(progressed, "parking")).toBeNull();
+      expect(renderUpdateRunNotice(progressed, "ack")).toBeNull();
+    }
+    expect(renderUpdateRunNotice(run(), "parking")).toBeNull();
   });
 
   it("reports changed git commits when the package version stays the same", () => {
@@ -206,7 +220,6 @@ describe("update run report", () => {
           booted: true,
           versionMatch: false,
           channelsReady: false,
-          inferenceProbe: "failed",
           pluginErrors: ["Activation failed"],
         },
         repair: [
@@ -218,7 +231,7 @@ describe("update run report", () => {
     expect(report.markdown).not.toContain("openclaw doctor");
     expect(report.markdown).not.toContain("Run the update manually");
     expect(report.markdown).toContain(
-      "version mismatch; channels not ready; inference failed; 1 plugin activation error(s)",
+      "version mismatch; channels not ready; 1 plugin activation error(s)",
     );
     expect(report.markdown).toContain("Repair 1: failed — Plugin still unavailable");
     expect(report.markdown).not.toContain("The gateway is running");

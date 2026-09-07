@@ -33,13 +33,20 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as agentExec from "./agent-exec.js";
 import { renderTriagePrompt } from "./triage-prompt.js";
+import { triageCommand } from "./triage.js";
 
 const mocks = vi.hoisted(() => ({
+  collectDoctorFindings: vi.fn(),
+  writeDiagnosticSupportExport: vi.fn(),
   agentCommand: vi.fn(),
 }));
 
-// The agent turn is a fixture leaf; exec, config, environment filtering, and child
-// processes stay real so target ownership cannot hide behind a repair-loop mock.
+// Diagnostics are fixture leaves; triage, exec, config, env filtering,
+// and child processes stay real so the handoff cannot hide behind an exec mock.
+vi.mock("./doctor-lint.js", () => ({ collectDoctorFindings: mocks.collectDoctorFindings }));
+vi.mock("../logging/diagnostic-support-export.js", () => ({
+  writeDiagnosticSupportExport: mocks.writeDiagnosticSupportExport,
+}));
 vi.mock("./agent.js", () => ({ agentCommand: mocks.agentCommand }));
 
 const execFileAsync = promisify(execFile);
@@ -91,7 +98,7 @@ afterEach(() => {
   pinRuntimePaths();
 });
 
-describe.skipIf(process.platform === "win32")("embedded repair installation target", () => {
+describe.skipIf(process.platform === "win32")("embedded triage installation target", () => {
   it.each([false, true])(
     "scopes prompt-free repair to its target (candidate=%s) while preserving policy and auth",
     async (candidate) => {
@@ -288,12 +295,14 @@ describe.skipIf(process.platform === "win32")("embedded repair installation targ
     });
   });
   it.each([
-    { layout: "split" as const, fails: false, workspaceSelector: "custom" },
-    { layout: "home" as const, fails: false, workspaceSelector: "default" },
-    { layout: "split" as const, fails: true, workspaceSelector: "default" },
+    { layout: "split" as const, fails: false, workspaceSelector: "custom", automatic: false },
+    { layout: "home" as const, fails: false, workspaceSelector: "default", automatic: false },
+    { layout: "split" as const, fails: true, workspaceSelector: "default", automatic: false },
+    { layout: "split" as const, fails: false, workspaceSelector: "custom", automatic: true },
+    { layout: "home" as const, fails: true, workspaceSelector: "default", automatic: true },
   ])(
-    "keeps the $layout installation and $workspaceSelector workspace addressable (fails=$fails)",
-    async ({ layout, fails, workspaceSelector }) => {
+    "keeps the $layout installation and $workspaceSelector workspace addressable (fails=$fails, automatic=$automatic)",
+    async ({ layout, fails, workspaceSelector, automatic }) => {
       const previousSnapshot = getRuntimeConfigSnapshot();
       const temporaryRoot = os.tmpdir();
       // Clear inherited credentials and selectors through the tracked helper. Only
@@ -323,6 +332,10 @@ describe.skipIf(process.platform === "win32")("embedded repair installation targ
             },
             async (state) => {
               vi.spyOn(process, "cwd").mockReturnValue(state.workspaceDir);
+              const executionRoot = automatic
+                ? state.path("owned installation")
+                : state.workspaceDir;
+              await fs.mkdir(executionRoot, { recursive: true });
               const defaultWorkspaceDir =
                 workspaceSelector === "custom"
                   ? state.path("custom default workspace")
@@ -333,154 +346,231 @@ describe.skipIf(process.platform === "win32")("embedded repair installation targ
               await fs.mkdir(defaultWorkspaceDir, { recursive: true });
               const workspaceMarkerPath = path.join(defaultWorkspaceDir, "workspace-probe.txt");
               await fs.writeFile(workspaceMarkerPath, marker);
-              await state.writeConfig({
-                meta: { lastTouchedVersion: marker },
-                agents: {
-                  ownership: "explicit",
-                  defaults: { systemAgent: { agentId: "diagnostic" } },
-                  entries: {
-                    diagnostic: {
-                      model: "fixture/diagnostic-model",
-                      runtime: { type: "acp" },
+              const terminalDescriptors = [process.stdin, process.stdout].map((stream) =>
+                Object.getOwnPropertyDescriptor(stream, "isTTY"),
+              );
+              for (const stream of [process.stdin, process.stdout]) {
+                Object.defineProperty(stream, "isTTY", { configurable: true, value: !automatic });
+              }
+              try {
+                await state.writeConfig({
+                  meta: { lastTouchedVersion: marker },
+                  agents: {
+                    ownership: "explicit",
+                    defaults: { systemAgent: { agentId: "diagnostic" } },
+                    entries: {
+                      diagnostic: {
+                        model: "fixture/diagnostic-model",
+                        runtime: { type: "acp" },
+                      },
                     },
                   },
-                },
-                env: { shellEnv: { enabled: false } },
-                plugins: { enabled: false },
-                gateway: { auth: { mode: "token", token: secret } },
-              });
-              const originalConfig = await fs.readFile(state.configPath, "utf8");
-              const archivePath = state.statePath("logs", "support", "installation.zip");
-              const archive = await new JSZip()
-                .file("installation.txt", marker)
-                .generateAsync({ type: "nodebuffer" });
-              await fs.mkdir(path.dirname(archivePath), { recursive: true });
-              await fs.writeFile(archivePath, archive);
-              const prompt = renderTriagePrompt({
-                findings: [
+                  env: { shellEnv: { enabled: false } },
+                  plugins: { enabled: false },
+                  gateway: { auth: { mode: "token", token: secret } },
+                });
+                const originalConfig = await fs.readFile(state.configPath, "utf8");
+                const archivePath = state.statePath("logs", "support", "installation.zip");
+                const archive = await new JSZip()
+                  .file("installation.txt", marker)
+                  .generateAsync({ type: "nodebuffer" });
+                await fs.mkdir(path.dirname(archivePath), { recursive: true });
+                await fs.writeFile(archivePath, archive);
+                const findings = [
                   {
                     checkId: "fixture/installation",
                     severity: "warning",
                     message: `Synthetic diagnostic; Authorization: Bearer ${secret}`,
                   },
-                ],
-                bundle: { kind: "available", path: archivePath },
-                redaction: { env: process.env, stateDir: state.stateDir },
-              });
-              const runtime = {
-                log: vi.fn(),
-                error: vi.fn(),
-                exit: vi.fn(),
-                writeStdout: vi.fn(),
-              };
-              const before = await inspectChildTarget(sanitizeHostExecEnv(), state.workspaceDir);
-              expect(before).toEqual({
-                stateDir: state.stateDir,
-                configPath: state.configPath,
-                configExists: true,
-                marker,
-                defaultWorkspaceDir,
-                workspaceMarker: marker,
-              });
-              if (layout === "split") {
-                expect(path.dirname(state.configPath)).not.toBe(state.stateDir);
-              }
-              const originalSelectors = {
-                stateDir: process.env.OPENCLAW_STATE_DIR,
-                configPath: process.env.OPENCLAW_CONFIG_PATH,
-                workspaceDir: process.env.OPENCLAW_WORKSPACE_DIR,
-              };
-
-              let runStateDir = "";
-              let shellLookup = "";
-              let childTarget: ChildTarget | undefined;
-              mocks.agentCommand.mockImplementation(async (opts: Record<string, unknown>) => {
-                const runPrompt = String(opts.message);
-                const archiveReference = /^Sanitized ZIP: (.+)$/mu.exec(runPrompt)?.[1];
-                expect(archiveReference).toBe("$OPENCLAW_STATE_DIR/logs/support/installation.zip");
-                expect(runPrompt).not.toContain(secret);
-                expect(runPrompt).not.toContain(state.stateDir);
-                expect(runPrompt).not.toContain(defaultWorkspaceDir);
-                expect(Buffer.byteLength(runPrompt)).toBeLessThanOrEqual(8 * 1024);
-                runStateDir = await fs.realpath(resolveStateDir());
-                expect(runStateDir).not.toBe(state.stateDir);
-                const runConfig = getRuntimeConfig();
-                expect(process.env.OPENCLAW_WORKSPACE_DIR).toBe(state.workspaceDir);
-                expect(runConfig.agents?.entries?.diagnostic?.workspace).toBe(state.workspaceDir);
-                expect(runConfig.agents?.entries?.diagnostic?.model).toBe(
-                  "fixture/diagnostic-model",
-                );
-                const sessionStore = resolveSessionStorePathCore(runConfig.session?.store, {
-                  agentId: String(opts.agentId),
-                });
-                expect(sessionStore).toBe(
-                  path.join(runStateDir, "agents", "diagnostic", "sessions", "sessions.json"),
-                );
-                expect(opts.sessionId).toEqual(expect.any(String));
-                // Exercise the same preparation and projection used by built-in exec;
-                // no installation selectors are supplied by the probe itself.
-                const prepared = resolveExecPreparedRunEnvironment({
-                  config: runConfig,
-                  agentId: "diagnostic",
-                });
-                const { env: toolEnv } = resolvePreparedExecEnvironment({
-                  execParams: { command: "synthetic read-only target probes" },
-                  host: "gateway",
-                  defaultPathPrepend: [],
-                  warnings: [],
-                  ...prepared,
-                });
-                expect(toolEnv.OPENAI_API_KEY).toBeUndefined();
-                const shell = await execFileAsync(
-                  "/bin/sh",
-                  [
-                    "-c",
-                    `archive="${archiveReference}"; printf '%s\\n' "$archive"; if [ -f "$archive" ]; then printf 'present\\n'; else printf 'missing\\n'; fi`,
-                  ],
-                  { env: toolEnv, cwd: state.workspaceDir, encoding: "utf8", timeout: 10_000 },
-                );
-                shellLookup = shell.stdout;
-                childTarget = await inspectChildTarget(toolEnv, state.workspaceDir);
-                if (fails) {
-                  throw new Error("synthetic run failure");
-                }
-                return {
-                  payloads: [{ text: "Synthetic boundary probes completed." }],
-                  meta: { durationMs: 1 },
+                ] as const;
+                mocks.collectDoctorFindings.mockResolvedValue(findings);
+                mocks.writeDiagnosticSupportExport.mockResolvedValue({ path: archivePath });
+                const target = resolveInstallationTarget();
+                const observedTargets: Record<
+                  string,
+                  ReturnType<typeof getInstallationTarget>
+                > = {};
+                const runtime = {
+                  log: vi.fn(),
+                  error: vi.fn(),
+                  exit: vi.fn(),
+                  writeStdout: vi.fn(),
                 };
-              });
+                const execSpy = vi.spyOn(agentExec, "agentExecCommand");
+                const before = await inspectChildTarget(sanitizeHostExecEnv(), state.workspaceDir);
+                expect(before).toEqual({
+                  stateDir: state.stateDir,
+                  configPath: state.configPath,
+                  configExists: true,
+                  marker,
+                  defaultWorkspaceDir,
+                  workspaceMarker: marker,
+                });
+                if (layout === "split") {
+                  expect(path.dirname(state.configPath)).not.toBe(state.stateDir);
+                }
+                const originalSelectors = {
+                  stateDir: process.env.OPENCLAW_STATE_DIR,
+                  configPath: process.env.OPENCLAW_CONFIG_PATH,
+                  workspaceDir: process.env.OPENCLAW_WORKSPACE_DIR,
+                };
 
-              const result = await withInstallationTarget(resolveInstallationTarget(), () =>
-                agentExec.agentExecCommand(prompt, { cwd: state.workspaceDir }, runtime),
-              );
-              expect(result.exitCode).toBe(fails ? 1 : 0);
+                let runStateDir = "";
+                let shellLookup = "";
+                let childTarget: ChildTarget | undefined;
+                const controller = new AbortController();
+                const assertCurrent = vi.fn();
+                const runFailure = new Error("synthetic run failure");
+                mocks.agentCommand.mockImplementation(async (opts: Record<string, unknown>) => {
+                  observedTargets.repair = getInstallationTarget();
+                  const prompt = String(opts.message);
+                  const archiveReference = /^Sanitized ZIP: (.+)$/mu.exec(prompt)?.[1];
+                  expect(archiveReference).toBe(
+                    "$OPENCLAW_STATE_DIR/logs/support/installation.zip",
+                  );
+                  expect(prompt).not.toContain(secret);
+                  expect(prompt).not.toContain(state.stateDir);
+                  expect(prompt).not.toContain(defaultWorkspaceDir);
+                  expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(8 * 1024);
+                  runStateDir = await fs.realpath(resolveStateDir());
+                  expect(runStateDir).not.toBe(state.stateDir);
+                  const runConfig = getRuntimeConfig();
+                  expect(process.env.OPENCLAW_WORKSPACE_DIR).toBe(executionRoot);
+                  expect(runConfig.agents?.entries?.diagnostic?.workspace).toBe(executionRoot);
+                  expect(runConfig.agents?.entries?.diagnostic?.model).toBe(
+                    "fixture/diagnostic-model",
+                  );
+                  const sessionStore = resolveSessionStorePathCore(runConfig.session?.store, {
+                    agentId: String(opts.agentId),
+                  });
+                  expect(sessionStore).toBe(
+                    path.join(runStateDir, "agents", "diagnostic", "sessions", "sessions.json"),
+                  );
+                  expect(opts.sessionId).toEqual(expect.any(String));
+                  // Exercise the same preparation and projection used by built-in exec;
+                  // no installation selectors are supplied by the probe itself.
+                  const prepared = resolveExecPreparedRunEnvironment({
+                    config: runConfig,
+                    agentId: "diagnostic",
+                  });
+                  const { env: toolEnv } = resolvePreparedExecEnvironment({
+                    execParams: { command: "synthetic read-only target probes" },
+                    host: "gateway",
+                    defaultPathPrepend: [],
+                    warnings: [],
+                    ...prepared,
+                  });
+                  expect(toolEnv.OPENAI_API_KEY).toBeUndefined();
+                  const shell = await execFileAsync(
+                    "/bin/sh",
+                    [
+                      "-c",
+                      `archive="${archiveReference}"; printf '%s\\n' "$archive"; if [ -f "$archive" ]; then printf 'present\\n'; else printf 'missing\\n'; fi`,
+                    ],
+                    { env: toolEnv, cwd: executionRoot, encoding: "utf8", timeout: 10_000 },
+                  );
+                  shellLookup = shell.stdout;
+                  childTarget = await inspectChildTarget(toolEnv, executionRoot);
+                  if (automatic) {
+                    const runSignal = opts.abortSignal as AbortSignal;
+                    expect(runSignal.aborted).toBe(false);
+                    expect(opts.assertSourceCurrent).toBe(assertCurrent);
+                    expect(prompt).toContain("## Triggering failure");
+                    expect(prompt).toContain("openclaw health --json");
+                    if (fails) {
+                      controller.abort(runFailure);
+                      expect(runSignal.aborted).toBe(true);
+                      expect(runSignal.reason).toBe(runFailure);
+                      runSignal.throwIfAborted();
+                    }
+                  }
+                  if (fails) {
+                    throw runFailure;
+                  }
+                  return {
+                    payloads: [{ text: "Synthetic boundary probes completed." }],
+                    meta: { durationMs: 1 },
+                  };
+                });
 
-              expect(runtime.error.mock.calls).toEqual(fails ? [["synthetic run failure"]] : []);
-              expect(runtime.exit).not.toHaveBeenCalled();
-              expect(getInstallationTarget()).toBeUndefined();
-              expect(mocks.agentCommand).toHaveBeenCalledOnce();
-              expect(process.env.OPENCLAW_STATE_DIR).toBe(originalSelectors.stateDir);
-              expect(process.env.OPENCLAW_CONFIG_PATH).toBe(originalSelectors.configPath);
-              expect(process.env.OPENCLAW_WORKSPACE_DIR).toBe(originalSelectors.workspaceDir);
-              expect(getRuntimeConfigSnapshot()).toBeNull();
-              await expect(fs.stat(runStateDir)).rejects.toMatchObject({ code: "ENOENT" });
-              expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
-              expect(await fs.readFile(archivePath)).toEqual(archive);
-              expect(await fs.readFile(workspaceMarkerPath, "utf8")).toBe(marker);
-              expect(JSON.stringify(runtime.log.mock.calls)).not.toContain(secret);
+                const run = automatic
+                  ? triageCommand(
+                      runtime,
+                      {},
+                      {
+                        failure: {
+                          kind: "update",
+                          phase: "restart-unhealthy",
+                          error: `Synthetic startup failure; Authorization: Bearer ${secret}`,
+                          installationRoot: executionRoot,
+                          expectedVersion: marker,
+                          gateway: "verify-running",
+                        },
+                        signal: controller.signal,
+                        assertCurrent,
+                      },
+                    )
+                  : withInstallationTarget(target, () =>
+                      agentExec.agentExecCommand(
+                        renderTriagePrompt({
+                          findings,
+                          bundle: { kind: "available", path: archivePath },
+                          redaction: { env: process.env, stateDir: state.stateDir },
+                        }),
+                        { cwd: executionRoot },
+                        runtime,
+                      ),
+                    );
+                if (automatic) {
+                  if (fails) {
+                    await expect(run).rejects.toMatchObject({ code: 1 });
+                  } else {
+                    await run;
+                  }
+                } else {
+                  expect(await run).toMatchObject({ exitCode: fails ? 1 : 0 });
+                }
 
-              // Assert only after exec's cleanup, so both failures preserve the
-              // ephemeral-run invariant and report the two lost target boundaries.
-              expect
-                .soft(shellLookup, "shell must find the archive named in the model prompt")
-                .toBe(`${archivePath}\npresent\n`);
-              expect
-                .soft(
-                  childTarget,
-                  "child OpenClaw must select the original config and default workspace",
-                )
-                .toEqual(before);
-              vi.restoreAllMocks();
+                expect(runtime.error.mock.calls).toEqual(fails ? [["synthetic run failure"]] : []);
+                expect(runtime.exit.mock.calls).toEqual(fails && automatic ? [[1]] : []);
+                expect(getInstallationTarget()).toBeUndefined();
+                expect(observedTargets).toEqual({ repair: target });
+                expect(mocks.agentCommand).toHaveBeenCalledOnce();
+                expect(execSpy).toHaveBeenCalledOnce();
+                expect(execSpy.mock.calls[0]?.[1].stateDir).toBeUndefined();
+                expect(execSpy.mock.calls[0]?.[1].cwd).toBe(executionRoot);
+                expect(process.env.OPENCLAW_STATE_DIR).toBe(originalSelectors.stateDir);
+                expect(process.env.OPENCLAW_CONFIG_PATH).toBe(originalSelectors.configPath);
+                expect(process.env.OPENCLAW_WORKSPACE_DIR).toBe(originalSelectors.workspaceDir);
+                expect(getRuntimeConfigSnapshot()).toBeNull();
+                await expect(fs.stat(runStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+                expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
+                expect(await fs.readFile(archivePath)).toEqual(archive);
+                expect(await fs.readFile(workspaceMarkerPath, "utf8")).toBe(marker);
+                expect(JSON.stringify(runtime.log.mock.calls)).not.toContain(secret);
+
+                // Assert only after exec's cleanup, so both failures preserve the
+                // ephemeral-run invariant and report the two lost target boundaries.
+                expect
+                  .soft(shellLookup, "shell must find the archive named in the model prompt")
+                  .toBe(`${archivePath}\npresent\n`);
+                expect
+                  .soft(
+                    childTarget,
+                    "child OpenClaw must select the original config and default workspace",
+                  )
+                  .toEqual(before);
+              } finally {
+                for (const [index, stream] of [process.stdin, process.stdout].entries()) {
+                  const descriptor = terminalDescriptors[index];
+                  if (descriptor) {
+                    Object.defineProperty(stream, "isTTY", descriptor);
+                  } else {
+                    Reflect.deleteProperty(stream, "isTTY");
+                  }
+                }
+                vi.restoreAllMocks();
+              }
             },
           );
         });

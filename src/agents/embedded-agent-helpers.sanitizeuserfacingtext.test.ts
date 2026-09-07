@@ -27,6 +27,15 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("Hi <final>there</final>!")).toBe("Hi there!");
   });
 
+  it.each([
+    'Example:\n```xml\n<final data-model="demo">payload</final>\n```',
+    "Write `<final>payload</final>` as XML.",
+  ])("preserves literal final tags through user-facing sanitization: %s", (example) => {
+    expect(sanitizeUserFacingText(`${example}\n<final>Outside answer</final>`)).toBe(
+      `${example}\nOutside answer`,
+    );
+  });
+
   it("strips self-closing and attributed final tags", () => {
     expect(sanitizeUserFacingText("<final/>Hello")).toBe("Hello");
     expect(sanitizeUserFacingText("<final data-model='gemini'>Hello</final>")).toBe("Hello");

@@ -12,17 +12,19 @@ openclaw onboard
 ```
 
 CLI onboarding is the recommended terminal setup path on macOS, Linux, and
-Windows (native or WSL2). On a fresh install, **Quick start** detects AI access
-already available on the machine, verifies it with a real completion, and opens
-the web dashboard with a foreground Gateway. **Custom setup** preserves the full
+Windows (native or WSL2). On a fresh install, **Quick start** detects available AI
+access, waits for you to choose a connection, verifies your choice with a real
+completion, and opens the web dashboard with a foreground Gateway. **Custom setup** preserves the full
 guided flow. `openclaw setup` runs the same flow ([Setup](/cli/setup) covers
 the `--baseline` config-only variant). Windows desktop users can also start
 from [Windows Hub](/platforms/windows).
 
-Guided onboarding establishes inference first: a real completion must succeed
-before workspace and Gateway setup continues. If no detected route works, it
-opens manual provider setup. Choosing **Skip for now** exits onboarding without
-starting OpenClaw.
+Guided onboarding verifies your selected connection before starting the Gateway
+and AI chat. Detected connections and supported providers share the same picker;
+failure or cancellation never automatically selects another provider. In local
+onboarding, **Skip for now** prepares the named agent's workspace and local Gateway
+configuration, then exits without starting either. Interrupted baseline setup
+resumes on the next run.
 
 The classic wizard remains available for remote Gateway setup, channel pairing,
 daemon controls, skills, and imports. Run it explicitly
@@ -92,9 +94,10 @@ Fresh local interactive onboarding offers **Quick start** and **Custom setup**
 after a one-line pointer to the [security guide](/gateway/security). Quick start
 records the security acknowledgment; Custom setup shows the full security note
 and asks for confirmation. Quick start uses the default agent name `main` and
-full access, leaves telemetry consent unset, and skips route confirmation,
-memory import, and app recommendations. Custom setup keeps the telemetry choice,
-agent name, access mode, route confirmation, and optional setup prompts.
+full access, leaves telemetry consent unset, and skips memory import and app
+recommendations. Custom setup keeps the telemetry choice, agent name, access mode,
+and optional setup prompts. Both lanes require an explicit provider choice before
+a live completion or any provider installation, model selection, or credential write.
 
 Quick start follows this path:
 
@@ -105,20 +108,21 @@ Quick start follows this path:
    model. Pi and OpenCode installs may also be reported for context when they
    cannot serve as the reusable inference route. Gemini CLI and Antigravity are
    not offered as detected setup routes.
-3. Test detected candidates with real completions until one works, then announce
-   the selected route. Earlier failures are summarized quietly.
-4. If detection is exhausted, choose OpenAI, Anthropic, xAI (Grok), Google, or
-   OpenRouter, or choose **More…** for the remaining providers. Each provider's
-   regions, plans, and supported browser, device, API-key, or token methods
-   appear in a second menu and are tested with the same real completion.
+3. Choose the detected connection you want, or select a supported provider.
+   Only that connection is tested with a real completion. If it fails, review the
+   error and choose whether to retry, select another provider, or skip.
+4. Choose **More…** for additional provider groups, including installable official
+   plugins. Each provider's regions, plans, and supported browser, device, API-key,
+   or token methods appear in a second menu. Plugin installation requires its
+   capability review before the selected provider's setup continues.
    For an unlisted endpoint, choose **Custom Provider** (under **More…** when shown) and enter
    its base URL, optional API key, compatibility, and model ID. Custom setup
    runs in the local CLI on the Gateway host and verifies a real reply before
    saving the provider or replacing the active model.
-   Choose **Skip for now** to exit without starting OpenClaw. Manual provider
-   setup continues through the remaining guided steps, including Gateway service
-   installation and optional setup. The quick-start defaults stay: agent name
-   `main`, full access, and telemetry consent unset.
+   Choose **Skip for now** to prepare the local baseline and exit without starting
+   the Gateway or AI chat. Choosing a provider through its manual setup keeps the
+   quick-start defaults: agent name `main`, full access, telemetry consent unset,
+   and a foreground Gateway after verification.
 5. Save the verified route, prepare the agent workspace, and persist Gateway
    settings.
 6. Start the Gateway in the foreground and open the browser dashboard. Press
@@ -129,10 +133,9 @@ Quick start follows this path:
 The quick-start choice is not offered for configured installs, remote Gateway
 chat setup, non-interactive runs, or runs with `--skip-ui` or `--tui`.
 
-Re-running the command on a configured installation tests the current default
-model first, making the guided flow a verification and repair pass. A failing
-check never replaces the configured model automatically; onboarding stops and
-asks how to continue. Run `openclaw channels add` or `openclaw configure` for
+Re-running the command on a configured installation offers the current default
+model first. Select it for a verification and repair pass. A failed check never
+replaces the configured model automatically; onboarding waits for your next choice. Run `openclaw channels add` or `openclaw configure` for
 later non-inference additions; use `openclaw onboard` for provider or auth route
 changes.
 

@@ -90,38 +90,53 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
   }
   const recordPath = path.join(root, ".artifacts/extension-package-boundary/plugin-sdk.json");
   const output = "packages/plugin-sdk/dist";
-  const step = async (label: string, args: string[], bin?: string) => {
+  const step = async (label: string, args: string[], bin?: string, env?: NodeJS.ProcessEnv) => {
     signal.throwIfAborted();
     // Expected compiler failures cancel only their own invocation, not later repair phases.
     const abortController = new AbortController();
     const abort = () => abortController.abort(signal.reason);
     signal.addEventListener("abort", abort, { once: true });
     try {
-      await fixture.track(runNodeStep(label, args, 30_000, { bin, abortController }));
+      await fixture.track(runNodeStep(label, args, 30_000, { bin, env, abortController }));
       signal.throwIfAborted();
     } finally {
       signal.removeEventListener("abort", abort);
     }
   };
-  const run = (declared = root) =>
-    step("native-fixture", [
-      path.join(declared, "scripts/prepare-extension-package-boundary-artifacts.mts"),
-      `--mode=${mode}`,
-    ]);
+  const run = (declared = root, pwd = declared) =>
+    step(
+      "native-fixture",
+      [
+        path.join(declared, "scripts/prepare-extension-package-boundary-artifacts.mts"),
+        `--mode=${mode}`,
+      ],
+      undefined,
+      { PWD: pwd },
+    );
   return { ancestor, root, native, write, plugins, recordPath, output, step, run };
 }
 
 describe("native declaration preparation", () => {
-  it.runIf(process.platform === "win32").for([
-    { name: "short entry", entry: true, workspace: false },
-    { name: "workspace junction", entry: false, workspace: true },
-    { name: "short entry and workspace junction", entry: true, workspace: true },
+  it.for([
+    { name: "Windows 8.3 short entry", entry: true, workspace: false },
+    { name: "Windows 8.3 workspace junction", entry: false, workspace: true },
+    { name: "Windows 8.3 short entry and workspace junction", entry: true, workspace: true },
+    { name: "POSIX PWD alias (package-boundary)", mode: "package-boundary" as const },
+    { name: "POSIX PWD alias (all)", mode: "all" as const },
   ])(
-    "publishes cold native output and reuses warm receipts through Windows 8.3 $name",
+    "publishes cold native output and reuses warm receipts through $name",
     { timeout: 30_000 },
-    ({ entry, workspace }, context) => {
-      const f = createPreparationFixture("package-boundary", context.signal);
+    ({ entry, workspace, mode }, context) => {
+      if (mode ? process.platform === "win32" : process.platform !== "win32") {
+        return context.skip("Checkout alias is specific to another platform");
+      }
+      const f = createPreparationFixture(mode ?? "package-boundary", context.signal);
       let declared = f.root;
+      if (mode) {
+        declared = path.join(f.ancestor, "declared-alias");
+        fs.symlinkSync(f.root, declared, "dir");
+        expect(fs.realpathSync.native(declared)).toBe(f.root);
+      }
       if (entry) {
         const short = resolveNativeFixtureShortPath(f.root);
         if (!short) {
@@ -144,7 +159,10 @@ describe("native declaration preparation", () => {
         expect(fs.realpathSync.native(link)).toBe(sdk);
       }
       return fixture.run(async () => {
-        const cold = await f.run(declared).catch((error: unknown) => error);
+        // Relative CLI entry paths use Node's physical cwd while Go can retain shell PWD.
+        const cold = await f
+          .run(mode ? f.root : declared, declared)
+          .catch((error: unknown) => error);
         const declaration = path.join(f.root, f.output, "src/nested.d.ts");
         const metadata = path.join(f.root, f.output, ".tsbuildinfo");
         // Even the failing-before case must reach real native emit, not fail during setup.
@@ -155,18 +173,34 @@ describe("native declaration preparation", () => {
         expect(receipt.fileInfos.length).toBeGreaterThan(0);
         expect(receipt.fileNames.some((file) => file.endsWith("/src/nested.ts"))).toBe(true);
         expect(cold).toBeUndefined();
-        const record = readArtifactRecord(f.recordPath);
-        expect(record?.inputs).toContain("src/nested.ts");
-        expect(record?.outputs[`${f.output}/src/nested.d.ts`]).toBeDefined();
-        const artifacts = [f.recordPath, declaration, metadata].map((file) => ({
-          file,
-          bytes: fs.readFileSync(file),
-          mtimeMs: fs.statSync(file).mtimeMs,
-        }));
-        await f.run(declared);
-        for (const artifact of artifacts) {
-          expect(fs.readFileSync(artifact.file)).toEqual(artifact.bytes);
-          expect(fs.statSync(artifact.file).mtimeMs).toBe(artifact.mtimeMs);
+        expect(readArtifactRecord(f.recordPath)?.inputs).toContain("src/nested.ts");
+        const owners = [
+          {
+            recordPath: f.recordPath,
+            output: f.output,
+            files: [".tsbuildinfo", "src/nested.d.ts", "src/plugin-sdk/core.d.ts"],
+          },
+          ...f.plugins.map(([id, pluginEntry]) => ({
+            recordPath: path.join(f.root, `.artifacts/extension-package-boundary/${id}.json`),
+            output: `.artifacts/extension-package-boundary/plugins/${id}`,
+            files: [".tsbuildinfo", `${pluginEntry}.d.ts`],
+          })),
+        ];
+        const artifacts = owners.flatMap((owner) => {
+          const outputs = owner.files.map((file) => `${owner.output}/${file}`);
+          expect(Object.keys(readArtifactRecord(owner.recordPath)!.outputs).toSorted()).toEqual(
+            outputs.toSorted(),
+          );
+          return [owner.recordPath, ...outputs.map((file) => path.join(f.root, file))].map(
+            (file) => ({ file, bytes: fs.readFileSync(file), mtimeMs: fs.statSync(file).mtimeMs }),
+          );
+        });
+        for (const spelling of [declared, f.root]) {
+          await f.run(mode ? f.root : spelling, spelling);
+          for (const artifact of artifacts) {
+            expect(fs.readFileSync(artifact.file)).toEqual(artifact.bytes);
+            expect(fs.statSync(artifact.file).mtimeMs).toBe(artifact.mtimeMs);
+          }
         }
       });
     },

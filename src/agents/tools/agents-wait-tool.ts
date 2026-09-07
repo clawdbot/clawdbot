@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -23,6 +23,51 @@ const AgentsWaitToolSchema = Type.Object({
   ids: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: MAX_WAIT_IDS }),
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
 });
+
+const CollectorCompletionSchema = Type.Object(
+  {
+    runId: Type.String(),
+    status: Type.Union([
+      Type.Literal("done"),
+      Type.Literal("failed"),
+      Type.Literal("killed"),
+      Type.Literal("timeout"),
+    ]),
+    result: Type.String(),
+    structured: Type.Optional(Type.Unknown()),
+    error: Type.Optional(Type.String()),
+    schemaError: Type.Optional(Type.String()),
+    sessionKey: Type.String(),
+    label: Type.Optional(Type.String()),
+    usage: Type.Optional(
+      Type.Object(
+        { inputTokens: Type.Number(), outputTokens: Type.Number() },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const AgentsWaitOutputSchema = Type.Object(
+  {
+    completed: Type.Array(CollectorCompletionSchema),
+    pending: Type.Array(Type.String()),
+    errors: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            runId: Type.String(),
+            error: Type.Union([Type.Literal("not_found"), Type.Literal("not_owner")]),
+          },
+          { additionalProperties: false },
+        ),
+      ),
+    ),
+    success: Type.Optional(Type.Literal(false)),
+  },
+  { additionalProperties: false },
+);
 
 type WaitError = { runId: string; error: "not_found" | "not_owner" };
 
@@ -64,7 +109,9 @@ function paramsOwner(config: OpenClawConfig | undefined, sessionKey: string): st
       : undefined;
 }
 
-function completionResult(entry: SubagentRunRecord) {
+function completionResult(
+  entry: SubagentRunRecord,
+): Static<typeof CollectorCompletionSchema> | undefined {
   const completion = entry.collectorCompletion;
   if (!completion) {
     return undefined;
@@ -262,6 +309,7 @@ export function createAgentsWaitTool(opts: {
     displaySummary: "Wait for collector children.",
     description: describeAgentsWaitTool(false),
     parameters: AgentsWaitToolSchema,
+    outputSchema: AgentsWaitOutputSchema,
     execute: async (_toolCallId, args, signal) => {
       const params = args as { ids: string[]; timeoutSeconds?: number };
       if (params.ids.length > MAX_WAIT_IDS) {

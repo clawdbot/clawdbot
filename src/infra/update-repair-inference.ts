@@ -6,7 +6,7 @@ import {
   resolveAmbientOwnerAgentId,
   toAgentEntriesRecord,
 } from "../agents/agent-scope-config.js";
-import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
+import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
 import { createModelAuthAvailabilityResolver } from "../agents/model-auth-availability.js";
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
 import { loadManifestModelCatalog } from "../agents/model-catalog.js";

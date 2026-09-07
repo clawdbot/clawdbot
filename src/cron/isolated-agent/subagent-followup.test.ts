@@ -495,50 +495,67 @@ describe("waitForDescendantSubagentSummary", () => {
     expect(runIds).toContain("run-2");
   });
 
-  it("waits for newly discovered active descendants after the first wait round", async () => {
-    vi.mocked(listDescendantRunsForRequester)
-      .mockReturnValueOnce([
-        {
-          runId: "run-1",
-          childSessionKey: "child-1",
-          requesterSessionKey: "cron-session",
-          requesterDisplayKey: "cron-session",
-          task: "task-1",
-          cleanup: "keep",
-          createdAt: 1000,
-          execution: { status: "running" },
-        },
-      ])
-      .mockReturnValueOnce([
-        {
-          runId: "run-2",
-          childSessionKey: "child-2",
-          requesterSessionKey: "cron-session",
-          requesterDisplayKey: "cron-session",
-          task: "task-2",
-          cleanup: "keep",
-          createdAt: 1001,
-          execution: { status: "running" },
-        },
-      ])
-      .mockReturnValue([]);
-
-    vi.mocked(callGateway).mockResolvedValue({ status: "ok" });
-    vi.mocked(readLatestAssistantReply).mockResolvedValue("Nested descendant work complete.");
+  it("waits for a yielded orchestrator's successor before selecting the cron synthesis", async () => {
+    const cronSessionKey = "agent:main:cron:daily-report:run:scheduled-run";
+    const orchestratorSessionKey = "agent:main:subagent:orchestrator";
+    const orchestrator = createDescendantRun({
+      runId: "orchestrator-yielded",
+      childSessionKey: orchestratorSessionKey,
+    });
+    orchestrator.requesterSessionKey = cronSessionKey;
+    orchestrator.pauseReason = "sessions_yield";
+    const workers = ["worker-a", "worker-b"].map((runId) => {
+      const worker = createDescendantRun({
+        runId,
+        childSessionKey: `agent:main:subagent:${runId}`,
+        active: true,
+      });
+      worker.requesterSessionKey = orchestratorSessionKey;
+      return worker;
+    });
+    let descendants = [orchestrator, ...workers];
+    let cronReply = "spawned a subagent";
+    const finalSynthesis = "Daily report complete: both findings reconciled.";
+    vi.mocked(listDescendantRunsForRequester).mockImplementation((sessionKey) =>
+      sessionKey === cronSessionKey ? descendants : [],
+    );
+    vi.mocked(readLatestAssistantReply).mockImplementation(async ({ sessionKey }) =>
+      sessionKey === cronSessionKey ? cronReply : "Unreconciled worker finding",
+    );
+    vi.mocked(callGateway).mockImplementation(async (request) => {
+      const runId = (request.params as { runId: string }).runId;
+      const completed = descendants.find((entry) => entry.runId === runId);
+      expect(completed).toBeDefined();
+      completed!.execution = { status: "terminal", endedAt: 3000 };
+      if (runId === "orchestrator-successor") {
+        cronReply = finalSynthesis;
+      } else if (workers.every((entry) => entry.execution.endedAt !== undefined)) {
+        // Settlement replaces the paused attempt; cron must discover its new run ID.
+        descendants = [
+          {
+            ...orchestrator,
+            runId: "orchestrator-successor",
+            pauseReason: undefined,
+            execution: { status: "running" },
+          },
+          ...workers,
+        ];
+      }
+      return { status: "ok" };
+    });
 
     const result = await waitForDescendantSubagentSummary({
-      sessionKey: "cron-session",
-      initialReply: "spawned a subagent",
+      sessionKey: cronSessionKey,
+      initialReply: cronReply,
       timeoutMs: 30_000,
       observedActiveDescendants: true,
     });
 
-    expect(result).toBe("Nested descendant work complete.");
+    expect(result).toBe(finalSynthesis);
     const waitedRunIds = vi
       .mocked(callGateway)
-      .mock.calls.filter((c) => (c[0] as { method?: string }).method === "agent.wait")
-      .map((c) => (c[0] as { params: { runId: string } }).params.runId);
-    expect(waitedRunIds).toEqual(["run-1", "run-2"]);
+      .mock.calls.map(([request]) => (request.params as { runId: string }).runId);
+    expect(waitedRunIds).toEqual(["worker-a", "worker-b", "orchestrator-successor"]);
   });
 
   it("handles agent.wait errors gracefully and still reads the synthesis", async () => {

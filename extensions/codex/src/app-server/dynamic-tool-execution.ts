@@ -210,8 +210,9 @@ export async function handleDynamicToolCallWithTimeout(params: {
     try {
       params.onAgentToolResult?.(event);
     } catch (error) {
+      const message = formatToolExecutionErrorMessage(error, "Unknown error");
       embeddedAgentLog.warn(
-        `onAgentToolResult handler failed: tool=${params.call.tool} error=${String(error)}`,
+        `onAgentToolResult handler failed: tool=${params.call.tool} error=${message}`,
       );
     }
   };

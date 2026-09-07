@@ -165,6 +165,8 @@ async function createRealMetadataLifecycle(
       skills: () => mocks.registerSkillsListener.mock.calls[0]![0](),
       auth: () => authEvent(),
       catalog: () => modelEvent({ phase: "catalog-published" }),
+      catalogFailure: () =>
+        modelEvent({ phase: "catalog-failed", error: new Error("catalog failed") }),
       owner: () => modelEvent({ phase: "invalidated" }),
     },
     async stop() {
@@ -214,7 +216,7 @@ describe("gateway chat metadata lifecycle", () => {
     },
   );
 
-  it.each(["skills", "auth", "catalog", "owner"] as const)(
+  it.each(["skills", "auth", "catalog", "catalogFailure", "owner"] as const)(
     "retains a terminal metadata failure through a later %s invalidation",
     async (event) => {
       const harness = await createRealMetadataLifecycle();
@@ -625,6 +627,7 @@ describe("gateway chat metadata lifecycle", () => {
 
     modelListener({ phase: "invalidated" });
     modelListener({ phase: "catalog-published" });
+    modelListener({ phase: "catalog-failed", error: new Error("obsolete catalog failed") });
     authListener();
     skillsListener();
 
@@ -649,6 +652,20 @@ describe("gateway chat metadata lifecycle", () => {
     await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
     skillsListener();
     await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(3));
+  });
+
+  it("keeps real metadata reads available after a nonfatal catalog attempt failure", async () => {
+    const harness = await createRealMetadataLifecycle();
+    try {
+      const before = await harness.lifecycle.read({ agentId: "main" });
+      harness.modelEvent({ phase: "catalog-failed", error: new Error("catalog attempt failed") });
+      const after = await harness.lifecycle.read({ agentId: "main" });
+      expect(after).toEqual(before);
+      expect(harness.warn).not.toHaveBeenCalled();
+      expect(mocks.fail).not.toHaveBeenCalled();
+    } finally {
+      await harness.stop();
+    }
   });
 
   it("refreshes after the prepared owner publishes a completed full catalog", async () => {

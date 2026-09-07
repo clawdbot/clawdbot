@@ -2,21 +2,24 @@
 summary: "OpenClaw Cohere provider plugin."
 read_when:
   - You are installing, configuring, or auditing the cohere plugin
-title: "Cohere plugin"
+title: "Cohere plugin reference"
 ---
 
-# Cohere plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 OpenClaw Cohere provider plugin.
 
 ## Distribution
 
 - Package: `@openclaw/cohere-provider`
-- Install route: npm; ClawHub: `clawhub:@openclaw/cohere-provider`
+- Install route: npm or ClawHub: `clawhub:@openclaw/cohere-provider`
 
 ## Surface
 
-providers: `cohere`
+- Providers: `cohere`
 
 ## Related docs
 

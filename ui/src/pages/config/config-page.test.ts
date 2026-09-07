@@ -18,11 +18,7 @@ import {
 } from "../../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as realtimeTalk from "../chat/realtime-talk.ts";
-import {
-  ConfigPage,
-  configSelectionFromSearch,
-  extractQuickSettingsSecurity,
-} from "./config-page.ts";
+import { ConfigPage, extractQuickSettingsSecurity } from "./config-page.ts";
 import { serverUiPrefProvenanceHint } from "./view-appearance-preferences.ts";
 import type { ConfigViewState } from "./view.ts";
 
@@ -48,40 +44,6 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-});
-
-describe("configSelectionFromSearch", () => {
-  it("opens a valid linked Settings section", () => {
-    expect(configSelectionFromSearch("communications", "?section=tts")).toEqual({
-      activeSection: "tts",
-      activeSubsection: null,
-    });
-  });
-
-  it("falls back when a linked section does not belong to the page", () => {
-    expect(configSelectionFromSearch("communications", "?section=gateway")).toEqual({
-      activeSection: "messages",
-      activeSubsection: null,
-    });
-  });
-
-  it("keeps MCP separate from Infrastructure", () => {
-    expect(configSelectionFromSearch("mcp", "?section=browser")).toEqual({
-      activeSection: "mcp",
-      activeSubsection: null,
-    });
-    expect(configSelectionFromSearch("infrastructure", "?section=mcp")).toEqual({
-      activeSection: "gateway",
-      activeSubsection: null,
-    });
-  });
-
-  it("keeps the Updates section off Advanced", () => {
-    expect(configSelectionFromSearch("advanced", "?section=update")).toEqual({
-      activeSection: null,
-      activeSubsection: null,
-    });
-  });
 });
 
 describe("extractQuickSettingsSecurity", () => {
@@ -355,7 +317,7 @@ describe("ConfigPage header", () => {
     render(page.render(), container);
 
     expect(container.querySelector(".page-subtitle")?.textContent?.trim()).toBe(
-      "Messages and text-to-speech settings.",
+      "Messages, text-to-speech, and meeting capture settings.",
     );
   });
 });
@@ -366,7 +328,14 @@ describe("ConfigPage moved section routes", () => {
     ["communications", "broadcast", "advanced", "?section=broadcast"],
     ["communications", "talk", "talk", "?section=talk"],
     ["appearance", "wizard", "advanced", "?section=wizard"],
-  ])("redirects the former %s %s section", (pageId, section, routeId, search) => {
+    [
+      "advanced",
+      "transcripts",
+      "communications",
+      "?section=transcripts&advanced=1",
+      "#config-section-transcripts",
+    ],
+  ])("redirects the former %s %s section", (pageId, section, routeId, search, hash = "") => {
     const navigate = vi.fn();
     const page = new ConfigPage();
     const state = page as unknown as {
@@ -388,7 +357,7 @@ describe("ConfigPage moved section routes", () => {
     state.routeData = {
       pathname: `/settings/${pageId}`,
       search: `?section=${section}`,
-      hash: "",
+      hash,
       section,
       advanced: false,
       tab: null,
@@ -397,7 +366,7 @@ describe("ConfigPage moved section routes", () => {
 
     state.syncRouteData();
 
-    expect(navigate).toHaveBeenCalledWith(routeId, { search, hash: "" });
+    expect(navigate).toHaveBeenCalledWith(routeId, { search, hash });
   });
 
   it("redirects the former Agent Defaults models section", () => {
@@ -432,35 +401,6 @@ describe("ConfigPage moved section routes", () => {
     state.syncRouteData();
 
     expect(navigate).toHaveBeenCalledWith("model-providers", { search: "", hash: "" });
-  });
-});
-
-describe("ConfigPage advanced selection guard", () => {
-  it("keeps curated sections off the Advanced page", () => {
-    expect(configSelectionFromSearch("advanced", "?section=messages")).toEqual({
-      activeSection: null,
-      activeSubsection: null,
-    });
-    expect(configSelectionFromSearch("advanced", "?section=env")).toEqual({
-      activeSection: "env",
-      activeSubsection: null,
-    });
-    expect(configSelectionFromSearch("advanced", "?section=mcp")).toEqual({
-      activeSection: null,
-      activeSubsection: null,
-    });
-    expect(configSelectionFromSearch("advanced", "?section=tts")).toEqual({
-      activeSection: null,
-      activeSubsection: null,
-    });
-    expect(configSelectionFromSearch("advanced", "?section=broadcast")).toEqual({
-      activeSection: "broadcast",
-      activeSubsection: null,
-    });
-    expect(configSelectionFromSearch("advanced", "?section=models")).toEqual({
-      activeSection: "models",
-      activeSubsection: null,
-    });
   });
 });
 

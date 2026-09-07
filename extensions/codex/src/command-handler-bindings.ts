@@ -6,6 +6,7 @@ import {
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeCodexStartupClientBestEffort } from "./app-server/attempt-client-cleanup.js";
+import { normalizeCodexAppServerBindingModelProvider } from "./app-server/auth-profile.js";
 import {
   consumeCodexAppServerLiveThread,
   hasCodexAppServerLiveThread,
@@ -21,7 +22,6 @@ import type { CodexThread } from "./app-server/protocol.js";
 import {
   assertCodexBindingMayBeReplaced,
   createCodexSessionGenerationSupersededError,
-  normalizeCodexAppServerBindingModelProvider,
   resolveCodexSessionBinding,
   sessionBindingIdentity,
 } from "./app-server/session-binding.js";

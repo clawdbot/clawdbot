@@ -6,7 +6,7 @@ import {
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
   normalizeOpenAIStrictCompatSchema,
   stripUnsupportedSchemaKeywords,
-} from "@openclaw/ai/internal/openai";
+} from "@openclaw/ai/internal/tool-schema";
 // Provider tool helpers expose shared tool-call payload contracts for provider plugins.
 import type { TSchema } from "typebox";
 import type {

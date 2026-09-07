@@ -29,6 +29,12 @@ type HttpDateComponents = {
   seconds: number;
 };
 
+type HttpDateInstant = {
+  timestampMs: number;
+  // Date cannot represent :60; its following timestamp is an exclusive upper bound.
+  leapSecond: boolean;
+};
+
 function ownDataValue(value: unknown, key: string): unknown {
   return value && typeof value === "object"
     ? Object.getOwnPropertyDescriptor(value, key)?.value
@@ -106,11 +112,19 @@ export function parseRetryAfterErrorSeconds(
   }
 }
 
-/** Parses the three HTTP-date forms accepted for Retry-After without Date.parse normalization. */
+/** Round leap seconds forward for Retry-After so an unrepresentable instant cannot retry early. */
 export function parseRetryAfterHttpDateMs(value: string, nowMs = Date.now()): number | undefined {
+  return parseHttpDateInstant(value, nowMs)?.timestampMs;
+}
+
+/** Parse all three HTTP-date forms while retaining leap-second ordering. */
+export function parseHttpDateInstant(
+  value: string,
+  nowMs = Date.now(),
+): HttpDateInstant | undefined {
   const imfFixdate = IMF_FIXDATE_RE.exec(value);
   if (imfFixdate) {
-    return parseHttpDateComponentsMs({
+    return parseHttpDateComponents({
       weekday: HTTP_DATE_SHORT_WEEKDAY_INDEX.get(imfFixdate[1] ?? ""),
       year: Number.parseInt(imfFixdate[4] ?? "", 10),
       month: HTTP_DATE_MONTH_INDEX.get(imfFixdate[3] ?? ""),
@@ -153,12 +167,12 @@ export function parseRetryAfterHttpDateMs(value: string, nowMs = Date.now()): nu
       now.getUTCMilliseconds(),
     );
     const resolvedYear = candidate > fiftyYearsFromNow ? candidateYear - 100 : candidateYear;
-    return parseHttpDateComponentsMs({ year: resolvedYear, ...components });
+    return parseHttpDateComponents({ year: resolvedYear, ...components });
   }
 
   const asctimeDate = OBSOLETE_ASCTIME_DATE_RE.exec(value);
   if (asctimeDate) {
-    return parseHttpDateComponentsMs({
+    return parseHttpDateComponents({
       weekday: HTTP_DATE_SHORT_WEEKDAY_INDEX.get(asctimeDate[1] ?? ""),
       year: Number.parseInt(asctimeDate[7] ?? "", 10),
       month: HTTP_DATE_MONTH_INDEX.get(asctimeDate[2] ?? ""),
@@ -172,16 +186,17 @@ export function parseRetryAfterHttpDateMs(value: string, nowMs = Date.now()): nu
   return undefined;
 }
 
-function parseHttpDateComponentsMs(components: HttpDateComponents): number | undefined {
+function parseHttpDateComponents(components: HttpDateComponents): HttpDateInstant | undefined {
   const timestamp = parseHttpDateCalendarMs(components);
   if (timestamp === undefined) {
     return undefined;
   }
-  const weekdayTimestamp = components.seconds === 60 ? timestamp - 1_000 : timestamp;
+  const leapSecond = components.seconds === 60;
+  const weekdayTimestamp = leapSecond ? timestamp - 1_000 : timestamp;
   if (new Date(weekdayTimestamp).getUTCDay() !== components.weekday) {
     return undefined;
   }
-  return timestamp;
+  return { timestampMs: timestamp, leapSecond };
 }
 
 function parseHttpDateCalendarMs(

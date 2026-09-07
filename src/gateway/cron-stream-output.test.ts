@@ -209,10 +209,15 @@ describe("cron stream output", () => {
   it("buffers output emitted before the asynchronous spawn call resolves", async () => {
     vi.useFakeTimers();
     const { promise: wait, resolve: resolveWait } = createDeferred<RunExit>();
+    const activity = { resultSettled: false, lastOutputAtMs: Date.now() };
     const run: ManagedRun = {
+      activity,
       runId: "early-output",
       startedAtMs: Date.now(),
-      cancel: vi.fn(() => resolveWait(exitResult({ reason: "manual-cancel" }))),
+      cancel: vi.fn(() => {
+        activity.resultSettled = true;
+        resolveWait(exitResult({ reason: "manual-cancel" }));
+      }),
       detachOutput: vi.fn(),
       wait: () => wait,
     };

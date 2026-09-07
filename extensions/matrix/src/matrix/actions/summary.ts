@@ -1,10 +1,7 @@
 // Matrix plugin module implements summary behavior.
 import { asNullableObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isMatrixNotFoundError } from "../errors.js";
-import {
-  resolveBundledMatrixReplacementContent,
-  resolveMatrixMessageAttachment,
-} from "../media-text.js";
+import { resolveMatrixReplacementContent, resolveMatrixMessageAttachment } from "../media-text.js";
 import { fetchMatrixPollMessageSummary } from "../poll-summary.js";
 import type { MatrixClient } from "../sdk.js";
 import {
@@ -57,7 +54,7 @@ export function summarizeMatrixRawEvent(event: MatrixRawEvent): MatrixMessageSum
   const displayContent =
     relates?.rel_type === "m.replace"
       ? (content["m.new_content"] ?? content)
-      : (resolveBundledMatrixReplacementContent(event) ?? content);
+      : (resolveMatrixReplacementContent(event) ?? content);
   let relType: string | undefined;
   let eventId: string | undefined;
   if (relates) {

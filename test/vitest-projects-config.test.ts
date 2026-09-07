@@ -55,6 +55,7 @@ const patternFiles = createPatternFileHelper("openclaw-vitest-projects-config-")
 const scopedGatewayMethodsIsolatedTestFiles = [
   "server-methods/agent.test.ts",
   "server-methods/board.runtime-boundaries.test.ts",
+  "server-methods/system-agent-setup-control-ui.test.ts",
   "server-methods/usage.test.ts",
   "server-methods/usage.sessions-usage.test.ts",
 ];
@@ -116,8 +117,12 @@ describe("projects vitest config", () => {
     expect(serverIsolatedConfig.include).toEqual(gatewayServerIsolatedTestFiles);
     expect(methodsConfig.exclude).toContain("server-methods/agent.test.ts");
     expect(methodsConfig.exclude).toContain("server-methods/board.runtime-boundaries.test.ts");
+    expect(methodsConfig.exclude).toContain("server-methods/system-agent-setup-control-ui.test.ts");
     expect(gatewayFallback.exclude).toContain("server-methods/agent.test.ts");
     expect(gatewayFallback.exclude).toContain("server-methods/board.runtime-boundaries.test.ts");
+    expect(gatewayFallback.exclude).toContain(
+      "server-methods/system-agent-setup-control-ui.test.ts",
+    );
     expect(gatewayFallback.exclude).toContain("server.sessions.compaction-read-errors.test.ts");
   });
 

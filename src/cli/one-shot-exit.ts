@@ -135,6 +135,20 @@ export function requestExitAfterOneShotOutput(
   return true;
 }
 
+/** A recorded command outcome must not be held hostage by resource cleanup. */
+export function watchCliExitAfterOutput(exitCode: number, onStall: () => void): void {
+  if (isVitestWorker(process.env)) {
+    return;
+  }
+  setTimeout(() => {
+    try {
+      onStall();
+    } finally {
+      defaultRuntime.exit(exitCode);
+    }
+  }, 10_000).unref();
+}
+
 function flushExitAfterOneShotOutput(
   runtime: RuntimeEnv = defaultRuntime,
   env: NodeJS.ProcessEnv = process.env,

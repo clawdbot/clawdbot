@@ -15,6 +15,26 @@ const OPENROUTER_MODEL = {
 } as const;
 
 describe("toModelRow", () => {
+  it("retains configured aliases when a model is missing from the catalog", () => {
+    const row = toModelRow({
+      key: "ollama/qa-missing-local",
+      tags: ["fallback#1", "configured"],
+      aliases: ["local-draft"],
+      authAvailability: undefined,
+    });
+
+    expect(row).toMatchObject({
+      key: "ollama/qa-missing-local",
+      name: "ollama/qa-missing-local",
+      input: "-",
+      contextWindow: null,
+      local: null,
+      available: null,
+      tags: ["fallback#1", "configured", "alias:local-draft", "missing"],
+      missing: true,
+    });
+  });
+
   it("keeps native context metadata and effective runtime context tokens distinct", () => {
     const row = toModelRow({
       model: {

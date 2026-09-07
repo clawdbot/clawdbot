@@ -23,6 +23,8 @@ export {
 export {
   finishUpdateRun,
   getUpdateRun,
-  recordUpdateRunPhase,
+  recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../infra/update-run-ledger.js";
+
+export { createManagedUpdateRequesterAuthority } from "../infra/update-requester-authority.js";

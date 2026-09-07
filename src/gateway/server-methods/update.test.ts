@@ -221,7 +221,7 @@ describe("update.run acknowledgement", () => {
     );
   });
 
-  it("records activation and awaits its notice before parking the managed gateway", async () => {
+  it("awaits one parking notice without advancing the updater phases", async () => {
     mockGlobalInstallSurface();
     detectRespawnSupervisorMock.mockReturnValue("launchd");
     getUpdateAvailableMock.mockReturnValue({
@@ -249,13 +249,21 @@ describe("update.run acknowledgement", () => {
     try {
       await Promise.race([started.promise, park]);
       expect(sendGatewayLifecycleNoticeMock).toHaveBeenCalledTimes(2);
-      expect(getUpdateRun(response.runId)?.phase).toBe("activating");
+      expect(getUpdateRun(response.runId)?.phase).toBe("requested");
       expect(parked).toBe(false);
     } finally {
       delivered.resolve(true);
     }
     await park;
     await beforePark();
+    expect(getUpdateRun(response.runId)?.phase).toBe("requested");
+    recordUpdateRunPhase(response.runId, "staging");
+    const validating = recordUpdateRunPhase(response.runId, "validating");
+    expect(
+      validating.steps
+        .filter(({ step }) => ["requested", "staging", "validating"].includes(step))
+        .map(({ step }) => step),
+    ).toEqual(["requested", "staging", "validating"]);
     expect(sendGatewayLifecycleNoticeMock).toHaveBeenCalledTimes(2);
     expect(sendGatewayLifecycleNoticeMock).toHaveBeenLastCalledWith(
       expect.objectContaining({

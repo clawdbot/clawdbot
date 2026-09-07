@@ -149,10 +149,7 @@ function createFixture() {
   const result = { messages: [{ role: "assistant", content: "done" }] };
   const preparedStreamRuntime = {
     abortable: (promise: Promise<unknown>) => promise,
-    cache: {
-      observabilityEnabled: true,
-      promptTools: [{ name: "read" }],
-    },
+    cache: {},
     history: {
       contextEnginePromptAuthority: "assembled",
       contextEngineAssemblySucceeded: true,
@@ -282,7 +279,6 @@ function createFixture() {
     Object.assign(promptState, {
       contextBudgetStatus: { status: "ok" },
       preflightRecovery: { attempted: false },
-      promptCacheChangesForTurn: [{ type: "cache" }],
       finalPromptText: "final prompt",
     });
     promptInput.prepared.sessionRuntime.state.prePromptMessageCount = 4;
@@ -301,7 +297,6 @@ function createFixture() {
       currentAttemptAssistant: { role: "assistant", content: "done" },
       currentAttemptCompletedAssistant: undefined,
       attemptUsage: { input: 1, output: 2, total: 3 },
-      cacheBreak: null,
       promptCache: { cacheRead: 1 },
       lastCallUsage: undefined,
       compactionOccurredThisAttempt: false,
@@ -616,7 +611,6 @@ describe("runEmbeddedAttemptSettledPhase", () => {
         lastAssistant: undefined,
         currentAttemptAssistant: undefined,
         attemptUsage: undefined,
-        cacheBreak: null,
         promptCache: undefined,
         lastCallUsage: undefined,
         compactionOccurredThisAttempt: false,

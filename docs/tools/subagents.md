@@ -31,9 +31,13 @@ genuinely needs the requester's current transcript, spawn it with
 follow-up thread.
 </Note>
 
-When you open a subagent session in the Control UI, its transcript is view-only.
-Use **Open parent session** in the composer area to continue the conversation with
-the parent. You can still use **Stop** when the Gateway reports an abortable run.
+A subagent run ends; a session does not. When you open a subagent run in the
+Control UI, its transcript is view-only. Use **Open parent session** in the
+composer area to continue the conversation with the parent. You can still use
+**Stop** when the Gateway reports an abortable run. Persistent sessions created
+with `visible: true` are ordinary sessions in the session tree: they keep their
+parent for navigation and completion announcements, and you can always type in
+them and steer them like any other session.
 
 ## Slash command
 
@@ -76,7 +80,8 @@ completion path described in the accepted receipt:
 - Ordinary announcing runs return an internal completion event to the requester,
   which reviews the result and decides whether a user-facing update is needed.
 - [Swarm collectors](/tools/swarm) return results through explicit collection,
-  not completion notifications.
+  not completion notifications; reserve them for large parallel fan-out (several
+  similar children, about five or more), and use ordinary spawns for one or a few.
 - Thread-bound session runs with a deliverable bound route reply directly to that
   thread, without a separate parent announcement.
 - Caller-managed quiet runs send no completion notification.
@@ -293,7 +298,7 @@ their latest assistant turn back to the requester; external delivery stays with
 the parent/requester agent.
 </Warning>
 
-With `visible: true`, `group`, `model`, `cwd`, and a same-agent `context: "fork"` are supported. Use this durable mode for coding, multi-step work, or work the parent may revisit, steer, or keep; it appears in the sidebar when the web UI is available and still works without it. Pass `group` to place the new session in that sidebar group atomically; omitted or blank values leave it ungrouped. A sandboxed target restricts `cwd` to that agent's workspace. Non-admin callers may use `cwd` only inside a configured agent workspace. With `worktree: true`, omitting `cwd` inherits the same-agent parent's live managed repository and creates a separate worktree. Other spawns use the target agent workspace; for another repository, ask the operator to start the session from a registered project. Do not replace a rejected persistent spawn with the synchronous `openclaw agent` CLI, whose command deadline defaults to 600 seconds. Thread binding, `mode: "session"`, thinking overrides, `lightContext`, and attachment staging are unavailable on this path because visible sessions are persistent dashboard sessions created through `sessions.create`. The default `mode: "run"`, empty `attachments`, and an empty `attachAs.mountPath` are accepted without changing that behavior. The new dashboard child inherits the requester's effective tool-policy ceiling before its first turn. Session listing and addressing obey `tools.sessions.visibility`; the default `all` scope covers sessions across agents on the Gateway for unsandboxed callers. Cross-agent access is on by default and governed by `tools.agentToAgent`; use `allow` to restrict agent pairs or set `enabled: false` to block ordinary cross-agent access (requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all`). Set `agent` for same-agent-only access, `tree` for current plus spawned scope (main retains its same-agent exception), or `self` for current-session-only access. Sandbox spawned-only clamps still apply. Cross-agent owned children are included by `tree`, not `agent`; preserve explicit `tree` for that workflow. See [Session tools](/concepts/session-tool#visibility) and [Managed worktrees](/concepts/managed-worktrees).
+With `visible: true`, `group`, `model`, `cwd`, and a same-agent `context: "fork"` are supported. Use this durable mode for coding, multi-step work, or results the user or parent may revisit, steer, or keep; it appears in the sidebar when the web UI is available and still works without it. Pass `group` to place the new session in that sidebar group atomically; omitted or blank values leave it ungrouped. A sandboxed target restricts `cwd` to that agent's workspace. Non-admin callers may use `cwd` only inside a configured agent workspace. With `worktree: true`, omitting `cwd` inherits the same-agent parent's live managed repository and creates a separate worktree. Other spawns use the target agent workspace; for another repository, ask the operator to start the session from a registered project. Do not replace a rejected persistent spawn with the synchronous `openclaw agent` CLI, whose command deadline defaults to 600 seconds. Thread binding, `mode: "session"`, thinking overrides, `lightContext`, and attachment staging are unavailable on this path because visible sessions are persistent dashboard sessions created through `sessions.create`. The default `mode: "run"`, empty `attachments`, and an empty `attachAs.mountPath` are accepted without changing that behavior. The new dashboard child inherits the requester's effective tool-policy ceiling before its first turn. Session listing and addressing obey `tools.sessions.visibility`; the default `all` scope covers sessions across agents on the Gateway for unsandboxed callers. Cross-agent access is on by default and governed by `tools.agentToAgent`; use `allow` to restrict agent pairs or set `enabled: false` to block ordinary cross-agent access (requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all`). Set `agent` for same-agent-only access, `tree` for current plus spawned scope (main retains its same-agent exception), or `self` for current-session-only access. Sandbox spawned-only clamps still apply. Cross-agent owned children are included by `tree`, not `agent`; preserve explicit `tree` for that workflow. See [Session tools](/concepts/session-tool#visibility) and [Managed worktrees](/concepts/managed-worktrees).
 
 If a call fails with `Parameters require visible=true`, omit the named group or worktree options to keep the hidden or ACP runtime. To create a visible session instead, use `visible: true` with `runtime: "subagent"` and omit `mode`, `thread`, `thinking`, `lightContext`, `attachments`, `attachAs`, swarm options, and the ACP-only `streamTo` and `resumeSessionId`. Worktree names and base refs also require `worktree: true`. Adding `visible: true` alone does not make an ACP call compatible.
 
@@ -355,9 +360,13 @@ starting a sibling. The requester is announced once such a follow-up finishes
 normally; a follow-up that yields again leaves the run paused and the requester
 waiting.
 
-Automatic continuation is specific to the plugin runtime API above. Ordinary
-follow-ups through routes not tracked as sub-agent runs neither continue the
-paused run nor announce its requester.
+The registry also continues a yielded sub-agent when its announced children
+settle, including an orchestrator spawned by cron. That internal settlement
+wake preserves the original requester and delivers the orchestrator's completion
+there. Ordinary follow-ups through routes not tracked as sub-agent runs neither
+continue the paused run nor announce its requester. See
+[Subagent yield handoff](/concepts/subagent-yield-handoff) for lifecycle ownership
+and the remaining boundary for channel progress after yield.
 
 Among plugin runtime follow-ups, continuation applies to those that use default
 delivery. A follow-up that supplies its own requester or completion-delivery
@@ -553,6 +562,10 @@ final answer, the correct follow-up is the exact silent token
 Each agent session (at any depth) can have at most `maxChildrenPerAgent`
 (default `5`) active children at a time. This prevents runaway fan-out
 from a single orchestrator.
+
+### Reset a conversation
+
+A full in-place conversation reset cancels unfinished native subagents associated with that session, including yielded children and children whose completion requester differs from their controller. Chat `/reset` and `sessions.reset` use the same cleanup owner. If child cancellation is incomplete, reset reports a failure before clearing the conversation; inspect the remaining tasks and retry. Child transcripts and unrelated sessions are preserved.
 
 ### Cascade stop
 

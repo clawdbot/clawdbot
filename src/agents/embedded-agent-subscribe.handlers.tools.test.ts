@@ -486,7 +486,7 @@ describe("handleToolExecutionStart read path checks", () => {
               "- Staging (Recommended): Safer default",
               "- Production",
               "",
-              "Tap an option, or reply with the option text or your own answer.",
+              "Reply with the number, the option text, or your own answer.",
             ].join("\n"),
           },
           {

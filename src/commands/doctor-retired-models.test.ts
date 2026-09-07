@@ -3,7 +3,7 @@ import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configu
 import { describe, expect, it, vi } from "vitest";
 import { resolveAgentModelFallbacksOverride } from "../agents/agent-scope.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
-import * as authProfileStore from "../agents/auth-profiles/store.js";
+import * as authProfileStore from "../agents/auth-profiles/store-runtime.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { loadCronJobsStore, resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";

@@ -385,14 +385,11 @@ export function resolvePublishedOwner(
   return candidates.length === 1 ? candidates[0] : undefined;
 }
 
-export function getPublishedPreparedModelRuntimeSnapshot(
+/** Reads an already-published generation without admitting discovery. */
+export function readPublishedModelRuntimeSnapshot(
   owners: Map<string, PreparedModelRuntimeOwner>,
   rawInput: PreparedModelRuntimeInput,
-  replacementPending: boolean,
 ): PreparedModelRuntimeSnapshot | undefined {
-  if (replacementPending) {
-    return undefined;
-  }
   const input = normalizePreparedModelRuntimeInput(rawInput);
   const owner = resolvePublishedOwner(owners, input, {
     allowConfiguredWorkspaceFallback:

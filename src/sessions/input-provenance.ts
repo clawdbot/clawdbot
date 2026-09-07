@@ -1,6 +1,7 @@
 // Input provenance helpers normalize source metadata for session messages.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
+import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
 import { isStringOption } from "../utils/string-readers.js";
 
 // Input provenance marks whether a user-role message actually came from an
@@ -103,13 +104,18 @@ export function isCompletionReportInputProvenance(value: unknown): boolean {
     return false;
   }
   const sourceTool = normalizeOptionalString(provenance.sourceTool)?.toLowerCase();
-  return sourceTool === "subagent_announce" || isAgentMediatedCompletionSourceTool(sourceTool);
+  return (
+    sourceTool === "subagent_announce" ||
+    sourceTool === "subagent_settle" ||
+    isAgentMediatedCompletionSourceTool(sourceTool)
+  );
 }
 
 const USER_FACING_SESSION_STATE_PRESERVING_SOURCE_TOOLS: ReadonlySet<string> = new Set([
   ...AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS,
   "exec_approval_followup",
   "subagent_announce",
+  "subagent_settle",
   "subagent_interrupted_resume",
 ]);
 
@@ -134,7 +140,7 @@ export function hasInterSessionUserProvenance(
 // Prefix text is model-facing safety context for inter-session handoffs. It
 // states source metadata and explicitly prevents treating the payload as direct
 // end-user instruction.
-function buildInterSessionPromptPrefix(inputProvenance: InputProvenance | undefined): string {
+export function buildInterSessionPromptContext(inputProvenance: InputProvenance | undefined) {
   const provenance = inputProvenance?.kind === "inter_session" ? inputProvenance : undefined;
   const details = [
     provenance?.sourceSessionKey ? `sourceSession=${provenance.sourceSessionKey}` : undefined,
@@ -142,11 +148,14 @@ function buildInterSessionPromptPrefix(inputProvenance: InputProvenance | undefi
     provenance?.sourceTool ? `sourceTool=${provenance.sourceTool}` : undefined,
     "isUser=false",
   ].filter(Boolean);
-  const header =
-    details.length > 0
-      ? `${INTER_SESSION_PROMPT_PREFIX_BASE} ${details.join(" ")}`
-      : INTER_SESSION_PROMPT_PREFIX_BASE;
-  return [header, INTER_SESSION_PROMPT_EXPLANATION].join("\n");
+  const header = `${INTER_SESSION_PROMPT_PREFIX_BASE} ${details.join(" ")}`;
+  return {
+    text: [header, INTER_SESSION_PROMPT_EXPLANATION].join("\n"),
+    fragments: [
+      { kind: "conversation-data", text: header },
+      { kind: "runtime-instruction", text: INTER_SESSION_PROMPT_EXPLANATION },
+    ] satisfies RuntimeContextFragment[],
+  };
 }
 
 export function stripInterSessionPromptPrefixForDisplay(text: string): string {
@@ -177,7 +186,7 @@ export function annotateInterSessionPromptText(
   if (!text.trim()) {
     return text;
   }
-  const prefix = buildInterSessionPromptPrefix(inputProvenance);
+  const prefix = buildInterSessionPromptContext(inputProvenance).text;
   if (text === prefix || text.startsWith(`${prefix}\n`)) {
     return text;
   }

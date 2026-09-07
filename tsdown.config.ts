@@ -10,6 +10,7 @@ import {
   collectSourceCheckoutPluginBuildEntries,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { createGatewayRunChunkMetadataPlugin } from "./scripts/lib/gateway-run-chunk-metadata.mts";
+import { createManagedHandoffBuildConfig } from "./scripts/lib/managed-handoff-build-config.mts";
 import {
   buildPluginSdkEntrySources,
   pluginSdkEntrypoints,
@@ -411,7 +412,6 @@ function buildCoreDistEntries(): Record<string, string> {
       "src/config/sessions/session-model-context.worker.ts",
     "config/sessions/disk-budget.worker": "src/config/sessions/disk-budget.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
-    "agents/prepared-model-catalog.worker": "src/agents/prepared-model-catalog.worker.ts",
     ...runtimeProcessBuildEntries,
     ...runtimeProcessDeclarationEntries,
     "system-agent/setup-inference-detection.worker":
@@ -438,6 +438,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "plugins/loader": "src/plugins/loader.ts",
     "plugins/sdk-alias": "src/plugins/sdk-alias.ts",
     "facade-activation-check.runtime": "src/plugin-sdk/facade-activation-check.runtime.ts",
+    "plugin-metadata-readers.runtime": "src/plugins/plugin-metadata-readers.runtime.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
     "telegram-ingress-worker.runtime": bundledPluginFile(
       "telegram",
@@ -758,7 +759,7 @@ const unifiedDeclarationCompilerOptions: NonNullable<DtsOptions["compilerOptions
   stableTypeOrdering: true;
 } = { stableTypeOrdering: true };
 
-const configs = [
+const configs: UserConfig[] = [
   nodeBuildConfig({
     name: TSDOWN_PACKAGE_CONFIG_GROUP,
     entry: buildAgentCoreDistEntries(),
@@ -820,6 +821,7 @@ const configs = [
     false,
   ),
   workerDeployBuildConfig(),
+  { ...createManagedHandoffBuildConfig(), name: TSDOWN_UNIFIED_CONFIG_GROUP, env },
   nodeBuildConfig(
     {
       name: TSDOWN_UNIFIED_CONFIG_GROUP,
@@ -850,6 +852,6 @@ const configs = [
         ),
       )
     : []),
-] satisfies UserConfig[];
+];
 
 export default configs;

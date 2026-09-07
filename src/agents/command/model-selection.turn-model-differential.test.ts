@@ -63,7 +63,7 @@ vi.mock("../auth-profiles/order.js", () => ({
 vi.mock("../auth-profiles/session-override.js", () => ({
   clearSessionAuthProfileOverride: vi.fn(async () => undefined),
 }));
-vi.mock("../auth-profiles/store.js", () => ({
+vi.mock("../auth-profiles/store-runtime.js", () => ({
   ensureAuthProfileStore: () => ({ profiles: {} }),
 }));
 vi.mock("../harness/runtime-plugin.js", () => ({

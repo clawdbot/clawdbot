@@ -357,7 +357,12 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: provider-owned local-service reconciliation context.
       // +7: card projection plus three rendering helpers on channel-outbound and its shipped barrel.
       // +2: shared diff-stat rendering on channel-outbound and its shipped barrel.
-      4445,
+      // +1: shared static UI guidance, separate from per-turn harness delivery policy.
+      // +1: shared root/account DM policy refinement for channel schemas.
+      // -1: add one tool policy object and retire two unused deprecated mode exports.
+      // -1: one exec policy object replaces two deprecated comparator exports.
+      // +1: approved bounded TAR inspection through the archive admission owner.
+      4446,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -483,7 +488,12 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shared session-catalog host publication with completion ownership.
       // +7: card projection plus three rendering helpers on channel-outbound and its shipped barrel.
       // +2: shared diff-stat rendering on channel-outbound and its shipped barrel.
-      2629,
+      // +1: shared static UI guidance, separate from per-turn harness delivery policy.
+      // +1: shared root/account DM policy refinement for channel schemas.
+      // -2: retire the deprecated mode projection callables.
+      // -2: exec comparators are members of the shared policy object.
+      // +1: approved bounded TAR inspection through the archive admission owner.
+      2628,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

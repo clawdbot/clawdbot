@@ -218,18 +218,20 @@ export function setRuntimeConfigSourceSnapshotIfCurrent(params: {
   return true;
 }
 
-export function resetConfigRuntimeState(): void {
+export function resetConfigRuntimeState(options: { preserveConfigEnv?: boolean } = {}): void {
   clearExecutablePathCache();
   runtimeConfigSnapshot = null;
   runtimeConfigSourceSnapshot = null;
   runtimeConfigSnapshotMetadata = null;
   runtimeConfigAppliedHash = null;
   runtimeConfigSnapshotRevision = 0;
-  resetPublishedConfigRuntimeEnv();
+  resetPublishedConfigRuntimeEnv({ preserveOwnership: options.preserveConfigEnv });
 }
 
 export function clearRuntimeConfigSnapshot(): void {
-  resetConfigRuntimeState();
+  // Snapshot cleanup leaves process.env intact. Retain its config-owned layer so
+  // the next startup/reload can replace it without treating it as ambient input.
+  resetConfigRuntimeState({ preserveConfigEnv: true });
 }
 
 export function getRuntimeConfigSnapshot(): OpenClawConfig | null {

@@ -389,8 +389,9 @@ struct DashboardManagerGatewayTargetTests {
             #expect(auxiliary.controller.currentURL == replacementServer.url("/#token=primary-token"))
             #expect(auxiliary.controller._testDashboardDataStore === dataStore)
             #expect(!auxiliary.controller._testDashboardDataStore.isPersistent)
-            auxiliary.controller._testOpenLinkBrowser(server.url("/reader/auxiliary"))
-            #expect(auxiliary.controller._testLinkBrowserDataStore === dataStore)
+            try auxiliary.controller.nativeBrowser.open(tabId: "mac-auxiliary", url: server.url("/reader/auxiliary"))
+            #expect(try #require(auxiliary.controller.nativeBrowser.webView(for: "mac-auxiliary"))
+                .configuration.websiteDataStore === dataStore)
 
             let auxiliaryWindow = auxiliary.controller.window
             await manager.handleEndpointState(.connecting(mode: .remote, detail: "Switching Gateway"))
@@ -420,8 +421,9 @@ struct DashboardManagerGatewayTargetTests {
             #expect(profileAutosaveName.hasPrefix("\(primaryAutosaveName)-\(studio)-"))
             #expect(replacement._testDashboardDataStore === dataStore)
             #expect(!replacement._testDashboardDataStore.isPersistent)
-            replacement._testOpenLinkBrowser(server.url("/reader/replacement"))
-            #expect(replacement._testLinkBrowserDataStore === replacement._testDashboardDataStore)
+            try replacement.nativeBrowser.open(tabId: "mac-replacement", url: server.url("/reader/replacement"))
+            #expect(try #require(replacement.nativeBrowser.webView(for: "mac-replacement"))
+                .configuration.websiteDataStore === replacement._testDashboardDataStore)
         }
     }
 

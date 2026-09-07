@@ -4,6 +4,7 @@ import type { DeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import type { ContextEngineLogicalTurnLease } from "../../agents/harness/context-engine-logical-turn.js";
+import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ThinkLevel } from "../thinking.js";
@@ -12,6 +13,7 @@ import type {
   AgentTurnCompaction,
   AgentTurnInternalResult,
   AgentTurnParams,
+  CompletedAgentAuthSelection,
   EmbeddedAgentRunResult,
   RuntimeFallbackAttempt,
 } from "./agent-runner-execution.types.js";
@@ -57,6 +59,8 @@ export type AgentFallbackCandidateCommonParams = {
 };
 
 export type AgentFallbackCycleState = {
+  maintenanceAuthProfile?: CompletedAgentAuthSelection;
+  compactionRequestBudget?: CompactionRequestBudget;
   deferredLifecycle: DeferredEmbeddedRunLifecycleManager;
   lifecycleGeneration: string;
   /** Turn admission time; terminal backstops must not stamp failure time as the start. */

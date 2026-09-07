@@ -25,7 +25,7 @@ let state: OpenClawTestState;
 describe("prepared model runtime catalog recovery", () => {
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "prepared-model-runtime-catalog-recovery" });
-    resetPreparedModelRuntimeHarness(state);
+    await resetPreparedModelRuntimeHarness(state);
     mocks.configuredAgentDirs.set("default", "/tmp/unused-agent");
     mocks.configuredAgentDirs.set("secondary", "/tmp/configured-secondary");
     mocks.configuredAgentDirs.set("tertiary", "/tmp/configured-tertiary");

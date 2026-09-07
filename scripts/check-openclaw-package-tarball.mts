@@ -131,6 +131,11 @@ const REQUIRED_BUNDLED_WORKSPACE_RUNTIME_ENTRIES = new Map([
         specifier: "@openclaw/ai/internal/runtime",
         entry: "dist/internal/runtime.mjs",
       },
+      {
+        specifier: "@openclaw/ai/internal/tool-schema",
+        entry: "dist/internal/tool-schema.mjs",
+        whenExported: "./internal/tool-schema",
+      },
     ],
   ],
 ]);

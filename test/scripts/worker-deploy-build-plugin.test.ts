@@ -110,6 +110,7 @@ console.log("relocated worker WebSocket and transcription passed");
       const result = await promisify(execFile)(
         process.execPath,
         [
+          ...(process.versions.bun ? ["--no-install"] : []),
           "--input-type=module",
           "--eval",
           probe,

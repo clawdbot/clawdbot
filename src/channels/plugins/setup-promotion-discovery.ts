@@ -1,5 +1,5 @@
 /**
- * Doctor-only static setup promotion lookup, with bundled setup fallback.
+ * Doctor-only setup promotion lookup through plugin-owned manifests and setup entries.
  *
  * Kept separate so hot Plugin SDK setup helpers never import plugin discovery.
  */
@@ -9,7 +9,7 @@ import {
   getOfficialExternalPluginCatalogManifest,
 } from "../../plugins/official-external-plugin-catalog.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
-import { getBundledChannelSetupPlugin, hasBundledChannelPackageSetupFeature } from "./bundled.js";
+import { loadSetupChannelPluginFromManifestRecord } from "./setup-entry-loader.js";
 import type { ChannelSetupPromotionSurface } from "./setup-promotion-helpers.js";
 
 export function resolveDiscoveredChannelSetupPromotionSurface(
@@ -37,10 +37,19 @@ export function resolveDiscoveredChannelSetupPromotionSurface(
   if (officialManifest?.setupFeatures?.configPromotion === "preserve-root") {
     return { configPromotion: "preserve-root" };
   }
-  if (!hasBundledChannelPackageSetupFeature(channelKey, "configPromotion")) {
+  const owner = registry.plugins.find(
+    (plugin) =>
+      plugin.channels.includes(channelKey) &&
+      plugin.packageManifest?.setupFeatures?.configPromotion === true,
+  );
+  if (!owner) {
     return null;
   }
-  const plugin = getBundledChannelSetupPlugin(channelKey);
+  const { plugin } = loadSetupChannelPluginFromManifestRecord({
+    record: owner,
+    channelId: channelKey,
+    env: process.env,
+  });
   const setup = plugin?.setupContract ?? plugin?.setup;
   return setup && typeof setup === "object" ? setup : null;
 }

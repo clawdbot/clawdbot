@@ -6,6 +6,7 @@ import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import * as exec from "../process/exec.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import { prepareUpdateFailureTriage, runUpdateFailureTriage } from "./update-triage.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -20,7 +21,7 @@ async function createInstalledTriage(params: { hang?: boolean; promptPath?: stri
     path.join(root, "dist", "index.js"),
     `
     const fs = require("node:fs");
-    fs.writeFileSync(${JSON.stringify(receiptPath)}, JSON.stringify({ pid: process.pid }));
+    fs.writeFileSync(${JSON.stringify(receiptPath)}, JSON.stringify({ pid: process.pid, updateRunId: process.env[${JSON.stringify(UPDATE_RUN_ID_ENV)}] ?? null }));
     ${params.hang ? "setInterval(() => {}, 1000);" : `process.stdout.write(JSON.stringify({ promptPath: ${JSON.stringify(promptPath)}, bundlePath: null, bundleError: "Snapshot unavailable" }));`}
   `,
   );
@@ -103,6 +104,18 @@ describe("update triage child lifecycle", () => {
       JSON.stringify({ promptPath, bundlePath: null, bundleError: "Snapshot unavailable" }),
     );
     expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("does not lend the completed update run identity to fresh triage", async () => {
+    const { target, receiptPath } = await createInstalledTriage();
+    const result = await runUpdateFailureTriage({
+      failure: { error: "Update failed" },
+      target: { ...target, env: { ...target.env, [UPDATE_RUN_ID_ENV]: "completed-update-run" } },
+      mode: "json",
+      runtime: { log: vi.fn(), error: vi.fn() },
+    });
+    expect(result.status).toBe("completed");
+    expect(JSON.parse(await fs.readFile(receiptPath, "utf8"))).toMatchObject({ updateRunId: null });
   });
 
   it("does not launch diagnostics after its owner closes during root discovery", async () => {

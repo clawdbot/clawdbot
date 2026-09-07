@@ -2,6 +2,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { findActiveUpdateRun, getUpdateRun } from "../infra/update-run-ledger.js";
 import type { UpdateRunPhase } from "../infra/update-run-record.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { reconcileOpenClawStateSchemaPublication } from "../state/openclaw-state-db.js";
 import { GATEWAY_EVENT_UPDATE_RUN_CHANGED } from "./events.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 
@@ -20,8 +21,32 @@ export function startUpdateRunWatcher(params: {
 }): { stop: () => Promise<void> } {
   const work = new AsyncWorkScope();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let publicationTimer: ReturnType<typeof setTimeout> | undefined;
   let watched: { runId: string; revision?: number; phase?: UpdateRunPhase } | undefined;
   let notices = Promise.resolve();
+
+  const schedulePublication = () => {
+    if (publicationTimer) {
+      clearTimeout(publicationTimer);
+      publicationTimer = undefined;
+    }
+    if (work.isClosing) {
+      return;
+    }
+    try {
+      const blocker = reconcileOpenClawStateSchemaPublication();
+      if (blocker?.publishAfterMs != null) {
+        // Deadline belongs to the ledger row, so process restarts never restart the grace.
+        publicationTimer = setTimeout(
+          schedulePublication,
+          Math.min(2_147_483_647, Math.max(0, blocker.publishAfterMs - Date.now())),
+        );
+        publicationTimer.unref?.();
+      }
+    } catch (error) {
+      params.log.warn(`state schema publication deferred: ${formatErrorMessage(error)}`);
+    }
+  };
 
   const poll = () => {
     if (work.isClosing) {
@@ -29,6 +54,7 @@ export function startUpdateRunWatcher(params: {
     }
     timer = undefined;
     try {
+      schedulePublication();
       const run = watched ? getUpdateRun(watched.runId) : findActiveUpdateRun();
       if (!run) {
         watched = undefined;
@@ -97,6 +123,10 @@ export function startUpdateRunWatcher(params: {
       if (timer) {
         clearTimeout(timer);
         timer = undefined;
+      }
+      if (publicationTimer) {
+        clearTimeout(publicationTimer);
+        publicationTimer = undefined;
       }
       if (wakeCurrentWatcher === wake) {
         wakeCurrentWatcher = undefined;

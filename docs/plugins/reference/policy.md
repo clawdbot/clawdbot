@@ -2,10 +2,13 @@
 summary: "Adds policy-backed doctor checks for workspace conformance."
 read_when:
   - You are installing, configuring, or auditing the policy plugin
-title: "Policy plugin"
+title: "Policy plugin reference"
 ---
 
-# Policy plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 Adds policy-backed doctor checks for workspace conformance.
 
@@ -16,7 +19,7 @@ Adds policy-backed doctor checks for workspace conformance.
 
 ## Surface
 
-CLI commands: `openclaw policy`
+- CLI commands: `openclaw policy`
 
 <!-- openclaw-plugin-reference:manual-start -->
 

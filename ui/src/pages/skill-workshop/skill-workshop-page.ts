@@ -285,7 +285,6 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     }
     const next = createSkillWorkshopState();
     next.skillWorkshopAgentId = previous.skillWorkshopAgentId;
-    next.skillWorkshopStatusFilter = previous.skillWorkshopStatusFilter;
     next.skillWorkshopQuery = previous.skillWorkshopQuery;
     next.skillWorkshopQueueWidth = previous.skillWorkshopQueueWidth;
     next.skillWorkshopMode = previous.skillWorkshopMode;
@@ -337,7 +336,12 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     }
     // The loaders own in-flight state. Even a later no-op load must not suppress
     // the productive request's terminal repaint; resets already replace its state.
-    void loadSkillWorkshopPageData({ context, state, force }).finally(this.requestPageUpdate);
+    void loadSkillWorkshopPageData({
+      context,
+      state,
+      force,
+      onProgress: this.requestPageUpdate,
+    }).finally(this.requestPageUpdate);
     this.requestPageUpdate();
   }
 
@@ -354,6 +358,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     void runSkillWorkshopPageHistoryScan({
       state: scope.state,
       context: scope.context,
+      onProgress: this.requestPageUpdate,
       isCurrent: () => this.isCurrentSourceScope(scope),
       current: () => {
         const state = this.state;
