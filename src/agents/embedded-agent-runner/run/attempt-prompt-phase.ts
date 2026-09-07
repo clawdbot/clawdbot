@@ -206,6 +206,7 @@ export async function runEmbeddedAttemptPromptPhase(
         : undefined;
     const promptContext = prepareEmbeddedAttemptPromptContext({
       attempt,
+      capabilityToolNames: prepared.toolCatalog.toolSearchRunPlan.capabilityToolNames,
       ...(heartbeatOutcomeContext ? { heartbeatOutcomeContext } : {}),
       messages: activeSession.messages,
       prompt: promptAssembly,

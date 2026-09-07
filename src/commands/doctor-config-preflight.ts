@@ -20,7 +20,6 @@ import type {
   MigrationCheckpointIdentity,
   StartupMigrationLease,
 } from "../infra/startup-migration-checkpoint.js";
-import { throwIfDoctorStateMigrationRefused } from "../infra/state-migrations.messages.js";
 import type {
   LegacyStateMigrationStepReceipt,
   MigrationMessages,
@@ -43,6 +42,7 @@ import {
   type DoctorConfigPreflightPluginSnapshotRead,
 } from "./doctor-config-preflight-plugin-index.js";
 import {
+  assertDoctorPreflightMigrationsComplete,
   completeStartupMigrationPreflight,
   noteStateMigrationResult,
   prepareStartupMigrationPlugins,
@@ -583,7 +583,11 @@ export async function runDoctorConfigPreflight(
           doctorMediaPersistenceAttempted = options.doctorOnlyStateMigrations === true;
           noteStartupStateMigrationResult(legacyStateResult);
           if (options.doctorOnlyStateMigrations === true) {
-            throwIfDoctorStateMigrationRefused(stateMigrationStepReceipts);
+            await assertDoctorPreflightMigrationsComplete({
+              cfg: migrationConfig,
+              stepReceipts: stateMigrationStepReceipts,
+              report: noteStartupStateMigrationResult,
+            });
           }
         } else if (stateMigrationInput.pluginDoctorConfig) {
           const pluginDoctorConfig = stateMigrationInput.pluginDoctorConfig;
