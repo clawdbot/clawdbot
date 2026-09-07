@@ -1390,16 +1390,52 @@ function normalizeToolResultMaxChars(maxChars: number): number {
     ? Math.floor(maxChars)
     : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 }
+function sanitizeToolTextRuns(
+  rawContent: Array<TextContent | ImageContent>,
+): Array<TextContent | ImageContent> {
+  const content: Array<TextContent | ImageContent> = [];
+  for (let index = 0; index < rawContent.length;) {
+    const item = rawContent[index]!;
+    if (item.type !== "text") {
+      content.push(item);
+      index += 1;
+      continue;
+    }
+
+    const textRun: TextContent[] = [];
+    while (index < rawContent.length) {
+      const next = rawContent[index]!;
+      if (next.type !== "text") {
+        break;
+      }
+      textRun.push(next);
+      index += 1;
+    }
+
+    const sanitizedText = sanitizeToolResult(textRun.map((entry) => entry.text).join(""));
+    let offset = 0;
+    content.push(
+      ...textRun.map((entry, runIndex) => {
+        const end =
+          runIndex === textRun.length - 1
+            ? sanitizedText.length
+            : Math.min(sanitizedText.length, offset + entry.text.length);
+        const sanitized = Object.assign({}, entry, { text: sanitizedText.slice(offset, end) });
+        offset = end;
+        return sanitized;
+      }),
+    );
+  }
+  return content;
+}
 function convertToolContents(
   rawContent: Array<TextContent | ImageContent>,
   toolResultMaxChars = DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
 ): CodexDynamicToolCallOutputContentItem[] {
-  // Redact each complete text block before budgeting so truncation cannot leave an
-  // unredactable credential fragment. Image blocks keep their bytes; the storage-oriented
+  // Adjacent text items form one model-visible stream, so sanitize each full run before
+  // repartitioning and budgeting. Image blocks keep their bytes; the storage-oriented
   // whole-result branch of sanitizeToolResult would drop them.
-  const content = rawContent.map((item) =>
-    item.type === "text" ? { ...item, text: sanitizeToolResult(item.text) } : item,
-  );
+  const content = sanitizeToolTextRuns(rawContent);
   const maxChars = normalizeToolResultMaxChars(toolResultMaxChars);
   const totalTextChars = content.reduce(
     (total, item) => total + (item.type === "text" ? item.text.length : 0),

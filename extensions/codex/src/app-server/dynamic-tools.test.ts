@@ -1938,6 +1938,34 @@ describe("createCodexDynamicToolBridge", () => {
     },
   );
 
+  it("redacts credentials split across adjacent dynamic tool text items", async () => {
+    const bridge = createBridgeWithToolResult("credential_lookup", {
+      content: [
+        { type: "text", text: "Deployment finished.\nAuthorization: Bearer " },
+        { type: "text", text: SYNTHETIC_BEARER_CREDENTIAL },
+        { type: "text", text: "\nArtifacts remain available." },
+      ],
+      details: {},
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-split-credential",
+      namespace: null,
+      tool: "credential_lookup",
+      arguments: {},
+    });
+
+    const text = result.contentItems
+      .map((item) => (item.type === "inputText" && typeof item.text === "string" ? item.text : ""))
+      .join("");
+    expect(text).not.toContain(SYNTHETIC_BEARER_CREDENTIAL);
+    expect(text).toContain("Authorization: Bearer");
+    expect(text).toContain("Deployment finished.");
+    expect(text).toContain("Artifacts remain available.");
+  });
+
   it("redacts a credential that crosses the dynamic tool result budget", async () => {
     const maxChars = 16_000;
     const totalChars = 20_000;
