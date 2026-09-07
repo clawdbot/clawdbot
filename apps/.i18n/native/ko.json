@@ -1693,6 +1693,7 @@
     "native.apple.05f711cec069ec47": "페어링이 필요합니다. 이미 페어링된 OpenClaw 클라이언트에서 /pair approve를 실행한 다음 연결을 다시 확인하세요.",
     "native.apple.0603402116243f9e": "워크트리에서 새 채팅",
     "native.apple.060e3947436fa930": "%1$@을(를) 처리하지 못했습니다: %2$@",
+    "native.apple.0644a7702bb80de1": "브라우저 로그인이 만료되었습니다. 이 Gateway에 다시 연결하세요.",
     "native.apple.067bbf8e4b7d1837": "인식한 내용: %@",
     "native.apple.06aa02b192d6a1b3": "검토 중",
     "native.apple.06ced75261e8a242": "앱 PID",

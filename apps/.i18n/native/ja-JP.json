@@ -1693,6 +1693,7 @@
     "native.apple.05f711cec069ec47": "ペアリングが必要です。 ペアリング済みのOpenClawクライアントで /pair approve を実行してから、接続を再確認してください。",
     "native.apple.0603402116243f9e": "ワークツリーで新規チャット",
     "native.apple.060e3947436fa930": "%1$@ を処理できませんでした: %2$@",
+    "native.apple.0644a7702bb80de1": "ブラウザのサインインの有効期限が切れました。このGatewayに再接続してください。",
     "native.apple.067bbf8e4b7d1837": "認識した音声: %@",
     "native.apple.06aa02b192d6a1b3": "確認中",
     "native.apple.06ced75261e8a242": "アプリのPID",
