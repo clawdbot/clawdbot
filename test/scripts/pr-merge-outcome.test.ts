@@ -638,6 +638,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     expect(f.record()).toMatchObject({ phase: "complete", landed, head: f.head });
     expect(f.state().mutations).toBe(1);
     expect(f.state().posts).toBe(1);
+    expect(f.state().comments[0]!.body).toContain("Merged via squash.");
     expect(f.state().comments[0]!.body).toContain(`/commit/${landed}`);
     f.git(["merge-base", "--is-ancestor", previous, outcomeRef]);
 
@@ -824,13 +825,13 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
   });
 
   it.each([
-    { method: "squash", queue: false },
-    { method: "merge", queue: false },
-    { method: "rebase", queue: false },
-    { method: "squash", queue: true },
+    { method: "squash", queue: false, comment: "Merged via squash." },
+    { method: "merge", queue: false, comment: "Merged via merge commit." },
+    { method: "rebase", queue: false, comment: "Merged via rebase." },
+    { method: "squash", queue: true, comment: "Merged via merge queue (requested squash)." },
   ])(
     "completes $method/queue=$queue with forward main during final receipt observation",
-    ({ method, queue }) => {
+    ({ method, queue, comment }) => {
       const f = fixture(undefined, [["prefix\n"], ["after\n"]]);
       f.advance("before\n");
       f.save({
@@ -848,6 +849,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       expect(f.record()).toMatchObject({ phase: "complete", landed, head: f.head });
       expect(state.mutations).toBe(1);
       expect(state.posts).toBe(1);
+      expect(state.comments[0]!.body).toContain(comment);
       expect(state.comments[0]!.body).toContain(`/commit/${landed}`);
       expect(existsSync(f.worktree)).toBe(false);
       expect(() =>

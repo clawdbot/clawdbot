@@ -1173,7 +1173,6 @@ exit 99
     expect(script).toContain("--squash");
     expect(script).toContain("--merge");
     expect(script).toContain("--rebase");
-    expect(script).toContain("'Merged via %s.");
     expect(script).toContain("--auto");
     expect(script).toContain('--match-head-commit "$PREP_HEAD_SHA"');
   });
