@@ -10,9 +10,9 @@ vi.mock("node:process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:process")>();
   return {
     default: {
-      ...actual.default,
+      ...actual,
       get versions() {
-        return { ...actual.default.versions, node: state.version, bun: undefined };
+        return { ...actual.versions, node: state.version, bun: undefined };
       },
       stderr: { write: state.error },
       exit: (code: number) => {
