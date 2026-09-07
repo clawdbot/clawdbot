@@ -59,6 +59,7 @@ import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { normalizeListenerAddress } from "./shared.js";
 import {
   inspectDaemonPortStatuses,
+  resolveGatewayStatusProbeConfig,
   resolveGatewayStatusSummary,
   type GatewayStatusSummary,
   type PortStatusSummary,
@@ -426,8 +427,9 @@ export async function gatherDaemonStatus(
       rpcUrlOverride: opts.rpc.url,
       localPortOverride,
     });
-  const serviceTargetsProbe = useNativeServiceTargetContext && !probeUrlOverride;
-  const shouldInspectLocalGateway = !probeUrlOverride;
+  const hasUrlOverride = Boolean(probeUrlOverride);
+  const serviceTargetsProbe = useNativeServiceTargetContext && !hasUrlOverride;
+  const shouldInspectLocalGateway = !hasUrlOverride;
   const windowsFirewall =
     opts.deep === true && shouldInspectLocalGateway
       ? await inspectWindowsGatewayFirewall({
@@ -517,21 +519,6 @@ export async function gatherDaemonStatus(
     }
   }
 
-  // Target auth and TLS are already resolved for this command. The generic client
-  // must not reinterpret service diagnostics as a configured remote connection.
-  const probeConfig: OpenClawConfig = {
-    ...daemonCfg,
-    gateway: {
-      ...daemonCfg.gateway,
-      mode: "local",
-      remote: undefined,
-      auth:
-        !probeUrlOverride && daemonCfg.gateway?.auth?.mode
-          ? { mode: daemonCfg.gateway.auth.mode }
-          : undefined,
-      tls: undefined,
-    },
-  };
   const rpc = opts.probe
     ? await loadDaemonProbeModule().then(({ probeGatewayStatus }) =>
         probeGatewayStatus({
@@ -540,7 +527,7 @@ export async function gatherDaemonStatus(
           localPortOverride,
           token: daemonProbeAuth?.token,
           password: daemonProbeAuth?.password,
-          config: probeConfig,
+          config: resolveGatewayStatusProbeConfig({ config: daemonCfg, hasUrlOverride }),
           tlsFingerprint: localCertificate?.ok
             ? localCertificate.value.fingerprintSha256
             : undefined,

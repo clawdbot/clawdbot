@@ -56,6 +56,30 @@ function appendProbeNote(
   return uniqueStrings(values).join(" ");
 }
 
+export function resolveGatewayStatusProbeConfig(params: {
+  config: OpenClawConfig;
+  hasUrlOverride: boolean;
+}): OpenClawConfig {
+  const { config, hasUrlOverride } = params;
+  // Target auth and TLS are already resolved for this command. The generic client
+  // must not reinterpret service diagnostics as a configured remote connection.
+  return {
+    ...config,
+    gateway: {
+      ...config.gateway,
+      mode: "local",
+      remote: config.gateway?.remote
+        ? { url: config.gateway.remote.url, edgeAuth: config.gateway.remote.edgeAuth }
+        : undefined,
+      auth:
+        !hasUrlOverride && config.gateway?.auth?.mode
+          ? { mode: config.gateway.auth.mode }
+          : undefined,
+      tls: undefined,
+    },
+  };
+}
+
 export async function resolveGatewayStatusSummary(params: {
   daemonCfg: OpenClawConfig;
   cliCfg: OpenClawConfig;

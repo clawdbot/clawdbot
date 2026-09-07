@@ -3,10 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
+import { gatewayEdgeAuthValueForTarget } from "../../gateway/edge-auth.js";
 import type { PortListener, PortUsageStatus } from "../../infra/ports-types.js";
 import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -565,81 +566,108 @@ describe("gatherDaemonStatus", () => {
     expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["configured", true],
-    ["configured", false],
-    ["environment", true],
-    ["environment", false],
-    ["none", true],
-    ["none", false],
-  ] as const)("uses service %s credentials with remote URL present=%s", async (auth, remoteUrl) => {
-    daemonLoadedConfig = {
-      gateway: {
-        mode: "remote",
-        bind: "loopback",
-        tls: { enabled: true },
-        auth:
-          auth === "none"
-            ? { mode: "none" }
-            : {
-                mode: "token",
-                ...(auth === "configured" ? { token: "service-config-token" } : {}),
-              },
-        remote: {
-          ...(remoteUrl ? { url: "wss://remote.example:19443" } : {}),
-          token: "remote-token",
-          password: "remote-password",
-          tlsFingerprint: "sha256:99:88:77:66",
+  it.each(
+    [
+      ["configured", "wss://remote.example:19443"],
+      ["configured", undefined],
+      ["environment", "wss://remote.example:19443"],
+      ["environment", undefined],
+      ["none", "wss://remote.example:19443"],
+      ["none", undefined],
+      ["configured", "wss://127.0.0.1:19001"],
+      ["configured", "wss://127.0.0.1:19001/other"],
+    ].flatMap(([auth, remoteUrl]) =>
+      [false, true].map((requireRpc) => ({ auth, remoteUrl, requireRpc })),
+    ),
+  )(
+    "uses service $auth credentials with remote=$remoteUrl and requireRpc=$requireRpc",
+    async ({ auth, remoteUrl, requireRpc }) => {
+      const edgeAuth = { "X-Test-Edge-Auth": "synthetic-status-edge-auth" };
+      daemonLoadedConfig = {
+        gateway: {
+          mode: "remote",
+          bind: "loopback",
+          tls: { enabled: true },
+          auth:
+            auth === "none"
+              ? { mode: "none" }
+              : {
+                  mode: "token",
+                  ...(auth === "configured" ? { token: "service-config-token" } : {}),
+                },
+          remote: {
+            url: remoteUrl,
+            edgeAuth,
+            token: "remote-token",
+            password: "remote-password",
+            tlsFingerprint: "sha256:99:88:77:66",
+          },
         },
-      },
-    };
-    const originalConfig = structuredClone(daemonLoadedConfig);
-    serviceReadCommand.mockResolvedValueOnce({
-      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
-      environment: {
-        OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
-        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
-        OPENCLAW_GATEWAY_TOKEN: "service-env-token",
-      },
-    });
-    setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", "ambient-token");
-    setTestEnvValue("OPENCLAW_GATEWAY_URL", "wss://ambient.example:19444");
+      };
+      const originalConfig = structuredClone(daemonLoadedConfig);
+      serviceReadCommand.mockResolvedValueOnce({
+        programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+        environment: {
+          OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
+          OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
+          OPENCLAW_GATEWAY_TOKEN: "service-env-token",
+        },
+      });
+      setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", "ambient-token");
+      setTestEnvValue("OPENCLAW_GATEWAY_URL", "wss://ambient.example:19444");
 
-    const status = await gatherStatus();
-    const input = callArg(callGatewayStatusProbe) as Parameters<
-      typeof import("./probe.js").probeGatewayStatus
-    >[0];
+      const status = await gatherStatus({ requireRpc });
+      const input = callArg(callGatewayStatusProbe) as Parameters<
+        typeof import("./probe.js").probeGatewayStatus
+      >[0];
 
-    expect(input.url).toBe("wss://127.0.0.1:19001");
-    expect(input.urlOverride).toBeUndefined();
-    expect(input.token).toBe(
-      auth === "none"
-        ? undefined
-        : auth === "configured"
-          ? "service-config-token"
-          : "service-env-token",
-    );
-    expect(input.password).toBeUndefined();
-    expect(input.tlsFingerprint).toBe("sha256:11:22:33:44");
-    expect(input.config?.gateway?.mode).toBe("local");
-    expect(input.config?.gateway?.remote).toBeUndefined();
-    expect(input.config?.gateway?.auth).toEqual({ mode: auth === "none" ? "none" : "token" });
-    expect(input.config?.gateway?.tls).toBeUndefined();
-    expect(status.rpc?.url).toBe(input.url);
-    expect(daemonLoadedConfig).toEqual(originalConfig);
-  });
+      expect(input.url).toBe("wss://127.0.0.1:19001");
+      expect(input.urlOverride).toBeUndefined();
+      expect(input.token).toBe(
+        auth === "none"
+          ? undefined
+          : auth === "configured"
+            ? "service-config-token"
+            : "service-env-token",
+      );
+      expect(input.password).toBeUndefined();
+      expect(input.tlsFingerprint).toBe("sha256:11:22:33:44");
+      expect(input.requireRpc).toBe(requireRpc);
+      assert(input.config);
+      expect(gatewayEdgeAuthValueForTarget({ config: input.config, targetUrl: input.url })).toEqual(
+        remoteUrl === "wss://127.0.0.1:19001" ? edgeAuth : undefined,
+      );
+      expect(input.config.gateway?.mode).toBe("local");
+      expect(input.config.gateway?.remote).toEqual({ url: remoteUrl, edgeAuth });
+      expect(input.config.gateway?.auth).toEqual({ mode: auth === "none" ? "none" : "token" });
+      expect(input.config.gateway?.tls).toBeUndefined();
+      expect(status.rpc?.url).toBe(input.url);
+      expect(daemonLoadedConfig).toEqual(originalConfig);
+    },
+  );
 
-  it.each([{}, { token: "explicit-token" }, { password: "explicit-password" }])(
-    "isolates explicit status target credentials %j",
-    async (auth) => {
+  it.each(
+    [
+      { auth: {}, remoteUrl: "wss://explicit.example:19445" },
+      { auth: { token: "explicit-token" }, remoteUrl: "wss://explicit.example:19445" },
+      { auth: { password: "explicit-password" }, remoteUrl: "wss://explicit.example:19445" },
+      { auth: { token: "explicit-token" }, remoteUrl: "wss://remote.example:19443" },
+      { auth: { token: "explicit-token" }, remoteUrl: "wss://explicit.example:19445/other" },
+    ].flatMap((testCase) => [false, true].map((requireRpc) => ({ ...testCase, requireRpc }))),
+  )(
+    "isolates explicit status credentials $auth with remote=$remoteUrl and requireRpc=$requireRpc",
+    async ({ auth, remoteUrl, requireRpc }) => {
+      const edgeAuth = { "X-Test-Edge-Auth": "synthetic-status-edge-auth" };
       daemonLoadedConfig = {
         gateway: {
           mode: "remote",
           tls: { enabled: true },
           auth: { mode: "token", token: "service-token" },
           remote: {
-            url: "wss://remote.example:19443",
+            url: remoteUrl,
+            edgeAuth,
             token: "remote-token",
+            password: "remote-password",
             tlsFingerprint: "sha256:99:88:77:66",
           },
         },
@@ -649,6 +677,7 @@ describe("gatherDaemonStatus", () => {
       await gatherStatus({
         rpc: { url: "wss://explicit.example:19445", ...auth },
         allowExecSecretRefs: false,
+        requireRpc,
       });
 
       const input = callArg(callGatewayStatusProbe) as Parameters<
@@ -661,9 +690,15 @@ describe("gatherDaemonStatus", () => {
       });
       expect({ token: input.token, password: input.password }).toEqual(auth);
       expect(input.tlsFingerprint).toBeUndefined();
-      expect(input.config?.gateway?.remote).toBeUndefined();
-      expect(input.config?.gateway?.auth).toBeUndefined();
-      expect(input.config?.gateway?.tls).toBeUndefined();
+      expect(input.requireRpc).toBe(requireRpc);
+      assert(input.config);
+      expect(gatewayEdgeAuthValueForTarget({ config: input.config, targetUrl: input.url })).toEqual(
+        remoteUrl === input.url ? edgeAuth : undefined,
+      );
+      expect(input.config.gateway?.mode).toBe("local");
+      expect(input.config.gateway?.remote).toEqual({ url: remoteUrl, edgeAuth });
+      expect(input.config.gateway?.auth).toBeUndefined();
+      expect(input.config.gateway?.tls).toBeUndefined();
       expect(inspectGatewayTlsCertificate).not.toHaveBeenCalled();
       expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).not.toHaveBeenCalled();
       expect(daemonLoadedConfig).toEqual(originalConfig);
