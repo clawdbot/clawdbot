@@ -55,11 +55,6 @@ async function startMinimalGatewayServer(params: { token: string }) {
               stateVersion: { presence: 0, health: 0 },
               uptimeMs: 0,
             },
-            policy: {
-              maxPayload: 1,
-              maxBufferedBytes: 1,
-              tickIntervalMs: 60_000,
-            },
           }),
         );
         return;

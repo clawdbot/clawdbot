@@ -221,6 +221,11 @@ describe("GatewayChatClient operator scopes", () => {
             scopes: requestedScopes,
             deviceToken: "approved-tui-device-token",
           },
+          policy: {
+            maxPayload: 512,
+            maxBufferedBytes: 1_024,
+            tickIntervalMs: 30_000,
+          },
         },
       });
       await approved.client.waitForReady();
@@ -264,6 +269,16 @@ describe("GatewayChatClient operator scopes", () => {
         runId: "tui-scope-upgrade-run",
         status: "started",
       });
+
+      const sentCount = approved.socket.sent.length;
+      await expect(
+        approved.client.sendChat({
+          sessionKey: "main",
+          message: "x".repeat(512),
+          runId: "tui-oversized-chat-run",
+        }),
+      ).rejects.toThrow("gateway request chat.send exceeds negotiated max payload");
+      expect(approved.socket.sent).toHaveLength(sentCount);
     } finally {
       await Promise.all(clients.map((client) => client.stop()));
       vi.doUnmock("../../packages/gateway-client/src/websocket.js");

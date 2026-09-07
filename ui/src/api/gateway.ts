@@ -49,15 +49,17 @@ import {
   loadOrCreateDeviceIdentity,
 } from "../lib/nodes/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
-import { createBrowserGatewaySocket } from "./gateway-browser-socket.ts";
+import * as gatewaySocket from "./gateway-browser-socket.ts";
 import { buildGatewayConnectDevice } from "./gateway-connect-device.ts";
 import {
   enrichProtocolMismatchDetails,
   resolveGatewayErrorDetailCode,
 } from "./gateway-connect-errors.ts";
+import { GatewayPayloadLimitError, normalizeGatewayPayloadError } from "./gateway-payload-error.ts";
 export type { EventFrame as GatewayEventFrame } from "@openclaw/gateway-client/browser";
 
 export { resolveGatewayErrorDetailCode };
+export { GatewayPayloadLimitError };
 
 export class GatewayRequestError extends GatewayProtocolRequestError {
   constructor(error: ErrorShape) {
@@ -248,21 +250,16 @@ export class GatewayBrowserClient {
     this.client = new GatewayProtocolClient<ConnectPlan>({
       createSocket: (handlers) => {
         this.maxPayloadBytes = undefined;
-        const socket = createBrowserGatewaySocket(this.opts.url, handlers);
-        return {
-          ...socket,
-          send: (data) => {
-            if (
-              this.maxPayloadBytes !== undefined &&
-              new TextEncoder().encode(data).byteLength > this.maxPayloadBytes
-            ) {
-              throw new GatewayPayloadLimitError();
-            }
-            socket.send(data);
-          },
-        };
+        return gatewaySocket.createBrowserGatewaySocket(this.opts.url, handlers);
       },
       createRequestId: generateUUID,
+      validateRequestFrame: (frame, method, isPreAuth) => {
+        try {
+          gatewaySocket.validateGatewayRequestFrame(frame, method, this.maxPayloadBytes, isPreAuth);
+        } catch (error) {
+          throw normalizeGatewayPayloadError(error);
+        }
+      },
       createRequestError: (error) =>
         new GatewayRequestError({
           code: error.code ?? "UNAVAILABLE",
@@ -484,7 +481,7 @@ export class GatewayBrowserClient {
   }
 
   private handleConnectHello(hello: GatewayHelloOk, plan: ConnectPlan) {
-    this.maxPayloadBytes = hello.policy?.maxPayload;
+    this.maxPayloadBytes = gatewaySocket.resolveGatewayMaxPayloadBytes(hello.policy);
     this.startTickWatch(hello);
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
@@ -635,12 +632,12 @@ export class GatewayBrowserClient {
     });
   }
 
-  async request<T = unknown>(
+  request<T = unknown>(
     method: string,
     params?: unknown,
     options?: GatewayProtocolRequestOptions,
   ): Promise<T> {
-    return await this.client.request<T>(method, params, options);
+    return this.client.request<T>(method, params, options);
   }
 
   async requestScopeUpgrade(options: { onPending?: (requestId: string) => void } = {}) {
@@ -722,14 +719,5 @@ export class GatewayBrowserClient {
     } catch (callbackError) {
       console.error("[gateway] close handler error:", callbackError);
     }
-  }
-}
-
-export class GatewayPayloadLimitError extends Error {
-  constructor() {
-    super(
-      "Request exceeds the Gateway payload limit. Shorten the message or remove one or more attachments and retry.",
-    );
-    this.name = "GatewayPayloadLimitError";
   }
 }

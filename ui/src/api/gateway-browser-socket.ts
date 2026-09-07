@@ -3,6 +3,10 @@ import {
   type GatewayProtocolSocket,
   type GatewayProtocolSocketHandlers,
 } from "@openclaw/gateway-client/browser";
+export {
+  resolveGatewayMaxPayloadBytes,
+  validateGatewayRequestFrame,
+} from "@openclaw/gateway-client/browser";
 
 export function createBrowserGatewaySocket(
   url: string,

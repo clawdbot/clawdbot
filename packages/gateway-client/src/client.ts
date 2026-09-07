@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import type { ClientRequest, IncomingMessage } from "node:http";
 import {
@@ -33,6 +34,11 @@ import {
   shouldRetryGatewayWithDeviceToken,
 } from "./connect-auth.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
+import {
+  DEFAULT_GATEWAY_MAX_PAYLOAD_BYTES,
+  validateGatewayRequestFrame,
+  resolveGatewayMaxPayloadBytes,
+} from "./payload-limits.js";
 import {
   GatewayProtocolClient,
   type GatewayProtocolCloseContext,
@@ -318,7 +324,6 @@ function formatGatewayClientErrorForLog(err: unknown): string {
 const FORCE_STOP_TERMINATE_GRACE_MS = 250;
 const STOP_AND_WAIT_TIMEOUT_MS = 1_000;
 const MAX_SUPPRESSED_TRANSIENT_PRE_HELLO_CLEAN_CLOSES = 1;
-
 function resolveLegacyNodePlatform(platform: string): string | undefined {
   switch (platform) {
     case "macos":
@@ -358,6 +363,7 @@ export class GatewayClient {
   private pendingStop: PendingStop | null = null;
   private transportValidated = false;
   private suppressedTransientPreHelloCleanCloses = 0;
+  private maxPayloadBytes: number | undefined;
 
   constructor(opts: GatewayClientOptions) {
     // Defaults keep the package inert until device identity support is used.
@@ -387,6 +393,8 @@ export class GatewayClient {
       createRequestTimeoutError: (method, timeoutMs, requestSent) =>
         new GatewayClientRequestTimeoutError({ method, timeoutMs, requestSent }),
       createRequestAbortError: createGatewayRequestAbortError,
+      validateRequestFrame: (frame, method, isPreAuth) =>
+        validateGatewayRequestFrame(frame, method, this.maxPayloadBytes, isPreAuth),
       buildConnectPlan: ({ nonce, challengeTs }) => {
         if (!nonce) {
           throw new Error("gateway connect challenge missing nonce");
@@ -527,7 +535,7 @@ export class GatewayClient {
       options: {
         // Allow node screen snapshots and other large responses. The challenge
         // timer starts after open, so separately bound the HTTP upgrade here.
-        maxPayload: 25 * 1024 * 1024,
+        maxPayload: DEFAULT_GATEWAY_MAX_PAYLOAD_BYTES,
         handshakeTimeout: handshakeTimeoutMs,
         ...(this.opts.origin ? { origin: this.opts.origin } : {}),
         ...(edgeAuthHeaders
@@ -935,6 +943,7 @@ export class GatewayClient {
   }
 
   private handleConnectHello(helloOk: HelloOk, assembled: AssembledConnect): void {
+    this.maxPayloadBytes = resolveGatewayMaxPayloadBytes();
     const reconnectWithCurrentNodeProtocol =
       this.useLegacyNodeProtocolEnvelope &&
       this.shouldNegotiateLegacyNodeProtocol() &&
@@ -979,6 +988,9 @@ export class GatewayClient {
       this.protocol.closeSocket(1012, "gateway protocol upgraded");
       return;
     }
+    // The Gateway installs this advertised limit on its WebSocket receiver after auth,
+    // so it bounds serialized client-to-Gateway request frames.
+    this.maxPayloadBytes = resolveGatewayMaxPayloadBytes(helloOk.policy);
     this.lastTick = Date.now();
     this.startTickWatch();
     void assembled;
