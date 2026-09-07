@@ -19,12 +19,14 @@ export async function execSchtasks(
       ? `schtasks timed out after ${SCHTASKS_TIMEOUT_MS}ms`
       : result.termination === "no-output-timeout"
         ? `schtasks produced no output for ${SCHTASKS_NO_OUTPUT_TIMEOUT_MS}ms`
-        : "";
+        : result.termination !== "exit"
+          ? "schtasks command terminated before confirmed completion"
+          : "";
   // schtasks can hang without output on some Windows hosts; convert both timeout
   // modes into ordinary process-like failures for service fallback logic.
   return {
     stdout: result.stdout,
     stderr: result.stderr || timeoutDetail,
-    code: typeof result.code === "number" ? result.code : result.killed ? 124 : 1,
+    code: result.termination === "exit" ? (result.code ?? 1) : result.code || 124,
   };
 }

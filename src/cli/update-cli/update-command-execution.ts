@@ -197,8 +197,7 @@ export async function executeMutableUpdate(params: {
       return;
     }
     try {
-      const uniqueMutationRoots = Array.from(new Set(mutationRoots));
-      for (const mutationRoot of uniqueMutationRoots) {
+      for (const mutationRoot of new Set(mutationRoots)) {
         preManagedServiceStop = await maybeStopManagedServiceBeforeMutableUpdate({
           updateInstallKind: params.updateInstallKind,
           root: mutationRoot,
@@ -208,6 +207,7 @@ export async function executeMutableUpdate(params: {
           phase,
           expectedService: admission?.services.get(mutationRoot),
           updateRun: params.opts.run,
+          recovery: params.opts.recovery,
           handoffFromGateway: (state) =>
             handoffUpdateFromGateway({
               state,

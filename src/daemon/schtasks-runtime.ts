@@ -378,22 +378,26 @@ export async function stopStartupEntry(
   env: GatewayServiceEnv,
   stdout: NodeJS.WritableStream,
   onMutation?: () => void,
+  assertCurrent?: () => void,
 ): Promise<void> {
   const runtime = await resolveControllableFallbackRuntime(env);
   if (runtime.pid) {
-    await terminateGatewayProcessTree(runtime.pid, 300);
+    await terminateGatewayProcessTree(runtime.pid, 300, assertCurrent);
   }
   onMutation?.();
   stdout.write(`${formatLine("Stopped Windows login item", resolveTaskName(env))}\n`);
 }
 
-export async function terminateInstalledStartupRuntime(env: GatewayServiceEnv): Promise<void> {
+export async function terminateInstalledStartupRuntime(
+  env: GatewayServiceEnv,
+  assertCurrent?: () => void,
+): Promise<void> {
   if (!(await isStartupEntryInstalled(env))) {
     return;
   }
   const runtime = await resolveControllableFallbackRuntime(env);
   if (runtime.pid) {
-    await terminateGatewayProcessTree(runtime.pid, 300);
+    await terminateGatewayProcessTree(runtime.pid, 300, assertCurrent);
   }
 }
 

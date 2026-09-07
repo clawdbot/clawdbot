@@ -34,6 +34,8 @@ export type GatewayServiceControlArgs = {
   env?: GatewayServiceEnv;
   disable?: boolean;
   preserveDefinition?: boolean;
+  /** Original live caller fence, rechecked at stop mutation boundaries. */
+  assertCurrent?: () => void;
   warn?: (message: string) => void;
   onMutation?: (mutation: GatewayLifecycleMutation) => void;
 };

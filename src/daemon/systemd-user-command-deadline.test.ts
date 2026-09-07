@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 const exec = vi.hoisted(() => vi.fn<typeof import("./exec-file.js").execFileUtf8>());
 vi.mock("./exec-file.js", () => ({ execFileUtf8: exec }));
-import { execBusctlUser } from "./systemd-exec.js";
+import { execBusctlUser, execSystemctlUser } from "./systemd-exec.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -46,4 +46,31 @@ describe("systemd user routing deadline", () => {
       expect(result.code).not.toBe(0);
     }
   });
+});
+
+it("does not dispatch machine fallback after the original stop owner retires", async () => {
+  let active = true;
+  vi.spyOn(process, "geteuid").mockReturnValue(1001);
+  exec.mockReset().mockImplementation(async () => {
+    active = false;
+    return {
+      code: 1,
+      termination: "exit",
+      stdout: "",
+      stderr: "Failed to connect to bus: No medium found",
+    };
+  });
+  await expect(
+    execSystemctlUser(
+      { USER: "owned", HOME: "/test/owned" },
+      ["stop", "openclaw-gateway.service"],
+      500,
+      () => {
+        if (!active) {
+          throw new Error("original stop owner retired");
+        }
+      },
+    ),
+  ).rejects.toThrow("original stop owner retired");
+  expect(exec).toHaveBeenCalledTimes(1);
 });

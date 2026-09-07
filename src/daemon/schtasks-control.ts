@@ -205,6 +205,7 @@ async function changeScheduledTaskEnabledState(params: {
   env: GatewayServiceEnv;
   enabled: boolean;
   beforeMutation?: () => Promise<void>;
+  assertCurrent?: () => void;
   restoreOnFailure?: boolean;
 }): Promise<boolean> {
   const taskName = resolveTaskName(params.env);
@@ -229,6 +230,7 @@ async function changeScheduledTaskEnabledState(params: {
 
   const action = params.enabled ? "/ENABLE" : "/DISABLE";
   await params.beforeMutation?.();
+  params.assertCurrent?.();
   const result = await execSchtasks(["/Change", "/TN", taskName, action]);
   if (result.code !== 0) {
     const detail = (result.stderr || result.stdout).trim() || "unknown error";
@@ -239,6 +241,7 @@ async function changeScheduledTaskEnabledState(params: {
       // A timeout can follow a committed /DISABLE, so restore the proven prior state.
       try {
         await params.beforeMutation?.();
+        params.assertCurrent?.();
         const restore = await execSchtasks(["/Change", "/TN", taskName, "/ENABLE"]);
         if (restore.code !== 0) {
           const restoreDetail = (restore.stderr || restore.stdout).trim() || "unknown error";
@@ -259,7 +262,11 @@ async function changeScheduledTaskEnabledState(params: {
 
 export async function suspendScheduledTaskAutoStartForUpdate(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
-  options?: { beforeMutation?: () => Promise<void>; restoreOnFailure?: boolean },
+  options?: {
+    beforeMutation?: () => Promise<void>;
+    assertCurrent?: () => void;
+    restoreOnFailure?: boolean;
+  },
 ): Promise<boolean> {
   return withGatewayServiceOperationLock(env, async () =>
     changeScheduledTaskEnabledState({ env, enabled: false, ...options }),
@@ -291,14 +298,21 @@ export async function stopScheduledTask({
   stdout,
   env,
   onMutation,
+  assertCurrent,
 }: GatewayServiceControlArgs): Promise<void> {
   const effectiveEnv = env ?? (process.env as GatewayServiceEnv);
   const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
   if (await shouldControlStartupEntry(effectiveEnv)) {
-    await stopStartupEntry(effectiveEnv, stdout, () => reportMutation("startup-entry-stop"));
+    await stopStartupEntry(
+      effectiveEnv,
+      stdout,
+      () => reportMutation("startup-entry-stop"),
+      assertCurrent,
+    );
     return;
   }
   const taskName = resolveTaskName(effectiveEnv);
+  assertCurrent?.();
   const res = await execSchtasks(["/End", "/TN", taskName]);
   if (res.code !== 0 && !isScheduledTaskDefinitelyNotRunning(taskName)) {
     throw new Error(`schtasks end failed: ${res.stderr || res.stdout}`.trim());
@@ -310,11 +324,15 @@ export async function stopScheduledTask({
     : null;
   const stopPort = stopContext?.port ?? null;
   if (manageGatewayPort) {
-    await terminateScheduledTaskGatewayListeners(effectiveEnv, stopContext ?? undefined);
+    await terminateScheduledTaskGatewayListeners(
+      effectiveEnv,
+      stopContext ?? undefined,
+      assertCurrent,
+    );
   } else {
-    await terminateScheduledTaskNodeHost(effectiveEnv);
+    await terminateScheduledTaskNodeHost(effectiveEnv, assertCurrent);
   }
-  await terminateInstalledStartupRuntime(effectiveEnv);
+  await terminateInstalledStartupRuntime(effectiveEnv, assertCurrent);
   if (stopPort) {
     const probeHosts = stopContext?.probeHosts ?? [];
     const released = await waitForGatewayPortRelease(stopPort, 5_000, { probeHosts });

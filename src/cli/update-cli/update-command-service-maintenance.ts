@@ -10,6 +10,7 @@ import {
   readWindowsStartupFallbackRuntimeForUpdate,
 } from "../../daemon/schtasks-runtime.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
+import { suspendScheduledTaskAutoStartForUpdate } from "../../daemon/schtasks.js";
 import {
   resolveManagedGatewayServiceCommand,
   type GatewayServiceState,
@@ -24,6 +25,14 @@ import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledge
 import { defaultRuntime } from "../../runtime.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import { gatewayMaintenanceBlockMessage } from "./update-command-handoff.js";
+import {
+  withUpdateCommandNativePreparation,
+  type UpdateCommandNativePreparation,
+} from "./update-command-native-preparation.js";
+import {
+  UpdateCommandRecoveryPendingError,
+  type UpdateCommandRecovery,
+} from "./update-command-recovery.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import {
   assertGatewayServiceAdmissionUnchanged,
@@ -326,7 +335,8 @@ export async function maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
   await stopState.windowsTaskAutoStartRecovery.restore(restartSafe, guard, assertCurrent);
 }
 
-export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
+type ManagedServiceStopParams = {
+  recovery?: UpdateCommandRecovery;
   updateRun?: UpdateCommandOptions["run"];
   updateInstallKind: "git" | "package";
   root: string;
@@ -340,9 +350,29 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   >;
   activatedInstall?: { packageUpdateNodeRunner?: string; invocationCwd?: string };
   timeoutMs?: number;
-}): Promise<PreManagedServiceStop> {
-  // Retain the invocation's original live owner across daemon awaits. History
-  // status and a later replacement fence are not authority for native effects.
+};
+
+export async function maybeStopManagedServiceBeforeMutableUpdate(
+  params: ManagedServiceStopParams,
+): Promise<PreManagedServiceStop> {
+  if (!params.recovery?.getRecord().nativeManager || params.phase === "inspect") {
+    return await stopManagedServiceBeforeMutableUpdate(params);
+  }
+  return await withUpdateCommandNativePreparation(
+    {
+      recovery: params.recovery,
+      env: params.updateRun?.env ?? process.env,
+      timeoutMs: params.timeoutMs,
+    },
+    (native) => stopManagedServiceBeforeMutableUpdate(params, native),
+  );
+}
+
+async function stopManagedServiceBeforeMutableUpdate(
+  params: ManagedServiceStopParams,
+  native?: UpdateCommandNativePreparation,
+): Promise<PreManagedServiceStop> {
+  // Retain the original live owner across daemon awaits; history is not authority.
   const executorFence = params.updateRun?.executorFence;
   const assertCurrent = () => executorFence?.assertCurrent();
   assertCurrent();
@@ -388,9 +418,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   });
   assertCurrent();
   if (params.phase) {
-    // Explicit admission phases pin the pre-update definition. Post-update
-    // maintenance retains the canonical owner check above, which permits the
-    // updater's authorized service refresh after activation.
+    // Admission pins the definition; post-update ownership permits authorized refresh.
     assertGatewayServiceAdmissionUnchanged(params.expectedService, serviceUpdateVerdict);
   }
   const inspected = {
@@ -442,6 +470,9 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
         "Gateway restart skipped: no Gateway service or listener is running.",
     };
   }
+  if (params.recovery && params.phase !== "inspect" && !native) {
+    throw new UpdateCommandRecoveryPendingError("Native service appeared after startup binding.");
+  }
   // Pure inventory inspection supplies no handoff callback. Execution supplies it
   // only after complete target admission, before online candidate validation.
   if (params.shouldRestart && serviceState.running && params.handoffFromGateway) {
@@ -469,8 +500,26 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     return blockMessage ? { ...inspected, blockMessage } : inspected;
   }
   const updateRun = params.updateRun;
-  const suspendTask = () =>
-    maybeSuspendWindowsTaskAutoStartForUpdate({
+  const suspendTask = async () => {
+    if (native && process.platform === "win32") {
+      await native.suppress(async (assertNativeCurrent) => {
+        await suspendScheduledTaskAutoStartForUpdate(serviceState.env, {
+          restoreOnFailure: false,
+          assertCurrent: assertNativeCurrent,
+          beforeMutation: async () => {
+            assertNativeCurrent();
+            await createWindowsTaskAutoStartGuard({
+              root: params.root,
+              before: inspected,
+              timeoutMs: params.timeoutMs,
+            })();
+            assertNativeCurrent();
+          },
+        });
+      });
+      return undefined;
+    }
+    return await maybeSuspendWindowsTaskAutoStartForUpdate({
       serviceEnv: serviceState.env,
       updateRun,
       assertCurrentService: createWindowsTaskAutoStartGuard({
@@ -487,6 +536,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
           }
         : undefined,
     });
+  };
   // A loaded LaunchAgent can be between KeepAlive respawns. Other supervisors
   // need the handoff marker to distinguish that transition from operator-stopped state.
   const supervisorMayRespawn =
@@ -552,32 +602,40 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
         env: params.updateRun.env,
       });
     }
-    if (params.activatedInstall) {
-      // Activation Doctor may have stamped newer config. Keep its service stop
-      // in that runtime too; the old parent's destructive-action guard is valid.
-      const stopped = await runUpdatedInstallGatewayCommand(
-        {
-          result: { root: params.root },
-          opts: { json: params.jsonMode },
-          invocationEnv: process.env,
-          serviceEnv: currentState.env,
-          timeoutMs: params.timeoutMs,
-          nodeRunner: params.activatedInstall.packageUpdateNodeRunner,
-          invocationCwd: params.activatedInstall.invocationCwd,
-          assertCurrent,
-        },
-        "stop",
-      );
-      if (stopped !== "accepted") {
-        throw new Error(
-          "Updated Gateway CLI did not confirm the service stopped for plugin maintenance.",
+    const stop = async (assertStopCurrent: () => void) => {
+      if (params.activatedInstall) {
+        // Activation Doctor may have stamped newer config. Keep its service stop
+        // in that runtime too; the old parent's destructive-action guard is valid.
+        const stopped = await runUpdatedInstallGatewayCommand(
+          {
+            result: { root: params.root },
+            opts: { json: params.jsonMode },
+            invocationEnv: process.env,
+            serviceEnv: currentState.env,
+            timeoutMs: params.timeoutMs,
+            nodeRunner: params.activatedInstall.packageUpdateNodeRunner,
+            invocationCwd: params.activatedInstall.invocationCwd,
+            assertCurrent: assertStopCurrent,
+          },
+          "stop",
         );
+        if (stopped !== "accepted") {
+          throw new Error(
+            "Updated Gateway CLI did not confirm the service stopped for plugin maintenance.",
+          );
+        }
+      } else {
+        await service.stop({
+          env: currentState.env,
+          stdout: params.jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout,
+          assertCurrent: assertStopCurrent,
+        });
       }
+    };
+    if (native) {
+      await native.stop(stop);
     } else {
-      await service.stop({
-        env: currentState.env,
-        stdout: params.jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout,
-      });
+      await stop(assertCurrent);
     }
     assertCurrent();
     if (windowsTaskAutoStartRecovery) {
