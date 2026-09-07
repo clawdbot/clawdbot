@@ -39,6 +39,20 @@ type AuthProfileEligibility = {
   reasonCode: AuthProfileEligibilityReasonCode;
 };
 
+function isAuthProfileRuntimeSettlementCandidate(params: {
+  credential: AuthProfileCredential | undefined;
+  eligibility: AuthProfileEligibility;
+  includePendingOAuthRefresh?: boolean;
+}): boolean {
+  return (
+    params.eligibility.eligible ||
+    (params.includePendingOAuthRefresh === true &&
+      params.eligibility.reasonCode === "expired" &&
+      params.credential?.type === "oauth" &&
+      isPendingOAuthRefreshFence(params.credential))
+  );
+}
+
 function isProfileProviderCompatibleWithAuthProvider(params: {
   cfg?: OpenClawConfig;
   authAliasLookupParams?: ProviderAuthAliasLookupParams;
@@ -140,6 +154,8 @@ export function resolveAuthProfileEligibility(params: {
   provider: string;
   profileId: string;
   now?: number;
+  /** Runtime resolvers may observe a durable pending refresh through settlement. */
+  includePendingOAuthRefresh?: boolean;
 }): AuthProfileEligibility {
   const providerAuthKey = resolveProviderIdForAuth(params.provider, {
     config: params.cfg,
@@ -192,8 +208,17 @@ export function resolveAuthProfileEligibility(params: {
     credential: cred,
     now: params.now,
   });
+  if (
+    isAuthProfileRuntimeSettlementCandidate({
+      credential: cred,
+      eligibility: credentialEligibility,
+      includePendingOAuthRefresh: params.includePendingOAuthRefresh,
+    })
+  ) {
+    return { eligible: true, reasonCode: "ok" };
+  }
   return {
-    eligible: credentialEligibility.eligible,
+    eligible: false,
     reasonCode: credentialEligibility.reasonCode,
   };
 }
@@ -305,7 +330,6 @@ export function resolveAuthProfileOrderWithMetadata(
   }
 
   const isValidProfile = (profileId: string): boolean => {
-    const credential = store.profiles[profileId];
     const eligibility = resolveAuthProfileEligibility({
       cfg,
       authAliasLookupParams: params.authAliasLookupParams,
@@ -313,13 +337,10 @@ export function resolveAuthProfileOrderWithMetadata(
       provider,
       profileId,
       now,
+      includePendingOAuthRefresh: params.includePendingOAuthRefresh,
     });
     return (
       eligibility.eligible ||
-      (params.includePendingOAuthRefresh === true &&
-        eligibility.reasonCode === "expired" &&
-        credential?.type === "oauth" &&
-        isPendingOAuthRefreshFence(credential)) ||
       (params.readinessMode === "read-only" && eligibility.reasonCode === "unresolved_ref")
     );
   };

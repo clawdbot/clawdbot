@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { AuthProfileStore } from "../auth-profiles.js";
+import { createOAuthRefreshFence } from "../auth-profiles/oauth-refresh-marker.js";
 import { resolveAgentHarnessPreparedAuthSupport } from "../harness/support.js";
 import { getApiKeyForModelCore } from "../model-auth.js";
 import {
@@ -432,6 +433,76 @@ describe("prepareAgentRuntimeAuthPlan", () => {
       "user",
       "auto",
     ]);
+  });
+
+  it("prepares an automatic pending OAuth fence for runtime settlement", () => {
+    const pendingProfileId = "xai:pending";
+    const backupProfileId = "xai:backup";
+    const pending = createOAuthRefreshFence({
+      profileId: pendingProfileId,
+      credential: {
+        type: "oauth",
+        provider: "xai",
+        access: "expired-access",
+        refresh: "refresh-token",
+        expires: 1,
+      },
+    });
+
+    const prepared = prepareAgentRuntimeAuth({
+      provider: "xai",
+      modelId: "grok-4",
+      env: {},
+      authProfileStore: authStore(
+        {
+          [pendingProfileId]: pending,
+          [backupProfileId]: apiKeyProfile("xai", "backup-key"),
+        },
+        { xai: [pendingProfileId, backupProfileId] },
+      ),
+    });
+
+    expect(
+      prepared.attempts
+        .filter((attempt) => attempt.kind === "profile")
+        .map((attempt) => attempt.profileId),
+    ).toEqual([pendingProfileId, backupProfileId]);
+  });
+
+  it("keeps a user-pinned pending OAuth fence ahead of ordered siblings", () => {
+    const pendingProfileId = "xai:pending";
+    const backupProfileId = "xai:backup";
+    const pending = createOAuthRefreshFence({
+      profileId: pendingProfileId,
+      credential: {
+        type: "oauth",
+        provider: "xai",
+        access: "expired-access",
+        refresh: "refresh-token",
+        expires: 1,
+      },
+    });
+
+    const prepared = prepareAgentRuntimeAuth({
+      provider: "xai",
+      modelId: "grok-4",
+      env: {},
+      authProfileStore: authStore(
+        {
+          [pendingProfileId]: pending,
+          [backupProfileId]: apiKeyProfile("xai", "backup-key"),
+        },
+        { xai: [backupProfileId] },
+      ),
+      sessionAuthProfileId: pendingProfileId,
+      sessionAuthProfileSource: "user",
+    });
+
+    expect(
+      prepared.attempts
+        .filter((attempt) => attempt.kind === "profile")
+        .map((attempt) => attempt.profileId),
+    ).toEqual([pendingProfileId, backupProfileId]);
   });
 
   it("defers an ambiguous route when native Codex owns auth", () => {

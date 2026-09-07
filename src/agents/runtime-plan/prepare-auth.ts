@@ -7,6 +7,7 @@ import { resolveMergedModelProviderConfig } from "../../config/model-provider-co
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRouteOverridePresence } from "../../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { isPendingOAuthRefreshFence } from "../auth-profiles/oauth-refresh-marker.js";
 import {
   prependAuthProfilePin,
   resolveAuthProfileEligibility,
@@ -156,13 +157,15 @@ function resolveProfile(
         env: params.env ?? process.env,
       })
     : undefined;
+  const pendingOAuthRefresh =
+    credential?.type === "oauth" && isPendingOAuthRefreshFence(credential);
   return {
     kind: "profile",
     profileId,
     provider: credential?.provider ?? configured?.provider,
     mode: credential?.type ?? configured?.mode,
     // Runtime materialization owns secret readiness; only proven-invalid facts are terminal here.
-    readiness: availability === false ? "unavailable" : "unknown",
+    readiness: availability === false && !pendingOAuthRefresh ? "unavailable" : "unknown",
     cooldown:
       !options.ignoreCooldown &&
       params.authProfileStore &&
@@ -238,6 +241,7 @@ export function prepareAgentRuntimeAuth(
           store,
           provider: authProfileSelectionProvider,
           profileId: userPinnedProfileId,
+          includePendingOAuthRefresh: true,
         })
       : { eligible: false };
     if (!eligibility.eligible) {
@@ -318,6 +322,7 @@ export function prepareAgentRuntimeAuth(
           preferredProfile: requestedProfileId,
           forModel: params.modelId,
           readinessMode: "read-only",
+          includePendingOAuthRefresh: true,
         });
   const automaticOrderResolution = prependAuthProfilePin(
     resolvedAutomaticOrder,
