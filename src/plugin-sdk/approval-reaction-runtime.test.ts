@@ -2,6 +2,7 @@
  * Tests approval reaction runtime helper behavior.
  */
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import {
@@ -33,7 +34,7 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
   it.each(["imessage", "signal", "whatsapp"])(
     "leaves concurrent %s decisions to the Gateway and retires both terminal surfaces",
     async (channel) => {
-      const winner = Promise.withResolvers<ApprovalResolveResult>();
+      const winner = createDeferred<ApprovalResolveResult>();
       const resolver = vi.mocked(resolveApprovalOverGateway).mockReset();
       resolver.mockReturnValue(winner.promise);
       const clearTarget = vi.fn();
