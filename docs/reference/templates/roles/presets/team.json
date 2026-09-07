@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "coordinator": {
+    "id": "coordinator",
+    "role": "coordinator"
+  },
+  "specialists": [
+    {
+      "id": "researcher",
+      "role": "researcher"
+    },
+    {
+      "id": "writer",
+      "role": "writer"
+    },
+    {
+      "id": "reviewer",
+      "role": "reviewer"
+    }
+  ]
+}

@@ -102,7 +102,7 @@ describe("guided onboarding inference composition", () => {
         {
           text: vi.fn(async ({ initialValue }) => initialValue ?? ""),
         },
-        { selectValues: ["full", "detected-ai"] },
+        { selectValues: ["one", "full", "detected-ai"] },
       );
       const runSetupMemoryImportStep = vi.fn(async () => ({
         status: "skipped" as const,
@@ -171,6 +171,16 @@ describe("guided onboarding inference composition", () => {
       );
       expect(prompter.select).toHaveBeenNthCalledWith(
         2,
+        expect.objectContaining({
+          initialValue: "one",
+          options: [
+            { value: "one", label: "One agent" },
+            { value: "team", label: "A small team: a coordinator plus specialists" },
+          ],
+        }),
+      );
+      expect(prompter.select).toHaveBeenNthCalledWith(
+        3,
         expect.objectContaining({
           options: expect.arrayContaining([expect.objectContaining({ value: "full" })]),
         }),

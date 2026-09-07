@@ -541,4 +541,43 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
       });
     },
   );
+  it("creates a role team through non-interactive onboarding and keeps coordinator ownership", async () => {
+    const { ensureOnboardingAgent } =
+      await vi.importActual<typeof import("../onboard-agent.js")>("../onboard-agent.js");
+    const { commitNonInteractiveOnboardConfig } =
+      await vi.importActual<typeof import("./config-write.js")>("./config-write.js");
+    await withTempHome(async (rawHome) => {
+      const home = await fs.realpath(rawHome);
+      const configDir = path.join(home, ".openclaw");
+      const workspace = path.join(home, "team-workspaces");
+      await fs.rm(path.join(configDir, "agents"), { recursive: true });
+      resetConfigRuntimeState();
+      mocks.ensureOnboardingAgent.mockImplementationOnce(ensureOnboardingAgent);
+      mocks.commitConfig.mockImplementationOnce(commitNonInteractiveOnboardConfig);
+
+      await runNonInteractiveSetup({ ...localOptions, workspace, team: true, json: true }, runtime);
+
+      const after = await readConfigFileSnapshot();
+      expect(after.valid).toBe(true);
+      expect(Object.keys(after.config.agents?.entries ?? {})).toEqual([
+        "coordinator",
+        "researcher",
+        "writer",
+        "reviewer",
+      ]);
+      expect(after.config.agents?.defaults?.systemAgent?.agentId).toBe("coordinator");
+      expect(after.config.agents?.entries?.coordinator).toMatchObject({
+        workspace: path.join(workspace, "coordinator"),
+        subagents: { allowAgents: ["researcher", "writer", "reviewer"], delegationMode: "prefer" },
+      });
+      await expect(
+        fs.stat(path.join(workspace, "coordinator", "BOOTSTRAP.md")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(mocks.logJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceDir: path.join(workspace, "coordinator"),
+        }),
+      );
+    });
+  });
 });

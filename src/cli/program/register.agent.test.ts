@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   agentCliCommandMock: vi.fn(),
   agentExecCommandMock: vi.fn(),
   agentsAddCommandMock: vi.fn(),
+  agentsTeamCreateCommandMock: vi.fn(),
   agentsBindingsCommandMock: vi.fn(),
   agentsBindCommandMock: vi.fn(),
   agentsDeleteCommandMock: vi.fn(),
@@ -46,6 +47,10 @@ vi.mock("../../commands/agent-exec.js", () => ({
 
 vi.mock("../../commands/agents.commands.add.js", () => ({
   agentsAddCommand: mocks.agentsAddCommandMock,
+}));
+
+vi.mock("../../commands/agents.commands.team.js", () => ({
+  agentsTeamCreateCommand: mocks.agentsTeamCreateCommandMock,
 }));
 
 vi.mock("../../commands/agents.commands.bind.js", () => ({
@@ -340,6 +345,56 @@ describe("agent command registration", () => {
     );
     expect(callRuntime).toBe(runtime);
     expect(flags).toEqual({ hasAutomationFlags: false });
+  });
+
+  it("keeps role creation interactive unless automation flags are explicit", async () => {
+    await runCli(["agents", "add", "editor", "--role", "writer", "--json"]);
+    expect(agentsAddCommandMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        name: "editor",
+        role: "writer",
+        json: true,
+        nonInteractive: false,
+      }),
+      runtime,
+      { hasAutomationFlags: false },
+    );
+    await runCli(["agents", "add", "editor", "--role", "writer", "--non-interactive"]);
+    expect(agentsAddCommandMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ role: "writer", nonInteractive: true }),
+      runtime,
+      { hasAutomationFlags: true },
+    );
+  });
+
+  it("parses team creation and forwards explicit coordinator and workspace choices", async () => {
+    await runCli([
+      "agents",
+      "team",
+      "create",
+      "--preset",
+      "team",
+      "--coordinator",
+      "lead",
+      "--prefix",
+      "docs",
+      "--workspace-root",
+      "/tmp/team",
+      "--non-interactive",
+      "--json",
+    ]);
+    expect(mocks.agentsTeamCreateCommandMock).toHaveBeenCalledWith(
+      {
+        preset: "team",
+        coordinator: "lead",
+        prefix: "docs",
+        workspaceRoot: "/tmp/team",
+        nonInteractive: true,
+        json: true,
+      },
+      runtime,
+    );
+    expect(agentsListCommandMock).not.toHaveBeenCalled();
   });
 
   it("runs agents list when root agents command is invoked", async () => {

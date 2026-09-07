@@ -42,7 +42,7 @@ describe("runGuidedOnboarding quick start", () => {
       if (acknowledgedAt) {
         localOnboarding.persisted.config = { wizard: { securityAcknowledgedAt: acknowledgedAt } };
       }
-      const prompter = createWizardPrompter(undefined, { selectValues: ["quick"] });
+      const prompter = createWizardPrompter(undefined, { selectValues: ["quick", "one"] });
       const deps = setupDeps({
         prompter,
         detect: vi.fn(async () =>
@@ -72,7 +72,7 @@ describe("runGuidedOnboarding quick start", () => {
 
       await runGuidedOnboardingImpl({ acceptRisk }, runtime, deps);
 
-      expect(prompter.select).toHaveBeenCalledExactlyOnceWith(
+      expect(vi.mocked(prompter.select).mock.calls.map(([params]) => params)).toEqual([
         expect.objectContaining({
           initialValue: "quick",
           options: [
@@ -80,7 +80,14 @@ describe("runGuidedOnboarding quick start", () => {
             expect.objectContaining({ value: "custom" }),
           ],
         }),
-      );
+        expect.objectContaining({
+          initialValue: "one",
+          options: [
+            { value: "one", label: "One agent" },
+            { value: "team", label: "A small team: a coordinator plus specialists" },
+          ],
+        }),
+      ]);
       expect(prompter.confirm).not.toHaveBeenCalled();
       expect(prompter.text).not.toHaveBeenCalled();
       expect(localOnboarding.persisted.config?.telemetry).toBeUndefined();
@@ -169,7 +176,7 @@ describe("runGuidedOnboarding quick start", () => {
   it("custom setup keeps telemetry, first-agent, access, and provider choices in order", async () => {
     const prompter = createWizardPrompter(
       { text: vi.fn(async () => "helper"), confirm: vi.fn(async () => true) },
-      { selectValues: ["custom", "full"] },
+      { selectValues: ["custom", "one", "full"] },
     );
     const deps = setupDeps({ prompter });
 
@@ -178,13 +185,15 @@ describe("runGuidedOnboarding quick start", () => {
     expect(vi.mocked(prompter.select).mock.calls.map(([params]) => params.message)).toEqual([
       "How would you like to start?",
       "Help make OpenClaw better?",
+      "What would you like to create?",
       "How should I set things up?",
     ]);
     const selects = vi.mocked(prompter.select).mock.invocationCallOrder;
     const firstAgentPrompt = vi.mocked(prompter.text).mock.invocationCallOrder[0]!;
     expect(selects[1]).toBeLessThan(firstAgentPrompt);
-    expect(firstAgentPrompt).toBeLessThan(selects[2]!);
-    expect(selects[2]).toBeLessThan(promptAuthChoiceGrouped.mock.invocationCallOrder[0]!);
+    expect(selects[2]).toBeLessThan(firstAgentPrompt);
+    expect(firstAgentPrompt).toBeLessThan(selects[3]!);
+    expect(selects[3]).toBeLessThan(promptAuthChoiceGrouped.mock.invocationCallOrder[0]!);
     expect(promptAuthChoiceGrouped.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(deps.activate).mock.invocationCallOrder[0]!,
     );
@@ -308,4 +317,23 @@ describe("runGuidedOnboarding quick start", () => {
       expect(deps.runBrowserHandoff).not.toHaveBeenCalled();
     },
   );
+  it("offers the team in quick start and carries its coordinator to the handoff", async () => {
+    const prompter = createWizardPrompter(undefined, { selectValues: ["quick", "team"] });
+    const deps = setupDeps({ prompter });
+    await runGuidedOnboardingImpl({}, makeRuntime(), deps);
+
+    expect(prompter.select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "What would you like to create?",
+        initialValue: "one",
+      }),
+    );
+    expect(deps.applySetup).toHaveBeenCalledWith(
+      expect.objectContaining({ firstAgent: { name: "coordinator", team: true } }),
+      { beforePersistentApply: expect.any(Function) },
+    );
+    expect(deps.runForegroundGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "coordinator" }),
+    );
+  });
 });

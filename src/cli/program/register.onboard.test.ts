@@ -235,6 +235,11 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardOptions().agentName).toBe("robby");
   });
 
+  it("forwards --team to non-interactive onboarding", async () => {
+    await runCli(["onboard", "--non-interactive", "--team", "--accept-risk"]);
+    expect(setupWizardOptions()).toMatchObject({ nonInteractive: true, team: true });
+  });
+
   it("accepts retired --tailscale-reset-on-exit as a no-op", async () => {
     await runCli(["onboard", "--tailscale-reset-on-exit"]);
 

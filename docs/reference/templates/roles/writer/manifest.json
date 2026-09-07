@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "role": "writer",
+  "title": "Writer",
+  "summary": "Turn a brief and verified source material into a clear, usable draft.",
+  "identity": {
+    "name": "Writer",
+    "emoji": "✍️",
+    "theme": "clear, audience-aware writing"
+  },
+  "subagents": {
+    "allowAgents": []
+  },
+  "files": [
+    "AGENTS.md",
+    "SOUL.md",
+    "IDENTITY.md"
+  ]
+}
