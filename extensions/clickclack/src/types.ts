@@ -192,6 +192,21 @@ export type ClickClackChannel = {
   created_at: string;
 };
 
+/** Upload metadata returned with ClickClack messages. */
+export type ClickClackUpload = {
+  id: string;
+  workspace_id: string;
+  owner_id: string;
+  nonce?: string;
+  filename: string;
+  content_type: string;
+  byte_size: number;
+  width: number;
+  height: number;
+  duration_ms: number;
+  created_at: string;
+};
+
 /** Message object returned by ClickClack channel, DM, and thread endpoints. */
 export type ClickClackMessage = {
   id: string;
@@ -208,6 +223,7 @@ export type ClickClackMessage = {
   created_at: string;
   kind?: "message" | "agent_commentary" | "agent_tool";
   author?: ClickClackUser;
+  attachments?: ClickClackUpload[];
   thread_state?: {
     root_message_id: string;
     reply_count: number;

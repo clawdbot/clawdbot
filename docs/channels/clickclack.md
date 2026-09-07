@@ -300,7 +300,7 @@ safety bound can omit an older active thread.
 ## Reply modes
 
 - `replyMode: "agent"` (default) dispatches inbound messages through the normal agent pipeline, including session recording and tool policy.
-- `replyMode: "model"` skips the agent pipeline and uses the plugin runtime's `llm.complete` for direct bot replies, optionally shaped by `model` and `systemPrompt`. The selected provider and model own the completion budget.
+- `replyMode: "model"` skips the agent pipeline and uses the plugin runtime's `llm.complete` for direct text-only bot replies, optionally shaped by `model` and `systemPrompt`. Because that completion API has no media input, attachment messages receive a visible unsupported-media notice and never gain agent or tool authority. The selected provider and model own the completion budget.
 
 Both modes honor `responsePrefix` at the channel or account level. Account
 values win, including `""` to disable an inherited prefix. Use `"auto"` for
@@ -540,6 +540,13 @@ optimized before sending. Durable queued sends use separate owner-scoped nonces 
 upload and message part, then retry attachment association with those same
 objects. See [Durable media delivery](#durable-media-delivery) for the server
 contract and recovery behavior.
+
+Inbound ClickClack attachments in agent mode are downloaded with the bot token
+and staged in OpenClaw's managed media store before the agent turn starts. The configured
+`mediaMaxMb` limit and ClickClack's 64 MiB ceiling both apply. ClickClack servers
+that support atomic `upload_id` message creation publish `message.created` only
+after the attachment link exists, preventing consumers from seeing a transient
+text-only message.
 
 Examples:
 
