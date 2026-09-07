@@ -738,7 +738,7 @@ describe("gatherDaemonStatus", () => {
     const originalProbe = callGatewayStatusProbe.getMockImplementation();
     assert(originalProbe);
     const server = createServer({ key: TEST_TLS_KEY_PEM, cert: TEST_TLS_CERT_PEM });
-    const wss = new WebSocketServer({ noServer: true });
+    const wss = new WebSocketServer({ noServer: true, maxPayload: 1_000_000 });
     const sockets = new Set<Socket>();
     const closedSockets: Promise<void>[] = [];
     const edgeAuthHeaders: unknown[] = [];
