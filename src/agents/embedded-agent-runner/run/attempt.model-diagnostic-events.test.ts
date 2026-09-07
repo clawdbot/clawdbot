@@ -562,4 +562,139 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     expectNumberField(completedEvent, "durationMs");
     expect(events[1]).not.toHaveProperty("errorCategory");
   });
+
+  it("emits error events when a stream yields a terminal error event", async () => {
+    const errorEvent = {
+      type: "error",
+      reason: "error",
+      error: {
+        errorMessage: "connection reset",
+        errorCode: "ECONNRESET",
+      },
+    };
+    async function* stream() {
+      yield { type: "text", text: "partial" };
+      yield errorEvent;
+    }
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-terminal-error",
+      },
+    );
+
+    const events = await collectModelCallEvents(async () => {
+      await drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
+    });
+
+    expect(events.map((event) => event.type)).toEqual(["model.call.started", "model.call.error"]);
+    const errorEventPayload = getEvent(events, 1);
+    expect(errorEventPayload.type).toBe("model.call.error");
+    expect(errorEventPayload.callId).toBe("call-terminal-error");
+    expect(errorEventPayload).toHaveProperty("durationMs");
+  });
+
+  it("emits error events when a stream yields an aborted terminal event", async () => {
+    const abortEvent = { type: "error", reason: "aborted", error: { errorMessage: "aborted" } };
+    async function* stream() {
+      yield abortEvent;
+    }
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-abort",
+      },
+    );
+
+    const events = await collectModelCallEvents(async () => {
+      await drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
+    });
+
+    expect(events.map((event) => event.type)).toEqual(["model.call.started", "model.call.error"]);
+  });
+
+  it("emits error events when a non-iterable result has stopReason: error", async () => {
+    const errorResult = {
+      role: "assistant",
+      content: [],
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.4",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
+      stopReason: "error",
+      errorMessage: "bare result was an error",
+      timestamp: 1,
+    };
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => errorResult) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-bare-error",
+      },
+    );
+
+    const events = await collectModelCallEvents(async () => {
+      const returned = wrapped({} as never, {} as never, {} as never);
+      expect(returned).toBe(errorResult);
+    });
+
+    expect(events.map((event) => event.type)).toEqual(["model.call.started", "model.call.error"]);
+  });
+
+  it("emits exactly one terminal event when a stream both yields error and rejects result()", async () => {
+    // Reproduces the "bare EOF plus rejected result" case from #127538:
+    // the iterator closes without a terminal chunk and the result() promise
+    // rejects. The diagnostic contract is exactly one model.call.error; the
+    // result observer must own the terminal emission when the iterator
+    // abandoned the stream without a done/error event.
+    const streamErr = new Error("event stream ended without a terminal event or final result");
+    const stream = {
+      [Symbol.asyncIterator]() {
+        let emitted = false;
+        return {
+          async next() {
+            if (!emitted) {
+              emitted = true;
+              return { value: { type: "start" }, done: false };
+            }
+            return { value: undefined, done: true };
+          },
+        };
+      },
+      result: () => Promise.reject(streamErr),
+    };
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-bare-eof",
+      },
+    );
+
+    const events = await collectModelCallEvents(async () => {
+      const response = wrapped({} as never, {} as never, {} as never) as unknown as typeof stream;
+      // Iterate to EOF (no terminal chunk) and then read result() which rejects.
+      await drain(response as AsyncIterable<unknown>);
+      await expect(response.result()).rejects.toThrow("event stream ended");
+    });
+
+    expect(events.map((event) => event.type)).toEqual(["model.call.started", "model.call.error"]);
+    const errorEventPayload = getEvent(events, 1);
+    expect(errorEventPayload.type).toBe("model.call.error");
+    expect(errorEventPayload.callId).toBe("call-bare-eof");
+  });
 });

@@ -13,6 +13,34 @@ import {
 import { createModelObserver } from "./attempt.model-diagnostic-observation.js";
 
 const MODEL_CALL_STREAM_RETURN_TIMEOUT_MS = 1000;
+const ASSISTANT_TERMINAL_ERROR_REASONS = new Set(["error", "aborted"]);
+
+/** Classifies an assistant event as a terminal error rather than a successful close. */
+function isAssistantTerminalErrorEvent(value: unknown): boolean {
+  if (!isRecord(value) || value.type !== "error") {
+    return false;
+  }
+  const reason = value.reason;
+  if (typeof reason === "string" && ASSISTANT_TERMINAL_ERROR_REASONS.has(reason)) {
+    return true;
+  }
+  // Provider streams that surface only an `errorMessage` field on `error` events
+  // still represent a terminal failure even when the reason label is missing.
+  return typeof value.errorMessage === "string";
+}
+
+/** Classifies a resolved assistant result message as a terminal failure. */
+function isAssistantErrorResult(result: unknown): boolean {
+  if (!isRecord(result)) {
+    return false;
+  }
+  const stopReason = result.stopReason;
+  if (typeof stopReason === "string" && ASSISTANT_TERMINAL_ERROR_REASONS.has(stopReason)) {
+    return true;
+  }
+  return typeof result.errorMessage === "string";
+}
+
 function asyncIteratorFactory(value: unknown): (() => AsyncIterator<unknown>) | undefined {
   if (value === null || typeof value !== "object") {
     return undefined;
@@ -70,6 +98,16 @@ async function* observeModelCallIterator<T>(
   // This is independent of state.terminalEventEmitted: result() can emit the
   // terminal event first, but the abandoned iterator still needs return() cleanup.
   let iteratorSettled = false;
+  // Provider-declared `{type:"error"}` events are the authoritative terminal
+  // signal for failure. We track them separately so the next iterator close
+  // publishes `model.call.error` rather than `model.call.completed` even when
+  // the provider also calls `iterator.return()` before the consumer reads it.
+  let sawTerminalError = false;
+  // A provider-declared `{type:"done"}` event is the authoritative successful
+  // terminal. A bare iterator close (no `done` and no `error`) defers to the
+  // exposed `result()` promise so a truncated or rejected result still
+  // publishes a truthful terminal event through the result observer.
+  let sawTerminalDone = false;
   try {
     for (;;) {
       const next = await iterator.next();
@@ -77,11 +115,25 @@ async function* observeModelCallIterator<T>(
         iteratorSettled = true;
         break;
       }
+      if (isAssistantTerminalErrorEvent(next.value)) {
+        sawTerminalError = true;
+      } else if (isRecord(next.value) && next.value.type === "done") {
+        sawTerminalDone = true;
+      }
       lifecycle.observer.observeResponseChunk(lifecycle.startedAt, next.value);
       lifecycle.observer.maybeEmitStreamProgress(lifecycle.eventBase);
       yield next.value;
     }
-    lifecycle.emitCompleted();
+    if (sawTerminalError) {
+      // Preserve a representative error object so the diagnostic event carries
+      // the same provider message the consumer would have seen. The error
+      // observer handles plain `Error` instances and records the message.
+      lifecycle.emitError(new Error("Provider stream ended with a terminal error event"));
+    } else if (sawTerminalDone) {
+      lifecycle.emitCompleted();
+    }
+    // Bare EOF without `done` or `error`: let the result observer own the
+    // terminal emission so a rejected result() still publishes model.call.error.
   } catch (err) {
     iteratorSettled = true;
     lifecycle.emitError(err);
@@ -94,14 +146,29 @@ async function* observeModelCallIterator<T>(
       // listeners, SSE readers) even when result() already emitted the terminal
       // event; lifecycle completion self-dedupes via state.terminalEventEmitted.
       await safeReturnIterator(iterator);
-      lifecycle.emitCompleted();
+      if (sawTerminalError) {
+        lifecycle.emitError(new Error("Provider stream ended with a terminal error event"));
+      } else {
+        // Consumer-returned-early is the conservative path. result() is still
+        // wired and may publish the terminal if a caller later reads it; this
+        // fallback only fires for the abandoned-without-result() case.
+        lifecycle.emitCompleted();
+      }
     }
   }
 }
 
 function observeModelCallFinalResult<T>(result: T, lifecycle: ModelCallLifecycle): T {
   lifecycle.observer.observeFinalResult(lifecycle.eventBase, lifecycle.startedAt, result);
-  lifecycle.emitCompleted();
+  if (isAssistantErrorResult(result)) {
+    // Reuse the resolved message as the error so plugin/timeline observers get
+    // the same provider detail (errorMessage/errorCode/errorBody) they would
+    // have received through the iterator path. emitError tolerates plain
+    // objects alongside Error instances.
+    lifecycle.emitError(result);
+  } else {
+    lifecycle.emitCompleted();
+  }
   return result;
 }
 
@@ -173,7 +240,11 @@ function observeModelCallResult(result: unknown, lifecycle: ModelCallLifecycle):
   if (createIterator) {
     return observeModelCallStream(result as AsyncIterable<unknown>, createIterator, lifecycle);
   }
-  lifecycle.emitCompleted();
+  if (isAssistantErrorResult(result)) {
+    lifecycle.emitError(result);
+  } else {
+    lifecycle.emitCompleted();
+  }
   return result;
 }
 
