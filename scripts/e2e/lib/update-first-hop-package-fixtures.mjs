@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -55,20 +58,57 @@ export function removeLegacyUpdateCompatChunks(packageRoot) {
   );
 }
 
-export function markFutureUpdateFixture(packageRoot) {
+export function markFutureUpdateFixture(packageRoot, sequence = 0) {
+  if (!Number.isSafeInteger(sequence) || sequence < 0 || sequence > 9) {
+    throw new Error("future fixture sequence must be an integer from 0 to 9");
+  }
+  const version = FUTURE_FIXTURE_VERSION.replace(/0$/, String(sequence));
   removeLegacyUpdateCompatChunks(packageRoot);
   const paths = resolveFixturePaths(packageRoot);
   const packageJson = readJson(paths.packageJson);
   const buildInfo = readJson(paths.buildInfo);
-  packageJson.version = FUTURE_FIXTURE_VERSION;
-  buildInfo.version = FUTURE_FIXTURE_VERSION;
-  buildInfo.buildId = `${FUTURE_FIXTURE_VERSION}-${buildInfo.commit}-future-fixture`;
+  packageJson.version = version;
+  buildInfo.version = version;
+  buildInfo.buildId = `${version}-${buildInfo.commit}-future-fixture`;
   writeJson(paths.packageJson, packageJson);
   writeJson(paths.buildInfo, buildInfo);
 }
 
+export function packFutureUpdateFixture(candidateTarball, outputTarball, sequence = 0) {
+  const source = path.resolve(candidateTarball);
+  const output = path.resolve(outputTarball);
+  if (source === output || fs.existsSync(output)) {
+    throw new Error("future fixture output must be a new tarball path");
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-future-update-"));
+  try {
+    execFileSync("tar", ["-xzf", source, "-C", root]);
+    const packageRoot = path.join(root, "package");
+    const sourceVersion = readJson(path.join(packageRoot, "package.json")).version;
+    markFutureUpdateFixture(packageRoot, sequence);
+    execFileSync("tar", ["-czf", output, "-C", root, "package"], {
+      env: { ...process.env, COPYFILE_DISABLE: "1" },
+    });
+    return {
+      method: "candidate-same-schema-self-update-fixture",
+      sourceVersion,
+      targetVersion: readJson(path.join(packageRoot, "package.json")).version,
+      sourceSha256: createHash("sha256").update(fs.readFileSync(source)).digest("hex"),
+      targetSha256: createHash("sha256").update(fs.readFileSync(output)).digest("hex"),
+    };
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 function main() {
-  const [mode, packageRoot] = process.argv.slice(2);
+  const [mode, packageRoot, outputTarball, sequence] = process.argv.slice(2);
+  if (mode === "future-tarball" && packageRoot && outputTarball) {
+    process.stdout.write(
+      `${JSON.stringify(packFutureUpdateFixture(packageRoot, outputTarball, sequence === undefined ? 0 : Number(sequence)), null, 2)}\n`,
+    );
+    return;
+  }
   if (!packageRoot || (mode !== "negative" && mode !== "future")) {
     throw new Error(
       "usage: update-first-hop-package-fixtures.mjs <negative|future> <package-root>",

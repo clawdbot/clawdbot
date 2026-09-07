@@ -6,6 +6,7 @@ import {
   FUTURE_FIXTURE_VERSION,
   LEGACY_UPDATE_COMPAT_CHUNKS,
   markFutureUpdateFixture,
+  packFutureUpdateFixture,
   removeLegacyUpdateCompatChunks,
 } from "../../scripts/e2e/lib/update-first-hop-package-fixtures.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -77,6 +78,36 @@ describe("first-hop package fixtures", () => {
     for (const name of LEGACY_UPDATE_COMPAT_CHUNKS) {
       expect(fs.existsSync(path.join(root, "dist", name))).toBe(false);
     }
+  });
+
+  it("packs distinct self-update targets without changing the candidate artifact", () => {
+    const root = tempDirs.make("openclaw-same-schema-fixtures-");
+    fs.cpSync(makePackageFixture(), path.join(root, "package"), { recursive: true });
+    const candidate = path.join(root, "candidate.tgz");
+    execFileSync("tar", ["-czf", candidate, "-C", root, "package"]);
+    const original = fs.readFileSync(candidate);
+    const receipts = [0, 1].map((sequence) => {
+      const output = path.join(root, `future-${sequence}.tgz`);
+      const receipt = packFutureUpdateFixture(candidate, output, sequence);
+      const pkg = JSON.parse(
+        execFileSync("tar", ["-xOf", output, "package/package.json"], { encoding: "utf8" }),
+      );
+      expect(pkg.version).toBe(receipt.targetVersion);
+      expect(pkg.dependencies).toEqual({ "@openclaw/ai": "2026.8.1" });
+      expect(
+        execFileSync("tar", ["-xOf", output, "package/dist/index.js"], { encoding: "utf8" }),
+      ).toBe("export {};\n");
+      expect(receipt.sourceVersion).toBe("2026.8.1");
+      return receipt;
+    });
+    expect(receipts.map((receipt) => receipt.targetVersion)).toEqual([
+      "2026.9.99-first-hop.0",
+      "2026.9.99-first-hop.1",
+    ]);
+    expect(new Set(receipts.map((receipt) => receipt.targetSha256)).size).toBe(2);
+    expect(fs.readFileSync(candidate)).toEqual(original);
+    expect(() => packFutureUpdateFixture(candidate, candidate)).toThrow("new tarball path");
+    expect(fs.readFileSync(candidate)).toEqual(original);
   });
 
   it.skipIf(process.platform === "win32")(
