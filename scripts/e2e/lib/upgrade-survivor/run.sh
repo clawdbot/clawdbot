@@ -5,6 +5,7 @@ set -Eeuo pipefail
 exec 3>&1
 
 source scripts/lib/openclaw-e2e-instance.sh
+source scripts/e2e/lib/external-package-transition.sh
 source scripts/e2e/lib/prepublish-plugin-registry.sh
 source scripts/e2e/lib/upgrade-survivor/plugin-dependency-fixtures.sh
 
@@ -100,10 +101,18 @@ FAILURE_SIGNAL=""
 gateway_pid=""
 plugin_registry_pid=""
 clawhub_fixture_pid=""
+restart_mock_pid=""
+restart_registry_pid=""
+restart_runtime_evidence=""
+restart_fixture_package=""
+restart_inference=""
 baseline_spec=""
 baseline_version=""
 baseline_version_expected="0"
 candidate_version=""
+candidate_tarball=""
+restart_fixture_version=""
+restart_fixture_evidence=""
 installed_version=""
 candidate_install_mode="updater"
 HISTORICAL_MOBILE_PAIRING_CANDIDATE_SHA="ea806575e6450e4d1efdfc72c19f04be982a1b9b"
@@ -275,6 +284,9 @@ write_summary() {
     SUMMARY_WATCH_RESTART_CONNECT="$WATCH_RESTART_CONNECT_JSON" \
     SUMMARY_WATCH_RESTART_STATE="$WATCH_RESTART_STATE_JSON" \
     SUMMARY_HISTORICAL_PACKAGE_REPLACEMENT="$HISTORICAL_PACKAGE_REPLACEMENT_EVIDENCE" \
+    SUMMARY_RESTART_FIXTURE="$restart_fixture_evidence" \
+    SUMMARY_RESTART_RUNTIME_FIXTURE="$restart_runtime_evidence" \
+    SUMMARY_RESTART_INFERENCE="$restart_inference" \
     node <<'NODE'
 const fs = require("node:fs");
 const phaseLog = process.env.SUMMARY_PHASE_LOG;
@@ -307,6 +319,9 @@ const summary = {
   updateRestartMode: process.env.SUMMARY_UPDATE_RESTART_MODE || "manual",
   updateRecovery: process.env.SUMMARY_UPDATE_REPAIR_REQUIRED === "1" ? "capability-consent" : null,
   updateRestartSource: process.env.SUMMARY_UPDATE_RESTART_SOURCE || null,
+  restartFixture: readJsonOrNull(process.env.SUMMARY_RESTART_FIXTURE),
+  restartRuntimeFixture: readJsonOrNull(process.env.SUMMARY_RESTART_RUNTIME_FIXTURE),
+  restartInference: process.env.SUMMARY_RESTART_INFERENCE || null,
   timings: {
     startupSeconds: numberOrNull(process.env.SUMMARY_START_SECONDS),
     updateRestartSeconds: numberOrNull(process.env.SUMMARY_UPDATE_RESTART_SECONDS),
@@ -448,6 +463,8 @@ cleanup() {
   stop_gateway
   openclaw_e2e_stop_process "${plugin_registry_pid:-}"
   openclaw_e2e_stop_process "${clawhub_fixture_pid:-}"
+  openclaw_e2e_stop_process "${restart_mock_pid:-}"
+  openclaw_e2e_stop_process "${restart_registry_pid:-}"
 }
 
 on_error() {
@@ -1133,12 +1150,38 @@ resolve_candidate_version() {
 
 resolve_candidate_install_mode() {
   candidate_install_mode="updater"
+  if [ "$baseline_version" = "2026.9.2" ] && [ "$candidate_version" = "2026.9.3" ]; then
+    candidate_install_mode="external-package-manager-and-fresh-doctor"
+  fi
   if [ "$SCENARIO" = "mobile-pairing-reconnect" ] &&
     [ "$baseline_version" = "2026.7.1" ] &&
     [ "$candidate_version" = "2026.8.1" ] &&
     [ "${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" = "$HISTORICAL_MOBILE_PAIRING_CANDIDATE_SHA" ]; then
     candidate_install_mode="historical-package-replacement"
   fi
+}
+
+prepare_candidate_tarball() {
+  [ -n "$candidate_tarball" ] && return 0
+  if [ "$CANDIDATE_KIND" = "tarball" ]; then
+    candidate_tarball="${CANDIDATE_SPEC#file:}"
+    return 0
+  fi
+  local package_dir
+  package_dir="$(mktemp -d "$RUNTIME_ROOT/candidate-package.XXXXXX")" || return "$?"
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" npm pack "$CANDIDATE_SPEC" \
+    --ignore-scripts --json --pack-destination "$package_dir" >"$package_dir/pack.json" || return "$?"
+  candidate_tarball="$(node - "$package_dir" "$candidate_version" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const [dir, expected] = process.argv.slice(2);
+const result = JSON.parse(fs.readFileSync(path.join(dir, "pack.json"), "utf8"));
+if (!Array.isArray(result) || result.length !== 1 || result[0].name !== "openclaw" || result[0].version !== expected || typeof result[0].filename !== "string" || !result[0].filename.endsWith(".tgz") || path.basename(result[0].filename) !== result[0].filename) {
+  throw new Error("Packed candidate identity differs from the selected release");
+}
+process.stdout.write(path.join(dir, result[0].filename));
+NODE
+  )" || return "$?"
 }
 
 candidate_update_spec() {
@@ -1158,6 +1201,7 @@ candidate_update_spec() {
 
 update_candidate() {
   local after_repair="${1:-0}"
+  local expected_version="${3:-$candidate_version}"
   local update_json="$UPDATE_JSON" update_err="$UPDATE_ERR"
   local observation_root
   # The old parent need not join its child. A fresh directory keeps a late exit
@@ -1172,8 +1216,11 @@ update_candidate() {
     update_err="$ARTIFACT_ROOT/recovery-update.err"
   fi
   local update_spec
-  update_spec="$(candidate_update_spec)"
-  echo "Updating baseline $baseline_spec to candidate $CANDIDATE_KIND:$update_spec ($candidate_version)"
+  update_spec="${2:-}"
+  if [ -z "$update_spec" ]; then
+    update_spec="$(candidate_update_spec)"
+  fi
+  echo "Updating baseline $baseline_spec to target $CANDIDATE_KIND:$update_spec ($expected_version)"
   local update_start=""
   local update_end=""
   local previous_service_pid="" previous_systemctl_lines=0
@@ -1217,10 +1264,10 @@ update_candidate() {
   # classifying the result; an unreadable package must not retain the baseline.
   installed_version="$(read_installed_version)" || installed_version=""
   if [ "$after_repair" != "1" ] && [ "$update_status" -le 1 ] && node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
-    assert-recoverable-update-json "$update_json" "$candidate_version" "$observation_root" "$baseline_version" >"$ARTIFACT_ROOT/update-result-check.log" 2>&1; then
+    assert-recoverable-update-json "$update_json" "$expected_version" "$observation_root" "$baseline_version" >"$ARTIFACT_ROOT/update-result-check.log" 2>&1; then
     update_repair_required="1"
   elif [ "$update_status" -eq 0 ] && node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
-    assert-successful-update-json "$update_json" "$candidate_version" "$observation_root"; then
+    assert-successful-update-json "$update_json" "$expected_version" "$observation_root"; then
     if [ "$after_repair" = "1" ] && [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
       update_end="$(node -e "process.stdout.write(String(Date.now()))")"
       update_restart_seconds=$(((update_end - update_start + 999) / 1000))
@@ -1228,6 +1275,9 @@ update_candidate() {
       # Require this invocation's actual replacement before claiming restart proof.
       assert_update_restart_service_replaced "$previous_service_pid" "$previous_systemctl_lines" || return 1
       update_restart_source="candidate-update"
+      if [ "$expected_version" != "$candidate_version" ]; then
+        update_restart_source="candidate-to-future"
+      fi
       if [ "$update_repair_required" = "1" ]; then
         update_restart_source="candidate-after-repair"
       fi
@@ -1244,8 +1294,8 @@ update_candidate() {
     [ "$update_status" -ne 0 ] || update_status=1
     return "$update_status"
   fi
-  if [ "$installed_version" != "$candidate_version" ]; then
-    echo "update did not leave the candidate installed: $installed_version" >&2
+  if [ "$installed_version" != "$expected_version" ]; then
+    echo "update did not leave the selected target installed: $installed_version (expected $expected_version)" >&2
     return 1
   fi
 }
@@ -1301,6 +1351,19 @@ update_candidate_for_install_mode() {
       ;;
     historical-package-replacement)
       replace_historical_mobile_pairing_candidate
+      ;;
+    external-package-manager-and-fresh-doctor)
+      local stopped_pid="${gateway_pid:-}"
+      if [ -s "$SYSTEMCTL_SHIM_PID_FILE" ]; then
+        stopped_pid="$(cat "$SYSTEMCTL_SHIM_PID_FILE")"
+      fi
+      stop_gateway || return "$?"
+      prepare_candidate_tarball || return "$?"
+      OPENCLAW_CURRENT_PACKAGE_TGZ="$candidate_tarball" \
+        openclaw_e2e_external_package_transition \
+        "$baseline_version" "$candidate_version" "$ARTIFACT_ROOT/external-transition" "$stopped_pid" || return "$?"
+      installed_version="$(read_installed_version)" || return "$?"
+      cp "$ARTIFACT_ROOT/external-transition/transition.json" "$UPDATE_JSON"
       ;;
     *)
       echo "unknown candidate install mode: $candidate_install_mode" >&2
@@ -1389,8 +1452,66 @@ run_doctor() {
   fi
 }
 
+prepare_restart_inference() {
+  if [ "$LIVE_OPENAI" = "1" ]; then
+    export OPENAI_API_KEY="$LIVE_OPENAI_API_KEY"
+    restart_inference="live-openai"
+    return 0
+  fi
+  restart_mock_pid="$(MOCK_REQUEST_LOG="$ARTIFACT_ROOT/restart-model-requests.jsonl" \
+    openclaw_e2e_start_mock_openai 44213 "$ARTIFACT_ROOT/restart-model.log")" || return "$?"
+  openclaw_e2e_wait_mock_openai 44213 || return "$?"
+  node scripts/e2e/lib/release-scenarios/assertions.mjs configure-mock-openai 44213 || return "$?"
+  restart_inference="mock-openai"
+}
+
+prepare_restart_fixture() {
+  prepare_candidate_tarball || return "$?"
+  local fixture_dir fixture_package runtime_source
+  fixture_dir="$(mktemp -d "$RUNTIME_ROOT/restart-fixture.XXXXXX")" || return "$?"
+  fixture_package="$fixture_dir/future.tgz"
+  node scripts/e2e/lib/update-first-hop-package-fixtures.mjs future-tarball \
+    "$candidate_tarball" "$fixture_package" >"$fixture_dir/receipt.json" || return "$?"
+  restart_fixture_version="$(node -p 'require(process.argv[1]).targetVersion' "$fixture_dir/receipt.json")" || return "$?"
+  mv "$fixture_dir/receipt.json" "$ARTIFACT_ROOT/restart-fixture.json" || return "$?"
+  restart_fixture_evidence="$ARTIFACT_ROOT/restart-fixture.json"
+  restart_fixture_package="$fixture_package"
+  runtime_source="$(node - "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:?managed restart requires the candidate plugin registry}" "$candidate_version" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const crypto = require("node:crypto");
+const [root, version] = process.argv.slice(2);
+const manifest = JSON.parse(fs.readFileSync(path.join(root, "prepublish-plugin-registry.json"), "utf8"));
+const entry = manifest.packages.find((item) => item.name === "@openclaw/codex" && item.version === version);
+if (!entry) throw new Error("Sealed candidate registry is missing its matching Codex runtime");
+const file = path.resolve(root, entry.tarball);
+if (crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex") !== entry.sha256) {
+  throw new Error("Candidate runtime artifact digest differs from the sealed registry");
+}
+process.stdout.write(file);
+NODE
+  )" || return "$?"
+  node scripts/e2e/lib/update-first-hop-package-fixtures.mjs future-runtime-tarball \
+    "$runtime_source" "$fixture_dir/codex.tgz" >"$fixture_dir/runtime-receipt.json" || return "$?"
+  mv "$fixture_dir/runtime-receipt.json" "$ARTIFACT_ROOT/restart-runtime-fixture.json" || return "$?"
+  restart_runtime_evidence="$ARTIFACT_ROOT/restart-runtime-fixture.json"
+  # The runtime is version-bound to its host. Serve the matching synthetic
+  # cohort without changing the sealed candidate registry or its identity.
+  OPENCLAW_NPM_REGISTRY_UPSTREAM="$NPM_CONFIG_REGISTRY" \
+    openclaw_prepublish_plugin_registry_start \
+      "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR" \
+      "${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" "$candidate_version" \
+      "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256:-}" \
+      "$fixture_dir/registry" restart_registry_pid \
+      "@openclaw/codex" "$restart_fixture_version" "$fixture_dir/codex.tgz" || return "$?"
+}
+
 repair_update_restart_auth() {
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+    # Historical preservation has already passed. This separate current-runtime
+    # update needs a configured inference route for its real serving receipt.
+    phase prepare-restart-inference prepare_restart_inference || return "$?"
+    phase prepare-restart-fixture prepare_restart_fixture || return "$?"
     # Start is preparation only. The following updater must replace this exact
     # supervisor itself; its existing replacement and auth assertions remain required.
     phase prepare-recovery-service run_update_restart_probe_gateway start 18789 "$COMMAND_TIMEOUT"
@@ -1400,7 +1521,7 @@ repair_update_restart_auth() {
     phase prepared-gateway-auth check_gateway_status
     local auth_status=$?
     [ "$auth_status" -eq 0 ] || return "$auth_status"
-    phase recovery-update-restart update_candidate 1
+    phase recovery-update-restart update_candidate 1 "file:$restart_fixture_package" "$restart_fixture_version"
     local recovery_status=$?
     [ "$recovery_status" -eq 0 ] || return "$recovery_status"
     assert_survival
@@ -1464,8 +1585,9 @@ assert_survival() {
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
   installed_version="$(read_installed_version)"
-  if [ "$installed_version" != "$candidate_version" ]; then
-    echo "candidate package version mismatch: expected $candidate_version, got $installed_version" >&2
+  local expected_version="${restart_fixture_version:-$candidate_version}"
+  if [ "$installed_version" != "$expected_version" ]; then
+    echo "selected package version mismatch: expected $expected_version, got $installed_version" >&2
     return 1
   fi
 }
@@ -1652,6 +1774,8 @@ phase update-candidate update_candidate_for_install_mode
 if [ "$candidate_install_mode" = "historical-package-replacement" ]; then
   phase assert-historical-package-replacement-prestart \
     assert_historical_package_replacement_prestart
+elif [ "$candidate_install_mode" = "external-package-manager-and-fresh-doctor" ]; then
+  phase assert-external-migration assert_survival
 else
   # A standalone Doctor pass would conceal missing migrations in the updater.
   phase assert-automatic-migration assert_survival

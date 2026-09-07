@@ -8,15 +8,27 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const runner = resolve("scripts/e2e/lib/upgrade-survivor/run.sh");
 const baselineVersion = "2026.7.1-2";
 const candidateVersion = "2026.8.1";
+type UpdateFault = {
+  packageState: string;
+  installedVersion: string | null;
+  exitCode: number;
+  targetVersion?: string;
+};
 
 describe.skipIf(process.platform === "win32")(
   "survivor installed version after update failure",
   () => {
-    it.each([
+    it.each<UpdateFault>([
       { packageState: "swapped", installedVersion: candidateVersion, exitCode: 1 },
       { packageState: "missing", installedVersion: null, exitCode: 42 },
       { packageState: "broken", installedVersion: null, exitCode: 43 },
       { packageState: "unchanged", installedVersion: baselineVersion, exitCode: 44 },
+      {
+        packageState: "future-swapped",
+        installedVersion: "2026.9.99-first-hop.0",
+        targetVersion: "2026.9.99-first-hop.0",
+        exitCode: 1,
+      },
     ])("reports $packageState package bytes and preserves exit $exitCode", (fixture) => {
       const home = tempDirs.make("survivor-installed-version-");
       const state = join(home, "state");
@@ -33,6 +45,8 @@ describe.skipIf(process.platform === "win32")(
         JSON.stringify({ name: "openclaw", version: baselineVersion }),
       );
       const entrypoint = join(packageRoot, "openclaw.mjs");
+      const targetVersion = fixture.targetVersion ?? candidateVersion;
+      const targetPackage = join(home, fixture.targetVersion ? "future.tgz" : "candidate.tgz");
       // Inject the package-swap/finalization fault at the executable boundary.
       // The real update owner, package reader, assertions and exit summary still run.
       writeFileSync(
@@ -49,14 +63,14 @@ if (args[0] === 'update') {
   if (packageState === 'missing') {
     fs.unlinkSync(manifest);
   } else if (packageState !== 'unchanged') {
-    const bytes = packageState === 'broken' ? '{' : JSON.stringify({name:'openclaw', version:${JSON.stringify(candidateVersion)}});
+    const bytes = packageState === 'broken' ? '{' : JSON.stringify({name:'openclaw', version:${JSON.stringify(targetVersion)}});
     fs.writeFileSync(manifest + '.next', bytes);
     fs.renameSync(manifest + '.next', manifest);
   }
   console.log(JSON.stringify({
     status:'error', mode:'npm', reason:'openclaw doctor',
     before:{version:${JSON.stringify(baselineVersion)}},
-    after:{version:${JSON.stringify(candidateVersion)}},
+    after:{version:${JSON.stringify(targetVersion)}},
     steps:[{name:'global update',exitCode:0},{name:'global install swap',exitCode:0},{name:'openclaw doctor',exitCode:${fixture.exitCode}}]
   }));
   console.error('target Doctor fixture failed');
@@ -83,7 +97,7 @@ if (args[0] === 'update') {
         installed_version="$(read_installed_version)"
         ;;
       resolve-candidate) candidate_version=${candidateVersion} ;;
-      update-candidate) "$@" ;;
+      update-candidate) ${fixture.targetVersion ? `update_candidate 0 "file:${targetPackage}" "${targetVersion}"` : '"$@"'} ;;
     esac
   }
 }
@@ -135,6 +149,7 @@ trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
         .map((line) => JSON.parse(line));
       // Keep the existing failure probe; version discovery must add no CLI calls.
       expect(calls.map((args) => args[0])).toEqual(["update", "config"]);
+      expect(calls[0][calls[0].indexOf("--tag") + 1]).toBe(`file:${targetPackage}`);
       expect(calls[1]).toEqual(["config", "validate", "--json"]);
       expect(summary.installedVersion).toBe(fixture.installedVersion);
     });
