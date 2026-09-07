@@ -151,6 +151,8 @@ export function beginUpdateRecovery(
  * awaits capture/reopen against current owned state/config/runtime, then passes
  * ref + manifest.binding here under the post-stop schema/exclusion fence. This
  * only persists verified facts; replay must reopen the immutable artifact again.
+ * If early preimages were bound, also pass the reopened manifest.preimageRef;
+ * neither an early artifact nor an unrelated full capture can replace them.
  */
 export function bindUpdateRecoveryCheckpoint(
   expected: UpdateRecoveryRevision,

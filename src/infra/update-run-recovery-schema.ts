@@ -62,6 +62,8 @@ const checkpointRef = z.strictObject({
 });
 const checkpoint = z.strictObject({
   ref: checkpointRef,
+  // Full checkpoints assembled from separately bound early files retain their locator.
+  preimageRef: checkpointRef.optional(),
   binding: z.strictObject({
     runId: z.uuid(),
     stateDir: absolutePath,
@@ -100,6 +102,11 @@ export const UpdateRecoveryRecordSchema = z
     createdAtMs: counter,
     updatedAtMs: counter,
     effects: z.array(UpdateRecoveryEffectSchema).max(4096),
+    // File-only original bytes/absence; never a substitute for the post-stop checkpoint.
+    preimages: checkpoint
+      .omit({ preimageRef: true })
+      .extend({ boundAtRevision: counter })
+      .optional(),
     checkpoint: checkpoint.optional(),
     // Append-only owner-reopened after-images. No defaults: preserve existing
     // publication commitments for records written before this facility existed.
@@ -140,6 +147,31 @@ export const UpdateRecoveryRecordSchema = z
     primaryFailure: z.strictObject({ code: exactText, effectId: z.uuid().nullable() }).nullable(),
   })
   .superRefine((record, ctx) => {
+    const early = record.preimages;
+    if (
+      (early &&
+        (early.boundAtRevision > record.revision ||
+          !record.source ||
+          early.binding.runId !== record.runId ||
+          early.binding.stateDir !== record.source.stateDir ||
+          early.binding.configPath !== record.source.configPath ||
+          early.binding.fromRuntime.root !== record.from.root ||
+          early.binding.fromRuntime.nodePath !== record.from.nodePath ||
+          early.binding.fromRuntime.version !== record.from.version)) ||
+      (record.checkpoint &&
+        ((early &&
+          (!isDeepStrictEqual(record.checkpoint.preimageRef, early.ref) ||
+            !isDeepStrictEqual(record.checkpoint.binding, early.binding) ||
+            record.checkpoint.ref.checkpointId === early.ref.checkpointId ||
+            record.checkpoint.ref.manifestPath === early.ref.manifestPath ||
+            record.checkpoint.ref.manifestSha256 === early.ref.manifestSha256)) ||
+          (!early && record.checkpoint.preimageRef)))
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Early file preimages must remain distinct from the full checkpoint",
+      });
+    }
     if (record.package && record.package.descriptor.transactionId !== record.transactionId) {
       ctx.addIssue({ code: "custom", message: "Package transaction differs from recovery" });
     }
