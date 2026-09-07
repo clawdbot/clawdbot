@@ -1568,7 +1568,19 @@
     "./plugin-sdk/llm": {
       "default": "./dist/plugin-sdk/llm.js"
     },
-    "./cli-entry": "./openclaw.mjs"
+    "./cli-entry": "./openclaw.mjs",
+    "./plugin-sdk/utf16-slice-runtime": {
+      "types": "./dist/plugin-sdk/utf16-slice-runtime.d.ts",
+      "default": "./dist/plugin-sdk/utf16-slice-runtime.js"
+    },
+    "./plugin-sdk/sqlite-vec-runtime": {
+      "types": "./dist/plugin-sdk/sqlite-vec-runtime.d.ts",
+      "default": "./dist/plugin-sdk/sqlite-vec-runtime.js"
+    },
+    "./plugin-sdk/node-sqlite-runtime": {
+      "types": "./dist/plugin-sdk/node-sqlite-runtime.d.ts",
+      "default": "./dist/plugin-sdk/node-sqlite-runtime.js"
+    }
   },
   "scripts": {
     "android:assemble": "node --import ./scripts/tsx.mjs scripts/run-android-gradle.mts :app:assemblePlayDebug :wear:assembleDebug :wear-shared:assembleDebug",

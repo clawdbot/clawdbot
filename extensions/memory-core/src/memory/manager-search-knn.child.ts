@@ -1,6 +1,10 @@
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/node-sqlite-runtime";
 // Child-process entrypoint for one hard-cancellable sqlite-vec KNN query.
-import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
-import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+// Slim barrels: importing from the heavy foundation/schema/runtime barrels pulls
+// 1,000+ transitive .js files into the child's module graph, adding ~2.3 s of
+// pure resolution+evaluation overhead per query (#140681). These narrow barrels
+// re-export only what the child needs.
+import { loadSqliteVecExtension } from "openclaw/plugin-sdk/sqlite-vec-runtime";
 import {
   runVectorKnnQuery,
   type VectorKnnRequest,
