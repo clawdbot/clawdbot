@@ -38,7 +38,7 @@ export function createSessionRosterCacheLifecycle(
   let cachedProfileId = options.bootRecord?.profileId;
   let disposed = false;
   const settled =
-    startupScope && !retired && host.readState().result === null
+    options.bootRecord && startupScope && !retired && host.readState().result === null
       ? cache
           .read(startupScope, expected)
           .then((record) => {

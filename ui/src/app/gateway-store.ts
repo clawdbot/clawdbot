@@ -30,6 +30,7 @@ import { resolveSessionKey } from "../lib/sessions/index.ts";
 import { readSessionDefaults } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { clearStoredChatSnapshots } from "../pages/chat/session-snapshot-invalidation.runtime.ts";
+import { clearBootRecords } from "./boot-record.ts";
 import type {
   ApplicationGateway,
   ApplicationGatewayConnectOptions,
@@ -376,6 +377,7 @@ export function createApplicationGateway(
     const retiredEventLog = credentialsChanged ? eventLog.resetConnection() : null;
     if (credentialsChanged) {
       connectionRevision += 1;
+      clearBootRecords();
       void clearStoredChatSnapshots();
       void import("../lib/sessions/session-roster-cache.runtime.ts").then(
         ({ clearCachedBootState }) => clearCachedBootState(),

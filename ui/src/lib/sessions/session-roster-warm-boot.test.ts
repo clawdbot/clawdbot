@@ -60,7 +60,9 @@ afterEach(() => {
   activeCapabilities.clear();
 });
 
-function harness(options: { cached?: Promise<SessionRosterRecord | null> } = {}) {
+function harness(
+  options: { cached?: Promise<SessionRosterRecord | null>; withBootRecord?: boolean } = {},
+) {
   let connectionRevision = 0;
   let snapshot: SessionGateway["snapshot"] = {
     client: null,
@@ -100,7 +102,7 @@ function harness(options: { cached?: Promise<SessionRosterRecord | null> } = {})
   const selection = { state: { selectedId: "main" }, subscribe: () => () => undefined };
   const sessions = createSessionCapability(gateway, selection, {
     rosterCache: { read, write },
-    bootRecord,
+    ...(options.withBootRecord !== false ? { bootRecord } : {}),
   });
   activeCapabilities.add(sessions);
   const publish = (patch: Partial<typeof snapshot>) => {
@@ -150,6 +152,29 @@ describe("session capability warm roster", () => {
     h.publish({ phase: "reconnecting" });
     expect(h.sessions.state.result?.sessions).toHaveLength(2);
     expect(h.sessions.state.resultCached).toBe(true);
+  });
+
+  it("does not read or publish a cached roster without an accepted boot record", async () => {
+    const h = harness({ withBootRecord: false });
+    await h.sessions.whenCachedRosterSettled();
+    expect(h.read).not.toHaveBeenCalled();
+    expect(h.sessions.state).toMatchObject({
+      result: null,
+      groups: [],
+      groupSettings: [],
+      sectionOrder: [],
+    });
+    expect(h.sessions.state.resultCached).not.toBe(true);
+    expect(h.sessions.canonicalListRevision).toBe(0);
+    h.publish({ phase: "reconnecting" });
+    expect(h.read).not.toHaveBeenCalled();
+    expect(h.sessions.state.result).toBeNull();
+
+    h.connect();
+    const live = sessionsResult([{ key: "agent:main:live", kind: "direct" }], 2);
+    h.live.resolve(live);
+    await vi.waitFor(() => expect(h.sessions.state.result).toEqual(live));
+    expect(h.sessions.state.resultCached).toBe(false);
   });
 
   it("replaces cached rows and stale presentation with the first live list, then schedules persistence", async () => {
