@@ -1,4 +1,5 @@
 import Testing
+import OpenClawChatUI
 @testable import OpenClaw
 
 struct CommandCenterTabSessionFilterTests {

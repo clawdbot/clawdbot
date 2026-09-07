@@ -483,7 +483,7 @@ describe("session list resolver cache", () => {
         expect(titleBatchSpy.mock.calls[0]?.[0]).toHaveLength(scenario.enriched);
         const sessionsByKey = new Map(result.sessions.map((session) => [session.key, session]));
         expect(sessionsByKey.get("agent:main:title-batch-0")).toMatchObject({
-          derivedTitle: "title 0",
+          derivedTitle: "Title 0",
           lastMessagePreview: "last 0",
         });
         expect(sessionsByKey.get(`agent:main:title-batch-${scenario.sharedTail}`)).toMatchObject({

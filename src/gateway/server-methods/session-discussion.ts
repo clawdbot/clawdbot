@@ -33,7 +33,7 @@ async function maybeGenerateTitleBeforeDiscussionOpen(params: {
     });
     const { entry } = resolved;
     const sessionId = entry?.sessionId;
-    if (!entry || !sessionId || hasExplicitSessionName(entry)) {
+    if (!entry || !sessionId || hasExplicitSessionName(entry, resolved.canonicalKey)) {
       return;
     }
 

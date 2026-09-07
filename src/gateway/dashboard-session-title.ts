@@ -102,14 +102,39 @@ type SessionTitleAttempt =
 /** Android stamps this prefix on its node main session; it is not a user rename. */
 const PLATFORM_AUTO_SESSION_LABEL_RE = /^OpenClaw App(?:\s*·|$)/i;
 
-export function isPlatformAutoSessionLabel(value: string | null | undefined): boolean {
-  const trimmed = value?.trim();
-  return Boolean(trimmed && PLATFORM_AUTO_SESSION_LABEL_RE.test(trimmed));
+function resolveNodeDeviceId12(sessionKey?: string): string | undefined {
+  const rest = parseAgentSessionKey(sessionKey)?.rest ?? "";
+  if (!rest.startsWith("node-")) {
+    return undefined;
+  }
+  const deviceId = rest.slice("node-".length).split(":")[0];
+  return deviceId || undefined;
 }
 
-export function resolveExplicitSessionName(entry: SessionEntry | undefined): string | undefined {
+function isPlatformAutoSessionLabel(
+  value: string | null | undefined,
+  sessionKey?: string,
+): boolean {
+  const trimmed = value?.trim();
+  const deviceId = resolveNodeDeviceId12(sessionKey);
+  if (!trimmed || !deviceId) {
+    return false;
+  }
+  if (/^OpenClaw App$/i.test(trimmed)) {
+    return true;
+  }
+  if (trimmed.toLowerCase() === `openclaw app · ${deviceId}`.toLowerCase()) {
+    return true;
+  }
+  return PLATFORM_AUTO_SESSION_LABEL_RE.test(trimmed) && trimmed.endsWith(` · ${deviceId}`);
+}
+
+export function resolveExplicitSessionName(
+  entry: SessionEntry | undefined,
+  sessionKey?: string,
+): string | undefined {
   const label = entry?.label?.trim();
-  if (label && !isPlatformAutoSessionLabel(label)) {
+  if (label && !isPlatformAutoSessionLabel(label, sessionKey)) {
     return label;
   }
   // Platform auto-labels must not block generated displayName titles.
@@ -118,15 +143,16 @@ export function resolveExplicitSessionName(entry: SessionEntry | undefined): str
     .find(Boolean);
 }
 
-export function hasExplicitSessionName(entry: SessionEntry | undefined): boolean {
-  return Boolean(resolveExplicitSessionName(entry));
+export function hasExplicitSessionName(
+  entry: SessionEntry | undefined,
+  sessionKey?: string,
+): boolean {
+  return Boolean(resolveExplicitSessionName(entry, sessionKey));
 }
 
 function isAutoTitleSessionKey(sessionKey: string): boolean {
   const rest = parseAgentSessionKey(sessionKey)?.rest ?? "";
-  return (
-    rest.startsWith("dashboard:") || rest.startsWith("ios-") || rest.startsWith("node-")
-  );
+  return rest.startsWith("dashboard:") || rest.startsWith("ios-") || rest.startsWith("node-");
 }
 
 /** True when this interactive chat key should receive an automatic topic title. */
@@ -238,7 +264,15 @@ async function generateDashboardSessionTitle(params: {
   } catch {
     params.assertCurrent?.();
     params.abortSignal?.throwIfAborted();
+    if (params.utilityOnly) {
+      return null;
+    }
     // Fall through to the deterministic goal title; keep provider errors private.
+  }
+  // Speculative utility-only naming must not persist a provisional title that
+  // would skip the healthy primary-model pass after send.
+  if (params.utilityOnly) {
+    return null;
   }
   // No model (or a failed isolated completion): persist a readable topic from the
   // first real user task so phone/Control UI sidebars are not first-bubble leftovers.
@@ -260,10 +294,8 @@ export async function prepareDashboardSessionTitle(params: {
   } catch {
     params.assertCurrent?.();
     params.abortSignal?.throwIfAborted();
-    // Speculation is optional; still offer a deterministic draft title.
-    const sourceText = buildDashboardSessionTitleSource({ message: params.userMessage });
-    const fallback = deriveGoalSessionTitle(sourceText, DASHBOARD_SESSION_TITLE_MAX_CHARS);
-    return fallback ? normalizeDashboardSessionTitle(fallback) : null;
+    // Speculation is optional; a failed utility pass must not invent a title.
+    return null;
   }
 }
 
@@ -295,7 +327,7 @@ export async function generateWorktreeSessionTitle(
   if (current?.sessionId !== params.sessionId) {
     throw new Error("Session changed while naming its worktree; retry from the current session.");
   }
-  return resolveExplicitSessionName(current);
+  return resolveExplicitSessionName(current, resolveStoredSessionKeyForAgentStore(params));
 }
 
 export async function maybeGenerateDashboardSessionTitle(params: {
@@ -338,7 +370,7 @@ export async function maybeGenerateSessionTitle(params: {
   const sessionKey = resolveStoredSessionKeyForAgentStore(params);
   const scope = { agentId: params.agentId, sessionKey, storePath: params.storePath };
   const entry = loadSessionEntry(scope);
-  if (hasExplicitSessionName(entry) || entry?.sessionId !== params.sessionId) {
+  if (hasExplicitSessionName(entry, sessionKey) || entry?.sessionId !== params.sessionId) {
     return { kind: "skipped" };
   }
 
@@ -394,7 +426,10 @@ export async function maybeGenerateSessionTitle(params: {
         await patchSessionEntryCore(
           scope,
           (current) => {
-            if (current.sessionId !== params.sessionId || hasExplicitSessionName(current)) {
+            if (
+              current.sessionId !== params.sessionId ||
+              hasExplicitSessionName(current, sessionKey)
+            ) {
               return null;
             }
             persisted = true;

@@ -4604,12 +4604,12 @@ describe("session list selected model display", () => {
       expect(listed.sessions).toHaveLength(11);
       expectFields(listed.sessions[0], {
         key: "agent:main:sess-yield-0",
-        derivedTitle: "title 0",
+        derivedTitle: "Title 0",
         lastMessagePreview: "last 0",
       });
       expectFields(listed.sessions.at(-1), {
         key: "agent:main:sess-yield-10",
-        derivedTitle: "title 10",
+        derivedTitle: "Title 10",
         lastMessagePreview: "last 10",
       });
       expect(listed.sessions[0]?.agentRuntime).toEqual({
@@ -4668,9 +4668,9 @@ describe("session list selected model display", () => {
       });
 
       expect(result.sessions).toHaveLength(101);
-      expect(result.sessions[0]?.derivedTitle).toBe("title 0");
+      expect(result.sessions[0]?.derivedTitle).toBe("Title 0");
       expect(result.sessions[0]?.lastMessagePreview).toBe("last 0");
-      expect(result.sessions[99]?.derivedTitle).toBe("title 99");
+      expect(result.sessions[99]?.derivedTitle).toBe("Title 99");
       expect(result.sessions[99]?.lastMessagePreview).toBe("last 99");
       expect(result.sessions[100]?.derivedTitle).toBeUndefined();
       expect(result.sessions[100]?.lastMessagePreview).toBeUndefined();
@@ -5007,7 +5007,9 @@ describe("deriveSessionTitle", () => {
 
   test("keeps a derived title valid when the limit bisects an emoji", () => {
     const entry = { sessionId: "abc123", updatedAt: Date.now() } as SessionEntry;
-    expect(deriveSessionTitle(entry, `${"t".repeat(58)}🚀 extra`)).toBe(`${"T".repeat(1)}${"t".repeat(57)}…`);
+    expect(deriveSessionTitle(entry, `${"t".repeat(58)}🚀 extra`)).toBe(
+      `${"T".repeat(1)}${"t".repeat(57)}…`,
+    );
   });
 
   test("truncates at word boundary when possible", () => {

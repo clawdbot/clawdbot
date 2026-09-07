@@ -232,9 +232,25 @@ internal fun sidebarSessionPresentation(
   )
 }
 
-internal fun isAndroidAppSessionLabel(label: String?): Boolean {
+internal fun nodeDeviceIdFromSessionKey(sessionKey: String?): String? {
+  val rest =
+    sessionKey?.trim()?.takeIf(String::isNotEmpty)?.let { key ->
+      val parts = key.split(':', limit = 3)
+      if (parts.size == 3 && parts[0] == "agent") parts[2] else key
+    } ?: return null
+  if (!rest.startsWith("node-")) return null
+  return rest.removePrefix("node-").substringBefore(':').takeIf(String::isNotEmpty)
+}
+
+internal fun isAndroidAppSessionLabel(
+  label: String?,
+  sessionKey: String?,
+): Boolean {
   val trimmed = label?.trim().orEmpty()
-  return trimmed == "OpenClaw App" || trimmed.startsWith("OpenClaw App ·")
+  val deviceId = nodeDeviceIdFromSessionKey(sessionKey) ?: return false
+  if (trimmed.equals("OpenClaw App", ignoreCase = true)) return true
+  if (trimmed.equals("OpenClaw App · $deviceId", ignoreCase = true)) return true
+  return trimmed.startsWith("OpenClaw App ·", ignoreCase = true) && trimmed.endsWith(" · $deviceId")
 }
 
 internal fun sessionPresentationTitle(
@@ -245,7 +261,7 @@ internal fun sessionPresentationTitle(
   val displayName = session.displayName?.trim()?.takeIf(String::isNotEmpty)
   // User renames live in label; Android's connect stamp is not a rename and must
   // yield to a generated topic title once the gateway persists displayName.
-  if (label != null && !isAndroidAppSessionLabel(label)) {
+  if (label != null && !isAndroidAppSessionLabel(label, session.key)) {
     return label
   }
   if (displayName != null) {
