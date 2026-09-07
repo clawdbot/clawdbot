@@ -42,6 +42,7 @@ import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
 } from "../utils/delivery-context.shared.js";
+import { formatTokenCount } from "../utils/token-format.js";
 import { resolveCommandSessionStoreTargets } from "./session-store-targets.js";
 import {
   resolveSessionDisplayModelRef,
@@ -77,8 +78,6 @@ type SessionCandidate = { agentId: string; entry: SessionEntry; sessionKey: stri
 const DEFAULT_SESSIONS_LIMIT = 100;
 const TOP_N_SELECTION_LIMIT = 200;
 const contextLookupRuntimeLoader = createLazyImportLoader(() => import("../agents/context.js"));
-
-const formatKTokens = (value: number) => `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
 
 /** True ACP sessions use the child runtime's model, not the configured fallback. */
 function applyAcpModelOverlayIfNeeded(
@@ -167,7 +166,7 @@ const formatTokensCell = (
   contextTokens: number | null,
   rich: boolean,
 ) => {
-  const ctxLabel = contextTokens ? formatKTokens(contextTokens) : "?";
+  const ctxLabel = contextTokens ? formatTokenCount(contextTokens) : "?";
   if (total === undefined) {
     const label = `unknown/${ctxLabel} (?%)`;
     return rich ? theme.muted(label) : label;
@@ -176,7 +175,7 @@ const formatTokensCell = (
     contextTokens && freshTotal !== undefined
       ? Math.min(999, Math.round((freshTotal / contextTokens) * 100))
       : null;
-  const label = `${formatKTokens(total)}/${ctxLabel} (${pct ?? "?"}%)`;
+  const label = `${formatTokenCount(total)}/${ctxLabel} (${pct ?? "?"}%)`;
   return colorByPct(label, pct, rich);
 };
 

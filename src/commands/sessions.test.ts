@@ -156,6 +156,77 @@ describe("sessionsCommand", () => {
     expect(row).toContain("2.0k/200k (?%)");
   });
 
+  it.each([
+    { totalTokens: 0, contextTokens: 200_000, fresh: true, version: 1, expected: "0/200k (0%)" },
+    { totalTokens: 1, contextTokens: 200_000, fresh: true, version: 1, expected: "1/200k (0%)" },
+    { totalTokens: 49, contextTokens: 200_000, fresh: true, version: 1, expected: "49/200k (0%)" },
+    { totalTokens: 420, contextTokens: 999, fresh: true, version: 1, expected: "420/999 (42%)" },
+    {
+      totalTokens: 999,
+      contextTokens: 1_000,
+      fresh: true,
+      version: 1,
+      expected: "999/1.0k (100%)",
+    },
+    {
+      totalTokens: 1_000_000,
+      contextTokens: 2_500_000,
+      fresh: true,
+      version: 1,
+      expected: "1.0m/2.5m (40%)",
+    },
+    { totalTokens: 49, contextTokens: 200_000, fresh: false, version: 1, expected: "49/200k (?%)" },
+    {
+      totalTokens: 49,
+      contextTokens: 200_000,
+      fresh: true,
+      version: undefined,
+      expected: "49/200k (?%)",
+    },
+    {
+      totalTokens: undefined,
+      contextTokens: 999,
+      fresh: undefined,
+      version: undefined,
+      expected: "unknown/999 (?%)",
+    },
+  ] as const)(
+    "preserves token values in text and JSON ($expected, fresh=$fresh, version=$version)",
+    async ({ totalTokens, contextTokens, fresh, version, expected }) => {
+      const store = await writeStore({
+        "agent:main:boundary": {
+          sessionId: "boundary-session",
+          updatedAt: Date.now() - 60_000,
+          totalTokens,
+          totalTokensFresh: fresh,
+          totalTokensVersion: version,
+          contextTokens,
+          modelSelectionLocked: true,
+          model: "test:opus",
+        },
+      });
+      try {
+        const { runtime, logs } = makeRuntime();
+        await sessionsCommand({ store }, runtime);
+        expect(singleSessionTableCells(logs)[5]).toBe(expected);
+
+        const json = makeRuntime();
+        await sessionsCommand({ store, json: true }, json.runtime);
+        const payload = JSON.parse(json.logs.join("\n"));
+        expect(payload.sessions).toEqual([
+          expect.objectContaining({
+            key: "agent:main:boundary",
+            totalTokens: totalTokens ?? null,
+            totalTokensFresh: fresh === true && version === 1,
+            contextTokens,
+          }),
+        ]);
+      } finally {
+        cleanupStore(store);
+      }
+    },
+  );
+
   it("renders the agent runtime in the tabular view", async () => {
     setMockSessionsConfig(() => ({
       agents: {
@@ -278,7 +349,7 @@ describe("sessionsCommand", () => {
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
     expect(row).toContain("OpenClaw Default");
-    expect(row).toContain("0.0k/1000k (0%)");
+    expect(row).toContain("11/1.0m (0%)");
   });
 
   it("shows placeholder rows when tokens are missing", async () => {
