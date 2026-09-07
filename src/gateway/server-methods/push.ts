@@ -41,7 +41,7 @@ import {
 } from "../../infra/push-web.js";
 import { getUserPreferences, setUserPreferences } from "../../state/user-preferences.js";
 import { resolveUserProfileId } from "../../state/user-profiles.js";
-import { respondUnavailableOnThrow } from "./nodes.helpers.js";
+import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlers, GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
 

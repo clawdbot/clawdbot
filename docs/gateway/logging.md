@@ -51,6 +51,23 @@ openclaw logs --follow
 - Embedded-run `continue_normal` decisions log at `debug`; retry, profile-rotation, model-fallback, and error decisions remain warnings.
 - Trace logging also includes diagnostic timing summaries for selected hot paths, such as plugin tool factory preparation. See [/tools/plugin#slow-plugin-tool-setup](/tools/plugin#slow-plugin-tool-setup).
 
+### Slow cron list pages
+
+A cron list page taking at least one second emits `cron: slow list page` through
+its existing logger, subject to the file log level. The structured record names
+`operation: "cron.listPage"` and reports `elapsedMs`, `waitToCallbackMs`,
+`callbackMs`, and `completionDelayMs`, plus available source, matched, and returned
+row counts, the outcome, and emitter `pid`, `threadId`, and `isMainThread`. Fast
+pages emit no such record.
+
+These are wall times, not CPU time: waiting includes scheduling delays, callback
+time includes awaited work, and completion delay covers settlement after the
+callback finishes. Each source page is measured separately; caller visibility
+filtering and delivery previews outside that page are not included. Existing
+trace context is retained when present. Emitter identity identifies the logging process/isolate, not the owner of work
+awaited by the callback. The diagnostic adds no job identifiers,
+job contents, or request parameters.
+
 ## Console capture
 
 The CLI captures `console.log/info/warn/error/debug/trace`, writes them to file logs, and still prints to stdout/stderr.

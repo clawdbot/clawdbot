@@ -805,7 +805,11 @@ Both `config.apply` and `config.patch` accept `raw`, `baseHash`, `sessionKey`,
 config file already exists (a first write with no existing config skips the check).
 
 For hot-applied changes, these RPCs wait until the active Gateway applies the
-exact write. Channel or plugin reloads may defer for unrelated active work. If
+exact write. Channel or plugin reloads may defer for unrelated active work.
+Policy-only writes covered by a plugin's dynamic-read contract, such as Discord
+allowlists and DM/group policies, publish without a channel restart or drain
+wait. Writes that also contain restart-required settings remain one deferred
+transaction. If
 the file watcher takes over the same unapplied write during that wait, the RPC stays pending
 through replay; persistence alone is not an application acknowledgment. Shutdown,
 supersession by different content, or failed application returns `UNAVAILABLE`

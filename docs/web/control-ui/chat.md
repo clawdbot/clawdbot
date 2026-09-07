@@ -156,6 +156,14 @@ Chat error banners, including cloud runner failures, show short messages in full
 Decoded text artifacts use the same literal preview. **Copy code** preserves the
 code's leading whitespace and final newline when present.
 
+**Copy URL** in browser tab cards also works on plain HTTP connections where the
+browser does not provide its Clipboard API.
+
+If the browser rejects a text clipboard write, starting another text or image
+copy cancels its delayed fallback. Code blocks replaced during streaming and
+Mermaid diagrams whose source changes also cancel that fallback. This does not
+cancel native clipboard writes that the browser has already accepted.
+
 ### Markdown tables
 
 Markdown tables scroll horizontally within the conversation. **Copy table** copies

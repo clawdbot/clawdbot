@@ -719,6 +719,12 @@ declare function json(value: unknown): void;
 declare function yield_control(reason?: string): Promise<void>;
 ```
 
+`TextEncoder` and `TextDecoder` are available for local text and byte transforms.
+Encoder and decoder instances survive `wait` snapshot restoration. They run
+inside the QuickJS sandbox and grant no filesystem, module, or network access.
+Returned values still use the JSON-only bridge; emit decoded text or an array of
+byte values rather than a binary attachment.
+
 Guest timers are bridged through the host, so they survive QuickJS snapshot/resume and remain bounded by the Code Mode execution and snapshot limits.
 `clearTimeout` also cancels a timer created before an earlier suspension; this
 applies to interactive Code Mode and headless automation scripts.
@@ -1201,10 +1207,24 @@ accepted. Parallel-capable calls can overlap before the next sequential call.
 Scheduling is shared across cells using the same run catalog; separate catalogs
 remain independent. Queued calls are canceled when their caller or catalog closes.
 
-Parallel nested calls are allowed up to `maxPendingToolCalls`. An oversized raw
-tool batch fails before any call in that batch is dispatched. [Swarm](/tools/swarm)
-launches, notes, and result waits instead queue for available bridge slots;
-they do not raise that limit or bypass the run's cancellation and policy checks.
+`maxPendingToolCalls` caps in-flight bridge requests, not the size of an ordinary
+`Promise.all` batch. Calls and timers beyond that cap wait in the guest alongside
+[Swarm](/tools/swarm) requests. At most 128 ordinary requests can be queued,
+independently of the configured in-flight cap, using the existing accepted
+bridge-limit ceiling. Swarm launches, notes, and result waits do not consume this
+ordinary quota; their existing group, VM memory, and snapshot limits still apply.
+Queued inputs and request identities survive snapshot/resume; `clearTimeout`
+removes a queued timer without starting a host timer. A queued timer's delay begins
+when it gets a bridge slot. Guest continuations run before waiting requests refill
+available slots, and fast requests still drain within the same `exec` or `wait`.
+
+Creating more ordinary requests than their queue quota allows fails the worker leg with
+`invalid_input` and guidance to await smaller batches. Catching the immediate
+JavaScript error does not admit a partial batch: no new calls from that
+synchronous frontier are dispatched. Earlier worker legs may already have run
+tools; inspect their effects rather than replaying the cell. Queueing does not
+raise memory, snapshot, time, or headless total tool-call limits, or bypass
+cancellation and policy checks.
 
 ## Run and snapshot lifecycle
 

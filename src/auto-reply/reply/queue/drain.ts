@@ -817,6 +817,10 @@ function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["curren
   return {
     text,
     ...(resumableText ? { resumableText } : {}),
+    fragments: contexts.flatMap(
+      ({ context }) =>
+        context.fragments ?? [{ kind: "conversation-data" as const, text: context.text }],
+    ),
     promptJoiner: "\n\n",
     ...(injectedGoalContexts.length > 0 ? { injectedGoalContexts } : {}),
   };

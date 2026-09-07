@@ -16,6 +16,7 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "./loader.test-fixtures.js";
+import { mutateManagedPluginEnabled } from "./management-mutations.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -33,6 +34,57 @@ describe("plugin runtime inspection", () => {
   afterAll(() => {
     cleanupPluginLoaderFixturesForTest();
   });
+
+  it.each([
+    { source: "bundled", kind: undefined, runtimeKind: undefined },
+    { source: "bundled", kind: "memory", runtimeKind: undefined },
+    { source: "config", kind: undefined, runtimeKind: "memory" },
+  ] as const)(
+    "enables a $source plugin with manifest kind $kind and runtime kind $runtimeKind",
+    async ({ source, kind, runtimeKind }) => {
+      const stateDir = makePluginLoaderTempDir();
+      const bundledDir = makePluginLoaderTempDir();
+      const pluginId = "policy-candidate";
+      const imported = path.join(stateDir, "runtime-imported");
+      const plugin = writePlugin({
+        id: pluginId,
+        dir: path.join(bundledDir, pluginId),
+        filename: "index.cjs",
+        body: `require("node:fs").writeFileSync(${JSON.stringify(imported)}, "imported"); module.exports = { id: ${JSON.stringify(pluginId)}, kind: ${JSON.stringify(runtimeKind)}, register() {} };`,
+      });
+      const manifestPath = path.join(plugin.dir, "openclaw.plugin.json");
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, ...(kind ? { kind } : {}) }));
+      await withEnvAsync(
+        {
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: source === "bundled" ? undefined : "1",
+        },
+        async () => {
+          await writeConfigFile({
+            plugins: {
+              ...(source === "config" ? { load: { paths: [plugin.file] }, allow: [pluginId] } : {}),
+              entries: { [pluginId]: { enabled: false } },
+            },
+          });
+          const result = await mutateManagedPluginEnabled({
+            pluginId,
+            enabled: true,
+            caller: "cli",
+          });
+          expect(result.status).toBe("committed");
+          const { snapshot } = await readConfigFileSnapshotForWrite();
+          expect(snapshot.sourceConfig.plugins?.entries?.[pluginId]?.enabled).toBe(true);
+          expect(snapshot.sourceConfig.plugins?.slots?.memory).toBe(
+            kind || runtimeKind ? pluginId : undefined,
+          );
+          expect(fs.existsSync(imported)).toBe(source !== "bundled");
+        },
+      );
+    },
+  );
 
   it("selects a newly installed legacy runtime kind without changing the running inventory", () => {
     const plugin = writePlugin({

@@ -1536,6 +1536,36 @@ describe("updateNpmInstalledPlugins", () => {
     },
   );
 
+  it.each(["@openclaw/codex", "@openclaw/codex@latest", "@openclaw/codex@2026.9.3"])(
+    "targets the activated core for version-bound post-update plugins while preserving %s",
+    async (spec) => {
+      const targetVersion = spec.endsWith("@2026.9.3") ? "2026.9.3" : "2026.9.4";
+      const { config } = createNpmUpdateFixture({
+        pluginId: "codex",
+        packageName: "@openclaw/codex",
+        installedVersion: "2026.9.2",
+        spec,
+        installerVersion: targetVersion,
+        installerResolvedSpec: `@openclaw/codex@${targetVersion}`,
+      });
+      runCommandWithTimeoutMock.mockImplementation(async (argv) => ({
+        code: 0,
+        stdout: JSON.stringify({
+          name: "@openclaw/codex",
+          version: argv.includes(`@openclaw/codex@${targetVersion}`) ? targetVersion : "2026.9.2",
+        }),
+        stderr: "",
+      }));
+      await updatePlugin(config, "codex", {
+        updateChannel: "stable",
+        coreVersion: "2026.9.4",
+        versionBoundPluginIds: new Set(["codex"]),
+        syncOfficialPluginInstalls: true,
+      });
+      expect(npmInstallCall()?.spec).toBe(`@openclaw/codex@${targetVersion}`);
+    },
+  );
+
   it("preserves floating official npm records during official sync", async () => {
     const { config } = createNpmUpdateFixture({
       pluginId: "acpx",

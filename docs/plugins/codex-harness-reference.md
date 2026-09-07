@@ -105,6 +105,12 @@ Sessions in these stores support the same view, continue, and archive actions,
 and the selected OpenClaw agent still owns the resulting connection; `homes`
 only adds catalog sources.
 
+Fresh native terminal sessions use the primary local profile, shown as
+`Local Codex`, or an eligible paired node. Additional local homes are session
+discovery and resume sources, not separate fresh-start destinations. The selected
+working directory controls Codex's project configuration without changing its home
+or login. See [Native CLI starts](/web/control-ui/sessions-and-sidebar#start-a-native-coding-cli).
+
 Only existing directories are included. Equivalent paths are canonicalized and
 deduplicated against the automatic homes, and automatic homes keep priority
 under the 100-source catalog cap. Changes require a Gateway restart.
@@ -1065,9 +1071,15 @@ Codex harness forwards the other bootstrap files as developer instructions:
   should use `memory_search` or `memory_get` when durable memory is relevant.
   If tools are disabled, memory search is unavailable, or the active
   workspace differs from the agent memory workspace, `MEMORY.md` uses the
-  normal bounded turn-context path instead.
-- `BOOTSTRAP.md`, when present, is forwarded as OpenClaw turn input reference
-  context.
+  bounded turn input reference path instead.
+- `BOOTSTRAP.md`, when present, uses the same turn input reference path.
+  These references are introduced on the first turn of a new native thread,
+  after a cold resume (including a Gateway restart), after native compaction,
+  or when their rendered content changes. Unchanged references are omitted
+  on subsequent warm turns once the complete reference block has been submitted.
+  If prompt fitting drops or truncates the block, a later turn introduces it again.
+  Tracking is process-local; reference content
+  remains ordinary user input in native history.
 
 ## Environment overrides
 

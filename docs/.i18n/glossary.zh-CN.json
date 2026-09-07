@@ -2194,5 +2194,109 @@
   {
     "source": "Build and develop",
     "target": "构建与开发"
+  },
+  {
+    "source": "CI pipeline jobs",
+    "target": "CI 流水线作业"
+  },
+  {
+    "source": "Watch a CI run",
+    "target": "查看 CI 运行"
+  },
+  {
+    "source": "CI checkout ownership",
+    "target": "CI 检出归属"
+  },
+  {
+    "source": "CI scope and routing",
+    "target": "CI 范围与路由"
+  },
+  {
+    "source": "CI runner classes",
+    "target": "CI 运行器类型"
+  },
+  {
+    "source": "CI capacity and shard weights",
+    "target": "CI 容量与分片权重"
+  },
+  {
+    "source": "Release validation workflows",
+    "target": "发布验证工作流"
+  },
+  {
+    "source": "Scheduled and maintenance workflows",
+    "target": "定时与维护工作流"
+  },
+  {
+    "source": "Local checks and Testbox",
+    "target": "本地检查与 Testbox"
+  },
+  {
+    "source": "Release channels",
+    "target": "发布渠道"
+  },
+  {
+    "source": "Transport and framing",
+    "target": "传输与分帧"
+  },
+  {
+    "source": "Handshake and roles",
+    "target": "握手与角色"
+  },
+  {
+    "source": "Presence and events",
+    "target": "在线状态与事件"
+  },
+  {
+    "source": "RPC methods",
+    "target": "RPC 方法"
+  },
+  {
+    "source": "Ledger RPCs",
+    "target": "账本 RPC"
+  },
+  {
+    "source": "Operator methods",
+    "target": "操作员方法"
+  },
+  {
+    "source": "Versioning",
+    "target": "版本管理"
+  },
+  {
+    "source": "Auth and device identity",
+    "target": "身份验证与设备身份"
+  },
+  {
+    "source": "Gateway protocol transport",
+    "target": "Gateway 协议传输"
+  },
+  {
+    "source": "Gateway protocol handshake",
+    "target": "Gateway 协议握手"
+  },
+  {
+    "source": "Gateway protocol presence and events",
+    "target": "Gateway 协议在线状态与事件"
+  },
+  {
+    "source": "Gateway protocol RPC methods",
+    "target": "Gateway 协议 RPC 方法"
+  },
+  {
+    "source": "Gateway protocol ledger RPCs",
+    "target": "Gateway 协议账本 RPC"
+  },
+  {
+    "source": "Gateway protocol operator methods",
+    "target": "Gateway 协议操作员方法"
+  },
+  {
+    "source": "Gateway protocol versioning",
+    "target": "Gateway 协议版本管理"
+  },
+  {
+    "source": "Gateway protocol auth",
+    "target": "Gateway 协议身份验证"
   }
 ]

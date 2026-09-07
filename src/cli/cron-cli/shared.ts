@@ -474,7 +474,7 @@ export function coerceCronDeliveryPreviews(value: unknown): Map<string, CronDeli
 }
 
 export function printCronList(
-  jobs: CronJob[],
+  jobs: Array<CronJob & { effectiveAgentId?: string | null }>,
   runtime: RuntimeEnv = defaultRuntime,
   opts?: { deliveryPreviews?: Map<string, CronDeliveryPreview> },
 ) {
@@ -524,7 +524,8 @@ export function printCronList(
       ? `${deliveryPreview.label} (${deliveryPreview.detail})`
       : "-";
     const deliveryLabel = formatCell(deliveryText, CRON_DELIVERY_PAD);
-    const agentLabel = formatCell(job.agentId, CRON_AGENT_PAD);
+    const agentId = job.effectiveAgentId ?? job.agentId;
+    const agentLabel = formatCell(agentId ?? "unresolved", CRON_AGENT_PAD);
     const ownerLabel = formatCell(job.owner?.sessionKey ?? job.owner?.agentId, CRON_OWNER_PAD);
     const modelLabel = formatCell(
       job.payload?.kind === "agentTurn" ? job.payload.model : undefined,
@@ -535,7 +536,7 @@ export function printCronList(
       job.sessionTarget === "main"
         ? colorize(rich, theme.accent, targetLabel)
         : colorize(rich, theme.accentBright, targetLabel);
-    const coloredAgent = job.agentId
+    const coloredAgent = agentId
       ? colorize(rich, theme.info, agentLabel)
       : colorize(rich, theme.muted, agentLabel);
 
