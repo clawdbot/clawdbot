@@ -7,6 +7,7 @@ import {
   closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
 } from "../src/state/openclaw-state-db.js";
+import { withEnv } from "../src/test-utils/env.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -76,9 +77,12 @@ function readSchemaVersions(db: DatabaseSync) {
   };
 }
 
-function expectGatewayOwnsState(databasePath: string) {
-  expect(() => withStateSchemaFence({ databasePath }, () => "unexpected authority")).toThrow(
-    "another Gateway owns that state directory",
+function expectGatewayOwnsState(instance: OpenClawTestInstance, databasePath: string) {
+  // Windows places lifecycle coordinators under the child's isolated home directory.
+  withEnv({ HOME: instance.env.HOME, USERPROFILE: instance.env.USERPROFILE }, () =>
+    expect(() => withStateSchemaFence({ databasePath }, () => "unexpected authority")).toThrow(
+      "another Gateway owns that state directory",
+    ),
   );
 }
 
@@ -90,7 +94,7 @@ describe("Gateway external shared-state ownership", () => {
       const { databasePath } = seedDeferredState(instance, true);
       observer = new DatabaseSync(databasePath, { readOnly: true });
       await instance.startGateway();
-      expectGatewayOwnsState(databasePath);
+      expectGatewayOwnsState(instance, databasePath);
       const deferred = { published: 15, metadata: 15, content: OPENCLAW_STATE_SCHEMA_VERSION };
       expect(readSchemaVersions(observer)).toEqual(deferred);
 
@@ -106,7 +110,7 @@ describe("Gateway external shared-state ownership", () => {
           /schema migration pending|refused shared state schema mutation|another Gateway owns/u,
         );
         expect(readSchemaVersions(observer)).toEqual(deferred);
-        expectGatewayOwnsState(databasePath);
+        expectGatewayOwnsState(instance, databasePath);
       }
     } finally {
       observer?.close();
@@ -122,7 +126,7 @@ describe("Gateway external shared-state ownership", () => {
       const database = new DatabaseSync(databasePath, { readOnly: true });
       observer = database;
       await instance.startGateway();
-      expectGatewayOwnsState(databasePath);
+      expectGatewayOwnsState(instance, databasePath);
       expect(readSchemaVersions(observer)).toEqual({
         published: 15,
         metadata: 15,
