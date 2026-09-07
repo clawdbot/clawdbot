@@ -22,6 +22,7 @@ let rest: RequestClient;
 let requests: { method: string; path: string; body: Record<string, unknown> }[];
 let current: { content: string; attachments: (typeof attachment)[] };
 let unexpectedUrls: string[];
+let rejectStructuredCaptionTails: boolean;
 
 beforeAll(async () => {
   server = createServer((request, response) => {
@@ -35,6 +36,21 @@ beforeAll(async () => {
       const method = request.method ?? "";
       const path = request.url ?? "";
       requests.push({ method, path, body });
+      if (typeof body.content === "string" && body.content.length > 2000) {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(JSON.stringify({ message: "Content exceeds Discord's 2000 character limit" }));
+        return;
+      }
+      if (
+        rejectStructuredCaptionTails &&
+        method === "POST" &&
+        !("poll" in body) &&
+        !("sticker_ids" in body)
+      ) {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(JSON.stringify({ message: "Synthetic caption tail failure" }));
+        return;
+      }
       if (method === "DELETE") {
         response.writeHead(204).end();
         return;
@@ -102,6 +118,7 @@ beforeEach(() => {
   requests = [];
   unexpectedUrls = [];
   current = { content: "Initial caption", attachments: [attachment] };
+  rejectStructuredCaptionTails = false;
 });
 
 afterEach(() => {
@@ -326,4 +343,149 @@ describe.each(["sticker", "poll"] as const)("Discord structured %s content", (ki
     expect(writes()[0]?.body.content).toBe(expected);
     expect(writes()[0]?.body).toHaveProperty(kind === "sticker" ? "sticker_ids" : "poll");
   });
+
+  it("applies the configured Discord Markdown and mention formatting", async () => {
+    const formattedCfg: OpenClawConfig = {
+      channels: {
+        discord: {
+          token,
+          groupPolicy: "open",
+          markdown: { tables: "code" },
+          mentionAliases: { ops: "523456789012345678" },
+        },
+      },
+    };
+    const content = "__Important__ @ops\n\n| A | B |\n| - | - |\n| x | y |";
+    const options = { cfg: formattedCfg, rest, content };
+    if (kind === "sticker") {
+      await sendStickerDiscord(`channel:${channelId}`, ["523456789012345678"], options);
+    } else {
+      await sendPollDiscord(
+        `channel:${channelId}`,
+        { question: "Lunch?", options: ["Pizza", "Sushi"] },
+        options,
+      );
+    }
+
+    expect(writes()).toHaveLength(1);
+    expect(writes()[0]?.body.content).toBe(
+      "**Important** <@523456789012345678>\n\n```\n| A | B |\n| --- | --- |\n| x | y |\n```",
+    );
+  });
+
+  it("chunks captions that formatting expands past Discord's limit", async () => {
+    const formattedCfg: OpenClawConfig = {
+      channels: {
+        discord: {
+          token,
+          groupPolicy: "open",
+          markdown: { tables: "code" },
+        },
+      },
+    };
+    const prefix = "x".repeat(1960);
+    const content = `${prefix}\n\n| A | B |\n| - | - |\n| x | y |`;
+    const options = { cfg: formattedCfg, rest, content, allowedMentions: { parse: [] } };
+    const result =
+      kind === "sticker"
+        ? await sendStickerDiscord(`channel:${channelId}`, ["523456789012345678"], options)
+        : await sendPollDiscord(
+            `channel:${channelId}`,
+            { question: "Lunch?", options: ["Pizza", "Sushi"] },
+            options,
+          );
+
+    expect(writes()).toHaveLength(2);
+    const [structuredWrite, tailWrite] = writes();
+    const sentContents = writes().map((write) =>
+      typeof write.body.content === "string" ? write.body.content : "",
+    );
+    expect(sentContents[0]?.startsWith(prefix)).toBe(true);
+    expect(sentContents.join("").replace(/`{3,}/gu, "").replace(/\s/gu, "")).toBe(
+      `${prefix}|A|B||---|---||x|y|`,
+    );
+    expect(structuredWrite?.body).toHaveProperty(kind === "sticker" ? "sticker_ids" : "poll");
+    expect(tailWrite?.body.content).not.toBe("");
+    expect(tailWrite?.body).not.toHaveProperty("sticker_ids");
+    expect(tailWrite?.body).not.toHaveProperty("poll");
+    expect(writes().map((write) => write.body.allowed_mentions)).toEqual([
+      { parse: [] },
+      { parse: [] },
+    ]);
+    expect(result.receipt.parts.map((part) => part.kind)).toEqual([
+      kind === "sticker" ? "card" : "poll",
+      "text",
+    ]);
+    expect(sentContents.every((sentContent) => sentContent.length <= 2000)).toBe(true);
+  });
+
+  it("reports the structured delivery before a caption tail fails", async () => {
+    const content = `${"x".repeat(1990)}\n\n| A | B |\n| - | - |\n| x | y |`;
+    const onDeliveryResult = vi.fn();
+    rejectStructuredCaptionTails = true;
+    const options = {
+      cfg: {
+        channels: {
+          discord: { token, groupPolicy: "open" as const, markdown: { tables: "code" as const } },
+        },
+      },
+      rest,
+      content,
+      onDeliveryResult,
+    };
+
+    await expect(
+      kind === "sticker"
+        ? sendStickerDiscord(`channel:${channelId}`, ["523456789012345678"], options)
+        : sendPollDiscord(
+            `channel:${channelId}`,
+            { question: "Lunch?", options: ["Pizza", "Sushi"] },
+            options,
+          ),
+    ).rejects.toThrow("Synthetic caption tail failure");
+
+    expect(writes()).toHaveLength(2);
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    expect(onDeliveryResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId,
+        receipt: expect.objectContaining({
+          primaryPlatformMessageId: messageId,
+          parts: [expect.objectContaining({ kind: kind === "sticker" ? "card" : "poll" })],
+        }),
+      }),
+    );
+  });
+});
+
+it("reports sticker delivery through the channel action before a caption tail fails", async () => {
+  const onDeliveryResult = vi.fn();
+  rejectStructuredCaptionTails = true;
+
+  await expect(
+    handleDiscordMessageAction({
+      action: "sticker",
+      params: {
+        to: `channel:${channelId}`,
+        stickerId: ["523456789012345678"],
+        message: `${"x".repeat(1990)}\n\n| A | B |\n| - | - |\n| x | y |`,
+      },
+      cfg: {
+        channels: {
+          discord: { token, groupPolicy: "open", markdown: { tables: "code" } },
+        },
+      },
+      onDeliveryResult,
+    }),
+  ).rejects.toThrow("Synthetic caption tail failure");
+
+  expect(onDeliveryResult).toHaveBeenCalledOnce();
+  expect(onDeliveryResult).toHaveBeenCalledWith(
+    expect.objectContaining({
+      messageId,
+      target: { kind: "channel", id: channelId },
+      receipt: expect.objectContaining({ primaryPlatformMessageId: messageId }),
+    }),
+  );
+  expect(onDeliveryResult.mock.calls[0]?.[0]).not.toHaveProperty("channel");
 });

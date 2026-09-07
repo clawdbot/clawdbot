@@ -8,6 +8,7 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import type { MessageActionInput } from "./message-action-contracts.js";
 import { executeMessagePoll } from "./message-action-execution.js";
 
 const pollerConfig = {
@@ -80,6 +81,8 @@ const pollerTestPlugin: ChannelPlugin = {
 async function runPollAction(params: {
   actionParams: Record<string, unknown>;
   toolContext?: ChannelThreadingToolContext;
+  onDeliveryResult?: NonNullable<MessageActionInput["onDeliveryResult"]>;
+  onSendAccepted?: () => Promise<void>;
 }) {
   const target = params.actionParams.target;
   if (typeof target !== "string") {
@@ -94,11 +97,13 @@ async function runPollAction(params: {
     mediaAccess: {},
     accountId: "default",
     dryRun: false,
+    ...(params.onSendAccepted ? { onSendAccepted: params.onSendAccepted } : {}),
     input: {
       cfg: pollerConfig,
       action: "poll",
       params: actionParams,
       toolContext: params.toolContext,
+      ...(params.onDeliveryResult ? { onDeliveryResult: params.onDeliveryResult } : {}),
     },
   });
   if (result.kind !== "poll") {
@@ -157,6 +162,41 @@ describe("executeMessagePoll", () => {
       messageId: "poll-test",
       receipt: { primaryPlatformMessageId: "poll-test", threadId: "42" },
     });
+  });
+
+  it("preserves delivery progress through the poll action entrypoint", async () => {
+    const order: string[] = [];
+    const onSendAccepted = vi.fn(async () => {
+      order.push("route");
+    });
+    const onDeliveryResult = vi.fn(async () => {
+      order.push("receipt");
+    });
+    const evidence = {
+      messageId: "poll-test",
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ messageId: "poll-test" }],
+        kind: "poll",
+        sentAt: 1,
+      }),
+    };
+    pollerSendPoll.mockImplementationOnce(async (params) => {
+      await params.onDeliveryResult?.(evidence);
+      return sendPoll(params);
+    });
+
+    await runPollAction({
+      actionParams: {
+        target: "poller:123",
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+      },
+      onSendAccepted,
+      onDeliveryResult,
+    });
+
+    expect(order).toEqual(["route", "receipt"]);
+    expect(onDeliveryResult).toHaveBeenCalledWith({ channel: "poller", ...evidence });
   });
 
   it.each([

@@ -1172,23 +1172,36 @@ describe("executeSendAction", () => {
 
   it("forwards poll args to sendPoll on core outbound path", async () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(null);
-    mocks.sendPoll.mockResolvedValue({
-      channel: "demo-outbound",
-      to: "channel:123",
-      question: "Lunch?",
-      options: ["Pizza", "Sushi"],
-      maxSelections: 1,
-      durationSeconds: null,
-      durationHours: null,
-      via: "gateway",
+    const order: string[] = [];
+    const onSendAccepted = vi.fn(async () => {
+      order.push("route");
+    });
+    const onDeliveryResult = vi.fn(async () => {
+      order.push("receipt");
+    });
+    const evidence = { channel: "demo-outbound", messageId: "poll-1" };
+    mocks.sendPoll.mockImplementation(async (params) => {
+      await params.onDeliveryResult?.(evidence);
+      return {
+        channel: "demo-outbound",
+        to: "channel:123",
+        question: "Lunch?",
+        options: ["Pizza", "Sushi"],
+        maxSelections: 1,
+        durationSeconds: null,
+        durationHours: null,
+        via: "gateway",
+      };
     });
 
     await executePollAction({
       ctx: createContext({
         accountId: "acc-1",
+        onSendAccepted,
         input: {
           sessionKey: "agent:main:demo-outbound:channel:123",
           inboundEventKind: "room_event",
+          onDeliveryResult,
         },
       }),
       resolveCorePoll: () => ({
@@ -1217,6 +1230,8 @@ describe("executeSendAction", () => {
       sessionKey: "agent:main:demo-outbound:channel:123",
       inboundEventKind: "room_event",
     });
+    expect(order).toEqual(["route", "receipt"]);
+    expect(onDeliveryResult).toHaveBeenCalledWith(evidence);
   });
 
   it("skips plugin dispatch during dry-run polls and forwards durationHours + silent", async () => {

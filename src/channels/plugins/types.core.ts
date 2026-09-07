@@ -758,6 +758,8 @@ export type ChannelMessageActionContext = {
    * them. Plugins forward it into durable sends so recovery does not replay too.
    */
   deliveryRetryOwner?: "caller";
+  /** Reports concrete platform sends before a later multi-send action can fail. */
+  onDeliveryResult?: ChannelMessageSendPollContext["onDeliveryResult"];
 };
 
 export type ChannelToolSend = {
@@ -868,6 +870,7 @@ export type ChannelPollContext = Pick<
   | "silent"
   | "isAnonymous"
   | "gatewayClientScopes"
+  | "onDeliveryResult"
   | "onPlatformSendDispatch"
   | "assertDirectAdapterHandoff"
 > & {

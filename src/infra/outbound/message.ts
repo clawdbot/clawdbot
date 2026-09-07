@@ -22,6 +22,7 @@ import { GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import type { DeliveryQueueCompletionRetention } from "../delivery-queue-sqlite.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
+import { normalizeChannelMessageSendResult } from "./deliver-types.js";
 import {
   resolveOutboundDurableFinalDeliverySupport,
   type DurableFinalDeliveryRequirements,
@@ -174,6 +175,8 @@ type MessagePollParams = {
   idempotencyKey?: string;
   sessionKey?: string;
   inboundEventKind?: InboundEventKind;
+  /** Persists each concrete platform send before any later chunk can fail. */
+  onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
   /** @internal Runs immediately before recipient-visible poll platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
   /** @internal Channel plugin already selected and bootstrapped by the caller. */
@@ -603,6 +606,13 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
       isAnonymous: params.isAnonymous,
       sessionKey: params.sessionKey,
       inboundEventKind: params.inboundEventKind,
+      onDeliveryResult: params.onDeliveryResult
+        ? async (deliveryResult) => {
+            await params.onDeliveryResult?.(
+              normalizeChannelMessageSendResult(channel, deliveryResult),
+            );
+          }
+        : undefined,
       onPlatformSendDispatch: params.onPlatformSendDispatch,
     });
 

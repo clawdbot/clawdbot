@@ -9,7 +9,6 @@ import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createChannelMessage, createThread, type RequestClient } from "./internal/discord.js";
-import { rewriteDiscordKnownMentions } from "./mentions.js";
 import { prepareDiscordOutboundText } from "./outbound-text.js";
 import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
 import {
@@ -26,7 +25,6 @@ import {
   buildDiscordSendError,
   buildDiscordTextChunks,
   createDiscordClient,
-  createDiscordMessageNonce,
   normalizeDiscordPollInput,
   normalizeStickerIds,
   resolveDiscordMessageFlags,
@@ -78,6 +76,12 @@ type DiscordClientRequest = ReturnType<typeof createDiscordClient>["request"];
 const DEFAULT_DISCORD_MEDIA_MAX_MB = 100;
 /** Discord's ChannelFlags.RequireTag is bit 4 on forum/media parent channels. */
 const DISCORD_FORUM_REQUIRE_TAG_FLAG = 1 << 4;
+
+function resolveDiscordTextLimit(textLimit: unknown): number | undefined {
+  return typeof textLimit === "number" && Number.isFinite(textLimit)
+    ? Math.max(1, Math.min(Math.floor(textLimit), 2000))
+    : undefined;
+}
 
 type DiscordChannelMessageResult = DiscordReceiptResultSource;
 
@@ -186,10 +190,7 @@ export async function sendMessageDiscord(
     configured: accountInfo.config.suppressEmbeds,
     override: opts.suppressEmbeds,
   });
-  const textLimit =
-    typeof opts.textLimit === "number" && Number.isFinite(opts.textLimit)
-      ? Math.max(1, Math.min(Math.floor(opts.textLimit), 2000))
-      : undefined;
+  const textLimit = resolveDiscordTextLimit(opts.textLimit);
   const mediaMaxBytes =
     typeof accountInfo.config.mediaMaxMb === "number"
       ? accountInfo.config.mediaMaxMb * 1024 * 1024
@@ -449,15 +450,9 @@ export async function sendStickerDiscord(
   opts: DiscordSendOpts & { content?: string },
 ): Promise<DiscordSendResult> {
   const context = await resolveDiscordStructuredSendContext(to, opts);
-  const { rewrittenContent, suppressEmbeds } = context;
   const stickers = normalizeStickerIds(stickerIds);
-  const flags = resolveDiscordMessageFlags({ silent: opts.silent, suppressEmbeds });
   const body = {
-    content: rewrittenContent || undefined,
     sticker_ids: stickers,
-    nonce: createDiscordMessageNonce(),
-    enforce_nonce: true,
-    ...(flags ? { flags } : {}),
   };
   return context.send("sticker", body);
 }
@@ -468,18 +463,12 @@ export async function sendPollDiscord(
   opts: DiscordSendOpts & { content?: string },
 ): Promise<DiscordSendResult> {
   const context = await resolveDiscordStructuredSendContext(to, opts);
-  const { rewrittenContent, suppressEmbeds } = context;
   if (poll.durationSeconds !== undefined) {
     throw new Error("Discord polls do not support durationSeconds; use durationHours");
   }
   const payload = normalizeDiscordPollInput(poll);
-  const flags = resolveDiscordMessageFlags({ silent: opts.silent, suppressEmbeds });
   const body = {
-    content: rewrittenContent || undefined,
     poll: payload,
-    nonce: createDiscordMessageNonce(),
-    enforce_nonce: true,
-    ...(flags ? { flags } : {}),
   };
   return context.send("poll", body);
 }
@@ -489,8 +478,6 @@ async function resolveDiscordStructuredSendContext(
   opts: DiscordSendOpts & { content?: string },
 ): Promise<{
   send: (kind: "poll" | "sticker", body: Record<string, unknown>) => Promise<DiscordSendResult>;
-  rewrittenContent?: string;
-  suppressEmbeds: boolean;
 }> {
   requireRuntimeConfig(opts.cfg, "Discord structured send");
   const {
@@ -500,39 +487,94 @@ async function resolveDiscordStructuredSendContext(
     account: accountInfo,
   } = await resolveDiscordSendTarget(to, opts);
   const content = opts.content;
-  const rewrittenContent = content?.trim()
-    ? rewriteDiscordKnownMentions(content, {
-        accountId: accountInfo.accountId,
-        mentionAliases: accountInfo.config.mentionAliases,
-      })
+  const preparedContent = content?.trim()
+    ? prepareDiscordOutboundText(content, {
+        cfg: opts.cfg,
+        account: accountInfo,
+        tableMode: opts.tableMode,
+      }).textWithMentions
     : undefined;
+  const suppressEmbeds = resolveDiscordSuppressEmbeds({
+    configured: accountInfo.config.suppressEmbeds,
+    override: opts.suppressEmbeds,
+  });
+  const chunkMode = opts.chunkMode ?? resolveChunkMode(opts.cfg, "discord", accountInfo.accountId);
+  const maxLinesPerMessage = opts.maxLinesPerMessage ?? accountInfo.config.maxLinesPerMessage;
+  const textLimit = resolveDiscordTextLimit(opts.textLimit);
+  const contentChunks = preparedContent
+    ? buildDiscordTextChunks(preparedContent, {
+        maxLinesPerMessage,
+        chunkMode,
+        maxChars: textLimit,
+      })
+    : [];
   return {
     send: async (kind, body) => {
+      const [structuredContent, ...remainingChunks] = contentChunks;
+      // The structured payload belongs to the first caption chunk only. Sending it with tail
+      // chunks would create duplicate polls or sticker messages instead of continuing the text.
+      // Build once so ambiguous REST retries reuse the same nonce and cannot duplicate it either.
+      const structuredRequestBody = {
+        ...buildDiscordMessageRequest({
+          endpoint: "create-message",
+          text: structuredContent ?? "",
+          allowedMentions: opts.allowedMentions,
+          flags: resolveDiscordMessageFlags({ silent: opts.silent, suppressEmbeds }),
+        }),
+        ...body,
+      };
       const result = (await request(
         async () => {
           await opts.onPlatformSendDispatch?.();
           opts.assertPlatformSendAuthorized?.();
           return createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, {
-            body,
+            body: structuredRequestBody,
           });
         },
         kind,
         { safety: "nonce-protected-create" },
       )) as { id: string; channel_id: string };
+      const deliveredResults: DiscordSendResult[] = [];
+      const structuredResult = toDiscordSendResult(result, channelId, {
+        kind: kind === "poll" ? "poll" : "card",
+        threadId: kind === "poll" ? opts.threadId : undefined,
+      });
       recordChannelActivity({
         channel: "discord",
         accountId: accountInfo.accountId,
         direction: "outbound",
       });
-      return toDiscordSendResult(result, channelId, {
-        kind: kind === "poll" ? "poll" : "card",
-        threadId: kind === "poll" ? opts.threadId : undefined,
-      });
+      deliveredResults.push(structuredResult);
+      await opts.onDeliveryResult?.(structuredResult);
+      const reportResult: DiscordSendProgress = async (progressResult, progressKind, replyToId) => {
+        const deliveredResult = toDiscordSendResult(progressResult, channelId, {
+          kind: progressKind,
+          reply: createReusableDiscordReplyReference(replyToId),
+        });
+        deliveredResults.push(deliveredResult);
+        await opts.onDeliveryResult?.(deliveredResult);
+      };
+      for (const chunk of remainingChunks) {
+        await sendDiscordText({
+          rest,
+          channelId,
+          text: chunk,
+          request,
+          maxLinesPerMessage,
+          chunkMode,
+          silent: opts.silent,
+          suppressEmbeds,
+          allowedMentions: opts.allowedMentions,
+          maxChars: textLimit,
+          onResult: reportResult,
+          onPlatformSendDispatch: opts.onPlatformSendDispatch,
+          assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
+        });
+      }
+      return {
+        ...structuredResult,
+        receipt: createDiscordSendReceiptFromResults({ results: deliveredResults }),
+      };
     },
-    rewrittenContent,
-    suppressEmbeds: resolveDiscordSuppressEmbeds({
-      configured: accountInfo.config.suppressEmbeds,
-      override: opts.suppressEmbeds,
-    }),
   };
 }

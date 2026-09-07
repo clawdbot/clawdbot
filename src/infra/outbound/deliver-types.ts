@@ -1,6 +1,10 @@
 // Delivery result types define the normalized channel send contract plus
 // partial-failure metadata for multi-payload outbound sends.
-import type { MessageReceipt, MessageReceiptSourceResult } from "../../channels/message/types.js";
+import type {
+  ChannelMessageSendResult,
+  MessageReceipt,
+  MessageReceiptSourceResult,
+} from "../../channels/message/types.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 
 export type OutboundDeliveryQueuePolicy = "required" | "best_effort";
@@ -26,6 +30,23 @@ export type OutboundDeliveryResult = {
   // Channel docking: stash channel-specific fields here to avoid core type churn.
   meta?: Record<string, unknown>;
 };
+
+/** Attach the core-owned channel identity to a channel-local adapter result. */
+export function normalizeChannelMessageSendResult(
+  channel: ChannelId,
+  result: ChannelMessageSendResult,
+): OutboundDeliveryResult {
+  return {
+    ...result,
+    channel,
+    messageId:
+      result.messageId ??
+      result.receipt.primaryPlatformMessageId ??
+      result.receipt.platformMessageIds[0] ??
+      "",
+    receipt: result.receipt,
+  };
+}
 
 /** Count platform sends without double-counting equivalent receipt representations. */
 export function countPhysicalOutboundSends(results: readonly OutboundDeliveryResult[]): number {

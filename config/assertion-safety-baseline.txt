@@ -3036,7 +3036,7 @@ src/infra/outbound/channel-selection.ts	2
 src/infra/outbound/channel-target.ts	1
 src/infra/outbound/conversation-delivery.ts	1
 src/infra/outbound/current-conversation-bindings.ts	1
-src/infra/outbound/deliver-channel.ts	4
+src/infra/outbound/deliver-channel.ts	3
 src/infra/outbound/deliver-payload.ts	1
 src/infra/outbound/deliver-prepare.ts	1
 src/infra/outbound/delivery-queue-media-spool.ts	2
