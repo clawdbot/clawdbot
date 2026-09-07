@@ -1,12 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { spawnSync } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { execa, type Options as ExecaOptions, type ResultPromise } from "execa";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
-import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { killProcessTree } from "./kill-tree.js";
 import { resolveSafeChildProcessInvocation } from "./windows-command.js";
@@ -21,17 +19,24 @@ type CommandProcessScope = {
 const commandProcessScope = new AsyncLocalStorage<CommandProcessScope>();
 
 /** Terminal command deadlines stop their children before the caller permits rollback. */
-export function withCommandProcessScope<T>(run: (stop: () => void) => T): T {
+export async function withCommandProcessScope<T>(
+  run: (stop: () => void) => Promise<T>,
+): Promise<T> {
   const scope: CommandProcessScope = { stopped: false, children: new Set() };
-  return commandProcessScope.run(scope, () =>
-    run(() => {
-      scope.stopped = true;
-      for (const stop of scope.children) {
-        stop();
-      }
-      scope.children.clear();
-    }),
-  );
+  const stop = () => {
+    scope.stopped = true;
+    for (const stopChild of scope.children) {
+      stopChild();
+    }
+    scope.children.clear();
+  };
+  return await commandProcessScope.run(scope, async () => {
+    try {
+      return await run(stop);
+    } finally {
+      stop();
+    }
+  });
 }
 
 function retainCommandProcess<OptionsType extends ExecaOptions>(
@@ -39,7 +44,9 @@ function retainCommandProcess<OptionsType extends ExecaOptions>(
   child: ResultPromise<OptionsType>,
 ): void {
   const pid = child.pid;
-  if (pid === undefined) {
+  // Windows executable finalizers retain a Job until process exit; dead launcher
+  // PIDs cannot safely identify their surviving descendants through taskkill.
+  if (pid === undefined || process.platform === "win32") {
     return;
   }
   const startedAt = getFileLockProcessStartTime(pid);
@@ -48,33 +55,18 @@ function retainCommandProcess<OptionsType extends ExecaOptions>(
     if (currentStart !== null && currentStart !== startedAt) {
       return;
     }
-    if (process.platform === "win32") {
-      // taskkill needs the live root to enumerate descendants. Its normal async
-      // helper cannot run after the terminal deadline exits this process.
-      if (child.nodeChildProcess.exitCode === null && child.nodeChildProcess.signalCode === null) {
-        spawnSync(getWindowsSystem32ExePath("taskkill.exe"), ["/PID", String(pid), "/T", "/F"], {
-          stdio: "ignore",
-          timeout: 3_000,
-          killSignal: "SIGKILL",
-          windowsHide: true,
-        });
-      }
-      return;
-    }
     killProcessTree(pid, { detached: true, force: true });
   };
   scope.children.add(stop);
   const release = () => {
-    if (process.platform !== "win32") {
-      try {
-        // A direct child can exit while descendants retain its pipes or mutate
-        // installed files. Keep that group owned until it actually disappears.
-        process.kill(-pid, 0);
+    try {
+      // A direct child can exit while descendants retain its pipes or mutate
+      // installed files. Keep that group owned until it actually disappears.
+      process.kill(-pid, 0);
+      return;
+    } catch (error) {
+      if (extractErrorCode(error) !== "ESRCH") {
         return;
-      } catch (error) {
-        if (extractErrorCode(error) !== "ESRCH") {
-          return;
-        }
       }
     }
     scope.children.delete(stop);

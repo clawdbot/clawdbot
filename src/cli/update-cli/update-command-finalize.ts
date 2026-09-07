@@ -19,6 +19,7 @@ import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
+import { retainCliProcessJobUntilExit } from "../runtime-cleanup-scope.js";
 import {
   parseTimeoutMsOrExit,
   resolveUpdateRoot,
@@ -75,6 +76,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
             databasePath: resolveOpenClawStateSqlitePath(process.env),
             recoverOrphanedSidecars: false,
           });
+          await retainCliProcessJobUntilExit();
           lifecycle.attachLedger();
           return await resolveUpdateRoot();
         }),

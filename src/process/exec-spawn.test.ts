@@ -5,19 +5,26 @@ import { isPidAlive } from "../shared/pid-alive.js";
 import { killPidIfAlive, waitForPidToExit } from "../test-utils/process-tree.js";
 import { spawnCommand, withCommandProcessScope } from "./exec-spawn.js";
 
+const endings = [false, true].flatMap((exitParent) =>
+  (["explicit", "resolve", "reject"] as const).map((completion) => ({ exitParent, completion })),
+);
+
 describe.skipIf(process.platform === "win32")("terminal command process ownership", () => {
-  it.each([false, true])(
-    "stops owned descendants without stopping another command (parent exited: %s)",
-    async (exitParent) => {
+  it.each(endings)(
+    "stops owned descendants on $completion without stopping another command (parent exited: $exitParent)",
+    async ({ exitParent, completion }) => {
       const unrelated = spawnCommand([process.execPath, "-e", "setInterval(()=>{},1000)"], {
         stdio: "ignore",
         reject: false,
       });
+      let child: ReturnType<typeof spawnCommand> | undefined;
+      let descendantPid: number | undefined;
+      const failure = new Error("scope fixture failure");
       try {
-        await withCommandProcessScope(async (stop) => {
+        const running = withCommandProcessScope(async (stop) => {
           const descendant =
             "process.on('SIGTERM',()=>{});setInterval(()=>{},1000);process.send('ready');";
-          const child = spawnCommand(
+          child = spawnCommand(
             [
               process.execPath,
               "-e",
@@ -28,33 +35,40 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
             ],
             { stdio: ["ignore", "pipe", "pipe"], ipc: true, reject: false },
           );
-          let descendantPid: number | undefined;
-          try {
-            const [message] = await once(child.nodeChildProcess, "message", {
-              signal: AbortSignal.timeout(3_000),
-            });
-            descendantPid = Number(message);
-            expect(Number.isSafeInteger(descendantPid)).toBe(true);
-            if (exitParent) {
-              await child;
-            }
-            expect(isPidAlive(descendantPid)).toBe(true);
-            stop();
-            expect(await waitForPidToExit(descendantPid)).toBe(true);
+          const [message] = await once(child.nodeChildProcess, "message", {
+            signal: AbortSignal.timeout(3_000),
+          });
+          descendantPid = Number(message);
+          expect(Number.isSafeInteger(descendantPid)).toBe(true);
+          if (exitParent) {
             await child;
-            expect(isPidAlive(unrelated.pid!)).toBe(true);
+          }
+          expect(isPidAlive(descendantPid)).toBe(true);
+          if (completion === "explicit") {
+            stop();
             expect(() => spawnCommand([process.execPath, "-e", ""])).toThrow(
               "Command process scope is closed",
             );
-          } finally {
-            stop();
-            killPidIfAlive(child.pid);
-            killPidIfAlive(descendantPid);
-            await child;
+          } else if (completion === "reject") {
+            throw failure;
           }
         });
+        if (completion === "reject") {
+          await expect(running).rejects.toBe(failure);
+        } else {
+          await running;
+        }
+        if (descendantPid === undefined) {
+          throw new Error("Scope did not receive its descendant PID");
+        }
+        expect(await waitForPidToExit(descendantPid)).toBe(true);
+        await child;
+        expect(isPidAlive(unrelated.pid!)).toBe(true);
       } finally {
+        killPidIfAlive(child?.pid);
+        killPidIfAlive(descendantPid);
         killPidIfAlive(unrelated.pid);
+        await child;
         await unrelated;
       }
     },
