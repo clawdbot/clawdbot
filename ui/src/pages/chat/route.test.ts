@@ -4,6 +4,7 @@ import type { SessionsResolveResult } from "../../../../packages/gateway-protoco
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadChatRoute } from "./route-loader.ts";
+import { pages } from "./route.ts";
 
 const keyUuid = "12345678-90ab-cdef-1234-567890abcdef";
 const sessionKey = `agent:main:dashboard:${keyUuid}`;
@@ -547,5 +548,43 @@ describe("loadChatRoute", () => {
       draft: undefined,
       face: "dashboard",
     });
+  });
+});
+
+describe("session route cache ownership", () => {
+  it.each(pages)("isolates $id loader results across connection owners", (page) => {
+    const { context } = contextFor();
+    let snapshot = context.gateway.snapshot;
+    let revision = 0;
+    const gateway = {
+      ...context.gateway,
+      get snapshot() {
+        return snapshot;
+      },
+      get connectionRevision() {
+        return revision;
+      },
+    };
+    const scopedContext = { ...context, gateway };
+    const location = { pathname: `/${page.id}/main`, search: "", hash: "" };
+    const cacheKey = () => page.loaderDeps!(scopedContext, location);
+    const initial = cacheKey();
+
+    snapshot = { ...snapshot, selfUser: { id: "first-user" } };
+    expect(cacheKey()).toBe(initial);
+    snapshot = { ...snapshot, phase: "reconnecting", selfUser: null };
+    expect(cacheKey()).toBe(initial);
+    snapshot = { ...snapshot, phase: "connected", selfUser: { id: "first-user" } };
+    expect(cacheKey()).toBe(initial);
+
+    snapshot = { ...snapshot, selfUser: { id: "second-user" } };
+    const replacementUser = cacheKey();
+    expect(replacementUser).not.toBe(initial);
+    revision += 1;
+    const replacementCredentials = cacheKey();
+    expect(replacementCredentials).not.toBe(replacementUser);
+    expect(page.loaderDeps!({ ...scopedContext, gateway: { ...gateway } }, location)).not.toBe(
+      replacementCredentials,
+    );
   });
 });

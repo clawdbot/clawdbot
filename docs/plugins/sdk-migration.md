@@ -102,6 +102,13 @@ an available newer helper. Remove these fallbacks only when the declared plugin
 API floor no longer includes 2026.9.2; test built plugin imports against that
 minimum host before changing unconditional SDK imports.
 
+Voice Call also retains its declared 2026.9.2 host support. Its realtime upgrade
+handler keeps the two HTTP rejection responses local because that SDK has no
+`websocket-runtime` subpath. Rejection bytes flush before the socket is destroyed,
+and socket errors retain their normal cleanup behavior. Remove this local
+transport compatibility code only when the declared plugin API floor excludes
+2026.9.2.
+
 Retained compatibility entrypoints keep their shipped caller names:
 `inbound-envelope` uses `resolveStorePath`, `provider-catalog-runtime` exports
 `resolvePluginProviders`, and `agent-runtime`'s

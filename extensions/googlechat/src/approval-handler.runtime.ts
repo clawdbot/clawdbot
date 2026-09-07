@@ -18,12 +18,11 @@ import { resolveGoogleChatAccount, type ResolvedGoogleChatAccount } from "./acco
 import { sendGoogleChatMessage, updateGoogleChatMessage } from "./api.js";
 import {
   buildGoogleChatApprovalActionParameters,
-  createGoogleChatApprovalToken,
+  googleChatApprovalControls,
   GOOGLECHAT_APPROVAL_ACTION,
   registerGoogleChatApprovalCardBinding,
   registerGoogleChatManualApprovalFollowupSuppression,
   unregisterGoogleChatManualApprovalFollowupSuppression,
-  unregisterGoogleChatApprovalCardBindings,
 } from "./approval-card-actions.js";
 import { escapeGoogleChatApprovalCardText as escapeGoogleChatText } from "./approval-card-text.js";
 import {
@@ -190,7 +189,7 @@ function buildActionSection(params: { actionFunction: string; view: PendingAppro
 } {
   const { actionFunction, view } = params;
   const actionTokens = view.actions.map((action) => ({
-    token: createGoogleChatApprovalToken(),
+    token: googleChatApprovalControls.createToken(),
     decision: action.decision,
   }));
   return {
@@ -423,10 +422,10 @@ export const googleChatApprovalNativeRuntime = createChannelApprovalNativeRuntim
       return tokens.length > 0 ? tokens : null;
     },
     unbindPending: ({ binding }) => {
-      unregisterGoogleChatApprovalCardBindings(binding);
+      googleChatApprovalControls.unregister(binding);
     },
     cancelDelivered: ({ entry }) => {
-      unregisterGoogleChatApprovalCardBindings(
+      googleChatApprovalControls.unregister(
         entry.actionTokens.map((actionToken) => actionToken.token),
       );
     },

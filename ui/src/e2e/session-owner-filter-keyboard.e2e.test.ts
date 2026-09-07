@@ -32,7 +32,7 @@ suite.define(() => {
             sessionRow("agent:main:bob", "Bob operations", 1),
           ]),
           owners: [
-            { type: "human", id: "profile-ada", label: "Ada" },
+            { type: "human", id: "profile-ada", label: "Ada Lovelace Byron" },
             { type: "human", id: "profile-bob", label: "Bob" },
             { type: "human", id: "profile-carol", label: "Carol" },
             { type: "human", id: "profile-dave", label: "Dave" },
@@ -150,26 +150,43 @@ suite.define(() => {
       await expect
         .poll(() =>
           page
-            .getByRole("menuitem", { name: "Specific owner: Ada", exact: true })
+            .getByRole("menuitem", { name: "Specific owner: Ada Lovelace Byron", exact: true })
             .locator(".sidebar-session-owner-selection .viewer-avatar")
             .count(),
         )
         .toBe(1);
       const selectedOwnerSubmenu = page.getByRole("menuitem", {
-        name: "Specific owner: Ada",
+        name: "Specific owner: Ada Lovelace Byron",
         exact: true,
       });
       await expect
         .poll(() =>
           selectedOwnerSubmenu.locator(".sidebar-session-owner-selection__name").textContent(),
         )
-        .toBe("Ada");
+        .toBe("Ada Lovelace Byron");
       await expect
         .poll(() => page.locator('[value="owner:"]').getAttribute("aria-checked"))
         .toBe("false");
       expect(
         await trailingGap(selectedOwnerSubmenu, ".sidebar-session-owner-selection__name"),
       ).toBeLessThanOrEqual(8);
+      // The long owner name must truncate; the row label keeps its full text
+      // and never runs underneath the avatar and name rail.
+      const { labelClipped, overlap } = await selectedOwnerSubmenu.evaluate((element) => {
+        const label = element.querySelector<HTMLElement>(":scope > .session-menu__text");
+        const details = element.querySelector<HTMLElement>(":scope > [slot='details']");
+        if (!label || !details) {
+          throw new Error("expected owner label and selection rail");
+        }
+        const range = document.createRange();
+        range.selectNodeContents(label);
+        return {
+          labelClipped: label.scrollWidth > label.clientWidth,
+          overlap: range.getBoundingClientRect().right - details.getBoundingClientRect().left,
+        };
+      });
+      expect(labelClipped).toBe(false);
+      expect(overlap).toBeLessThanOrEqual(0);
     } finally {
       await context.close();
     }

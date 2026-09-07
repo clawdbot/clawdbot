@@ -57,6 +57,7 @@ export function createApplicationGateway(initial: ApplicationGatewaySnapshot) {
   let snapshot = initial;
   const listeners = new Set<(value: ApplicationGatewaySnapshot) => void>();
   const gateway = {
+    connectionRevision: 0,
     connection: { gatewayUrl: "ws://gateway.example.test", token: "", password: "" },
     get snapshot() {
       return snapshot;

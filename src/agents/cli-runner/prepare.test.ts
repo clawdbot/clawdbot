@@ -29,6 +29,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerContextEngineForOwner } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { resolveMcpLoopbackScopedTools as resolveLoopbackTools } from "../../gateway/mcp-http.runtime.js";
+import {
+  claimHeartbeatOutcomeForRun,
+  persistHeartbeatOutcome,
+} from "../../infra/heartbeat-outcome-store.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
 import type {
   CliBackendExecute,
@@ -686,6 +690,156 @@ describe("prepareCliRunContext", () => {
     setActiveDegradedSecretOwners([]);
     vi.unstubAllEnvs();
     fixture.cleanup();
+  });
+
+  it.each(["process", "plugin"] as const)(
+    "carries silent heartbeat outcome in late %s user input without rebinding",
+    async (targetKind) => {
+      const { sessionTarget } = fixture.session;
+      if (targetKind === "plugin") {
+        setRawCliBackendForPrepareTest({
+          ...defaultTestCliBackend,
+          prepareExecution: () => ({
+            async *execute() {
+              yield { type: "result" };
+            },
+          }),
+        });
+      }
+      const admission = prepareSystemAgentRunAdmission(
+        {},
+        "run-test",
+        "main",
+        "heartbeat-context-test",
+      );
+      const input = {
+        preparedRunAdmission: admission,
+        sessionKey: sessionTarget.sessionKey,
+        trigger: "user" as const,
+        prompt: "What happened?",
+        transcriptPrompt: "What happened?",
+        currentInboundContext: { text: "Quoted reply", resumableText: "Room delta" },
+      };
+      try {
+        const before = await fixture.prepare(input);
+        persistHeartbeatOutcome({
+          ...sessionTarget,
+          runSessionKey: "agent:main:main:heartbeat",
+          occurredAt: 1,
+          response: { outcome: "done", notify: false, summary: "ISOLATED_CLI_OUTCOME_947" },
+        });
+        for (let retry = 0; retry < 2; retry++) {
+          const context = await fixture.prepare(input);
+          expect(context.executionTarget.kind).toBe(targetKind);
+          const visibleInput = [
+            context.params.prompt,
+            context.promptContext?.prependContext,
+            context.promptContext?.appendContext,
+          ]
+            .filter(Boolean)
+            .join("\n");
+          expect(visibleInput.match(/ISOLATED_CLI_OUTCOME_947/g)).toHaveLength(1);
+          expect(context.params.transcriptPrompt).toBe("What happened?");
+          expect(context.systemPrompt).toBe(before.systemPrompt);
+          expect(context.extraSystemPromptHash).toBe(before.extraSystemPromptHash);
+          expect(context.messageToolPolicyHash).toBe(before.messageToolPolicyHash);
+          expect(input.currentInboundContext).toEqual({
+            text: "Quoted reply",
+            resumableText: "Room delta",
+          });
+        }
+        const laterAdmission = prepareSystemAgentRunAdmission(
+          {},
+          "later-user-run",
+          "main",
+          "heartbeat-context-test",
+        );
+        try {
+          const later = await fixture.prepare({
+            ...input,
+            runId: "later-user-run",
+            preparedRunAdmission: laterAdmission,
+          });
+          expect(JSON.stringify([later.params.prompt, later.promptContext])).not.toContain(
+            "ISOLATED_CLI_OUTCOME_947",
+          );
+        } finally {
+          laterAdmission.close();
+        }
+      } finally {
+        admission.close();
+      }
+    },
+  );
+
+  it.each(["heartbeat", "cron", "in-memory", "aborted"] as const)(
+    "does not consume silent heartbeat context for %s CLI preparation",
+    async (kind) => {
+      const { sessionTarget, dir } = fixture.session;
+      persistHeartbeatOutcome({
+        ...sessionTarget,
+        runSessionKey: "agent:main:main:heartbeat",
+        occurredAt: 1,
+        response: { outcome: "done", notify: false, summary: "Retained CLI outcome" },
+      });
+      const admission = prepareSystemAgentRunAdmission(
+        {},
+        "run-test",
+        "main",
+        "heartbeat-context-test",
+      );
+      const input = {
+        preparedRunAdmission: admission,
+        sessionKey: sessionTarget.sessionKey,
+        trigger: kind === "heartbeat" || kind === "cron" ? kind : ("user" as const),
+        ...(kind === "in-memory" ? { sessionManager: SessionManager.inMemory(dir) } : {}),
+        ...(kind === "aborted" ? { abortSignal: AbortSignal.abort() } : {}),
+      };
+      try {
+        if (kind === "aborted") {
+          await expect(fixture.prepare(input)).rejects.toThrow();
+        } else {
+          const context = await fixture.prepare(input);
+          expect(JSON.stringify([context.params.prompt, context.promptContext])).not.toContain(
+            "Retained CLI outcome",
+          );
+        }
+        expect(claimHeartbeatOutcomeForRun({ ...sessionTarget, runId: "next-user" })?.summary).toBe(
+          "Retained CLI outcome",
+        );
+      } finally {
+        admission.close();
+      }
+    },
+  );
+
+  it("does not renew an explicitly revoked CLI owner to claim silent heartbeat context", async () => {
+    const { sessionTarget } = fixture.session;
+    persistHeartbeatOutcome({
+      ...sessionTarget,
+      runSessionKey: "agent:main:main:heartbeat",
+      occurredAt: 1,
+      response: { outcome: "done", notify: false, summary: "Keep revoked-owner outcome" },
+    });
+    const admission = prepareSystemAgentRunAdmission(
+      {},
+      "revoked-user",
+      "main",
+      "heartbeat-context-test",
+    );
+    const admittedRunContext = await admission.admit("embedded");
+    admission.close();
+    await expect(
+      fixture.prepare({
+        admittedRunContext,
+        runId: "revoked-user",
+        trigger: "user",
+        sessionKey: sessionTarget.sessionKey,
+      }),
+    ).rejects.toThrow("authority");
+    expect(claimHeartbeatOutcomeForRun({ ...sessionTarget, runId: "next-user" })?.summary).toBe(
+      "Keep revoked-owner outcome",
+    );
   });
 
   it("carries the session-key-derived workspace owner into prepared params", async () => {

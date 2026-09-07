@@ -242,6 +242,18 @@ gh workflow run duplicate-after-merge.yml \
   -f apply=true
 ```
 
+### Update Migration
+
+`Update Migration` runs the expanded published-upgrade baseline set weekly on
+Sunday at 03:17 UTC and on manual dispatch. It keeps both `plugin-deps-cleanup`
+and `legacy-operator-state`, with no provider secrets. Its separate
+non-canceling schedule group coalesces pending runs and cannot cancel manual
+validation. See [Package Acceptance suite profiles](/ci/release-validation#suite-profiles)
+for runtime baseline resolution, per-baseline grouping, the 78–90
+runner-minute weekly planning allowance, and the successful-upgrade requirements.
+[Runner registration budgets](/ci/capacity#runner-registration-budget) account
+for the weekly burst separately from PR and main admission.
+
 ## ClawSweeper activity forwarding
 
 `.github/workflows/clawsweeper-dispatch.yml` is the target-side bridge from OpenClaw repository activity into ClawSweeper. It does not check out or execute untrusted pull request code. The workflow creates a GitHub App token from `CLAWSWEEPER_APP_PRIVATE_KEY`, then dispatches compact `repository_dispatch` payloads to `openclaw/clawsweeper`.

@@ -42,6 +42,16 @@ export function toModelRow(params: {
     authAvailability,
     authAvailabilityAuthoritative = false,
   } = params;
+  const mergedTags = new Set(tags);
+  if (aliases.length > 0) {
+    for (const tag of mergedTags) {
+      if (tag === "alias" || tag.startsWith("alias:")) {
+        mergedTags.delete(tag);
+      }
+    }
+    mergedTags.add(`alias:${aliases.join(",")}`);
+  }
+
   if (!model) {
     return {
       key,
@@ -50,7 +60,7 @@ export function toModelRow(params: {
       contextWindow: null,
       local: null,
       available: null,
-      tags: [...tags, "missing"],
+      tags: [...mergedTags, "missing"],
       missing: true,
     };
   }
@@ -66,18 +76,6 @@ export function toModelRow(params: {
     : availableKeys !== undefined
       ? modelIsAvailable
       : (authAvailability ?? (modelIsAvailable ? true : null));
-  const aliasTags = aliases.length > 0 ? [`alias:${aliases.join(",")}`] : [];
-  const mergedTags = new Set(tags);
-  if (aliasTags.length > 0) {
-    for (const tag of mergedTags) {
-      if (tag === "alias" || tag.startsWith("alias:")) {
-        mergedTags.delete(tag);
-      }
-    }
-    for (const tag of aliasTags) {
-      mergedTags.add(tag);
-    }
-  }
 
   return {
     key,

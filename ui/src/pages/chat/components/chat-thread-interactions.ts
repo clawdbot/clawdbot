@@ -74,6 +74,8 @@ export type ChatThreadProps = ChatSendStatusActions & {
   personActivity?: PersonActivityRouting;
   sessionKey: string;
   presented?: boolean;
+  /** Mounted transcript visibility, independent of which split pane owns input. */
+  transcriptVisible?: boolean;
   gatewayClient?: GatewayBrowserClient | null;
   selectedSession: GatewaySessionRow | undefined;
   boardProvider?: BoardProvider;

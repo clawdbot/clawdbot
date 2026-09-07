@@ -1,9 +1,18 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
+import type { EmbeddedAgentQueueHandle } from "../../agents/embedded-agent-runner/run-state.js";
+import {
+  clearActiveEmbeddedRun,
+  setActiveEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import {
+  createReplyOperation,
+  markReplyOperationExecutionStarted,
+} from "../../auto-reply/reply/reply-run-registry.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import {
   loadSessionEntry,
@@ -147,6 +156,70 @@ it("selects current work before pagination and represents an isolated cron run o
     }
   });
 });
+
+it.each(["global", "unknown"] as const)(
+  "keeps %s activity with its agent when physical stores share a session ID",
+  async (sessionKey) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const config: OpenClawConfig = {
+        agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
+        session: { scope: "global", store: state.statePath("{agentId}.sqlite") },
+      };
+      const sessionId = `restored-${sessionKey}`;
+      const runId = `ops-${sessionKey}-run`;
+      for (const agentId of ["main", "ops"]) {
+        await upsertSessionEntryCore(
+          { agentId, sessionKey, storePath: state.statePath(`${agentId}.sqlite`) },
+          { sessionId, updatedAt: 1, visibility: "shared" },
+        );
+      }
+      const context = requestContext(config);
+      const client = identifiedClient("viewer@example.test");
+      const request = { activeOnly: true, includeGlobal: true, includeUnknown: true, limit: 100 };
+      const activeOwners = async () =>
+        (await listSessions({ client, context, request })).sessions.map((row) => row.agentId);
+      const handle: EmbeddedAgentQueueHandle = {
+        runId,
+        abort: () => undefined,
+        isAborted: () => false,
+        isCompacting: () => false,
+        isStreaming: () => true,
+        queueMessage: async () => undefined,
+      };
+      let reply: ReturnType<typeof createReplyOperation> | undefined;
+      registerAgentRunContext(runId, {
+        agentId: "ops",
+        sessionId,
+        sessionKey,
+        projectSessionActive: true,
+      });
+      try {
+        await expect(activeOwners()).resolves.toEqual(["ops"]);
+        setActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "ops");
+        await expect(activeOwners()).resolves.toEqual(["ops"]);
+        clearAgentRunContext(runId);
+        await expect(activeOwners()).resolves.toEqual(["ops"]);
+        clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+
+        reply = createReplyOperation({
+          agentId: "ops",
+          sessionId,
+          sessionKey,
+          resetTriggered: false,
+        });
+        await expect(activeOwners()).resolves.toEqual(["ops"]);
+        markReplyOperationExecutionStarted(reply);
+        await expect(activeOwners()).resolves.toEqual(["ops"]);
+        reply.complete();
+        await expect(activeOwners()).resolves.toEqual([]);
+      } finally {
+        reply?.complete();
+        clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+        clearAgentRunContext(runId);
+      }
+    });
+  },
+);
 
 it.each(["global", "unknown"] as const)(
   "keeps active %s owners and their physical transcript, board, and sharing rows distinct",

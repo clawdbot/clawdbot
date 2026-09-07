@@ -15,7 +15,7 @@ const SESSION_NAVIGATION_PREVIEW_TIMEOUT_MS = 5_000;
 type RetentionHost = HTMLElement & { requestUpdate(): unknown };
 type RetentionBindings = {
   context: () => ApplicationContext | undefined;
-  face: () => SessionNavigationIntent["face"];
+  presented: () => boolean;
   layout: () => ChatSplitLayout;
   selectReplacement: (paneId: string, sourceSessionKey: string, sessionKey: string) => void;
 };
@@ -42,6 +42,10 @@ export class ChatPageRetainedSessions {
     this.sessionsByPane.clear();
     window.removeEventListener("popstate", this.cancelPreview);
     window.removeEventListener(SESSION_NAVIGATION_INTENT_EVENT, this.handleNavigationIntent);
+    this.cancelPreview();
+  }
+
+  suspend(): void {
     this.cancelPreview();
   }
 
@@ -135,14 +139,11 @@ export class ChatPageRetainedSessions {
   }
 
   private readonly handleNavigationIntent = (event: Event) => {
-    if (!(event instanceof CustomEvent)) {
+    if (!this.bindings.presented() || !(event instanceof CustomEvent)) {
       return;
     }
     this.cancelPreview();
     const intent = event.detail as SessionNavigationIntent;
-    if (intent.face !== this.bindings.face()) {
-      return;
-    }
     const layout = this.bindings.layout();
     const activePane = findPane(layout, layout.activePaneId)?.pane;
     const retainedKey = this.sessionsByPane
@@ -151,6 +152,7 @@ export class ChatPageRetainedSessions {
     if (
       !activePane ||
       !retainedKey ||
+      this.findPane(activePane.id, retainedKey)?.routeFace !== intent.face ||
       areUiSessionKeysEquivalent(activePane.sessionKey, retainedKey)
     ) {
       return;
@@ -191,8 +193,9 @@ export class ChatPageRetainedSessions {
       if (pane.paneId !== paneId) {
         continue;
       }
-      const presented = areUiSessionKeysEquivalent(pane.sessionKey ?? "", sessionKey);
-      pane.classList.toggle("chat-pane-cache__pane--visible", presented);
+      const selected = areUiSessionKeysEquivalent(pane.sessionKey ?? "", sessionKey);
+      const presented = this.bindings.presented() && selected;
+      pane.classList.toggle("chat-pane-cache__pane--visible", selected);
       pane.visuallyPresented = presented;
       if (preview) {
         pane.toggleAttribute("inert", true);

@@ -37,6 +37,9 @@ openclaw agents delete work
 
 Options: `--json`, `--bindings` (include full routing rules, not only per-agent counts/summaries).
 
+Provider-status labels include optional account display names beside account IDs.
+Routing rules continue to identify accounts by channel and account ID.
+
 Identity fields saved in config take precedence. Fields that are not configured
 fall back to `IDENTITY.md` in the agent's workspace. Unsupported avatar values
 and unreadable local images also fall back to the workspace avatar.

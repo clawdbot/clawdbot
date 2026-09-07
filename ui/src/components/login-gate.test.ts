@@ -134,6 +134,82 @@ describe("login gate failure recovery", () => {
     ).toEqual(["openclaw gateway auth-token --show", "openclaw doctor --generate-gateway-token"]);
   });
 
+  it("keeps the visible credential mode while a token is being replaced", async () => {
+    const onTokenChange = vi.fn();
+    const onPasswordChange = vi.fn();
+    const element = document.createElement("openclaw-login-gate") as LoginGateElement;
+    const render = (token: string) => {
+      element.props = {
+        resourceBasePath: "",
+        connected: false,
+        lastError: "unauthorized: gateway token mismatch",
+        lastErrorCode: ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
+        hasToken: Boolean(token),
+        hasPassword: true,
+        gatewayUrl: "ws://127.0.0.1:18789",
+        token,
+        password: "shared-password",
+        showGatewayToken: false,
+        showGatewayPassword: false,
+        onGatewayUrlChange: vi.fn(),
+        onTokenChange,
+        onPasswordChange,
+        onToggleGatewayToken: vi.fn(),
+        onToggleGatewayPassword: vi.fn(),
+        onConnect: vi.fn(),
+      };
+    };
+    render("stale-token");
+    document.body.append(element);
+    await element.updateComplete;
+    const input = element.querySelector<HTMLInputElement>("#login-gate-credential")!;
+    expect(input.value).toBe("stale-token");
+
+    input.value = "";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    render("");
+    await element.updateComplete;
+    input.value = "fresh-token";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    expect(onTokenChange.mock.calls.map(([value]) => value)).toEqual(["", "fresh-token"]);
+    expect(onPasswordChange).not.toHaveBeenCalled();
+    expect(
+      element.querySelector('.login-gate__segmented [aria-checked="true"]')?.textContent?.trim(),
+    ).toBe("Token");
+  });
+
+  it("selects the password field when the Gateway asks for a password despite a saved token", async () => {
+    const element = await mountFailure(
+      "password missing",
+      ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
+      { token: "saved-token", password: "" },
+    );
+
+    expect(
+      element.querySelector('.login-gate__segmented [aria-checked="true"]')?.textContent?.trim(),
+    ).toBe("Password");
+    expect(element.querySelector<HTMLInputElement>("#login-gate-credential")?.value).toBe("");
+    expect(element.querySelector(".login-gate__failure-title")?.textContent?.trim()).toBe(
+      "Password needed",
+    );
+  });
+
+  it("keeps Connect available beside Refresh for a protocol mismatch", async () => {
+    const element = await mountFailure(
+      "protocol mismatch",
+      ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+    );
+    const actions = element.querySelector(".login-gate__actions");
+
+    expect(actions?.querySelector(".login-gate__failure-refresh")).not.toBeNull();
+    expect(actions?.querySelector("button.login-gate__connect")?.textContent?.trim()).toBe(
+      "Connect",
+    );
+    actions?.querySelector<HTMLButtonElement>("button.login-gate__connect")?.click();
+    expect(element.props.onConnect).toHaveBeenCalledOnce();
+  });
+
   it("offers page refresh for a protocol mismatch and reloads when selected", async () => {
     const element = await mountFailure(
       "protocol mismatch",
@@ -210,58 +286,90 @@ describe("login gate failure recovery", () => {
     expect(element.querySelector(".login-gate__failure-refresh")).toBeNull();
   });
 
-  it("offers a one-command recovery before manual pairing approval", async () => {
+  it("leads pairing recovery with one approve command and folds the form away", async () => {
     const element = await mountFailure(
       "pairing required",
       ConnectErrorDetailCodes.PAIRING_REQUIRED,
     );
+    const failure = element.querySelector<HTMLElement>(".login-gate__failure");
 
+    expect(failure?.getAttribute("data-kind")).toBe("pairing-required");
+    expect(failure?.getAttribute("data-tone")).toBe("pending");
+    expect(failure?.querySelector(".login-gate__failure-title")?.textContent).toBe(
+      "Approve this browser",
+    );
+    expect(failure?.querySelector(".login-gate__command--hero code")?.textContent?.trim()).toBe(
+      "openclaw devices approve --latest",
+    );
     const steps = Array.from(
       element.querySelectorAll<HTMLElement>(".login-gate__failure-steps li"),
       (entry) => entry.textContent?.replace(/\s+/g, " ").trim(),
     );
-    expect(steps).toHaveLength(4);
-    expect(steps[0]).toContain("On the Gateway host, run openclaw dashboard");
-    expect(steps[0]).toContain("to open a secure one-time pairing link.");
-    expect(steps[1]).toContain("Run openclaw devices list");
-    expect(steps[1]).toContain("on the Gateway host.");
-    expect(steps[2]).toBe("Approve the pending browser/device request from that list.");
-    expect(steps[3]).toBe("Reconnect after the approval completes.");
-    expect(
-      Array.from(element.querySelectorAll(".login-gate__failure-steps code"), (entry) =>
-        entry.textContent?.trim(),
-      ),
-    ).toEqual(["openclaw dashboard", "openclaw devices list"]);
+    expect(steps).toHaveLength(3);
+    expect(steps[0]).toContain("prints the exact approve command");
+    expect(steps[1]).toContain("Prefer a link? Run openclaw dashboard");
+    expect(steps[1]).toContain("on the Gateway host and open the one-time URL");
+    expect(steps[2]).toBe("Once approved, click Connect.");
+    // The form stays reachable but folded; its summary names the target without a credential.
+    const connection = failure?.querySelector<HTMLDetailsElement>(".login-gate__connection");
+    expect(connection?.open).toBe(false);
+    expect(connection?.querySelector("summary")?.textContent?.replace(/\s+/g, " ")).toContain(
+      "Connecting to 127.0.0.1:18789 · no credential Change",
+    );
+    expect(element.querySelectorAll("button.login-gate__connect")).toHaveLength(1);
   });
 
-  it("renders only a normalized pairing request in an approval command", async () => {
+  it("shows automatic pairing recovery only while reconnect is pending", async () => {
+    const element = await mountFailure(
+      "pairing required",
+      ConnectErrorDetailCodes.PAIRING_REQUIRED,
+    );
+    element.props = { ...element.props, reconnectPending: true };
+    await element.updateComplete;
+
+    expect(element.textContent).toContain(
+      "Waiting for approval… this page connects on its own once the request is approved.",
+    );
+    expect(element.textContent).not.toContain("Once approved, click Connect.");
+    expect(element.querySelector('[aria-hidden="true"].session-run-spinner')).not.toBeNull();
+    const checkNow = element.querySelector<HTMLButtonElement>(".login-gate__connect")!;
+    expect(checkNow.textContent?.trim()).toBe("Check now");
+    checkNow.click();
+    expect(element.props.onConnect).toHaveBeenCalledOnce();
+
+    element.props = { ...element.props, reconnectPending: false };
+    await element.updateComplete;
+    expect(element.textContent).toContain("Once approved, click Connect.");
+    expect(element.textContent).not.toContain("Waiting for approval…");
+    expect(element.querySelector(".session-run-spinner")).toBeNull();
+    expect(checkNow.textContent?.trim()).toBe("Connect");
+  });
+
+  it("renders only a normalized pairing request in the approve command", async () => {
     const safe = await mountFailure(
       "scope upgrade pending approval (requestId: req-123)",
       ConnectErrorDetailCodes.PAIRING_REQUIRED,
     );
 
-    expect(
-      Array.from(safe.querySelectorAll(".login-gate__failure-steps code"), (entry) =>
-        entry.textContent?.trim(),
-      ),
-    ).toContain("openclaw devices approve req-123");
+    expect(safe.querySelector(".login-gate__failure-title")?.textContent).toBe(
+      "Approve the new access level",
+    );
+    expect(safe.querySelector(".login-gate__command--hero code")?.textContent?.trim()).toBe(
+      "openclaw devices approve req-123",
+    );
+    expect(safe.querySelectorAll(".login-gate__failure-steps li")).toHaveLength(2);
     safe.remove();
 
     const unsafe = await mountFailure(
       "scope upgrade pending approval (requestId: req-123;touch-owned)",
       ConnectErrorDetailCodes.PAIRING_REQUIRED,
     );
-    const unsafeCommands = Array.from(
-      unsafe.querySelectorAll(".login-gate__failure-steps code"),
-      (entry) => entry.textContent?.trim(),
-    );
 
-    expect(unsafeCommands.some((command) => command?.startsWith("openclaw devices approve"))).toBe(
-      false,
+    expect(unsafe.querySelector(".login-gate__command--hero code")?.textContent?.trim()).toBe(
+      "openclaw devices approve --latest",
     );
-    expect(unsafe.textContent).toContain(
-      "Approve the pending browser/device request from that list.",
-    );
+    // Only the redacted raw-error disclosure may echo the rejected id.
+    expect(unsafe.querySelector(".login-gate__hero")?.textContent).not.toContain("touch-owned");
     expect(unsafe.querySelector(".login-gate__failure-steps")?.textContent).not.toContain(
       "touch-owned",
     );

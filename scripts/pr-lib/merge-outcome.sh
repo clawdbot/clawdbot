@@ -248,19 +248,128 @@ merge_outcome_reconcile() {
   echo "MERGED exact attempted head $head as $landed; receipt retained at $MERGE_OUTCOME_REF."
 }
 
+merge_outcome_find_comment() {
+  local pr="$1" comments marker matches
+  MERGE_COMPLETION_COMMENT_URL=""
+  marker="<!-- openclaw-merge:$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .attempt) -->"
+  comments=$(gh_plain api --hostname "$MERGE_REPO_HOST" --paginate --slurp \
+    "repos/$MERGE_REPO_NAME/issues/$pr/comments?per_page=100" -H 'Cache-Control: max-age=0') || return 1
+  matches=$(printf '%s\n' "$comments" | jq -ce --arg marker "$marker" \
+    '[.[][] | select(.body | contains($marker))] | if length <= 1 then . else error("ambiguous completion marker") end') || return 1
+  if [ "$matches" != '[]' ]; then
+    MERGE_COMPLETION_COMMENT_URL=$(printf '%s\n' "$matches" | jq -er '.[0].html_url | select(type == "string" and length > 0)') || return 1
+  fi
+}
+
+merge_outcome_comment_body() {
+  local pr="$1" head landed method route label
+  head=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .head) || return 1
+  landed=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .landed) || return 1
+  method=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .method) || return 1
+  route=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .route) || return 1
+  case "$route:$method" in
+    admin:*) label="admin squash with trusted Crabbox infrastructure proof" ;;
+    queue:*) label="merge queue (requested $method)" ;;
+    auto:*) label="squash auto-merge" ;;
+    immediate:merge) label="merge commit" ;;
+    *) label="$method" ;;
+  esac
+  printf 'Merged via %s.\n\n- Prepared head SHA: [%s](%s/pull/%s/commits/%s)\n- Landed commit: [%s](%s/commit/%s)' \
+    "$label" "$head" "$MERGE_REPO_URL" "$pr" "$head" "$landed" "$MERGE_REPO_URL" "$landed"
+}
+
+merge_outcome_post_comment() {
+  local pr="$1" body="$2"
+  body+=$'\n\n'"<!-- openclaw-merge:$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .attempt) -->"
+  # Persist intent before POST: an interrupted or lost reply is lookup-only on recovery.
+  merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.phase="commenting"')" || return 1
+  if ! MERGE_COMPLETION_COMMENT_URL=$(gh_plain api --hostname "$MERGE_REPO_HOST" --method POST \
+    "repos/$MERGE_REPO_NAME/issues/$pr/comments" --raw-field "body=$body" --jq '.html_url // empty') ||
+    [ -z "$MERGE_COMPLETION_COMMENT_URL" ]; then
+    echo "Merge confirmed; completion comment outcome uncertain. No second POST or cleanup. Run scripts/pr merge-run $pr for read-only reconciliation."
+    return 1
+  fi
+  merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.phase="commented"')"
+}
+
+merge_outcome_head_branch() {
+  local pr="$1" head_json
+  head_json=$(gh_plain pr view "$pr" --repo "$MERGE_REPO_URL" --json headRefOid,headRefName,headRepository,headRepositoryOwner) || return 1
+  MERGE_HEAD_REF=$(printf '%s\n' "$head_json" | jq -er --arg head "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .head)" \
+    'select(.headRefOid == $head) | .headRefName | select(type == "string" and length > 0)') || return 1
+  MERGE_HEAD_REPO=$(printf '%s\n' "$head_json" | jq -er '.headRepositoryOwner.login + "/" + .headRepository.name | select(test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"))') || return 1
+  git check-ref-format "refs/heads/$MERGE_HEAD_REF"
+}
+
+merge_outcome_require_cleanup_absent() {
+  local pr="$1" root worktrees branch ref_status=0
+  root=$(repo_root) || return 1
+  worktrees=$(git worktree list --porcelain) || return 1
+  if [ -e "$root/.worktrees/pr-$pr" ] || [ -L "$root/.worktrees/pr-$pr" ] ||
+    printf '%s\n' "$worktrees" | grep -Fxq "worktree $root/.worktrees/pr-$pr"; then
+    echo "Completion requires the native worktree to be absent; inspect its ownership before cleanup." >&2
+    return 1
+  fi
+  merge_outcome_head_branch "$pr" || return 1
+  for branch in "temp/pr-$pr" "pr-$pr" "pr-$pr-prep"; do
+    ref_status=0
+    git show-ref --verify --quiet "refs/heads/$branch" || ref_status=$?
+    [ "$ref_status" -eq 1 ] || { echo "Completion requires local branch $branch to be absent; no deletion attempted." >&2; return 1; }
+  done
+  ref_status=0
+  git ls-remote --exit-code --refs "https://$MERGE_REPO_HOST/$MERGE_HEAD_REPO.git" "refs/heads/$MERGE_HEAD_REF" >/dev/null || ref_status=$?
+  [ "$ref_status" -eq 2 ] || { echo "Completion requires authoritative remote branch absence; no deletion attempted." >&2; return 1; }
+}
+
+merge_complete() {
+  local pr="$1" expected_oid="$2" phase body
+  local MERGE_OUTCOME_REF MERGE_OUTCOME_OID MERGE_OUTCOME_RECORD MERGE_REPO
+  local MERGE_REPO_URL MERGE_REPO_HOST MERGE_REPO_NAME MERGE_OBSERVATION
+  local MERGE_HEAD_REF MERGE_HEAD_REPO MERGE_COMPLETION_COMMENT_URL
+  merge_outcome_init "$pr" || return 1
+  if [ "$MERGE_OUTCOME_OID" != "$expected_oid" ] ||
+    ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e '.phase != "intent"' >/dev/null; then
+    merge_outcome_stop "completion requires the exact verified merge receipt; reconcile pending intent first"
+    return 1
+  fi
+  merge_outcome_reconcile "$pr" || return 1
+  phase=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .phase) || return 1
+  if [ "$phase" = complete ]; then
+    echo "merge-complete already complete for PR #$pr; no side effects."
+    return 0
+  fi
+  # Delayed completion only observes cleanup; it never deletes recreated resources.
+  merge_outcome_require_cleanup_absent "$pr" || return 1
+  if [ "$phase" = merged ] && [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .route)" = admin ]; then
+    echo "Admin completion requires its original landing audit before a first comment; preserve the receipt for owner review." >&2
+    return 1
+  fi
+  merge_outcome_find_comment "$pr" || return 1
+  if [ -n "$MERGE_COMPLETION_COMMENT_URL" ]; then
+    merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.phase="commented"')" || return 1
+  elif [ "$phase" = merged ]; then
+    body=$(merge_outcome_comment_body "$pr") || return 1
+    merge_outcome_post_comment "$pr" "$body" || return 1
+  else
+    echo "Completion comment is missing or uncertain; no second POST. Inspect the recorded attempt marker." >&2
+    return 1
+  fi
+  merge_outcome_require_cleanup_absent "$pr" || return 1
+  merge_outcome_stable "$pr" || return 1
+  merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.phase="complete"')" || return 1
+  echo "merge-complete complete for PR #$pr"
+  echo "completion comment: $MERGE_COMPLETION_COMMENT_URL"
+}
+
 merge_outcome_resume() {
-  local pr="$1" phase comments marker comment_url
+  local pr="$1" phase MERGE_COMPLETION_COMMENT_URL
   merge_outcome_reconcile "$pr" || return 1
   phase=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .phase)
   [ "$phase" != intent ] || return 0
   if [ "$phase" = commenting ]; then
-    marker="<!-- openclaw-merge:$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .attempt) -->"
     # Absence never permits a second POST: the first response may have been lost.
-    if comments=$(gh_plain api --hostname "$MERGE_REPO_HOST" --paginate --slurp \
-      "repos/$MERGE_REPO_NAME/issues/$pr/comments?per_page=100" -H 'Cache-Control: max-age=0') &&
-      comment_url=$(printf '%s\n' "$comments" | jq -er --arg marker "$marker" \
-        '[.[][] | select(.body | contains($marker))] | select(length == 1) | .[0].html_url | select(type == "string" and length > 0)'); then
-      echo "Completion comment observed: $comment_url"
+    if merge_outcome_find_comment "$pr" && [ -n "$MERGE_COMPLETION_COMMENT_URL" ]; then
+      echo "Completion comment observed: $MERGE_COMPLETION_COMMENT_URL"
       merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.phase="commented"')" || return 1
     fi
   fi
@@ -268,5 +377,6 @@ merge_outcome_resume() {
     echo "merge-run already complete for PR #$pr; no side effects."
   else
     echo "Merge confirmed; completion pending. Recovery does not repeat comment POST or cleanup. Inspect the completion marker in PR comments and any remaining .worktrees/pr-$pr/local branches; verify their ownership before manual cleanup."
+    echo "After cleanup, explicitly finalize: scripts/pr merge-complete $pr $MERGE_OUTCOME_OID --confirmed-operator-completion"
   fi
 }

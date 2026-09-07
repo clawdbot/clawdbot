@@ -267,9 +267,8 @@ reconcile dependencies before the remote wrapper starts.
 
 ## Core commands
 
-Run the test toolchain on Node 22.22.3+, Node 24.15+, or Node 26+. Vitest 5
-excludes Node 25 from its declared engine range; packaged OpenClaw runtime
-support for Node 25.9+ is unchanged.
+Run the test toolchain on Node 24.16+ or Node 26.1+, matching the packaged
+runtime floor. Older Node bindings can truncate SQLite TEXT values at embedded NUL characters.
 
 The test toolchain pins stable Vitest `5.0.0`, including its browser and coverage
 packages. Use `describe(name, { concurrent: false }, callback)` for ordered
@@ -982,7 +981,7 @@ Drives the interactive wizard via a pseudo-tty, verifies config/workspace/sessio
 
 ## QR import smoke (Docker)
 
-Ensures the maintained QR runtime helper loads under the supported Docker Node runtimes (Node 24 default, Node 22 compatible):
+Ensures the maintained QR runtime helper loads under the default Docker Node 24 runtime:
 
 ```bash
 pnpm test:docker:qr

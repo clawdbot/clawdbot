@@ -29,7 +29,7 @@ let state: OpenClawTestState;
 describe("prepared model runtime reload auth adoption", () => {
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "prepared-model-runtime" });
-    resetPreparedModelRuntimeHarness(state);
+    await resetPreparedModelRuntimeHarness(state);
   });
 
   it("refreshes stale catalog content only when an explicit read requests it", async () => {
