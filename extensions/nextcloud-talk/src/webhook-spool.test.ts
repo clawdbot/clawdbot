@@ -7,7 +7,11 @@ import {
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
+import {
+  createSignedCreateMessageRequest,
+  createSignedFileSharedActivityRequest,
+  createSignedVoiceMessageActivityRequest,
+} from "./monitor.test-fixtures.js";
 import { migrateNextcloudTalkLegacyReplayState } from "./webhook-spool-state.js";
 import { createNextcloudTalkWebhookSpool } from "./webhook-spool.js";
 
@@ -328,6 +332,36 @@ describe("Nextcloud Talk durable ingress", () => {
     });
   });
 
+  it("continues delivering ordinary Create Note text messages", async () => {
+    await withQueue(async (queue) => {
+      const deliver = vi.fn(async () => {});
+      const spool = startSpool(queue, deliver);
+      try {
+        await expect(
+          spool.receive(
+            createRawEvent({
+              messageId: "msg-text-regression",
+              roomToken: "room-text-regression",
+              text: "ordinary text",
+            }),
+          ),
+        ).resolves.toBe("accepted");
+        await spool.waitForIdle();
+        expect(deliver).toHaveBeenCalledWith(
+          expect.objectContaining({
+            messageId: "msg-text-regression",
+            roomToken: "room-text-regression",
+            text: "ordinary text",
+            mediaType: "text/plain",
+          }),
+          expect.any(Object),
+        );
+      } finally {
+        await spool.stop();
+      }
+    });
+  });
+
   it("completes a gated turn that does not dispatch", async () => {
     await withQueue(async (queue) => {
       const deliver = vi.fn(async () => {});
@@ -366,6 +400,259 @@ describe("Nextcloud Talk durable ingress", () => {
         await spool.receive(rawEvent);
         await spool.waitForIdle();
         expect(deliver).toHaveBeenCalledTimes(1);
+      } finally {
+        await spool.stop();
+      }
+    });
+  });
+
+  it("rejects a duplicate file_shared activity after completion", async () => {
+    await withQueue(async (queue) => {
+      const { body } = createSignedFileSharedActivityRequest();
+      const deliver = vi.fn(async (_message, lifecycle) => {
+        await lifecycle.onAdopted();
+      });
+      const spool = startSpool(queue, deliver);
+      try {
+        await expect(spool.receive(body)).resolves.toBe("accepted");
+        await spool.waitForIdle();
+        await expect(spool.receive(body)).resolves.toBe("accepted");
+        await spool.waitForIdle();
+        expect(deliver).toHaveBeenCalledTimes(1);
+        expect(deliver).toHaveBeenCalledWith(
+          expect.objectContaining({
+            messageId: "4242",
+            roomToken: "redacted-room-token",
+            attachment: expect.objectContaining({ fileId: "9001" }),
+          }),
+          expect.any(Object),
+        );
+      } finally {
+        await spool.stop();
+      }
+    });
+  });
+
+  it("replays an interrupted file_shared activity in its original room lane", async () => {
+    await withQueue(async (queue) => {
+      const { body } = createSignedFileSharedActivityRequest();
+      const interruptedDeliver = vi.fn(async (_message, lifecycle) => {
+        lifecycle.onDeferred();
+      });
+      const interrupted = startSpool(queue, interruptedDeliver);
+      await interrupted.receive(body);
+      await interrupted.waitForIdle();
+      expect(await queue.listClaims()).toEqual([
+        expect.objectContaining({
+          id: "4242",
+          laneKey: "room:redacted-room-token",
+        }),
+      ]);
+      await interrupted.stop();
+
+      const recoveredDeliver = vi.fn(async (_message, lifecycle) => {
+        await lifecycle.onAdopted();
+      });
+      const recovered = startSpool(queue, recoveredDeliver);
+      try {
+        await recovered.waitForIdle();
+        expect(recoveredDeliver).toHaveBeenCalledTimes(1);
+        expect(recoveredDeliver).toHaveBeenCalledWith(
+          expect.objectContaining({
+            messageId: "4242",
+            roomToken: "redacted-room-token",
+            attachment: expect.objectContaining({ fileId: "9001" }),
+          }),
+          expect.any(Object),
+        );
+      } finally {
+        await recovered.stop();
+      }
+    });
+  });
+
+  it("durably admits Talk file_shared activities", async () => {
+    await withQueue(async (queue) => {
+      const { body } = createSignedFileSharedActivityRequest();
+      const deliver = vi.fn(async (_message, lifecycle) => {
+        lifecycle.onDeferred();
+      });
+      const spool = startSpool(queue, deliver);
+      try {
+        await expect(spool.receive(body)).resolves.toBe("accepted");
+        await spool.waitForIdle();
+        expect(await queue.listClaims()).toEqual([
+          expect.objectContaining({
+            id: "4242",
+            laneKey: "room:redacted-room-token",
+            payload: expect.objectContaining({ rawEvent: body }),
+          }),
+        ]);
+        expect(deliver).toHaveBeenCalledWith(
+          expect.objectContaining({
+            messageId: "4242",
+            roomToken: "redacted-room-token",
+            roomName: "Receipts",
+            senderId: "users/alice",
+            senderName: "Alice",
+            text: "@openclaw please inspect this receipt",
+            timestamp: expect.any(Number),
+            attachment: {
+              fileId: "9001",
+              name: "receipt.pdf",
+              mimeType: "application/pdf",
+              declaredSizeBytes: 24_576,
+              shareUrl: "https://nextcloud.example/s/redacted-share-token",
+              hideDownload: false,
+            },
+          }),
+          expect.any(Object),
+        );
+      } finally {
+        await spool.stop();
+      }
+    });
+  });
+
+  it("durably admits canonical native Talk voice-message activities", async () => {
+    await withQueue(async (queue) => {
+      const { body } = createSignedVoiceMessageActivityRequest();
+      const deliver = vi.fn(async (_message, lifecycle) => {
+        lifecycle.onDeferred();
+      });
+      const spool = startSpool(queue, deliver);
+      try {
+        await expect(spool.receive(body)).resolves.toBe("accepted");
+        await spool.waitForIdle();
+        expect(await queue.listClaims()).toEqual([
+          expect.objectContaining({
+            id: "4250",
+            laneKey: "room:redacted-room-token",
+            payload: expect.objectContaining({ rawEvent: body }),
+          }),
+        ]);
+        expect(deliver).toHaveBeenCalledWith(
+          expect.objectContaining({
+            messageId: "4250",
+            roomToken: "redacted-room-token",
+            roomName: "Voice notes",
+            senderId: "users/alice",
+            senderName: "Alice",
+            text: "",
+            attachment: {
+              fileId: "9010",
+              name: "voice-note.wav",
+              mimeType: "audio/wav",
+              declaredSizeBytes: 557_804,
+              shareUrl: "https://nextcloud.example/s/redacted-voice-share-token",
+              hideDownload: false,
+            },
+          }),
+          expect.any(Object),
+        );
+      } finally {
+        await spool.stop();
+      }
+    });
+  });
+
+  it("bounds malformed file metadata as an unavailable attachment", async () => {
+    await withQueue(async (queue) => {
+      const fixture = createSignedFileSharedActivityRequest();
+      const payload = JSON.parse(fixture.body) as { object: { id: string; content: string } };
+      payload.object.id = "4245";
+      payload.object.content = JSON.stringify({
+        message: "{file}",
+        parameters: { file: { type: "file" } },
+      });
+      const body = JSON.stringify(payload);
+      const deliver = vi.fn<NextcloudTalkIngressDeliver>(async () => {});
+      const spool = startSpool(queue, deliver);
+      try {
+        await expect(spool.receive(body)).resolves.toBe("accepted");
+        await spool.waitForIdle();
+        await expect(spool.receive(body)).resolves.toBe("accepted");
+        await spool.waitForIdle();
+        expect(deliver).toHaveBeenCalledTimes(1);
+        expect(deliver).toHaveBeenCalledWith(
+          expect.objectContaining({
+            messageId: "4245",
+            text: "",
+            attachmentIssue: "media_missing_metadata",
+          }),
+          expect.any(Object),
+        );
+        expect(deliver.mock.calls[0]?.[0]).not.toHaveProperty("attachment");
+      } finally {
+        await spool.stop();
+      }
+    });
+  });
+
+  it("keeps malformed normal-message activities without a file parameter ignored", async () => {
+    await withQueue(async (queue) => {
+      const fixture = createSignedFileSharedActivityRequest();
+      const payload = JSON.parse(fixture.body) as { object: { id: string; content: string } };
+      payload.object.id = "4246";
+      payload.object.content = "{not-json";
+      const deliver = vi.fn();
+      const spool = startSpool(queue, deliver);
+      try {
+        await expect(spool.receive(JSON.stringify(payload))).resolves.toBe("ignored");
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        expect(deliver).not.toHaveBeenCalled();
+      } finally {
+        await spool.stop();
+      }
+    });
+  });
+
+  it("keeps unrelated Talk Activity events ignored", async () => {
+    await withQueue(async (queue) => {
+      const fixture = createSignedFileSharedActivityRequest();
+      const payload = JSON.parse(fixture.body) as {
+        object: { id: string; name: string; content: string };
+      };
+      payload.object.id = "4243";
+      payload.object.name = "participant_joined";
+      payload.object.content = JSON.stringify({
+        message: "Alice joined the conversation",
+        parameters: {},
+      });
+      const deliver = vi.fn();
+      const log = vi.fn();
+      const spool = startSpool(queue, deliver, log);
+      try {
+        await expect(spool.receive(JSON.stringify(payload))).resolves.toBe("ignored");
+        expect(log).toHaveBeenCalledWith(
+          "nextcloud-talk: ignored non-message webhook event (type=Activity objectType=Note)",
+        );
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        expect(deliver).not.toHaveBeenCalled();
+      } finally {
+        await spool.stop();
+      }
+    });
+  });
+
+  it("keeps Talk object_shared activities ignored", async () => {
+    await withQueue(async (queue) => {
+      const fixture = createSignedFileSharedActivityRequest();
+      const payload = JSON.parse(fixture.body) as {
+        object: { id: string; name: string; content: string };
+      };
+      payload.object.id = "4244";
+      payload.object.name = "object_shared";
+      payload.object.content = JSON.stringify({
+        message: "{object}",
+        parameters: { object: { type: "deck-card", id: "redacted" } },
+      });
+      const deliver = vi.fn();
+      const spool = startSpool(queue, deliver);
+      try {
+        await expect(spool.receive(JSON.stringify(payload))).resolves.toBe("ignored");
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        expect(deliver).not.toHaveBeenCalled();
       } finally {
         await spool.stop();
       }

@@ -1,6 +1,7 @@
 // Nextcloud Talk plugin module owns webhook ingress identity and legacy-state migration.
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import type { NextcloudTalkInboundAttachment } from "./types.js";
 
 export const NEXTCLOUD_TALK_INGRESS_PAYLOAD_VERSION = 1;
 
@@ -49,11 +50,88 @@ export function requiredString(value: unknown, field: string): string {
   throw new NextcloudTalkWebhookPayloadError(`Nextcloud Talk webhook is missing ${field}.`);
 }
 
+export type ParsedNextcloudTalkFileShare = {
+  text: string;
+  attachment?: NextcloudTalkInboundAttachment;
+  attachmentIssue?: "media_missing_metadata";
+};
+
+function parseDeclaredSizeBytes(value: unknown): number | undefined {
+  if (typeof value !== "string" || !/^\d+$/u.test(value.trim())) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function parseFileAttachment(value: unknown): NextcloudTalkInboundAttachment | undefined {
+  if (!isRecord(value) || value.type !== "file") {
+    return undefined;
+  }
+  const name = typeof value.name === "string" ? value.name.trim() : "";
+  const mimeType = typeof value.mimetype === "string" ? value.mimetype.trim() : "";
+  const shareUrl = typeof value.link === "string" ? value.link.trim() : "";
+  const declaredSizeBytes = parseDeclaredSizeBytes(value.size);
+  const hideDownload = value["hide-download"];
+  if (
+    !name ||
+    !mimeType ||
+    !shareUrl ||
+    declaredSizeBytes === undefined ||
+    (hideDownload !== "yes" && hideDownload !== "no")
+  ) {
+    return undefined;
+  }
+  const fileId = typeof value.id === "string" && value.id.trim() ? value.id.trim() : undefined;
+  return {
+    ...(fileId ? { fileId } : {}),
+    name,
+    mimeType,
+    declaredSizeBytes,
+    shareUrl,
+    hideDownload: hideDownload === "yes",
+  };
+}
+
+/** Recognize Talk's file-bearing message Activity without admitting other system events. */
+export function parseNextcloudTalkFileSharedActivity(
+  envelope: Record<string, unknown>,
+): ParsedNextcloudTalkFileShare | null {
+  if (envelope.type !== "Activity") {
+    return null;
+  }
+  const object = isRecord(envelope.object) ? envelope.object : null;
+  if (
+    object?.type !== "Note" ||
+    (object.name !== "file_shared" && object.name !== "message" && object.name !== "")
+  ) {
+    return null;
+  }
+
+  let content: unknown;
+  try {
+    content = typeof object.content === "string" ? JSON.parse(object.content) : null;
+  } catch {
+    content = null;
+  }
+  const contentRecord = isRecord(content) ? content : null;
+  const parameters = isRecord(contentRecord?.parameters) ? contentRecord.parameters : null;
+  if (!parameters || !Object.hasOwn(parameters, "file")) {
+    return null;
+  }
+  const message = typeof contentRecord?.message === "string" ? contentRecord.message : "";
+  const text = message.trim() === "{file}" ? "" : message;
+  const attachment = parseFileAttachment(parameters.file);
+  return attachment ? { text, attachment } : { text, attachmentIssue: "media_missing_metadata" };
+}
+
 export function inspectNextcloudTalkWebhookEnvelope(
   rawEvent: string,
 ): { eventId: string; laneKey: string } | null {
   const envelope = parseRawObject(rawEvent);
-  if (envelope.type !== "Create") {
+  const isCreateMessage = envelope.type === "Create";
+  const isFileShare = parseNextcloudTalkFileSharedActivity(envelope) !== null;
+  if (!isCreateMessage && !isFileShare) {
     return null;
   }
   const object = isRecord(envelope.object) ? envelope.object : null;

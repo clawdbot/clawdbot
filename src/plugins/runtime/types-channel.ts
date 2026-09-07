@@ -106,6 +106,7 @@ export type PluginRuntimeChannel = {
     saveRemoteMedia: typeof import("../../media/fetch.js").saveRemoteMedia;
     saveResponseMedia: typeof import("../../media/fetch.js").saveResponseMedia;
     saveMediaBuffer: typeof import("../../media/store.js").saveMediaBuffer;
+    deleteMediaBuffer: typeof import("../../media/store.js").deleteMediaBuffer;
   };
   activity: {
     record: typeof import("../../infra/channel-activity.js").recordChannelActivity;

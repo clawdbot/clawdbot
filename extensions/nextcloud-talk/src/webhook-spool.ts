@@ -21,6 +21,7 @@ import {
   migrateNextcloudTalkLegacyReplayState,
   NEXTCLOUD_TALK_INGRESS_PAYLOAD_VERSION,
   NextcloudTalkWebhookPayloadError,
+  parseNextcloudTalkFileSharedActivity,
   parseRawObject,
   requiredString,
   type NextcloudTalkIngressPayload,
@@ -40,7 +41,7 @@ function describeIgnoredWebhookEvent(rawEvent: string): string {
 }
 
 const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> = z.object({
-  type: z.enum(["Create", "Update", "Delete"]),
+  type: z.enum(["Create", "Update", "Delete", "Activity"]),
   actor: z.object({
     type: z.literal("Person"),
     id: z.string().min(1),
@@ -79,13 +80,22 @@ function parseClaimedMessage(
       `Nextcloud Talk ingress row ${claimedId} has an unsupported version.`,
     );
   }
-  const result = NextcloudTalkWebhookPayloadSchema.safeParse(parseRawObject(payload.rawEvent));
-  if (!result.success || result.data.type !== "Create" || result.data.object.id !== claimedId) {
+  const rawEnvelope = parseRawObject(payload.rawEvent);
+  const result = NextcloudTalkWebhookPayloadSchema.safeParse(rawEnvelope);
+  const fileShare = parseNextcloudTalkFileSharedActivity(rawEnvelope);
+  if (!result.success) {
     throw new NextcloudTalkWebhookPayloadError(
       `Nextcloud Talk ingress row ${claimedId} has invalid message identity.`,
     );
   }
   const webhook = result.data;
+  const isSupportedEvent =
+    webhook.type === "Create" || (webhook.type === "Activity" && fileShare !== null);
+  if (!isSupportedEvent || webhook.object.id !== claimedId) {
+    throw new NextcloudTalkWebhookPayloadError(
+      `Nextcloud Talk ingress row ${claimedId} has invalid message identity.`,
+    );
+  }
   const roomId = requiredString(webhook.target.id, "target.id");
   if (claimedLaneKey !== `room:${roomId}`) {
     throw new NextcloudTalkWebhookPayloadError(
@@ -98,11 +108,13 @@ function parseClaimedMessage(
     roomName: webhook.target.name,
     senderId: webhook.actor.id,
     senderName: webhook.actor.name,
-    text: webhook.object.content || webhook.object.name,
+    text: fileShare ? fileShare.text : webhook.object.content || webhook.object.name,
     mediaType: webhook.object.mediaType || "text/plain",
     timestamp: payload.receivedAt,
     // Activity Streams does not distinguish Talk room kinds. Runtime lookup refines this.
     isGroupChat: true,
+    ...(fileShare?.attachment ? { attachment: fileShare.attachment } : {}),
+    ...(fileShare?.attachmentIssue ? { attachmentIssue: fileShare.attachmentIssue } : {}),
   };
   return message;
 }
