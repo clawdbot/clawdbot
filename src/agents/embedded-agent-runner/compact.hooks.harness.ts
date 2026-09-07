@@ -804,6 +804,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
       },
       estimateTokens: estimateTokensMock,
       generateSummary: vi.fn(async () => "summary"),
+      serializeConversation: vi.fn(() => "serialized conversation"),
     }));
 
     vi.doMock("../sessions/sdk.js", () => ({
