@@ -158,6 +158,22 @@ describe("widget export", () => {
     ]);
   });
 
+  it("does not split a supplementary-plane character in PNG download filenames", async () => {
+    const frame = createWidgetFrame();
+    const names: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
+      function clickDownload(this: HTMLAnchorElement) {
+        if (this.download) {
+          names.push(this.download);
+        }
+      },
+    );
+    await exportWidget("download", frame, `a${"📊".repeat(61)}`, {
+      requestSnapshot: () => Promise.resolve(PNG_DATA_URL),
+    });
+    expect(names).toEqual([`a${"📊".repeat(59)}.png`]);
+  });
+
   it("rejects non-PNG and oversized snapshot replies", async () => {
     for (const dataUrl of [
       "data:image/jpeg;base64,aW1hZ2U=",
