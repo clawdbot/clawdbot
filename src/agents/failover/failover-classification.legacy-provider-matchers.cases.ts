@@ -43,13 +43,13 @@ export const legacyProviderMatcherCases = legacyFailoverCorpusRows(
       6,
       [patternsSource, "classifyFailoverReason"],
       "502 <!doctype html><html><head><title>502 Bad Gateway</title></head><body><h1>502 Bad Gateway</h1><p>cloudflare-nginx</p></body></html>",
-      "timeout",
+      "server_error",
     ],
     [
       7,
       [patternsSource, "classifyFailoverReason"],
       "503 <!doctype html><html><head><title>503</title></head><body><h1>Service Unavailable</h1><p>Please try again. Rate limit exceeded.</p></body></html>",
-      "timeout",
+      "server_error",
     ],
     [8, "isAuthErrorMessage", "API key invalidation policy updated", null],
     [

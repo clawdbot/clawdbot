@@ -59,7 +59,7 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
     };
     expect(classifyFailoverSignal(signal)).toEqual({
       kind: "reason",
-      reason: status === 529 ? "overloaded" : "timeout",
+      reason: status === 529 ? "overloaded" : "server_error",
     });
   });
 
@@ -70,9 +70,13 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
   });
 
   it.each([
-    ...[500, 502, 503, 504, 520, 521, 522, 523, 524].map((status) => ({
+    ...[504, 522, 524].map((status) => ({
       signal: { status, message: "The model is not available. Please try again later." },
       reason: "timeout",
+    })),
+    ...[500, 502, 503, 520, 521, 523].map((status) => ({
+      signal: { status, message: "The model is not available. Please try again later." },
+      reason: "server_error",
     })),
     {
       signal: {

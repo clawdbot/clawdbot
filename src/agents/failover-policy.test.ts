@@ -36,6 +36,12 @@ const CASES: ReasonCase[] = [
     preserveTransientProbeSlot: false,
   },
   {
+    reason: "server_error",
+    allowCooldownProbe: true,
+    useTransientProbeSlot: true,
+    preserveTransientProbeSlot: false,
+  },
+  {
     reason: "unknown",
     allowCooldownProbe: true,
     useTransientProbeSlot: true,

@@ -67,6 +67,15 @@ export const overflowServerMiscCases = [
     signal: { message: "Proxy stream ended before terminal event" },
     expected: reason("timeout"),
   },
+  ...failoverSignalRows(billingSource, reason("server_error"), [
+    [
+      "billing-cloudflare-521",
+      {
+        message:
+          "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
+      },
+    ],
+  ]),
   ...failoverSignalRows(billingSource, reason("timeout"), [
     ["billing-deadline-exceeded", { message: "deadline exceeded" }],
     ["billing-no-stream-chunks", { message: "request ended without sending any chunks" }],
@@ -78,13 +87,6 @@ export const overflowServerMiscCases = [
       { message: "dial tcp: lookup api.example.com: no such host (ENOTFOUND)" },
     ],
     ["billing-dns-eai-again", { message: "temporary dns failure EAI_AGAIN" }],
-    [
-      "billing-cloudflare-521",
-      {
-        message:
-          "521 <!DOCTYPE html><html><head><title>Web server is down</title></head><body>Cloudflare</body></html>",
-      },
-    ],
     [
       "billing-openai-retry-guidance",
       {
@@ -153,7 +155,7 @@ export const overflowServerMiscCases = [
     ["billing-chinese-service-busy", { message: "服务繁忙，请稍后再试" }],
     ["billing-chinese-system-error", { message: "系统错误，请稍后重试" }],
   ]),
-  ...failoverSignalRows(patternsSource, reason("timeout"), [
+  ...failoverSignalRows(patternsSource, reason("server_error"), [
     [
       "patterns-cloudflare-html-502",
       {
@@ -218,7 +220,7 @@ export const overflowServerMiscCases = [
     id: "http-provider-503",
     source: httpSource,
     signal: { status: 503, message: "Provider API error (503)" },
-    expected: reason("timeout"),
+    expected: reason("server_error"),
   },
   {
     id: "openrouter-network-finish",
@@ -250,12 +252,14 @@ export const overflowServerMiscCases = [
         '{"type":"error","error":{"type":"api_error","message":"Service temporarily unavailable"}}',
     },
   ]),
-  ...messageRows(billingSource, reason("timeout"), [
-    { id: "billing-status-499", message: "499 Client Closed Request" },
+  ...messageRows(billingSource, reason("server_error"), [
     { id: "billing-status-500", message: "500 Internal Server Error" },
     { id: "billing-status-502", message: "502 Bad Gateway" },
-    { id: "billing-status-504", message: "504 Gateway Timeout" },
     { id: "billing-503-database", message: "503 Internal Database Error" },
+  ]),
+  ...messageRows(billingSource, reason("timeout"), [
+    { id: "billing-status-499", message: "499 Client Closed Request" },
+    { id: "billing-status-504", message: "504 Gateway Timeout" },
     { id: "billing-stop-abort", message: "Unhandled stop reason: abort" },
     { id: "billing-stream-closed", message: "stream was closed" },
     { id: "billing-esockettimedout", message: "Error: connect ESOCKETTIMEDOUT 10.0.0.1:443" },
@@ -310,9 +314,11 @@ export const overflowServerMiscCases = [
     // FIXED(refactor-02): was timeout, now overloaded
     { id: "retry-503-retry-after", message: "503 Service Unavailable; Retry-After: 120 seconds" },
   ]),
-  ...messageRows(retrySource, reason("timeout"), [
+  ...messageRows(retrySource, reason("server_error"), [
     { id: "retry-http-500", message: "HTTP 500 temporary provider response" },
     { id: "retry-503", message: "503: temporary provider response" },
+  ]),
+  ...messageRows(retrySource, reason("timeout"), [
     { id: "retry-524", message: "524 status code (no body)" },
   ]),
   ...messageRows(patternsSource, reason("auth"), [

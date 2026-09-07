@@ -17,7 +17,7 @@ export const legacyBillingBCases = legacyFailoverCorpusRows("legacy-billing-b", 
     "overloaded",
   ],
   [7, "classifyFailoverReason", "HTTP 499: 499 Client Closed Request", "timeout"],
-  [8, "classifyFailoverReason", "HTTP 500", "timeout"],
+  [8, "classifyFailoverReason", "HTTP 500", "server_error"],
   [
     9,
     "classifyFailoverReason",
