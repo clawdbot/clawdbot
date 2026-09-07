@@ -229,7 +229,7 @@ jobs:
         if: ${{ inputs.run_windows_ci }}
         shell: bash
         env:
-          REQUESTED_NODE_VERSION: "22.x"
+          REQUESTED_NODE_VERSION: "24.x"
         run: |
           set -euo pipefail
           source .github/actions/setup-pnpm-store-cache/ensure-node.sh
@@ -241,7 +241,7 @@ jobs:
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
           cache-mode: restore
-          node-version: 22.x
+          node-version: 24.x
 
       - &windows_versions
         name: Runtime versions

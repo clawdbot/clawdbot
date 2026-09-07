@@ -307,6 +307,7 @@ function renderStatusBody(params: {
   onCredentialMode: (mode: CredentialMode) => void;
 }) {
   const { props, feedback } = params;
+  const waitingForPairing = feedback.kind === "pairing-required" && props.reconnectPending;
   return html`
     <section
       class="login-gate__body login-gate__failure"
@@ -333,10 +334,18 @@ function renderStatusBody(params: {
           : nothing
       }
       ${renderSteps(feedback)}
+      ${
+        waitingForPairing
+          ? html`<p class="login-gate__failure-summary">
+              <span class="session-run-spinner" aria-hidden="true"></span>
+              ${t("login.failure.pairing.waiting")}
+            </p>`
+          : nothing
+      }
       <div class="login-gate__actions">
         ${renderRefreshAction(feedback)}
         <button class="btn login-gate__connect" @click=${props.onConnect}>
-          ${t("common.connect")}
+          ${waitingForPairing ? t("login.failure.pairing.checkNow") : t("common.connect")}
         </button>
       </div>
       <details class="login-gate__connection">

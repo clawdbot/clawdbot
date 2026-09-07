@@ -599,6 +599,9 @@ export class OpenClawApp extends OpenClawLightDomElement {
             resourceBasePath: context.resourceBasePath,
             connected: gatewayConnected,
             lastError: gatewaySnapshot.lastError,
+            reconnectPending:
+              gatewaySnapshot.lastError !== null &&
+              (gatewaySnapshot.phase === "connecting" || gatewaySnapshot.phase === "reconnecting"),
             lastErrorCode: gatewaySnapshot.lastErrorCode,
             lastErrorAuthReason: gatewaySnapshot.lastErrorAuthReason,
             hasToken: Boolean(this.loginToken.trim()),

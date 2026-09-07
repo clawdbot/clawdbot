@@ -100,6 +100,9 @@ const enLogin = {
         stepLatest:
           "That command prints the exact approve command for the newest pending request; run that one as well.",
         stepReconnect: "Once approved, click Connect.",
+        waiting:
+          "Waiting for approval… this page connects on its own once the request is approved.",
+        checkNow: "Check now",
       },
       insecure: {
         title: "Secure browser context required",

@@ -146,6 +146,13 @@ still has `off`/`on` reasoning maps.
 }
 ```
 
+### Model instances and context
+
+With preload enabled, OpenClaw routes chat requests to a loaded instance with
+enough context for the selected model budget. A newly loaded instance is addressed by the
+identifier returned by LM Studio. Your configured model reference and conversation model identity
+keep the canonical model key.
+
 ### Disabling preload
 
 LM Studio supports just-in-time (JIT) model loading, loading models on first request. OpenClaw

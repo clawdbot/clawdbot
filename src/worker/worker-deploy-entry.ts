@@ -1,7 +1,10 @@
 import { flushCompileCache } from "node:module";
 import "./worker-deploy-runtime.js";
+import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import workerDeployBrowserRuntime from "./worker-deploy-browser-runtime.js";
 import { runWorkerProcess } from "./worker-process.js";
+
+assertSupportedRuntime();
 
 const args = process.argv.slice(2);
 const internalWorkerIpc = args.includes("--internal-worker-ipc");
