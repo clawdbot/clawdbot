@@ -1,3 +1,4 @@
+import type { StdioOptions } from "node:child_process";
 // CI resource owner; the disposable credentialless runner is the isolation boundary.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -21,13 +22,29 @@ await runWithFailedTrailer("macos-native", async () => {
     );
   }
   const [profileMode, ...args] = process.argv.slice(2);
-  if (profileMode !== "default" && profileMode !== "named") {
+  const quickChatPreflight = profileMode === "quick-chat-preflight";
+  const quickChat = profileMode === "quick-chat" || quickChatPreflight;
+  if (profileMode !== "default" && profileMode !== "named" && !quickChat) {
     throw new Error("Select default or named profile semantics before the Swift test arguments.");
   }
-  if (!args.includes("--skip-build")) {
+  if (!quickChat && !args.includes("--skip-build")) {
     throw new Error(
       "Build tests first with swift build --build-tests; this launcher requires --skip-build.",
     );
+  }
+  if (quickChat) {
+    const runnerTemp = fs.realpathSync(env.RUNNER_TEMP);
+    if (
+      process.platform !== "darwin" ||
+      args.length !== 2 ||
+      !args.every(
+        (value) => path.isAbsolute(value) && path.dirname(fs.realpathSync(value)) === runnerTemp,
+      )
+    ) {
+      throw new Error(
+        "Quick Chat requires the prebuilt driver and evidence directory in RUNNER_TEMP.",
+      );
+    }
   }
 
   // Keep paths short for tools honoring TMPDIR, independently of RUNNER_TEMP's length.
@@ -71,7 +88,7 @@ await runWithFailedTrailer("macos-native", async () => {
       TEMP: tmp,
       // The full suite protects default-profile lifecycle behavior. Named-profile
       // construction is exercised separately; both use the disposable runner's account.
-      OPENCLAW_PROFILE: profileMode === "named" ? `test-${randomUUID()}` : "default",
+      OPENCLAW_PROFILE: profileMode === "default" ? "default" : `test-${randomUUID()}`,
       OPENCLAW_STATE_DIR: state,
       OPENCLAW_CONFIG_PATH: path.join(state, "openclaw.json"),
     });
@@ -88,7 +105,12 @@ await runWithFailedTrailer("macos-native", async () => {
     for (const dir of [path.dirname(keychain), path.join(home, "Library/Preferences")]) {
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     }
-    const run = async (bin: string, commandArgs: string[], timeoutMs?: number) => {
+    const run = async (
+      bin: string,
+      commandArgs: string[],
+      timeoutMs?: number,
+      stdio?: StdioOptions,
+    ) => {
       canRemove = false;
       const code = await runManagedCommand({
         bin,
@@ -96,6 +118,7 @@ await runWithFailedTrailer("macos-native", async () => {
         env: childEnv,
         requireProcessTreeExit: true,
         timeoutMs,
+        stdio,
       });
       canRemove = true;
       return code;
@@ -116,7 +139,39 @@ await runWithFailedTrailer("macos-native", async () => {
           return;
         }
       }
-      process.exitCode = await run("swift", ["test", ...args]);
+      if (quickChatPreflight) {
+        const commandPath = path.join(root, "quick-chat-preflight-command.jsonl");
+        fs.writeFileSync(commandPath, '{"id":"permission-preflight","action":"stop"}\n', {
+          mode: 0o600,
+        });
+        const descriptors = [
+          fs.openSync(commandPath, "r"),
+          fs.openSync(path.join(args[1], "permission-preflight.jsonl"), "wx", 0o600),
+          fs.openSync(path.join(args[1], "permission-preflight.stderr.log"), "wx", 0o600),
+        ];
+        try {
+          process.exitCode = await run(
+            args[0],
+            [path.resolve("apps/macos/.build/release/OpenClaw"), args[1]],
+            30_000,
+            descriptors,
+          );
+        } finally {
+          for (const descriptor of descriptors) fs.closeSync(descriptor);
+        }
+      } else {
+        process.exitCode = quickChat
+          ? await run(
+              process.execPath,
+              [
+                "scripts/quick-chat-visible/run.mjs",
+                fs.realpathSync("apps/macos/.build/release/OpenClaw"),
+                ...args,
+              ],
+              480_000,
+            )
+          : await run("swift", ["test", ...args]);
+      }
     } finally {
       // A completed failed create may leave a database. Never delete it until every child closed.
       if (canRemove && fs.existsSync(keychain)) {

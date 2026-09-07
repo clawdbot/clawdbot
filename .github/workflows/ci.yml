@@ -4692,6 +4692,35 @@ jobs:
           xcodebuild -version
           swift --version
 
+      - name: Preflight normal Quick Chat permissions
+        id: quick-chat-permissions
+        if: ${{ success() && matrix.phase == 'release' && github.event_name == 'workflow_dispatch' && inputs.dispatch_id == 'f27-visible-proof-ff58c1c42fd-v1' }}
+        run: |
+          set -euo pipefail
+          proof="$RUNNER_TEMP/quick-chat-visible-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          driver="$RUNNER_TEMP/quick-chat-visible-driver-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -m 700 "$proof"
+          echo "artifact-path=$proof" >> "$GITHUB_OUTPUT"
+          echo "driver-path=$driver" >> "$GITHUB_OUTPUT"
+          {
+            echo "product_source=ff58c1c42fd6353974b2da8b9ba7384248b0c634"
+            echo "checkout_source=$(git rev-parse HEAD)"
+            echo "workflow_source=${{ github.workflow_sha }}"
+            echo "run_id=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT"
+            for scoped in apps/macos apps/shared apps/swabble; do
+              echo "$scoped=$(git rev-parse HEAD:$scoped)"
+            done
+            shasum -a 256 scripts/quick-chat-visible/*
+            sw_vers
+            xcodebuild -version
+          } > "$proof/inputs.txt"
+          test "$(git rev-parse HEAD:apps/macos)" = aeb486f5fb2cad703ee7038705f2954e35063305
+          test "$(git rev-parse HEAD:apps/shared)" = e37052791d0aa9fe054f18794f991a2e1f897886
+          test "$(git rev-parse HEAD:apps/swabble)" = ce4c820139152aa3d546b924d65b9dc32261937a
+          /usr/bin/xcrun swiftc -parse-as-library scripts/quick-chat-visible/QuickChatVisibleDriver.swift -o "$driver" 2>&1 | tee "$proof/driver-compile.log"
+          echo "driver-sha256=$(shasum -a 256 "$driver" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          node scripts/test-macos-native.mts quick-chat-preflight "$driver" "$proof"
+
       - name: Native state schema version contract
         if: matrix.phase == 'release'
         run: |
@@ -4735,6 +4764,51 @@ jobs:
           echo "::warning::SwiftPM did not produce complete Sparkle metadata; resetting once before retry."
           swift package --package-path apps/macos reset
           swift build --package-path apps/macos --product OpenClaw --configuration release
+
+      - name: Observe normal Quick Chat presentation
+        id: quick-chat-visible
+        if: ${{ success() && matrix.phase == 'release' && github.event_name == 'workflow_dispatch' && inputs.dispatch_id == 'f27-visible-proof-ff58c1c42fd-v1' }}
+        run: |
+          set -euo pipefail
+          proof="${{ steps.quick-chat-permissions.outputs.artifact-path }}"
+          driver="${{ steps.quick-chat-permissions.outputs.driver-path }}"
+          test "$(shasum -a 256 "$driver" | awk '{print $1}')" = "${{ steps.quick-chat-permissions.outputs.driver-sha256 }}"
+          {
+            echo "product_source=ff58c1c42fd6353974b2da8b9ba7384248b0c634"
+            echo "checkout_source=$(git rev-parse HEAD)"
+            echo "workflow_source=${{ github.workflow_sha }}"
+            echo "run_id=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT"
+            for scoped in apps/macos apps/shared apps/swabble; do
+              echo "$scoped=$(git rev-parse HEAD:$scoped)"
+            done
+            shasum -a 256 scripts/quick-chat-visible/*
+            sw_vers
+            xcodebuild -version
+          } > "$proof/build-inputs.txt"
+          test "$(git rev-parse HEAD:apps/macos)" = aeb486f5fb2cad703ee7038705f2954e35063305
+          test "$(git rev-parse HEAD:apps/shared)" = e37052791d0aa9fe054f18794f991a2e1f897886
+          test "$(git rev-parse HEAD:apps/swabble)" = ce4c820139152aa3d546b924d65b9dc32261937a
+          test -x apps/macos/.build/release/OpenClaw
+          test -d apps/macos/.build/release/OpenClaw_OpenClaw.bundle
+          /usr/bin/codesign --verify --strict apps/macos/.build/release/OpenClaw 2>&1 | tee "$proof/executable-signature.txt"
+          /usr/bin/otool -L apps/macos/.build/release/OpenClaw > "$proof/executable-linkage.txt"
+          node scripts/test-macos-native.mts quick-chat "$driver" "$proof"
+
+      - name: Upload normal Quick Chat observations
+        if: ${{ always() && steps.quick-chat-permissions.outputs.artifact-path != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: macos-quick-chat-visible-${{ needs.preflight.outputs.checkout_revision }}
+          path: |
+            ${{ steps.quick-chat-permissions.outputs.artifact-path }}/*.txt
+            ${{ steps.quick-chat-permissions.outputs.artifact-path }}/*.log
+            ${{ steps.quick-chat-permissions.outputs.artifact-path }}/*.jsonl
+            ${{ steps.quick-chat-permissions.outputs.artifact-path }}/quick-chat-*.png
+            ${{ steps.quick-chat-permissions.outputs.artifact-path }}/quick-chat-*.json
+            ${{ steps.quick-chat-permissions.outputs.artifact-path }}/fixture/wire.jsonl
+            ${{ steps.quick-chat-permissions.outputs.artifact-path }}/fixture/stopped.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: OpenClawKit Talk-trait opt-out (no ElevenLabsKit when default traits disabled)
         if: matrix.phase == 'tests'
