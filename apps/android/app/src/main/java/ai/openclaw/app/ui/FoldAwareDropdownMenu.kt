@@ -7,6 +7,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.view.View
 import android.view.ViewTreeObserver
+import android.view.WindowManager
 import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.heightIn
@@ -104,7 +105,12 @@ internal fun FoldAwareDropdownMenu(
     Popup(
       popupPositionProvider = opening,
       onDismissRequest = opening.dismiss,
-      properties = PopupProperties(focusable = true),
+      // Non-editing menus own native focus without becoming IME targets.
+      properties =
+        PopupProperties(
+          flags = WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM,
+          inheritSecurePolicy = true,
+        ),
     ) {
       val popupView = LocalView.current
       SideEffect { opening.popupRoot = popupView.rootView }

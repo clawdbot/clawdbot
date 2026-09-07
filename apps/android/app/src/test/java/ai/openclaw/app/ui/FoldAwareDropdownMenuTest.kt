@@ -367,6 +367,7 @@ class FoldAwareDropdownMenuTest {
     val params = root.layoutParams as WindowManager.LayoutParams
     assertEquals(0, params.flags and (WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL))
     assertTrue(params.flags and WindowManager.LayoutParams.FLAG_SECURE != 0)
+    assertFalse("Non-editing menu must not become an IME target", WindowManager.LayoutParams.mayUseInputMethod(params.flags))
     composeRule.runOnIdle {
       assertTrue(root.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ESCAPE)))
       assertTrue(root.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ESCAPE)))
