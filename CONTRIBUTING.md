@@ -147,18 +147,42 @@ The root `tsconfig.json` is configured for legacy decorators (`experimentalDecor
 with `useDefineForClassFields: false`. Avoid flipping these unless you are also updating the UI
 build tooling to support standard decorators.
 
-## AI/Vibe-Coded PRs Welcome! 🤖
+## AI-Assisted Contributions
 
-Built with Codex, Claude, or other AI tools? **Welcome!** No AI-assistance label or disclosure is required.
+Built with Codex, Claude, or another AI tool? **Welcome!** No AI-assistance
+label or disclosure is required. Keep the engineering bar unchanged: the
+contributor understands the submitted code and owns the problem, intended
+behavior, scope, and submitted result, while the agent should own the technical
+investigation and verification.
 
-Please include in your PR:
+For a review-ready AI-assisted contribution:
 
-- [ ] Include a concise **Evidence** section with the most useful validation. Reviewers will inspect the code, tests, and CI rather than relying on the PR body alone.
-- [ ] Confirm you understand what the code does
-- [ ] Run the `autoreview` skill when available and address accepted/actionable findings
-- [ ] Follow the [pull request review flow](https://docs.openclaw.ai/reference/pull-request-review-flow) after Barnacle, ClawSweeper, or maintainer feedback
+- Link the issue or request that defines non-trivial work. For bugs and very
+  small fixes, link existing context when it exists. Start from the existing
+  discussion and ask the contributor only about unresolved observable behavior,
+  non-goals, or genuine tradeoffs.
+- Read repository instructions, inspect adjacent code and recent related
+  maintainer repairs, and identify the owner or interface boundary that should
+  enforce the behavior.
+- Make the smallest durable change at that boundary. Avoid unrelated cleanup,
+  speculative abstractions, and new public vocabulary.
+- Set a reviewability budget before editing. Simplify or split the work if the
+  patch grows beyond what a reviewer can validate as one change.
+- Keep comments for non-obvious reasons, invariants, constraints, and
+  tradeoffs—not narrated code, hype, or an agent diary.
+- Provide exact-head, behavior-matched validation and current CI. Run
+  `autoreview` when available; otherwise use another independent review pass.
+  Address accepted and actionable findings.
+- Keep the durable explanation and evidence in the PR body. Before publication,
+  give the contributor a plain-language summary of intended behavior, changed
+  boundary and blast radius, strongest evidence, known gaps, and rollback.
+- Submit a complete, review-ready PR. Use draft status only for the brief
+  mergeability/CI attachment step or while implementation or proof is
+  intentionally incomplete; do not leave complete PRs in draft as a waiting
+  room.
 
-AI PRs are first-class citizens here and follow the same quality and review standards as any other PR.
+Follow the [pull request review flow](https://docs.openclaw.ai/reference/pull-request-review-flow)
+after Barnacle, ClawSweeper, or maintainer feedback.
 
 ## Current Focus & Roadmap 🗺
 

@@ -21,6 +21,9 @@ fix: add null check to task query
 **MUST:** Keep **Allow edits from maintainers** enabled for this PR so maintainers
 can help update the branch when needed.
 
+For AI-assisted work, follow the canonical
+[AI-assisted contribution guidance](https://github.com/openclaw/openclaw/blob/main/CONTRIBUTING.md#ai-assisted-contributions).
+
 </details>
 
 ## What Problem This Solves
