@@ -558,6 +558,45 @@ it("rejects bounded cleanup across opaque hydration-boundary rows", async () => 
   ).toThrow("Bounded transcript cleanup cannot cross the hydrated removal window");
 });
 
+it("ignores inactive matching rows before the bounded active cleanup window", async () => {
+  const dir = tempDirs.make("openclaw-session-manager-bounded-inactive-boundary-");
+  const scope = {
+    agentId: "main",
+    sessionId: "bounded-inactive-boundary",
+    sessionKey: "agent:main:bounded-inactive-boundary",
+    storePath: path.join(dir, "sessions.json"),
+  };
+  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  const root = await appendTranscriptMessage(scope, {
+    cwd: dir,
+    eventId: "root",
+    message: { role: "user", content: "retained" },
+  });
+  await appendTranscriptMessage(scope, {
+    cwd: dir,
+    eventId: "inactive-remove",
+    message: { role: "assistant", content: "remove" },
+    parentId: root.messageId,
+  });
+  const branchManager = SessionManager.open(scope, dir);
+  branchManager.branch(root.messageId);
+  const activeId = branchManager.appendMessage(buildAssistantMessage("remove"));
+  await waitForSessionTranscriptIndexReconcile({
+    agentId: scope.agentId,
+    path: resolveSessionTranscriptDatabasePath(scope),
+  });
+
+  const manager = SessionManager.openBounded(scope, {
+    cwd: dir,
+    maxBytes: 4096,
+    maxEvents: 1,
+  });
+  expect(manager.removeTrailingEntries((entry) => entry.id === activeId)).toBe(1);
+  expect(SessionManager.open(scope, dir).buildSessionContext().messages).toMatchObject([
+    { content: "retained" },
+  ]);
+});
+
 it("keeps the original hydration boundary after a partial bounded trim", async () => {
   const dir = tempDirs.make("openclaw-session-manager-bounded-partial-trim-");
   const scope = {
