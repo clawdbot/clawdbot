@@ -82,11 +82,13 @@ let store: TeamReportsStore;
 let server: Server;
 let port: number;
 let available = true;
+let currentOrgs = ["configured-example"];
 const getStore = vi.fn(() => (available ? store : undefined));
 
 beforeEach(() => {
   runtimeScopeMock.mockReturnValue({ client: { connect: { scopes: ["operator.read"] } } });
   getStore.mockClear();
+  currentOrgs = ["configured-example"];
 });
 
 function fetchPath(
@@ -144,7 +146,7 @@ beforeAll(async () => {
     getStore,
     status: () => ({ running: false, lastRun: "fixture-run" }),
     health: () => ({ running: false, warnings: 1 }),
-    orgs: ["example"],
+    orgs: () => currentOrgs,
     people: () => [
       {
         github: ["alice", "alice-alias"],
@@ -256,7 +258,7 @@ describe("Team Reports HTTP responses", () => {
     expect(response.body).toContain(`<script nonce="${nonce}">`);
     expect(response.body).not.toContain('href="javascript:');
     expect(response.body).toContain(
-      `href="https://127.0.0.1:${port}/reports/day/2026-08-20/" target="_blank" rel="noopener" aria-label="Open in a new window"`,
+      `href="https://127.0.0.1:${port}/reports/day/2026-08-20/" target="_blank" rel="noopener" data-report-open-window aria-label="Open in a new window"`,
     );
     expect(response.body).toContain('href="/reports/people/alice/"');
     expect(response.body).toContain("Deterministic summary");
@@ -449,6 +451,26 @@ describe("Team Reports HTTP responses", () => {
     });
     const status = await fetchPath("/reports/status");
     expect(JSON.parse(status.body)).toEqual({ running: false, lastRun: "fixture-run" });
+  });
+
+  it("reads current overview organizations and prefers the displayed report's organizations", async () => {
+    const emptyStore = createTeamReportsStore({ stateDir: path.join(directory, "empty") });
+    try {
+      for (const name of ["first-organization", "new <organization>"]) {
+        currentOrgs = [name];
+        getStore.mockReturnValueOnce(emptyStore);
+        const response = await fetchPath("/reports/");
+        expect(response.status).toBe(200);
+        expect(response.body).toContain(
+          name.replaceAll("<", "&lt;").replaceAll(">", "&gt;") + " · team",
+        );
+      }
+      const stored = await fetchPath("/reports/");
+      expect(stored.body).toContain("example · team");
+      expect(stored.body).not.toContain("new &lt;organization&gt; · team");
+    } finally {
+      emptyStore.close();
+    }
   });
 
   it("reports unavailable service state without touching a closed store", async () => {

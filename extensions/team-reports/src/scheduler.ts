@@ -103,6 +103,10 @@ export class TeamReportsScheduler {
     }
   }
 
+  orgs(): string[] {
+    return this.options.config.github.orgs;
+  }
+
   people(): Person[] {
     return this.roster;
   }

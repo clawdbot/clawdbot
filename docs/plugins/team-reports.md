@@ -126,9 +126,14 @@ per-person calendar. The generation panel shows scheduler and source health.
 Closed and partial periods remain distinct, with coverage and summary warnings
 alongside the report.
 
-The theme toggle persists per browser. Without a saved choice, the embedded page
-follows the operating system's light or dark preference independently of the
-Control UI theme. Relative times and open-day countdowns refresh with a small
+The theme choice follows you through in-tab navigation via the page fragment
+(`#theme=light` or `#theme=dark`). Inside the sandboxed Reports tab, it lasts for
+that visit. It persists per browser only where storage is available, such as in
+a separate window. Pages choose the theme from the fragment first, then browser
+storage when available, then the operating system's light or dark preference,
+independently of the Control UI theme.
+
+Relative times and open-day countdowns refresh with a small
 inline script that the Content Security Policy allows by nonce. The same script
 enables history toggles, member filtering, and the quiet-member switch. Pages
 still work without JavaScript: all history rows and members remain available,

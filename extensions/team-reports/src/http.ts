@@ -22,7 +22,7 @@ type TeamReportsHttpOptions = {
   getStore: () => TeamReportsStore | undefined;
   status: () => unknown;
   health: () => TeamReportsHealth;
-  orgs: string[];
+  orgs: () => string[];
   people: () => Person[];
 };
 
@@ -210,10 +210,11 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
     if (route.segments.length === 0) {
       const periods = index();
       const latest = periods.day[0];
+      const stored = latest ? store.getPeriod("day", latest.key) : undefined;
       return html(
         renderIndexPage(ctx, periods, {
-          orgs: options.orgs,
-          latest: latest ? (store.getPeriod("day", latest.key) ?? undefined) : undefined,
+          orgs: stored?.report.orgs ?? options.orgs(),
+          latest: stored,
           health: options.health(),
         }),
       );

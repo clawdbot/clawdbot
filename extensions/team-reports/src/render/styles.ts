@@ -522,7 +522,7 @@ body[data-report-page="people"] .person-activity-chart, body[data-report-page="p
 body[data-report-page="people"] .person-activity-chart:focus-visible, body[data-report-page="person"] .person-activity-chart:focus-visible { outline: 2px solid var(--oc-accent-primary); outline-offset: 2px; }
 body[data-report-page="people"] .person-activity-svg, body[data-report-page="person"] .person-activity-svg { display: block; width: 100%; height: clamp(250px, 36vw, 390px); overflow: visible; }
 body[data-report-page="people"] .person-activity-axis, body[data-report-page="person"] .person-activity-axis, body[data-report-page="people"] .person-activity-gridline, body[data-report-page="person"] .person-activity-gridline, body[data-report-page="people"] .person-activity-line, body[data-report-page="person"] .person-activity-line { vector-effect: non-scaling-stroke; }
-body[data-report-page="people"] .person-activity-axis, body[data-report-page="person"] .person-activity-axis { stroke: var(--oc-border-strong); stroke-width: 1; }
+body[data-report-page="people"] .person-activity-axis, body[data-report-page="person"] .person-activity-axis { fill: none; stroke: var(--oc-border-strong); stroke-width: 1; }
 body[data-report-page="people"] .person-activity-gridline, body[data-report-page="person"] .person-activity-gridline { stroke: var(--oc-border-subtle); stroke-width: 1; }
 body[data-report-page="people"] .person-activity-axis-tick, body[data-report-page="person"] .person-activity-axis-tick { fill: var(--oc-text-muted); font: 11px/1 var(--oc-font-mono); }
 body[data-report-page="people"] .person-activity-axis-tick-left, body[data-report-page="person"] .person-activity-axis-tick-left { text-anchor: end; }

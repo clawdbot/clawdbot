@@ -5,18 +5,36 @@ export const REPORT_SCRIPT = `(() => {
   const storedTheme = () => {
     try { const value = localStorage.getItem('theme'); return value === 'light' || value === 'dark' ? value : ''; } catch { return ''; }
   };
-  root.dataset.theme = storedTheme() || (query.matches ? 'light' : 'dark');
+  const fragmentTheme = () => {
+    const value = new URLSearchParams(location.hash.slice(1)).get('theme');
+    return value === 'light' || value === 'dark' ? value : '';
+  };
+  root.dataset.theme = fragmentTheme() || storedTheme() || (query.matches ? 'light' : 'dark');
   document.addEventListener('DOMContentLoaded', () => {
     root.dataset.js = 'true';
     const applyTheme = (theme, persist) => {
       root.dataset.theme = theme;
-      if (persist) { try { localStorage.setItem('theme', theme); } catch {} }
+      if (persist) {
+        try { localStorage.setItem('theme', theme); } catch {}
+        history.replaceState(null, '', '#theme=' + theme);
+      }
+      // Opaque-origin frames cannot use storage; carry their choice through report links.
+      const basePath = root.dataset.reportBasePath;
+      for (const link of document.querySelectorAll('a[href]')) {
+        const href = link.getAttribute('href');
+        const target = new URL(href, location.href);
+        const internal = target.origin === location.origin &&
+          (target.pathname === basePath || target.pathname.startsWith(basePath + '/'));
+        if (internal || link.hasAttribute('data-report-open-window')) {
+          link.setAttribute('href', href.split('#')[0] + '#theme=' + theme);
+        }
+      }
       for (const button of document.querySelectorAll('[data-theme-toggle]')) {
         button.setAttribute('aria-label', 'Switch to ' + (theme === 'light' ? 'dark' : 'light') + ' theme');
       }
     };
     applyTheme(root.dataset.theme, false);
-    query.addEventListener('change', event => { if (!storedTheme()) applyTheme(event.matches ? 'light' : 'dark', false); });
+    query.addEventListener('change', event => { if (!fragmentTheme() && !storedTheme()) applyTheme(event.matches ? 'light' : 'dark', false); });
     for (const button of document.querySelectorAll('[data-theme-toggle]')) {
       button.addEventListener('click', () => applyTheme(root.dataset.theme === 'light' ? 'dark' : 'light', true));
     }

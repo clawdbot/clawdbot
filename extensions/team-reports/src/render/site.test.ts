@@ -120,6 +120,26 @@ describe("Team Reports site behavior", () => {
     expect(
       home({ day: [{ ...closed, status: "partial", generatedAtMs: closed.untilMs - 1000 }] }),
     ).not.toContain(">Intraday</span>");
+    const closedToday = home({ day: [{ ...today, status: "closed" }] });
+    expect(closedToday).not.toContain(">Intraday</span>");
+    expect(closedToday).not.toContain('class="quick-card oc-card oc-card-interactive partial"');
+  });
+
+  it.each<{ period: Period; key: string }>([
+    { period: "day", key: "2026-09-06" },
+    { period: "week", key: "2026-W36" },
+    { period: "month", key: "2026-08" },
+  ])("preserves stored $period completeness in overview cards and history", ({ period, key }) => {
+    const closed = entry(period, key);
+    const incomplete = home({ [period]: [{ ...closed, status: "partial" }] });
+    expect(incomplete.match(/oc-badge-warning[^>]*>Incomplete<\/span>/g)).toHaveLength(2);
+    expect(incomplete).toContain('class="quick-card oc-card oc-card-interactive partial"');
+    expect(incomplete).not.toContain(">Intraday</span>");
+    expect(incomplete).not.toContain("Open reporting windows");
+    const complete = home({ [period]: [closed] });
+    expect(complete).not.toContain(">Incomplete</span>");
+    expect(complete).not.toContain(">Intraday</span>");
+    expect(complete).not.toContain('class="quick-card oc-card oc-card-interactive partial"');
   });
 
   it("compares an open aggregate snapshot to elapsed prior days instead of the full period", () => {
@@ -197,6 +217,44 @@ describe("Team Reports site behavior", () => {
     );
     expect(distribution.indexOf("member-13")).toBeLessThan(distribution.indexOf("member-12"));
     expect(distribution).toContain("Show remaining 2");
+  });
+
+  it("keeps every retained GitHub item accessible beyond the three-item preview", () => {
+    const report = document();
+    const member = report.members[0]!;
+    member.github.items = ["First change", "Second change", "Third change", "Fourth <change>"].map(
+      (title, index) => ({
+        kind: "pr_opened",
+        repo: `example/repo-${index}`,
+        title,
+        url: `https://github.com/example/repo-${index}/pull/1`,
+        atMs: report.generatedAtMs,
+        actor: member.login,
+      }),
+    );
+    member.github.items[3]!.repo = "example/<hostile-repo>";
+    member.github.items[3]!.url = "javascript:alert(1)";
+    const html = renderReportPage(ctx, report, null, []);
+    expect(html.match(/class="theme"/g)).toHaveLength(3);
+    const details = html.match(/<details><summary>4 GitHub items<\/summary>(.*?)<\/details>/s)?.[1];
+    expect(details).toBeDefined();
+    for (const title of [
+      "First change",
+      "Second change",
+      "Third change",
+      "Fourth &lt;change&gt;",
+    ]) {
+      expect(details).toContain(title);
+    }
+    expect(details?.match(/PR opened/g)).toHaveLength(4);
+    expect(details).toContain("example/repo-0");
+    expect(details).toContain("example/&lt;hostile-repo&gt;");
+    expect(details).toContain(
+      'href="https://github.com/example/repo-0/pull/1" target="_blank" rel="noopener"',
+    );
+    expect(details).not.toContain("javascript:");
+    expect(details).not.toContain("<hostile-repo>");
+    expect(details).not.toContain("Fourth <change>");
   });
 
   it("keeps source warning banners bounded and escapes hostile data on every page", () => {

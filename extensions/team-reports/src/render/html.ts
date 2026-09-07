@@ -31,6 +31,18 @@ const SERIES_LENGTH = { day: 28, week: 12, month: 6 };
 const combined = (entry: PeriodListEntry) => entry.githubTotal + entry.discordMessages;
 const number = (value: number) => value.toLocaleString("en-US");
 
+function completenessBadge(ctx: PageContext, entry: PeriodListEntry): string {
+  if (entry.status !== "partial") {
+    return "";
+  }
+  if ((ctx.nowMs ?? Date.now()) >= entry.untilMs) {
+    return '<span class="oc-badge oc-badge-warning partial-report-badge">Incomplete</span>';
+  }
+  return entry.period === "day" && isOpen(ctx, entry) && entry.generatedAtMs < entry.untilMs
+    ? '<span class="oc-badge oc-badge-info partial-report-badge">Intraday</span>'
+    : "";
+}
+
 function quickTrend(ctx: PageContext, index: PeriodIndex, entry: PeriodListEntry): string {
   const ascending = index[entry.period]
     .filter((candidate) => candidate.key <= entry.key)
@@ -64,7 +76,7 @@ function quickCard(ctx: PageContext, index: PeriodIndex, period: Period): string
     return `<section class="quick-card oc-card"><span class="oc-eyebrow">${period}</span><span class="quick-title">No ${period} reports yet</span><p class="oc-empty">Generate a report to see activity.</p></section>`;
   }
   const open = isOpen(ctx, entry);
-  return `<a class="quick-card oc-card oc-card-interactive${open ? " partial" : ""}" href="${escapeHtml(href(ctx.basePath, period, entry.key))}"><span class="oc-eyebrow">${open && period === "day" ? "today" : period}</span><span class="quick-title">${escapeHtml(periodTitle(entry))}</span><span class="quick-meta">${escapeHtml(formatWindow(entry))}<br>${entry.activeMembers}/${entry.memberCount} active · ${number(entry.githubTotal)} GitHub · ${number(entry.discordMessages)} Discord</span>${openPeriodStatus(ctx, entry)}${quickTrend(ctx, index, entry)}</a>`;
+  return `<a class="quick-card oc-card oc-card-interactive${entry.status === "partial" ? " partial" : ""}" href="${escapeHtml(href(ctx.basePath, period, entry.key))}"><span class="oc-eyebrow">${open && period === "day" ? "today" : period}</span><span class="quick-title">${escapeHtml(periodTitle(entry))} ${completenessBadge(ctx, entry)}</span><span class="quick-meta">${escapeHtml(formatWindow(entry))}<br>${entry.activeMembers}/${entry.memberCount} active · ${number(entry.githubTotal)} GitHub · ${number(entry.discordMessages)} Discord</span>${openPeriodStatus(ctx, entry)}${quickTrend(ctx, index, entry)}</a>`;
 }
 function history(ctx: PageContext, entries: PeriodListEntry[], period: Period): string {
   const visible = period === "day" ? 7 : 12;
@@ -83,9 +95,7 @@ function history(ctx: PageContext, entries: PeriodListEntry[], period: Period): 
               entry.sinceMs,
             )
           : formatWindow(entry);
-      const intraday =
-        period === "day" && isOpen(ctx, entry) && entry.generatedAtMs < entry.untilMs;
-      return `<a class="row" href="${escapeHtml(href(ctx.basePath, period, entry.key))}"${index >= visible ? " data-extra hidden" : ""}><span><span class="row-title-line"><span class="title">${escapeHtml(periodTitle(entry))}</span>${intraday ? '<span class="oc-badge oc-badge-info partial-report-badge">Intraday</span>' : ""}</span><br><span class="date">${escapeHtml(subline)}</span></span><span class="row-trend" aria-hidden="true">${trend}</span><span class="stats"><strong>${entry.activeMembers}/${entry.memberCount}</strong> active<br>${number(entry.githubTotal)} GitHub / ${number(entry.discordMessages)} Discord</span></a>`;
+      return `<a class="row" href="${escapeHtml(href(ctx.basePath, period, entry.key))}"${index >= visible ? " data-extra hidden" : ""}><span><span class="row-title-line"><span class="title">${escapeHtml(periodTitle(entry))}</span>${completenessBadge(ctx, entry)}</span><br><span class="date">${escapeHtml(subline)}</span></span><span class="row-trend" aria-hidden="true">${trend}</span><span class="stats"><strong>${entry.activeMembers}/${entry.memberCount}</strong> active<br>${number(entry.githubTotal)} GitHub / ${number(entry.discordMessages)} Discord</span></a>`;
     })
     .join("");
   return `<section class="oc-section" id="${period}"><div class="oc-section-header"><div><div class="oc-eyebrow">${period}</div><h2>${period[0]?.toUpperCase()}${period.slice(1)} History</h2></div>${entries.length > visible ? `<button class="toggle oc-action oc-action-ghost js-only" type="button" data-toggle="${period}" aria-expanded="false">Show all ${entries.length}</button>` : ""}</div><div class="list" data-list="${period}">${rows || `<p class="oc-empty">No ${period} reports yet.</p>`}</div></section>`;

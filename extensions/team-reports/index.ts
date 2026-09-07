@@ -119,7 +119,7 @@ export default definePluginEntry({
         getStore: () => store,
         status: () => requireScheduler().status(),
         health: () => requireScheduler().health(),
-        orgs: initial.github.orgs,
+        orgs: () => scheduler?.orgs() ?? initial.github.orgs,
         people: () => scheduler?.people() ?? initial.people ?? [],
       }),
     });
