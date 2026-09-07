@@ -154,12 +154,12 @@ export async function waitForCollectorCompletion(params: {
     }
     return state.completed[0];
   };
+  if (params.signal?.aborted) {
+    throw new ToolInputError("agents.run wait aborted.");
+  }
   const immediate = readCompletion();
   if (immediate) {
     return immediate;
-  }
-  if (params.signal?.aborted) {
-    throw new ToolInputError("agents.run wait aborted.");
   }
   return await new Promise<CollectorCompletionResult>((resolve, reject) => {
     let settled = false;

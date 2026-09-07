@@ -186,6 +186,22 @@ describe("agents_wait", () => {
     ).resolves.toMatchObject({ result: "retained collector result" });
   });
 
+  it("rejects an already-completed collector when the wait is already aborted", async () => {
+    const entry = collectorRun("aborted-completed", "agent:main:main", { status: "done" });
+    records.set(entry.runId, entry);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      waitForCollectorCompletion({
+        runId: entry.runId,
+        currentSessionKeys: new Set(["agent:main:main"]),
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("agents.run wait aborted");
+    expect(registryEvents.listeners.size).toBe(0);
+  });
+
   it("rejects when abort wins the listener-registration race", async () => {
     const entry = collectorRun("abort-race", "agent:main:main");
     records.set(entry.runId, entry);
