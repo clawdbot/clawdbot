@@ -5,6 +5,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import {
+  resolveApprovalOverGateway,
+  type ApprovalResolveResult,
+} from "./approval-gateway-runtime.js";
+import {
   APPROVAL_REACTION_BINDINGS,
   buildApprovalPendingPromptPayload,
   buildApprovalReactionDeliveredBindingMarker,
@@ -19,10 +23,67 @@ import {
   readApprovalReactionPresentationBinding,
   resolveApprovalReactionDecision,
   resolveTypedApprovalReactionTarget,
+  settleApprovalReaction,
   shouldSuppressLocalNativeExecApprovalPrompt,
 } from "./approval-reaction-runtime.js";
 
+vi.mock("./approval-gateway-runtime.js", () => ({ resolveApprovalOverGateway: vi.fn() }));
+
 describe("plugin-sdk/approval-reaction-runtime", () => {
+  it.each(["imessage", "signal", "whatsapp"])(
+    "leaves concurrent %s decisions to the Gateway and retires both terminal surfaces",
+    async (channel) => {
+      const winner = Promise.withResolvers<ApprovalResolveResult>();
+      const resolver = vi.mocked(resolveApprovalOverGateway).mockReset();
+      resolver.mockReturnValue(winner.promise);
+      const clearTarget = vi.fn();
+      const onResolved = vi.fn();
+      const settle = (decision: "allow-once" | "deny") =>
+        settleApprovalReaction({
+          request: {
+            cfg: {},
+            channel,
+            accountId: "default",
+            senderId: "operator",
+            approvalId: "race",
+            approvalKind: "exec",
+            decision,
+          },
+          approvers: ["operator"],
+          authorizeActorAction: () => ({ authorized: true }),
+          loadResolver: async () => resolveApprovalOverGateway,
+          clearTarget,
+          onResolved,
+        });
+      const attempts = [settle("allow-once"), settle("deny")];
+      await Promise.resolve();
+      expect(resolver).toHaveBeenCalledTimes(2);
+      expect(clearTarget).not.toHaveBeenCalled();
+      const result: ApprovalResolveResult = {
+        applied: false,
+        approval: {
+          id: "race",
+          urlPath: "/approvals/race",
+          createdAtMs: 1,
+          expiresAtMs: 100,
+          resolvedAtMs: 2,
+          status: "denied",
+          decision: "deny",
+          reason: "user",
+          presentation: {
+            kind: "exec",
+            commandText: "echo example",
+            allowedDecisions: ["allow-once", "deny"],
+          },
+        },
+      };
+      winner.resolve(result);
+      await expect(Promise.all(attempts)).resolves.toEqual(["resolved", "resolved"]);
+      expect(clearTarget).toHaveBeenCalledTimes(2);
+      expect(onResolved.mock.calls).toEqual([[result], [result]]);
+    },
+  );
+
   const execRequest: ExecApprovalRequest = {
     id: "exec-approval-123",
     request: {

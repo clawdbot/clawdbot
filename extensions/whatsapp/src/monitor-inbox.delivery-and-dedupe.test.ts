@@ -1,5 +1,9 @@
 // WhatsApp monitor inbox behavior split by ownership.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearWhatsAppApprovalReactionTargetsForTest,
+  registerWhatsAppApprovalReactionTarget,
+} from "./approval-reactions.js";
 import { createWhatsAppDurableInboundQueue } from "./inbound/durable-receive.js";
 import { resolveWhatsAppIngressLifecycle } from "./inbound/ingress-lifecycle.js";
 import type { WebInboundMessage } from "./inbound/types.js";
@@ -15,11 +19,91 @@ import {
   settleInboundWork,
   startInboxMonitor,
   waitForMessageCalls,
+  waitForInboundWorkDrained,
   type InboxOnMessage,
 } from "./monitor-inbox.test-harness.js";
 
+const approvalResolver = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
+  resolveApprovalOverGateway: approvalResolver,
+}));
+
 describe("web monitor inbox delivery and dedupe", () => {
   installStreamsInboundMessageHooks();
+  beforeEach(() => {
+    clearWhatsAppApprovalReactionTargetsForTest();
+    approvalResolver.mockReset();
+  });
+
+  it("replays approval reactions after Gateway loss without losing batch siblings", async () => {
+    registerWhatsAppApprovalReactionTarget({
+      accountId: DEFAULT_ACCOUNT_ID,
+      remoteJid: "15551230000@s.whatsapp.net",
+      messageId: "approval-message",
+      approvalId: "exec-replay",
+      approvalKind: "exec",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+    const replayStarted = Promise.withResolvers<void>();
+    const finishReplay = Promise.withResolvers<void>();
+    approvalResolver
+      .mockRejectedValueOnce(new Error("gateway 503"))
+      .mockRejectedValueOnce(new Error("gateway still unavailable"))
+      .mockImplementationOnce(async () => {
+        replayStarted.resolve();
+        await finishReplay.promise;
+        return { applied: true, approval: { status: "allowed", decision: "allow-once" } };
+      });
+    const onMessage = vi.fn();
+    const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      durableInboundQueue: queue,
+    });
+    try {
+      sock.ev.emit("messages.upsert", {
+        type: "notify",
+        messages: [
+          {
+            key: { id: "reaction-replay", remoteJid: "15551230000@s.whatsapp.net", fromMe: false },
+            message: {
+              reactionMessage: {
+                text: "👍",
+                key: { id: "approval-message", remoteJid: "15551230000@s.whatsapp.net" },
+              },
+            },
+            messageTimestamp: 1_700_000_000,
+          },
+          ...buildNotifyMessageUpsert({
+            id: "batch-survivor",
+            remoteJid: "999@s.whatsapp.net",
+            text: "batch survivor",
+            timestamp: 1_700_000_001,
+          }).messages,
+        ],
+      });
+      await replayStarted.promise;
+      const claim = (await queue.listClaims()).find((entry) => entry.attempts === 1);
+      expect(claim).toBeDefined();
+      if (!claim) {
+        throw new Error("expected the replayed approval claim");
+      }
+      finishReplay.resolve();
+      await waitForInboundWorkDrained();
+      expect(approvalResolver).toHaveBeenCalledTimes(3);
+      expect(approvalResolver.mock.calls[1]).toEqual(approvalResolver.mock.calls[0]);
+      expect(approvalResolver.mock.calls[2]).toEqual(approvalResolver.mock.calls[0]);
+      expect(onMessage).toHaveBeenCalledTimes(1);
+      expect(inboundMessage(onMessage).payload.body).toBe("batch survivor");
+      expect(await queue.listClaims()).toEqual([]);
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
+      await expect(
+        queue.enqueue(claim.id, claim.payload, { laneKey: claim.laneKey }),
+      ).resolves.toMatchObject({ kind: "completed" });
+    } finally {
+      finishReplay.resolve();
+      await listener.close();
+    }
+  });
 
   it("delivery coordinator streams inbound messages", async () => {
     const onMessage = vi.fn(async (msg) => {

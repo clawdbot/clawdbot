@@ -636,6 +636,16 @@ do not treat the recorded approval alone as proof that the change completed.
 
 Other approval helpers:
 
+- Use `settleApprovalReaction` from
+  `openclaw/plugin-sdk/approval-reaction-runtime` for explicitly authorized
+  reaction decisions. It checks the supplied approvers and actor authorization,
+  loads the Gateway resolver lazily, and calls `clearTarget` for every terminal
+  result (including a losing click) or approval-not-found error. Keep transport
+  identity, route checks, cleanup, and result logging in the plugin. Other errors
+  propagate with the binding intact; the channel must hand them to its durable
+  ingress or poller for replay. `readApprovalReactionTargetRecord` validates the
+  shared persisted fields; transport-specific route and author fields still need
+  their own validation.
 - Use `createNativeApprovalChannelRouteGates` from
   `openclaw/plugin-sdk/approval-native-runtime` when a channel supports both
   session-origin native delivery and explicit approval forwarding targets. The
