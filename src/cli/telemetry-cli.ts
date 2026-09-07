@@ -93,15 +93,12 @@ export function registerTelemetryCli(program: Command): void {
       runCommandWithRuntime(defaultRuntime, () => showTelemetry(options)),
     );
 
-  telemetry
-    .command("on")
-    .description("Enable anonymous feature statistics")
-    .action(async () => runCommandWithRuntime(defaultRuntime, () => setTelemetryEnabled(true)));
-
-  telemetry
-    .command("off")
-    .description("Disable anonymous feature statistics")
-    .action(async () => runCommandWithRuntime(defaultRuntime, () => setTelemetryEnabled(false)));
-
-  applyParentDefaultHelpAction(telemetry);
+  for (const [name, enabled] of Object.entries({ on: true, off: false })) {
+    telemetry
+      .command(name)
+      .description(`${enabled ? "Enable" : "Disable"} anonymous feature statistics`)
+      .action(() => runCommandWithRuntime(defaultRuntime, () => setTelemetryEnabled(enabled)));
+  }
+  // Preserve the shipped help subcommand when adding a parent action.
+  applyParentDefaultHelpAction(telemetry.helpCommand(true));
 }

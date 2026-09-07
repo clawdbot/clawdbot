@@ -1,4 +1,4 @@
-import { Command } from "commander";
+import { Command, CommanderError } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerTelemetryCli } from "./telemetry-cli.js";
@@ -43,9 +43,22 @@ const payload = {
   },
 };
 
-async function runTelemetryCli(args: string[]): Promise<void> {
-  const program = new Command().exitOverride();
+function createTelemetryProgram() {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const program = new Command()
+    .name("openclaw")
+    .exitOverride()
+    .configureOutput({
+      writeOut: (text) => stdout.push(text),
+      writeErr: (text) => stderr.push(text),
+    });
   registerTelemetryCli(program);
+  return { program, stdout, stderr };
+}
+
+async function runTelemetryCli(args: string[]): Promise<void> {
+  const { program } = createTelemetryProgram();
   await program.parseAsync(["telemetry", ...args], { from: "user" });
 }
 
@@ -179,16 +192,47 @@ describe("telemetry cli", () => {
   it("prints parent help with a successful exit when no subcommand is given", async () => {
     const previousExitCode = process.exitCode;
     process.exitCode = undefined;
-    const program = new Command().exitOverride();
-    registerTelemetryCli(program);
-    const telemetry = program.commands.find((command) => command.name() === "telemetry");
-    const helpSpy = vi.spyOn(telemetry!, "outputHelp").mockImplementation(() => {});
+    const { program, stdout, stderr } = createTelemetryProgram();
 
     try {
-      await program.parseAsync(["telemetry"], { from: "user" });
+      let exitCode: number;
+      try {
+        await program.parseAsync(["telemetry"], { from: "user" });
+        exitCode = process.exitCode ?? 0;
+      } catch (error) {
+        if (!(error instanceof CommanderError) || error.code !== "commander.help") {
+          throw error;
+        }
+        exitCode = error.exitCode;
+      }
 
-      expect(helpSpy).toHaveBeenCalledTimes(1);
-      expect(process.exitCode).toBe(0);
+      expect(exitCode).toEqual(0);
+      expect(stdout.join("")).toContain("Usage: openclaw telemetry [options] [command]");
+      expect(stdout.join("")).toContain("Inspect and manage anonymous usage telemetry");
+      expect(stderr).toEqual([]);
+      expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
+      expect(mocks.transformConfigFileWithRetry).not.toHaveBeenCalled();
+    } finally {
+      process.exitCode = previousExitCode;
+    }
+  });
+
+  it.each([
+    { name: "explicit help", args: ["--help"], usage: "telemetry [options] [command]" },
+    { name: "implicit help", args: ["help"], usage: "telemetry [options] [command]" },
+    { name: "nested help", args: ["help", "show"], usage: "telemetry show [options]" },
+  ])("preserves $name without reading or changing telemetry", async ({ args, usage }) => {
+    const previousExitCode = process.exitCode;
+    process.exitCode = undefined;
+    const { program, stdout, stderr } = createTelemetryProgram();
+    try {
+      await expect(
+        program.parseAsync(["telemetry", ...args], { from: "user" }),
+      ).rejects.toMatchObject({ exitCode: 0 });
+      expect(stdout.join("")).toContain(`Usage: openclaw ${usage}`);
+      expect(stderr).toEqual([]);
+      expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
+      expect(mocks.transformConfigFileWithRetry).not.toHaveBeenCalled();
     } finally {
       process.exitCode = previousExitCode;
     }
