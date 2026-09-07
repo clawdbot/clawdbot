@@ -249,6 +249,8 @@ export function createUpdateRecoveryCheckpointAdapter(params: {
         const progress = current.restore!;
         if (
           progress.phase !== "observed" ||
+          // Persisted progress is not evidence that this resource is still restored.
+          checked.result.observations[progress.resourceCursor]?.observed !== "after" ||
           progress.resourceCursor + 1 >= checked.reopened.plan.resources.length
         ) {
           throw new UpdateRecoveryConflictError();

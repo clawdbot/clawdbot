@@ -21,6 +21,7 @@ import {
   bindUpdateRecoveryAfterImage,
   recordUpdateRecoveryIntent,
   recordUpdateRecoveryObservation,
+  recordUpdateRecoveryRestoreProgress,
   loadUpdateRecovery,
   claimUpdateRecovery,
   type UpdateRecoveryRecord,
@@ -39,7 +40,7 @@ function family(file: string) {
     fs.existsSync(entry) ? fileHash(entry) : null,
   );
 }
-async function fixture() {
+async function fixture(withService = false) {
   const root = fs.realpathSync(dirs.make("recovery-checkpoint-adapter-"));
   await buildCheckpointReaderRuntime(root);
   const options = { env: { HOME: root, OPENCLAW_STATE_DIR: root } };
@@ -60,6 +61,7 @@ async function fixture() {
   );
   const configPath = path.join(root, "openclaw.json");
   const file = path.join(root, "state", "openclaw.sqlite");
+  const servicePath = path.join(root, "service.env");
   const access = {
     artifactRoot: path.join(root, "artifacts"),
     binding: {
@@ -73,14 +75,25 @@ async function fixture() {
   const capture = async (content: string) => {
     fs.writeFileSync(configPath, content);
     const output = { sourcePath: configPath, state: await inspectCheckpointFile(configPath) };
+    if (withService) {
+      fs.writeFileSync(servicePath, content);
+    }
     closeOpenClawStateDatabaseForTest();
     const ref = await captureUpdateCheckpoint({
       ...access,
       exclusions: [],
-      expectedSources: [output],
+      expectedSources: [
+        output,
+        ...(withService
+          ? [{ sourcePath: servicePath, state: await inspectCheckpointFile(servicePath) }]
+          : []),
+      ],
       resources: [
         { sourcePath: configPath, kind: "config", restore: "replace" },
         { sourcePath: file, kind: "sqlite", restore: "replace" },
+        ...(withService
+          ? [{ sourcePath: servicePath, kind: "service" as const, restore: "replace" as const }]
+          : []),
       ],
     });
     const reopened = await reopenUpdateCheckpoint(ref, access);
@@ -222,6 +235,42 @@ describe("checkpoint to recovery claim/progress adapter", () => {
     expect((await reopened.inspect()).status).toBe("verified");
     expect(family(f.displacedPath)).toEqual(displaced);
     await expect(reopened.next()).rejects.toThrow();
+  });
+
+  it("refuses to skip an unrestored resource based on persisted observed progress", async () => {
+    const f = await fixture(true);
+    expect((await f.apply(f.adapter.record)).status).toBe("applied");
+    await f.adapter.observe();
+    closeOpenClawStateDatabaseForTest();
+    const pending = await f.adapter.next();
+    expect(pending.restore).toMatchObject({ resourceCursor: 1, phase: "intent" });
+    // A prior executor's persisted observation is evidence, not proof that the
+    // resource remains restored. Reconcile it through the checkpoint owner.
+    const observed = recordUpdateRecoveryRestoreProgress(
+      pending,
+      { ...pending.restore!, phase: "observed" },
+      f.adapterParams.fence,
+      f.options,
+    );
+    closeOpenClawStateDatabaseForTest();
+    const resumed = createUpdateRecoveryCheckpointAdapter({
+      ...f.adapterParams,
+      expected: loadUpdateRecovery(observed.runId, f.options)!,
+    });
+    const inspection = await resumed.inspect();
+    expect(inspection.status).toBe("incomplete");
+    expect(inspection.observations[1]?.observed).toBe("before");
+    expect(inspection.observations).toHaveLength(3);
+    const before = family(f.file);
+    await expect(resumed.next()).rejects.toThrow();
+    expect(family(f.file)).toEqual(before);
+    expect(loadUpdateRecovery(observed.runId, f.options)).toEqual(observed);
+    expect(fs.readFileSync(f.configPath, "utf8")).toBe("candidate");
+    expect((await f.apply(observed, 1)).status).toBe("applied");
+    expect((await resumed.next()).restore).toMatchObject({
+      resourceCursor: 2,
+      phase: "intent",
+    });
   });
 
   it.each([
