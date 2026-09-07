@@ -4,11 +4,13 @@ import { buildCronCommandShellArgv } from "../../cron/command-shell-argv.js";
 import { isSystemMonitorDeclaration } from "../../cron/system-owned-declaration.js";
 import type { CronJob } from "../../cron/types.js";
 import { isSystemOwnedCronPayloadKind } from "../../cron/types.js";
+import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import {
   parseCronCommandArgv,
   parseCronCommandEnv,
   parseCronFallbacks,
   parseCronToolsAllow,
+  resolveGatewayPlatform,
 } from "./shared.js";
 import { parseCronThreadIdOption } from "./thread-id-shared.js";
 import { readCronPayloadScript } from "./trigger-options.js";
@@ -25,7 +27,7 @@ const assignIf = (
 };
 
 export async function resolveCronEditPayloadDeliveryPatch(
-  opts: Record<string, unknown>,
+  opts: GatewayRpcOpts & Record<string, unknown>,
   loadExistingJob: () => Promise<CronJob>,
   webhookUrl: string | undefined,
   commandCwd: string | undefined,
@@ -35,6 +37,9 @@ export async function resolveCronEditPayloadDeliveryPatch(
   const scriptPath = normalizeOptionalString(opts.script);
   const commandShell = normalizeOptionalString(opts.command);
   const commandArgv = parseCronCommandArgv(opts.commandArgv);
+  // Shell-string payloads execute on the Gateway host, which may differ from
+  // this CLI machine; resolve the wrapper for that platform.
+  const gatewayPlatform = commandShell ? await resolveGatewayPlatform(opts) : undefined;
   if (commandShell && commandArgv) {
     throw new Error("Pass command payload either with --command or --command-argv, not both.");
   }
@@ -242,7 +247,12 @@ export async function resolveCronEditPayloadDeliveryPatch(
   } else if (hasCommandPatch) {
     const payload: Record<string, unknown> = { kind: "command" };
     assignIf(payload, "argv", commandArgv, Boolean(commandArgv));
-    assignIf(payload, "argv", buildCronCommandShellArgv(commandShell ?? ""), Boolean(commandShell));
+    assignIf(
+      payload,
+      "argv",
+      buildCronCommandShellArgv(commandShell ?? "", gatewayPlatform),
+      Boolean(commandShell),
+    );
     assignIf(payload, "cwd", commandCwd, Boolean(commandCwd));
     assignIf(payload, "env", parseCronCommandEnv(opts.commandEnv), opts.commandEnv !== undefined);
     assignIf(payload, "input", opts.commandInput, hasCommandInput);

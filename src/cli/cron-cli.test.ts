@@ -1024,6 +1024,62 @@ describe("cron cli", () => {
     expect(params?.delivery?.mode).toBe("none");
   });
 
+  it("wraps shell-string commands for the gateway platform reported by system.info", async () => {
+    resetGatewayMock();
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "system.info") {
+          return { platform: "linux" };
+        }
+        return { ok: true, params };
+      },
+    );
+    const program = buildProgram();
+    await program.parseAsync(
+      ["cron", "add", "--name", "Remote posix gateway", "--every", "10m", "--command", "echo ok"],
+      { from: "user" },
+    );
+
+    const params = getGatewayCallParams<CronAddParams>("cron.add");
+    expect(params?.payload?.kind).toBe("command");
+    expect(params?.payload?.argv).toEqual(["sh", "-lc", "echo ok"]);
+  });
+
+  it("wraps shell-string commands with cmd.exe for a win32 gateway", async () => {
+    resetGatewayMock();
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "system.info") {
+          return { platform: "win32" };
+        }
+        return { ok: true, params };
+      },
+    );
+    const program = buildProgram();
+    await program.parseAsync(
+      ["cron", "add", "--name", "Remote windows gateway", "--every", "10m", "--command", "echo ok"],
+      { from: "user" },
+    );
+
+    const params = getGatewayCallParams<CronAddParams>("cron.add");
+    expect(params?.payload?.argv).toEqual(["cmd.exe", "/d", "/s", "/c", "echo ok"]);
+  });
+
+  it("falls back to the local platform when system.info is unavailable", async () => {
+    // defaultGatewayMock answers non-cron methods with { ok: true, params } (no platform).
+
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Legacy gateway",
+      "--every",
+      "10m",
+      "--command",
+      "echo ok",
+    ]);
+
+    expect(params?.payload?.argv).toEqual(buildCronCommandShellArgv("echo ok"));
+  });
+
   it("creates stream schedules from exact argv flags", async () => {
     await runCronCommand([
       "cron",
