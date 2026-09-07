@@ -1,8 +1,12 @@
 // Child-process entrypoint for one hard-cancellable sqlite-vec KNN query.
 import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
-import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  openNodeSqliteDatabase,
+  supportsNodeSqliteExtensionLoading,
+} from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   runVectorKnnQuery,
+  validateVectorKnnRequest,
   type VectorKnnRequest,
   type VectorKnnResponse,
 } from "./manager-search-knn.js";
@@ -38,12 +42,17 @@ async function run(input: unknown): Promise<VectorKnnChildResult> {
   if (!isChildInput(input)) {
     return { status: "failed", error: "invalid memory vector KNN child input" };
   }
+  validateVectorKnnRequest(input.request);
+  const extensionLoadingSupported = supportsNodeSqliteExtensionLoading();
   const db = openNodeSqliteDatabase(input.databasePath, {
-    allowExtension: true,
+    allowExtension: extensionLoadingSupported,
     readOnly: true,
   });
   try {
     db.exec("PRAGMA query_only = ON; PRAGMA busy_timeout = 5000");
+    if (!extensionLoadingSupported) {
+      return { status: "ok", value: { rows: [], fallbackScanRequired: true } };
+    }
     const loaded = await loadSqliteVecExtension({
       db,
       extensionPath: input.extensionPath,
