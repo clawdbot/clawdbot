@@ -233,6 +233,7 @@ function buildXaiOauthModelFromLiveRow(row: unknown): ModelDefinitionConfig | un
 
 export async function buildLiveXaiOAuthProvider(params: {
   discoveryApiKey: string;
+  authMode?: "oauth" | "token";
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
 }): Promise<ModelProviderConfig> {
@@ -244,7 +245,7 @@ export async function buildLiveXaiOAuthProvider(params: {
       providerConfig: {
         baseUrl: XAI_GROK_OAUTH_BASE_URL,
         api: "openai-responses",
-        auth: "oauth",
+        auth: params.authMode ?? "oauth",
       },
       models: [],
       discoveryApiKey: params.discoveryApiKey,

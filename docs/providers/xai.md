@@ -113,6 +113,13 @@ subscription quota are separate billing buckets.
 - xAI decides which accounts can receive OAuth API tokens. If an account is
   not eligible, use the API-key path or check the subscription on xAI's side.
 
+For a manually managed Grok subscription token, set `models.providers.xai.auth`
+to `"token"` and `models.providers.xai.baseUrl` to
+`https://cli-chat-proxy.grok.com/v1`. Model discovery uses the subscription
+catalog and keeps token authentication; an unavailable token does not switch
+discovery to the Console API. Tokens with the default or native xAI API endpoint
+continue to use the API catalog. Prefer OAuth login for automatic token refresh.
+
 <Tip>
 Use `xai-oauth` when signing in from SSH, Docker, or a VPS. OpenClaw prints a
 URL and short code; finish sign-in in any local browser while the remote

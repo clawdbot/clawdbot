@@ -26,6 +26,7 @@ import {
   buildLiveXaiOAuthProvider,
   buildLiveXaiProvider,
   buildXaiProvider,
+  XAI_GROK_OAUTH_BASE_URL,
 } from "./provider-catalog.js";
 import { isXaiProviderId } from "./provider-id.js";
 import {
@@ -220,8 +221,19 @@ export default defineSingleProviderPluginEntry({
           // Prepared direct auth must not reopen failed profile candidates.
           ...(!auth.profileId && auth.mode !== "none" ? { allowAuthProfileFallback: false } : {}),
         }).catch(() => undefined);
+        // Static token storage does not distinguish subscription tokens from Console API tokens.
+        const subscriptionToken =
+          (runtimeAuth?.mode === "token" || auth.mode === "token") &&
+          ctx.config.models?.providers?.[PROVIDER_ID]?.baseUrl?.trim().replace(/\/+$/u, "") ===
+            XAI_GROK_OAUTH_BASE_URL;
+        if (subscriptionToken && (!runtimeAuth?.apiKey || runtimeAuth.mode !== "token")) {
+          return {
+            providers: {},
+            outcomes: [{ provider: PROVIDER_ID, profileId: auth.profileId, status: "unavailable" }],
+          };
+        }
         const selectedAuth =
-          runtimeAuth?.mode === "oauth" && runtimeAuth.apiKey
+          runtimeAuth?.apiKey && (runtimeAuth.mode === "oauth" || subscriptionToken)
             ? { ...runtimeAuth, oauth: true }
             : { ...(auth.apiKey ? auth : ctx.resolveProviderApiKey(PROVIDER_ID)), oauth: false };
         if (!selectedAuth.apiKey) {
@@ -233,7 +245,10 @@ export default defineSingleProviderPluginEntry({
           profileId: selectedAuth.profileId,
           run: async () => ({
             provider: selectedAuth.oauth
-              ? await buildLiveXaiOAuthProvider({ discoveryApiKey: apiKey })
+              ? await buildLiveXaiOAuthProvider({
+                  discoveryApiKey: apiKey,
+                  authMode: selectedAuth.mode === "token" ? "token" : "oauth",
+                })
               : await buildLiveXaiProvider(selectedAuth),
           }),
         });
