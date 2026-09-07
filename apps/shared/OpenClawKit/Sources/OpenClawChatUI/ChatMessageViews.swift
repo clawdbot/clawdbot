@@ -286,7 +286,7 @@ private struct ChatBubbleShape: InsettableShape {
 }
 
 @MainActor
-struct ChatMessageBubble: View {
+struct ChatMessageBubble: View, @MainActor Equatable {
     let message: OpenClawChatMessage
     let style: OpenClawChatView.Style
     let markdownVariant: ChatMarkdownVariant
@@ -310,6 +310,39 @@ struct ChatMessageBubble: View {
         String,
         OpenClawChatMediaKind,
         OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
+
+    var canUseIOSRenderGate: Bool {
+        guard self.message.role.lowercased() == "assistant" else { return false }
+        return !self.message.content.contains { content in
+            content.isInlineAttachment || (content.type ?? "").lowercased() == "canvas"
+        }
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        // The iOS gate excludes media/widgets, so resolver closures cannot affect its subtree.
+        // Comparing closure identity would defeat the gate because ChatView rebuilds them each pass.
+        guard self.styleValue(lhs.style) == self.styleValue(rhs.style) else { return false }
+        return lhs.message == rhs.message &&
+            lhs.markdownVariant.rawValue == rhs.markdownVariant.rawValue &&
+            lhs.userAccent == rhs.userAccent &&
+            lhs.displayOptions.rawValue == rhs.displayOptions.rawValue &&
+            lhs.assistantName == rhs.assistantName &&
+            lhs.assistantAvatarText == rhs.assistantAvatarText &&
+            lhs.assistantAvatarTint == rhs.assistantAvatarTint &&
+            lhs.showsAssistantAvatar == rhs.showsAssistantAvatar &&
+            lhs.isClean == rhs.isClean &&
+            lhs.contextWindowTokens == rhs.contextWindowTokens &&
+            lhs.userMessageExpanded == rhs.userMessageExpanded &&
+            lhs.inlineWidgetResolverReady == rhs.inlineWidgetResolverReady &&
+            lhs.mediaArtifactResolverReady == rhs.mediaArtifactResolverReady
+    }
+
+    private static func styleValue(_ style: OpenClawChatView.Style) -> UInt8 {
+        switch style {
+        case .standard: 0
+        case .onboarding: 1
+        }
+    }
 
     var body: some View {
         if self.isUser {
