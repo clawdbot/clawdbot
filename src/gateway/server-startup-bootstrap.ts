@@ -87,15 +87,6 @@ export async function prepareGatewayServerBootstrap(input: {
   // Derive defaults and admit exactly the snapshot that bootstrap will consume.
   process.env.OPENCLAW_GATEWAY_PORT = String(port);
   const envBeforeStartupConfigLoad = { ...process.env };
-  const startupConfigSnapshotRead = await withArtifactPreservingStateReads(async () => {
-    const read =
-      opts.startupConfigSnapshotRead ??
-      (await readConfigFileSnapshotWithPluginMetadata({ observe: false }));
-    assertConfiguredWorkspaceStateReady({
-      cfg: captureConfigOverrideApplier()(read.snapshot.config),
-    });
-    return read;
-  });
   const formatRuntimeGatewayAuthTokenWarning = input.formatRuntimeGatewayAuthTokenWarning;
   const traceOriginAt = opts.processStartedAt ?? opts.startupStartedAt;
   const startupElapsedMs =
@@ -112,6 +103,28 @@ export async function prepareGatewayServerBootstrap(input: {
   if (startupElapsedMs > 0) {
     startupTrace.mark("process.bootstrap");
   }
+  const startupConfigSnapshotRead = await withArtifactPreservingStateReads(async () => {
+    if (!resumeGatewayRestartTraceFromEnv(process.env, [["source", "env"]])) {
+      const restartHandoff = readGatewayRestartHandoffSync();
+      resumeGatewayRestartTraceFromHandoff(restartHandoff?.restartTrace, [
+        ["source", restartHandoff?.source],
+        ["restartKind", restartHandoff?.restartKind],
+        ["supervisorMode", restartHandoff?.supervisorMode],
+      ]);
+    }
+    const read =
+      opts.startupConfigSnapshotRead ??
+      (await startupTrace.measure("config.snapshot.read", () =>
+        readConfigFileSnapshotWithPluginMetadata({
+          observe: false,
+          measure: (name, run) => startupTrace.measure(name, run),
+        }),
+      ));
+    assertConfiguredWorkspaceStateReady({
+      cfg: captureConfigOverrideApplier()(read.snapshot.config),
+    });
+    return read;
+  });
   const inspectStateOwnership = async (signal?: AbortSignal) => {
     normalizeStateDirEnv(process.env);
     await assertOpenClawStateWriteAllowedAtPath({
@@ -192,14 +205,6 @@ export async function prepareGatewayServerBootstrap(input: {
     key: "OPENCLAW_RAW_STREAM_PATH",
     description: "raw stream log path override",
   });
-  if (!resumeGatewayRestartTraceFromEnv(process.env, [["source", "env"]])) {
-    const restartHandoff = readGatewayRestartHandoffSync();
-    resumeGatewayRestartTraceFromHandoff(restartHandoff?.restartTrace, [
-      ["source", restartHandoff?.source],
-      ["restartKind", restartHandoff?.restartKind],
-      ["supervisorMode", restartHandoff?.supervisorMode],
-    ]);
-  }
   if (!minimalTestGateway) {
     await startupTrace.measure("runtime.agent-cli", () => prepareGatewayAgentCliShim());
   }
