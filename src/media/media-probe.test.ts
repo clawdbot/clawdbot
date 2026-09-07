@@ -72,7 +72,7 @@ describe("probeMediaFile", () => {
         "-protocol_whitelist",
         "fd",
         "-show_entries",
-        "format=duration:stream=index,codec_type,codec_name,profile,pix_fmt,duration,width,height:stream_disposition=default,attached_pic:stream_side_data=rotation",
+        "format=duration:stream=index,codec_type,codec_name,profile,pix_fmt,duration,width,height,sample_aspect_ratio:stream_disposition=default,attached_pic:stream_side_data=rotation",
         "-of",
         "json",
         "-fd",
@@ -120,6 +120,39 @@ describe("probeMediaFile", () => {
       height: 1280,
     });
   });
+
+  it.each([
+    { sampleAspectRatio: "64:45", rotation: 0, width: 1024, height: 576 },
+    { sampleAspectRatio: "64:45", rotation: -90, width: 576, height: 1024 },
+    { sampleAspectRatio: "8:9", rotation: 0, width: 640, height: 576 },
+    { sampleAspectRatio: "1:1", rotation: 0, width: 720, height: 576 },
+    { sampleAspectRatio: "0:1", rotation: 0, width: 720, height: 576 },
+    { sampleAspectRatio: "N/A", rotation: 0, width: 720, height: 576 },
+  ])(
+    "returns display dimensions for SAR $sampleAspectRatio at rotation $rotation",
+    async (testCase) => {
+      runFfprobe.mockResolvedValue(
+        JSON.stringify({
+          streams: [
+            {
+              codec_type: "video",
+              width: 720,
+              height: 576,
+              sample_aspect_ratio: testCase.sampleAspectRatio,
+              side_data_list: [{ rotation: testCase.rotation }],
+            },
+          ],
+        }),
+      );
+      const display = { width: testCase.width, height: testCase.height };
+      await expect(probeMediaFile(clipPath, "video")).resolves.toEqual(display);
+      await expect(probeVideoDimensions(Buffer.from("video"))).resolves.toEqual(display);
+      await expect(probePlaybackMediaFileDescriptor(17, "video")).resolves.toMatchObject({
+        width: 720,
+        height: 576,
+      });
+    },
+  );
 
   it("probes an inherited descriptor through stdin", async () => {
     runFfprobe.mockResolvedValueOnce(JSON.stringify({ format: { duration: "2" } }));
@@ -340,7 +373,7 @@ describe("probeVideoDimensions", () => {
         "-protocol_whitelist",
         "pipe",
         "-show_entries",
-        "format=duration:stream=index,codec_type,codec_name,profile,pix_fmt,duration,width,height:stream_disposition=default,attached_pic:stream_side_data=rotation",
+        "format=duration:stream=index,codec_type,codec_name,profile,pix_fmt,duration,width,height,sample_aspect_ratio:stream_disposition=default,attached_pic:stream_side_data=rotation",
         "-of",
         "json",
         "pipe:0",

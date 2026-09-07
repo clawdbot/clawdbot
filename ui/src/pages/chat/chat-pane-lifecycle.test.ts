@@ -34,52 +34,48 @@ const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
 const confirmationOwners = new Set<HTMLElement>();
 
 describe("chat pane composer prefill attention", () => {
-  function createComposerAttentionFixture() {
+  it.each([
+    { label: "draft prefill", draft: "Prefilled prompt", repeat: false, attention: true },
+    { label: "repeated draft prefill", draft: "Prefilled prompt", repeat: true, attention: true },
+    { label: "plain focus", draft: undefined, repeat: false, attention: false },
+    { label: "empty draft", draft: "", repeat: false, attention: false },
+  ])("focuses with the expected attention cue for $label", ({ draft, repeat, attention }) => {
+    vi.useFakeTimers();
     const { pane } = createTestChatPane({
       client: {} as GatewayBrowserClient,
       sessions: {} as SessionCapability,
     });
-    const input = document.createElement("div");
+    const input = document.body.appendChild(document.createElement("div"));
     input.className = "agent-chat__input";
-    const textarea = document.createElement("textarea");
-    input.append(textarea);
-    document.body.append(input);
+    const textarea = input.appendChild(document.createElement("textarea"));
     vi.spyOn(pane, "querySelector").mockReturnValue(textarea);
     const lifecycle = pane as TestChatPane & {
+      draft?: string;
       focusComposer: boolean;
       updated: (changedProperties?: Map<PropertyKey, unknown>) => void;
     };
     lifecycle.focusComposer = true;
-    return { input, lifecycle, textarea };
-  }
-
-  it("focuses and clears the one-shot composer cue for an explicit route hint", () => {
-    vi.useFakeTimers();
-    const { input, lifecycle, textarea } = createComposerAttentionFixture();
-
+    lifecycle.draft = draft;
+    const attentionClass = "agent-chat__input--prefill-attention";
+    const mutations = new MutationObserver(() => {});
+    mutations.observe(input, { attributeFilter: ["class"], attributeOldValue: true });
     lifecycle.updated(new Map([["focusComposer", false]]));
-
     expect(document.activeElement).toBe(textarea);
-    expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(true);
+    expect(input.classList.contains(attentionClass)).toBe(attention);
+    if (repeat) {
+      vi.advanceTimersByTime(300);
+      lifecycle.updated(new Map([["focusComposer", false]]));
+    }
     vi.advanceTimersByTime(599);
-    expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(true);
+    expect(input.classList.contains(attentionClass)).toBe(attention);
     vi.advanceTimersByTime(1);
-    expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(false);
-    input.remove();
-  });
-
-  it("restarts the cue without letting the prior timer clear it", () => {
-    vi.useFakeTimers();
-    const { input, lifecycle } = createComposerAttentionFixture();
-
-    lifecycle.updated(new Map([["focusComposer", false]]));
-    vi.advanceTimersByTime(300);
-    lifecycle.updated(new Map([["focusComposer", false]]));
-    vi.advanceTimersByTime(599);
-
-    expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(true);
-    vi.advanceTimersByTime(1);
-    expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(false);
+    expect(input.classList.contains(attentionClass)).toBe(false);
+    if (!attention) {
+      expect(
+        mutations.takeRecords().some(({ oldValue }) => oldValue?.includes(attentionClass)),
+      ).toBe(false);
+    }
+    mutations.disconnect();
     input.remove();
   });
 });

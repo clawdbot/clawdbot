@@ -1,6 +1,8 @@
 import { QUEUED_USER_MESSAGE_MARKER } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
+import * as execApprovals from "../../../infra/exec-approvals.js";
+import { withMockedPlatform } from "../../../test-utils/vitest-spies.js";
 import { addSession, deleteSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import * as mediaTaskStatus from "../../media-generation-task-status.js";
@@ -146,6 +148,27 @@ afterEach(() => {
 });
 
 describe("prepareEmbeddedAttemptPromptContext", () => {
+  it("carries current Windows approval hints without changing system or user prompt bytes", () =>
+    withMockedPlatform("win32", () => {
+      const load = vi.spyOn(execApprovals, "loadExecApprovals").mockReturnValue({ version: 1 });
+      const fixture = createInput();
+      fixture.input.capabilityToolNames.add("exec");
+      const before = prepareEmbeddedAttemptPromptContext(fixture.input);
+      load.mockReturnValue({
+        version: 1,
+        agents: { "agent-1": { allowlist: [{ pattern: "C:\\Tools\\node.exe" }] } },
+      });
+      const after = prepareEmbeddedAttemptPromptContext(fixture.input);
+      expect(before.runtimeContextMessageForCurrentTurn?.content).toContain(
+        "## Approved executables\nnone",
+      );
+      expect(after.runtimeContextMessageForCurrentTurn?.content).toContain(
+        "C:\\Tools\\node.exe (any arguments)",
+      );
+      expect(after.systemPromptForHook).toBe(before.systemPromptForHook);
+      expect(after.promptForSession).toBe(before.promptForSession);
+      expect(fixture.setActiveSessionSystemPrompt).not.toHaveBeenCalled();
+    }));
   it("carries execution-owned processes in id order without elapsed time or output", () => {
     const fixture = createInput();
     fixture.input.capabilityToolNames.add("process");

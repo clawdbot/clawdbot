@@ -564,7 +564,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       const textarea = this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR);
       const input = textarea?.closest<HTMLElement>(".agent-chat__input");
       textarea?.focus({ preventScroll: true });
-      if (input) {
+      if (input && this.draft) {
         this.showComposerPrefillAttention(input);
       }
     }
