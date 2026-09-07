@@ -198,7 +198,7 @@ describe("renderUpdates", () => {
     expect(onUpdateNow).toHaveBeenCalledOnce();
   });
 
-  it("shows extended stable only for the exact authored value and disables auto-apply", () => {
+  it("shows extended stable for an authored channel and disables auto-apply", () => {
     render(
       renderUpdates(
         createProps({
@@ -218,6 +218,58 @@ describe("renderUpdates", () => {
     const automaticRow = row("Automatic updates");
     expect(automaticRow.textContent).toContain("never installs them automatically");
     expect(automaticRow.querySelector("wa-switch")?.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("reports a configless extended-stable package install by the Gateway channel and gates auto-apply", () => {
+    // A direct `npm install -g openclaw@extended-stable` never writes update.channel;
+    // the Gateway still resolves and publishes extended-stable as the schedule channel.
+    render(
+      renderUpdates(
+        createProps({
+          configObject: { update: { auto: { enabled: true } } },
+          schedule: { channel: "extended-stable", autoEnabled: true, install: { kind: "package" } },
+          updateAvailable: null,
+        }),
+      ),
+      container,
+    );
+
+    const channel = row("Release channel").querySelector<HTMLElement & { value: string }>(
+      "wa-radio-group",
+    );
+    expect(channel?.value).toBe("extended-stable");
+    expect(
+      [...container.querySelectorAll("wa-radio")].map((option) => option.textContent?.trim()),
+    ).toEqual(["Stable", "Beta", "Dev", "Extended stable"]);
+    const selected = channel?.querySelector<HTMLElement & { checked: boolean }>(
+      'wa-radio[value="extended-stable"]',
+    );
+    expect(selected?.checked).toBe(true);
+    const automatic = automaticUpdatesControl().toggle;
+    expect(automatic.checked).toBe(false);
+    expect(automatic.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("keeps the authored channel ahead of the Gateway schedule channel", () => {
+    render(
+      renderUpdates(
+        createProps({
+          configObject: { update: { channel: "beta", auto: { enabled: false } } },
+          schedule: { channel: "extended-stable", autoEnabled: true, install: { kind: "package" } },
+          updateAvailable: null,
+        }),
+      ),
+      container,
+    );
+
+    const channel = row("Release channel").querySelector<HTMLElement & { value: string }>(
+      "wa-radio-group",
+    );
+    expect(channel?.value).toBe("beta");
+    expect(
+      [...container.querySelectorAll("wa-radio")].map((option) => option.textContent?.trim()),
+    ).toEqual(["Stable", "Beta", "Dev"]);
+    expect(automaticUpdatesControl().toggle.hasAttribute("disabled")).toBe(false);
   });
 
   it("lets an admin resume disabled checks while preserving the automatic-update preference", () => {

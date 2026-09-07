@@ -30,7 +30,8 @@ import { formatDateTimeMs, formatTimeAgo } from "../../lib/format.ts";
 
 registerSettingsEnglish();
 
-type UpdatesChannel = "stable" | "beta" | "dev" | "extended-stable";
+const UPDATES_CHANNELS = ["stable", "beta", "dev", "extended-stable"] as const;
+type UpdatesChannel = (typeof UPDATES_CHANNELS)[number];
 
 type UpdatesViewProps = {
   nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
@@ -225,25 +226,21 @@ function renderUpdateFailureReportNotice(notice: UpdateFailureReportNotice) {
 function readUpdatesSettings(
   configObject: Record<string, unknown>,
   schedule: UpdateScheduleState | null,
-): { channel: UpdatesChannel; autoEnabled: boolean; extendedStableAuthored: boolean } {
+): { channel: UpdatesChannel; autoEnabled: boolean; extendedStable: boolean } {
   const update = asConfigRecord(configObject.update);
   const auto = asConfigRecord(update?.auto);
-  const authoredChannel = update?.channel;
-  const extendedStableAuthored = authoredChannel === "extended-stable";
+  // The saved (or drafted) channel owns policy; the Gateway schedule reports the
+  // channel a configless install resolved to, since a direct
+  // openclaw@extended-stable package install never writes update.channel.
   const channel =
-    authoredChannel === "stable" ||
-    authoredChannel === "beta" ||
-    authoredChannel === "dev" ||
-    extendedStableAuthored
-      ? authoredChannel
-      : schedule?.channel === "beta" || schedule?.channel === "dev"
-        ? schedule.channel
-        : "stable";
+    UPDATES_CHANNELS.find((candidate) => candidate === update?.channel) ??
+    UPDATES_CHANNELS.find((candidate) => candidate === schedule?.channel) ??
+    "stable";
   return {
     channel,
     autoEnabled:
       typeof auto?.enabled === "boolean" ? auto.enabled : (schedule?.autoEnabled ?? false),
-    extendedStableAuthored,
+    extendedStable: channel === "extended-stable",
   };
 }
 
@@ -433,7 +430,7 @@ export function renderUpdates(props: UpdatesViewProps): TemplateResult {
     { value: "beta", label: t("updates.channel.beta") },
     { value: "dev", label: t("updates.channel.dev") },
   ];
-  if (settings.extendedStableAuthored) {
+  if (settings.extendedStable) {
     channelOptions.push({
       value: "extended-stable",
       label: t("updates.channel.extendedStable"),
