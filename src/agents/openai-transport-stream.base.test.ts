@@ -1183,7 +1183,7 @@ describe("openai transport stream", () => {
     expect(headers.session_id).toBeUndefined();
   });
 
-  it("adds SSE Accept only to native ChatGPT/Codex Responses stream requests", () => {
+  it("disables compression for streams and adds SSE Accept to native ChatGPT/Codex", () => {
     const codexModel = makeResponsesModel({
       id: "gpt-5.5",
       name: "GPT-5.5",
@@ -1207,19 +1207,23 @@ describe("openai transport stream", () => {
     });
 
     expect(testing.buildOpenAISdkRequestOptions(codexModel, undefined, { stream: true })).toEqual({
-      headers: { Accept: "text/event-stream" },
+      headers: { Accept: "text/event-stream", "Accept-Encoding": "identity" },
       maxRetries: 0,
     });
     expect(
       testing.buildOpenAISdkRequestOptions(transportAliasModel, undefined, { stream: true }),
-    ).toEqual({ headers: { Accept: "text/event-stream" }, maxRetries: 0 });
+    ).toEqual({
+      headers: { Accept: "text/event-stream", "Accept-Encoding": "identity" },
+      maxRetries: 0,
+    });
     expect(testing.buildOpenAISdkRequestOptions(codexModel)).toBeUndefined();
     expect(
       testing.buildOpenAISdkRequestOptions(nonNativeChatGPTModel, undefined, { stream: true }),
-    ).toBeUndefined();
-    expect(
-      testing.buildOpenAISdkRequestOptions(openAIModel, undefined, { stream: true }),
-    ).toBeUndefined();
+    ).toEqual({ headers: { "Accept-Encoding": "identity" }, maxRetries: 0 });
+    expect(testing.buildOpenAISdkRequestOptions(openAIModel, undefined, { stream: true })).toEqual({
+      headers: { "Accept-Encoding": "identity" },
+      maxRetries: 0,
+    });
   });
 
   it("builds boundary-aware stream shapers for supported default agent transports", () => {

@@ -361,8 +361,15 @@ export function buildOpenAISdkRequestOptions(
   | undefined {
   const timeout = resolveOpenAISdkTimeoutMs(model, options?.timeoutMs);
   const headers =
-    options?.stream === true && usesNativeOpenAICodexResponsesBackend(model)
-      ? { Accept: "text/event-stream" }
+    options?.stream === true
+      ? {
+          // Compressed event streams can be buffered or truncated by compatible
+          // endpoints and intermediaries before the terminal SSE event reaches
+          // the SDK. Streaming is already incremental, so prefer the stable
+          // wire contract over response compression.
+          "Accept-Encoding": "identity",
+          ...(usesNativeOpenAICodexResponsesBackend(model) ? { Accept: "text/event-stream" } : {}),
+        }
       : undefined;
   if (timeout === undefined && !signal && !headers) {
     return undefined;
