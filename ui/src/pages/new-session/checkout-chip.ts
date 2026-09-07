@@ -101,7 +101,7 @@ export function renderCheckoutChip(params: {
   folderLabel: string;
   worktree: boolean;
   worktreeAvailable: boolean;
-  repositoryUnavailable?: boolean;
+  repositoryIssue?: string;
   branches: DraftBranches | null;
   branchesLoading: boolean;
   baseRef: string;
@@ -186,9 +186,7 @@ export function renderCheckoutChip(params: {
                   disabled: !params.worktreeAvailable,
                   title: params.worktreeAvailable
                     ? undefined
-                    : params.repositoryUnavailable
-                      ? t("newSession.gitCheckUnavailable")
-                      : t("newSession.worktreeUnavailable"),
+                    : (params.repositoryIssue ?? t("newSession.worktreeUnavailable")),
                   onSelect: () => params.onSelectWorktree(true),
                   keepOpen: true,
                 },

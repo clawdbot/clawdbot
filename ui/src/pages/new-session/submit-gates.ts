@@ -13,6 +13,7 @@ import { sessionPlacementDispatchParams } from "../../lib/sessions/session-place
 import { requiresChatModelSetup } from "../chat/chat-model-setup.ts";
 import * as catalog from "./catalog-target.ts";
 import { isWorktreeNameValid, type NewSessionVisibility } from "./create-params.ts";
+import type { DraftRepositoryState } from "./discovery.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import { resolveDraftSessionPlacement } from "./draft-session-placement.ts";
@@ -62,6 +63,18 @@ export const PAGE_RENDERED_GATES: ReadonlySet<string> = new Set([
   "worktree-name",
 ]);
 
+/** Why the folder's Git state is unknown; undefined once the probe settled on a verdict. */
+export function repositoryIssueText(repository: DraftRepositoryState): string | undefined {
+  switch (repository.kind) {
+    case "forbidden":
+      return t("newSession.folderRequiresScope", { scope: repository.missingScope });
+    case "unavailable":
+      return t("newSession.gitCheckUnavailable");
+    default:
+      return undefined;
+  }
+}
+
 export function resolveCloudPlacementDisabledReason(place: DraftPlaceState): string | undefined {
   const runtimeReason = place.modelControl.cloudRuntimeUnsupportedReason();
   if (runtimeReason) {
@@ -70,8 +83,9 @@ export function resolveCloudPlacementDisabledReason(place: DraftPlaceState): str
   if (place.repository.kind === "checking") {
     return t("newSession.checkingGit");
   }
-  if (place.repository.kind === "unavailable") {
-    return t("newSession.gitCheckUnavailable");
+  const repositoryIssue = repositoryIssueText(place.repository);
+  if (repositoryIssue) {
+    return repositoryIssue;
   }
   return place.worktreeAvailable() ? undefined : t("newSession.cloudRequiresWorktree");
 }
@@ -313,7 +327,9 @@ export function resolveNewSessionSubmitBlock(
       reason:
         place.repository.kind === "checking"
           ? t("newSession.checkingGit")
-          : t("newSession.worktreeUnavailable"),
+          : place.repository.kind === "forbidden"
+            ? t("newSession.folderRequiresScope", { scope: place.repository.missingScope })
+            : t("newSession.worktreeUnavailable"),
     };
   }
   if (place.worktree && !isWorktreeNameValid(place.worktreeName)) {

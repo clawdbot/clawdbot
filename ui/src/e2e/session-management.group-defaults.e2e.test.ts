@@ -245,6 +245,79 @@ suite.define(() => {
     },
   );
 
+  it("explains the admin requirement for a folder outside the agent workspaces", async () => {
+    const groupCwd = "/home/peter/OpenClaw";
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([]),
+        "worktrees.branches": { branches: [], repositoryStatus: "not_git" },
+      },
+      sessionGroups: ["Client work"],
+      sessionGroupDefaults: { "Client work": { cwd: groupCwd, worktree: false } },
+      workspace: "/home/peter/openclaw",
+      workspaceGit: true,
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      // The first probe is refused for scope; the static not_git reply serves the retry.
+      await gateway.deferNext("worktrees.branches", { repoRoot: groupCwd });
+      const group = page.locator('[data-session-section="category:Client work"]');
+      await group.waitFor({ state: "visible", timeout: 10_000 });
+      await group.locator(".sidebar-recent-sessions__head").hover();
+      await group.getByRole("button", { name: "Group options for Client work" }).click();
+      await page.getByRole("menuitem", { name: "New session defaults" }).click();
+      const dialog = page.locator(
+        `openclaw-modal-dialog[label='New session defaults for "Client work"']`,
+      );
+      await dialog.waitFor({ state: "visible" });
+      await gateway.waitForRequest("worktrees.branches");
+      await gateway.rejectDeferred("worktrees.branches", {
+        code: "FORBIDDEN",
+        message: "missing scope: operator.admin",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.admin",
+          requiredScopes: ["operator.admin"],
+        },
+      });
+
+      const environment = dialog.locator("[data-session-group-environment]");
+      await expect
+        .poll(() => environment.getAttribute("data-session-group-environment"))
+        .not.toBe("checking");
+      await captureUiProof(suite, page, "group-defaults-forbidden.png");
+      expect(await environment.getAttribute("data-session-group-environment")).toBe("forbidden");
+      const note = await environment.textContent();
+      expect(note).toContain("needs operator.admin access");
+      expect(note).not.toContain("Couldn't verify Git");
+      const save = dialog.getByRole("button", { name: "Save" });
+      await expect.poll(() => save.isDisabled()).toBe(true);
+      expect(await gateway.getRequests("sessions.groups.update")).toHaveLength(0);
+
+      // A scope grant on the same connection makes the retry succeed.
+      await dialog.getByRole("button", { name: "Retry" }).click();
+      await expect
+        .poll(() => environment.getAttribute("data-session-group-environment"))
+        .toBe("local");
+      await expect.poll(() => save.isEnabled()).toBe(true);
+      await save.click();
+      expect((await gateway.waitForRequest("sessions.groups.update")).params).toMatchObject({
+        name: "Client work",
+        cwd: groupCwd,
+        worktree: false,
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("omits the group category for a legacy Gateway", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();

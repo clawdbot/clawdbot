@@ -1,3 +1,4 @@
+import { readMissingScopeError } from "@openclaw/gateway-client/browser";
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type {
@@ -26,6 +27,12 @@ type Options = {
   submit: (defaults: SessionGroupDefaults) => Promise<string | null>;
 };
 
+// A refused path is an authorization outcome, not a Git failure; it stays refused
+// until the connection gains the named scope, so the dialog keeps it distinct.
+type RepositoryInspection =
+  | { kind: WorktreeRepositoryStatus | "checking" }
+  | { kind: "forbidden"; missingScope: string };
+
 let active = false;
 
 export function showSessionGroupDefaultsDialog(options: Options): Promise<void> {
@@ -36,7 +43,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
   return withPromiseModalHost<void>(undefined, ({ host, render, finish: settle }) => {
     let cwd = options.defaults.cwd;
     let worktree = false;
-    let repositoryStatus: WorktreeRepositoryStatus | "checking" = "checking";
+    let repository: RepositoryInspection = { kind: "checking" };
     let repositoryRequestToken = 0;
     let submitting = false;
     let failure: string | null = null;
@@ -50,9 +57,13 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
       active = false;
     };
 
+    // Save needs a settled Git verdict: sessions.groups.update applies the same
+    // workspace containment, so a refused path would only fail there instead.
+    const repositoryBlocksSave = () => repository.kind !== "git" && repository.kind !== "not_git";
+
     const handleSubmit = async (event: Event) => {
       event.preventDefault();
-      if (submitting || repositoryStatus === "checking" || repositoryStatus === "unavailable") {
+      if (submitting || repositoryBlocksSave()) {
         return;
       }
       submitting = true;
@@ -61,7 +72,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
       try {
         failure = await options.submit({
           cwd: cwd.trim(),
-          worktree: repositoryStatus === "git" && worktree,
+          worktree: repository.kind === "git" && worktree,
         });
       } catch (error) {
         failure = formatUiError(error);
@@ -98,7 +109,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
 
     const inspectRepository = async (restoreSavedWorktree: boolean) => {
       const requestToken = ++repositoryRequestToken;
-      repositoryStatus = "checking";
+      repository = { kind: "checking" };
       worktree = false;
       failure = null;
       paint();
@@ -107,13 +118,16 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
         if (requestToken !== repositoryRequestToken) {
           return;
         }
-        repositoryStatus = status;
+        repository = { kind: status };
         worktree = status === "git" && restoreSavedWorktree && options.defaults.worktree;
-      } catch {
+      } catch (error) {
         if (requestToken !== repositoryRequestToken) {
           return;
         }
-        repositoryStatus = "unavailable";
+        const missing = readMissingScopeError(error);
+        repository = missing
+          ? { kind: "forbidden", missingScope: missing.missingScope }
+          : { kind: "unavailable" };
         worktree = false;
       }
       paint();
@@ -179,7 +193,17 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
         ? folderDisplayName(trimmedCwd)
         : t("sessionsView.groupDefaultsCwdPlaceholder");
       const environmentState =
-        repositoryStatus === "checking" ? "checking" : repositoryStatus === "git" ? "git" : "local";
+        repository.kind === "checking" ||
+        repository.kind === "git" ||
+        repository.kind === "forbidden"
+          ? repository.kind
+          : "local";
+      const localNote =
+        repository.kind === "forbidden"
+          ? t("newSession.folderRequiresScope", { scope: repository.missingScope })
+          : repository.kind === "unavailable"
+            ? t("newSession.gitCheckUnavailable")
+            : t("newSession.checkoutCurrentNote");
       const environmentOptions = [
         {
           value: "local",
@@ -299,7 +323,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                     aria-live="polite"
                   >
                     ${
-                      repositoryStatus === "git"
+                      repository.kind === "git"
                         ? html`
                             <wa-dropdown
                               class="session-group-defaults__mode-dropdown"
@@ -361,31 +385,25 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                         : html`
                             <div
                               class="session-group-defaults__resolved-mode"
-                              role=${repositoryStatus === "checking" ? "status" : nothing}
+                              role=${repository.kind === "checking" ? "status" : nothing}
                             >
                               <span class="new-session-page__target-icon" aria-hidden="true"
                                 >${
-                                  repositoryStatus === "checking" ? icons.gitBranch : icons.monitor
+                                  repository.kind === "checking" ? icons.gitBranch : icons.monitor
                                 }</span
                               >
                               <span class="session-group-defaults__resolved-copy">
                                 <strong
                                   >${
-                                    repositoryStatus === "checking"
+                                    repository.kind === "checking"
                                       ? t("newSession.checkingGit")
                                       : t("sessionsView.groupDefaultsLocal")
                                   }</strong
                                 >
                                 ${
-                                  repositoryStatus === "checking"
+                                  repository.kind === "checking"
                                     ? nothing
-                                    : html`<small
-                                        >${
-                                          repositoryStatus === "unavailable"
-                                            ? t("newSession.gitCheckUnavailable")
-                                            : t("newSession.checkoutCurrentNote")
-                                        }</small
-                                      >`
+                                    : html`<small>${localNote}</small>`
                                 }
                               </span>
                             </div>
@@ -403,16 +421,12 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                 <button
                   type="submit"
                   class="btn primary"
-                  ?disabled=${
-                    submitting ||
-                    repositoryStatus === "checking" ||
-                    repositoryStatus === "unavailable"
-                  }
+                  ?disabled=${submitting || repositoryBlocksSave()}
                 >
                   ${t("common.save")}
                 </button>
                 ${
-                  repositoryStatus === "unavailable"
+                  repository.kind === "unavailable" || repository.kind === "forbidden"
                     ? html`
                         <button
                           type="button"
