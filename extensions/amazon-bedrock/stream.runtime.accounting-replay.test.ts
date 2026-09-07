@@ -358,7 +358,9 @@ describe("Bedrock prompt cache ownership", () => {
       const first = await captureMessages(model, context, { cacheRetention: "short" });
       expect(first[2]?.content?.at(-1)).toEqual({ cachePoint: { type: "default" } });
       const previousAssistant = context.messages[1];
-      if (previousAssistant?.role !== "assistant") throw new Error("missing assistant fixture");
+      if (previousAssistant?.role !== "assistant") {
+        throw new Error("missing assistant fixture");
+      }
       context.messages.push(
         {
           ...previousAssistant,
@@ -421,8 +423,9 @@ describe("Bedrock prompt cache ownership", () => {
           expect(JSON.stringify(payload).match(/"cachePoint"/g)).toHaveLength(2);
         }
       }
-      if (cacheRetention !== "none")
+      if (cacheRetention !== "none") {
         expect(requests[0]?.system?.slice(0, 2)).toEqual(requests[1]?.system?.slice(0, 2));
+      }
     },
   );
 
