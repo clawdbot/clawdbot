@@ -2701,15 +2701,11 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
     expect(workflow).toContain("bun_global_install_smoke:");
     expect(workflow).toContain("Setup trusted release harness for Bun smoke");
     expect(workflow).toContain("uses: ./.release-harness/.github/actions/setup-release-harness");
-    expect(workflow).toContain("npm install -g bun@1.4.0");
-    expect(workflow).toContain('install-bun: "false"');
+    expect(workflow).toContain("npm install --prefix /tmp/bun-runtime bun@1.4.0");
     expect(workflow).toContain("Run Bun global install candidate-payload smoke");
-    expect(workflow).toContain("working-directory: .release-harness");
-    expect(workflow).toContain("bash scripts/e2e/bun-global-install-smoke.sh");
+    expect(workflow).toContain("exec bash /harness/scripts/e2e/bun-global-install-smoke.sh");
     expect(workflow).not.toContain("uses: ./.release-harness/.github/actions/setup-node-env");
-    expect(workflow).toContain(
-      "OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ: ${{ runner.temp }}/install-smoke-candidate-payload/candidate.tgz",
-    );
+    expect(workflow).toContain("-e OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ=/payload/candidate.tgz");
     expect(workflow).not.toContain("OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE");
     expect(workflow).toContain("group: ${{ github.workflow }}-workflow-call-${{ github.run_id }}");
     expect(workflow).toContain("cancel-in-progress: false");
@@ -2723,18 +2719,18 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
     expect(workflow).not.toContain("OPENCLAW_CI_EVENT_NAME");
     expect(workflow).not.toContain('if [ "$event_name"');
     expect(workflow).toContain('echo "run_bun_global_install_smoke=$run_bun_global_install_smoke"');
-    expect(workflow).toContain("run_fast_install_smoke=true");
     expect(workflow).toContain("run_full_install_smoke=true");
     expect(workflow).toContain("run_install_smoke=true");
-    expect(workflow).toContain("install-smoke-fast:");
-    expect(workflow).toContain("run_fast_install_smoke");
+    expect(workflow).not.toContain("install-smoke-fast:");
+    expect(workflow).not.toContain("docker-e2e-fast:");
+    expect(workflow).not.toContain("run_fast_install_smoke");
     expect(workflow).toContain("run_full_install_smoke");
     expect(workflow).toContain("timeout --kill-after=30s 45m docker buildx build");
     expect(workflow).not.toContain('docker pull "$IMAGE_REF"');
     expect(workflow).not.toContain("packages: write");
     expect(workflow).not.toContain("--push");
     expect(workflow).not.toContain('timeout 300s docker pull "$IMAGE_REF"');
-    expect(workflow.match(/timeout --kill-after=30s 20m docker run --rm/g)?.length).toBe(6);
+    expect(workflow.match(/timeout --kill-after=30s 20m docker run --rm/g)?.length).toBe(4);
     expect(workflow).not.toMatch(/(^|\n)\s+docker run --rm --entrypoint sh/u);
     expect(workflow).toContain("--progress=plain");
     expect(workflow).toContain("--load");
@@ -2837,11 +2833,8 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
     expect(workflowStep(payload, "Download exact candidate source archive").run).toContain(
       "https://codeload.github.com/${TARGET_REPOSITORY}/tar.gz/${TARGET_SHA}",
     );
-    expect(workflowStep(payload, "Package candidate only inside pinned harness").run).toContain(
-      "--user node",
-    );
-    expect(workflowStep(payload, "Seal candidate payload in clean pinned harness").run).toContain(
-      "--network none",
+    expect(workflowStep(payload, "Package and seal candidate in pinned harness").run).toContain(
+      "bash .release-harness/scripts/docker/pack-candidate-in-container.sh",
     );
     expect(
       workflowStep(workflow.jobs.installer_smoke_update, "Run Rocky Linux installer smoke").run,

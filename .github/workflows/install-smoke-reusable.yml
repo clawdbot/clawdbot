@@ -47,7 +47,6 @@ jobs:
     outputs:
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       run_install_smoke: ${{ steps.manifest.outputs.run_install_smoke }}
-      run_fast_install_smoke: ${{ steps.manifest.outputs.run_fast_install_smoke }}
       run_full_install_smoke: ${{ steps.manifest.outputs.run_full_install_smoke }}
       run_bun_global_install_smoke: ${{ steps.manifest.outputs.run_bun_global_install_smoke }}
       target_sha: ${{ steps.manifest.outputs.target_sha }}
@@ -65,10 +64,7 @@ jobs:
           node --input-type=module <<'NODE'
           const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
           const repository = process.env.EXPECTED_WORKFLOW_REPOSITORY ?? "";
-          if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repository)) {
-            throw new Error("github.repository must be an owner/repository slug");
-          }
-          if (job.workflow_repository !== repository) {
+          if (repository !== "openclaw/openclaw" || job.workflow_repository !== repository) {
             throw new Error("job.workflow_repository must exactly match github.repository");
           }
           if (typeof job.workflow_sha !== "string" || !/^[0-9a-f]{40}$/u.test(job.workflow_sha)) {
@@ -93,132 +89,20 @@ jobs:
           set -euo pipefail
           workflow_bun_global_install_smoke="${OPENCLAW_CI_WORKFLOW_BUN_GLOBAL_INSTALL_SMOKE:-false}"
           docs_only=false
-          run_fast_install_smoke=true
           run_full_install_smoke=true
           run_bun_global_install_smoke="$workflow_bun_global_install_smoke"
           run_install_smoke=true
-          target_sha="$(git rev-parse HEAD)"
+          target_sha="$(git rev-parse --verify 'HEAD^{commit}')"
+          [[ "$target_sha" =~ ^[0-9a-f]{40}$ ]]
           dockerfile_image="openclaw-dockerfile-smoke-local:${target_sha}"
           {
             echo "docs_only=$docs_only"
             echo "run_install_smoke=$run_install_smoke"
-            echo "run_fast_install_smoke=$run_fast_install_smoke"
             echo "run_full_install_smoke=$run_full_install_smoke"
             echo "run_bun_global_install_smoke=$run_bun_global_install_smoke"
             echo "target_sha=$target_sha"
             echo "dockerfile_image=$dockerfile_image"
           } >> "$GITHUB_OUTPUT"
-
-  install-smoke-fast:
-    needs: [preflight]
-    if: needs.preflight.outputs.run_fast_install_smoke == 'true' && needs.preflight.outputs.run_full_install_smoke != 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    env:
-      DOCKER_BUILD_SUMMARY: "false"
-      DOCKER_BUILD_RECORD_UPLOAD: "false"
-      OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1"
-    steps:
-      - name: Checkout CLI
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.preflight.outputs.target_sha }}
-          persist-credentials: false
-
-      - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@a5256a73e30f09e37e3eceb8ca36043d17621d24 # v2.1.0
-        with:
-          cache-key: Dockerfile
-
-      # Keep release smoke builds bounded and log-producing. The Blacksmith
-      # build action can leave jobs in-progress without step logs when a remote
-      # builder stalls; an explicit buildx invocation fails closed instead.
-      - name: Build root Dockerfile smoke image
-        run: |
-          timeout --kill-after=30s 45m docker buildx build \
-            --progress=plain \
-            --load \
-            --build-arg OPENCLAW_EXTENSIONS=matrix \
-            -t openclaw-dockerfile-smoke:local \
-            -t openclaw-ext-smoke:local \
-            -f ./Dockerfile \
-            .
-
-      - name: Run root Dockerfile CLI smoke
-        run: |
-          timeout --kill-after=30s 20m docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc '
-            which openclaw &&
-            openclaw --version &&
-            node -e "
-              const fs = require(\"node:fs\");
-              const path = require(\"node:path\");
-              const YAML = require(\"yaml\");
-              const workspace = YAML.parse(fs.readFileSync(\"/app/pnpm-workspace.yaml\", \"utf8\")) ?? {};
-              for (const [dep, rel] of Object.entries(workspace.patchedDependencies ?? {})) {
-                const absolute = path.join(\"/app\", rel);
-                if (!fs.existsSync(absolute)) {
-                  throw new Error(\"missing patch for \" + dep + \": \" + rel);
-                }
-              }
-            "
-          '
-
-      - name: Run agents delete shared workspace Docker CLI smoke
-        env:
-          OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_IMAGE: openclaw-dockerfile-smoke:local
-          OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_SKIP_BUILD: "1"
-        run: bash scripts/e2e/agents-delete-shared-workspace-docker.sh
-
-      - name: Run Docker gateway network e2e
-        env:
-          OPENCLAW_GATEWAY_NETWORK_E2E_IMAGE: openclaw-dockerfile-smoke:local
-          OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD: "1"
-        run: bash scripts/e2e/gateway-network-docker.sh
-
-      - name: Smoke test Dockerfile with matrix extension build arg
-        run: |
-          timeout --kill-after=30s 20m docker run --rm --entrypoint sh openclaw-ext-smoke:local -lc '
-            which openclaw &&
-            openclaw --version &&
-            node -e "
-              const Module = require(\"node:module\");
-              const matrixPackage = require(\"/app/extensions/matrix/package.json\");
-              const requireFromMatrix = Module.createRequire(\"/app/extensions/matrix/package.json\");
-              const runtimeDeps = Object.keys(matrixPackage.dependencies ?? {});
-              if (runtimeDeps.length === 0) {
-                throw new Error(
-                  \"matrix package has no declared runtime dependencies; smoke cannot validate install mirroring\",
-                );
-              }
-              for (const dep of runtimeDeps) {
-                requireFromMatrix.resolve(dep);
-              }
-              const { spawnSync } = require(\"node:child_process\");
-              const run = spawnSync(\"openclaw\", [\"plugins\", \"list\", \"--json\"], { encoding: \"utf8\" });
-              if (run.status !== 0) {
-                process.stderr.write(run.stderr || run.stdout || \"plugins list failed\\n\");
-                process.exit(run.status ?? 1);
-              }
-              const parsed = JSON.parse(run.stdout);
-              const matrix = (parsed.plugins || []).find((entry) => entry.id === \"matrix\");
-              if (!matrix) {
-                throw new Error(\"matrix plugin missing from bundled plugin list\");
-              }
-              const matrixDiag = (parsed.diagnostics || []).filter(
-                (diag) =>
-                  typeof diag.source === \"string\" &&
-                  diag.source.includes(\"/extensions/matrix\") &&
-                  typeof diag.message === \"string\" &&
-                  diag.message.includes(\"extension entry escapes package directory\"),
-              );
-              if (matrixDiag.length > 0) {
-                throw new Error(
-                  \"unexpected matrix diagnostics: \" +
-                    matrixDiag.map((diag) => diag.message).join(\"; \"),
-                );
-              }
-            "
-          '
 
   root_dockerfile_image:
     needs: [preflight]
@@ -261,7 +145,7 @@ jobs:
             --no-same-owner \
             --no-same-permissions \
             -C "$candidate_dir"
-          test -f "$candidate_dir/Dockerfile"
+          test -f "$candidate_dir/Dockerfile" && test ! -L "$candidate_dir/Dockerfile"
 
       # Start from a statically trusted checkout. The following step validates job context
       # locally before restoring the exact called-workflow revision.
@@ -340,17 +224,32 @@ jobs:
           );
           NODE
 
-      - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@a5256a73e30f09e37e3eceb8ca36043d17621d24 # v2.1.0
-        with:
-          cache-key: Dockerfile
-
       - name: Build local root Dockerfile smoke image
         env:
           CANDIDATE_DIR: ${{ runner.temp }}/root-dockerfile-candidate
           IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
         run: |
+          set -euo pipefail
+          exec 2>&1
+          command_token="$(openssl rand -hex 32)"
+          # A candidate Dockerfile can request arbitrary cache mounts. Never
+          # attach its build to the persistent release harness builder.
+          builder="install-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            status=$?
+            trap - EXIT
+            timeout --kill-after=10s 30s docker buildx rm -f "$builder" || status=1
+            printf '::%s::\n' "$command_token"
+            exit "$status"
+          }
+          trap cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          printf '::stop-commands::%s\n' "$command_token"
+          timeout --kill-after=30s 5m docker buildx create \
+            --name "$builder" --driver docker-container
           timeout --kill-after=30s 45m docker buildx build \
+            --builder "$builder" \
             --progress=plain \
             --load \
             --build-arg OPENCLAW_EXTENSIONS=matrix \
@@ -436,16 +335,30 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
+      - *trusted_workflow_subdir_checkout_step
+      - *trusted_workflow_subdir_identity_step
+
       - name: Checkout CLI
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.target_sha }}
+          path: .candidate
           persist-credentials: false
+          submodules: false
 
       - name: Run QR package install smoke
         env:
+          OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}/.candidate
           OPENCLAW_QR_SMOKE_FORCE_INSTALL: "1"
-        run: bash scripts/e2e/qr-import-docker.sh
+        run: |
+          set -euo pipefail
+          exec 2>&1
+          command_token="$(openssl rand -hex 32)"
+          trap 'printf "::%s::\n" "$command_token"' EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          printf '::stop-commands::%s\n' "$command_token"
+          bash .release-harness/scripts/e2e/qr-import-docker.sh
 
   root_dockerfile_smokes:
     needs: [preflight, root_dockerfile_image, root_dockerfile_image_ready]
@@ -530,6 +443,13 @@ jobs:
         env:
           IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
         run: |
+          set -euo pipefail
+          exec 2>&1
+          command_token="$(openssl rand -hex 32)"
+          trap 'printf "::%s::\n" "$command_token"' EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          printf '::stop-commands::%s\n' "$command_token"
           timeout --kill-after=30s 20m docker run --rm --entrypoint sh "$IMAGE_REF" -lc '
             which openclaw &&
             openclaw --version &&
@@ -551,7 +471,15 @@ jobs:
         env:
           OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}
           OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_SKIP_BUILD: "1"
-        run: bash .release-harness/scripts/e2e/agents-delete-shared-workspace-docker.sh
+        run: |
+          set -euo pipefail
+          exec 2>&1
+          command_token="$(openssl rand -hex 32)"
+          trap 'printf "::%s::\n" "$command_token"' EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          printf '::stop-commands::%s\n' "$command_token"
+          bash .release-harness/scripts/e2e/agents-delete-shared-workspace-docker.sh
 
       - name: Run Docker gateway network e2e
         env:
@@ -560,12 +488,27 @@ jobs:
           OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD: "1"
           OPENCLAW_SELECTED_SHA: ${{ needs.preflight.outputs.target_sha }}
           OPENCLAW_TOOLING_SHA: ${{ steps.workflow.outputs.sha }}
-        run: bash .release-harness/scripts/e2e/gateway-network-docker.sh
+        run: |
+          set -euo pipefail
+          exec 2>&1
+          command_token="$(openssl rand -hex 32)"
+          trap 'printf "::%s::\n" "$command_token"' EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          printf '::stop-commands::%s\n' "$command_token"
+          bash .release-harness/scripts/e2e/gateway-network-docker.sh
 
       - name: Smoke test Dockerfile with matrix extension build arg
         env:
           IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
         run: |
+          set -euo pipefail
+          exec 2>&1
+          command_token="$(openssl rand -hex 32)"
+          trap 'printf "::%s::\n" "$command_token"' EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          printf '::stop-commands::%s\n' "$command_token"
           timeout --kill-after=30s 20m docker run --rm --entrypoint sh "$IMAGE_REF" -lc '
             which openclaw &&
             openclaw --version &&
@@ -673,61 +616,10 @@ jobs:
             -f ./.release-harness/scripts/docker/install-sh-smoke/Dockerfile \
             ./.release-harness/scripts/docker
 
-      - name: Package candidate only inside pinned harness
-        env:
-          ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
-        run: |
-          set -euo pipefail
-          package_dir="${RUNNER_TEMP}/candidate-package"
-          mkdir -p "$package_dir"
-          chmod 0777 "$package_dir"
-          timeout --kill-after=30s 50m docker run --rm \
-            --cap-drop ALL \
-            --security-opt no-new-privileges \
-            --pids-limit 1024 \
-            --user node \
-            --entrypoint /bin/bash \
-            -e ALLOW_UNRELEASED_CHANGELOG \
-            -e CI=1 \
-            -v "${RUNNER_TEMP}/candidate.tar.gz:/input/candidate.tar.gz:ro" \
-            -v "${package_dir}:/output" \
-            -v "$PWD/.release-harness:/harness:ro" \
-            openclaw-install-candidate-packager:local \
-            -lc '
-              set -euo pipefail
-              source_dir="$(mktemp -d)"
-              tar -xzf /input/candidate.tar.gz \
-                --strip-components=1 \
-                --no-same-owner \
-                --no-same-permissions \
-                -C "$source_dir"
-              cd "$source_dir"
-              preflight_args=(--source-dir "$source_dir")
-              if [[ "$ALLOW_UNRELEASED_CHANGELOG" == "true" ]]; then
-                preflight_args+=(--allow-unreleased-changelog)
-              fi
-              node /harness/scripts/package-source-preflight.mjs "${preflight_args[@]}"
-              mkdir -p /tmp/corepack
-              corepack enable --install-directory /tmp/corepack
-              export PATH="/tmp/corepack:$PATH"
-              pnpm install --frozen-lockfile
-              package_args=(
-                --source-dir "$source_dir"
-                --output-dir /output
-                --output-name candidate.tgz
-              )
-              # The TypeScript implementation is the capability boundary for this
-              # newer option; frozen Node-native packers intentionally omit it.
-              if [[ "$ALLOW_UNRELEASED_CHANGELOG" == "true" ]] && \
-                grep -Fq -- '--allow-unreleased-changelog' scripts/package-openclaw-for-docker.mts; then
-                package_args+=(--allow-unreleased-changelog)
-              fi
-              node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"
-            '
-
-      - name: Seal candidate payload in clean pinned harness
+      - name: Package and seal candidate in pinned harness
         id: payload
         env:
+          ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
           HARNESS_REPOSITORY: ${{ steps.workflow.outputs.repository }}
           HARNESS_SHA: ${{ steps.workflow.outputs.sha }}
           TARGET_REPOSITORY: ${{ github.repository }}
@@ -735,28 +627,18 @@ jobs:
         run: |
           set -euo pipefail
           payload_dir="${RUNNER_TEMP}/install-smoke-candidate-payload"
-          install -d -m 0750 "$payload_dir"
-          docker run --rm \
-            --network none \
-            --cap-drop ALL \
-            --security-opt no-new-privileges \
-            --user "$(id -u):$(id -g)" \
-            --entrypoint node \
-            -v "$PWD/.release-harness:/harness:ro" \
-            -v "${RUNNER_TEMP}/candidate.tar.gz:/input/candidate.tar.gz:ro" \
-            -v "${RUNNER_TEMP}/candidate-package:/package:ro" \
-            -v "${payload_dir}:/payload" \
-            openclaw-install-candidate-packager:local \
-            /harness/scripts/install-smoke-candidate-payload.mts seal \
-              --archive /input/candidate.tar.gz \
-              --package-dir /package \
-              --output-dir /payload \
-              --repository "$TARGET_REPOSITORY" \
-              --target-sha "$TARGET_SHA" \
-              --harness-repository "$HARNESS_REPOSITORY" \
-              --harness-sha "$HARNESS_SHA" \
-              --run-id "$GITHUB_RUN_ID" \
-              --run-attempt "$GITHUB_RUN_ATTEMPT" \
+          bash .release-harness/scripts/docker/pack-candidate-in-container.sh \
+            --archive "${RUNNER_TEMP}/candidate.tar.gz" \
+            --output-dir "$payload_dir" \
+            --harness-dir "$PWD/.release-harness" \
+            --image openclaw-install-candidate-packager:local \
+            --repository "$TARGET_REPOSITORY" \
+            --target-sha "$TARGET_SHA" \
+            --harness-repository "$HARNESS_REPOSITORY" \
+            --harness-sha "$HARNESS_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --allow-unreleased-changelog "$ALLOW_UNRELEASED_CHANGELOG" \
             >"${RUNNER_TEMP}/candidate-payload-result.json"
           manifest="${payload_dir}/install-smoke-candidate-payload.json"
           artifact_name="install-smoke-candidate-payload-${TARGET_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -1123,12 +1005,27 @@ jobs:
           OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS: "1"
           OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE: ${{ inputs.update_baseline_version || 'latest' }}
           OPENCLAW_INSTALL_SMOKE_UPDATE_EXPECT_VERSION: ${{ needs.installer_smoke_candidate_payload.outputs.package_version }}
-        run: bash .release-harness/scripts/test-install-sh-docker.sh
+        run: |
+          set -euo pipefail
+          exec 2>&1
+          command_token="$(openssl rand -hex 32)"
+          trap 'printf "::%s::\n" "$command_token"' EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          printf '::stop-commands::%s\n' "$command_token"
+          bash .release-harness/scripts/test-install-sh-docker.sh
 
       - name: Run Rocky Linux installer smoke
         env:
           PAYLOAD_DIR: ${{ runner.temp }}/install-smoke-candidate-payload
         run: |
+          set -euo pipefail
+          exec 2>&1
+          command_token="$(openssl rand -hex 32)"
+          trap 'printf "::%s::\n" "$command_token"' EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          printf '::stop-commands::%s\n' "$command_token"
           timeout --kill-after=30s 20m docker run --rm \
             --platform linux/amd64 \
             -e OPENCLAW_NO_ONBOARD=1 \
@@ -1141,6 +1038,13 @@ jobs:
         env:
           PAYLOAD_DIR: ${{ runner.temp }}/install-smoke-candidate-payload
         run: |
+          set -euo pipefail
+          exec 2>&1
+          command_token="$(openssl rand -hex 32)"
+          trap 'printf "::%s::\n" "$command_token"' EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          printf '::stop-commands::%s\n' "$command_token"
           timeout --kill-after=30s 20m docker run --rm \
             --platform linux/amd64 \
             -e OPENCLAW_NO_ONBOARD=1 \
@@ -1319,7 +1223,15 @@ jobs:
           OPENCLAW_INSTALL_NONROOT_SKIP_IMAGE_BUILD: "1"
           OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT: "0"
           OPENCLAW_INSTALL_SMOKE_UPDATE_EXPECT_VERSION: ${{ needs.installer_smoke_candidate_payload.outputs.package_version }}
-        run: bash .release-harness/scripts/test-install-sh-docker.sh
+        run: |
+          set -euo pipefail
+          exec 2>&1
+          command_token="$(openssl rand -hex 32)"
+          trap 'printf "::%s::\n" "$command_token"' EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          printf '::stop-commands::%s\n' "$command_token"
+          bash .release-harness/scripts/test-install-sh-docker.sh
 
   installer_smoke:
     needs:
@@ -1459,39 +1371,113 @@ jobs:
             --manifest-sha256 "$MANIFEST_SHA256" \
             --source-archive-sha256 "$SOURCE_ARCHIVE_SHA256"
 
-      - name: Install Bun for global smoke
-        run: npm install -g bun@1.4.0
+      - name: Build pinned Bun smoke harness
+        run: |
+          timeout --kill-after=30s 20m docker build \
+            -t openclaw-bun-smoke:local \
+            -f .release-harness/scripts/docker/install-sh-smoke/Dockerfile \
+            .release-harness/scripts/docker
 
       - name: Run Bun global install candidate-payload smoke
-        working-directory: .release-harness
-        env:
-          OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD: "0"
-          OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ: ${{ runner.temp }}/install-smoke-candidate-payload/candidate.tgz
-        run: bash scripts/e2e/bun-global-install-smoke.sh
-
-  docker-e2e-fast:
-    needs: [preflight]
-    if: needs.preflight.outputs.run_fast_install_smoke == 'true' || needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 12
-    env:
-      DOCKER_BUILD_SUMMARY: "false"
-      DOCKER_BUILD_RECORD_UPLOAD: "false"
-    steps:
-      - name: Checkout CLI
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.preflight.outputs.target_sha }}
-          persist-credentials: false
-
-      - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@a5256a73e30f09e37e3eceb8ca36043d17621d24 # v2.1.0
-        with:
-          cache-key: scripts/e2e/Dockerfile
-
-      - name: Setup Node environment for package smoke
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          install-bun: "false"
-          install-deps: "true"
+        run: |
+          set -euo pipefail
+          exec 2>&1
+          command_token="$(openssl rand -hex 32)"
+          container="openclaw-bun-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          harness_dir=""
+          container_absent=0
+          remove_container() {
+            local status=0
+            local inventory
+            if ! inventory="$(timeout --kill-after=10s 30s docker container ls --all \
+              --filter "name=$container" --format '{{.Names}}')"; then
+              echo "Cannot inventory Bun smoke container: $container" >&2
+              return 1
+            fi
+            if grep -Fx -- "$container" <<<"$inventory" >/dev/null; then
+              timeout --kill-after=10s 30s docker rm -f "$container" >/dev/null || status=1
+              if ! inventory="$(timeout --kill-after=10s 30s docker container ls --all \
+                --filter "name=$container" --format '{{.Names}}')" ||
+                grep -Fx -- "$container" <<<"$inventory" >/dev/null; then
+                echo "Bun smoke container absence unconfirmed after removal: $container" >&2
+                return 1
+              fi
+            fi
+            container_absent=1
+            echo "Confirmed Bun smoke container absent: $container" >&2
+            return "$status"
+          }
+          cleanup() {
+            local status=$?
+            local cleanup_status=0
+            trap - EXIT INT TERM
+            remove_container || cleanup_status=$?
+            if [[ "$container_absent" == 1 ]]; then
+              [[ -z "$harness_dir" ]] || rm -rf -- "$harness_dir" || cleanup_status=1
+            else
+              echo "Bun smoke staging retained while container absence is unconfirmed." >&2
+            fi
+            printf '::%s::\n' "$command_token"
+            if [[ "$status" == 0 ]]; then
+              status="$cleanup_status"
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          printf '::stop-commands::%s\n' "$command_token"
+          harness_source="$(realpath .release-harness)"
+          umask 022
+          harness_dir="$(mktemp -d "${RUNNER_TEMP}/bun-smoke-harness.XXXXXXXX")"
+          chmod 0755 "$harness_dir"
+          # Only the selected payload path's trusted script/import/data closure is exposed.
+          for file in \
+            scripts/e2e/bun-global-install-smoke.sh \
+            scripts/e2e/lib/bun-global-install/assertions.mjs \
+            scripts/e2e/lib/agent-turn-output.mjs \
+            scripts/e2e/lib/fixtures/mock-openai-config.mjs \
+            scripts/e2e/lib/text-file-utils.mjs \
+            scripts/e2e/lib/env-limits.mjs \
+            scripts/e2e/lib/mock-openai-http.mjs \
+            scripts/e2e/lib/prepublish-plugin-registry.sh \
+            scripts/e2e/mock-openai-server.mjs \
+            scripts/docker/verify-fs-safe-native.mjs \
+            scripts/lib/docker-e2e-package.sh \
+            scripts/lib/docker-e2e-logs.sh \
+            scripts/lib/docker-e2e-container.sh \
+            scripts/lib/docker-e2e-resource-diagnostics.sh \
+            scripts/lib/openclaw-e2e-instance.sh \
+            scripts/lib/official-external-provider-catalog.json \
+            scripts/lib/record-shared.mjs \
+            scripts/lib/regexp.mjs \
+            packages/normalization-core/package.json \
+            packages/normalization-core/src/utf16-slice.ts; do
+            input="$harness_source/$file"
+            [[ -f "$input" && ! -L "$input" && "$(realpath "$input")" == "$input" ]] || {
+              echo "Bun smoke harness input is not a regular non-symlink file: $file" >&2
+              exit 1
+            }
+            mkdir -p "$harness_dir/$(dirname "$file")"
+            cp "$input" "$harness_dir/$file"
+            chmod 0644 "$harness_dir/$file"
+          done
+          timeout --kill-after=30s 35m docker run --rm --init \
+            --name "$container" \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 1024 \
+            --user node \
+            --entrypoint /bin/bash \
+            -e CI=1 \
+            -e OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD=0 \
+            -e OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ=/payload/candidate.tgz \
+            -v "$harness_dir:/harness:ro" \
+            -v "${RUNNER_TEMP}/install-smoke-candidate-payload:/payload:ro" \
+            openclaw-bun-smoke:local \
+            -lc '
+              set -euo pipefail
+              npm install --prefix /tmp/bun-runtime bun@1.4.0
+              export PATH="/tmp/bun-runtime/node_modules/.bin:$PATH"
+              exec bash /harness/scripts/e2e/bun-global-install-smoke.sh
+            '

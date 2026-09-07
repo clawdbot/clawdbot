@@ -323,33 +323,51 @@ jobs:
             --fallback-ok \
             --github-output "$GITHUB_OUTPUT"
 
-      - name: Checkout selected ref for reachability fallback
-        if: steps.fast_ref.outputs.fallback == 'true'
+      - name: Checkout resolved candidate for admission
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ inputs.ref }}
+          ref: ${{ steps.fast_ref.outputs.ref_kind != 'unknown' && steps.fast_ref.outputs.sha || inputs.ref }}
           path: source
           fetch-depth: 0
           filter: blob:none
           sparse-checkout: package.json
           sparse-checkout-cone-mode: false
 
-      - name: Resolve checked-out fallback SHA
-        if: steps.fast_ref.outputs.fallback == 'true'
-        id: fallback_ref
+      - name: Finalize resolved SHA
+        id: ref
         working-directory: source
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        env:
+          RESOLVED_SHA: ${{ steps.fast_ref.outputs.ref_kind != 'unknown' && steps.fast_ref.outputs.sha || '' }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          selected_sha="$(git rev-parse --verify 'HEAD^{commit}')"
+          [[ "$selected_sha" =~ ^[0-9a-f]{40}$ ]]
+          if [[ -n "$RESOLVED_SHA" && "$selected_sha" != "$RESOLVED_SHA" ]]; then
+            echo "Candidate checkout differs from the resolved immutable SHA." >&2
+            exit 1
+          fi
+          expected_sha="${EXPECTED_SHA#"${EXPECTED_SHA%%[![:space:]]*}"}"
+          expected_sha="${expected_sha%"${expected_sha##*[![:space:]]}"}"
+          normalized_expected_sha="$(printf '%s' "$expected_sha" | tr '[:upper:]' '[:lower:]')"
+          if [[ -n "$normalized_expected_sha" && "$selected_sha" != "$normalized_expected_sha" ]]; then
+            echo "Ref resolved to ${selected_sha}, expected ${EXPECTED_SHA}." >&2
+            exit 1
+          fi
+          echo "sha=${selected_sha}" >> "$GITHUB_OUTPUT"
 
       - name: Validate selected ref belongs to this repository
-        if: steps.fast_ref.outputs.fallback == 'true'
+        id: admission
         working-directory: source
         env:
           RELEASE_REF: ${{ inputs.ref }}
+          SELECTED_SHA: ${{ steps.ref.outputs.sha }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          SELECTED_SHA="$(git rev-parse HEAD)"
+          [[ "$SELECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(git rev-parse HEAD)" == "$SELECTED_SHA" ]]
           git_fetch_with_checkout_auth() {
             local -a git_args=(git)
             if ! git config --get-all http.https://github.com/.extraheader >/dev/null; then
@@ -362,42 +380,18 @@ jobs:
           git_fetch_with_checkout_auth --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
           git_fetch_with_checkout_auth --tags origin '+refs/tags/*:refs/tags/*'
 
-          if git tag --points-at "${SELECTED_SHA}" | grep -Eq '^v'; then
+          if git tag --points-at "${SELECTED_SHA}" | grep -E '^v' >/dev/null; then
+            echo "admitted=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          if git for-each-ref --format='%(refname:short)' --contains "${SELECTED_SHA}" refs/remotes/origin | grep -Eq '^origin/'; then
+          if git for-each-ref --format='%(refname:short)' --contains "${SELECTED_SHA}" refs/remotes/origin | grep -E '^origin/' >/dev/null; then
+            echo "admitted=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          echo "Ref '${RELEASE_REF}' resolved to ${SELECTED_SHA}, but that commit is not reachable from an OpenClaw branch or release tag." >&2
-          echo "Secret-bearing release checks only run repository-owned branch/tag history, not arbitrary unreferenced commits." >&2
-          exit 1
-
-      - name: Finalize resolved SHA
-        id: ref
-        env:
-          FAST_SHA: ${{ steps.fast_ref.outputs.sha }}
-          FALLBACK_SHA: ${{ steps.fallback_ref.outputs.sha }}
-          EXPECTED_SHA: ${{ inputs.expected_sha }}
-          USED_FALLBACK: ${{ steps.fast_ref.outputs.fallback }}
-        run: |
-          set -euo pipefail
-          selected_sha="$FAST_SHA"
-          if [[ "$USED_FALLBACK" == "true" ]]; then
-            selected_sha="$FALLBACK_SHA"
-          fi
-          if [[ -z "$selected_sha" ]]; then
-            echo "Failed to resolve selected ref SHA." >&2
-            exit 1
-          fi
-          normalized_selected_sha="$(printf '%s' "$selected_sha" | tr '[:upper:]' '[:lower:]')"
-          normalized_expected_sha="$(printf '%s' "$EXPECTED_SHA" | tr '[:upper:]' '[:lower:]')"
-          if [[ -n "${normalized_expected_sha// }" ]] && [[ "$normalized_selected_sha" != "$normalized_expected_sha" ]]; then
-            echo "Ref resolved to ${selected_sha}, expected ${EXPECTED_SHA}." >&2
-            exit 1
-          fi
-          echo "sha=${normalized_selected_sha}" >> "$GITHUB_OUTPUT"
+          echo "admitted=false" >> "$GITHUB_OUTPUT"
+          echo "Ref '${RELEASE_REF}' at ${SELECTED_SHA} requires isolated installer-only execution."
 
       - name: Validate Tideclaw alpha target matches workflow branch
         if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
@@ -818,6 +812,53 @@ jobs:
             printf 'qa_parity_scheduled=%s\n' "$qa_parity_scheduled"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Enforce selected ref execution boundary
+        env:
+          SELECTED_REF_ADMITTED: ${{ steps.admission.outputs.admitted }}
+          INSTALL_SMOKE_SCHEDULED: ${{ steps.inputs.outputs.install_smoke_scheduled }}
+          CROSS_OS_SCHEDULED: ${{ steps.inputs.outputs.cross_os_scheduled }}
+          LIVE_E2E_SCHEDULED: ${{ steps.inputs.outputs.live_e2e_scheduled }}
+          PACKAGE_ACCEPTANCE_SCHEDULED: ${{ steps.inputs.outputs.package_acceptance_scheduled }}
+          QA_PARITY_SCHEDULED: ${{ steps.inputs.outputs.qa_parity_scheduled }}
+          QA_LIVE_SCHEDULED: ${{ steps.inputs.outputs.qa_live_scheduled }}
+          PACKAGE_REQUIRED: ${{ steps.inputs.outputs.package_required }}
+          DOCKER_REQUIRED: ${{ steps.inputs.outputs.docker_required }}
+          RUN_MATURITY_SCORECARD: ${{ steps.inputs.outputs.run_maturity_scorecard }}
+          RUN_RELEASE_SOAK: ${{ steps.inputs.outputs.run_release_soak }}
+          RELEASE_PACKAGE_SPEC: ${{ steps.inputs.outputs.release_package_spec }}
+          PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ steps.inputs.outputs.package_acceptance_package_spec }}
+          CODEX_PLUGIN_SPEC: ${{ steps.inputs.outputs.codex_plugin_spec }}
+          CANDIDATE_ARTIFACT_JSON: ${{ steps.inputs.outputs.candidate_artifact_json }}
+          ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.allow_frozen_target_scenario_omissions }}
+        run: |
+          set -euo pipefail
+          if [[ "$SELECTED_REF_ADMITTED" == "true" ]]; then
+            exit 0
+          fi
+          [[ "$SELECTED_REF_ADMITTED" == "false" ]] || {
+            echo "Selected ref admission is missing." >&2
+            exit 1
+          }
+          if [[ "$INSTALL_SMOKE_SCHEDULED" != "true" ||
+                "$CROSS_OS_SCHEDULED" != "false" ||
+                "$LIVE_E2E_SCHEDULED" != "false" ||
+                "$PACKAGE_ACCEPTANCE_SCHEDULED" != "false" ||
+                "$QA_PARITY_SCHEDULED" != "false" ||
+                "$QA_LIVE_SCHEDULED" != "false" ||
+                "$PACKAGE_REQUIRED" != "false" ||
+                "$DOCKER_REQUIRED" != "false" ||
+                "$RUN_MATURITY_SCORECARD" != "false" ||
+                "$RUN_RELEASE_SOAK" != "false" ||
+                "$ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS" != "false" ||
+                -n "$RELEASE_PACKAGE_SPEC" ||
+                -n "$PACKAGE_ACCEPTANCE_PACKAGE_SPEC" ||
+                -n "$CODEX_PLUGIN_SPEC" ||
+                -n "$CANDIDATE_ARTIFACT_JSON" ]]; then
+            echo "Unadmitted refs require an isolated installer-only plan: rerun_group=install-smoke, release_profile=beta, phase=all or independent, with no soak, maturity, package inputs, or frozen-target omissions." >&2
+            exit 1
+          fi
+          echo "Isolated installer validation only; this is not full release validation."
+
       - name: Resolve source checkout upgrade baseline
         id: source_upgrade_baseline
         if: steps.inputs.outputs.install_smoke_scheduled == 'true'
@@ -842,6 +883,7 @@ jobs:
           RELEASE_REF: ${{ inputs.ref }}
           RELEASE_SHA: ${{ steps.ref.outputs.sha }}
           RELEASE_REF_FAST_PATH: ${{ steps.fast_ref.outputs.fast }}
+          SELECTED_REF_ADMITTED: ${{ steps.admission.outputs.admitted }}
           RELEASE_PROVIDER: ${{ inputs.provider }}
           RELEASE_MODE: ${{ inputs.mode }}
           RELEASE_PHASE: ${{ steps.inputs.outputs.phase }}
@@ -869,6 +911,10 @@ jobs:
             echo "- Requested ref: \`${RELEASE_REF}\`"
             echo "- Validated SHA: \`${RELEASE_SHA}\`"
             echo "- Ref resolution fast path: \`${RELEASE_REF_FAST_PATH}\`"
+            echo "- Repository branch/release-tag admission: \`${SELECTED_REF_ADMITTED}\`"
+            if [[ "$SELECTED_REF_ADMITTED" == "false" ]]; then
+              echo "- Scope: isolated installer-only validation, not full release validation."
+            fi
             echo "- Cross-OS provider: \`${RELEASE_PROVIDER}\`"
             echo "- Cross-OS mode: \`${RELEASE_MODE}\`"
             echo "- Phase: \`${RELEASE_PHASE}\`"
@@ -2057,7 +2103,7 @@ jobs:
   qa_lab_runtime_parity_release_checks:
     name: Verify QA Lab runtime-pair lanes
     needs: [resolve_target, qa_lab_runtime_pair_lane_release_checks]
-    if: always() && needs.resolve_target.outputs.qa_parity_scheduled == 'true'
+    if: always() && needs.resolve_target.result == 'success' && needs.resolve_target.outputs.qa_parity_scheduled == 'true'
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 15

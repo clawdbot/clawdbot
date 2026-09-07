@@ -1,6 +1,16 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -19,6 +29,7 @@ const IDENTITY = {
   targetSha: "2".repeat(40),
 };
 const PACKAGE_VERSION = "2026.8.1-beta.3";
+const DATA_HELPER = path.resolve("scripts/docker/pack-candidate-data.py");
 
 function sha256(filePath: string): string {
   return createHash("sha256").update(readFileSync(filePath)).digest("hex");
@@ -246,5 +257,639 @@ describe("install smoke candidate payload", () => {
         packageDir: packageFixture.packageDir,
       }),
     ).rejects.toThrow("candidate package tarball must be a regular file");
+  });
+});
+
+describe("candidate packager orchestration", () => {
+  function runPackager(
+    options: {
+      buildStatus?: number;
+      sealStatus?: number;
+      cleanupStatus?: number;
+      inventoryStatus?: number;
+      lingeringInventory?: boolean;
+      harnessSha?: string;
+      mode?: string;
+      registry?: boolean;
+      harnessAlias?: boolean;
+      extraArgs?: string[];
+    } = {},
+  ) {
+    const fixture = createFixture();
+    const bin = path.join(fixture.root, "bin");
+    const scratch = path.join(fixture.root, "scratch");
+    const log = path.join(fixture.root, "docker.jsonl");
+    mkdirSync(bin);
+    mkdirSync(scratch);
+    // Record the Docker boundary without executing candidate code on the host.
+    writeFileSync(
+      path.join(bin, "docker"),
+      `#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(process.env.DOCKER_LOG, JSON.stringify(args) + "\\n");
+if (args[0] === "image") {
+  console.log("sha256:" + "a".repeat(64));
+} else if (args[0] === "run") {
+  const snapshot = args.find((arg) => arg.endsWith(":/harness:ro")).slice(0, -":/harness:ro".length);
+  fs.writeFileSync(process.env.HARNESS_INVENTORY, JSON.stringify(fs.readdirSync(snapshot, { recursive: true })));
+  if (args.includes("/bin/bash")) {
+    console.error("::warning::candidate log");
+    process.exit(${options.buildStatus ?? 0});
+  }
+  console.log("{}");
+  process.exit(${options.sealStatus ?? 0});
+} else if (args[0] === "rm") {
+  process.exit(${options.cleanupStatus ?? 0});
+} else if (args[0] === "container" && args[1] === "inspect") {
+  process.exit(${options.inventoryStatus ?? 0});
+} else if (args[0] === "container" && args[1] === "ls") {
+  if (${options.inventoryStatus ?? 0}) process.exit(${options.inventoryStatus ?? 0});
+  const name = args.find((arg) => arg.startsWith("name=")).slice(5);
+  const calls = fs.readFileSync(process.env.DOCKER_LOG, "utf8").trim().split("\\n").map(JSON.parse);
+  const started = calls.some((call) => call[0] === "run" && call.includes(name));
+  const removed = calls.some((call) => call[0] === "rm" && call.includes(name));
+  if (started && (!removed || ${Boolean(options.cleanupStatus || options.lingeringInventory)})) console.log(name);
+  console.log(name + "-unrelated");
+}
+`,
+      { mode: 0o755 },
+    );
+    writeFileSync(path.join(bin, "timeout"), '#!/bin/bash\nshift 2\nexec "$@"\n', { mode: 0o755 });
+    const harness = path.resolve(".");
+    const harnessSha =
+      options.harnessSha ?? execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    const result = spawnSync(
+      "bash",
+      [
+        path.join(harness, "scripts/docker/pack-candidate-in-container.sh"),
+        "--archive",
+        fixture.archivePath,
+        ...(options.mode === "registry-only" ? [] : ["--output-dir", fixture.payloadDir]),
+        "--harness-dir",
+        harness,
+        "--image",
+        "trusted-packager:local",
+        "--repository",
+        IDENTITY.repository,
+        "--target-sha",
+        IDENTITY.targetSha,
+        "--harness-repository",
+        IDENTITY.harnessRepository,
+        "--harness-sha",
+        harnessSha,
+        "--run-id",
+        IDENTITY.runId,
+        "--run-attempt",
+        IDENTITY.runAttempt,
+        "--allow-unreleased-changelog",
+        "true",
+        "--mode",
+        options.mode ?? "package",
+        ...(options.registry
+          ? [
+              "--registry-output-dir",
+              path.join(fixture.root, "registry"),
+              "--candidate-version",
+              PACKAGE_VERSION,
+              "--required-packages-json",
+              '["@openclaw/discord"]',
+            ]
+          : []),
+        ...(options.extraArgs ?? []),
+        ...(options.harnessAlias ? ["--output-dir", harness] : []),
+      ],
+      {
+        encoding: "utf8",
+        timeout: 15_000,
+        env: {
+          PATH: `${bin}:${process.env.PATH}`,
+          HOME: fixture.root,
+          TMPDIR: scratch,
+          DOCKER_LOG: log,
+          HARNESS_INVENTORY: path.join(fixture.root, "harness-inventory.json"),
+          GITHUB_ACTIONS: "true",
+          GITHUB_ENV: path.join(fixture.root, "host-actions-env"),
+          GH_TOKEN: "synthetic-host-only",
+        },
+      },
+    );
+    const calls: string[][] = existsSync(log)
+      ? readFileSync(log, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line) as string[])
+      : [];
+    return { result, calls, scratch, fixture, harnessSha };
+  }
+
+  it("pins the image and isolates mutable build output from fresh sealing", () => {
+    const { result, calls, scratch, fixture, harnessSha } = runPackager();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe("{}");
+    const runs = calls.filter(([command]) => command === "run");
+    expect(runs).toHaveLength(2);
+    const [build, seal] = runs;
+    for (const args of runs) {
+      expect(args).toContain(`sha256:${"a".repeat(64)}`);
+      expect(args).toContain("ALL");
+      expect(args).toContain("no-new-privileges");
+      expect(args).not.toContain("synthetic-host-only");
+      expect(args.join("\n")).not.toContain("host-actions-env");
+      expect(args.join("\n")).not.toContain("docker.sock");
+    }
+    expect(build[build.indexOf("--user") + 1]).toBe("node");
+    expect(build).toContain("ALLOW_UNRELEASED_CHANGELOG=true");
+    expect(build).toContain(`${fixture.archivePath}:/input/candidate.tar.gz:ro`);
+    expect(build.some((arg) => arg.includes("pnpm install --frozen-lockfile"))).toBe(true);
+    expect(build.some((arg) => arg.endsWith(":/payload"))).toBe(false);
+    const mutableOutput = build.find((arg) => arg.endsWith(":/output"))!;
+    expect(seal).toContain(`${mutableOutput.slice(0, -":/output".length)}:/package:ro`);
+    expect(seal[seal.indexOf("--network") + 1]).toBe("none");
+    expect(seal).toContain("/harness/scripts/docker/pack-candidate-data.py");
+    expect(seal).toContain(harnessSha);
+    expect(seal).toContain(IDENTITY.targetSha);
+    expect(calls.filter(([command]) => command === "rm")).toHaveLength(2);
+    expect(readdirSync(scratch)).toEqual([]);
+    const buildName = build[build.indexOf("--name") + 1];
+    expect(calls.findIndex((args) => args[0] === "rm" && args.includes(buildName))).toBeLessThan(
+      calls.indexOf(seal),
+    );
+    const snapshotFiles = JSON.parse(
+      readFileSync(path.join(fixture.root, "harness-inventory.json"), "utf8"),
+    ) as string[];
+    expect(snapshotFiles).toContain("scripts/prepublish-plugin-registry-artifact.mjs");
+    expect(snapshotFiles.some((file) => /(?:^|\/)(?:\.git|node_modules)(?:\/|$)/u.test(file))).toBe(
+      false,
+    );
+    const token = result.stderr.match(/::stop-commands::([a-f0-9]{64})/u)?.[1];
+    expect(token).toBeDefined();
+    expect(result.stderr).toContain(`::${token}::`);
+    expect(result.stderr.indexOf("::warning::")).toBeGreaterThan(
+      result.stderr.indexOf("::stop-commands::"),
+    );
+  });
+
+  it.each([
+    { buildStatus: 37, expectedStatus: 37, runs: 1 },
+    { buildStatus: 124, expectedStatus: 124, runs: 1 },
+    { sealStatus: 42, expectedStatus: 42, runs: 2 },
+    { cleanupStatus: 1, expectedStatus: 1, runs: 1, removals: 2, retainedScratch: true },
+    { inventoryStatus: 1, expectedStatus: 1, runs: 1, removals: 0, retainedScratch: true },
+    { lingeringInventory: true, expectedStatus: 1, runs: 1, removals: 2, retainedScratch: true },
+    { buildStatus: 37, cleanupStatus: 1, expectedStatus: 37, runs: 1, retainedScratch: true },
+  ])("preserves failure and cleans owned resources: %j", (options) => {
+    const { result, calls, scratch } = runPackager(options);
+    expect(result.status, result.stderr).toBe(options.expectedStatus);
+    expect(calls.filter(([command]) => command === "run")).toHaveLength(options.runs);
+    expect(calls.filter(([command]) => command === "rm")).toHaveLength(
+      options.removals ?? options.runs,
+    );
+    expect(readdirSync(scratch)).toHaveLength(options.retainedScratch ? 1 : 0);
+    if (options.retainedScratch) {
+      const buildName = calls.find(([command]) => command === "run")!;
+      expect(result.stderr).not.toContain(
+        `confirmed candidate container absent: ${buildName[buildName.indexOf("--name") + 1]}`,
+      );
+    }
+  });
+
+  it("rejects a mismatched harness before invoking Docker", () => {
+    const { result, calls } = runPackager({ harnessSha: "f".repeat(40) });
+    expect(result.status).not.toBe(0);
+    expect(calls).toEqual([]);
+  });
+
+  it.each(["package", "registry-only"])("separates registry outputs in %s mode", (mode) => {
+    const { result, calls } = runPackager({ mode, registry: true });
+    expect(result.status, result.stderr).toBe(0);
+    const [build, seal] = calls.filter(([command]) => command === "run");
+    expect(build).toContain(`MODE=${mode}`);
+    expect(build).toContain(`CANDIDATE_VERSION=${PACKAGE_VERSION}`);
+    expect(build.some((arg) => arg.endsWith(":/registry-output"))).toBe(true);
+    expect(build.some((arg) => arg.endsWith(":/registry"))).toBe(false);
+    expect(seal.some((arg) => arg.endsWith(":/registry-input:ro"))).toBe(true);
+    expect(seal.some((arg) => arg.endsWith(":/registry"))).toBe(true);
+    expect(build.some((arg) => arg.endsWith(":/output"))).toBe(mode === "package");
+    expect(seal.some((arg) => arg.endsWith(":/payload"))).toBe(mode === "package");
+  });
+
+  it.each([
+    { mode: "package", registry: false, policy: undefined, candidatePolicy: false },
+    { mode: "package", registry: false, policy: "installer", candidatePolicy: false },
+    { mode: "package", registry: false, policy: "package-candidate", candidatePolicy: true },
+    { mode: "package", registry: true, policy: undefined, candidatePolicy: true },
+    { mode: "package", registry: true, policy: "installer", candidatePolicy: true },
+    { mode: "registry-only", registry: true, policy: undefined, candidatePolicy: true },
+    { mode: "registry-only", registry: true, policy: "package-candidate", candidatePolicy: true },
+  ])("executes the selected dependency install policy: %j", (options) => {
+    const { result, calls, fixture } = runPackager({
+      ...options,
+      extraArgs: options.policy ? ["--install-policy", options.policy] : [],
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const build = calls.find((args) => args[0] === "run" && args.includes("/bin/bash"))!;
+    const guest = build.at(-1)!;
+    const selector = guest.match(
+      / {4}if \[\[ [^\n]+ \]\]; then\n {6}pnpm install[\s\S]+?\n {4}fi/u,
+    )?.[0];
+    expect(selector).toBeDefined();
+    const environment: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: fixture.root };
+    for (let index = 0; index < build.length; index += 1) {
+      if (build[index] === "-e") {
+        const entry = build[index + 1];
+        const equals = entry.indexOf("=");
+        environment[entry.slice(0, equals)] = entry.slice(equals + 1);
+      }
+    }
+    const selected = spawnSync(
+      "bash",
+      ["-c", `set -euo pipefail\npnpm() { printf '%s\\0' "$@"; }\n${selector}`],
+      { encoding: "utf8", env: environment, timeout: 5_000 },
+    );
+    expect(selected.status, selected.stderr).toBe(0);
+    expect(selected.stdout.split("\0").filter(Boolean)).toEqual([
+      "install",
+      "--frozen-lockfile",
+      ...(options.candidatePolicy
+        ? [
+            "--config.ignore-scripts=false",
+            "--config.engine-strict=false",
+            "--config.enable-pre-post-scripts=true",
+          ]
+        : []),
+    ]);
+    if (!options.registry) {
+      expect(build).toContain("CANDIDATE_VERSION=");
+      expect(build.some((arg) => arg.endsWith(":/registry-output"))).toBe(false);
+    }
+  });
+
+  it.each([
+    { mode: "unknown" },
+    { extraArgs: ["--install-policy", "unknown"] },
+    { mode: "registry-only" },
+    { mode: "registry-only", registry: true, extraArgs: ["--output-dir", "unexpected-output"] },
+    {
+      registry: true,
+      extraArgs: ["--required-packages-json", '["@openclaw/discord","@openclaw/discord"]'],
+    },
+    { registry: true, extraArgs: ["--required-packages-json", '["../invalid"]'] },
+    { registry: true, extraArgs: ["--candidate-version", "invalid version"] },
+    { extraArgs: ["--candidate-version", PACKAGE_VERSION] },
+    { extraArgs: ["--repository", "../openclaw"] },
+    { harnessAlias: true },
+  ])("rejects invalid or aliased inputs before worker execution: %j", (options) => {
+    const { result, calls } = runPackager(options);
+    expect(result.status).not.toBe(0);
+    expect(calls.some(([command]) => command === "run")).toBe(false);
+  });
+});
+
+describe("candidate source equivalence", () => {
+  function sourceFixture(format = "tar.gz", prefix = "candidate/") {
+    const root = tempDirs.make("candidate-git-data-");
+    const source = path.join(root, "source");
+    mkdirSync(source);
+    writeFileSync(path.join(source, "package.json"), JSON.stringify({ version: PACKAGE_VERSION }));
+    writeFileSync(path.join(source, "entry.sh"), "#!/bin/sh\nexit 0\n");
+    chmodSync(path.join(source, "entry.sh"), 0o755);
+    symlinkSync("entry.sh", path.join(source, "entry-link"));
+    function git(...args: string[]) {
+      return execFileSync(
+        "git",
+        ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", ...args],
+        {
+          cwd: source,
+          env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" },
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      ).trim();
+    }
+    git("init", "--quiet", "--template=");
+    git("config", "user.name", "Source Test");
+    git("config", "user.email", "source-test@example.invalid");
+    git("add", ".");
+    git("commit", "-qm", "test source");
+    const head = git("rev-parse", "HEAD");
+    const archive = path.join(root, "source.tar.gz");
+    execFileSync(
+      "git",
+      ["archive", `--format=${format}`, `--prefix=${prefix}`, "-o", archive, head],
+      {
+        cwd: source,
+      },
+    );
+    return { root, source, archive, head, git };
+  }
+
+  function compareSource(
+    fixture: ReturnType<typeof sourceFixture>,
+    overrides: { head?: string; version?: string } = {},
+  ) {
+    return spawnSync(
+      "python3",
+      [
+        DATA_HELPER,
+        "compare",
+        "--source-dir",
+        fixture.source,
+        "--archive",
+        fixture.archive,
+        "--target-sha",
+        overrides.head ?? fixture.head,
+        "--candidate-version",
+        overrides.version ?? PACKAGE_VERSION,
+      ],
+      { encoding: "utf8", timeout: 15_000 },
+    );
+  }
+
+  it.each([
+    ["tar.gz", "candidate/"],
+    ["tar", "different-prefix/"],
+  ])("accepts the same real Git tree with %s and %s", (format, prefix) => {
+    const result = compareSource(sourceFixture(format, prefix));
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it.each(["SHA", "version", "tracked changes", "different clean tree"])(
+    "rejects inconsistent source %s",
+    (kind) => {
+      const fixture = sourceFixture();
+      let head = fixture.head;
+      if (kind === "tracked changes" || kind === "different clean tree") {
+        writeFileSync(path.join(fixture.source, "entry.sh"), "#!/bin/sh\nexit 2\n");
+      }
+      if (kind === "different clean tree") {
+        fixture.git("commit", "-qam", "changed source");
+        head = fixture.git("rev-parse", "HEAD");
+      }
+      const result = compareSource(fixture, {
+        head: kind === "SHA" ? "f".repeat(40) : head,
+        version: kind === "version" ? "2026.9.1" : PACKAGE_VERSION,
+      });
+      expect(result.status).not.toBe(0);
+    },
+  );
+
+  it.each(["export-ignore", "export-subst", "submodule"])(
+    "fails closed for unsupported %s representation",
+    (kind) => {
+      const fixture = sourceFixture();
+      if (kind === "submodule") {
+        fixture.git("update-index", "--add", "--cacheinfo", `160000,${fixture.head},submodule`);
+        mkdirSync(path.join(fixture.source, "submodule"));
+      } else {
+        writeFileSync(path.join(fixture.source, ".gitattributes"), `entry.sh ${kind}\n`);
+        writeFileSync(path.join(fixture.source, "entry.sh"), "#!/bin/sh\n# $Format:%H$\n");
+        fixture.git("add", ".");
+      }
+      fixture.git("commit", "-qm", "unsupported representation");
+      const head = fixture.git("rev-parse", "HEAD");
+      fixture.git("archive", "--format=tar.gz", "--prefix=candidate/", "-o", fixture.archive, head);
+      const result = compareSource(fixture, { head });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toMatch(/unsupported/u);
+    },
+  );
+
+  it.each(["mode", "symlink", "duplicate", "traversal", "git metadata", "special", "missing"])(
+    "rejects archive %s drift before source execution",
+    (kind) => {
+      const fixture = sourceFixture();
+      execFileSync(
+        "python3",
+        [
+          "-c",
+          `
+import io, os, sys, tarfile
+archive, kind = sys.argv[1:]
+temporary = archive + ".modified"
+with tarfile.open(archive) as source, tarfile.open(temporary, "w:gz") as target:
+    for member in source:
+        data = source.extractfile(member).read() if member.isfile() else None
+        if kind == "missing" and member.name.endswith("entry.sh"):
+            continue
+        if kind == "mode" and member.name.endswith("entry.sh"):
+            member.mode = 0o644
+        if kind == "symlink" and member.issym():
+            member.linkname = "package.json"
+        target.addfile(member, io.BytesIO(data) if data is not None else None)
+        if kind == "duplicate" and member.name.endswith("entry.sh"):
+            target.addfile(member, io.BytesIO(data))
+    if kind in ("traversal", "git metadata", "special"):
+        name = {"traversal": "candidate/../escape", "git metadata": "candidate/.git/config", "special": "candidate/fifo"}[kind]
+        member = tarfile.TarInfo(name)
+        if kind == "special":
+            member.type = tarfile.FIFOTYPE
+        target.addfile(member)
+os.replace(temporary, archive)
+`,
+          fixture.archive,
+          kind,
+        ],
+        { encoding: "utf8" },
+      );
+      const result = compareSource(fixture);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toMatch(/archive|unsupported/u);
+    },
+  );
+});
+
+describe("candidate registry sealing", () => {
+  function registryFixture() {
+    const fixture = createFixture();
+    const raw = path.join(fixture.root, "raw-registry");
+    const sealed = path.join(fixture.root, "sealed-registry");
+    mkdirSync(raw);
+    writeFileSync(path.join(raw, "root.tgz"), readFileSync(fixture.packagePath));
+    writeFileSync(
+      path.join(fixture.packageContents, "package.json"),
+      JSON.stringify({ name: "@openclaw/discord", version: PACKAGE_VERSION }),
+    );
+    createTarball(path.join(raw, "discord.tgz"), path.dirname(fixture.packageContents), [
+      "package",
+    ]);
+    const manifest = {
+      schema: "openclaw.prepublish-plugin-registry/v1",
+      schemaVersion: 1,
+      sourceSha: IDENTITY.targetSha,
+      candidateVersion: PACKAGE_VERSION,
+      packages: [
+        { name: "@openclaw/discord", tarball: "discord.tgz" },
+        { name: "openclaw", tarball: "root.tgz" },
+      ].map((entry) => ({
+        name: entry.name,
+        tarball: entry.tarball,
+        version: PACKAGE_VERSION,
+        sha256: sha256(path.join(raw, entry.tarball)),
+      })),
+    };
+    const writeManifest = () =>
+      writeFileSync(path.join(raw, "prepublish-plugin-registry.json"), JSON.stringify(manifest));
+    writeManifest();
+    return { ...fixture, raw, sealed, manifest, writeManifest };
+  }
+
+  function sealRegistry(
+    fixture: ReturnType<typeof registryFixture>,
+    options: {
+      mode?: string;
+      required?: string;
+      sourceSha?: string;
+      version?: string;
+      registry?: boolean;
+    } = {},
+  ) {
+    return spawnSync(
+      "python3",
+      [
+        DATA_HELPER,
+        "seal",
+        "--mode",
+        options.mode ?? "registry-only",
+        "--harness-dir",
+        path.resolve("."),
+        "--registry-dir",
+        fixture.raw,
+        ...(options.registry === false ? [] : ["--registry-output-dir", fixture.sealed]),
+        "--reported-registry-dir",
+        fixture.sealed,
+        "--candidate-version",
+        options.version ?? PACKAGE_VERSION,
+        "--required-packages-json",
+        options.required ?? '["@openclaw/discord"]',
+        "--target-sha",
+        options.sourceSha ?? IDENTITY.targetSha,
+        "--archive",
+        fixture.archivePath,
+        "--package-dir",
+        fixture.packageDir,
+        "--output-dir",
+        fixture.payloadDir,
+        "--repository",
+        IDENTITY.repository,
+        "--harness-repository",
+        IDENTITY.harnessRepository,
+        "--harness-sha",
+        IDENTITY.harnessSha,
+        "--run-id",
+        IDENTITY.runId,
+        "--run-attempt",
+        IDENTITY.runAttempt,
+      ],
+      { encoding: "utf8", timeout: 15_000 },
+    );
+  }
+
+  it.each(["registry-only", "package"])(
+    "seals %s using the existing verifier and retains additional described packages",
+    (mode) => {
+      const fixture = registryFixture();
+      const rootHash = sha256(fixture.packagePath);
+      const result = sealRegistry(fixture, { mode });
+      expect(result.status, result.stderr).toBe(0);
+      expect(readdirSync(fixture.sealed).toSorted()).toEqual([
+        "discord.tgz",
+        "prepublish-plugin-registry.json",
+        "root.tgz",
+      ]);
+      expect(sha256(fixture.packagePath)).toBe(rootHash);
+      expect(sha256(path.join(fixture.sealed, "root.tgz"))).toBe(rootHash);
+      const parsed = JSON.parse(result.stdout);
+      if (mode === "registry-only") {
+        expect(readdirSync(fixture.payloadDir)).toEqual([]);
+        expect(parsed).toMatchObject({
+          manifestPath: path.join(fixture.sealed, "prepublish-plugin-registry.json"),
+          manifestSha256: sha256(path.join(fixture.sealed, "prepublish-plugin-registry.json")),
+          packages: ["@openclaw/discord", "openclaw"],
+        });
+      } else {
+        expect(parsed).toMatchObject({
+          ...IDENTITY,
+          schema: "openclaw.install-smoke-candidate-payload/v1",
+          packageVersion: PACKAGE_VERSION,
+        });
+        expect(parsed.files.map((file: { name: string }) => file.name)).toEqual([
+          "candidate.tgz",
+          "candidate-pack.json",
+          "install.sh",
+          "install-cli.sh",
+        ]);
+      }
+    },
+  );
+
+  it("keeps default package stdout byte-compatible with the existing sealer", async () => {
+    const fixture = registryFixture();
+    const result = sealRegistry(fixture, { mode: "package", registry: false });
+    const direct = await sealInstallSmokeCandidatePayload({
+      ...IDENTITY,
+      archivePath: fixture.archivePath,
+      packageDir: fixture.packageDir,
+      outputDir: path.join(fixture.root, "direct-payload"),
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe(`${JSON.stringify(direct)}\n`);
+    expect(existsSync(fixture.sealed)).toBe(false);
+  });
+
+  it("keeps described companions when the required package list is empty", () => {
+    const result = sealRegistry(registryFixture(), { required: "[]" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout).packages).toEqual(["@openclaw/discord", "openclaw"]);
+  });
+
+  it.each([
+    "source",
+    "version",
+    "digest",
+    "required",
+    "extra file",
+    "symlink",
+    "duplicate",
+    "traversal",
+    "corrupt tarball",
+    "packed identity",
+  ])("rejects registry %s failure through the actual verifier boundary", (kind) => {
+    const fixture = registryFixture();
+    const entry = fixture.manifest.packages[0];
+    const tarball = path.join(fixture.raw, entry.tarball);
+    if (kind === "digest") {
+      entry.sha256 = "f".repeat(64);
+    }
+    if (kind === "extra file") {
+      writeFileSync(path.join(fixture.raw, "extra"), "unexpected");
+    }
+    if (kind === "duplicate") {
+      fixture.manifest.packages.push({ ...entry });
+    }
+    if (kind === "traversal") {
+      entry.tarball = "../escape.tgz";
+    }
+    if (kind === "symlink") {
+      unlinkSync(tarball);
+      symlinkSync(fixture.packagePath, tarball);
+    }
+    if (kind === "corrupt tarball" || kind === "packed identity") {
+      writeFileSync(
+        tarball,
+        kind === "corrupt tarball"
+          ? Buffer.from("not a tarball")
+          : readFileSync(fixture.packagePath),
+      );
+      entry.sha256 = sha256(tarball);
+    }
+    fixture.writeManifest();
+    const result = sealRegistry(fixture, {
+      sourceSha: kind === "source" ? "f".repeat(40) : undefined,
+      version: kind === "version" ? "2026.9.1" : undefined,
+      required: kind === "required" ? '["@openclaw/missing"]' : undefined,
+    });
+    expect(result.status).not.toBe(0);
+    expect(existsSync(fixture.sealed)).toBe(false);
   });
 });
