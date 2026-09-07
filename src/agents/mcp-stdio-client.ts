@@ -103,6 +103,23 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
   }
 
   class StdioTransport extends OpenClawStdioClientTransport {
+    override onerror: OpenClawStdioClientTransport["onerror"] = (error) =>
+      fail(
+        error instanceof McpStdioFrameError
+          ? errors.protocol(error.message, error.cause)
+          : errors.unavailable("proxy failed to start", error),
+      );
+    override onexit: OpenClawStdioClientTransport["onexit"] = ({ code, signal }) => {
+      if (!stopped && !failure) {
+        const tail = stderr.toString("utf8").trim();
+        fail(
+          errors.unavailable(
+            `proxy exited (${signal ?? code ?? "unknown"})${tail ? `: ${tail}` : ""}`,
+          ),
+        );
+      }
+    };
+
     override async send(message: JSONRPCMessage): Promise<void> {
       // SDK timeouts send cancellation before rejecting; fatal shutdown replaces it here.
       if ("method" in message && message.method === "notifications/cancelled") {
@@ -130,24 +147,6 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
     stderr = Buffer.concat([stderr, chunk]).subarray(-MAX_STDERR_BYTES);
   };
   transport.stderr?.on("data", onStderr);
-  // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Transport uses callback properties, not EventTarget.
-  transport.onerror = (error) =>
-    fail(
-      error instanceof McpStdioFrameError
-        ? errors.protocol(error.message, error.cause)
-        : errors.unavailable("proxy failed to start", error),
-    );
-  // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Transport uses callback properties, not EventTarget.
-  transport.onexit = ({ code, signal }) => {
-    if (!stopped && !failure) {
-      const tail = stderr.toString("utf8").trim();
-      fail(
-        errors.unavailable(
-          `proxy exited (${signal ?? code ?? "unknown"})${tail ? `: ${tail}` : ""}`,
-        ),
-      );
-    }
-  };
   const startup = connectMcpClient({
     client: protocol,
     transport,
