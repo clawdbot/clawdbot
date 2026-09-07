@@ -1,10 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ActionResult } from "@trycua/cua-driver";
-import type {
-  McpMessage,
-  McpStdioClient,
-  McpStdioDecoder,
-} from "openclaw/plugin-sdk/mcp-stdio-runtime";
+import type { mcpStdioRuntime } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   ClickButton,
@@ -13,6 +9,13 @@ import {
   type CuaDriverSession,
   type CuaToolResult,
 } from "./driver-client.js";
+
+type McpStdioRuntime = Awaited<ReturnType<typeof mcpStdioRuntime.load>>;
+type McpStdioClient = ReturnType<McpStdioRuntime["createMcpStdioClient"]>;
+type McpStdioDecoder = NonNullable<
+  ConstructorParameters<McpStdioRuntime["OpenClawStdioClientTransport"]>[0]["decoder"]
+>;
+type McpMessage = NonNullable<ReturnType<McpStdioDecoder["readMessage"]>>;
 
 const MCP_PROTOCOL_VERSION = "2025-06-18";
 const MCP_STARTUP_TIMEOUT_MS = 10_000;
@@ -179,7 +182,7 @@ function normalizeMcpToolResult(tool: string, raw: unknown): CuaToolResult {
 class CuaMcpResponseDecoder implements McpStdioDecoder {
   private pending = Buffer.alloc(0);
   private pendingBytes = 0;
-  private chunk = Buffer.alloc(0);
+  private chunk: Buffer = Buffer.alloc(0);
   private cursor = 0;
 
   constructor(private readonly fail: (error: Error) => void) {}
@@ -330,12 +333,13 @@ class CuaMcpProxyClient {
       }
     }
     // The normal Windows/Linux SDK route never loads the MCP runtime graph.
+    const { mcpStdioRuntime } = await import("openclaw/plugin-sdk/agent-harness-runtime");
     const {
       createMcpStdioClient,
       OpenClawStdioClientTransport,
       connectMcpClient,
       disposeMcpClient,
-    } = await import("openclaw/plugin-sdk/mcp-stdio-runtime");
+    } = await mcpStdioRuntime.load();
     if (this.stopped) {
       throw driverUnavailable("CUA MCP proxy is stopping");
     }
@@ -375,18 +379,20 @@ class CuaMcpProxyClient {
       this.stderr = Buffer.concat([this.stderr, chunk]).subarray(-MAX_STDERR_BYTES);
     };
     transport.stderr?.on("data", stderr);
-    transport.onerror = (error) =>
-      this.fail(driverUnavailable("failed to start CUA MCP proxy", error));
-    transport.onexit = ({ code, signal }) => {
-      if (!this.stopped && !this.failure) {
-        const detail = this.stderr.toString("utf8").trim();
-        this.fail(
-          driverUnavailable(
-            `CUA MCP proxy exited (${signal ?? code ?? "unknown"})${detail ? `: ${detail}` : ""}`,
-          ),
-        );
-      }
+    const callbacks: Pick<typeof transport, "onerror" | "onexit"> = {
+      onerror: (error) => this.fail(driverUnavailable("failed to start CUA MCP proxy", error)),
+      onexit: ({ code, signal }) => {
+        if (!this.stopped && !this.failure) {
+          const detail = this.stderr.toString("utf8").trim();
+          this.fail(
+            driverUnavailable(
+              `CUA MCP proxy exited (${signal ?? code ?? "unknown"})${detail ? `: ${detail}` : ""}`,
+            ),
+          );
+        }
+      },
     };
+    Object.assign(transport, callbacks);
     this.connection = {
       request: protocol.request,
       retire: () => transport.retire(),

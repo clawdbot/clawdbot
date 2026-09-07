@@ -146,7 +146,7 @@ describe("OpenClawStdioClientTransport", () => {
       decoder: new ReadBuffer({ maxBufferSize: 8 }),
     });
     const onerror = vi.fn();
-    transport.onerror = onerror;
+    Object.assign(transport, { onerror });
     await transport.start();
     fixture.stdout.write(Buffer.alloc(9, 0x20));
     expect(onerror).toHaveBeenCalledExactlyOnceWith(
@@ -158,7 +158,7 @@ describe("OpenClawStdioClientTransport", () => {
     const fixture = createChild();
     const transport = createTransport({ command: "node" });
     const received = vi.fn();
-    transport.onmessage = received;
+    Object.assign(transport, { onmessage: received });
     const client = new Client({ name: "stdio-ownership-test", version: "1" });
     const connecting = client.connect(transport);
     await vi.waitFor(() => expect(fixture.stdin.readableLength).toBeGreaterThan(0));
@@ -181,7 +181,7 @@ describe("OpenClawStdioClientTransport", () => {
     const pending = client.request({ method: "ping" }, EmptyResultSchema, { timeout: 120_000 });
     const rejected = expect(pending).rejects.toThrow("Connection closed");
     const onexit = vi.fn();
-    transport.onexit = onexit;
+    Object.assign(transport, { onexit });
     const closed = vi.fn();
     const closing = transport.terminate().then(closed);
     await rejected;
@@ -436,8 +436,7 @@ describe("OpenClawStdioClientTransport", () => {
     const transport = createTransport({ command: "node" });
     const onerror = vi.fn();
     const onmessage = vi.fn();
-    transport.onerror = onerror;
-    transport.onmessage = onmessage;
+    Object.assign(transport, { onerror, onmessage });
     await transport.start();
     fixture.stdout.write('invalid\n{"jsonrpc":"2.0","id":1,"result":{}}\n');
     expect(onerror).toHaveBeenCalledOnce();

@@ -275,7 +275,7 @@ extensions/cua-computer/src/driver-artifact-verification.ts	2
 extensions/cua-computer/src/driver-artifacts.ts	1
 extensions/cua-computer/src/driver-client.ts	15
 extensions/cua-computer/src/driver-result.ts	9
-extensions/cua-computer/src/mcp-driver-client.ts	5
+extensions/cua-computer/src/mcp-driver-client.ts	4
 extensions/cua-computer/src/window-actions.ts	3
 extensions/deepinfra/provider-models.ts	2
 extensions/deepinfra/video-generation-provider.ts	2

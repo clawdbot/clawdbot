@@ -643,11 +643,17 @@ Use `openclaw plugins inspect <id>` to see a plugin's shape.
 
 ## MCP subprocess runtime
 
-**Import:** `openclaw/plugin-sdk/mcp-stdio-runtime` using dynamic `import()` when opening the connection.
+**Import:** `mcpStdioRuntime` from `openclaw/plugin-sdk/agent-harness-runtime` using dynamic `import()` when opening the connection. Call `await mcpStdioRuntime.load()` to obtain the shared client factory, transport, startup deadline, and disposal helpers. The object loads those implementations lazily.
 
-Use this seam when a plugin owns an MCP proxy subprocess. `createMcpStdioClient()` creates a client backed by the MCP SDK's request correlation and deadlines. Its `connect(transport)` attaches the transport; the caller then performs initialization with `request(method, params, timeoutMs)` and sends notifications with `notification(method, params)`. Requests return an object result. `close()` closes the connection, and `isTimeout(error)` identifies an MCP request-timeout error. Initialization policy stays with the plugin; the SDK's experimental task and server-handler APIs are not exposed. `McpStdioClient` and `McpMessage` describe this boundary.
+```ts
+const { mcpStdioRuntime } = await import("openclaw/plugin-sdk/agent-harness-runtime");
+const { createMcpStdioClient, OpenClawStdioClientTransport, connectMcpClient, disposeMcpClient } =
+  await mcpStdioRuntime.load();
+```
 
-`OpenClawStdioClientTransport` owns the launched subprocess and its descendants. It accepts `command`, optional `args`, `cwd`, `env`, `prepareDataDir`, and `stderr`. By default it merges the MCP SDK's default environment with `env` and uses the SDK's bounded JSON-RPC decoder. `exactEnv: true` uses only the supplied environment. A custom `McpStdioDecoder` implements `append`, `readMessage`, and `clear`; it must enforce byte bounds before buffering and validate each returned `McpMessage`.
+Use this seam when a plugin owns an MCP proxy subprocess. `createMcpStdioClient()` creates a client backed by the MCP SDK's request correlation and deadlines. Its `connect(transport)` attaches the transport; the caller then performs initialization with `request(method, params, timeoutMs)` and sends notifications with `notification(method, params)`. Requests return an object result. `close()` closes the connection, and `isTimeout(error)` identifies an MCP request-timeout error. Initialization policy stays with the plugin; the SDK's experimental task and server-handler APIs are not exposed. Client and message types can be inferred from the returned factory and transport members.
+
+`OpenClawStdioClientTransport` owns the launched subprocess and its descendants. It accepts `command`, optional `args`, `cwd`, `env`, `prepareDataDir`, and `stderr`. By default it merges the MCP SDK's default environment with `env` and uses the SDK's bounded JSON-RPC decoder. `exactEnv: true` uses only the supplied environment. A custom decoder implements `append`, `readMessage`, and `clear`; it must enforce byte bounds before buffering and validate each returned JSON-RPC message.
 
 `onexit` receives the root process's `{ code, signal }`. It is separate from cleanup confirmation: `onclose` retires the connection, while `close()` joins owned-process cleanup. `retire()` closes input and retires RPC admission immediately; `terminate()` additionally sends TERM. Each operation retains cleanup ownership, and its returned promise still joins cleanup. `forceClose()` requests KILL. These methods own only the spawned process tree, never a separately started service reached through its socket.
 

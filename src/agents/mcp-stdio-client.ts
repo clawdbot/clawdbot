@@ -9,7 +9,7 @@ import {
   type Result,
 } from "@modelcontextprotocol/sdk/types.js";
 
-export type McpStdioClient = {
+type McpStdioClient = {
   connect: (transport: Transport) => Promise<void>;
   request: (
     method: string,
@@ -53,6 +53,8 @@ export function createMcpStdioClient(): McpStdioClient {
       }),
     notification: (method, params) => protocol.notification({ method, params }),
     close: () => protocol.close(),
-    isTimeout: (error) => error instanceof McpError && error.code === ErrorCode.RequestTimeout,
+    // McpError exposes numeric wire codes, including values outside the SDK enum.
+    isTimeout: (error) =>
+      error instanceof McpError && error.code === Number(ErrorCode.RequestTimeout),
   };
 }

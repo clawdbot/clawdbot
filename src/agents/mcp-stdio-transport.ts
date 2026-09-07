@@ -18,9 +18,9 @@ import {
 } from "../process/owned-stdio.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 
-export type McpStdioDecoder = Pick<ReadBuffer, "append" | "readMessage" | "clear">;
+type McpStdioDecoder = Pick<ReadBuffer, "append" | "readMessage" | "clear">;
 
-export type McpStdioExit = { code: number | null; signal: NodeJS.Signals | null };
+type McpStdioExit = { code: number | null; signal: NodeJS.Signals | null };
 
 type OpenClawStdioServerParameters = {
   command: string;
