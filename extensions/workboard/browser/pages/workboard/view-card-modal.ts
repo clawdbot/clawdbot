@@ -6,15 +6,23 @@ import { t } from "../../i18n/index.ts";
 import { workboardCardSessionKey } from "../../lib/workboard/card-state.ts";
 import {
   addWorkboardCardComment,
+  formatWorkboardAttachmentBytes,
   getWorkboardState,
+  hasWorkboardStagedAttachmentBusy,
+  prepareWorkboardStagedAttachmentPreview,
+  removeWorkboardStagedAttachment,
   resetDraftState,
   saveWorkboardCardDraft,
+  stageWorkboardAttachments,
+  WORKBOARD_MAX_CARD_ATTACHMENTS,
   WORKBOARD_PRIORITIES,
   type WorkboardCard,
+  type WorkboardStagedAttachment,
   type WorkboardPriority,
   type WorkboardStatus,
   type WorkboardTemplateId,
   type WorkboardUiState,
+  workboardStagedAttachmentBusyKey,
 } from "../../lib/workboard/index.ts";
 import { buildAssignableAgentOptions } from "./agent-filter.ts";
 import {
@@ -118,6 +126,10 @@ export function openEditModal(state: WorkboardUiState, card: WorkboardCard) {
   state.draftSessionKey = workboardCardSessionKey(card) ?? "";
   state.draftTemplateId = card.metadata?.templateId ?? "";
   state.draftCommentBody = "";
+  state.draftAttachments = [];
+  state.attachmentPreviewRequestId += 1;
+  state.attachmentPreview = null;
+  state.attachmentPreviewTrigger = null;
 }
 
 function applyTemplate(state: WorkboardUiState, templateId: WorkboardTemplateId) {
@@ -130,6 +142,240 @@ function applyTemplate(state: WorkboardUiState, templateId: WorkboardTemplateId)
   state.draftNotes = t(`workboard.templateDraft.${template.draftKey}Notes`);
   state.draftLabels = template.labels;
   state.draftPriority = template.priority;
+}
+
+function stageDraftFiles(
+  state: WorkboardUiState,
+  files: readonly File[],
+  requestUpdate?: () => void,
+) {
+  const result = stageWorkboardAttachments(files, state.draftAttachments.length);
+  if (result.accepted.length > 0) {
+    state.draftAttachments = [...state.draftAttachments, ...result.accepted];
+    requestUpdate?.();
+    for (const entry of result.accepted) {
+      void prepareDraftAttachmentPreview(state, entry, requestUpdate);
+    }
+  }
+  if (result.rejected.length > 0) {
+    state.error = result.rejected
+      .map(({ fileName, reason }) => {
+        if (reason === "empty") {
+          return t("workboard.attachmentsRejectedEmpty", { file: fileName });
+        }
+        if (reason === "invalid_name") {
+          return t("workboard.attachmentsRejectedInvalidName", { file: fileName });
+        }
+        if (reason === "too_large") {
+          return t("workboard.attachmentsRejectedTooLarge", { file: fileName });
+        }
+        return t("workboard.attachmentsRejectedTooMany");
+      })
+      .join(" ");
+  } else if (result.accepted.length > 0) {
+    state.error = null;
+  }
+  requestUpdate?.();
+}
+
+async function prepareDraftAttachmentPreview(
+  state: WorkboardUiState,
+  entry: WorkboardStagedAttachment,
+  requestUpdate?: () => void,
+) {
+  try {
+    const preview = await prepareWorkboardStagedAttachmentPreview(entry.file);
+    const current = state.draftAttachments.find((candidate) => candidate.id === entry.id);
+    if (current) {
+      current.preview = preview;
+      requestUpdate?.();
+    }
+  } catch {
+    const current = state.draftAttachments.find((candidate) => candidate.id === entry.id);
+    if (current) {
+      current.preview = { kind: "unavailable" };
+      requestUpdate?.();
+    }
+  }
+}
+
+function focusStagedAttachmentAfterRemove(
+  trigger: HTMLButtonElement | null | undefined,
+  previousActive: Element | null,
+) {
+  if (!trigger) {
+    return;
+  }
+  if (
+    previousActive !== null &&
+    previousActive !== trigger &&
+    previousActive !== trigger.ownerDocument.body
+  ) {
+    return;
+  }
+  queueMicrotask(() => {
+    const active = trigger.ownerDocument.activeElement;
+    if (active !== trigger && active !== trigger.ownerDocument.body) {
+      return;
+    }
+    const section = trigger.ownerDocument.querySelector<HTMLElement>(".workboard-attachments");
+    const survivingRemove = section?.querySelector<HTMLButtonElement>(
+      ".workboard-attachments__staged button:not([disabled])",
+    );
+    const addFiles = section?.querySelector<HTMLInputElement>(".workboard-attachments__input");
+    (survivingRemove ?? addFiles)?.focus();
+  });
+}
+
+function renderStagedAttachmentPreview(entry: WorkboardStagedAttachment) {
+  const preview = entry.preview;
+  if (!preview) {
+    return html`<small>${t("workboard.attachmentsPreviewPreparing")}</small>`;
+  }
+  if (preview.kind === "image") {
+    return html`<img
+      class="workboard-attachments__preview-image"
+      src=${preview.dataUrl}
+      alt=${entry.fileName}
+    />`;
+  }
+  if (preview.kind === "text") {
+    return html`<pre class="workboard-attachments__preview-text">${preview.text}</pre>`;
+  }
+  if (preview.kind === "pdf") {
+    return html`<object
+      class="workboard-attachments__preview-document"
+      data=${preview.dataUrl}
+      type="application/pdf"
+      aria-label=${entry.fileName}
+    >
+      <p>${t("workboard.attachmentsPreviewUnavailable")}</p>
+    </object>`;
+  }
+  return html`<small>${t("workboard.attachmentsPreviewUnavailable")}</small>`;
+}
+
+function renderDraftAttachments(
+  state: WorkboardUiState,
+  existingCount: number,
+  draftActionsBusy: boolean,
+  params: {
+    host: WorkboardProps["host"];
+    requestUpdate?: () => void;
+  },
+) {
+  const attachmentCount = existingCount + state.draftAttachments.length;
+  const attachmentLimitText =
+    attachmentCount > WORKBOARD_MAX_CARD_ATTACHMENTS
+      ? t("workboard.attachmentsPruneWarning", {
+          existing: String(existingCount),
+          staged: String(state.draftAttachments.length),
+          max: String(WORKBOARD_MAX_CARD_ATTACHMENTS),
+        })
+      : t("workboard.attachmentsLimits", {
+          count: String(attachmentCount),
+          max: String(WORKBOARD_MAX_CARD_ATTACHMENTS),
+        });
+  return html`
+    <section class="workboard-attachments workboard-field workboard-field--wide">
+      <div class="workboard-attachments__header">
+        <div>
+          <span>${t("workboard.attachmentsTitle")}</span>
+          <small>${attachmentLimitText}</small>
+        </div>
+        <label class="btn workboard-attachments__picker">
+          ${icons.plus} ${t("workboard.attachmentsAdd")}
+          <input
+            class="workboard-attachments__input"
+            type="file"
+            multiple
+            aria-label=${t("workboard.attachmentsAdd")}
+            ?disabled=${draftActionsBusy || state.draftAttachments.length >= WORKBOARD_MAX_CARD_ATTACHMENTS}
+            @change=${(event: Event) => {
+              const input = event.currentTarget as HTMLInputElement;
+              if (input.files?.length) {
+                stageDraftFiles(state, Array.from(input.files), params.requestUpdate);
+              }
+              input.value = "";
+            }}
+          />
+        </label>
+      </div>
+      <div
+        class="workboard-attachments__dropzone"
+        tabindex="0"
+        @dragover=${(event: DragEvent) => event.preventDefault()}
+        @drop=${(event: DragEvent) => {
+          event.preventDefault();
+          if (!draftActionsBusy && event.dataTransfer?.files.length) {
+            stageDraftFiles(state, Array.from(event.dataTransfer.files), params.requestUpdate);
+          }
+        }}
+        @paste=${(event: ClipboardEvent) => {
+          if (!draftActionsBusy && event.clipboardData?.files.length) {
+            stageDraftFiles(state, Array.from(event.clipboardData.files), params.requestUpdate);
+          }
+        }}
+      >
+        <span>${t("workboard.attachmentsDrop")}</span>
+        <small>${t("workboard.attachmentsLimitsHelp")}</small>
+      </div>
+      ${
+        state.draftAttachments.length > 0
+          ? html`
+              <ul
+                class="workboard-attachments__staged"
+                aria-label=${t("workboard.attachmentsStaged")}
+              >
+                ${state.draftAttachments.map(
+                  (entry) => html`
+                    <li>
+                      <span class="workboard-attachments__name" title=${entry.fileName}>
+                        ${entry.fileName}
+                      </span>
+                      <small>
+                        ${t("workboard.attachmentsFileInfo", {
+                          size: formatWorkboardAttachmentBytes(entry.byteSize),
+                          mime: entry.mimeType ?? t("common.na"),
+                        })}
+                      </small>
+                      <div class="workboard-attachments__preview">
+                        ${renderStagedAttachmentPreview(entry)}
+                      </div>
+                      <button
+                        class="btn btn--icon workboard-card__icon"
+                        type="button"
+                        aria-label=${t("workboard.attachmentsRemove", { file: entry.fileName })}
+                        ?disabled=${
+                          draftActionsBusy ||
+                          state.attachmentBusyIds.has(workboardStagedAttachmentBusyKey(entry.id))
+                        }
+                        @click=${(event: Event) => {
+                          const trigger =
+                            event.currentTarget instanceof HTMLButtonElement
+                              ? event.currentTarget
+                              : null;
+                          void removeWorkboardStagedAttachment({
+                            host: params.host,
+                            staged: entry,
+                            trigger,
+                            onRemoved: (previousActive) =>
+                              focusStagedAttachmentAfterRemove(trigger, previousActive),
+                            requestUpdate: params.requestUpdate,
+                          });
+                        }}
+                      >
+                        ${icons.x}
+                      </button>
+                    </li>
+                  `,
+                )}
+              </ul>
+            `
+          : nothing
+      }
+    </section>
+  `;
 }
 
 export function renderCardModal(props: WorkboardProps) {
@@ -171,13 +417,19 @@ export function renderCardModal(props: WorkboardProps) {
   const editingCard = state.editingCardId
     ? (state.cards.find((card) => card.id === state.editingCardId) ?? null)
     : null;
+  const existingAttachmentCount = editingCard?.metadata?.attachments?.length ?? 0;
   const comments = editingCard?.metadata?.comments ?? [];
   const draftCommentBusy = editing && state.busyCardIds.has(state.editingCardId ?? "");
   const draftActionsBusy =
-    !canMutate(props) || state.loading || state.dispatching || draftCommentBusy;
+    !canMutate(props) ||
+    state.loading ||
+    state.dispatching ||
+    draftCommentBusy ||
+    hasWorkboardStagedAttachmentBusy(state.attachmentBusyIds);
   // Save completion resets this shared draft. Lock every edit and dismissal path
   // only for that write so stale drafts can still use Cancel to recover readiness.
-  const draftDismissalBusy = state.draftSaving;
+  const draftDismissalBusy =
+    state.draftSaving || hasWorkboardStagedAttachmentBusy(state.attachmentBusyIds);
   const dismissDraft = () => {
     if (draftDismissalBusy) {
       return false;
@@ -359,6 +611,10 @@ export function renderCardModal(props: WorkboardProps) {
               />
             </label>
           </div>
+          ${renderDraftAttachments(state, existingAttachmentCount, draftActionsBusy, {
+            host: props.host,
+            requestUpdate: props.onRequestUpdate,
+          })}
           ${
             editing
               ? html`

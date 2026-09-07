@@ -121,6 +121,11 @@ export function resetDraftState(state: WorkboardUiState) {
   state.draftSessionKey = "";
   state.draftTemplateId = "";
   state.draftCommentBody = "";
+  state.draftAttachments = [];
+  state.attachmentPreviewRequestId += 1;
+  state.attachmentPreview = null;
+  state.attachmentPreviewTrigger = null;
+  state.attachmentBusyIds = new Set();
   if (resolveStaleEdit) {
     state.mutationReadiness = "ready";
   }

@@ -5,10 +5,19 @@ import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import {
   addWorkboardCardComment,
+  decodeWorkboardAttachmentText,
+  deleteWorkboardAttachment,
+  downloadWorkboardAttachment,
+  formatWorkboardAttachmentBytes,
   getWorkboardDependencyState,
   getWorkboardLifecycle,
   getWorkboardState,
+  inspectWorkboardAttachment,
+  workboardAttachmentDataUrl,
+  workboardAttachmentMediaType,
+  workboardAttachmentMimeType,
   type WorkboardCard,
+  type WorkboardAttachment,
   type WorkboardDependencyState,
   type WorkboardUiState,
 } from "../../lib/workboard/index.ts";
@@ -41,11 +50,17 @@ const workboardCardDetailDescriptionId = "workboard-card-detail-description";
 export function openCardDetails(state: WorkboardUiState, card: WorkboardCard) {
   state.detailCardId = card.id;
   state.detailCommentBody = "";
+  state.attachmentPreviewRequestId += 1;
+  state.attachmentPreview = null;
+  state.attachmentPreviewTrigger = null;
 }
 
 function closeCardDetails(state: WorkboardUiState) {
   state.detailCardId = null;
   state.detailCommentBody = "";
+  state.attachmentPreviewRequestId += 1;
+  state.attachmentPreview = null;
+  state.attachmentPreviewTrigger = null;
 }
 
 export function getVisibleDetailCard(state: WorkboardUiState): WorkboardCard | null {
@@ -135,6 +150,186 @@ function detailValues<T>(entries: readonly T[], ...fields: Array<keyof T>): stri
   return entries.map((entry) => joinDetailParts(...fields.map((field) => entry[field])));
 }
 
+function renderAttachmentPreview(
+  props: WorkboardProps,
+  preview: WorkboardUiState["attachmentPreview"],
+) {
+  if (!preview) {
+    return nothing;
+  }
+  const mimeType = workboardAttachmentMimeType(preview.attachment);
+  const mediaType = workboardAttachmentMediaType(preview.attachment);
+  const dataUrl = workboardAttachmentDataUrl(preview.attachment, preview.contentBase64);
+  const textPreview = mediaType.startsWith("text/")
+    ? decodeWorkboardAttachmentText(preview.contentBase64)
+    : null;
+  return html`
+    <div
+      class="workboard-attachment-preview"
+      role="region"
+      aria-label=${preview.attachment.fileName}
+    >
+      <div class="workboard-attachment-preview__header">
+        <strong>${preview.attachment.fileName}</strong>
+        <button
+          class="btn btn--icon workboard-card__icon"
+          type="button"
+          aria-label=${t("workboard.attachmentsPreviewClose")}
+          @click=${() => {
+            const state = getWorkboardState(props.host);
+            const trigger = state.attachmentPreviewTrigger;
+            state.attachmentPreviewRequestId += 1;
+            state.attachmentPreview = null;
+            state.attachmentPreviewTrigger = null;
+            trigger?.focus();
+            props.onRequestUpdate?.();
+          }}
+        >
+          ${icons.x}
+        </button>
+      </div>
+      ${
+        mediaType.startsWith("image/")
+          ? html`<img
+              class="workboard-attachment-preview__image"
+              src=${dataUrl}
+              alt=${preview.attachment.fileName}
+            />`
+          : mediaType.startsWith("text/") && textPreview !== null
+            ? html`<pre class="workboard-attachment-preview__text">${textPreview}</pre>`
+            : mediaType === "application/pdf"
+              ? html`<object
+                  class="workboard-attachment-preview__document"
+                  data=${dataUrl}
+                  type=${mimeType}
+                  aria-label=${preview.attachment.fileName}
+                >
+                  <p>${t("workboard.attachmentsPreviewUnavailable")}</p>
+                </object>`
+              : html`<p>${t("workboard.attachmentsPreviewUnavailable")}</p>`
+      }
+    </div>
+  `;
+}
+
+function renderAttachmentDetails(
+  props: WorkboardProps,
+  card: WorkboardCard,
+  attachments: readonly WorkboardAttachment[],
+  writable: boolean,
+) {
+  if (attachments.length === 0) {
+    return nothing;
+  }
+  const state = getWorkboardState(props.host);
+  return html`
+    <section class="workboard-detail__section workboard-attachment-details">
+      <div class="workboard-attachment-details__header">
+        <h3>${t("workboard.attachmentsTitle")}</h3>
+        <span
+          >${t("workboard.attachmentsLimits", { count: String(attachments.length), max: "20" })}</span
+        >
+      </div>
+      <ul class="workboard-detail__list workboard-attachment-details__list">
+        ${attachments.map((attachment) => {
+          const busy = state.attachmentBusyIds.has(attachment.id);
+          const fileLabel = attachment.fileName;
+          return html`
+            <li>
+              <div class="workboard-attachment-details__metadata">
+                <strong title=${fileLabel}>${fileLabel}</strong>
+                <small>
+                  ${t("workboard.attachmentsFileInfo", {
+                    size: formatWorkboardAttachmentBytes(attachment.byteSize),
+                    mime: attachment.mimeType ?? t("common.na"),
+                  })}
+                </small>
+                ${attachment.note ? html`<span>${attachment.note}</span>` : nothing}
+              </div>
+              <div class="workboard-attachment-details__actions">
+                <button
+                  class="btn btn--xs"
+                  type="button"
+                  data-workboard-attachment-id=${attachment.id}
+                  data-workboard-attachment-action="inspect"
+                  ?disabled=${busy || !props.client || !props.connected}
+                  @click=${(event: Event) =>
+                    inspectWorkboardAttachment({
+                      host: props.host,
+                      client: props.client,
+                      attachment,
+                      trigger:
+                        event.currentTarget instanceof HTMLButtonElement
+                          ? event.currentTarget
+                          : null,
+                      requestUpdate: props.onRequestUpdate,
+                    })}
+                >
+                  ${icons.eye} ${t("workboard.attachmentsInspect", { file: fileLabel })}
+                </button>
+                <button
+                  class="btn btn--xs"
+                  type="button"
+                  data-workboard-attachment-id=${attachment.id}
+                  data-workboard-attachment-action="download"
+                  ?disabled=${busy || !props.client || !props.connected}
+                  @click=${() =>
+                    downloadWorkboardAttachment({
+                      host: props.host,
+                      client: props.client,
+                      attachment,
+                      requestUpdate: props.onRequestUpdate,
+                    })}
+                >
+                  ${t("workboard.attachmentsDownload", { file: fileLabel })}
+                </button>
+                ${
+                  writable
+                    ? html`<button
+                        class="btn btn--xs workboard-card__delete"
+                        type="button"
+                        data-workboard-attachment-id=${attachment.id}
+                        data-workboard-attachment-action="delete"
+                        ?disabled=${busy || !props.client || !props.connected}
+                        @click=${(event: Event) => {
+                          if (
+                            !window.confirm(
+                              t("workboard.attachmentsDeleteConfirm", { file: fileLabel }),
+                            )
+                          ) {
+                            return;
+                          }
+                          void deleteWorkboardAttachment({
+                            host: props.host,
+                            client: props.client,
+                            cardId: card.id,
+                            attachmentId: attachment.id,
+                            trigger:
+                              event.currentTarget instanceof HTMLButtonElement
+                                ? event.currentTarget
+                                : null,
+                            requestUpdate: props.onRequestUpdate,
+                          });
+                        }}
+                      >
+                        ${icons.trash} ${t("workboard.attachmentsDelete", { file: fileLabel })}
+                      </button>`
+                    : nothing
+                }
+              </div>
+            </li>
+          `;
+        })}
+      </ul>
+      ${
+        state.attachmentPreview?.attachment.cardId === card.id
+          ? renderAttachmentPreview(props, state.attachmentPreview)
+          : nothing
+      }
+    </section>
+  `;
+}
+
 export function renderCardDetailsPanel(props: WorkboardProps) {
   const state = getWorkboardState(props.host);
   const card = getVisibleDetailCard(state);
@@ -188,10 +383,6 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
     [
       t("workboard.badgeArtifacts", { count: String(artifacts.length) }),
       detailValues(artifacts, "label", "url", "path", "mimeType"),
-    ],
-    [
-      t("workboard.badgeAttachments", { count: String(attachments.length) }),
-      detailValues(attachments, "fileName", "mimeType", "note"),
     ],
     [
       t("workboard.detailDiagnostics"),
@@ -344,6 +535,7 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
               : nothing
           }
           ${renderDependencyDetailList(dependencies)}
+          ${renderAttachmentDetails(props, card, attachments, writable)}
           ${detailSections.map(([title, values]) => renderDetailList(title, values))}
 
           <section class="workboard-detail__section">
