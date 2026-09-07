@@ -239,6 +239,17 @@ replacement or background update campaigns; see [Updating](/install/updating)
 for those separate entry points. A required plugin capability consent remains
 an explicit recovery step and is recorded in the survivor summary.
 
+The `2026.9.2` to `2026.9.3` tarball transition uses the documented
+[external package-manager installation and fresh Doctor procedure](/reference/database-schemas#doctor-refuses-a-schema-migration-during-an-update).
+The survivor summary names this method explicitly. The old updater must refuse
+the schema 15 to 16 migration, and the negative proof must leave schema 15
+intact. After the Gateway owner stops its process and a verified backup exists,
+the package manager installs the candidate and fresh Doctor performs migration.
+`test:docker:release-upgrade-user-journey` also verifies retained baseline and
+new candidate conversations through Gateway history. Its artifacts record
+`selfUpdatePassed: false`; a passing supported transition does not mean the
+old in-process self-update succeeded.
+
 Scale the fixture with `OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS`,
 `OPENCLAW_UPGRADE_SURVIVOR_VOLUME_EVENTS_PER_SESSION`, and
 `OPENCLAW_UPGRADE_SURVIVOR_VOLUME_CRON_JOBS`. The default budget for the
