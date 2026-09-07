@@ -217,6 +217,48 @@ describe("channelsCapabilitiesCommand", () => {
       discoversChannels: false,
     },
     {
+      name: "blank channel",
+      options: { channel: "" },
+      message: "--channel must not be blank",
+      discoversChannels: false,
+    },
+    {
+      name: "blank agent with all channels",
+      options: { channel: "all", agent: " " },
+      message: "--agent must not be blank",
+      discoversChannels: false,
+    },
+    {
+      name: "blank account without a channel",
+      options: { account: "" },
+      message: "--account must not be blank",
+      discoversChannels: false,
+    },
+    {
+      name: "whitespace account without a channel",
+      options: { account: "   ", json: true },
+      message: "--account must not be blank",
+      discoversChannels: false,
+    },
+    {
+      name: "whitespace account with a channel",
+      options: { channel: "slack", account: "   " },
+      message: "--account must not be blank",
+      discoversChannels: false,
+    },
+    {
+      name: "blank target without a channel",
+      options: { target: "  " },
+      message: "--target must not be blank",
+      discoversChannels: false,
+    },
+    {
+      name: "blank target with a channel",
+      options: { channel: "discord", target: "", json: true },
+      message: "--target must not be blank",
+      discoversChannels: false,
+    },
+    {
       name: "unknown channel after installable plugin lookup",
       options: { channel: "definitely-not-a-channel", json: true },
       message:
@@ -254,6 +296,42 @@ describe("channelsCapabilitiesCommand", () => {
     expect(probeAccount).not.toHaveBeenCalled();
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     expect(mocks.refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
+  });
+
+  it("reports every configured account when --account is omitted", async () => {
+    const plugin = buildPlugin({ id: "slack" });
+    plugin.config.listAccountIds = () => ["ops", "sales"];
+    plugin.config.resolveAccount = (_cfg: OpenClawConfig, accountId?: string | null) => ({
+      accountId,
+    });
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: {} },
+      channelId: "slack",
+      plugin,
+      configChanged: false,
+    });
+
+    await channelsCapabilitiesCommand({ channel: "slack", json: true }, runtime);
+
+    const payload = JSON.parse(logs[0] ?? "{}") as {
+      channels?: Array<{ accountId?: string }>;
+    };
+    expect(payload.channels?.map((entry) => entry.accountId)).toStrictEqual(["ops", "sales"]);
+  });
+
+  it("reports every channel when --channel is omitted", async () => {
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
+      buildPlugin({ id: "slack" }),
+      buildPlugin({ id: "discord" }),
+    ]);
+
+    await channelsCapabilitiesCommand({ json: true }, runtime);
+
+    const payload = JSON.parse(logs[0] ?? "{}") as {
+      channels?: Array<{ channel?: string }>;
+    };
+    expect(payload.channels?.map((entry) => entry.channel)).toStrictEqual(["slack", "discord"]);
+    expect(mocks.resolveInstallableChannelPlugin).not.toHaveBeenCalled();
   });
 
   it.each([
