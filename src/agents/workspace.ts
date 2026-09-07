@@ -238,6 +238,23 @@ async function loadTemplate(name: string): Promise<string> {
 }
 
 /**
+ * Template lookup for comparison-only checks ("is this file still pristine?").
+ * Provisioning must keep using loadTemplate() and fail loudly, because it
+ * cannot write a file it has no template for. Comparison callers only ask
+ * whether existing content still matches, so an unavailable template makes the
+ * answer unknown, never fatal: an install missing its packaged templates would
+ * otherwise turn every agent turn into a hard error on a fully provisioned
+ * workspace.
+ */
+async function loadTemplateForComparison(name: string): Promise<string | undefined> {
+  try {
+    return await loadTemplate(name);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Canonical bootstrap filenames in prompt order. Single source for the runtime
  * validation set, the name union, and the Control UI core-files list; a private
  * copy anywhere else silently drifts when a file is retired.
@@ -403,15 +420,24 @@ function isTransientWorkspaceReadError(error: unknown): boolean {
 
 async function fileContentDiffersFromTemplate(
   filePath: string,
-  template: string,
+  // Undefined when the template is unavailable: existing content cannot be
+  // attested as pristine, so it counts as user content (the safe answer, since
+  // callers use this to decide whether regenerating would destroy real work).
+  template: string | undefined,
 ): Promise<boolean> {
   try {
-    return await retryAsync(async () => (await fs.readFile(filePath, "utf-8")) !== template, {
-      attempts: 3,
-      minDelayMs: 50,
-      maxDelayMs: 50,
-      shouldRetry: (err) => isTransientWorkspaceReadError(err),
-    });
+    return await retryAsync(
+      async () => {
+        const content = await fs.readFile(filePath, "utf-8");
+        return template === undefined || content !== template;
+      },
+      {
+        attempts: 3,
+        minDelayMs: 50,
+        maxDelayMs: 50,
+        shouldRetry: (err) => isTransientWorkspaceReadError(err),
+      },
+    );
   } catch (err) {
     const anyErr = err as { code?: string };
     if (anyErr.code === "ENOENT") {
@@ -496,7 +522,10 @@ async function workspaceProfileLooksConfigured(params: {
 }): Promise<boolean> {
   const profileFileDiffs = await Promise.all(
     WORKSPACE_ONBOARDING_PROFILE_FILENAMES.map(async (fileName) =>
-      fileContentDiffersFromTemplate(path.join(params.dir, fileName), await loadTemplate(fileName)),
+      fileContentDiffersFromTemplate(
+        path.join(params.dir, fileName),
+        await loadTemplateForComparison(fileName),
+      ),
     ),
   );
   return (
@@ -520,7 +549,8 @@ async function workspaceRequiredBootstrapLooksCustomized(
       try {
         const content = await fs.readFile(filePath, "utf-8");
         const contentHash = createHash("sha256").update(content).digest("hex");
-        if (contentHash !== generatedHash && content !== (await loadTemplate(fileName))) {
+        const template = await loadTemplateForComparison(fileName);
+        if (contentHash !== generatedHash && (template === undefined || content !== template)) {
           return true;
         }
       } catch {
@@ -531,7 +561,10 @@ async function workspaceRequiredBootstrapLooksCustomized(
   }
   const fileDiffs = await Promise.all(
     fileNames.map(async (fileName) =>
-      fileContentDiffersFromTemplate(path.join(dir, fileName), await loadTemplate(fileName)),
+      fileContentDiffersFromTemplate(
+        path.join(dir, fileName),
+        await loadTemplateForComparison(fileName),
+      ),
     ),
   );
   return fileDiffs.some(Boolean);
@@ -630,7 +663,7 @@ async function collectGeneratedBootstrapHashes(dir: string): Promise<Map<string,
   for (const fileName of GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES) {
     try {
       const content = await fs.readFile(path.join(dir, fileName), "utf-8");
-      if (content === (await loadTemplate(fileName))) {
+      if (content === (await loadTemplateForComparison(fileName))) {
         hashes.set(fileName, createHash("sha256").update(content).digest("hex"));
       }
     } catch {
