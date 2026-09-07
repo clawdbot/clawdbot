@@ -25,14 +25,24 @@ type SessionsPageListFilters = {
   search?: string;
 };
 
-function routeOptions(location: RouteLocation) {
+function routeOptions(
+  location: RouteLocation,
+  storedStatusFilter: SessionArchivedFilter = "active",
+) {
   const search = new URLSearchParams(location.search);
   const expandedSessionKey = search.get("session")?.trim() || null;
   // The retired internal `showArchived` param is deliberately not read; Sessions
   // URLs are not a shipped contract and stale links fall back to the Active view.
   const requestedStatus = search.get("status");
-  const statusFilter: SessionArchivedFilter =
-    requestedStatus === "archived" ? "archived" : requestedStatus === "all" ? "all" : "active";
+  const statusFilter: SessionArchivedFilter = search.has("status")
+    ? requestedStatus === "archived"
+      ? "archived"
+      : requestedStatus === "all"
+        ? "all"
+        : "active"
+    : expandedSessionKey
+      ? "active"
+      : storedStatusFilter;
   return { expandedSessionKey, statusFilter };
 }
 
@@ -65,10 +75,12 @@ async function loadSessionsRoute(
   context: ApplicationContext,
   location: RouteLocation,
 ): Promise<SessionsRouteData> {
+  const preferenceState = await import("./route-preferences.runtime.ts");
+  const preferences = preferenceState.loadSessionsPagePreferences();
   await context.runtimeConfig.ensureLoaded().catch(() => undefined);
   // The mounted page owns list issuance, including scope/status navigation
   // during a search. Prefetching here bypasses its single in-flight request.
-  return routeOptions(location);
+  return routeOptions(location, preferences.statusFilter);
 }
 
 export const page = definePage({

@@ -19,6 +19,7 @@ import {
 
 afterEach(() => {
   document.body.replaceChildren();
+  localStorage.clear();
   vi.restoreAllMocks();
 });
 
