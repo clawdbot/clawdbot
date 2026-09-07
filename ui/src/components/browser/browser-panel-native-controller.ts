@@ -128,13 +128,15 @@ export class BrowserPanelNativeController {
       this.controller.setState("activeTargetId", null);
       this.controller.setState("view", null);
       this.controller.exitCaptureModes();
-      if (next) {
+      // A pending open selects its own tab when its state lands; an automatic
+      // fallback would cancel that activation and strand the newer request.
+      if (next && !this.pendingActivation) {
         void this.controller.selectTab(next.id);
-      } else {
+      } else if (!next) {
         // The closed tab's address must not linger in the empty panel.
         this.controller.syncUrlDraft("");
       }
-    } else if (!this.controller.activeTargetId && this.nativeTabs[0]) {
+    } else if (!this.controller.activeTargetId && !this.pendingActivation && this.nativeTabs[0]) {
       void this.controller.selectTab(this.nativeTabs[0].id);
     }
     if (this.activeTab) {

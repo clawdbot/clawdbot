@@ -363,6 +363,44 @@ describe("native Browser panel ownership", () => {
     expect(focus).not.toHaveBeenCalled();
   });
 
+  it("lets a newer pending open win over the automatic fallback selection", async () => {
+    const native = fakeNativeBrowser();
+    const { controller } = controllerFixture();
+    await controller.refreshAll();
+    await controller.closeTab("remote");
+    expect(controller.activeTargetId).toBeNull();
+    const firstReply = createDeferred<{ ok: true; tabId: string }>();
+    const secondReply = createDeferred<{ ok: true; tabId: string }>();
+    native.postMessage
+      .mockImplementationOnce(() => firstReply.promise)
+      .mockImplementationOnce(() => secondReply.promise);
+    const firstOpen = controller.openUrl("https://example.test/first", {
+      newTab: true,
+      native: true,
+    });
+    const secondOpen = controller.openUrl("https://example.test/second", {
+      newTab: true,
+      native: true,
+    });
+    const opens = native.messages().filter((candidate) => candidate.type === "open");
+    if (opens[0]?.type !== "open" || opens[1]?.type !== "open") {
+      throw new Error("Expected two native open requests");
+    }
+    // The first tab's state lands while the second request is still pending.
+    native.publish([nativeTab(opens[0].tabId, "https://example.test/first")]);
+    firstReply.resolve({ ok: true, tabId: opens[0].tabId });
+    await firstOpen;
+    expect(controller.activeTargetId).toBeNull();
+    native.publish([
+      nativeTab(opens[0].tabId, "https://example.test/first"),
+      nativeTab(opens[1].tabId, "https://example.test/second"),
+    ]);
+    secondReply.resolve({ ok: true, tabId: opens[1].tabId });
+    await secondOpen;
+    expect(controller.activeTargetId).toBe(opens[1].tabId);
+    expect(controller.urlDraft).toBe("https://example.test/second");
+  });
+
   it("clears the address bar when the last tab closes without a successor", async () => {
     fakeNativeBrowser([nativeTab("mac-one")]);
     const { controller } = controllerFixture();

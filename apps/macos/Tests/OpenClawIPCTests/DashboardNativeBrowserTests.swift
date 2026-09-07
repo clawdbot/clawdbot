@@ -332,6 +332,12 @@ struct DashboardNativeBrowserHostTests {
         fixture.host.navigationDidFail(for: original)
         #expect(try fixture.host.open(tabId: "mac-retry", url: requested) == "mac-retry")
         #expect(fixture.host.state.tabs.map(\.id) == ["mac-original", "mac-retry"])
+
+        // The explicit new-tab action opens about:blank and must always get its own tab.
+        let blank = try #require(URL(string: "about:blank"))
+        #expect(try fixture.host.open(tabId: "mac-blank-one", url: blank) == "mac-blank-one")
+        #expect(try fixture.host.open(tabId: "mac-blank-two", url: blank) == "mac-blank-two")
+        #expect(fixture.host.state.tabs.map(\.id) == ["mac-original", "mac-retry", "mac-blank-one", "mac-blank-two"])
     }
 
     @Test func `requested alias survives the initial redirect chain and retires on later navigation`() throws {

@@ -112,8 +112,10 @@ final class DashboardNativeBrowserHost {
     func open(tabId: String, url: URL) throws -> String {
         let requestedURL = try DashboardBrowserMessageHandler.url(url.absoluteString)
         // Prefer the page currently at this URL over another tab's initial redirect alias.
-        if let existing = self.tabs.first(where: { $0.browser.representedURL == requestedURL }) ??
-            self.tabs.first(where: { $0.browser.requestedURLAlias == requestedURL })
+        // An explicit blank new tab must never collapse onto an existing blank tab.
+        if requestedURL.absoluteString != "about:blank",
+           let existing = self.tabs.first(where: { $0.browser.representedURL == requestedURL }) ??
+           self.tabs.first(where: { $0.browser.requestedURLAlias == requestedURL })
         {
             self.onOpen?()
             self.scheduleStatePush()
