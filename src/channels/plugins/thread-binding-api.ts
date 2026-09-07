@@ -30,10 +30,10 @@ type ThreadBindingApi = {
 };
 
 function loadBundledChannelThreadBindingApi(channelId: string): ThreadBindingApi | undefined {
-  return loadOptionalBundledChannelPublicArtifact<ThreadBindingApi>(
+  return loadOptionalBundledChannelPublicArtifact({
     channelId,
-    "thread-binding-api.js",
-  );
+    artifactBasename: "thread-binding-api.js",
+  });
 }
 
 function normalizeThreadBindingPlacement(value: unknown): ThreadBindingPlacement | undefined {

@@ -22,7 +22,10 @@ type MessageToolApi = {
 };
 
 function loadBundledChannelMessageToolApi(channelId: string): MessageToolApi | undefined {
-  return loadOptionalBundledChannelPublicArtifact<MessageToolApi>(channelId, "message-tool-api.js");
+  return loadOptionalBundledChannelPublicArtifact({
+    channelId,
+    artifactBasename: "message-tool-api.js",
+  });
 }
 
 /**
