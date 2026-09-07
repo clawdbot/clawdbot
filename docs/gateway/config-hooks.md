@@ -343,7 +343,7 @@ completed email processing or delivery. Verify the restricted reader through
 reader-to-agent handoff, expose only the required tool and constrain the
 default-on [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent)
 policy with `allow`, or set `enabled: false` when no handoff is needed; see also
-[Prompt injection](/gateway/security#prompt-injection) and
+[Prompt injection](/gateway/security/prompt-injection) and
 [per-agent sandbox and tools](/tools/multi-agent-sandbox-tools).
 
 ---

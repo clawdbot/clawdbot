@@ -90,7 +90,7 @@ For the default account, you can use env vars:
 
 Config values override env vars.
 
-`SYNOLOGY_CHAT_INCOMING_URL` and `SYNOLOGY_NAS_HOST` cannot be set from a workspace `.env`; see [Workspace `.env` files](/gateway/security#workspace-env-files).
+`SYNOLOGY_CHAT_INCOMING_URL` and `SYNOLOGY_NAS_HOST` cannot be set from a workspace `.env`; see [Workspace `.env` files](/gateway/security/secrets-and-storage#workspace-env-files).
 
 ## DM policy and access control
 

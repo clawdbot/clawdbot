@@ -107,7 +107,7 @@ Configure the proxy address narrowly in `gateway.trustedProxies` and have the
 proxy overwrite or safely rebuild forwarding headers. OpenClaw then restores
 validated per-client attribution and rate-limit buckets. See [Trusted Proxy
 Auth](/gateway/trusted-proxy-auth) and the [Gateway security
-guide](/gateway/security#reverse-proxy-configuration).
+guide](/gateway/security/network-exposure#reverse-proxy-configuration).
 
 A headerless TCP forwarder provides no request-level provenance and is
 indistinguishable from a process connecting directly over loopback. This

@@ -97,7 +97,7 @@ Use one of these trusted sources for provider credentials instead:
 
 If you previously stored provider keys or endpoint routing values only in a workspace `.env`, move them to one of the trusted sources above. Workspace `.env` can still provide ordinary project variables that are not credentials, endpoint redirects, host overrides, or `OPENCLAW_*` runtime controls.
 
-See [Workspace `.env` files](/gateway/security#workspace-env-files) for the security rationale.
+See [Workspace `.env` files](/gateway/security/secrets-and-storage#workspace-env-files) for the security rationale.
 
 ## Config `env` block
 
