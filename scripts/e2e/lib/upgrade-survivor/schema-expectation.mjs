@@ -122,24 +122,19 @@ function readSeededAgents(stateDir, configFile) {
       assert.equal(path.resolve(entries[agentId].agentDir), path.join(agentRoot, "agent"));
     }
     const files = [];
-    function visit(directory) {
+    function visitSessions(directory) {
       if (!fs.existsSync(directory)) {
         return;
       }
       for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
         const absolute = path.join(directory, entry.name);
         if (entry.isDirectory()) {
-          visit(absolute);
+          visitSessions(absolute);
           continue;
         }
         assert(entry.isFile(), `non-file baseline agent specimen: ${absolute}`);
         const local = path.relative(agentRoot, absolute).split(path.sep).join("/");
         const relative = path.relative(stateDir, absolute).split(path.sep).join("/");
-        // WAL, shared memory, and reindex scratch belong to the existing SQLite owner.
-        if (local.startsWith("agent/openclaw-agent.sqlite")) {
-          files.push({ relative, kind: "sqlite-runtime" });
-          continue;
-        }
         const bytes = fs.readFileSync(absolute);
         const specimen = { relative, sha256: hashBytes(bytes) };
         if (local === "sessions/sessions.json") {
@@ -174,7 +169,19 @@ function readSeededAgents(stateDir, configFile) {
         }
       }
     }
-    visit(agentRoot);
+    visitSessions(path.join(agentRoot, "sessions"));
+    // Model catalogs and other per-agent artifacts have separate owners.
+    const runtimeDir = path.join(agentRoot, "agent");
+    if (fs.existsSync(runtimeDir)) {
+      for (const entry of fs.readdirSync(runtimeDir, { withFileTypes: true })) {
+        // WAL, shared memory, and reindex scratch belong to the existing SQLite owner.
+        if (!entry.name.startsWith("openclaw-agent.sqlite")) {
+          continue;
+        }
+        assert(entry.isFile(), `non-file baseline SQLite specimen: ${entry.name}`);
+        files.push({ relative: `agents/${agentId}/agent/${entry.name}`, kind: "sqlite-runtime" });
+      }
+    }
     const databaseRelative = `agents/${agentId}/agent/openclaw-agent.sqlite`;
     return {
       agentId,

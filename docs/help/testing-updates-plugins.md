@@ -193,7 +193,8 @@ opens databases read-only and never triggers migrations or publication. See
 
 The before snapshot also records the baseline's configured agent roster and
 agent-scoped legacy specimens, including session rows, transcript and trajectory
-files, trajectory pointers, and skill-prompt blobs. Before candidate probes or
+files, trajectory pointers, and skill-prompt blobs. Model catalogs and unrelated
+per-agent artifacts are outside this observer's session-migration scope. Before candidate probes or
 agent turns, each agent with existing SQLite or legacy session history must have
 a store at the candidate agent schema. The observer verifies imported session
 identities and transcript events, completed archive receipts and retained source

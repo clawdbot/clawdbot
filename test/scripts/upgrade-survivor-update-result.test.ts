@@ -257,7 +257,9 @@ function schemaFixture(
       encoding: "utf8",
       timeout: 10_000,
     });
-  const prepared = run("prepare", baselineVersion, tarball, stateDir, snapshotFile, configFile);
+  const prepare = () =>
+    run("prepare", baselineVersion, tarball, stateDir, snapshotFile, configFile);
+  const prepared = prepare();
   expect(prepared.status, prepared.stderr).toBe(0);
   function checkSchemaOutcome(
     exitCode = 0,
@@ -275,6 +277,7 @@ function schemaFixture(
   }
   return {
     prepared,
+    prepare,
     stateDir,
     check: checkSchemaOutcome,
     stateDatabase,
@@ -416,6 +419,41 @@ describe("published survivor schema outcome", () => {
       expect(result.stdout.trim()).toBe("success");
     },
   );
+
+  it("ignores model catalogs and unrelated agent files while retaining strict session classification", () => {
+    const lane = schemaFixture("2026.7.1-2", 1, null, (stateDir) => {
+      const agentDir = join(stateDir, "agents", "main", "agent");
+      mkdirSync(join(agentDir, "provider-cache"), { recursive: true });
+      writeFileSync(
+        join(agentDir, "models.json"),
+        JSON.stringify({ providers: { survivor: { models: [] } } }),
+      );
+      writeFileSync(join(agentDir, "provider-cache", "unrelated.txt"), "Not a migration specimen");
+    });
+    const snapshot = JSON.parse(readFileSync(lane.snapshotFile, "utf8"));
+    expect(snapshot.agents).toEqual([
+      {
+        agentId: "main",
+        databaseRelative: "agents/main/agent/openclaw-agent.sqlite",
+        requiresDatabase: false,
+        files: [],
+      },
+      {
+        agentId: "ops",
+        databaseRelative: "agents/ops/agent/openclaw-agent.sqlite",
+        requiresDatabase: false,
+        files: [],
+      },
+    ]);
+    const sessions = join(lane.stateDir, "agents", "main", "sessions");
+    mkdirSync(sessions, { recursive: true });
+    writeFileSync(join(sessions, "unknown.json"), "{}");
+    const result = lane.prepare();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "unclassified baseline agent specimen: agents/main/sessions/unknown.json",
+    );
+  });
 
   it.each(["main", "ops"])("requires the legacy %s store before candidate probes", (agentId) => {
     const lane = legacyAgentFixture(agentId);
