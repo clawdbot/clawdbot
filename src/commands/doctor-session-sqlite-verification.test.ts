@@ -75,7 +75,7 @@ describe("createRecoveryDestinationVerifier", () => {
     // mtime/ctime well past the baseline.  Only the SHM file (index 2) is exempt from
     // ctime/mtime fencing — read-only queries update SHM read marks. The WAL (index 1)
     // and rollback journal (index 3) are still fully fenced. (#140467)
-    const shmPath = resolveSqliteDatabaseFilePaths(sqlitePath)[2];
+    const shmPath = resolveSqliteDatabaseFilePaths(sqlitePath)[2]!;
     const future = new Date((Date.now() / 1000) * 1000 + 60_000);
     if (fs.existsSync(shmPath)) {
       fs.utimesSync(shmPath, future, future);
@@ -159,6 +159,12 @@ describe("createRecoveryDestinationVerifier", () => {
     // commit where SQLite recycles the existing WAL space). (#140467)
     const sameSize = Buffer.alloc(256, 0xcd);
     fs.writeFileSync(walPath, sameSize);
+
+    // Explicitly advance the mtime past the baseline so the test is deterministic across
+    // platforms — on some Linux filesystems a same-size rewrite may land within the same
+    // nanosecond tick as the baseline. A real same-size WAL commit changes the WAL mtime.
+    const walFuture = new Date((Date.now() / 1000) * 1000 + 60_000);
+    fs.utimesSync(walPath, walFuture, walFuture);
 
     // SHOULD throw — the WAL file (index 1) is fully fenced, so the ctime/mtime change
     // from the in-place content rewrite is detected even though size is unchanged.
