@@ -7,6 +7,7 @@ import type { z } from "zod";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import { isKernelOwnedChannelConfigKey } from "./channel-config-keys.js";
 import { FIELD_HELP } from "./schema.help.js";
+import { INHERITED_DEFAULT_PLACEHOLDERS } from "./schema.inherited-defaults.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import { applyDerivedTags } from "./schema.tags.js";
 import { applyConfigTierHints } from "./schema.tiers.js";
@@ -149,6 +150,7 @@ export function buildBaseHints(): ConfigUiHints {
     [FIELD_LABELS, "label"],
     [FIELD_HELP, "help"],
     [FIELD_PLACEHOLDERS, "placeholder"],
+    [INHERITED_DEFAULT_PLACEHOLDERS, "placeholder"],
   ] as const) {
     for (const [path, value] of Object.entries(metadata)) {
       if (!isPluginOwnedChannelHintPath(path)) {

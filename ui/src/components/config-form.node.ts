@@ -114,7 +114,11 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
       return renderFieldRow({
         label,
         help,
-        defaultDescription: renderSchemaDefaultDescription(schema, value),
+        defaultDescription: renderSchemaDefaultDescription(
+          schema,
+          value,
+          hintForPath(path, hints)?.placeholder,
+        ),
         tags,
         showLabel,
         control: renderSegmentedControl({
@@ -176,7 +180,11 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
       return renderFieldRow({
         label,
         help,
-        defaultDescription: renderSchemaDefaultDescription(schema, value),
+        defaultDescription: renderSchemaDefaultDescription(
+          schema,
+          value,
+          hintForPath(path, hints)?.placeholder,
+        ),
         tags,
         showLabel,
         control: renderSegmentedControl({

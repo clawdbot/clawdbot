@@ -310,9 +310,13 @@ export function renderCollectionDefaultDescription(
 export function renderSchemaDefaultDescription(
   schema: JsonSchema,
   value: unknown,
+  placeholder?: string,
 ): TemplateResult | typeof nothing {
   if (schema.default === undefined) {
-    return nothing;
+    // A hint placeholder names a runtime fallback the schema does not declare;
+    // show it while the key is unset so a segmented control with nothing
+    // selected still reads as "Default: loopback" rather than as no value.
+    return value === undefined && placeholder ? html`${placeholder}` : nothing;
   }
   return html`${t(value === undefined ? "configForm.usingDefault" : "configForm.defaultValue", {
     value: formatConfigValueText(schema.default),

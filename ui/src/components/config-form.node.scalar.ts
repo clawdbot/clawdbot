@@ -504,6 +504,13 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
   const helpId = showLabel && help ? configFieldId(path, "description") : undefined;
   const displayValue = value ?? "";
   const effectiveValue = value !== undefined ? value : schema.default;
+  // A hint placeholder names a runtime fallback the schema does not declare,
+  // so an empty input reads as "Default: 18789" rather than as nothing.
+  const placeholder =
+    hintForPath(path, hints)?.placeholder ??
+    (schema.default !== undefined
+      ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
+      : undefined);
   const constraints = numericInputConstraints(schema);
   const numericStep = typeof constraints.step === "number" ? constraints.step : 1;
   const controlIdentity = params.controlIdentity ?? params.sourceIdentity ?? value;
@@ -566,11 +573,7 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
       aria-label=${label}
       aria-describedby=${helpId ?? nothing}
       aria-invalid="false"
-      placeholder=${
-        schema.default !== undefined
-          ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
-          : nothing
-      }
+      placeholder=${placeholder ?? nothing}
       min=${constraints.min ?? nothing}
       max=${constraints.max ?? nothing}
       step=${constraints.step}

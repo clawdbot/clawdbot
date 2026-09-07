@@ -251,6 +251,37 @@ describe("config form scalar integrity", () => {
     expect(onPatch).toHaveBeenLastCalledWith(["retries"], 4);
   });
 
+  it("names an undeclared runtime fallback from the placeholder hint while unset", () => {
+    // Fields such as gateway.port have no schema default but a runtime
+    // fallback; the hint placeholder is the only place the form can learn it.
+    const container = document.createElement("div");
+    const onPatch = vi.fn();
+    const renderValue = (value: number | undefined) =>
+      render(
+        renderNumberInput({
+          schema: { type: "integer" },
+          value,
+          path: ["gateway", "port"],
+          hints: { "gateway.port": { placeholder: "Default: 18789" } },
+          unsupported: new Set(),
+          disabled: false,
+          onPatch,
+        }),
+        container,
+      );
+    renderValue(undefined);
+    const numberInput = expectElement(
+      container.querySelector<HTMLInputElement>("input[type='number']"),
+      "fallback number input",
+    );
+    expect(numberInput.value).toBe("");
+    expect(numberInput.placeholder).toBe("Default: 18789");
+    expect(container.textContent).not.toContain("Using default");
+
+    renderValue(9000);
+    expect(container.querySelector<HTMLInputElement>("input[type='number']")?.value).toBe("9000");
+  });
+
   it("shows the default description without a reset button on an overridden row", () => {
     const container = document.createElement("div");
     render(
