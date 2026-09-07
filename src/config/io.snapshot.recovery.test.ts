@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { acquireStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import {
@@ -131,10 +132,11 @@ describe("prepared config recovery", () => {
     },
   );
 
-  it.each(["config", "backup"] as const)(
+  it.each(["config", "backup", "lease"] as const)(
     "refuses %s changes while archiving the clobbered config",
     async (changedSource) => {
       const { root, configPath, original, env } = fixture();
+      const lease = changedSource === "lease" ? acquireStartupMigrationLease({ env }) : undefined;
       const changedPath = changedSource === "config" ? configPath : `${configPath}.bak`;
       const concurrentRaw = '{ "gateway": { "mode": "local", "port": 18721 } }\n';
       const io = createConfigIO({
@@ -150,7 +152,11 @@ describe("prepared config recovery", () => {
             writeFile: async (pathname, data, options) => {
               await fs.promises.writeFile(pathname, data, options);
               if (typeof pathname === "string" && pathname.startsWith(`${configPath}.clobbered.`)) {
-                await fs.promises.writeFile(changedPath, concurrentRaw);
+                if (lease) {
+                  lease.release();
+                } else {
+                  await fs.promises.writeFile(changedPath, concurrentRaw);
+                }
               }
             },
           },
@@ -158,10 +164,14 @@ describe("prepared config recovery", () => {
       });
       const plan = await prepare(io);
       expect(plan).not.toBeNull();
-      await expect(plan!.apply()).rejects.toThrow(
-        "config recovery source changed since preparation",
+      await expect(plan!.apply(lease?.heartbeat)).rejects.toThrow(
+        lease
+          ? "startup migration lease was lost"
+          : "config recovery source changed since preparation",
       );
-      expect(fs.readFileSync(changedPath, "utf8")).toBe(concurrentRaw);
+      if (!lease) {
+        expect(fs.readFileSync(changedPath, "utf8")).toBe(concurrentRaw);
+      }
       expect(fs.readFileSync(configPath, "utf8")).toBe(
         changedSource === "config" ? concurrentRaw : original,
       );

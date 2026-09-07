@@ -156,7 +156,7 @@ export type ReadConfigFileSnapshotWithPluginMetadataResult = {
 };
 
 export type PreparedConfigRecovery = ReadConfigFileSnapshotWithPluginMetadataResult & {
-  apply: () => Promise<void>;
+  apply: (beforeCommit?: () => void) => Promise<void>;
 };
 
 export type BestEffortConfigSnapshot = {

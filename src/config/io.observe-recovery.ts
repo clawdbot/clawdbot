@@ -328,15 +328,19 @@ type SuspiciousConfigRecoveryPlan = {
 /** Prepare the existing recovery without observing or writing the selected config. */
 export async function prepareSuspiciousConfigRead(params: ConfigReadRecoveryParams): Promise<{
   candidate: ConfigReadRecoveryResult;
-  apply: () => Promise<void>;
+  apply: (beforeCommit?: () => void) => Promise<void>;
 } | null> {
   const plan = await runConfigRecoveryAsync(planSuspiciousConfigRead(params));
   return (
     plan && {
       candidate: plan.candidate,
-      apply: async () => {
-        plan.assertUnchanged();
-        const result = await runConfigRecoveryAsync(plan.apply(plan.assertUnchanged));
+      apply: async (beforeCommit) => {
+        const assertAllowed = () => {
+          beforeCommit?.();
+          plan.assertUnchanged();
+        };
+        assertAllowed();
+        const result = await runConfigRecoveryAsync(plan.apply(assertAllowed));
         if (!result.restored) {
           throw result.error;
         }

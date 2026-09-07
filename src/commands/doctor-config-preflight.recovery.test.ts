@@ -88,3 +88,50 @@ it.each(["backup", "active config"] as const)(
     });
   },
 );
+
+it.each(["expired", "reassigned"] as const)(
+  "does not restore a backup after the migration lease is %s during admission",
+  async (loss) => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      const stateDir = path.join(home, ".openclaw");
+      const configPath = path.join(stateDir, "openclaw.json");
+      await fs.mkdir(stateDir, { recursive: true });
+      const original = '{"update":{"channel":"stable"}}\n';
+      await fs.writeFile(configPath, original);
+      await fs.writeFile(
+        `${configPath}.bak`,
+        JSON.stringify({ gateway: { mode: "local" }, plugins: { enabled: false } }),
+      );
+      openOpenClawStateDatabase({ path: path.join(stateDir, "state", "openclaw.sqlite") });
+      closeOpenClawStateDatabaseForTest();
+      let replacement: checkpoint.StartupMigrationLease | undefined;
+      vi.spyOn(checkpoint, "acquireStartupMigrationLeaseWithWait").mockImplementationOnce(
+        async (params) => {
+          const stale = checkpoint.acquireStartupMigrationLease({
+            ...params,
+            nowMs: Date.now() - checkpoint.STARTUP_MIGRATION_LEASE_TTL_MS - 1,
+          });
+          if (loss === "reassigned") {
+            replacement = checkpoint.acquireStartupMigrationLease(params);
+          }
+          return stale;
+        },
+      );
+      try {
+        const refusal = await runDoctorConfigPreflight({
+          migrateLegacyConfig: false,
+          requireStartupMigrationCheckpoint: true,
+        }).catch((error: unknown) => error);
+        expect(await fs.readFile(configPath, "utf8")).toBe(original);
+        expect((await fs.readdir(stateDir)).filter((name) => name.includes(".clobbered."))).toEqual(
+          [],
+        );
+        expect(refusal).toBeInstanceOf(Error);
+        expect(String(refusal)).toContain("startup migration lease was lost");
+        replacement?.heartbeat();
+      } finally {
+        replacement?.release();
+      }
+    });
+  },
+);

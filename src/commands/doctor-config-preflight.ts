@@ -218,7 +218,7 @@ export async function runDoctorConfigPreflight(
     }, 60_000);
     startupMigrationHeartbeat.unref?.();
     // Restore only the backup admitted under this lease, before any other repair.
-    await configSnapshotRead.recovery?.apply();
+    await configSnapshotRead.recovery?.apply(startupMigrationLease.heartbeat);
   };
   const noteStartupStateMigrationResult = (result: MigrationMessages) => {
     startupMigrationWarnings.push(...result.warnings);
