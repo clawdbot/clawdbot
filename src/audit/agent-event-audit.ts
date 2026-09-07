@@ -70,14 +70,14 @@ function auditSkillSelectionName(value: unknown): string | undefined {
   return name && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(name) ? name : undefined;
 }
 
-function auditSkillSelectionSource(value: unknown): "explicit_trigger" | "natural_prompt" | "none" {
+function auditSkillSelectionSource(value: unknown): "observed_runtime" | "none" {
   const label = normalizeOptionalLowercaseString(value)?.replace(/[^a-z0-9_-]/gu, "");
-  return label === "explicit_trigger" || label === "natural_prompt" ? label : "none";
+  return label === "observed_runtime" ? label : "none";
 }
 
-function auditSkillSelectionConfidence(value: unknown): "deterministic" | "heuristic" | "none" {
+function auditSkillSelectionConfidence(value: unknown): "observed" | "none" {
   const label = normalizeOptionalLowercaseString(value)?.replace(/[^a-z0-9_-]/gu, "");
-  return label === "deterministic" || label === "heuristic" ? label : "none";
+  return label === "observed" ? label : "none";
 }
 
 // Audit is projection-only: session/run correlation cannot establish identity.
@@ -130,23 +130,18 @@ function projectAgentEvent(event: AgentEventPayload): AgentAuditProjection | und
   const provenance = projectExplicitAttribution(event);
   if (event.stream === "skill_selection" && event.data?.kind === "skill_selection") {
     const selectedSkill = auditSkillSelectionName(event.data.selectedSkill);
-    const selectedOverlay = auditSkillSelectionName(event.data.selectedOverlay);
-    const selectedName = selectedSkill ?? selectedOverlay;
-    const selectionSource = selectedName
-      ? auditSkillSelectionSource(event.data.selectionSource) === "explicit_trigger"
-        ? "explicit_trigger"
-        : "natural_prompt"
+    const selectionSource = selectedSkill
+      ? auditSkillSelectionSource(event.data.selectionSource)
       : "none";
     const selectionConfidence = auditSkillSelectionConfidence(event.data.selectionConfidence);
-    const action: SkillSelectionAuditEventInput["action"] = selectedSkill
-      ? selectionSource === "explicit_trigger"
-        ? "skill.selection.explicit_trigger"
-        : "skill.selection.natural_prompt"
-      : selectedOverlay
-        ? selectionSource === "explicit_trigger"
-          ? "overlay.selection.explicit_trigger"
-          : "overlay.selection.natural_prompt"
-        : "skill.selection.none";
+    if (
+      !selectedSkill ||
+      selectionSource !== "observed_runtime" ||
+      selectionConfidence !== "observed"
+    ) {
+      return undefined;
+    }
+    const action: SkillSelectionAuditEventInput["action"] = "skill.selection.observed";
     const common = {
       sourceId: legacyAuditSourceId({
         runId,
@@ -164,36 +159,12 @@ function projectAgentEvent(event: AgentEventPayload): AgentAuditProjection | und
       ...(provenance.sessionId ? { sessionId: provenance.sessionId } : {}),
       runId,
     };
-    let input: SkillSelectionAuditEventInput;
-    if (selectedSkill) {
-      const skillAction =
-        selectionSource === "explicit_trigger"
-          ? "skill.selection.explicit_trigger"
-          : "skill.selection.natural_prompt";
-      input = {
-        ...common,
-        action: skillAction,
-        status: selectionConfidence === "none" ? "heuristic" : selectionConfidence,
-        toolName: selectedSkill,
-      };
-    } else if (selectedOverlay) {
-      const overlayAction =
-        selectionSource === "explicit_trigger"
-          ? "overlay.selection.explicit_trigger"
-          : "overlay.selection.natural_prompt";
-      input = {
-        ...common,
-        action: overlayAction,
-        status: selectionConfidence === "none" ? "heuristic" : selectionConfidence,
-        toolName: selectedOverlay,
-      };
-    } else {
-      input = {
-        ...common,
-        action: "skill.selection.none",
-        status: "none",
-      };
-    }
+    const input: SkillSelectionAuditEventInput = {
+      ...common,
+      action,
+      status: "observed",
+      toolName: selectedSkill,
+    };
     return {
       input,
     };
@@ -448,6 +419,10 @@ export function createAgentEventAuditRecorder(options?: {
         return;
       }
       const runInstance = `${event.lifecycleGeneration ?? "unknown"}\0${event.runId}`;
+      if (projection.input.kind === "skill_selection") {
+        writer.record(projection.input);
+        return;
+      }
       if (!projection.terminal) {
         const alreadyOpen = openRunInstances.has(runInstance);
         clearPending(runInstance);

@@ -12,9 +12,7 @@ type AuditEventStatus =
   | "cancelled"
   | "timed_out"
   | "blocked"
-  | "deterministic"
-  | "heuristic"
-  | "none"
+  | "observed"
   | "unknown";
 
 type AuditMessageDirection = "inbound" | "outbound";
@@ -110,18 +108,11 @@ export type ToolActionAuditEventInput = AuditEventInputBase &
     toolName: string;
   };
 
-type SkillSelectionAuditLifecycle =
-  | {
-      action: "skill.selection.explicit_trigger" | "skill.selection.natural_prompt";
-      status: "deterministic" | "heuristic";
-      errorCode?: never;
-    }
-  | {
-      action: "overlay.selection.explicit_trigger" | "overlay.selection.natural_prompt";
-      status: "deterministic" | "heuristic";
-      errorCode?: never;
-    }
-  | { action: "skill.selection.none"; status: "none"; errorCode?: never };
+type SkillSelectionAuditLifecycle = {
+  action: "skill.selection.observed";
+  status: "observed";
+  errorCode?: never;
+};
 
 export type SkillSelectionAuditEventInput = AuditEventInputBase &
   AgentAuditAttribution &
@@ -325,6 +316,7 @@ export type ToolActionAuditEventRecord = AgentAuditEventRecordBase & {
 
 export type SkillSelectionAuditEventRecord = AgentAuditEventRecordBase & {
   kind: "skill_selection";
+  toolName: string;
 } & SkillSelectionAuditLifecycle;
 
 type MessageAuditEventRecordBase = AuditEventRecordBase & {

@@ -12,6 +12,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { createAbortError } from "../infra/abort-signal.js";
+import { onAgentAuditEvent } from "../infra/agent-events.js";
 import {
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
@@ -1562,6 +1563,8 @@ describe("before_tool_call loop detection behavior", () => {
       loopDetection: { enabled: false },
     });
 
+    const auditEvents: unknown[] = [];
+    const stopAudit = onAgentAuditEvent((event) => auditEvents.push(event));
     await withSkillUsageDiagnosticEvents(async (emitted, privateData, flush) => {
       await tool.execute(
         "tool-call-skill-read",
@@ -1592,6 +1595,30 @@ describe("before_tool_call loop detection behavior", () => {
       expect(JSON.stringify(emitted)).not.toContain("SKILL.md");
       expect(JSON.stringify(emitted)).not.toContain(skillBaseDir);
       expect(privateData[0]?.skillUsage?.skillFile).toBe(skillFilePath);
+      expect(auditEvents).toEqual([
+        expect.objectContaining({
+          runId: "run-1",
+          stream: "skill_selection",
+          agentId: "main",
+          sessionKey: "session-key",
+          sessionId: "session-id",
+          data: {
+            kind: "skill_selection",
+            schemaVersion: 1,
+            agentId: "main",
+            sessionKey: "session-key",
+            sessionId: "session-id",
+            runId: "run-1",
+            selectedSkill: "demo-skill",
+            selectionSource: "observed_runtime",
+            selectionConfidence: "observed",
+            selectionRule: "tool_invocation",
+            activation: "read",
+            skillSource: "workspace",
+            redaction: "metadata_only",
+          },
+        }),
+      ]);
       expect(consumeRunSkillUsage("run-1")).toEqual([
         {
           name: "demo-skill",
@@ -1602,6 +1629,7 @@ describe("before_tool_call loop detection behavior", () => {
       ]);
       expect(consumeRunSkillUsage("run-1")).toEqual([]);
     });
+    stopAudit();
   });
 
   it("matches home-compacted skill instruction paths from prompts", async () => {

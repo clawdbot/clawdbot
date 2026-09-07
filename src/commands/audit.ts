@@ -225,7 +225,7 @@ function toLegacyAuditListParams(params: AuditActivityListParams): AuditListPara
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.runId ? { runId: params.runId } : {}),
     ...(params.kind === "agent_run" || params.kind === "tool_action" ? { kind: params.kind } : {}),
-    ...(params.status ? { status: params.status } : {}),
+    ...(params.status && params.status !== "observed" ? { status: params.status } : {}),
     ...(params.after !== undefined ? { after: params.after } : {}),
     ...(params.before !== undefined ? { before: params.before } : {}),
     ...(params.limit !== undefined ? { limit: params.limit } : {}),

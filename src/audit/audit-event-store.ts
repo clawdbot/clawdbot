@@ -60,13 +60,7 @@ function getAuditKysely(db: DatabaseSync) {
 
 const RUN_ACTIONS = ["agent.run.started", "agent.run.finished"] as const;
 const TOOL_ACTIONS = ["tool.action.started", "tool.action.finished"] as const;
-const SKILL_SELECTION_ACTIONS = [
-  "skill.selection.explicit_trigger",
-  "skill.selection.natural_prompt",
-  "skill.selection.none",
-  "overlay.selection.explicit_trigger",
-  "overlay.selection.natural_prompt",
-] as const;
+const SKILL_SELECTION_ACTIONS = ["skill.selection.observed"] as const;
 const CONVERSATION_KINDS = ["direct", "group", "channel", "unknown"] as const;
 const DELIVERY_KINDS = ["text", "media", "other"] as const;
 const FAILURE_STAGES = ["platform_send", "queue", "unknown"] as const;
@@ -285,21 +279,16 @@ function parseSkillSelectionRow(row: AuditEventRow): SkillSelectionAuditEventRec
   requireNull(row, "tool_call_id");
   requireNull(row, "error_code");
   const toolName = optionalText(row, row.tool_name, "toolName");
-  const common = {
-    ...parseAgentRecordFields(row),
-    kind: "skill_selection" as const,
-    ...(toolName ? { toolName } : {}),
-  };
-  const action = requiredEnum(row, row.action, "action", SKILL_SELECTION_ACTIONS);
-  if (action === "skill.selection.none") {
-    requireNull(row, "tool_name");
-    requiredEnum(row, row.status, "status", ["none"]);
-    return { ...common, action, status: "none" };
-  }
   if (!toolName) {
     corruptAuditRow(row, "missing selected skill name");
   }
-  const status = requiredEnum(row, row.status, "status", ["deterministic", "heuristic"]);
+  const common = {
+    ...parseAgentRecordFields(row),
+    kind: "skill_selection" as const,
+    toolName,
+  };
+  const action = requiredEnum(row, row.action, "action", SKILL_SELECTION_ACTIONS);
+  const status = requiredEnum(row, row.status, "status", ["observed"]);
   return { ...common, action, status };
 }
 

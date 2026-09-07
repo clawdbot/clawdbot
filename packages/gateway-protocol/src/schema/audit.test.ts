@@ -52,7 +52,7 @@ describe("legacy audit protocol schemas", () => {
     expect(validate.Check({ ...event, result: "secret" })).toBe(false);
   });
 
-  it("accepts metadata-only skill selection records", () => {
+  it("keeps skill selection out of the legacy audit.list contract", () => {
     const validate = Compile(AuditEventSchema);
     expect(
       validate.Check({
@@ -61,20 +61,16 @@ describe("legacy audit protocol schemas", () => {
         sourceSequence: 2,
         occurredAt: 3,
         kind: "skill_selection",
-        action: "skill.selection.natural_prompt",
-        status: "deterministic",
+        action: "skill.selection.observed",
+        status: "observed",
         actor: { type: "agent", id: "main" },
         agentId: "main",
         sessionKey: "agent:main:discord:channel:c1",
         runId: "run-1",
         toolName: "runtime-skill-loading-diagnostics",
-        selectedSkill: "runtime-skill-loading-diagnostics",
-        selectionSource: "natural_prompt",
-        selectionConfidence: "deterministic",
-        selectionRule: "deterministic_guardrail",
         redaction: "metadata_only",
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 });
 
@@ -124,7 +120,7 @@ describe("audit activity protocol schemas", () => {
     expect(validate.Check({ ...event, text: "secret message" })).toBe(false);
   });
 
-  it("discriminates run, tool, inbound-message, and outbound-message records", () => {
+  it("discriminates run, tool, skill-selection, inbound-message, and outbound-message records", () => {
     const validate = Compile(AuditActivityEventV1Schema);
     const common = {
       schemaVersion: 1,
@@ -151,6 +147,14 @@ describe("audit activity protocol schemas", () => {
       action: "tool.action.finished",
       toolName: "exec",
     };
+    const skillSelection = {
+      ...common,
+      eventType: "skill_selection",
+      kind: "skill_selection",
+      action: "skill.selection.observed",
+      status: "observed",
+      selectedSkill: "debug-toolkit",
+    };
     const outboundMessage = {
       ...common,
       eventType: "outbound_message",
@@ -164,6 +168,7 @@ describe("audit activity protocol schemas", () => {
 
     expect(validate.Check(agentRun)).toBe(true);
     expect(validate.Check(toolAction)).toBe(true);
+    expect(validate.Check(skillSelection)).toBe(true);
     expect(validate.Check(outboundMessage)).toBe(true);
     expect(
       validate.Check({

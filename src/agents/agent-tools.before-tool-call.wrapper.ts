@@ -1,3 +1,4 @@
+import { emitAgentAuditEvent } from "../infra/agent-events.js";
 /**
  * Wrapped before_tool_call execution boundary.
  * Owns tool preparation/finalization, adjusted-param replay state, terminal
@@ -14,6 +15,7 @@ import {
 } from "../infra/diagnostic-trace-context.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import { buildRuntimeSkillSelectionMarker } from "../skills/runtime-skill-selection.js";
 import { recordRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { copyBeforeToolCallWrapperMetadata } from "./agent-tool-metadata.js";
 import {
@@ -590,6 +592,24 @@ export function wrapToolWithBeforeToolCallHook(
             activation: skillMatch.activation,
             ...(skillMatch.skillFile ? { skillFile: skillMatch.skillFile } : {}),
           });
+          if (ctx?.runId) {
+            emitAgentAuditEvent({
+              runId: ctx.runId,
+              stream: "skill_selection",
+              agentId: ctx.agentId,
+              sessionKey: ctx.sessionKey,
+              sessionId: ctx.sessionId,
+              data: buildRuntimeSkillSelectionMarker({
+                agentId: ctx.agentId,
+                sessionKey: ctx.sessionKey,
+                sessionId: ctx.sessionId,
+                runId: ctx.runId,
+                skillName: skillMatch.skillName,
+                skillSource: skillMatch.skillSource,
+                activation: skillMatch.activation,
+              }),
+            });
+          }
         }
         if (hookOptions.emitDiagnostics) {
           if (skillMatch) {

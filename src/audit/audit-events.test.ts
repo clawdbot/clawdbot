@@ -343,16 +343,16 @@ describe("agent activity audit projection", () => {
     });
   });
 
-  it("projects deterministic skill-selection metadata without prompt content", () => {
+  it("projects observed skill-selection metadata without prompt content", () => {
     const projected = projectAgentEventToAudit(
       agentEvent({
         stream: "skill_selection",
         data: {
           kind: "skill_selection",
           selectedSkill: "runtime-skill-loading-diagnostics",
-          selectionSource: "natural_prompt",
-          selectionConfidence: "deterministic",
-          selectionRule: "deterministic_guardrail",
+          selectionSource: "observed_runtime",
+          selectionConfidence: "observed",
+          selectionRule: "tool_invocation",
           redaction: "metadata_only",
         },
       }),
@@ -360,8 +360,8 @@ describe("agent activity audit projection", () => {
 
     expect(projected).toMatchObject({
       kind: "skill_selection",
-      action: "skill.selection.natural_prompt",
-      status: "deterministic",
+      action: "skill.selection.observed",
+      status: "observed",
       toolName: "runtime-skill-loading-diagnostics",
       agentId: "coder",
       sessionKey: "agent:coder:main",
@@ -369,7 +369,7 @@ describe("agent activity audit projection", () => {
     expect(JSON.stringify(projected)).not.toContain("PRIVATE_PROMPT_CONTENT");
   });
 
-  it("projects negative-control skill selection as none", () => {
+  it("drops unobserved skill selection claims", () => {
     const projected = projectAgentEventToAudit(
       agentEvent({
         stream: "skill_selection",
@@ -382,12 +382,7 @@ describe("agent activity audit projection", () => {
       }),
     );
 
-    expect(projected).toMatchObject({
-      kind: "skill_selection",
-      action: "skill.selection.none",
-      status: "none",
-    });
-    expect(projected).not.toHaveProperty("toolName");
+    expect(projected).toBeUndefined();
   });
 
   it("does not share reused run id provenance across recorder instances", () => {
@@ -765,6 +760,38 @@ describe("agent activity audit projection", () => {
       { action: "agent.run.started", status: "started" },
       { action: "agent.run.finished", status: "failed" },
     ]);
+  });
+
+  it("records observed skill use between lifecycle start and terminal events", async () => {
+    const inputs: AuditEventInput[] = [];
+    const writer = captureAuditWriter(inputs);
+    const recorder = createAgentEventAuditRecorder({ writer, terminalSettleMs: 60_000 });
+    const lifecycleGeneration = "gateway-skill-use";
+
+    recorder.record(agentEvent({ lifecycleGeneration, seq: 1 }));
+    recorder.record(
+      agentEvent({
+        lifecycleGeneration,
+        seq: 2,
+        stream: "skill_selection",
+        data: {
+          kind: "skill_selection",
+          selectedSkill: "debug-toolkit",
+          selectionSource: "observed_runtime",
+          selectionConfidence: "observed",
+          selectionRule: "tool_invocation",
+          redaction: "metadata_only",
+        },
+      }),
+    );
+    recorder.record(agentEvent({ lifecycleGeneration, seq: 3, data: { phase: "end" } }));
+
+    expect(inputs.map(({ action, status }) => ({ action, status }))).toEqual([
+      { action: "agent.run.started", status: "started" },
+      { action: "skill.selection.observed", status: "observed" },
+      { action: "agent.run.finished", status: "succeeded" },
+    ]);
+    await recorder.stop();
   });
 
   it("keeps one start when a retry cancels a pending terminal", async () => {
