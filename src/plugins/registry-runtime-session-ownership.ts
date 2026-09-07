@@ -462,6 +462,16 @@ export function createPluginSessionOwnership(state: PluginRegistryState, pluginI
       sessionKeys: [target?.sessionKey ?? params.sessionKey],
       storePath: ownershipStorePath,
     });
+    // The scan above only observes the key-derived scoped store, so a direct
+    // caller-supplied sessionId living in another agent/store passes silently.
+    // Fail closed when the key already resolves to a persisted entry whose
+    // identity disagrees (see #128327). The target path enforces its own exact
+    // identity above, and fresh keys without an entry still create normally.
+    if (!target && directSessionId && entry && entry.sessionId !== directSessionId) {
+      throw new Error(
+        `Plugin "${pluginId}" may execute session "${sessionKey}" only with its exact persisted identity.`,
+      );
+    }
     // Reuse the authorized snapshot, but never manufacture a native pin or replace
     // a turn-local request (including auto). Detached and raw-model runs own their selection.
     if (

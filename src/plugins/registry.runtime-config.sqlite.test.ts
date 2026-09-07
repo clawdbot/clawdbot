@@ -200,4 +200,64 @@ describe("plugin registry SQLite session ownership", () => {
       }
     });
   });
+
+  it("rejects a plugin-supplied sessionId that disagrees with its key's persisted identity", async () => {
+    await withTempHome(async (home) => {
+      const ownKey = "agent:researcher:dashboard:identity-mismatch-key";
+      const ownSessionId = "own-persisted-session";
+      // Victim lives in a different agent's per-agent store, so the caller's
+      // key-scoped ID scan cannot observe it.
+      const foreignLockedKey = "agent:main:dashboard:identity-mismatch-locked-owner";
+      const foreignSessionId = "foreign-locked-session";
+      try {
+        await replaceSessionEntry(
+          { agentId: "researcher", sessionKey: ownKey },
+          { sessionId: ownSessionId, updatedAt: 1 },
+        );
+        await replaceSessionEntry(
+          { agentId: "main", sessionKey: foreignLockedKey },
+          {
+            sessionId: foreignSessionId,
+            updatedAt: 2,
+            agentHarnessId: "test-harness",
+            modelSelectionLocked: true,
+          },
+        );
+
+        const runtime = createPluginRuntime();
+        const runEmbeddedAgent = vi.fn(async () => ({
+          ok: true,
+        })) as unknown as PluginRuntime["agent"]["runEmbeddedAgent"];
+        Object.defineProperty(runtime.agent, "runEmbeddedAgent", {
+          configurable: true,
+          value: runEmbeddedAgent,
+        });
+        const pluginRegistry = createTestRegistry(runtime);
+        const callerRecord = createPluginRecord({
+          id: "extractor-plugin",
+          source: "/plugins/extractor-plugin/index.js",
+          origin: "bundled",
+          enabled: true,
+          configSchema: false,
+        });
+        const callerApi = pluginRegistry.createApi(callerRecord, {
+          config: {} as OpenClawConfig,
+        });
+
+        await expect(
+          callerApi.runtime.agent.runEmbeddedAgent({
+            sessionId: foreignSessionId,
+            sessionKey: ownKey,
+            workspaceDir: path.join(home, "workspace"),
+            prompt: "continue",
+            timeoutMs: 1,
+            runId: "run-mismatch",
+          } as Parameters<PluginRuntime["agent"]["runEmbeddedAgent"]>[0]),
+        ).rejects.toThrow("only with its exact persisted identity");
+        expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      } finally {
+        closeOpenClawAgentDatabasesForTest();
+      }
+    });
+  });
 });
