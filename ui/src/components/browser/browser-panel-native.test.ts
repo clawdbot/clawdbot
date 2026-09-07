@@ -304,9 +304,9 @@ describe("native Browser panel ownership", () => {
   });
 
   it("builds panels and opens Mac tabs without crypto.randomUUID (insecure origins)", async () => {
-    const secureCrypto = globalThis.crypto;
     vi.stubGlobal("crypto", {
-      getRandomValues: (array: Uint8Array) => secureCrypto.getRandomValues(array),
+      // Insecure origins still expose getRandomValues; randomUUID is absent.
+      getRandomValues: (array: Uint8Array) => array.fill(0x5a),
     });
     const native = fakeNativeBrowser();
     const { controller } = controllerFixture();
