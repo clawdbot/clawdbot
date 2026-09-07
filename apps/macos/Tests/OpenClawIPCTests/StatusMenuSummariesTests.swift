@@ -211,13 +211,12 @@ private final class UsageGatewayFixture {
                 guard let frame = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let method = frame["method"] as? String else { return }
                 let requestParams = frame["params"] as? [String: Any]
-                requests.withValue {
-                    $0.append(Request(
-                        owner: owner,
-                        method: method,
-                        dateMode: requestParams?["mode"] as? String,
-                        timeZone: requestParams?["timeZone"] as? String))
-                }
+                let request = Request(
+                    owner: owner,
+                    method: method,
+                    dateMode: requestParams?["mode"] as? String,
+                    timeZone: requestParams?["timeZone"] as? String)
+                requests.withValue { $0.append(request) }
                 let payload: String
                 switch method {
                 case "usage.status":
