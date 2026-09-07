@@ -105,7 +105,7 @@ async function readSystemdManagerCommand(
   const query = async (args: string[], signatures: string[]): Promise<unknown[] | null> => {
     const result = await execBusctlUser(
       env,
-      ["--json=short", ...args],
+      ["--json=short", ...(opts?.requireLoaded ? ["--auto-start=no"] : []), ...args],
       Math.max(1, Math.floor((deadlineAt - performance.now()) / remainingCalls--)),
     );
     if (result.code !== 0) {

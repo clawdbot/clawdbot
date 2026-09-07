@@ -37,6 +37,11 @@ export async function execSystemctl(
   return await execSystemdCommand("systemctl", args, env, timeoutMs);
 }
 
+/** System-manager reads never inherit user-bus routing. */
+export async function execBusctlSystem(args: string[], timeoutMs?: number): Promise<ExecResult> {
+  return await execSystemdCommand("busctl", ["--system", ...args], undefined, timeoutMs);
+}
+
 export function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
   // Unit status can be in stdout while stderr contains a launcher diagnostic.
   return `${result.stderr} ${result.stdout}`.trim();

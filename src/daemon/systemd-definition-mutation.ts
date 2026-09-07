@@ -82,7 +82,12 @@ async function readStableFile(
   }
 }
 
-async function inspect(env: GatewayServiceEnv, environment: GatewayServiceEnv, timeoutMs?: number) {
+async function inspect(
+  env: GatewayServiceEnv,
+  environment: GatewayServiceEnv,
+  timeoutMs?: number,
+  requireLoaded = false,
+) {
   const { unit, generated } = resolveMutationTargets(env, environment);
   const snapshots = new Map<string, Snapshot>();
   const fingerprint = new Map<string, string>();
@@ -100,6 +105,7 @@ async function inspect(env: GatewayServiceEnv, environment: GatewayServiceEnv, t
     const command = await readSystemdServiceExecStart(env, {
       requireEffective: true,
       timeoutMs,
+      ...(requireLoaded ? { requireLoaded: true } : {}),
     });
     sourcePath = command?.sourcePath;
     const targets = new Set([unit, generated, `${unit}.bak`]);
@@ -177,17 +183,34 @@ async function inspect(env: GatewayServiceEnv, environment: GatewayServiceEnv, t
 
 export async function readSystemdDefinitionMutationCapability(
   env: GatewayServiceEnv,
-  options?: { environment?: GatewayServiceEnv; timeoutMs?: number },
+  options?: { environment?: GatewayServiceEnv; timeoutMs?: number; requireLoaded?: boolean },
 ): Promise<ServiceDefinitionMutationCapability> {
   const selected = path.basename(resolveSystemdUnitPath(env));
   const names =
     selected === "openclaw-gateway.service" ? [selected, "openclaw.service"] : [selected];
-  const deadlineAt = options?.timeoutMs ? performance.now() + options.timeoutMs : undefined;
+  const budget =
+    options?.timeoutMs && Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+      ? options.timeoutMs
+      : options?.requireLoaded
+        ? 5000
+        : undefined;
+  const deadlineAt = budget === undefined ? undefined : performance.now() + budget;
+  const remaining = () => {
+    if (deadlineAt === undefined) {
+      return undefined;
+    }
+    const value = deadlineAt - performance.now();
+    if (value <= 0) {
+      throw new Error("Definition inspection deadline expired.");
+    }
+    return value;
+  };
   for (const name of names) {
     try {
       await assertNoSystemSystemdOwnership(
         name,
-        deadlineAt === undefined ? undefined : Math.max(1, deadlineAt - performance.now()),
+        remaining(),
+        ...(options?.requireLoaded ? [{ requireLoaded: true }] : []),
       );
     } catch (error) {
       const owned =
@@ -197,7 +220,12 @@ export async function readSystemdDefinitionMutationCapability(
         : { kind: "unknown", reason: "system-ownership-unverified" };
     }
   }
-  return (await inspect(env, options?.environment ?? env, options?.timeoutMs)).capability;
+  try {
+    return (await inspect(env, options?.environment ?? env, remaining(), options?.requireLoaded))
+      .capability;
+  } catch {
+    return { kind: "unknown", reason: "inspection-failed" };
+  }
 }
 
 export async function withSystemdDefinitionMutation<T>(

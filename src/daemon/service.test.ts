@@ -186,10 +186,13 @@ describe("resolveGatewayService", () => {
 });
 
 describe("readGatewayServiceState", () => {
-  it("passes update loaded-only admission to the command and runtime adapters", async () => {
+  it("passes update loaded-only admission to every native inspection adapter", async () => {
     const readCommand = vi.fn(async () => null);
     const readRuntime = vi.fn(async () => ({ status: "stopped" }));
-    const service = createService({ readCommand, readRuntime });
+    const readDefinitionMutationCapability = vi.fn<
+      NonNullable<GatewayService["readDefinitionMutationCapability"]>
+    >(async () => ({ kind: "writable" }));
+    const service = createService({ readCommand, readRuntime, readDefinitionMutationCapability });
     await readGatewayServiceState(service, {
       requireEffective: true,
       requireLoadedCommand: true,
@@ -201,6 +204,12 @@ describe("readGatewayServiceState", () => {
       timeoutMs: 100,
     });
     expect(readRuntime).toHaveBeenCalledWith(expect.anything(), {
+      requireLoaded: true,
+      timeoutMs: 100,
+    });
+    expect(readDefinitionMutationCapability).toHaveBeenCalledWith({
+      env: expect.anything(),
+      environment: expect.anything(),
       requireLoaded: true,
       timeoutMs: 100,
     });
