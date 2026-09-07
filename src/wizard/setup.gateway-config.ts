@@ -254,7 +254,8 @@ export async function configureGatewayForSetup(
     const needsPasswordRef =
       opts.secretInputMode === "ref" &&
       !existingPasswordRef &&
-      quickstartGateway.password !== opts.baseConfig.gateway?.auth?.password;
+      (flow === "advanced" ||
+        quickstartGateway.password !== opts.baseConfig.gateway?.auth?.password);
     let password: SecretInput | undefined = !needsPasswordRef
       ? quickstartGateway.password
       : (existingPasswordRef ?? undefined);

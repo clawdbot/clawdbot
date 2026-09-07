@@ -356,41 +356,49 @@ describe("configureGatewayForSetup", () => {
     ]);
   });
 
-  it("honors secretInputMode=ref for gateway password prompts", async () => {
-    const previous = process.env.OPENCLAW_GATEWAY_PASSWORD;
-    process.env.OPENCLAW_GATEWAY_PASSWORD = "gateway-secret"; // pragma: allowlist secret
-    try {
-      const prompter = createPrompter({
-        selectQueue: ["loopback", "off", "env"],
-        textQueue: ["18789", "OPENCLAW_GATEWAY_PASSWORD"],
-      });
-      const runtime = createRuntime();
+  it.each([false, true])(
+    "honors secretInputMode=ref for gateway password prompts (existing: %s)",
+    async (existing) => {
+      const previous = process.env.OPENCLAW_GATEWAY_PASSWORD;
+      process.env.OPENCLAW_GATEWAY_PASSWORD = "gateway-secret"; // pragma: allowlist secret
+      try {
+        const prompter = createPrompter({
+          selectQueue: ["loopback", "off", "env"],
+          textQueue: ["18789", "OPENCLAW_GATEWAY_PASSWORD"],
+        });
+        const runtime = createRuntime();
 
-      const result = await configureGatewayForSetup({
-        flow: "advanced",
-        baseConfig: {},
-        nextConfig: {},
-        localPort: 18789,
-        quickstartGateway: createQuickstartGateway("password"),
-        secretInputMode: "ref", // pragma: allowlist secret
-        prompter,
-        runtime,
-      });
+        const baseConfig = existing
+          ? { gateway: { auth: { mode: "password" as const, password: "gateway-secret" } } }
+          : {};
+        const result = await configureGatewayForSetup({
+          flow: "advanced",
+          baseConfig,
+          nextConfig: baseConfig,
+          localPort: 18789,
+          quickstartGateway: existing
+            ? resolveQuickstartGatewayDefaults(baseConfig)
+            : createQuickstartGateway("password"),
+          secretInputMode: "ref", // pragma: allowlist secret
+          prompter,
+          runtime,
+        });
 
-      expect(result.nextConfig.gateway?.auth?.mode).toBe("password");
-      expect(result.nextConfig.gateway?.auth?.password).toEqual({
-        source: "env",
-        provider: "default",
-        id: "OPENCLAW_GATEWAY_PASSWORD",
-      });
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-      } else {
-        process.env.OPENCLAW_GATEWAY_PASSWORD = previous;
+        expect(result.nextConfig.gateway?.auth?.mode).toBe("password");
+        expect(result.nextConfig.gateway?.auth?.password).toEqual({
+          source: "env",
+          provider: "default",
+          id: "OPENCLAW_GATEWAY_PASSWORD",
+        });
+      } finally {
+        if (previous === undefined) {
+          delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+        } else {
+          process.env.OPENCLAW_GATEWAY_PASSWORD = previous;
+        }
       }
-    }
-  });
+    },
+  );
 
   it("routes a seeded quickstart password through the configured SecretRef provider", async () => {
     const password = "gateway-password-from-exec";
