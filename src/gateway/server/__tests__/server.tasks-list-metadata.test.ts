@@ -1,11 +1,11 @@
 import { afterAll, expect, test } from "vitest";
-import type { TasksListResult } from "../../packages/gateway-protocol/src/index.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { listTaskRecordsUnsorted } from "../tasks/runtime-internal.js";
-import { configureTaskRegistryRuntime } from "../tasks/task-registry.store.js";
-import type { TaskRecord } from "../tasks/task-registry.types.js";
-import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
-import { installGatewayTestHooks } from "./server.auth.test-helpers.js";
+import type { TasksListResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { listTaskRecordsUnsorted } from "../../../tasks/runtime-internal.js";
+import { configureTaskRegistryRuntime } from "../../../tasks/task-registry.store.js";
+import type { TaskRecord } from "../../../tasks/task-registry.types.js";
+import { resetTaskRegistryForTests } from "../../../tasks/task-runtime.test-helpers.js";
+import { installGatewayTestHooks } from "../../server.auth.test-helpers.js";
 import {
   createTaskSnapshot,
   expectedTaskIds,
@@ -15,7 +15,7 @@ import {
   sendRpc,
   TASK_COUNT,
   withAuthenticatedTaskGateway,
-} from "./server.tasks-list.test-helpers.js";
+} from "../../server.tasks-list.test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
