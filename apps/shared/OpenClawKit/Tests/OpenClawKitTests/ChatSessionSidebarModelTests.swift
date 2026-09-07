@@ -553,7 +553,7 @@ struct ChatSessionSidebarModelTests {
         #expect(nodes.filter { !$0.children.isEmpty }.isEmpty)
     }
 
-    @Test func `main aliases cannot archive while ordinary sessions can`() {
+    @Test func `archive eligibility requires a non-main durable identity`() {
         #expect(!ChatSessionSidebarModel.canArchiveSession(
             self.entry(key: "main"),
             mainSessionKey: "agent:main:main"))
@@ -572,11 +572,21 @@ struct ChatSessionSidebarModelTests {
         #expect(!ChatSessionSidebarModel.canArchiveSession(
             self.entry(key: "agent:main:blank-id", sessionId: "  "),
             mainSessionKey: "agent:main:main"))
-        #expect(!ChatSessionSidebarModel.canArchiveSession(
-            self.entry(key: "agent:main:running", status: "running"),
+    }
+
+    @Test func `active sessions remain archivable for gateway drain`() {
+        #expect(ChatSessionSidebarModel.canArchiveSession(
+            self.entry(
+                key: "agent:main:running",
+                sessionId: "session-running",
+                status: "running",
+                hasActiveRun: true),
             mainSessionKey: "agent:main:main"))
-        #expect(!ChatSessionSidebarModel.canArchiveSession(
-            self.entry(key: "agent:main:active", hasActiveSubagentRun: true),
+        #expect(ChatSessionSidebarModel.canArchiveSession(
+            self.entry(
+                key: "agent:main:active",
+                sessionId: "session-active-subagent",
+                hasActiveSubagentRun: true),
             mainSessionKey: "agent:main:main"))
     }
 

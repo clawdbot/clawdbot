@@ -497,12 +497,9 @@ public enum ChatSessionSidebarModel {
         _ session: OpenClawChatSessionEntry,
         mainSessionKey: String) -> Bool
     {
-        let status = session.status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return self.normalized(session.sessionId) != nil &&
-            self.canDeleteSession(key: session.key, mainSessionKey: mainSessionKey) &&
-            session.hasActiveRun != true &&
-            session.hasActiveSubagentRun != true &&
-            status != "running"
+        // The Gateway drains active work before archive commit; keep only client-side identity guards.
+        self.normalized(session.sessionId) != nil &&
+            self.canDeleteSession(key: session.key, mainSessionKey: mainSessionKey)
     }
 
     public static func isSessionInActiveAgentScope(
