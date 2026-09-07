@@ -47,7 +47,7 @@ type GatewayControlOwner = {
   }) => Promise<void>;
   connId: string;
   control: RealtimeVoiceGatewayControl & Required<Pick<RealtimeVoiceGatewayControl, "bindControl">>;
-  runAgentConsult: RealtimeVoiceAgentConsultRunner;
+  runAgentConsult: RealtimeVoiceAgentConsultRunner & TalkAgentConsultLifecycleMethods;
   sessionTarget: PreparedTalkSessionTarget;
   voiceSessionId: string;
 };
@@ -56,13 +56,17 @@ type GatewayControlCommands = Parameters<
   NonNullable<RealtimeVoiceGatewayControl["bindControl"]>
 >[0];
 
+type TalkAgentConsultLifecycleMethods = {
+  claimAppend?: () => boolean;
+  claimFailureAppend?: () => boolean;
+  steer?: RealtimeVoiceAgentConsultRunner;
+};
+
 type LifecycleBoundTalkAgentConsult = ((
   args: unknown,
   signal: AbortSignal,
-) => Promise<{ text: string }>) & {
-  claimAppend?: () => boolean;
-  steer?: RealtimeVoiceAgentConsultRunner;
-};
+) => Promise<{ text: string }>) &
+  TalkAgentConsultLifecycleMethods;
 
 const owners = new Map<string, GatewayControlOwner>();
 const pendingOwners = new Set<GatewayControlOwner>();
@@ -237,6 +241,7 @@ export function createTalkClientGatewayControlOwner(params: {
     "broadcastToConnIds" | "logGateway" | "chatAbortControllers"
   >;
   assertConnectionOpen?: () => void;
+  runToolAgentConsult: (args: unknown, signal: AbortSignal) => Promise<{ text: string }>;
   runAgentConsult: LifecycleBoundTalkAgentConsult;
   appendTranscript: (entry: {
     entryId: string;
@@ -294,7 +299,11 @@ export function createTalkClientGatewayControlOwner(params: {
       throw new Error("Realtime voice session is not active");
     }
   };
-  const admitConsult = async (args: unknown, consultSignal: AbortSignal) => {
+  const admitConsult = async (
+    runner: (args: unknown, signal: AbortSignal) => Promise<{ text: string }>,
+    args: unknown,
+    consultSignal: AbortSignal,
+  ) => {
     assertActive();
     consultSignal.throwIfAborted();
     await params.flushTranscript();
@@ -302,7 +311,7 @@ export function createTalkClientGatewayControlOwner(params: {
     // would let flush-completion teardown close the owner before the run starts.
     assertActive();
     consultSignal.throwIfAborted();
-    return params.runAgentConsult(args, consultSignal);
+    return runner(args, consultSignal);
   };
   const bindControl = (nextCommands: GatewayControlCommands) => {
     owner.assertOpen();
@@ -365,7 +374,7 @@ export function createTalkClientGatewayControlOwner(params: {
     controller: AbortController,
   ): Promise<void> => {
     try {
-      const result = await admitConsult(event.args, controller.signal);
+      const result = await admitConsult(params.runToolAgentConsult, event.args, controller.signal);
       if (signal.aborted) {
         return;
       }
@@ -413,7 +422,7 @@ export function createTalkClientGatewayControlOwner(params: {
       // leaves accepted provider work under its own cancellation owner.
       consultControllers.set(consultId, { controller, closeDisposition: "detach" });
       try {
-        return await admitConsult({ question: prompt }, delegatedSignal);
+        return await admitConsult(params.runAgentConsult, { question: prompt }, delegatedSignal);
       } finally {
         consultControllers.delete(consultId);
       }
@@ -427,6 +436,16 @@ export function createTalkClientGatewayControlOwner(params: {
           current = false;
         }
         const claimed = params.runAgentConsult.claimAppend?.() === true;
+        return current && claimed;
+      },
+      claimFailureAppend: () => {
+        let current = true;
+        try {
+          assertActive();
+        } catch {
+          current = false;
+        }
+        const claimed = params.runAgentConsult.claimFailureAppend?.() === true;
         return current && claimed;
       },
       steer: params.runAgentConsult.steer

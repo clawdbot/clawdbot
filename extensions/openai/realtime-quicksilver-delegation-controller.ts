@@ -42,6 +42,7 @@ interface LifecycleBoundAgentConsultRunner {
     ...args: Parameters<RealtimeVoiceAgentConsultRunner>
   ): ReturnType<RealtimeVoiceAgentConsultRunner>;
   claimAppend?: () => boolean;
+  claimFailureAppend?: () => boolean;
   steer?: RealtimeVoiceAgentConsultRunner;
 }
 
@@ -363,6 +364,7 @@ export class OpenAIQuicksilverDelegationController {
 
   private async runDelegation(delegation: PendingDelegation, signal: AbortSignal): Promise<void> {
     let text: string;
+    let failed = false;
     const runner = this.options.runAgentConsult;
     try {
       // Host-classified sessions disable vendor filler. Receipt is launch-only, not run admission.
@@ -393,6 +395,7 @@ export class OpenAIQuicksilverDelegationController {
       this.options.logger.warn(
         `OpenAI GPT-Live delegation consult failed: ${truncateUtf16Safe(reason, 180) || "unknown error"}`,
       );
+      failed = true;
       text = CONSULT_FAILURE_TEXT;
     }
     while (this.steeringPromise) {
@@ -402,11 +405,18 @@ export class OpenAIQuicksilverDelegationController {
       runner.claimAppend?.();
       return;
     }
-    if (!runner.claimAppend) {
-      this.fail(new Error("Realtime delegation completion ownership is unavailable"));
+    const claim = failed ? runner.claimFailureAppend : runner.claimAppend;
+    if (!claim) {
+      this.fail(
+        new Error(
+          failed
+            ? "Realtime delegation failure ownership is unavailable"
+            : "Realtime delegation completion ownership is unavailable",
+        ),
+      );
       return;
     }
-    if (!runner.claimAppend()) {
+    if (!claim()) {
       return;
     }
     const delegationId = this.activeDelegationId;

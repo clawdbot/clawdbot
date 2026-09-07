@@ -1,9 +1,13 @@
+import type { EmbeddedRunCompletionRegistration } from "../agents/embedded-agent-runner/run-state.js";
 import { prepareEmbeddedAgentRunCompletionClaim } from "../agents/embedded-agent-runner/runs.js";
 import { resolveCommandAuthorization } from "../auto-reply/command-auth.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "../auto-reply/reply/reply-tool-authority.js";
 import { normalizeTalkSection } from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isAgentEventLifecycleGenerationCurrent } from "../infra/agent-events.js";
+import {
+  getAgentEventLifecycleGeneration,
+  isAgentEventLifecycleGenerationCurrent,
+} from "../infra/agent-events.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import {
   GatewayDrainingError,
@@ -186,13 +190,16 @@ export function createTalkClientAgentConsultRunner(params: {
       ...(params.ownerConnId ? { rawSourceRef: params.ownerConnId } : {}),
     }));
   type PromptOwner = {
-    claimCompletion?: () => boolean;
+    completionClaim?: ReturnType<typeof prepareEmbeddedAgentRunCompletionClaim>;
     cleanup?: () => void;
     identity?: { runId: string; sessionId: string };
     isCurrent?: (sessionId?: string) => boolean;
-    resolveRunStarted: () => void;
-    runStarted: Promise<void>;
+    lifecycleGeneration: string;
+    registered: Promise<EmbeddedRunCompletionRegistration | undefined>;
+    requestSignal?: AbortSignal;
+    resolveRegistration: (registration: EmbeddedRunCompletionRegistration | undefined) => void;
     signal?: AbortSignal;
+    voiceSessionId?: string;
   };
   let promptOwner: PromptOwner | undefined;
   const runArgs = async (args: unknown, signal?: AbortSignal, owner?: PromptOwner) => {
@@ -200,6 +207,9 @@ export function createTalkClientAgentConsultRunner(params: {
     const voiceSessionId = params.getVoiceSessionId();
     if (!voiceSessionId) {
       throw new Error("Realtime browser voice session is not ready for agent consult");
+    }
+    if (owner) {
+      owner.voiceSessionId = voiceSessionId;
     }
     // Relays own admission before their lazy record registration. Browser callbacks
     // must validate the durable call before accepting a new run.
@@ -245,7 +255,8 @@ export function createTalkClientAgentConsultRunner(params: {
           onRunStarted: ({ runId, sessionId, timeoutMs }) => {
             if (owner) {
               owner.identity = { runId, sessionId };
-              owner.claimCompletion = prepareEmbeddedAgentRunCompletionClaim(sessionId, runId);
+              owner.completionClaim = prepareEmbeddedAgentRunCompletionClaim(sessionId, runId);
+              void owner.completionClaim.registered.then(owner.resolveRegistration);
             }
             if (params.registerRun) {
               params.registerRun({ runId });
@@ -293,7 +304,6 @@ export function createTalkClientAgentConsultRunner(params: {
                     isAgentEventLifecycleGenerationCurrent(generation))) &&
                 (resolvedSessionId === undefined || resolvedSessionId === sessionId) &&
                 (params.isRunCurrent?.(runId) ?? true);
-              owner.resolveRunStarted();
             }
             return registration
               ? {
@@ -308,16 +318,41 @@ export function createTalkClientAgentConsultRunner(params: {
   };
   const isOwnerCurrent = (owner: PromptOwner, sessionId?: string): boolean =>
     promptOwner === owner && owner.isCurrent?.(sessionId) === true;
+  const clearOwner = (owner: PromptOwner): void => {
+    if (promptOwner === owner) {
+      promptOwner = undefined;
+    }
+    owner.cleanup?.();
+  };
   const claimAppend = (): boolean => {
     const owner = promptOwner;
     if (!owner) {
       return false;
     }
     const current = isOwnerCurrent(owner);
-    const completed = owner.claimCompletion?.() === true;
-    promptOwner = undefined;
-    owner.cleanup?.();
+    const completed = owner.completionClaim?.claimCompletion() === true;
+    clearOwner(owner);
     return current && completed;
+  };
+  const claimFailureAppend = (): boolean => {
+    const owner = promptOwner;
+    if (!owner) {
+      return false;
+    }
+    const identity = owner.identity;
+    const current =
+      owner.requestSignal?.aborted !== true &&
+      isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration) &&
+      params.getVoiceSessionId() === owner.voiceSessionId &&
+      (identity ? isOwnerCurrent(owner, identity.sessionId) : promptOwner === owner);
+    const claimed = owner.completionClaim
+      ? owner.completionClaim.claimFailure()
+      : identity === undefined &&
+        owner.voiceSessionId !== undefined &&
+        isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration);
+    owner.resolveRegistration(undefined);
+    clearOwner(owner);
+    return current && claimed;
   };
   const steer = async ({ prompt, signal }: { prompt: string; signal?: AbortSignal }) => {
     signal?.throwIfAborted();
@@ -325,11 +360,11 @@ export function createTalkClientAgentConsultRunner(params: {
     if (!owner) {
       throw new Error("No active Talk consult is available to steer");
     }
-    await owner.runStarted;
+    const registration = await owner.registered;
     signal?.throwIfAborted();
     const identity = owner.identity;
     const ownerSignal = owner.signal;
-    if (!identity || !ownerSignal || !isOwnerCurrent(owner, identity.sessionId)) {
+    if (!registration || !identity || !ownerSignal || !isOwnerCurrent(owner, identity.sessionId)) {
       throw new Error("The active Talk consult is no longer current");
     }
     const result = await controlRealtimeVoiceAgentRun({
@@ -338,6 +373,18 @@ export function createTalkClientAgentConsultRunner(params: {
         runId: identity.runId,
         signal: ownerSignal,
         isCurrent: (sessionId) => isOwnerCurrent(owner, sessionId),
+      },
+      getToolAuthorityOverlay: () => {
+        if (!isOwnerCurrent(owner, identity.sessionId)) {
+          throw new Error("The active Talk consult is no longer current");
+        }
+        return prepareTalkClientControlAuthority({
+          config: params.config,
+          sessionTarget: params.sessionTarget,
+          authority,
+          source: registration.toolAuthoritySource,
+          agentRuntime: getAgentRuntime(),
+        });
       },
       text: prompt,
       mode: "steer",
@@ -351,21 +398,30 @@ export function createTalkClientAgentConsultRunner(params: {
     if (promptOwner) {
       throw new Error("A Talk consult is already active");
     }
-    const { promise: runStarted, resolve: resolveRunStarted } = createDeferredCore();
-    const owner: PromptOwner = { resolveRunStarted, runStarted };
-    const resolveRunStartedOnAbort = () => resolveRunStarted();
+    const { promise: registered, resolve: resolveRegistration } = createDeferredCore<
+      EmbeddedRunCompletionRegistration | undefined
+    >();
+    const owner: PromptOwner = {
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      registered,
+      requestSignal: signal,
+      resolveRegistration,
+    };
+    const revokeRegistrationOnAbort = () => resolveRegistration(undefined);
     promptOwner = owner;
-    signal?.addEventListener("abort", resolveRunStartedOnAbort, { once: true });
+    signal?.addEventListener("abort", revokeRegistrationOnAbort, { once: true });
     try {
       return await runArgs(args, signal, owner);
     } catch (error) {
-      resolveRunStarted();
+      resolveRegistration(undefined);
       throw error;
     } finally {
-      signal?.removeEventListener("abort", resolveRunStartedOnAbort);
+      signal?.removeEventListener("abort", revokeRegistrationOnAbort);
     }
   };
-  const lifecycleMethods = params.ownerConnId ? { claimAppend, steer } : { claimAppend };
+  const lifecycleMethods = params.ownerConnId
+    ? { claimAppend, claimFailureAppend, steer }
+    : { claimAppend, claimFailureAppend };
   const lifecycleBoundRunArgs = Object.assign(runOwnedArgs, lifecycleMethods);
   const runPrompt = Object.assign(
     async ({ prompt, signal }: { prompt: string; signal?: AbortSignal }) =>

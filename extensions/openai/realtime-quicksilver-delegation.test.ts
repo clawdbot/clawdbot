@@ -15,6 +15,7 @@ type ConsultRunner = ((params: {
   signal?: AbortSignal;
 }) => Promise<{ text: string }>) & {
   claimAppend?: () => boolean;
+  claimFailureAppend?: () => boolean;
   steer?: (params: { prompt: string; signal?: AbortSignal }) => Promise<{ text: string }>;
 };
 
@@ -28,6 +29,7 @@ function deferred<T>() {
 
 function createDelegationHarness(params?: {
   claimAppend?: (() => boolean) | null;
+  claimFailureAppend?: (() => boolean) | null;
   runAgentConsult?: ConsultRunner;
   steerAgentConsult?: ConsultRunner["steer"];
   handleDelegationInput?: RealtimeVoiceGatewayControl["handleDelegationInput"];
@@ -41,10 +43,13 @@ function createDelegationHarness(params?: {
   const sessionController = new AbortController();
   const claimAppend =
     params?.claimAppend === null ? undefined : (params?.claimAppend ?? (() => true));
+  const claimFailureAppend =
+    params?.claimFailureAppend === null ? undefined : (params?.claimFailureAppend ?? (() => true));
   const runAgentConsult = Object.assign(
     params?.runAgentConsult ?? vi.fn(async () => ({ text: "Done" })),
     {
       ...(claimAppend ? { claimAppend } : {}),
+      ...(claimFailureAppend ? { claimFailureAppend } : {}),
       ...(params?.steerAgentConsult ? { steer: params.steerAgentConsult } : {}),
     },
   );
@@ -769,6 +774,80 @@ describe("GPT-Live sideband protocol", () => {
     expect(logger.warn).toHaveBeenCalledWith(
       `OpenAI GPT-Live delegation consult failed: ${expectedReason}`,
     );
+  });
+
+  it("uses the startup-failure claim exactly once for a pre-registration failure", async () => {
+    const claimAppend = vi.fn(() => false);
+    const claimFailureAppend = vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
+    const runAgentConsult = vi.fn<ConsultRunner>(async () => {
+      throw new Error("startup failed");
+    });
+    const { controller, socket } = createDelegationHarness({
+      claimAppend,
+      claimFailureAppend,
+      runAgentConsult,
+    });
+
+    delegate(controller, "delegation-startup-failed", "do work");
+
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+    expect(parseSent(socket)).toContainEqual(
+      expect.objectContaining({
+        delegation_item_id: "delegation-startup-failed",
+        channel: "speakable",
+        content: [
+          {
+            type: "input_text",
+            text: "The agent task failed. Tell the user it did not complete and offer to try again.",
+          },
+        ],
+      }),
+    );
+    expect(claimFailureAppend).toHaveBeenCalledOnce();
+    expect(claimAppend).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { state: "revoked", claimFailureAppend: () => false },
+    { state: "unavailable", claimFailureAppend: null },
+  ])(
+    "does not append a startup failure when ownership is $state",
+    async ({ claimFailureAppend }) => {
+      const runAgentConsult = vi.fn<ConsultRunner>(async () => {
+        throw new Error("startup failed");
+      });
+      const { controller, onFatalError, socket } = createDelegationHarness({
+        claimAppend: () => false,
+        claimFailureAppend,
+        runAgentConsult,
+      });
+
+      delegate(controller, "delegation-startup-rejected", "do work");
+
+      await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
+      await nextEventLoopTurn();
+      expect(socket.sent).toEqual([]);
+      if (claimFailureAppend === null) {
+        expect(onFatalError).toHaveBeenCalledOnce();
+      } else {
+        expect(onFatalError).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("never uses startup-failure ownership for a successful completion", async () => {
+    const claimAppend = vi.fn(() => true);
+    const claimFailureAppend = vi.fn(() => true);
+    const { controller, socket } = createDelegationHarness({
+      claimAppend,
+      claimFailureAppend,
+    });
+
+    delegate(controller, "delegation-success", "do work");
+
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+    expect(claimAppend).toHaveBeenCalledOnce();
+    expect(claimFailureAppend).not.toHaveBeenCalled();
   });
 
   it("handles structured delegated failures with a non-string message", async () => {

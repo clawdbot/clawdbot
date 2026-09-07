@@ -2,6 +2,7 @@ import type { RealtimeVoiceAgentConsultRunner } from "../talk/provider-types.js"
 
 type RelayAgentConsultRunner = RealtimeVoiceAgentConsultRunner & {
   claimAppend: () => boolean;
+  claimFailureAppend: () => boolean;
   steer?: RealtimeVoiceAgentConsultRunner;
 };
 
@@ -20,6 +21,11 @@ export function bindTalkRealtimeRelayAgentConsult(
     claimAppend: () => {
       const current = isCurrent();
       const claimed = runPrompt.claimAppend();
+      return current && claimed;
+    },
+    claimFailureAppend: () => {
+      const current = isCurrent();
+      const claimed = runPrompt.claimFailureAppend();
       return current && claimed;
     },
     ...(steer

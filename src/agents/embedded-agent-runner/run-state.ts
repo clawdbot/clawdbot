@@ -116,10 +116,15 @@ export type EmbeddedRunRegistration = {
   onHumanInputResolved?: () => void;
 };
 
-type EmbeddedRunCompletionClaim = {
+export type EmbeddedRunCompletionRegistration = {
+  toolAuthoritySource?: "reply" | "attempt";
+};
+
+export type EmbeddedRunCompletionClaim = {
   runId: string;
   lifecycleGeneration: string;
   promoted: boolean;
+  settleRegistration: (registration: EmbeddedRunCompletionRegistration | undefined) => void;
 };
 
 export type EmbeddedRunWaiter = {
@@ -323,6 +328,7 @@ function evictPriorLifecycleEmbeddedRuns(): void {
   }
   for (const [sessionId, claim] of EMBEDDED_RUN_COMPLETION_CLAIMS) {
     if (!isAgentEventLifecycleGenerationCurrent(claim.lifecycleGeneration)) {
+      claim.settleRegistration(undefined);
       EMBEDDED_RUN_COMPLETION_CLAIMS.delete(sessionId);
     }
   }

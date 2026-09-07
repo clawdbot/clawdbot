@@ -15,6 +15,104 @@ import {
 import { cleanupTalkConnection } from "./talk-session-registry.js";
 
 describe("Talk client Gateway control owner", () => {
+  it("uses the non-owning runner for successive provider tool consultations", async () => {
+    const bridge = controlBridge();
+    const runToolAgentConsult = vi
+      .fn()
+      .mockResolvedValueOnce({ text: "first result" })
+      .mockResolvedValueOnce({ text: "second result" });
+    const runAgentConsult = Object.assign(
+      vi.fn(async () => ({ text: "owned result" })),
+      {
+        claimAppend: vi.fn(() => true),
+        claimFailureAppend: vi.fn(() => true),
+      },
+    );
+    const owner = createTalkClientGatewayControlOwner({
+      voiceSessionId: "voice-tool-repeat",
+      sessionTarget,
+      connId: "conn-tool-repeat",
+      context: controlContext(),
+      runToolAgentConsult,
+      runAgentConsult,
+      appendTranscript: vi.fn(async () => undefined),
+      flushTranscript: vi.fn(async () => undefined),
+      closeLogicalSession: vi.fn(async () => undefined),
+    });
+    owner.control.bindBridge(bridge);
+    await owner.adoptProvider(vi.fn(async () => undefined));
+    owner.activate();
+
+    try {
+      for (const [callId, question] of [
+        ["call-first", "first question"],
+        ["call-second", "second question"],
+      ] as const) {
+        owner.control.onToolCall?.({
+          itemId: `item-${callId}`,
+          callId,
+          name: "openclaw_agent_consult",
+          args: { question },
+        });
+        await vi.waitFor(() =>
+          expect(bridge.submitToolResult).toHaveBeenCalledWith(callId, {
+            result: callId === "call-first" ? "first result" : "second result",
+          }),
+        );
+      }
+
+      expect(runToolAgentConsult).toHaveBeenCalledTimes(2);
+      expect(runAgentConsult).not.toHaveBeenCalled();
+      expect(runAgentConsult.claimAppend).not.toHaveBeenCalled();
+    } finally {
+      await owner.close();
+    }
+  });
+
+  it.each(["close", "replace"] as const)(
+    "rejects a late browser startup-failure claim after owner %s",
+    async (transition) => {
+      const claimFailureAppend = vi.fn(() => true);
+      const runAgentConsult = Object.assign(
+        vi.fn(async () => ({ text: "done" })),
+        {
+          claimAppend: vi.fn(() => true),
+          claimFailureAppend,
+        },
+      );
+      const common = {
+        voiceSessionId: "voice-late-failure",
+        sessionTarget,
+        connId: "conn-late-failure",
+        context: controlContext(),
+        runToolAgentConsult: vi.fn(async () => ({ text: "done" })),
+        runAgentConsult,
+        appendTranscript: vi.fn(async () => undefined),
+        flushTranscript: vi.fn(async () => undefined),
+        closeLogicalSession: vi.fn(async () => undefined),
+      };
+      const owner = createTalkClientGatewayControlOwner(common);
+      let replacement: ReturnType<typeof createTalkClientGatewayControlOwner> | undefined;
+      await owner.adoptProvider(vi.fn(async () => undefined));
+      owner.activate();
+
+      try {
+        if (transition === "replace") {
+          replacement = createTalkClientGatewayControlOwner(common);
+          await replacement.adoptProvider(vi.fn(async () => undefined));
+          replacement.activate();
+        } else {
+          await owner.close();
+        }
+        expect(owner.runAgentConsult.claimFailureAppend?.()).toBe(false);
+        expect(claimFailureAppend).toHaveBeenCalledOnce();
+      } finally {
+        await owner.close();
+        await replacement?.close();
+      }
+    },
+  );
+
   it.each([
     ["Status?", false, false, "delegation", true],
     ["cancel", false, false, "delegation", true],
@@ -86,6 +184,7 @@ describe("Talk client Gateway control owner", () => {
         sessionTarget,
         connId: "conn-gateway",
         context: controlContext(warn, (event) => talkEvents.push(event)),
+        runToolAgentConsult: vi.fn(async () => ({ text: "done" })),
         runAgentConsult: vi.fn(async () => ({ text: "done" })),
         appendTranscript: vi.fn(async () => undefined),
         flushTranscript: vi.fn(async () => undefined),
@@ -175,6 +274,7 @@ describe("Talk client Gateway control owner", () => {
         sessionTarget,
         connId: "conn-gateway",
         context: controlContext(),
+        runToolAgentConsult: runAgentConsult,
         runAgentConsult,
         controlAgentRun,
         appendTranscript,
@@ -257,6 +357,7 @@ describe("Talk client Gateway control owner", () => {
       sessionTarget,
       connId: "conn-control",
       context: controlContext(),
+      runToolAgentConsult: runAgentConsult,
       runAgentConsult,
       appendTranscript: vi.fn(async () => undefined),
       flushTranscript: vi.fn(async () => undefined),
@@ -324,6 +425,7 @@ describe("Talk client Gateway control owner", () => {
         sessionTarget,
         connId: `conn-spoken-control-${entry}`,
         context: controlContext(),
+        runToolAgentConsult: runAgentConsult,
         runAgentConsult,
         controlAgentRun,
         appendTranscript: vi.fn(async () => undefined),
@@ -403,6 +505,7 @@ describe("Talk client Gateway control owner", () => {
         sessionTarget,
         connId: `conn-flush-${entry}-${transition}`,
         context: controlContext(),
+        runToolAgentConsult: runAgentConsult,
         runAgentConsult,
         appendTranscript: vi.fn(async () => undefined),
         closeLogicalSession: vi.fn(async () => undefined),
@@ -459,15 +562,17 @@ describe("Talk client Gateway control owner", () => {
       const admissionsAfterClose: boolean[] = [];
       let closed = false;
       const flushTranscript = vi.fn(() => flush.promise);
+      const runAgentConsult = vi.fn(async () => {
+        admissionsAfterClose.push(closed);
+        return { text: "accepted while open" };
+      });
       const owner = createTalkClientGatewayControlOwner({
         voiceSessionId: `voice-flush-completion-${entry}`,
         sessionTarget,
         connId: `conn-flush-completion-${entry}`,
         context: controlContext(),
-        runAgentConsult: vi.fn(async () => {
-          admissionsAfterClose.push(closed);
-          return { text: "accepted while open" };
-        }),
+        runToolAgentConsult: runAgentConsult,
+        runAgentConsult,
         appendTranscript: vi.fn(async () => undefined),
         flushTranscript,
         closeLogicalSession: vi.fn(async () => undefined),
@@ -524,6 +629,7 @@ describe("Talk client Gateway control owner", () => {
       sessionTarget,
       connId: "conn-delegation-detach",
       context: controlContext(),
+      runToolAgentConsult: runAgentConsult,
       runAgentConsult,
       appendTranscript: vi.fn(async () => undefined),
       flushTranscript: vi.fn(async () => undefined),
@@ -560,6 +666,7 @@ describe("Talk client Gateway control owner", () => {
       sessionTarget,
       connId: "conn-disconnect",
       context: controlContext(),
+      runToolAgentConsult: vi.fn(async () => ({ text: "done" })),
       runAgentConsult: vi.fn(async () => ({ text: "done" })),
       appendTranscript: vi.fn(async () => undefined),
       flushTranscript: vi.fn(async () => undefined),
@@ -581,6 +688,7 @@ describe("Talk client Gateway control owner", () => {
       sessionTarget,
       connId: "conn-close-error",
       context: controlContext(),
+      runToolAgentConsult: vi.fn(async () => ({ text: "done" })),
       runAgentConsult: vi.fn(async () => ({ text: "done" })),
       appendTranscript: vi.fn(async () => undefined),
       flushTranscript: vi.fn(async () => undefined),
@@ -611,6 +719,7 @@ describe("Talk client Gateway control owner", () => {
       sessionTarget,
       connId: "conn-replacement",
       context: controlContext(),
+      runToolAgentConsult: runAgentConsult,
       runAgentConsult,
       appendTranscript,
       flushTranscript: vi.fn(async () => undefined),

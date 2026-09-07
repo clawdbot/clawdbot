@@ -429,7 +429,10 @@ describe("embedded-agent runner run lifecycle", () => {
   it("revokes a completion claim when a replacement takes the session", () => {
     const firstHandle = createRunHandle({ runId: "run-first" });
     const replacementHandle = createRunHandle({ runId: "run-second" });
-    const claimCompletion = prepareEmbeddedAgentRunCompletionClaim("session-reused", "run-first");
+    const { claimCompletion } = prepareEmbeddedAgentRunCompletionClaim(
+      "session-reused",
+      "run-first",
+    );
 
     setActiveEmbeddedRun("session-reused", firstHandle);
     setActiveEmbeddedRun("session-reused", replacementHandle);
@@ -439,7 +442,7 @@ describe("embedded-agent runner run lifecycle", () => {
 
   it("consumes a completed claim exactly once after the run clears", () => {
     const handle = createRunHandle({ runId: "run-completed" });
-    const claimCompletion = prepareEmbeddedAgentRunCompletionClaim(
+    const { claimCompletion } = prepareEmbeddedAgentRunCompletionClaim(
       "session-completed",
       "run-completed",
     );
@@ -454,7 +457,7 @@ describe("embedded-agent runner run lifecycle", () => {
   it("does not revive a completed claim after an intervening run", () => {
     const firstHandle = createRunHandle({ runId: "run-first" });
     const replacementHandle = createRunHandle({ runId: "run-second" });
-    const claimCompletion = prepareEmbeddedAgentRunCompletionClaim(
+    const { claimCompletion } = prepareEmbeddedAgentRunCompletionClaim(
       "session-intervening",
       "run-first",
     );
@@ -470,7 +473,10 @@ describe("embedded-agent runner run lifecycle", () => {
   it("revokes prepared claims on abort and registry reset", () => {
     const abort = vi.fn();
     const handle = createRunHandle({ abort, runId: "run-aborted" });
-    const abortedClaim = prepareEmbeddedAgentRunCompletionClaim("session-aborted", "run-aborted");
+    const { claimCompletion: abortedClaim } = prepareEmbeddedAgentRunCompletionClaim(
+      "session-aborted",
+      "run-aborted",
+    );
     setActiveEmbeddedRun("session-aborted", handle);
 
     expect(abortEmbeddedAgentRun("session-aborted")).toBe(true);
@@ -478,7 +484,10 @@ describe("embedded-agent runner run lifecycle", () => {
     expect(abortedClaim()).toBe(false);
 
     const resetHandle = createRunHandle({ runId: "run-reset" });
-    const resetClaim = prepareEmbeddedAgentRunCompletionClaim("session-reset", "run-reset");
+    const { claimCompletion: resetClaim } = prepareEmbeddedAgentRunCompletionClaim(
+      "session-reset",
+      "run-reset",
+    );
     setActiveEmbeddedRun("session-reset", resetHandle);
     clearActiveEmbeddedRun("session-reset", resetHandle);
     testing.resetActiveEmbeddedRuns();

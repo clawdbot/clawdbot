@@ -76,6 +76,9 @@ import {
   type AbandonedEmbeddedRun,
   type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
+  type EmbeddedRunCompletionClaim,
+  type EmbeddedRunCompletionRegistration,
+  type EmbeddedRunRegistration,
   type EmbeddedRunWaiter,
 } from "./run-state.js";
 
@@ -848,7 +851,8 @@ function prepareEmbeddedAgentQueueMessage(
 
 function revokeCompletionClaim(sessionId: string, runId?: string): void {
   const claim = EMBEDDED_RUN_COMPLETION_CLAIMS.get(sessionId);
-  if (claim?.promoted && claim.runId === runId) {
+  if (claim && (runId === undefined || claim.runId === runId)) {
+    claim.settleRegistration(undefined);
     EMBEDDED_RUN_COMPLETION_CLAIMS.delete(sessionId);
   }
 }
@@ -984,19 +988,47 @@ export function isEmbeddedAgentRunActive(sessionId: string): boolean {
 export function prepareEmbeddedAgentRunCompletionClaim(
   sessionId: string,
   runId: string,
-): () => boolean {
-  const claim = {
+): {
+  claimCompletion: () => boolean;
+  claimFailure: () => boolean;
+  registered: Promise<EmbeddedRunCompletionRegistration | undefined>;
+} {
+  let registrationSettled = false;
+  let settleRegistration!: (registration: EmbeddedRunCompletionRegistration | undefined) => void;
+  const registered = new Promise<EmbeddedRunCompletionRegistration | undefined>((resolve) => {
+    settleRegistration = (registration) => {
+      if (registrationSettled) {
+        return;
+      }
+      registrationSettled = true;
+      resolve(registration);
+    };
+  });
+  const claim: EmbeddedRunCompletionClaim = {
     runId,
     lifecycleGeneration: getAgentEventLifecycleGeneration(),
     promoted: false,
+    settleRegistration,
   };
+  revokeCompletionClaim(sessionId);
   EMBEDDED_RUN_COMPLETION_CLAIMS.set(sessionId, claim);
-  return () => {
+  const consume = (allowUnregistered: boolean): boolean => {
     if (EMBEDDED_RUN_COMPLETION_CLAIMS.get(sessionId) !== claim) {
       return false;
     }
     EMBEDDED_RUN_COMPLETION_CLAIMS.delete(sessionId);
-    return claim.promoted && isAgentEventLifecycleGenerationCurrent(claim.lifecycleGeneration);
+    if (!claim.promoted) {
+      claim.settleRegistration(undefined);
+    }
+    return (
+      (allowUnregistered || claim.promoted) &&
+      isAgentEventLifecycleGenerationCurrent(claim.lifecycleGeneration)
+    );
+  };
+  return {
+    claimCompletion: () => consume(false),
+    claimFailure: () => consume(true),
+    registered,
   };
 }
 
@@ -1544,6 +1576,7 @@ export function setActiveEmbeddedRun(
   // The immutable handle generation rejects delayed stale registration even
   // when rotation left no replacement owner in the session slot.
   if (!isAgentEventLifecycleGenerationCurrent(incomingLifecycleGeneration)) {
+    revokeCompletionClaim(sessionId, handle.runId);
     try {
       handle.abort("restart");
     } catch (error) {
@@ -1553,17 +1586,24 @@ export function setActiveEmbeddedRun(
     return;
   }
   if (handle.diagnosticOwner && isDiagnosticEmbeddedRunOwnerClosed(handle.diagnosticOwner)) {
+    revokeCompletionClaim(sessionId, handle.runId);
     handle.abort("restart");
     return;
   }
   const caller = getGatewayToolCallerIdentity();
-  const toolAuthority = caller?.embeddedRunToolAuthorityBinding?.({
-    sessionId,
-    sessionKey,
-    sessionFile,
-    agentId,
-    handle,
-  });
+  let toolAuthority: EmbeddedRunRegistration["toolAuthority"];
+  try {
+    toolAuthority = caller?.embeddedRunToolAuthorityBinding?.({
+      sessionId,
+      sessionKey,
+      sessionFile,
+      agentId,
+      handle,
+    });
+  } catch (error) {
+    revokeCompletionClaim(sessionId, handle.runId);
+    throw error;
+  }
   const previousHandle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   const wasActive = previousHandle !== undefined;
   if (previousHandle) {
@@ -1571,7 +1611,12 @@ export function setActiveEmbeddedRun(
     clearEmbeddedRunAbortability(previousHandle, { retainFinalizing: true });
     EMBEDDED_RUN_FORCED_TERMINAL_SETTLEMENTS.delete(previousHandle);
   }
-  toolAuthority?.assertActive();
+  try {
+    toolAuthority?.assertActive();
+  } catch (error) {
+    revokeCompletionClaim(sessionId, handle.runId);
+    throw error;
+  }
   clearEmbeddedRunAbandonment({ sessionId, sessionKey, sessionFile });
   ACTIVE_EMBEDDED_RUNS.set(sessionId, handle);
   // The dispatch scope carries the admitted instance across both core and
@@ -1616,16 +1661,6 @@ export function setActiveEmbeddedRun(
   if (handle.runId) {
     ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.set(handle.runId, handle);
   }
-  const completionClaim = EMBEDDED_RUN_COMPLETION_CLAIMS.get(sessionId);
-  if (
-    completionClaim &&
-    completionClaim.runId === handle.runId &&
-    completionClaim.lifecycleGeneration === incomingLifecycleGeneration
-  ) {
-    completionClaim.promoted = true;
-  } else if (completionClaim) {
-    EMBEDDED_RUN_COMPLETION_CLAIMS.delete(sessionId);
-  }
   clearActiveRunSessionKeys(sessionId);
   setActiveRunSessionKey(sessionKey, sessionId);
   clearActiveRunSessionFiles(sessionId);
@@ -1645,6 +1680,19 @@ export function setActiveEmbeddedRun(
   });
   if (!sessionId.startsWith("probe-")) {
     diag.debug(`run registered: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
+  }
+  const completionClaim = EMBEDDED_RUN_COMPLETION_CLAIMS.get(sessionId);
+  if (
+    completionClaim &&
+    completionClaim.runId === handle.runId &&
+    completionClaim.lifecycleGeneration === incomingLifecycleGeneration
+  ) {
+    completionClaim.promoted = true;
+    completionClaim.settleRegistration(
+      toolAuthority ? { toolAuthoritySource: toolAuthority.source } : {},
+    );
+  } else if (completionClaim) {
+    revokeCompletionClaim(sessionId);
   }
 }
 
@@ -1748,6 +1796,9 @@ const testing = {
     EMBEDDED_RUN_WAITERS.clear();
     ACTIVE_EMBEDDED_RUNS.clear();
     ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.clear();
+    for (const claim of EMBEDDED_RUN_COMPLETION_CLAIMS.values()) {
+      claim.settleRegistration(undefined);
+    }
     EMBEDDED_RUN_COMPLETION_CLAIMS.clear();
     RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS.clear();
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.clear();
