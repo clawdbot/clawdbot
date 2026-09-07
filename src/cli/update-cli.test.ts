@@ -5546,6 +5546,22 @@ describe("update-cli", () => {
     },
   );
 
+  it("previews explicit artifacts without claiming staged plugin admission", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-local-preview"));
+    await updateCommand({ dryRun: true, json: true, tag: "/tmp/candidate.tgz" });
+    expect(lastWriteJsonCall()).toMatchObject({
+      dryRun: true,
+      targetVersion: null,
+      notes: expect.arrayContaining([
+        expect.stringContaining(
+          "Configured plugin availability will be checked against the staged package",
+        ),
+      ]),
+    });
+    expect(packageInstallCommandCall()?.[0]).toBeUndefined();
+    expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
+  });
+
   it("previews the resolved package owner without probing for another manager", async () => {
     mockPackageInstallStatus(createCaseDir("openclaw-dry-run-owner"));
     resolveGlobalManager.mockResolvedValueOnce("npm").mockResolvedValue("bun");
