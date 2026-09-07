@@ -9,7 +9,7 @@ const require = createRequire(import.meta.url);
 const root = process.env.HOME!;
 // Keep real install discovery inside the fixture; only the completion case has a CLI binary.
 await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
-const [scenario, ...args] = process.argv.slice(2);
+const [runtimeProcessEntrypointsJson, scenario, ...args] = process.argv.slice(2);
 const borrowed = scenario?.startsWith("borrowed-");
 if (scenario === "completion-hang") {
   await fs.writeFile(
@@ -88,6 +88,12 @@ export const readConfigFileSnapshot = async () => ({ valid: true, config, source
 export const assertConfigWriteAllowedInCurrentMode = () => {};
 `;
 const stubs = new Map<string, string>([
+  // Forward prepared locations, not currentModuleUrl as an import: builds may
+  // place that URL in a shared chunk. Workers still execute their real compiled code.
+  [
+    sourceUrl("../infra/runtime-process-entrypoints.ts"),
+    `export const runtimeProcessEntrypoints = ${runtimeProcessEntrypointsJson};`,
+  ],
   [sourceUrl("../commands/doctor.ts"), doctorSource],
   [sourceUrl("../config/config.ts"), snapshotSource],
   [
@@ -108,7 +114,13 @@ const stubs = new Map<string, string>([
   ],
   [
     sourceUrl("./update-cli/update-command-config.ts"),
-    "export const readPostCorePreUpdateSourceConfig = async () => undefined; export const persistRequestedUpdateChannel = async ({configSnapshot}) => configSnapshot; export const persistValidatedDowngradeConfig = async () => {}; export const restoreDroppedPreUpdateChannels = snapshot => ({snapshot, changed: false});",
+    `export const readPostCorePreUpdateSourceConfig = async () => {
+      ${scenario === "phase-hang" ? "await new Promise(resolve => setTimeout(resolve, 1_200));" : ""}
+      return undefined;
+    };
+    export const persistRequestedUpdateChannel = async ({configSnapshot}) => configSnapshot;
+    export const persistValidatedDowngradeConfig = async () => {};
+    export const restoreDroppedPreUpdateChannels = snapshot => ({snapshot, changed: false});`,
   ],
   [
     sourceUrl("./update-cli/update-command-plugins.ts"),
@@ -119,6 +131,23 @@ const stubs = new Map<string, string>([
     `export const resolveGatewayInstallEntrypoint = async () => ${JSON.stringify(installedEntry)};`,
   ],
 ]);
+const blockedPhase =
+  scenario === "phase-hang"
+    ? "configSnapshot"
+    : scenario === "completion-hang"
+      ? "completionCache"
+      : undefined;
+if (blockedPhase) {
+  const lifecycleUrl = sourceUrl("./update-cli/update-finalization-lifecycle.ts");
+  // Keep real phase ownership; only the deliberately blocked phase gets a short budget.
+  stubs.set(
+    lifecycleUrl,
+    `import { UpdateFinalizationLifecycle as RealLifecycle } from ${JSON.stringify(`${lifecycleUrl}?fixture-original`)};
+export class UpdateFinalizationLifecycle extends RealLifecycle {
+  budget(phase) { return phase === ${JSON.stringify(blockedPhase)} ? 1_000 : super.budget(phase); }
+}`,
+  );
+}
 if (scenario === "human-recovery-plugin-error") {
   stubs.set(
     sourceUrl("./update-cli/update-command-report.ts"),

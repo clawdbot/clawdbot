@@ -163,22 +163,29 @@ export function createSessionListSearchMatcher(params: {
     (rowContext ??= params.getRowContext?.() ?? buildSessionListRowMetadataContext({ now }));
   let acpPrepared = false;
   return (key: string, entry: SessionEntry): boolean => {
+    const target = expectDefined(params.targetsBySessionKey.get(key), "search row owner");
+    const storeKey = target.storeKey ?? key;
     const fields = [
-      key,
+      storeKey,
       entry.label,
       entry.subject,
       entry.sessionId,
       entry.category,
-      resolveSessionListSearchDisplayName(key, entry),
-      resolveGatewaySessionDisplayName(key, entry),
-      resolveGatewaySessionKind(key, entry),
+      resolveSessionListSearchDisplayName(storeKey, entry),
+      resolveGatewaySessionDisplayName(storeKey, entry),
+      resolveGatewaySessionKind(storeKey, entry),
     ];
     addSessionListSearchModelFields(fields, { provider: entry.modelProvider, model: entry.model });
     if (matchesSessionListSearch(fields, search)) {
       return true;
     }
-    const agentId = expectDefined(params.targetsBySessionKey.get(key), "search row owner").agentId;
-    const run = projectGatewaySessionRunState({ key, entry, now, rowContext: context() }).fields;
+    const agentId = target.agentId;
+    const run = projectGatewaySessionRunState({
+      key: storeKey,
+      entry,
+      now,
+      rowContext: context(),
+    }).fields;
     const active = params.projectActiveRun?.(key, entry, agentId);
     const state = projectGatewaySessionActiveRun(active, run.status);
     const goal = resolveGatewaySessionGoal(entry, now);
@@ -208,7 +215,7 @@ export function createSessionListSearchMatcher(params: {
     }
     const selected = resolveSessionSelectedModelRef({
       cfg,
-      sessionKey: key,
+      sessionKey: storeKey,
       entry,
       agentId,
       rowContext: context(),
@@ -219,7 +226,7 @@ export function createSessionListSearchMatcher(params: {
       matchesSessionListSearch(
         resolveSessionListSearchModelFields({
           cfg,
-          key,
+          key: storeKey,
           entry,
           agentId,
           rowContext: context(),
@@ -241,7 +248,7 @@ export function createSessionListSearchMatcher(params: {
     }
     const { agentRuntime } = resolveGatewaySessionRuntimeProjection({
       cfg,
-      sessionKey: key,
+      sessionKey: storeKey,
       entry,
       agentId,
       provider: selected.provider,

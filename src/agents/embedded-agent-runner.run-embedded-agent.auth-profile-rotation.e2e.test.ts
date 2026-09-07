@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 // End-to-end auth-profile rotation coverage for embedded runner retries.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { redactIdentifier } from "../logging/redact-identifier.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import {
   resolveInlineProviderApiKeyUsageId,
@@ -351,6 +351,8 @@ const makeErrorAttempt = (
     ...overrides,
   });
   return makeAttempt({
+    // Rotation-only fixtures disable retries; retry-budget cases override this.
+    providerRetryMaxRetries: 0,
     assistantTexts: [],
     lastAssistant: assistant,
     ...(opts?.currentAttempt ? { currentAttemptAssistant: assistant } : {}),
@@ -456,8 +458,7 @@ async function runAutoPinnedRotationCase(params: {
   runEmbeddedAttemptMock.mockReset();
   return withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
     await writeAuthStore(agentDir);
-    // This provider reports a three-retry cap; exhaust it before rotating.
-    // Credential/quota failures still rotate after the first failed attempt.
+    // Exhaust this provider's three-retry cap before rotating on transient failures.
     const failureCount = params.exhaustTransientRetries ? 4 : 1;
     for (let attempt = 0; attempt < failureCount; attempt += 1) {
       runEmbeddedAttemptMock.mockResolvedValueOnce({
@@ -920,8 +921,9 @@ describe("runEmbeddedAgent auth profile rotation", () => {
     }
   });
 
-  it("rotates auto-pinned profiles on long-window rate limits without transient retries", async () => {
+  it("rotates auto-pinned profiles on long-window rate limits after transient retries", async () => {
     await runAutoPinnedRotationCase({
+      exhaustTransientRetries: true,
       errorMessage: "429 Too Many Requests: subscription usage limit reached",
       sessionKey: "agent:test:auto",
       runId: "run:auto",

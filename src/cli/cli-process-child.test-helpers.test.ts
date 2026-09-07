@@ -1,7 +1,11 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import { describe, expect, it } from "vitest";
-import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import {
+  formatCliProcessFailure,
+  runCliProcessChild,
+  waitForCliProcessStderrMarker,
+} from "./cli-process-child.test-helpers.js";
 
 // A launcher that hands its stdio to a detached grandchild which writes only after the
 // guard has already fired, then stays alive itself so SIGKILL has a launcher to reach.
@@ -117,5 +121,59 @@ describe("runCliProcessChild", () => {
 
     expect(chunks).toHaveLength(afterGuard);
     expect(chunks.at(-1) ?? "").not.toContain("after-guard");
+  });
+});
+
+describe("waitForCliProcessStderrMarker", () => {
+  it("reports missing markers and captured stderr when the child exits", async () => {
+    await expect(
+      runCliProcessChild({
+        nodeArgs: ["-e", "process.stderr.write('failed before ready'); process.exitCode = 1;"],
+        env: process.env,
+        timeoutMs: 2_000,
+        interact: async (child) => {
+          child.stdin.end();
+          await waitForCliProcessStderrMarker(child, "phase entered");
+        },
+      }),
+    ).rejects.toThrow(/stderr ended before marker "phase entered"[\s\S]*failed before ready/u);
+  });
+
+  it("matches split markers, removes its listeners, and retains trailing stderr", async () => {
+    const result = await runCliProcessChild({
+      nodeArgs: [
+        "-e",
+        [
+          "process.stderr.write('phase ');",
+          "process.stdin.once('data', () => {",
+          "  process.stderr.write('entered');",
+          "  process.stdin.once('end', () => process.stderr.write(' after marker'));",
+          "});",
+        ].join("\n"),
+      ],
+      env: process.env,
+      interact: async (child) => {
+        const events = ["data", "end", "close", "error"] as const;
+        const listeners = events.map((event) => child.stderr.listeners(event));
+        const childErrorListeners = child.listeners("error");
+        const marker = waitForCliProcessStderrMarker(child, "phase entered");
+        await once(child.stderr, "data");
+        child.stdin.write("continue\n");
+        await marker;
+        for (const [index, event] of events.entries()) {
+          expect(child.stderr.listeners(event)).toEqual(listeners[index]);
+        }
+        expect(child.listeners("error")).toEqual(childErrorListeners);
+        expect(child.stderr.destroyed).toBe(false);
+        child.stdin.end();
+      },
+    });
+
+    expect(result).toEqual({
+      code: 0,
+      signal: null,
+      stdout: "",
+      stderr: "phase entered after marker",
+    });
   });
 });

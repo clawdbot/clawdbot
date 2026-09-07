@@ -6,7 +6,7 @@ import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveThreadBindingExpiry } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
+import * as threadBindingRuntime from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import { getDiscordRuntime } from "../runtime.js";
 import type {
   PersistedThreadBindingRecord,
@@ -250,6 +250,31 @@ function resolveTimestampExpiry(timestamp: number, durationMs: number): number |
   return Number.isFinite(at) && at > 0 ? at + durationMs : undefined;
 }
 
+// Published 2026.9.2 has lifecycle normalization but not prepared expiry selection.
+// Remove this fallback when the declared plugin API floor excludes that host.
+const threadBindingExpirySdk: Partial<
+  Pick<typeof threadBindingRuntime, "resolveThreadBindingExpiry">
+> = threadBindingRuntime;
+
+function resolveThreadBindingExpiryForHost(
+  params: Parameters<typeof threadBindingRuntime.resolveThreadBindingExpiry>[0],
+): ReturnType<typeof threadBindingRuntime.resolveThreadBindingExpiry> {
+  if (threadBindingExpirySdk.resolveThreadBindingExpiry) {
+    return threadBindingExpirySdk.resolveThreadBindingExpiry(params);
+  }
+  const { inactivityExpiresAt, maxAgeExpiresAt } = params;
+  if (
+    inactivityExpiresAt != null &&
+    (maxAgeExpiresAt == null || inactivityExpiresAt <= maxAgeExpiresAt)
+  ) {
+    return { expiresAt: inactivityExpiresAt, reason: "idle-expired" };
+  }
+  if (maxAgeExpiresAt != null) {
+    return { expiresAt: maxAgeExpiresAt, reason: "max-age-expired" };
+  }
+  return {};
+}
+
 export function resolvePreparedThreadBindingLifecycle(params: {
   record: ThreadBindingRecord;
   idleTimeoutMs: number;
@@ -266,7 +291,7 @@ export function resolvePreparedThreadBindingLifecycle(params: {
   return {
     idleTimeoutMs,
     maxAgeMs,
-    ...resolveThreadBindingExpiry({
+    ...resolveThreadBindingExpiryForHost({
       inactivityExpiresAt: resolveTimestampExpiry(params.record.lastActivityAt, idleTimeoutMs),
       maxAgeExpiresAt: resolveTimestampExpiry(params.record.boundAt, maxAgeMs),
     }),

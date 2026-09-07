@@ -1101,9 +1101,9 @@ describe("loadWorkspaceBootstrapFiles", () => {
     });
 
     const agentsPath = path.join(syncFs.realpathSync(tempDir), DEFAULT_AGENTS_FILENAME);
-    const originalLstat = syncFs.promises.lstat.bind(syncFs.promises);
+    const originalLstat = syncFs.lstatSync.bind(syncFs);
     let agentsLstatAttempts = 0;
-    const lstatSpy = vi.spyOn(syncFs.promises, "lstat").mockImplementation((async (
+    const lstatSpy = vi.spyOn(syncFs, "lstatSync").mockImplementation(((
       target: unknown,
       options?: unknown,
     ) => {
@@ -1113,8 +1113,8 @@ describe("loadWorkspaceBootstrapFiles", () => {
           errno: -11,
         });
       }
-      return await originalLstat(target as never, options as never);
-    }) as typeof syncFs.promises.lstat);
+      return originalLstat(target as never, options as never);
+    }) as typeof syncFs.lstatSync);
 
     try {
       const files = await loadWorkspaceBootstrapFiles(tempDir);

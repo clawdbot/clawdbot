@@ -15,6 +15,7 @@ import type { PackageUpdateTransaction } from "../../infra/package-update-steps.
 import { replaceFileAtomic } from "../../infra/replace-file.js";
 import {
   readUpdateStateSchemaVersions,
+  resolveUpdateStateContentVersion,
   updateStateSchemaVersionsMatch,
   type UpdateStateSchemaVersion,
 } from "../../infra/update-candidate-state.js";
@@ -109,18 +110,21 @@ export async function rollbackFailedUpdate(params: {
     ) {
       return false;
     }
-    const baselineVersions = new Map(baseline.map((entry) => [entry.path, entry.userVersion]));
+    const baselineVersions = new Map(
+      baseline.map((entry) => [entry.path, resolveUpdateStateContentVersion(entry)]),
+    );
     for (const entry of current) {
-      if (entry.userVersion === null || baselineVersions.get(entry.path) != null) {
+      const version = resolveUpdateStateContentVersion(entry);
+      if (version === null || baselineVersions.get(entry.path) != null) {
         continue;
       }
       // First-use creation is not migration, but the retained runtime must still
       // support that new store before replacing a reachable candidate.
       const kind = entry.path === sharedPath ? "state" : "agent";
       const supported = params.previousSchemaVersions?.[kind];
-      if (supported === undefined || entry.userVersion > supported) {
+      if (supported === undefined || version > supported) {
         throw new Error(
-          `Automatic rollback refused: newly created ${kind} database ${entry.path} uses schema ${entry.userVersion}; retained previous package support is ${supported ?? "unknown"}. Keep the candidate installed.`,
+          `Automatic rollback refused: newly created ${kind} database ${entry.path} uses schema ${version}; retained previous package support is ${supported ?? "unknown"}. Keep the candidate installed.`,
         );
       }
     }

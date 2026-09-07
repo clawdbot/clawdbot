@@ -344,6 +344,7 @@ describe("verified package rollback", () => {
     },
     { change: "identity-read-failed", previousVerified: true, restored: true, service: "stopped" },
     { change: "shared", previousVerified: true, restored: false, service: "stopped" },
+    { change: "new-shared-deferred", previousVerified: true, restored: false, service: "stopped" },
     { change: "agent", previousVerified: true, restored: false, service: "stopped" },
     { change: "during-stop", previousVerified: true, restored: false, service: "stopped" },
     { change: "unknown-runtime", previousVerified: true, restored: false, service: "stopped" },
@@ -377,11 +378,26 @@ describe("verified package rollback", () => {
       let activationConfig: { path: string; raw: string | null; hash: string } | undefined;
       const shared = path.join(stateDir, "state/openclaw.sqlite");
       const agent = path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite");
-      setVersion(shared, 7);
+      if (change !== "new-shared-deferred") {
+        setVersion(shared, 7);
+      }
       if (!change.startsWith("new-agent")) {
         setVersion(agent, 3);
       }
       const schemaVersions = await readUpdateStateSchemaVersions({ stateDir, config: {} });
+      if (change === "new-shared-deferred") {
+        expect(schemaVersions.find((entry) => entry.path === shared)?.userVersion).toBeNull();
+        setVersion(shared, 7);
+        const database = new DatabaseSync(shared);
+        try {
+          database.exec(`
+            CREATE TABLE config_machine_state (state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER);
+            INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '8', 0);
+          `);
+        } finally {
+          database.close();
+        }
+      }
       if (change.startsWith("new-agent")) {
         setVersion(agent, change === "new-agent-foreign" ? 4 : 3);
       }
@@ -482,7 +498,7 @@ describe("verified package rollback", () => {
             result: inspected,
             root: candidateRoot,
             schemaVersions,
-            candidateSchemaVersions: { state: 7, agent: 3 },
+            candidateSchemaVersions: { state: change === "new-shared-deferred" ? 8 : 7, agent: 3 },
             config,
             env: process.env,
           }),
@@ -589,7 +605,7 @@ describe("verified package rollback", () => {
           configSnapshot,
           activationConfig,
           schemaVersions,
-          candidateSchemaVersions: { state: 7, agent: 3 },
+          candidateSchemaVersions: { state: change === "new-shared-deferred" ? 8 : 7, agent: 3 },
           previousSchemaVersions:
             change === "new-agent-previous-unknown"
               ? undefined
@@ -693,7 +709,9 @@ describe("verified package rollback", () => {
         );
       } else {
         expect(outcome.result.reason).toBe(
-          change === "unknown-runtime" || change.startsWith("new-agent-previous-")
+          change === "unknown-runtime" ||
+            change === "new-shared-deferred" ||
+            change.startsWith("new-agent-previous-")
             ? "rollback-state-unverified"
             : previousVerified
               ? "state-migrated-no-rollback"

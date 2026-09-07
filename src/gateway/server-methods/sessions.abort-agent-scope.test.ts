@@ -408,7 +408,10 @@ describe("sessions.abort agent scope", () => {
       { context, reqId: "req-channel-active" },
     );
 
-    expect(isEmbeddedAgentRunInProgressMock).toHaveBeenCalledWith("sess-weixin");
+    expect(isEmbeddedAgentRunInProgressMock).toHaveBeenCalledWith(
+      "sess-weixin",
+      expect.objectContaining({ agentId: "main" }),
+    );
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({

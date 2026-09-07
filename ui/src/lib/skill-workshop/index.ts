@@ -48,6 +48,7 @@ export type SkillWorkshopProposal = {
    */
   bodyLoaded: boolean;
   status: SkillWorkshopProposalStatus;
+  degradedState?: SkillsProposalsListResult["proposals"][number]["degradedState"];
   origin?: {
     agentId?: string;
     sessionKey?: string;

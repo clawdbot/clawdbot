@@ -240,10 +240,23 @@ verified running. Staging, candidate validation, and pre-activation repair are e
 records include service PID/port, version/build identity, settled health,
 plugin activation errors, channel readiness, and `/readyz`.
 
-After a live database migration, a fresh process from the candidate completes
-verification and writes the final outcome to the same run. It carries forward
-the activation steps; a schema upgrade does not create a separate report or let
-the old updater reopen the newer database.
+With transactional updaters from 2026.9.3 onward, a fresh process from the
+candidate completes verification after a live database migration and writes the
+final outcome to the same run. It carries forward the activation steps; a schema
+upgrade does not create a separate report or let the old updater reopen the
+newer database.
+
+The 2026.9.2 updater keeps its own completion path. For shared-state migrations,
+the candidate applies schema content but delays version publication until every
+affected terminal run is at least five minutes old, or each still-running row
+has been unchanged for more than 30 minutes. Doctor reports the deferral; the
+new Gateway already uses the migrated content and publishes the version after
+the deadline. Pending agent-database migrations, missing state metadata, and
+failed content migrations still produce `update-schema-bump-unfenced` with
+[manual update commands](/install/updating#updating-from-2026.9.2-across-a-schema-bump).
+See [Database schemas](/reference/database-schemas#schema-bumps-and-older-updaters)
+for exact publication rules and the remaining risk to a stalled old CLI's final
+report.
 
 ## `update repair`
 
