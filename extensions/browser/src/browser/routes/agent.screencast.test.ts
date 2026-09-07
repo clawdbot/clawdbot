@@ -13,6 +13,7 @@ import {
 import { makeBrowserProfile, makeBrowserServerState } from "../server-context.test-harness.js";
 import { registerBrowserAgentScreencastRoutes } from "./agent.screencast.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
+import type { BrowserRequest } from "./types.js";
 
 const pw = vi.hoisted(() => ({ available: true }));
 
@@ -52,9 +53,12 @@ function setup(options: { existingSession?: boolean; url?: string; listedUrl?: s
     state,
     runtime,
     ensureTabAvailable,
-    request: async (body: Record<string, unknown> = {}) => {
+    request: async (
+      body: Record<string, unknown> = {},
+      requester?: BrowserRequest["requester"],
+    ) => {
       const response = createBrowserRouteResponse();
-      await route({ params: {}, query: {}, body }, response.res);
+      await route({ params: {}, query: {}, body, requester }, response.res);
       return response;
     },
   };
@@ -67,6 +71,37 @@ describe("browser screencast mint route", () => {
 
   afterEach(() => {
     clearBrowserScreencastTokens();
+  });
+
+  it.each(["before request", "during tab resolution"])(
+    "rejects a requester revoked %s",
+    async (when) => {
+      const requester = new AbortController();
+      const { request, ensureTabAvailable } = setup();
+      if (when === "before request") {
+        requester.abort();
+      } else {
+        const resolveTab = ensureTabAvailable.getMockImplementation()!;
+        ensureTabAvailable.mockImplementationOnce(async () => {
+          requester.abort();
+          return await resolveTab();
+        });
+      }
+      const response = await request({}, { signal: requester.signal });
+      expect(response.statusCode).toBe(401);
+      expect(response.body).toMatchObject({ code: "SCREENCAST_REQUESTER_GONE" });
+      expect(response.body).not.toHaveProperty("token");
+    },
+  );
+
+  it("binds a minted token to the requester lifetime", async () => {
+    const requester = new AbortController();
+    const { request } = setup();
+    const response = await request({}, { signal: requester.signal });
+    const token = (response.body as { token: string }).token;
+    expect(response.statusCode).toBe(200);
+    requester.abort();
+    expect(consumeBrowserScreencastToken(token)).toBeUndefined();
   });
 
   it.each([

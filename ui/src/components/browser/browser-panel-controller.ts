@@ -710,6 +710,7 @@ export class BrowserPanelController implements ReactiveController {
     this.setState("strokes", []);
     this.setState("inspected", null);
     this.setState("inspectPointer", null);
+    this.stream.flushPendingFrame();
   }
 
   setMode(mode: BrowserPanelMode): void {

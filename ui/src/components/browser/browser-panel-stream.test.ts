@@ -5,6 +5,7 @@ import {
   createBrowserClient,
   createBrowserPanelTestMetrics,
   createBrowserPanelTestTab,
+  createInspectedNode,
   flushBrowserResponses,
   setupBrowserPanelTestCleanup,
   stubScreenshotMedia,
@@ -110,6 +111,67 @@ async function start(controller: BrowserPanelController) {
 }
 
 describe("Browser panel stream ownership", () => {
+  it.each(["annotate", "inspect"] as const)(
+    "pins the captured image and URL during %s and presents the latest frame on exit",
+    async (mode) => {
+      const { controller } = setup();
+      const socket = await start(controller);
+      controller.setMode(mode);
+      controller.setState("strokes", [{ points: [{ x: 0.1, y: 0.2 }] }]);
+      controller.setState("inspected", createInspectedNode("Original button"));
+      const pinnedView = controller.view;
+      socket.receive(screencastFrame(NEXT_URL, 200, 100));
+      socket.receive(screencastFrame(NEXT_URL, 300, 100));
+      socket.receive(JSON.stringify({ type: "meta", url: NEXT_URL, title: "Next" }));
+      await flush();
+      expect(controller.view).toBe(pinnedView);
+      expect(controller.view).toMatchObject({ dataUrl: "blob:frame-0", url: PAGE_URL });
+      expect(controller.tabs[0]).toMatchObject({ url: NEXT_URL, title: "Next" });
+      expect(controller.urlDraft).toBe(NEXT_URL);
+      expect(controller.strokes).toHaveLength(1);
+      expect(controller.inspected?.name).toBe("Original button");
+
+      controller.exitCaptureModes();
+      await flush();
+      expect(controller.view).toMatchObject({
+        dataUrl: "blob:frame-1",
+        url: NEXT_URL,
+        metrics: { cssWidth: 300, title: "Next", url: NEXT_URL },
+      });
+      expect(controller.strokes).toEqual([]);
+      expect(controller.inspected).toBeNull();
+      expect(revokedUrls).toEqual(["blob:frame-0"]);
+    },
+  );
+
+  it("holds a frame whose decode finishes after capture mode begins", async () => {
+    const { controller } = setup();
+    const socket = await start(controller);
+    const images: EventTarget[] = [];
+    vi.stubGlobal(
+      "Image",
+      class extends EventTarget {
+        constructor() {
+          super();
+          images.push(this);
+        }
+        src = "";
+      },
+    );
+    socket.receive(screencastFrame(NEXT_URL));
+    controller.setMode("annotate");
+    socket.receive(JSON.stringify({ type: "meta", url: NEXT_URL, title: "Next" }));
+    images[0]!.dispatchEvent(new Event("load"));
+    await flush();
+    expect(controller.view).toMatchObject({ dataUrl: "blob:frame-0", url: PAGE_URL });
+    expect(revokedUrls).toEqual(["blob:frame-1"]);
+
+    controller.exitCaptureModes();
+    images[1]!.dispatchEvent(new Event("load"));
+    await flush();
+    expect(controller.view).toMatchObject({ dataUrl: "blob:frame-2", url: NEXT_URL });
+  });
+
   it("lets frames own the view and skips screenshot refreshes while live", async () => {
     const { controller, calls } = setup();
     const socket = await start(controller);
@@ -236,6 +298,24 @@ describe("Browser panel stream ownership", () => {
     expect(calls("/screencast")).toHaveLength(2);
     sockets[1]!.disconnect(1006);
     await retry;
+  });
+
+  it("falls back and backs off malformed mint responses without opening a socket", async () => {
+    const { controller, calls } = setup(async (envelope) =>
+      envelope.path === "/screencast" ? {} : undefined,
+    );
+    const pending = controller.refreshAll();
+    await flush();
+    expect(sockets).toHaveLength(0);
+    await pending;
+    expect(controller.view?.dataUrl).toMatch(/^data:/);
+    await controller.refreshAll();
+    expect(calls("/screencast")).toHaveLength(1);
+    expect(calls("/screenshot")).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await controller.refreshAll();
+    expect(calls("/screencast")).toHaveLength(2);
+    expect(sockets).toHaveLength(0);
   });
 
   it("restarts streaming immediately after a URL-bar navigation on the same tab", async () => {

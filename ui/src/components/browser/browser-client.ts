@@ -172,7 +172,20 @@ export async function requestBrowserScreencast(
   client: BrowserRequestClient,
   params: { targetId: string; maxWidth: number; maxHeight: number },
 ): Promise<{ token: string; wsPath: string; targetId: string; url: string }> {
-  return await browserRequest(client, { method: "POST", path: "/screencast", body: params });
+  const result = asRecord(
+    await browserRequest(client, { method: "POST", path: "/screencast", body: params }),
+  );
+  const token = stringOrEmpty(result?.token);
+  const wsPath = stringOrEmpty(result?.wsPath);
+  if (!token || !wsPath) {
+    throw new Error("browser screencast response is malformed");
+  }
+  return {
+    token,
+    wsPath,
+    targetId: stringOrEmpty(result?.targetId),
+    url: stringOrEmpty(result?.url),
+  };
 }
 
 export function isBrowserScreencastUnsupportedError(error: unknown): boolean {

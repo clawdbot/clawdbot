@@ -26,6 +26,7 @@ type StreamState = {
 
 interface BrowserPanelStreamHost extends StreamState {
   readonly host: BrowserPanelControllerHost;
+  readonly mode: "interact" | "annotate" | "inspect";
   readonly operations: Pick<
     BrowserPanelOperationOwnership,
     "epoch" | "route" | "isLive" | "capturedTabs" | "markNavigationReconciled"
@@ -209,7 +210,12 @@ export class BrowserPanelStream {
     }
     attempt.metadata = metadata;
     const view = this.host.view;
-    if (attempt.live && view?.targetId === attempt.targetId && view.metrics) {
+    if (
+      this.host.mode === "interact" &&
+      attempt.live &&
+      view?.targetId === attempt.targetId &&
+      view.metrics
+    ) {
       this.host.setState("view", {
         ...view,
         url: metadata.url,
@@ -229,10 +235,21 @@ export class BrowserPanelStream {
     }
   }
 
+  flushPendingFrame(): void {
+    const attempt = this.attempt;
+    if (attempt && this.current(attempt) && !attempt.decoding) {
+      void this.decodeFrames(attempt);
+    }
+  }
+
   private async decodeFrames(attempt: Attempt): Promise<void> {
     attempt.decoding = true;
     try {
       while (this.current(attempt) && attempt.pendingFrame) {
+        const mode = this.host.mode;
+        if (mode !== "interact") {
+          return;
+        }
         const frame = attempt.pendingFrame;
         const metadata = attempt.metadata;
         attempt.pendingFrame = undefined;
@@ -240,6 +257,13 @@ export class BrowserPanelStream {
         this.decodingUrl = objectUrl;
         const image = await loadBrowserPanelImage(objectUrl);
         if (!this.current(attempt)) {
+          return;
+        }
+        // Capture mode can begin while an image is decoding; keep the newest frame for exit.
+        if (this.host.mode !== "interact") {
+          attempt.pendingFrame ??= frame;
+          URL.revokeObjectURL(objectUrl);
+          this.decodingUrl = undefined;
           return;
         }
         if (metadata !== attempt.metadata && attempt.metadata?.url !== frame.url) {

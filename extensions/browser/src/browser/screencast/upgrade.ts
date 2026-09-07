@@ -16,7 +16,7 @@ export async function handleBrowserScreencastUpgrade(
     return false;
   }
   const params = consumeBrowserScreencastToken(url.searchParams.get("token") ?? "");
-  if (!params) {
+  if (!params || params.requesterSignal?.aborted) {
     try {
       socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
     } finally {

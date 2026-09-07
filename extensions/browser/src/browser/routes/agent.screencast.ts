@@ -24,6 +24,19 @@ export function registerBrowserAgentScreencastRoutes(
   ctx: BrowserRouteContext,
 ) {
   app.post("/screencast", async (req, res) => {
+    const requesterGone = () => {
+      if (!req.requester?.signal.aborted) {
+        return false;
+      }
+      res.status(401).json({
+        error: "The Gateway connection that requested the screencast has ended.",
+        code: "SCREENCAST_REQUESTER_GONE",
+      });
+      return true;
+    };
+    if (requesterGone()) {
+      return;
+    }
     const body = readBody(req);
     await withRouteTabContext({
       req,
@@ -68,6 +81,9 @@ export function registerBrowserAgentScreencastRoutes(
         const url = await resolveTabUrl(tab.url);
         signal.throwIfAborted();
         assertCurrent();
+        if (requesterGone()) {
+          return;
+        }
         const { token, expiresAtMs } = mintBrowserScreencastToken({
           profileName,
           targetId: tab.targetId,
@@ -78,6 +94,7 @@ export function registerBrowserAgentScreencastRoutes(
           quality: clampScreencastOption(body.quality, 30, 90, 70),
           lifecycleGeneration: generation,
           lifecycleSignal: lifecycle.controller.signal,
+          requesterSignal: req.requester?.signal,
           assertCurrent,
           checkNavigationAllowed: async (nextUrl) => {
             await assertBrowserNavigationResultAllowed({

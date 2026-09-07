@@ -31,15 +31,22 @@ class BrowserScreencastSession {
     params.lifecycleSignal.addEventListener("abort", this.onTargetClosed, { once: true });
   }
 
-  addViewer(ws: WebSocket): void {
+  addViewer(ws: WebSocket, requesterSignal?: AbortSignal): void {
+    const onRequesterGone = () => ws.close(4006, "authority_revoked");
     this.viewers.add(ws);
     ws.once("close", () => {
+      requesterSignal?.removeEventListener("abort", onRequesterGone);
       this.viewers.delete(ws);
       this.readyViewers.delete(ws);
       if (this.viewers.size === 0) {
         void this.close();
       }
     });
+    requesterSignal?.addEventListener("abort", onRequesterGone, { once: true });
+    if (requesterSignal?.aborted) {
+      onRequesterGone();
+      return;
+    }
     this.sendReady();
   }
 
@@ -298,6 +305,10 @@ export function attachBrowserScreencastViewer(
   params: BrowserScreencastTokenParams,
   ws: WebSocket,
 ): void {
+  if (params.requesterSignal?.aborted) {
+    ws.close(4006, "authority_revoked");
+    return;
+  }
   try {
     params.lifecycleSignal.throwIfAborted();
     params.assertCurrent();
@@ -316,12 +327,12 @@ export function attachBrowserScreencastViewer(
     session = undefined;
   }
   if (session) {
-    session.addViewer(ws);
+    session.addViewer(ws, params.requesterSignal);
     return;
   }
   session = new BrowserScreencastSession(key, params);
   sessions.set(key, session);
-  session.addViewer(ws);
+  session.addViewer(ws, params.requesterSignal);
   const next = session;
   // Finish retiring the predecessor before attaching a replacement to the same page.
   void Promise.resolve(previousDrain).then(() => next.start());

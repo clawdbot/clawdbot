@@ -99,6 +99,11 @@ after 60 seconds and can be consumed once. Invalid, expired, and reused tokens
 are rejected with HTTP 401 before upgrade. Viewers send no application messages;
 binary viewer messages close the connection.
 
+Tickets and viewers minted through the Gateway are bound to the requesting
+Gateway connection; ending that connection revokes unused tickets and closes
+its viewers. The loopback HTTP control API has no Gateway connection to bind,
+so its tickets remain TTL-only.
+
 The plugin shares one CDP screencast per profile and tab. Chrome sends JPEG
 frames on repaint, paced to approximately 20 frames per second. Slow viewers
 skip frames instead of building a queue. Navigation immediately retires the
@@ -118,19 +123,22 @@ after allowed navigation and page load. Binary messages contain:
 metadata and describe the layout viewport in CSS pixels. `scrollX` and `scrollY`
 come from `scrollOffsetX` and `scrollOffsetY`; `ts` is the CDP frame timestamp.
 
-| Close code | Meaning                                                                   |
-| ---------- | ------------------------------------------------------------------------- |
-| 4001       | Token invalid or expired (normally rejected before upgrade with HTTP 401) |
-| 4003       | `navigation_blocked`                                                      |
-| 4004       | `target_closed`, including a profile lifecycle change                     |
-| 4005       | Unsupported streaming                                                     |
-| 1012       | Gateway shutting down                                                     |
+| Close code | Meaning                                                                                             |
+| ---------- | --------------------------------------------------------------------------------------------------- |
+| 4001       | Token invalid or expired (normally rejected before upgrade with HTTP 401)                           |
+| 4003       | `navigation_blocked`                                                                                |
+| 4004       | `target_closed`, including a profile lifecycle change                                               |
+| 4005       | Unsupported streaming                                                                               |
+| 4006       | `authority_revoked` (the Gateway connection that minted the token ended, e.g. device token revoked) |
+| 1012       | Gateway shutting down                                                                               |
 
 Chrome MCP existing-session profiles and missing Playwright return HTTP 501 with
 `code: "SCREENCAST_UNSUPPORTED"` and `reason: "existing-session"` or `"playwright"`.
 Node-routed requests fail before proxying with `INVALID_REQUEST` and details
 `{ "code": "SCREENCAST_UNSUPPORTED", "reason": "node" }`. The Control UI falls
 back to the existing screenshot route when streaming is unavailable.
+While Annotate or Inspect is active, the Control UI pins the captured image and
+its URL, then displays the latest held frame when capture mode ends.
 
 ### `/act` error contract
 

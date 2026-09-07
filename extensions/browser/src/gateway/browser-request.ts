@@ -60,6 +60,8 @@ export async function handleBrowserGatewayRequest({
   params,
   respond,
   context,
+  client,
+  hasCurrentClientAuthority,
 }: Parameters<GatewayRequestHandlers["browser.request"]>[0]) {
   const typed = params as BrowserRequestParams;
   const methodRaw = (normalizeOptionalString(typed.method) ?? "").toUpperCase();
@@ -289,6 +291,11 @@ export async function handleBrowserGatewayRequest({
     return;
   }
 
+  const requesterSignal =
+    hasCurrentClientAuthority?.() === false ? AbortSignal.abort() : client?.connectionSignal;
+  const requester = requesterSignal
+    ? { connId: client?.connId, signal: requesterSignal }
+    : undefined;
   let result;
   try {
     result = timeoutMs
@@ -300,6 +307,7 @@ export async function handleBrowserGatewayRequest({
               query,
               body,
               signal,
+              ...(requester ? { requester } : {}),
             }),
           timeoutMs,
           "browser request",
@@ -309,6 +317,7 @@ export async function handleBrowserGatewayRequest({
           path,
           query,
           body,
+          ...(requester ? { requester } : {}),
         });
   } catch (err) {
     respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));

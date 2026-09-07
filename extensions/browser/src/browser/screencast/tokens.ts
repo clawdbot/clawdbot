@@ -11,6 +11,7 @@ export type BrowserScreencastTokenParams = {
   quality: number;
   lifecycleGeneration: number;
   lifecycleSignal: AbortSignal;
+  requesterSignal?: AbortSignal;
   assertCurrent: () => void;
   checkNavigationAllowed: (url: string) => Promise<void>;
 };
@@ -19,13 +20,19 @@ type TokenEntry = {
   params: BrowserScreencastTokenParams;
   expiresAtMs: number;
   expiryTimer: ReturnType<typeof setTimeout>;
+  onRequesterGone: () => void;
 };
 
 const TOKEN_TTL_MS = 60_000;
 const tokens = new Map<string, TokenEntry>();
 
 function deleteToken(token: string): void {
-  clearTimeout(tokens.get(token)?.expiryTimer);
+  const entry = tokens.get(token);
+  if (!entry) {
+    return;
+  }
+  clearTimeout(entry.expiryTimer);
+  entry.params.requesterSignal?.removeEventListener("abort", entry.onRequesterGone);
   tokens.delete(token);
 }
 
@@ -37,7 +44,12 @@ export function mintBrowserScreencastToken(params: BrowserScreencastTokenParams)
   const expiresAtMs = Date.now() + TOKEN_TTL_MS;
   const expiryTimer = setTimeout(() => deleteToken(token), TOKEN_TTL_MS);
   expiryTimer.unref();
-  tokens.set(token, { params, expiresAtMs, expiryTimer });
+  const onRequesterGone = () => deleteToken(token);
+  tokens.set(token, { params, expiresAtMs, expiryTimer, onRequesterGone });
+  params.requesterSignal?.addEventListener("abort", onRequesterGone, { once: true });
+  if (params.requesterSignal?.aborted) {
+    deleteToken(token);
+  }
   return { token, expiresAtMs };
 }
 

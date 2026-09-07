@@ -1,4 +1,4 @@
-import { EventEmitter } from "node:events";
+import { EventEmitter, getEventListeners } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { Page } from "playwright-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -91,6 +91,42 @@ describe("browser screencast sessions", () => {
     await flush();
     return viewer;
   }
+
+  it("revokes only the requesting viewer and stops capture after the last requester leaves", async () => {
+    const firstRequester = new AbortController();
+    const secondRequester = new AbortController();
+    const first = await attach(screencastParams({ requesterSignal: firstRequester.signal }));
+    const second = await attach(screencastParams({ requesterSignal: secondRequester.signal }));
+    page.paint(1);
+    firstRequester.abort();
+    expect(first.close).toHaveBeenCalledWith(4006, "authority_revoked");
+    expect(second.close).not.toHaveBeenCalled();
+    expect(getEventListeners(firstRequester.signal, "abort")).toHaveLength(0);
+    page.paint(2);
+    expect(first.frames()).toHaveLength(1);
+    expect(second.frames()).toHaveLength(2);
+    expect(page.cdp.detach).not.toHaveBeenCalled();
+    secondRequester.abort();
+    expect(second.close).toHaveBeenCalledWith(4006, "authority_revoked");
+    await flush();
+    expect(page.cdp.detach).toHaveBeenCalledOnce();
+  });
+
+  it("releases requester subscriptions when a viewer closes normally", async () => {
+    const requester = new AbortController();
+    const viewer = await attach(screencastParams({ requesterSignal: requester.signal }));
+    expect(getEventListeners(requester.signal, "abort")).toHaveLength(1);
+    viewer.close();
+    expect(getEventListeners(requester.signal, "abort")).toHaveLength(0);
+    requester.abort();
+    expect(viewer.close).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a requester revoked before viewer attachment without starting capture", async () => {
+    const viewer = await attach(screencastParams({ requesterSignal: AbortSignal.abort() }));
+    expect(viewer.close).toHaveBeenCalledWith(4006, "authority_revoked");
+    expect(page.newCDPSession).not.toHaveBeenCalled();
+  });
 
   it("shares one JPEG message across viewers, skips congestion, and ack-paces every frame", async () => {
     const first = await attach();
