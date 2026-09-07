@@ -7,7 +7,10 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { t } from "../../i18n/index.ts";
-import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
+import {
+  createIosNativeDeviceSettingsSnapshot,
+  createNativeDeviceSettingsSnapshot,
+} from "../../test-helpers/native-device-settings.ts";
 import "./talk-page.ts";
 
 const ACTIVE_VOICES = ["", "cove", "spruce", "custom-voice"];
@@ -226,6 +229,62 @@ afterEach(() => {
 });
 
 describe("Talk device and voice wake settings", () => {
+  it.each([false, true])(
+    "renders only published iOS voice controls and routes edits to native owners (minimal: %s)",
+    async (minimal) => {
+      const snapshot = createIosNativeDeviceSettingsSnapshot();
+      if (minimal) {
+        snapshot.voice = { supported: true, wakeEnabled: false };
+      }
+      const nativeDeviceSettings = {
+        snapshot,
+        subscribe: () => () => undefined,
+        set: vi.fn(),
+        requestPermission: vi.fn(),
+        openSystemSettings: vi.fn(),
+        openPanel: vi.fn(),
+        checkForUpdates: vi.fn(),
+        installChromeExtension: vi.fn(),
+        refresh: vi.fn(),
+        dispose: vi.fn(),
+      } satisfies NativeDeviceSettingsCapability;
+      const { page, request } = createTalkMutationHarness({ nativeDeviceSettings });
+      await vi.waitFor(() => expect(request).toHaveBeenCalled());
+      await page.updateComplete;
+      const section = [...page.querySelectorAll<HTMLElement>(".settings-section")].find(
+        (element) =>
+          element.querySelector(".settings-section__heading")?.textContent?.trim() ===
+          "This iPhone",
+      )!;
+      expect(section).toBeDefined();
+      const rows = [...section.querySelectorAll<HTMLElement>(".settings-row")];
+      const controls = minimal
+        ? ([["Voice Wake", "voice.wakeEnabled"]] as const)
+        : ([
+            ["Voice Wake", "voice.wakeEnabled"],
+            ["Talk mode", "voice.talkEnabled"],
+            ["Show Talk button", "voice.talkButtonEnabled"],
+            ["Talk in the background", "voice.talkBackgroundEnabled"],
+            ["Use speakerphone", "voice.speakerphoneEnabled"],
+          ] as const);
+      expect(
+        rows.map((row) => row.querySelector(".settings-row__title")?.textContent?.trim()),
+      ).toEqual(controls.map(([title]) => title));
+      for (const [index, [, key]] of controls.entries()) {
+        const row = rows[index];
+        if (!row) {
+          throw new Error(`Missing device voice control: ${key}`);
+        }
+        const toggle = row.querySelector<HTMLElement & { checked: boolean }>("wa-switch")!;
+        const next = !toggle.checked;
+        row.click();
+        expect(nativeDeviceSettings.set).toHaveBeenLastCalledWith(key, next);
+      }
+      expect(nativeDeviceSettings.set).toHaveBeenCalledTimes(controls.length);
+      expect(section.querySelector("select, button")).toBeNull();
+    },
+  );
+
   it("keeps device controls out of browsers while saving Gateway trigger words after a debounce", async () => {
     const voiceWakeRequest = vi.fn(async (method: string) => ({
       triggers: method === "voicewake.get" ? ["openclaw"] : ["hello computer"],

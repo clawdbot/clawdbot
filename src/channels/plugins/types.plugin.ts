@@ -68,6 +68,7 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   };
   reload?: {
     configPrefixes: string[];
+    /** Published dynamic reads; `*` matches one nonempty dotted config key. */
     noopPrefixes?: string[];
     /**
      * Opt into restarting only the changed non-default named account.

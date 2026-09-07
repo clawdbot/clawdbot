@@ -169,6 +169,33 @@ describe("Microsoft Teams approval Adaptive Cards", () => {
     expect(expired).not.toHaveProperty("actions");
   });
 
+  it.each([
+    { terminalStatus: undefined, label: "Not applied" },
+    { terminalStatus: "cancelled", label: "Cancelled" },
+  ] as const)(
+    "preserves the $label system-agent heading after denial",
+    ({ terminalStatus, label }) => {
+      const card = buildMSTeamsResolvedApprovalCard({
+        approvalKind: "system-agent",
+        approvalId: "system-agent:change-1",
+        phase: "resolved",
+        title: "OpenClaw change",
+        metadata: [],
+        commandText: "restart the Gateway",
+        operationSummary: "restart the Gateway",
+        decision: "deny",
+        applicationStatus: "not-applied",
+        terminalStatus,
+      });
+
+      expect(card.body).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ text: `OpenClaw Change Approval: ${label}` }),
+        ]),
+      );
+    },
+  );
+
   it("displays the canonical winning decision when another surface resolved the approval first", () => {
     const result: ApprovalResolveResult = {
       applied: false,

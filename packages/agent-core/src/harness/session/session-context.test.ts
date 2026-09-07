@@ -1,5 +1,6 @@
 import type { AssistantMessage, ProviderReplayState } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
+import { findCutPoint } from "../compaction/compaction.js";
 import { convertToLlm } from "../messages.js";
 import type { SessionTreeEntry } from "../types.js";
 import { buildSessionContext, projectSessionEntryMessage } from "./session.js";
@@ -133,6 +134,57 @@ function toolResultEntry(
 }
 
 describe("buildSessionContext", () => {
+  it.each([false, true])(
+    "keeps runtime carriers with their user at compaction boundaries (carrier=%s)",
+    (runtimeContextCarrier) => {
+      const entries: SessionTreeEntry[] = [
+        userEntry("entry-0", null, "original request"),
+        {
+          type: "custom_message",
+          id: "entry-1",
+          parentId: "entry-0",
+          timestamp,
+          customType: runtimeContextCarrier ? "openclaw.runtime-context" : "extension-context",
+          content: "metadata ".repeat(100),
+          display: false,
+          details: { runtimeContextCarrier },
+        },
+        assistantEntry("entry-2", "entry-1", "done"),
+      ];
+      for (const keepRecentTokens of [100, 1, 1_000]) {
+        const cut = findCutPoint(entries, 0, entries.length, keepRecentTokens);
+        const expectedIndex =
+          keepRecentTokens === 1_000 ? 0 : keepRecentTokens === 1 || runtimeContextCarrier ? 2 : 1;
+        expect(cut).toEqual({
+          firstKeptEntryIndex: expectedIndex,
+          turnStartIndex: expectedIndex === 2 ? (runtimeContextCarrier ? 0 : 1) : -1,
+          isSplitTurn: expectedIndex === 2,
+        });
+        const firstKeptEntry = entries[cut.firstKeptEntryIndex];
+        if (!firstKeptEntry) {
+          throw new Error("Expected a retained compaction boundary");
+        }
+        const replay = buildSessionContext([
+          ...entries,
+          {
+            type: "compaction",
+            id: "compacted",
+            parentId: "entry-2",
+            timestamp,
+            summary: "Earlier conversation",
+            firstKeptEntryId: firstKeptEntry.id,
+            tokensBefore: 1_000,
+          },
+        ]);
+        if (runtimeContextCarrier) {
+          expect(replay.messages.some((message) => message.role === "custom")).toBe(
+            replay.messages.some((message) => message.role === "user"),
+          );
+        }
+      }
+    },
+  );
+
   it("keeps display-only custom activity out of model input", () => {
     const activity = {
       role: "custom" as const,

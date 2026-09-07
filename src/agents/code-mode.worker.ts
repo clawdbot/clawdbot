@@ -501,6 +501,16 @@ async function runVmExecution(params: {
     if (params.bridge.admissionFailure) {
       throw params.bridge.admissionFailure;
     }
+    const admissionError = params.vm.global
+      .getProp("__openclawAdmissionError")
+      .consume((read) =>
+        params.vm
+          .callFunction(read, params.vm.undefined)
+          .consume((error) => (error.isString ? error.toString() : undefined)),
+      );
+    if (admissionError) {
+      throw new CodeModeWorkerFailure("invalid_input", admissionError);
+    }
     params.vm.global
       .getProp("__openclawDrainQueuedRequests")
       .consume((drain) => params.vm.callFunction(drain, params.vm.undefined).dispose());

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 import { syncMemoryWikiUnsafeLocalSources } from "./unsafe-local.js";
 
@@ -204,6 +205,46 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     await expect(
       fs.readFile(path.join(vaultDir, unavailablePage!.pagePath), "utf8"),
     ).resolves.toContain("remember this");
+  });
+
+  it("keeps prior pages, sync state, and ingest log when a source read fails", async () => {
+    const privateDir = await createPrivateDir("failed-source-read");
+    const previousPath = path.join(privateDir, "previous.md");
+    const failingPath = path.join(privateDir, "failing.md");
+    await fs.writeFile(previousPath, "# Previous source\n", "utf8");
+    const { rootDir: vaultDir, config } = await createVault({
+      rootDir: nextCaseRoot("failed-source-read-vault"),
+      config: {
+        vaultMode: "unsafe-local",
+        unsafeLocal: { allowPrivateMemoryCoreAccess: true, paths: [privateDir] },
+      },
+    });
+    const first = await syncMemoryWikiUnsafeLocalSources(config);
+    const previousPage = path.join(vaultDir, first.pagePaths[0] ?? "");
+    const previousContent = await fs.readFile(previousPage, "utf8");
+    const previousState = await readMemoryWikiSourceSyncState(vaultDir);
+    const logPath = path.join(vaultDir, ".openclaw-wiki", "log.jsonl");
+    const previousLog = await fs.readFile(logPath, "utf8");
+    await fs.rm(previousPath);
+    await fs.writeFile(failingPath, "# Unreadable source\n", "utf8");
+
+    const readFile = fs.readFile.bind(fs);
+    const readSpy = vi
+      .spyOn(fs, "readFile")
+      .mockImplementation(
+        async (...args: Parameters<typeof fs.readFile>): ReturnType<typeof fs.readFile> => {
+          if (args[0] === failingPath) {
+            throw new Error("source read failed");
+          }
+          return readFile(...args);
+        },
+      );
+    await expect(syncMemoryWikiUnsafeLocalSources(config)).rejects.toThrow("source read failed");
+    readSpy.mockRestore();
+
+    await expect(fs.readFile(previousPage, "utf8")).resolves.toBe(previousContent);
+    await expect(readMemoryWikiSourceSyncState(vaultDir)).resolves.toEqual(previousState);
+    await expect(fs.readFile(logPath, "utf8")).resolves.toBe(previousLog);
   });
 
   it("skips generated source pages copied into a configured path", async () => {

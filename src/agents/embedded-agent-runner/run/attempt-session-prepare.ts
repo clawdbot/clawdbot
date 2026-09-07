@@ -457,6 +457,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
     }
     const userTranscriptContexts = input.getUserTranscriptContexts();
     return {
+      sessionVersion: sessionManager.getHeader()?.version,
       appendOnlyRuntimeContext: input.appendOnlyRuntimeContext,
       ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
       ...(includeBoundaryTimestamp ? {} : { includeTimestamp: false }),

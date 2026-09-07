@@ -315,7 +315,7 @@ describe("Code Mode worker lifecycle", () => {
 
     expect(
       await execute(
-        "globalThis.previousRun = true; setTimeout(() => {}, 1); setTimeout(() => {}, 2);",
+        "globalThis.previousRun = true; for (let i = 0; i < 130; i++) setTimeout(() => {}, 1);",
       ),
     ).toMatchObject({ status: "failed", code: "invalid_input" });
     const cancelled = await execute(

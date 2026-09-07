@@ -8,7 +8,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { CURRENT_SESSION_VERSION, SessionManager } from "../agents/sessions/session-manager.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
 import {
   loadExactSessionEntry,
   upsertSessionEntryCore,
@@ -2372,7 +2372,7 @@ describe("runDoctorSessionSqlite", () => {
     expect(events[0]).toMatchObject({
       id: "session-1",
       type: "session",
-      version: CURRENT_SESSION_VERSION,
+      version: 3,
     });
     expect(events[0]).not.toHaveProperty("sessionId");
     expect(events[1]).toEqual({

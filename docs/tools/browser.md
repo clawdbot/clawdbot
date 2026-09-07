@@ -160,6 +160,11 @@ that card's browser and tab. This does not change `browser.defaultProfile` or
 another session's selection. Without a session browser target, the panel uses
 the configured default routing.
 
+The panel streams the active tab live as the page repaints. It falls back to
+screenshots for node-routed browsers, Chrome MCP existing-session profiles,
+missing Playwright, or stream connection failures. Navigation rules apply to
+the stream: navigating to a blocked address stops it and clears the view.
+
 Preview cards are interactive only when OpenClaw can identify the browser's
 route. Sandbox browser results remain available to the agent but do not open a
 host-browser preview.

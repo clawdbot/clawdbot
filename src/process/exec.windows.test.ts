@@ -383,29 +383,40 @@ describe("Windows command execution", () => {
     });
   });
 
-  it("does not time out after the direct child exits while output settles", async () => {
-    vi.useFakeTimers();
-    const command = createMockSubprocess({ autoFinish: false });
-    execaMock.mockReturnValueOnce(command);
+  it.each([
+    { exitCode: 0, killProcessTree: undefined },
+    { exitCode: 7, killProcessTree: undefined },
+    { exitCode: 0, killProcessTree: true },
+    { exitCode: 7, killProcessTree: true },
+  ])(
+    "does not target an exited Windows root (code $exitCode, tree=$killProcessTree) while output settles",
+    async ({ exitCode, killProcessTree }) => {
+      vi.useFakeTimers();
+      const command = createMockSubprocess({ autoFinish: false });
+      execaMock.mockReturnValueOnce(command);
 
-    await withMockedWindowsPlatform(async () => {
-      const resultPromise = runCommandWithTimeout(["node", "quick.js"], { timeoutMs: 80 });
-      command.exitCode = 0;
-      command.emit("exit", 0, null);
+      await withMockedWindowsPlatform(async () => {
+        const resultPromise = runCommandWithTimeout(["node", "quick.js"], {
+          timeoutMs: 80,
+          killProcessTree,
+        });
+        command.exitCode = exitCode;
+        command.emit("exit", exitCode, null);
 
-      await vi.advanceTimersByTimeAsync(81);
-      expect(execaMock).toHaveBeenCalledTimes(1);
-      expect(command.stdout.destroyed).toBe(false);
-      await vi.advanceTimersByTimeAsync(19);
-      expect(command.stdout.destroyed).toBe(false);
-      await vi.advanceTimersToNextTimerAsync();
-      expect(command.stdout.destroyed).toBe(true);
-      expect(command.stderr.destroyed).toBe(true);
+        await vi.advanceTimersByTimeAsync(81);
+        expect(execaMock).toHaveBeenCalledTimes(1);
+        expect(command.stdout.destroyed).toBe(false);
+        await vi.advanceTimersByTimeAsync(19);
+        expect(command.stdout.destroyed).toBe(false);
+        await vi.advanceTimersToNextTimerAsync();
+        expect(command.stdout.destroyed).toBe(true);
+        expect(command.stderr.destroyed).toBe(true);
 
-      command.finish();
-      await expect(resultPromise).resolves.toMatchObject({ code: 0, termination: "exit" });
-    });
-  });
+        command.finish({ exitCode });
+        await expect(resultPromise).resolves.toMatchObject({ code: exitCode, termination: "exit" });
+      });
+    },
+  );
 
   it("gracefully then force-kills a Windows process tree", async () => {
     vi.useFakeTimers();

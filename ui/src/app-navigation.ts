@@ -2,7 +2,10 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 // Control UI app navigation defines sidebar and settings presentation metadata.
 import type { RouteId } from "./app-route-paths.ts";
-import type { NativeDeviceSettingsCapability } from "./app/native-device-settings.ts";
+import type {
+  NativeDeviceSettingsCapability,
+  NativeDeviceSettingsSnapshot,
+} from "./app/native-device-settings.ts";
 import type { IconName } from "./components/icons.ts";
 import { i18n, t } from "./i18n/index.ts";
 
@@ -251,6 +254,24 @@ export function isSettingsNavigationRouteVisible(
   );
 }
 
+export function deviceSettingsGroupLabelKey(
+  snapshot?: NativeDeviceSettingsSnapshot | null,
+): string {
+  const device = snapshot?.device;
+  if (device?.platform === "macos") {
+    return "nav.settingsGroupDevice";
+  }
+  if (device?.platform === "ios") {
+    if (device.formFactor === "phone") {
+      return "nav.settingsGroupThisIPhone";
+    }
+    if (device.formFactor === "pad") {
+      return "nav.settingsGroupThisIPad";
+    }
+  }
+  return "nav.settingsGroupThisDevice";
+}
+
 export function visibleSettingsNavigationGroups(
   canAdmin: boolean,
   nativeDeviceSettings: NativeDeviceSettingsCapability | null = null,
@@ -259,9 +280,8 @@ export function visibleSettingsNavigationGroups(
   return groups
     .map((group) => ({
       labelKey:
-        group.labelKey === "nav.settingsGroupDevice" &&
-        nativeDeviceSettings?.snapshot?.device.platform !== "macos"
-          ? "nav.settingsGroupThisDevice"
+        group.labelKey === "nav.settingsGroupDevice"
+          ? deviceSettingsGroupLabelKey(nativeDeviceSettings?.snapshot)
           : group.labelKey,
       routes: group.routes.filter((route) =>
         isSettingsNavigationRouteVisible(route, canAdmin, nativeDeviceSettings),
@@ -292,6 +312,7 @@ const SETTINGS_NAVIGATION_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
 ]);
 
 const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation> = {
+  settings: ["settings", "nav.settings", "common.settingsSections"],
   agents: ["bot", "tabs.agents", "subtitles.agents"],
   activity: ["activity", "tabs.activity", "subtitles.activity"],
   meetings: ["book", "tabs.meetings", "subtitles.meetings"],
@@ -435,7 +456,13 @@ export function formatDocumentTitle(options: {
   return base;
 }
 
-export function settingsNavigationLabelForRoute(routeId: NavigationRouteId): string {
+export function settingsNavigationLabelForRoute(
+  routeId: NavigationRouteId,
+  snapshot?: NativeDeviceSettingsSnapshot | null,
+): string {
+  if (routeId === "device" && snapshot) {
+    return t(deviceSettingsGroupLabelKey(snapshot));
+  }
   if (routeId === "custodian") {
     return t("nav.askOpenClaw");
   }

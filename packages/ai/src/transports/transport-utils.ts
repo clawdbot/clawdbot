@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Model } from "@openclaw/llm-core";
+import { consumeResponseBytes } from "@openclaw/normalization-core";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -89,22 +90,6 @@ export function isCodeModeModelVisibleToolName(
   return visibleToolNames.has(name);
 }
 
-function isGoogleGemini3Model(modelId: string, family: "flash" | "pro"): boolean {
-  const normalized = modelId.trim().toLowerCase();
-  const suffix = family === "pro" ? "pro" : "flash";
-  return new RegExp(
-    `(?:^|/)gemini-(?:3(?:\\.\\d+)?-${suffix}|${suffix}${family === "flash" ? "(?:-lite)?" : ""}-latest)(?:-|$)`,
-  ).test(normalized);
-}
-
-export function isGoogleGemini3ProModel(modelId: string): boolean {
-  return isGoogleGemini3Model(modelId, "pro");
-}
-
-export function isGoogleGemini3FlashModel(modelId: string): boolean {
-  return isGoogleGemini3Model(modelId, "flash");
-}
-
 async function readChunkWithIdleTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   timeoutMs: number,
@@ -148,24 +133,21 @@ export async function readResponseTextSnippet(
   let bytes = 0;
   let truncated = false;
   try {
-    while (bytes < maxBytes) {
-      const result = options?.chunkTimeoutMs
-        ? await readChunkWithIdleTimeout(reader, options.chunkTimeoutMs, options.onIdleTimeout)
-        : await reader.read();
-      if (result.done) {
-        break;
-      }
-      if (!result.value?.length) {
-        continue;
-      }
-      const remaining = maxBytes - bytes;
-      chunks.push(result.value.subarray(0, remaining));
-      bytes += Math.min(result.value.length, remaining);
-      if (result.value.length >= remaining) {
-        truncated = true;
-        await reader.cancel().catch(() => undefined);
-        break;
-      }
+    if (bytes < maxBytes) {
+      const result = await consumeResponseBytes({
+        maxBytes,
+        stopAtLimit: true,
+        read: () =>
+          options?.chunkTimeoutMs
+            ? readChunkWithIdleTimeout(reader, options.chunkTimeoutMs, options.onIdleTimeout)
+            : reader.read(),
+        onChunk: (chunk) => chunks.push(chunk),
+        onLimit: async () => {
+          await reader.cancel().catch(() => undefined);
+        },
+      });
+      bytes = Math.min(result.size, maxBytes);
+      truncated = result.truncated;
     }
   } catch (error) {
     await reader.cancel(error).catch(() => undefined);

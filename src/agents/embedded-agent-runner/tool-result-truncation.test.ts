@@ -114,6 +114,7 @@ function preparePromptProjectionStateForTest(params: {
 }) {
   const prompt = params.raw ? "raw probe" : "continue";
   prepareEmbeddedAttemptPromptContext({
+    capabilityToolNames: new Set(),
     attempt: {
       config: {},
       contextTokenBudget: 128_000,
@@ -126,13 +127,7 @@ function preparePromptProjectionStateForTest(params: {
     messages: params.messages,
     prompt: {
       effectivePrompt: prompt,
-      promptBeforePromptBuildHooks: prompt,
-      hasPromptBuildContext: false,
       effectiveTranscriptPrompt: prompt,
-      transcriptPromptForRuntimeSplit: prompt,
-      promptForRuntimeContextSplit: prompt,
-      promptForModelBeforeRuntimeContextSplit: prompt,
-      promptForRuntimeContextBeforeAnnotation: prompt,
     },
     replaceSessionMessages: () => {},
     sessionAgentId: "main",
