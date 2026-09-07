@@ -7,6 +7,12 @@ const retrySchema = z.object({ retry_after: z.number().finite().nonnegative() })
 const timeoutMs = 30_000;
 export const ABORT_LABEL = "Discord collection aborted.";
 
+export class DiscordHttpError extends Error {
+  constructor(readonly status: number) {
+    super(`Discord request failed (HTTP ${status}); check bot channel permissions.`);
+  }
+}
+
 export function createClient(
   config: DiscordSourceConfig,
   runtime: SourceRuntime,
@@ -98,9 +104,7 @@ export function createClient(
           continue;
         }
         if (result.status < 200 || result.status >= 300) {
-          throw new Error(
-            `Discord request failed (HTTP ${result.status}); check bot channel permissions.`,
-          );
+          throw new DiscordHttpError(result.status);
         }
         if (result.data === undefined) {
           throw new Error("Discord returned invalid JSON.");

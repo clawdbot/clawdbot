@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { config, json, message, roster, runtime, window } from "./discord.fixtures.js";
+import { config, json, message, roster, runtime, thread, window } from "./discord.fixtures.js";
 import { createDiscordSource } from "./index.js";
 
 afterEach(() => vi.useRealTimers());
@@ -68,78 +68,242 @@ describe("Discord report source", () => {
     expect(result.messages.every((entry) => !entry.authorIsBot && entry.content.trim())).toBe(true);
   });
 
-  it("rolls active and recent archived threads into configured parents and bounds archive paging", async () => {
-    const archiveTimes = [window.untilMs + 1000, window.sinceMs + 1000, window.sinceMs - 1];
-    let archivePages = 0;
-    const context = runtime((url) => {
-      if (url.pathname.endsWith("/threads/active")) {
-        return json({
-          threads: [
-            { id: "22", parent_id: "20", name: "design" },
-            { id: "90", parent_id: "99", name: "outside" },
-          ],
-        });
-      }
-      if (url.pathname.endsWith("/threads/archived/public")) {
-        archivePages += 1;
-        if (archivePages === 1) {
+  it.each([
+    ["public", 11],
+    ["private", 12],
+  ])(
+    "rolls active and %s archived threads into configured parents and bounds archive paging",
+    async (archiveKind, type) => {
+      const archiveTimes = [window.untilMs + 1000, window.sinceMs + 1000, window.sinceMs - 1];
+      let archivePages = 0;
+      const context = runtime((url) => {
+        if (url.pathname.endsWith("/threads/active")) {
+          return json({
+            threads: [
+              { id: "22", parent_id: "20", name: "design", type },
+              { id: "90", parent_id: "99", name: "outside" },
+            ],
+          });
+        }
+        if (url.pathname.endsWith(`/channels/20/threads/archived/${archiveKind}`)) {
+          expect(url.searchParams.get("limit")).toBe("100");
+          archivePages += 1;
+          if (archivePages === 1) {
+            return json({
+              threads: [
+                {
+                  id: "22",
+                  parent_id: "20",
+                  name: "design",
+                  type,
+                  thread_metadata: {
+                    archive_timestamp: new Date(archiveTimes[0] ?? 0).toISOString(),
+                  },
+                },
+              ],
+              has_more: true,
+            });
+          }
+          expect(url.searchParams.get("before")).toBe(new Date(archiveTimes[0] ?? 0).toISOString());
           return json({
             threads: [
               {
-                id: "22",
+                id: "21",
                 parent_id: "20",
-                name: "design",
+                name: "review",
+                type,
                 thread_metadata: {
-                  archive_timestamp: new Date(archiveTimes[0] ?? 0).toISOString(),
+                  archive_timestamp: new Date(archiveTimes[1] ?? 0).toISOString(),
+                },
+              },
+              {
+                id: "23",
+                parent_id: "20",
+                name: "old",
+                type,
+                thread_metadata: {
+                  archive_timestamp: new Date(archiveTimes[2] ?? 0).toISOString(),
                 },
               },
             ],
             has_more: true,
           });
         }
-        expect(url.searchParams.get("before")).toBe(new Date(archiveTimes[0] ?? 0).toISOString());
+        if (url.pathname.endsWith("/messages")) {
+          const channelId = url.pathname.split("/").at(-2);
+          return json([message(window.sinceMs + 1, url.pathname, BigInt(channelId ?? "0"))]);
+        }
+        return undefined;
+      });
+      const result = await createDiscordSource(context).collect(config, window, roster);
+      expect(archivePages).toBe(2);
+      expect(
+        result.messages.map(({ channelId, parentChannelId, channelName }) => ({
+          channelId,
+          parentChannelId,
+          channelName,
+        })),
+      ).toEqual([
+        { channelId: "20", parentChannelId: "20", channelName: "engineering" },
+        { channelId: "21", parentChannelId: "20", channelName: "engineering/review" },
+        { channelId: "22", parentChannelId: "20", channelName: "engineering/design" },
+      ]);
+      expect(context.requests.filter((url) => url.pathname.endsWith("/messages"))).toHaveLength(3);
+      expect(context.logs).toEqual([
+        "team-reports: Discord channels/threads listed: 1 channels, 2 threads",
+        "team-reports: Discord messages done: 1 channels, 2 threads, 3 messages",
+      ]);
+    },
+  );
+
+  it("preserves private thread messages after the thread archives", async () => {
+    const privateThread = thread(message(window.sinceMs - 1000).id, window.sinceMs + 1000);
+    let archived = false;
+    const context = runtime((url) => {
+      if (url.pathname.endsWith("/threads/active")) {
+        return json({ threads: archived ? [] : [privateThread] });
+      }
+      if (url.pathname.endsWith("/channels/20/threads/archived/private")) {
+        return json({ threads: archived ? [privateThread] : [], has_more: false });
+      }
+      if (url.pathname.endsWith(`/channels/${privateThread.id}/messages`)) {
+        expect(url.searchParams.get("after")).toBe("175928843960320000");
+        return json([message(window.sinceMs + 1)]);
+      }
+      return undefined;
+    });
+    const source = createDiscordSource(context);
+    const activeResult = await source.collect(config, window, roster);
+    archived = true;
+    const archivedResult = await source.collect(config, window, roster);
+    expect(activeResult.messages).toHaveLength(1);
+    expect(archivedResult.messages).toEqual(activeResult.messages);
+    expect(archivedResult.status.warnings).toEqual([]);
+    expect(archivedResult.status.stale).not.toBe(true);
+  });
+
+  it("falls back to joined private archives and pages by thread id past old archive timestamps", async () => {
+    const newerThread = thread(message(window.sinceMs - 1000).id, window.sinceMs - 1);
+    const olderThread = thread(message(window.sinceMs - 2000).id, window.sinceMs + 1000);
+    let joinedPages = 0;
+    const context = runtime((url) => {
+      if (url.pathname.endsWith("/channels/20/threads/archived/private")) {
+        return json({}, 403);
+      }
+      if (url.pathname.endsWith("/users/@me/threads/archived/private")) {
+        joinedPages += 1;
+        expect(url.searchParams.get("limit")).toBe("100");
+        expect(url.searchParams.get("before")).toBe(joinedPages === 1 ? null : newerThread.id);
         return json({
-          threads: [
-            {
-              id: "21",
-              parent_id: "20",
-              name: "review",
-              thread_metadata: { archive_timestamp: new Date(archiveTimes[1] ?? 0).toISOString() },
-            },
-            {
-              id: "23",
-              parent_id: "20",
-              name: "old",
-              thread_metadata: { archive_timestamp: new Date(archiveTimes[2] ?? 0).toISOString() },
-            },
-          ],
-          has_more: true,
+          threads: [joinedPages === 1 ? newerThread : olderThread],
+          has_more: joinedPages === 1,
         });
       }
-      if (url.pathname.endsWith("/messages")) {
-        const channelId = url.pathname.split("/").at(-2);
-        return json([message(window.sinceMs + 1, url.pathname, BigInt(channelId ?? "0"))]);
+      if (url.pathname.endsWith(`/channels/${olderThread.id}/messages`)) {
+        return json([message(window.sinceMs + 1)]);
       }
       return undefined;
     });
     const result = await createDiscordSource(context).collect(config, window, roster);
-    expect(archivePages).toBe(2);
+    expect(result.messages.map((entry) => entry.channelId)).toEqual([olderThread.id]);
+    expect(joinedPages).toBe(2);
+    expect(result.status.warnings).toEqual([]);
+    expect(result.status.stale).not.toBe(true);
+    expect(result.status.stats.privateArchivesSkipped).toBe(0);
+  });
+
+  it("counts inaccessible private archives without warnings or stale status when both endpoints return 403", async () => {
+    const context = runtime((url) => {
+      if (url.pathname.endsWith("/threads/archived/private")) {
+        return json({}, 403);
+      }
+      if (url.pathname.endsWith("/channels/20/messages")) {
+        return json([message(window.sinceMs + 1)]);
+      }
+      return undefined;
+    });
+    const result = await createDiscordSource(context).collect(config, window, roster);
+    expect(result.messages).toHaveLength(1);
+    expect(result.status.ok).toBe(true);
+    expect(result.status.stale).not.toBe(true);
+    expect(result.status.warnings).toEqual([]);
+    expect(result.status.stats.privateArchivesSkipped).toBe(1);
     expect(
-      result.messages.map(({ channelId, parentChannelId, channelName }) => ({
-        channelId,
-        parentChannelId,
-        channelName,
-      })),
-    ).toEqual([
-      { channelId: "20", parentChannelId: "20", channelName: "engineering" },
-      { channelId: "21", parentChannelId: "20", channelName: "engineering/review" },
-      { channelId: "22", parentChannelId: "20", channelName: "engineering/design" },
-    ]);
-    expect(context.requests.filter((url) => url.pathname.endsWith("/messages"))).toHaveLength(3);
-    expect(context.logs).toEqual([
-      "team-reports: Discord channels/threads listed: 1 channels, 2 threads",
-      "team-reports: Discord messages done: 1 channels, 2 threads, 3 messages",
-    ]);
+      context.requests.filter((url) => url.pathname.endsWith("/threads/archived/private")),
+    ).toHaveLength(2);
+  });
+
+  it.each(["primary", "joined"])(
+    "warns on non-403 failures from %s private archives",
+    async (endpoint) => {
+      const context = runtime((url) => {
+        if (url.pathname.endsWith("/channels/20/threads/archived/private")) {
+          return json({}, endpoint === "primary" ? 404 : 403);
+        }
+        if (url.pathname.endsWith("/users/@me/threads/archived/private")) {
+          return json({}, 404);
+        }
+        return undefined;
+      });
+      const result = await createDiscordSource(context).collect(config, window, roster);
+      expect(result.status.warnings).toEqual([expect.stringMatching(/20.*404/)]);
+      expect(result.status.stale).toBe(true);
+      expect(result.status.stats.privateArchivesSkipped).toBe(0);
+    },
+  );
+
+  it.each([15, 16])(
+    "collects archived posts from type %s channels without requesting parent messages",
+    async (type) => {
+      const context = runtime((url) => {
+        if (url.pathname.endsWith("/guilds/10/channels")) {
+          return json([{ id: "20", name: "posts", type }]);
+        }
+        if (url.pathname.endsWith("/threads/archived/public")) {
+          return json({ threads: [thread("21", window.sinceMs + 1000, 11)], has_more: false });
+        }
+        if (url.pathname.endsWith("/channels/21/messages")) {
+          return json([message(window.sinceMs + 1)]);
+        }
+        return undefined;
+      });
+      const result = await createDiscordSource(context).collect(config, window, roster);
+      expect(result.messages.map((entry) => entry.channelName)).toEqual(["posts/discussion"]);
+      expect(context.requests.some((url) => url.pathname.endsWith("/channels/20/messages"))).toBe(
+        false,
+      );
+      expect(result.status.warnings).toEqual([]);
+    },
+  );
+
+  it("collects active announcement thread messages beyond 100 pages regardless of thread creation time", async () => {
+    const activeThread = thread(message(window.sinceMs - 1000).id, window.sinceMs - 1000, 10);
+    let pages = 0;
+    const context = runtime((url) => {
+      if (url.pathname.endsWith("/threads/active")) {
+        return json({ threads: [activeThread] });
+      }
+      if (url.pathname.endsWith(`/channels/${activeThread.id}/messages`)) {
+        const after = BigInt(url.searchParams.get("after") ?? "0");
+        pages += 1;
+        return json(
+          Array.from({ length: pages <= 100 ? 100 : 1 }, (_, index) => ({
+            ...message(window.sinceMs + 1),
+            id: (after + BigInt(index + 1)).toString(),
+          })).toReversed(),
+        );
+      }
+      return undefined;
+    });
+    const result = await createDiscordSource(context).collect(config, window, roster);
+    expect(pages).toBe(101);
+    expect(result.messages).toHaveLength(10001);
+    expect(
+      result.messages.every(
+        (entry) => entry.channelId === activeThread.id && entry.atMs === window.sinceMs,
+      ),
+    ).toBe(true);
+    expect(result.status.warnings).toEqual([]);
   });
 
   it.each([0.25, 3_000_000])(

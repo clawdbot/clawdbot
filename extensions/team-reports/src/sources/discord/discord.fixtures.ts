@@ -11,6 +11,16 @@ export const config: DiscordSourceConfig = {
 export const window = { sinceMs: 1462015105000, untilMs: 1462015107000 };
 export const roster: Roster = { members: [], byLogin: new Map(), byDiscordId: new Map() };
 
+export function thread(id: string, archivedMs: number, type = 12) {
+  return {
+    id,
+    parent_id: "20",
+    name: "discussion",
+    type,
+    thread_metadata: { archive_timestamp: new Date(archivedMs).toISOString() },
+  };
+}
+
 export function message(atMs: number, content = "Synthetic discussion", idOffset = 1n) {
   return {
     id: (((BigInt(atMs) - 1420070400000n) << 22n) + idOffset).toString(),
@@ -53,7 +63,10 @@ export function runtime(
       if (url.pathname.endsWith("/threads/active")) {
         return json({ threads: [] });
       }
-      if (url.pathname.endsWith("/threads/archived/public")) {
+      if (
+        url.pathname.endsWith("/threads/archived/public") ||
+        url.pathname.endsWith("/threads/archived/private")
+      ) {
         return json({ threads: [], has_more: false });
       }
       if (url.pathname.endsWith("/messages")) {

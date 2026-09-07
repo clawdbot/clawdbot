@@ -298,6 +298,9 @@ by the same actor and comment kind count once within the window. Bot activity
 is excluded, and nonmember GitHub actors appear separately with counts only.
 Members with no activity still appear in the roster.
 
+Pull-request review submissions, including approval and request-changes bodies,
+are not collected; inline review comments are included.
+
 Discord totals include unmapped authors, but unmatched entries contain only
 the author ID and count, without message content. Excerpts come only from
 channels with `excerpts: true`, use collapsed whitespace, and keep the newest
@@ -374,6 +377,15 @@ Repository advisories are optional. An advisory request returning HTTP 403 or
 404 counts toward `advisoriesSkipped` in the GitHub source stats without adding
 a warning or marking the day stale. Rate-limit responses still wait and retry;
 other advisory failures retain their warnings.
+
+Discord collection includes active and archived threads, including forum and
+media posts. Private archives require `MANAGE_THREADS` and
+`READ_MESSAGE_HISTORY`; if Discord returns HTTP 403, collection falls back to
+private threads the bot has joined, using `READ_MESSAGE_HISTORY`.
+If both private-archive endpoints return HTTP 403, the channel counts toward
+`privateArchivesSkipped` in Discord source stats without a warning or stale
+status; other failures retain their warnings.
+Private threads the bot cannot access are outside the report's coverage.
 
 Long runs emit `team-reports:` progress lines in the Gateway log when roster,
 repository, issue-search, commit, comment/advisory, and Discord collection stages

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { DiscordMessage, DiscordSource, SourceRuntime, SourceStatus } from "../../types.js";
 import { checkAbort, createResponseParser } from "../http.js";
-import { ABORT_LABEL, createClient } from "./client.js";
+import { ABORT_LABEL, createClient, DiscordHttpError } from "./client.js";
 
 const snowflake = z.string().regex(/^\d{1,20}$/);
 const channelSchema = z.object({
@@ -39,7 +39,7 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
       const status: SourceStatus = {
         ok: true,
         warnings: [],
-        stats: { apiCalls: 0, channelsScanned: 0, threadsScanned: 0 },
+        stats: { apiCalls: 0, channelsScanned: 0, threadsScanned: 0, privateArchivesSkipped: 0 },
       };
       const collected = new Map<string, DiscordMessage>();
       const warn = (scope: string, error: unknown) => {
@@ -95,36 +95,65 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
         warn("Discord active threads", error);
       }
 
-      for (const id of configured) {
+      const collectArchives = async (path: string, order: "timestamp" | "id" = "timestamp") => {
         let before: string | undefined;
-        try {
-          while (true) {
-            checkAbort(runtime.signal, ABORT_LABEL);
-            const page = parse(
-              archivesSchema,
-              await client.get(`/channels/${encodeURIComponent(id)}/threads/archived/public`, {
-                limit: "100",
-                ...(before ? { before } : {}),
-              }),
-            );
-            let oldestMs = Infinity;
-            for (const thread of page.threads) {
-              const archivedMs = Date.parse(thread.thread_metadata.archive_timestamp);
-              oldestMs = Math.min(oldestMs, archivedMs);
-              if (archivedMs >= window.sinceMs) {
-                addThread(thread);
-              }
+        while (true) {
+          checkAbort(runtime.signal, ABORT_LABEL);
+          const page = parse(
+            archivesSchema,
+            await client.get(path, { limit: "100", ...(before ? { before } : {}) }),
+          );
+          let oldestMs = Infinity;
+          let oldestId: string | undefined;
+          for (const thread of page.threads) {
+            const archivedMs = Date.parse(thread.thread_metadata.archive_timestamp);
+            oldestMs = Math.min(oldestMs, archivedMs);
+            if (!oldestId || BigInt(thread.id) < BigInt(oldestId)) {
+              oldestId = thread.id;
             }
-            if (!page.has_more || page.threads.length === 0 || oldestMs <= window.sinceMs) {
-              break;
+            if (archivedMs >= window.sinceMs) {
+              addThread(thread);
             }
-            if (before && oldestMs >= Date.parse(before)) {
-              throw new Error("Discord archived-thread pagination did not advance.");
-            }
-            before = new Date(oldestMs).toISOString();
           }
+          // Joined archives sort by creation ID, so an older thread can still have recent activity.
+          if (
+            !page.has_more ||
+            !oldestId ||
+            (order === "timestamp" && oldestMs <= window.sinceMs)
+          ) {
+            break;
+          }
+          if (
+            before &&
+            (order === "id" ? BigInt(oldestId) >= BigInt(before) : oldestMs >= Date.parse(before))
+          ) {
+            throw new Error("Discord archived-thread pagination did not advance.");
+          }
+          before = order === "id" ? oldestId : new Date(oldestMs).toISOString();
+        }
+      };
+      for (const id of configured) {
+        const channelPath = `/channels/${encodeURIComponent(id)}`;
+        try {
+          await collectArchives(`${channelPath}/threads/archived/public`);
         } catch (error) {
           warn(`Discord archived threads for channel ${id}`, error);
+        }
+        try {
+          try {
+            await collectArchives(`${channelPath}/threads/archived/private`);
+          } catch (error) {
+            if (!(error instanceof DiscordHttpError) || error.status !== 403) {
+              throw error;
+            }
+            await collectArchives(`${channelPath}/users/@me/threads/archived/private`, "id");
+          }
+        } catch (error) {
+          if (error instanceof DiscordHttpError && error.status === 403) {
+            status.stats.privateArchivesSkipped = Number(status.stats.privateArchivesSkipped) + 1;
+          } else {
+            warn(`Discord private archived threads for channel ${id}`, error);
+          }
         }
       }
 
