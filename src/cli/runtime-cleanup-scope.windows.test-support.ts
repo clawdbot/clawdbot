@@ -16,7 +16,7 @@ if (role === "launcher") {
   const child = spawn(
     process.execPath,
     ["-e", "setTimeout(()=>process.exit(0),30000);process.send('ready');process.disconnect();"],
-    { stdio: ["ignore", "ignore", "ignore", "ipc"], windowsHide: true },
+    { stdio: ["ignore", "ignore", "ignore", "ipc"], windowsHide: true, detached: true },
   );
   await once(child, "message");
   process.send?.({ descendantPid: child.pid }, () => process.exit(0));
