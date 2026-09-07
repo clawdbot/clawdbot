@@ -56,7 +56,9 @@ describe("monitor boundary: reply_to_guid echo limiter proof", () => {
       config: cfg,
       abortSignal: abort.signal,
       runtime: {
-        log: vi.fn((msg: string) => logMessages.push(msg)),
+        log: vi.fn((...args: unknown[]) => {
+          logMessages.push(args.join(" "));
+        }),
         error: vi.fn(),
         exit: vi.fn(),
       },
