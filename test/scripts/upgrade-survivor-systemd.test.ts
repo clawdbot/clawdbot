@@ -14,7 +14,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const owner = resolve("scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh");
 
-function fixture(customPaths = true) {
+function fixture(customPaths = true, registry?: string) {
   const home = tempDirs.make("survivor-manager-");
   const artifacts = join(home, customPaths ? "artifacts ' \" $ `" : "bin");
   mkdirSync(artifacts, { recursive: true });
@@ -27,6 +27,7 @@ function fixture(customPaths = true) {
     HOME: home,
     PATH: `${home}/bin:${process.env.PATH}`,
     npm_config_prefix: home,
+    NPM_CONFIG_REGISTRY: registry,
     OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: customPaths ? paths.log : undefined,
     OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: customPaths ? paths.pid : undefined,
     OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG: customPaths ? paths.daemonLog : undefined,
@@ -162,7 +163,9 @@ describe.skipIf(process.platform === "win32")("survivor manager fixture", () => 
   });
 
   it("keeps the inspected service alive after the caller terminal closes and drains restart children", async () => {
-    const { home, env, shell, systemctl, unit, paths } = fixture();
+    const registry = "http://127.0.0.1:41731";
+    const { home, env, shell, systemctl, unit, paths } = fixture(true, registry);
+    env.NPM_CONFIG_REGISTRY = undefined;
     const record = join(home, "starts.jsonl");
     const program = join(home, "gateway fixture.mjs");
     const environmentFile = join(home, "gateway.systemd.env");
@@ -171,7 +174,7 @@ describe.skipIf(process.platform === "win32")("survivor manager fixture", () => 
     writeFileSync(
       program,
       `import fs from "node:fs";
-fs.appendFileSync(${JSON.stringify(record)}, JSON.stringify({pid:process.pid, argv:process.argv.slice(2), cwd:process.cwd(), value:process.env.FIXTURE_VALUE, state:process.env.OPENCLAW_STATE_DIR, update:process.env.OPENCLAW_UPDATE_IN_PROGRESS}) + "\\n");
+fs.appendFileSync(${JSON.stringify(record)}, JSON.stringify({pid:process.pid, argv:process.argv.slice(2), cwd:process.cwd(), value:process.env.FIXTURE_VALUE, state:process.env.OPENCLAW_STATE_DIR, update:process.env.OPENCLAW_UPDATE_IN_PROGRESS, npmRegistry:process.env.NPM_CONFIG_REGISTRY, npmLowerRegistry:process.env.npm_config_registry, bunRegistry:process.env.BUN_CONFIG_REGISTRY}) + "\\n");
 process.on("SIGTERM", () => process.exit(0));
 setInterval(() => {}, 1000);
 `,
@@ -251,6 +254,9 @@ raise SystemExit(code if code >= 0 else 128 - code)
         cwd: inspected?.workingDirectory,
         value: inspected?.environment?.FIXTURE_VALUE,
         state: join(home, "state"),
+        npmRegistry: registry,
+        npmLowerRegistry: registry,
+        bunRegistry: registry,
       });
       const previousPid = readFileSync(paths.pid, "utf8").trim();
       expect(await readSystemdServiceRuntime(env)).toMatchObject({
@@ -264,8 +270,14 @@ raise SystemExit(code if code >= 0 else 128 - code)
           String(previousLines),
         ]);
       expect(assertion().status).not.toBe(0);
+      env.NPM_CONFIG_REGISTRY = "http://127.0.0.1:41732";
       expect(systemctl("restart", "openclaw-gateway.service").status).toBe(0);
       await waitForStarts(2);
+      expect(records()[1]).toMatchObject({
+        npmRegistry: registry,
+        npmLowerRegistry: registry,
+        bunRegistry: registry,
+      });
       const proof = assertion();
       expect(proof.status, proof.stderr).toBe(0);
       expect(records()[1]?.pid).not.toBe(records()[0]?.pid);

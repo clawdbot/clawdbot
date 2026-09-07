@@ -1640,6 +1640,8 @@ repair_update_restart_auth() {
     # update needs a configured inference route for its real serving receipt.
     phase prepare-restart-inference prepare_restart_inference || return "$?"
     phase prepare-restart-fixture prepare_restart_fixture || return "$?"
+    # Native service clients do not forward the newly created fixture registry.
+    phase prepare-restart-manager install_update_restart_systemctl_shim || return "$?"
     # Start is preparation only. The following updater must replace this exact
     # supervisor itself; its existing replacement and auth assertions remain required.
     phase prepare-recovery-service run_update_restart_probe_gateway start 18789 "$COMMAND_TIMEOUT"
