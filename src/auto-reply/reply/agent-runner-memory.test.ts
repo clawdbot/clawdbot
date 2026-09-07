@@ -26,6 +26,7 @@ import {
   readSessionTranscriptMessageEvents,
   readSessionTranscriptActiveStats,
   readTranscriptStatsSync,
+  updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
@@ -4061,89 +4062,225 @@ describe("runMemoryFlushIfNeeded", () => {
     }
   });
 
-  it("refreshes the Codex byte latch after maintenance shrinks an oversized transcript", async () => {
-    const fixture = await createOversizedByteCompactionFixture();
-    const sessionKey = "main";
-    const scope = {
-      agentId: "main",
-      sessionId: "session",
-      sessionKey,
-      storePath: fixture.storePath,
-    };
+  describe("token-path accounting inside the queued compactor", () => {
+    const sessionKey = "agent:main:main";
     const sessionEntry: SessionEntry = {
-      ...fixture.sessionEntry,
-      agentRuntimeOverride: "codex",
-      agentHarnessId: "openclaw",
+      sessionId: "session",
+      updatedAt: 10,
+      totalTokens: 200_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+      compactionCount: 0,
+      activeWriterRunId: "settled-run",
     };
-    await upsertSessionEntryCore(scope, sessionEntry);
-    const run = async (entry: SessionEntry) =>
-      await runSessionCompactionIfNeeded({
-        cfg: { agents: { defaults: { compaction: { maxActiveTranscriptBytes: "10b" } } } },
-        followupRun: createTestFollowupRun({
-          provider: "openai",
-          model: "gpt-5.5",
-          sessionId: "session",
+
+    async function createTokenAccountingFixture(label: string) {
+      const storePath = path.join(rootDir, `sqlite-token-${label}.json`);
+      const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+      await upsertSessionEntryCore(scope, sessionEntry);
+      const sessionStore = { [sessionKey]: sessionEntry };
+      incrementCompactionCountMock.mockImplementation(incrementCompactionCount);
+      const run = async (entry: SessionEntry | undefined) =>
+        await runSessionCompactionIfNeeded({
+          cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+          followupRun: createTestFollowupRun({ sessionId: "session", sessionKey }),
+          defaultModel: "anthropic/claude-opus-4-6",
+          modelContextTokens: 100_000,
+          sessionEntry: entry,
+          sessionStore,
           sessionKey,
-        }),
-        defaultModel: "gpt-5.5",
-        modelContextTokens: 1_000_000,
-        sessionEntry: entry,
-        sessionStore: { [sessionKey]: entry },
-        sessionKey,
-        storePath: fixture.storePath,
-        isHeartbeat: true,
-      });
-    const initialBytes = readSessionTranscriptActiveStats(scope).sizeBytes;
-    let settledBytes = 0;
-    incrementCompactionCountMock.mockImplementation(incrementCompactionCount);
-    compactEmbeddedAgentSessionMock.mockImplementationOnce(async (_params, host) => {
-      const accepted = await acceptCompactionSuccessor({
-        currentTarget: scope,
-        expectedEntry: {
-          sessionId: sessionEntry.sessionId,
-          lifecycleRevision: sessionEntry.lifecycleRevision,
-          activeWriterRunId: sessionEntry.activeWriterRunId,
-        },
-        assertActive: () => {},
-        result: {
+          storePath,
+          isHeartbeat: false,
+        });
+      // The successor acceptance the queued compactor performs while it holds the session lane.
+      const acceptSuccessor = async () =>
+        await acceptCompactionSuccessor({
+          currentTarget: scope,
+          expectedEntry: {
+            sessionId: sessionEntry.sessionId,
+            lifecycleRevision: sessionEntry.lifecycleRevision,
+            activeWriterRunId: sessionEntry.activeWriterRunId,
+          },
+          assertActive: () => {},
+          result: {
+            ok: true,
+            compacted: true,
+            result: { sessionId: "session", tokensBefore: 200_000, tokensAfter: 42 },
+          },
+        });
+      // A run admitted behind the compaction claims the writer as its first lane action.
+      const claimReplacementWriter = async (patch: Partial<SessionEntry> = {}) => {
+        await updateSessionEntry(
+          scope,
+          () => ({ activeWriterRunId: "replacement-run", ...patch }),
+          { skipMaintenance: true },
+        );
+      };
+      return { storePath, run, acceptSuccessor, claimReplacementWriter };
+    }
+
+    it("lands before a run waiting on the session lane claims the writer", async () => {
+      const fixture = await createTokenAccountingFixture("held-accounting");
+      compactEmbeddedAgentSessionMock.mockImplementationOnce(async (_params, host) => {
+        const accepted = await fixture.acceptSuccessor();
+        await host?.onHostCompactionCommitted?.({
+          entry: accepted.entry,
+          tokensAfter: 42,
+          compactionKind: "context-engine",
+        });
+        // The compactor returns only after releasing the lane to the waiting run.
+        await fixture.claimReplacementWriter();
+        return {
           ok: true,
           compacted: true,
-          result: { sessionId: "session", tokensBefore: 10, tokensAfter: 42 },
-        },
+          compactionKind: "context-engine",
+          result: { tokensAfter: 42 },
+        };
       });
-      host?.onCommitted?.(accepted);
-      const commit = {
-        entry: accepted.entry,
-        tokensAfter: 42,
-        compactionKind: "context-engine" as const,
-      };
-      await host?.onHostCompactionCommitted?.(commit);
-      await replaceTranscriptEvents(scope, [
-        { type: "message", message: { role: "user", content: "x".repeat(128) } },
-      ]);
-      settledBytes = readSessionTranscriptActiveStats(scope).sizeBytes;
-      await host?.onHostCompactionTranscriptSettled?.(commit);
-      return {
-        ok: true,
-        compacted: true,
-        compactionKind: "context-engine",
-        result: { tokensAfter: 42 },
-      };
+
+      const entry = await fixture.run(sessionEntry);
+
+      expect(entry).toMatchObject({ compactionCount: 1, totalTokens: 42, totalTokensFresh: true });
+      expect(loadSessionEntry({ storePath: fixture.storePath, sessionKey })).toMatchObject({
+        compactionCount: 1,
+        totalTokens: 42,
+        totalTokensFresh: true,
+        activeWriterRunId: "replacement-run",
+      });
+      expect(incrementCompactionCountMock).toHaveBeenCalledTimes(1);
+
+      // The accounted total is what the next turn projects, so it does not compact again.
+      await fixture.run(loadSessionEntry({ storePath: fixture.storePath, sessionKey }));
+      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
     });
 
-    await run(sessionEntry);
-    await run(loadMainSessionEntry(fixture.storePath));
+    it("does not account against a writer that replaced the row before the host commit", async () => {
+      const fixture = await createTokenAccountingFixture("replaced-writer");
+      compactEmbeddedAgentSessionMock.mockImplementationOnce(async (_params, host) => {
+        const accepted = await fixture.acceptSuccessor();
+        await fixture.claimReplacementWriter({ compactionCount: 7, totalTokens: 666 });
+        await host?.onHostCompactionCommitted?.({
+          entry: accepted.entry,
+          tokensAfter: 42,
+          compactionKind: "context-engine",
+        });
+        return {
+          ok: true,
+          compacted: true,
+          compactionKind: "context-engine",
+          result: { tokensAfter: 42 },
+        };
+      });
 
-    expect(settledBytes).toBeGreaterThan(10);
-    expect(settledBytes).toBeLessThan(initialBytes);
-    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
-    expect(loadMainSessionEntry(fixture.storePath).compactionCount).toBe(1);
-    expect(loadMainSessionEntry(fixture.storePath).transcriptByteCompactionLatch).toEqual({
-      activeBytes: settledBytes,
-      sessionId: "session",
-      maxBytes: 10,
+      await expect(fixture.run(sessionEntry)).rejects.toThrow(
+        "Session changed before compaction maintenance could be recorded",
+      );
+
+      expect(loadSessionEntry({ storePath: fixture.storePath, sessionKey })).toMatchObject({
+        activeWriterRunId: "replacement-run",
+        compactionCount: 7,
+        totalTokens: 666,
+      });
     });
   });
+
+  it.each([
+    { runtime: "Codex", codex: true },
+    { runtime: "embedded", codex: false },
+  ])(
+    "refreshes the $runtime byte latch after maintenance shrinks an oversized transcript",
+    async ({ codex }) => {
+      const fixture = await createOversizedByteCompactionFixture();
+      const sessionKey = "main";
+      const scope = {
+        agentId: "main",
+        sessionId: "session",
+        sessionKey,
+        storePath: fixture.storePath,
+      };
+      const sessionEntry: SessionEntry = codex
+        ? { ...fixture.sessionEntry, agentRuntimeOverride: "codex", agentHarnessId: "openclaw" }
+        : fixture.sessionEntry;
+      await upsertSessionEntryCore(scope, sessionEntry);
+      const run = async (entry: SessionEntry) =>
+        codex
+          ? await runSessionCompactionIfNeeded({
+              cfg: { agents: { defaults: { compaction: { maxActiveTranscriptBytes: "10b" } } } },
+              followupRun: createTestFollowupRun({
+                provider: "openai",
+                model: "gpt-5.5",
+                sessionId: "session",
+                sessionKey,
+              }),
+              defaultModel: "gpt-5.5",
+              modelContextTokens: 1_000_000,
+              sessionEntry: entry,
+              sessionStore: { [sessionKey]: entry },
+              sessionKey,
+              storePath: fixture.storePath,
+              isHeartbeat: true,
+            })
+          : await fixture.run(entry);
+      const initialBytes = readSessionTranscriptActiveStats(scope).sizeBytes;
+      let settledBytes = 0;
+      incrementCompactionCountMock.mockImplementation(incrementCompactionCount);
+      compactEmbeddedAgentSessionMock.mockImplementationOnce(async (_params, host) => {
+        const accepted = await acceptCompactionSuccessor({
+          currentTarget: scope,
+          expectedEntry: {
+            sessionId: sessionEntry.sessionId,
+            lifecycleRevision: sessionEntry.lifecycleRevision,
+            activeWriterRunId: sessionEntry.activeWriterRunId,
+          },
+          assertActive: () => {},
+          result: {
+            ok: true,
+            compacted: true,
+            result: { sessionId: "session", tokensBefore: 10, tokensAfter: 42 },
+          },
+        });
+        const commit = {
+          entry: accepted.entry,
+          tokensAfter: 42,
+          compactionKind: "context-engine" as const,
+        };
+        await host?.onHostCompactionCommitted?.(commit);
+        await replaceTranscriptEvents(scope, [
+          { type: "message", message: { role: "user", content: "x".repeat(128) } },
+        ]);
+        settledBytes = readSessionTranscriptActiveStats(scope).sizeBytes;
+        await host?.onHostCompactionTranscriptSettled?.(commit);
+        return {
+          ok: true,
+          compacted: true,
+          compactionKind: "context-engine",
+          result: { tokensAfter: 42 },
+        };
+      });
+
+      await run(sessionEntry);
+
+      expect(settledBytes).toBeGreaterThan(10);
+      expect(settledBytes).toBeLessThan(initialBytes);
+      // The persisted latch sets the re-arm point, so it must reflect the settled
+      // transcript rather than the size measured before maintenance ran.
+      expect(loadMainSessionEntry(fixture.storePath).transcriptByteCompactionLatch).toEqual({
+        activeBytes: settledBytes,
+        sessionId: "session",
+        maxBytes: 10,
+      });
+
+      await run(loadMainSessionEntry(fixture.storePath));
+
+      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+      expect(loadMainSessionEntry(fixture.storePath).compactionCount).toBe(1);
+      expect(loadMainSessionEntry(fixture.storePath).transcriptByteCompactionLatch).toEqual({
+        activeBytes: settledBytes,
+        sessionId: "session",
+        maxBytes: 10,
+      });
+    },
+  );
 
   it("clears a Codex byte latch after shrink below the cap without compacting", async () => {
     const storePath = path.join(rootDir, "sqlite-codex-shrink-below-cap.json");
