@@ -252,6 +252,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Maximum number of memory hits returned from search before downstream reranking and prompt injection. Raise for broader recall, or lower for tighter prompts and faster responses.",
   "memory.search.query.minScore":
     "Minimum relevance score threshold for including memory results in final recall output. Increase to reduce weak/noisy matches, or lower when you need more permissive retrieval.",
+  "memory.search.query.timeoutSeconds":
+    "Seconds a memory_search or memory_get call may run before it is cut off and reported as timed out (default 15). Raise it for large indexes or slow embedding providers when lookups keep timing out; keep it low to stop a stalled lookup from holding up a reply.",
   "memory.search.cache.enabled":
     "Caches computed chunk embeddings in SQLite so reindexing and incremental updates run faster (default: true). Keep this enabled unless investigating cache correctness or minimizing disk usage.",
   memory: "Built-in memory configuration (global).",

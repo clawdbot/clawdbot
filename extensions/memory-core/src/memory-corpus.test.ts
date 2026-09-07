@@ -74,3 +74,33 @@ it.each(["provider", "caller"] as const)(
     }
   },
 );
+
+it("honors a configured deadline instead of the built-in 15s", async () => {
+  vi.useFakeTimers();
+  const pending = createDeferred<string[]>();
+  let signal: AbortSignal | undefined;
+  const result = runMemoryCorpusDeadline({
+    operation: "memory_get",
+    timeoutMs: 60_000,
+    run: async (currentSignal) => {
+      signal = currentSignal;
+      return await attemptMemoryCorpus({
+        corpus: "memory",
+        signal: currentSignal,
+        unavailableValue: [],
+        run: () => pending.promise,
+      });
+    },
+  });
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect(signal?.aborted).toBe(false);
+  await vi.advanceTimersByTimeAsync(45_000);
+  expect(signal?.aborted).toBe(true);
+  expect(await result).toMatchObject({
+    outcome: "unavailable",
+    value: [],
+    deadline: true,
+    error: "memory_get timed out after 60s",
+  });
+  pending.resolve([]);
+});

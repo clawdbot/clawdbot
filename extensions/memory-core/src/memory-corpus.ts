@@ -106,29 +106,29 @@ export async function attemptMemoryCorpus<T>(params: {
 
 export async function runMemoryCorpusDeadline<T>(params: {
   operation: "memory_search" | "memory_get";
+  /** Deadline for the whole call; defaults to DEFAULT_MEMORY_SEARCH_TIMEOUT_MS. */
+  timeoutMs?: number;
   parentSignal?: AbortSignal;
   run: (signal: AbortSignal) => Promise<T>;
 }): Promise<T> {
   if (params.parentSignal?.aborted) {
     throw resolveMemorySearchAbortError(params.parentSignal);
   }
+  const timeoutMs = params.timeoutMs ?? DEFAULT_MEMORY_SEARCH_TIMEOUT_MS;
   const controller = new AbortController();
   const startedAt = performance.now();
   const timeoutError = createMemorySearchDeadlineError(
-    `${params.operation} timed out after ${DEFAULT_MEMORY_SEARCH_TIMEOUT_MS / 1000}s`,
+    `${params.operation} timed out after ${Math.round(timeoutMs / 1000)}s`,
   );
   const expire = () => controller.abort(timeoutError);
   const checkDeadline = () => {
     // A synchronous database operation can finish before an overdue timer is serviced.
-    if (
-      !controller.signal.aborted &&
-      performance.now() - startedAt >= DEFAULT_MEMORY_SEARCH_TIMEOUT_MS
-    ) {
+    if (!controller.signal.aborted && performance.now() - startedAt >= timeoutMs) {
       expire();
     }
   };
   memoryCorpusDeadlineChecks.set(controller.signal, checkDeadline);
-  const timer = setTimeout(expire, DEFAULT_MEMORY_SEARCH_TIMEOUT_MS);
+  const timer = setTimeout(expire, timeoutMs);
   timer.unref?.();
   const onParentAbort = () => controller.abort(resolveMemorySearchAbortError(params.parentSignal!));
   params.parentSignal?.addEventListener("abort", onParentAbort, { once: true });

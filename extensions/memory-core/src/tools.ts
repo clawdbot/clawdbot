@@ -145,6 +145,7 @@ function isActiveMemoryManagerContext(
 async function closeMemoryManagers(
   managers: Iterable<ActiveMemoryManagerContext["manager"]>,
   parentSignal?: AbortSignal,
+  timeoutMs: number = DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
 ): Promise<void> {
   const pending = Array.from(managers, async (manager) => await manager.close?.());
   if (pending.length === 0) {
@@ -152,7 +153,7 @@ async function closeMemoryManagers(
   }
   try {
     await runMemorySearchWithDeadline({
-      timeoutMs: DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+      timeoutMs,
       parentSignal,
       run: async () => {
         await Promise.allSettled(pending);
@@ -412,6 +413,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
         try {
           return await runMemoryCorpusDeadline({
             operation: "memory_search",
+            timeoutMs: settings.query.timeoutMs,
             parentSignal: callerSignal,
             run: async (signal) => {
               searchSignal = signal;
@@ -544,9 +546,13 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
           if (searchSignal?.aborted) {
             // Admitted searches retain their leases until they settle; teardown
             // must not add another cleanup timeout to an already expired reply.
-            void closeMemoryManagers(memoryManagersToClose);
+            void closeMemoryManagers(memoryManagersToClose, undefined, settings.query.timeoutMs);
           } else {
-            await closeMemoryManagers(memoryManagersToClose, callerSignal);
+            await closeMemoryManagers(
+              memoryManagersToClose,
+              callerSignal,
+              settings.query.timeoutMs,
+            );
           }
         }
       },
@@ -558,7 +564,7 @@ export function createMemoryGetTool(options: MemoryToolOptions) {
     options,
     contract: MEMORY_GET_TOOL_CONTRACT,
     execute:
-      ({ cfg, agentId }) =>
+      ({ cfg, agentId, settings }) =>
       async (_toolCallId, params, callerSignal) => {
         const rawParams = asToolParamsRecord(params);
         const relPath = readStringParam(rawParams, "path", { required: true });
@@ -576,6 +582,7 @@ export function createMemoryGetTool(options: MemoryToolOptions) {
             sandboxed: options.sandboxed,
             requestedCorpus,
             signal: callerSignal,
+            timeoutMs: settings.query.timeoutMs,
           });
         }
         return await executeMemoryReadResult({
@@ -595,6 +602,7 @@ export function createMemoryGetTool(options: MemoryToolOptions) {
           agentSessionKey: options.agentSessionKey,
           sandboxed: options.sandboxed,
           signal: callerSignal,
+          timeoutMs: settings.query.timeoutMs,
         });
       },
   });

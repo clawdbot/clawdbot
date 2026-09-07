@@ -89,6 +89,8 @@ export type ResolvedMemorySearchConfig = {
   query: {
     maxResults: number;
     minScore: number;
+    /** Deadline for one memory_search or memory_get call. */
+    timeoutMs: number;
     hybrid: {
       enabled: boolean;
       vectorWeight: number;
@@ -119,6 +121,7 @@ const DEFAULT_SESSION_DELTA_BYTES = 100_000;
 const DEFAULT_SESSION_DELTA_MESSAGES = 50;
 const DEFAULT_MAX_RESULTS = 6;
 const DEFAULT_MIN_SCORE = 0.35;
+const DEFAULT_QUERY_TIMEOUT_SECONDS = 15;
 const DEFAULT_HYBRID_ENABLED = true;
 const DEFAULT_HYBRID_VECTOR_WEIGHT = 0.7;
 const DEFAULT_HYBRID_TEXT_WEIGHT = 0.3;
@@ -206,6 +209,11 @@ export function resolveMemorySearchIndexConfig(cfg: OpenClawConfig, agentId: str
         overrides?.query?.minScore ?? defaults?.query?.minScore ?? DEFAULT_MIN_SCORE,
         0,
         1,
+      ),
+      timeoutMs: Math.round(
+        (overrides?.query?.timeoutSeconds ??
+          defaults?.query?.timeoutSeconds ??
+          DEFAULT_QUERY_TIMEOUT_SECONDS) * 1000,
       ),
       hybrid: {
         enabled: DEFAULT_HYBRID_ENABLED,
