@@ -28,10 +28,7 @@ export const padTerminalCell = (value: string, size: number) => {
 };
 
 /** Applies terminal color based on a model-list tag. */
-export const formatTag = (tag: string, rich: boolean) => {
-  if (!rich) {
-    return tag;
-  }
+export const formatTag = (tag: string) => {
   if (tag === "default") {
     return theme.success(tag);
   }
@@ -44,10 +41,7 @@ export const formatTag = (tag: string, rich: boolean) => {
   if (tag === "missing") {
     return theme.error(tag);
   }
-  if (tag.startsWith("fallback#")) {
-    return theme.warn(tag);
-  }
-  if (tag.startsWith("img-fallback#")) {
+  if (tag.startsWith("fallback#") || tag.startsWith("img-fallback#")) {
     return theme.warn(tag);
   }
   if (tag.startsWith("alias:")) {
