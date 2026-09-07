@@ -94,8 +94,10 @@ vi.mock("../../agents/auth-profiles/profiles.js", () => ({
   upsertAuthProfileWithLockOrThrow: mocks.upsertAuthProfileWithLock,
 }));
 
-vi.mock("../../agents/auth-profiles/store.js", () => ({
+vi.mock("../../agents/auth-profiles/store-runtime.js", () => ({
   loadAuthProfileStoreForRuntime: mocks.loadAuthProfileStoreForRuntime,
+}));
+vi.mock("../../agents/auth-profiles/store.js", () => ({
   resolvePersistedAuthProfileOwnerAgentDir: mocks.resolvePersistedAuthProfileOwnerAgentDir,
 }));
 

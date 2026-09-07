@@ -24,10 +24,8 @@ import {
   upsertAuthProfileWithLockOrThrow,
 } from "../../agents/auth-profiles/profiles.js";
 import { resolveAuthProfileDatabasePath } from "../../agents/auth-profiles/sqlite.js";
-import {
-  loadAuthProfileStoreForRuntime,
-  resolvePersistedAuthProfileOwnerAgentDir,
-} from "../../agents/auth-profiles/store.js";
+import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store-runtime.js";
+import { resolvePersistedAuthProfileOwnerAgentDir } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { clearAuthProfileCooldown } from "../../agents/auth-profiles/usage.js";
 import { normalizeProviderId } from "../../agents/model-ref-shared.js";
