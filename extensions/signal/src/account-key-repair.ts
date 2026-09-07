@@ -48,8 +48,8 @@ function listedAccountIdOf(key: string): string | undefined {
 // Signal lists accounts under normalizeAccountId(key) but the shared account resolver and the
 // policy readers select the entry with the exact/case-folded lookup, so a key that normalizes to
 // something else loses its account settings. Doctor owns the one-time key move and runtime keeps
-// reading the canonical map. Only ids with at least one such key get a state, as every other id
-// is already selected as authored.
+// reading the canonical map. An id gets a state when at least one such key names it or when
+// several keys spell the id itself, as every other id has the one key its readers select.
 function assessSignalAccountKeys(
   accounts: unknown,
   rootAccount?: unknown,
@@ -94,6 +94,20 @@ function assessSignalAccountKeys(
       typeof entry.account === "string" &&
       !entry.account.trim();
     states.set(accountId, { kind: "repairable", key: authoredKey, dropEmptyAccount });
+  }
+  // Keys that differ only in case all spell one id, so none of them is authored and the loop above
+  // never sees the id. The lookup still selects one key and leaves the rest unreachable, so the
+  // report has to name the group. A group keyed by a folded spelling that is not the id its members
+  // are listed under, such as "work phone" from "Work Phone", already belongs to that id through
+  // the authored path and must not gain a second state under a key no reader looks up.
+  for (const [accountId, selectedKeys] of selectedKeysByAccountId) {
+    if (
+      selectedKeys.length > 1 &&
+      !states.has(accountId) &&
+      selectedKeys.every((key) => listedAccountIdOf(key) === accountId)
+    ) {
+      states.set(accountId, { kind: "selected", keys: selectedKeys });
+    }
   }
   return states;
 }

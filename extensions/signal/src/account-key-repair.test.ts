@@ -215,6 +215,88 @@ describe("signal account key repair", () => {
     ]);
   });
 
+  const caseFoldedTwins: {
+    shape: string;
+    accounts: Record<string, { transport: { kind: string; url: string } }>;
+    reportedKeys: string;
+    winner: string;
+    winnerUrl: string;
+  }[] = [
+    {
+      shape: "an exact key beside its case twin",
+      accounts: {
+        "work-phone": { transport: { kind: "external-native", url: "http://127.0.0.1:9101" } },
+        "WORK-PHONE": { transport: { kind: "external-native", url: "http://127.0.0.1:9102" } },
+      },
+      reportedKeys: '"work-phone", "WORK-PHONE"',
+      winner: "work-phone",
+      winnerUrl: "http://127.0.0.1:9101",
+    },
+    {
+      shape: "two case variants with no exact key",
+      accounts: {
+        "Work-Phone": { transport: { kind: "external-native", url: "http://127.0.0.1:9101" } },
+        "WORK-PHONE": { transport: { kind: "external-native", url: "http://127.0.0.1:9102" } },
+      },
+      reportedKeys: '"Work-Phone", "WORK-PHONE"',
+      winner: "Work-Phone",
+      winnerUrl: "http://127.0.0.1:9101",
+    },
+  ];
+
+  it.each(caseFoldedTwins)(
+    "reports keys that differ only in case and keeps the lookup winner: $shape",
+    ({ accounts, reportedKeys, winner, winnerUrl }) => {
+      const authored = structuredClone(accounts);
+      const cfg = signalConfig({ accounts });
+
+      const repaired = repairSignal({ accounts });
+
+      expect(collisionRule?.match?.(accounts, {})).toBe(true);
+      expect(repairRule?.match?.(accounts, {})).toBe(false);
+      expect(repaired.changes).toEqual([]);
+      expect(repaired.signal.accounts).toEqual(authored);
+      expect(
+        signalDoctor.collectPreviewWarnings?.({ cfg, doctorFixCommand: "openclaw doctor --fix" }),
+      ).toEqual([
+        `- channels.signal.accounts: ${reportedKeys} resolve to account id "work-phone". Doctor keeps them as authored; only an existing exact or case-insensitive matching key remains selected. Rename them so one key owns the account.`,
+      ]);
+      // Reporting must not change who owns the id. The exact key wins where there is one, else the
+      // first case-folded key in map order, before and after doctor runs.
+      expect(resolveAccountEntry(accounts, "work-phone")).toBe(accounts[winner]);
+      expect(resolveSignalAccount({ cfg, accountId: "work-phone" }).baseUrl).toBe(winnerUrl);
+      expect(
+        resolveSignalAccount({
+          cfg: normalizeCompatibilityConfig({ cfg }).config,
+          accountId: "work-phone",
+        }).baseUrl,
+      ).toBe(winnerUrl);
+    },
+  );
+
+  it("reports a pair whose folded spelling is no account id only under the id Signal lists", () => {
+    const accounts = {
+      "Work Phone": { transport: { kind: "external-native", url: "http://127.0.0.1:9101" } },
+      "WORK PHONE": { transport: { kind: "external-native", url: "http://127.0.0.1:9102" } },
+    };
+    const authored = structuredClone(accounts);
+
+    const repaired = repairSignal({ accounts });
+
+    // Both keys fold to "work phone", which no reader looks up, and Signal lists both under
+    // "work-phone", so the pair belongs to that one collision and gets no second report.
+    expect(repaired.changes).toEqual([]);
+    expect(repaired.signal.accounts).toEqual(authored);
+    expect(
+      signalDoctor.collectPreviewWarnings?.({
+        cfg: signalConfig({ accounts }),
+        doctorFixCommand: "openclaw doctor --fix",
+      }),
+    ).toEqual([
+      `- channels.signal.accounts: "Work Phone", "WORK PHONE" resolve to account id "work-phone". Doctor keeps them as authored; only an existing exact or case-insensitive matching key remains selected. Rename them so one key owns the account.`,
+    ]);
+  });
+
   it("reports nothing and changes nothing when every key is already normalized", () => {
     const accounts = { "work-phone": { account: "+15555550123" }, default: {} };
 
