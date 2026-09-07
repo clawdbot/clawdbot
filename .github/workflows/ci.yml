@@ -5554,7 +5554,7 @@ jobs:
           esac
 
       - name: Prepare exact F25 Android APK export
-        if: github.event_name == 'workflow_dispatch' && inputs.target_ref == '3e3092ac39e86858a3d2df6ff124bb72e55aa1e0' && needs.preflight.outputs.checkout_revision == inputs.target_ref && inputs.dispatch_id == 'f25-android-apk-export-3e3092ac39e8-v2' && matrix.task == 'build-play'
+        if: github.event_name == 'workflow_dispatch' && inputs.target_ref == '3e3092ac39e86858a3d2df6ff124bb72e55aa1e0' && needs.preflight.outputs.checkout_revision == inputs.target_ref && inputs.dispatch_id == 'f25-android-apk-export-3e3092ac39e8-v3' && matrix.task == 'build-play'
         shell: bash
         env:
           SOURCE_COMMIT: ${{ needs.preflight.outputs.checkout_revision }}
@@ -5577,9 +5577,9 @@ jobs:
           cp "$build_config" "$export_dir/BuildConfig.java"
           tools="$ANDROID_SDK_ROOT/build-tools/36.0.0"
           "$tools/apksigner" verify --verbose --print-certs "$export_dir/candidate.apk" | tee "$export_dir/signing.txt"
-          "$tools/aapt2" dump badging "$export_dir/candidate.apk" > "$export_dir/package.txt"
+          "$tools/aapt2" dump badging "$export_dir/candidate.apk" | tee "$export_dir/package.txt"
           grep -F "package: name='ai.openclaw.app.debug' " "$export_dir/package.txt"
-          grep -Fx "sdkVersion:'31'" "$export_dir/package.txt"
+          grep -Fx "minSdkVersion:'31'" "$export_dir/package.txt"
           grep -Fx "targetSdkVersion:'36'" "$export_dir/package.txt"
           jq -n \
             --arg sourceCommit "$SOURCE_COMMIT" \
@@ -5594,7 +5594,7 @@ jobs:
           )
 
       - name: Upload exact F25 Android APK
-        if: github.event_name == 'workflow_dispatch' && inputs.target_ref == '3e3092ac39e86858a3d2df6ff124bb72e55aa1e0' && needs.preflight.outputs.checkout_revision == inputs.target_ref && inputs.dispatch_id == 'f25-android-apk-export-3e3092ac39e8-v2' && matrix.task == 'build-play'
+        if: github.event_name == 'workflow_dispatch' && inputs.target_ref == '3e3092ac39e86858a3d2df6ff124bb72e55aa1e0' && needs.preflight.outputs.checkout_revision == inputs.target_ref && inputs.dispatch_id == 'f25-android-apk-export-3e3092ac39e8-v3' && matrix.task == 'build-play'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: android-f25-play-debug-${{ needs.preflight.outputs.checkout_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
