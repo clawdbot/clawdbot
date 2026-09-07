@@ -11,6 +11,7 @@ import {
 } from "../config/sessions.js";
 import {
   listSessionChildEntriesReadOnly,
+  type ExactSessionEntryReadOnlyReader,
   type SessionEntryListScope,
 } from "../config/sessions/session-accessor.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
@@ -149,6 +150,7 @@ type GatewaySessionStoreLookupParams = {
   store?: Record<string, SessionEntry>;
   storeCache?: GatewaySessionStoreCache;
   targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
+  readExactCandidates?: ExactSessionEntryReadOnlyReader;
 };
 
 type GatewaySessionStorePlan<T> = {
@@ -193,6 +195,7 @@ function prepareGatewaySessionStoreLookup(
       ...(params.exactRead ? { exactKeys: scanTargets } : {}),
       ...(params.projection ? { projection: params.projection } : {}),
       ...(params.storeCache ? { cache: params.storeCache } : {}),
+      ...(params.readExactCandidates ? { readExactCandidates: params.readExactCandidates } : {}),
     },
     store: index === 0 && target.storePath === fallback.storePath ? params.store : undefined,
   }));
@@ -284,6 +287,7 @@ function prepareExplicitDeletedLegacyMainStoreTarget(
         ...(params.exactRead ? { exactKeys: lookupSeeds } : {}),
         ...(params.projection ? { projection: params.projection } : {}),
         ...(params.storeCache ? { cache: params.storeCache } : {}),
+        ...(params.readExactCandidates ? { readExactCandidates: params.readExactCandidates } : {}),
       },
     }));
   return {
@@ -365,6 +369,7 @@ function prepareGatewaySessionStoreTarget(
         ...(params.exactRead ? { exactKeys: [canonicalKey] } : {}),
         ...(params.projection ? { projection: params.projection } : {}),
         ...(params.storeCache ? { cache: params.storeCache } : {}),
+        ...(params.readExactCandidates ? { readExactCandidates: params.readExactCandidates } : {}),
       },
     };
     return {

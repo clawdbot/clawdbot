@@ -14,11 +14,11 @@ type CronListCallerScopeContext = {
 const CRON_LIST_SCOPED_SNAPSHOT_MAX_ATTEMPTS = 3;
 
 export async function listCronPageWithVisibility({
-  matchesJob,
+  filterJobs,
   context,
   options,
 }: {
-  matchesJob: (job: CronJob) => boolean;
+  filterJobs: (jobs: CronJob[]) => CronJob[];
   context: CronListCallerScopeContext;
   options: CronListPageOptions;
 }): Promise<CronListPageResult> {
@@ -41,7 +41,7 @@ export async function listCronPageWithVisibility({
       }
       snapshotRevision = sourcePage.snapshotRevision;
 
-      scopedJobs.push(...sourcePage.jobs.filter(matchesJob));
+      scopedJobs.push(...filterJobs(sourcePage.jobs));
 
       if (
         !sourcePage.hasMore ||

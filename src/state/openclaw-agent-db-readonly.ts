@@ -43,6 +43,50 @@ type OpenClawAgentDatabaseReadOnlyBehavior = {
   allowExtension?: boolean;
 };
 
+type ReadOnlyFileIdentity = { dev: bigint; ino: bigint };
+type ScopedReadOnlyConnection = {
+  database: OpenClawAgentReadOnlyDatabaseHandle;
+  identity: ReadOnlyFileIdentity;
+  allowExtension: boolean;
+};
+type ReadOnlyScope = { active: boolean; connection?: ScopedReadOnlyConnection };
+
+function readOnlyFileIdentity(pathname: string): ReadOnlyFileIdentity | undefined {
+  try {
+    const { dev, ino } = fs.statSync(pathname, { bigint: true });
+    return { dev, ino };
+  } catch {
+    // A failed probe disables reuse; ordinary admission still owns errors and misses.
+    return undefined;
+  }
+}
+
+function sameReadOnlyFile(
+  a: ReadOnlyFileIdentity | undefined,
+  b: ReadOnlyFileIdentity | undefined,
+) {
+  return a !== undefined && b !== undefined && a.dev === b.dev && a.ino === b.ino;
+}
+
+function closeReadOnlyScopeConnection(scope: ReadOnlyScope | undefined) {
+  const connection = scope?.connection;
+  if (scope) {
+    scope.connection = undefined;
+  }
+  connection?.database.close();
+}
+
+function hasReadableAgentSchema({ db, agentId, path: pathname }: OpenClawAgentReadOnlyDatabase) {
+  const userVersion = assertSupportedAgentSchemaVersion(db, pathname);
+  assertCanonicalAgentPersistenceVersion(db, pathname, userVersion);
+  const schemaMeta = readExistingAgentSchemaMeta(db);
+  if (!schemaMeta) {
+    return false;
+  }
+  assertExistingAgentSchemaOwner(schemaMeta, agentId, pathname);
+  return true;
+}
+
 /**
  * Look up a process-held handle without adopting writer-side failures.
  *
@@ -88,14 +132,10 @@ export function openOpenClawAgentDatabaseReadOnly(
   };
   try {
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-    const userVersion = assertSupportedAgentSchemaVersion(db, pathname);
-    assertCanonicalAgentPersistenceVersion(db, pathname, userVersion);
-    const schemaMeta = readExistingAgentSchemaMeta(db);
-    if (!schemaMeta) {
+    if (!hasReadableAgentSchema({ db, agentId, path: pathname })) {
       close();
       return { found: false, reason: "schema-missing" };
     }
-    assertExistingAgentSchemaOwner(schemaMeta, agentId, pathname);
     return { found: true, database: { agentId, db, path: pathname, close } };
   } catch (error) {
     close();
@@ -109,41 +149,115 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
   options: OpenClawAgentDatabaseOptions,
   behavior: OpenClawAgentDatabaseReadOnlyBehavior = {},
 ): OpenClawAgentDatabaseReadOnlyResult<T> {
-  const agentId = normalizeAgentId(options.agentId);
-  const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
-  if (isIncognitoOpenClawAgentSqlitePath(pathname, { agentId, env: options.env })) {
-    // Read-only misses must not create process-lifetime handles; only creation and
-    // write paths may materialize the process-held incognito database.
-    const database = getOpenClawAgentDatabaseIfOpen({ ...options, agentId });
-    if (database && behavior.allowExtension) {
-      throw new Error("Extension-capable read-only access is unavailable for incognito databases.");
+  return readOpenClawAgentDatabaseReadOnly(operation, options, behavior);
+}
+
+/** Reuse one fresh connection synchronously; every logical read still queries current rows. */
+export function withOpenClawAgentDatabaseReadOnlyScope<T>(
+  operation: (read: typeof withOpenClawAgentDatabaseReadOnly) => T,
+): T {
+  const scope: ReadOnlyScope = { active: true };
+  const read: typeof withOpenClawAgentDatabaseReadOnly = (readOperation, options, behavior) => {
+    if (!scope.active) {
+      throw new Error("Read-only agent database scope has closed.");
     }
-    return database
-      ? { found: true, value: operation(database) }
-      : { found: false, reason: "database-missing" };
-  }
-  // Borrow only outside a transaction so readers see committed rows.
-  // The writer owns reused handles; this call closes only fresh connections.
-  const processOpened = behavior.allowExtension
-    ? undefined
-    : findOpenAgentDatabase({ ...options, agentId });
-  const reusable = processOpened && !processOpened.db.isTransaction ? processOpened : undefined;
-  const fresh = reusable
-    ? undefined
-    : openOpenClawAgentDatabaseReadOnly({ ...options, agentId }, behavior);
-  if (fresh && !fresh.found) {
-    return fresh;
-  }
-  const database = reusable ?? fresh!.database;
-  const { db } = database;
+    return readOpenClawAgentDatabaseReadOnly(readOperation, options, behavior, scope);
+  };
   try {
+    return operation(read);
+  } finally {
+    scope.active = false;
+    closeReadOnlyScopeConnection(scope);
+  }
+}
+
+function readOpenClawAgentDatabaseReadOnly<T>(
+  operation: (database: OpenClawAgentReadOnlyDatabase) => T,
+  options: OpenClawAgentDatabaseOptions,
+  behavior: OpenClawAgentDatabaseReadOnlyBehavior = {},
+  scope?: ReadOnlyScope,
+): OpenClawAgentDatabaseReadOnlyResult<T> {
+  // Detach an idle connection so a reentrant read cannot close its active caller.
+  let retained = scope?.connection;
+  if (scope) {
+    scope.connection = undefined;
+  }
+  let fresh: OpenClawAgentDatabaseReadOnlyOpenResult | undefined;
+  let identity: ReadOnlyFileIdentity | undefined;
+  let succeeded = false;
+  try {
+    const agentId = normalizeAgentId(options.agentId);
+    const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
+    const incognito = isIncognitoOpenClawAgentSqlitePath(pathname, { agentId, env: options.env });
+    const processOpened =
+      incognito || behavior.allowExtension
+        ? undefined
+        : findOpenAgentDatabase({ ...options, agentId });
+    const reusable = processOpened && !processOpened.db.isTransaction ? processOpened : undefined;
+    if (
+      retained &&
+      (incognito ||
+        reusable ||
+        retained.database.agentId !== agentId ||
+        retained.database.path !== pathname ||
+        retained.allowExtension !== Boolean(behavior.allowExtension) ||
+        retained.database.db.isTransaction ||
+        !sameReadOnlyFile(retained.identity, readOnlyFileIdentity(pathname)))
+    ) {
+      const previous = retained;
+      retained = undefined;
+      previous.database.close();
+    }
+    if (incognito) {
+      // Read-only misses must not create process-lifetime handles; only creation and
+      // write paths may materialize the process-held incognito database.
+      const database = getOpenClawAgentDatabaseIfOpen({ ...options, agentId });
+      if (database && behavior.allowExtension) {
+        throw new Error(
+          "Extension-capable read-only access is unavailable for incognito databases.",
+        );
+      }
+      const result: OpenClawAgentDatabaseReadOnlyResult<T> = database
+        ? { found: true, value: operation(database) }
+        : { found: false, reason: "database-missing" };
+      succeeded = result.found;
+      return result;
+    }
+    // Borrow only outside a transaction so readers see committed rows.
+    // The writer owns reused handles; this call closes only fresh connections.
+    const before = scope && !reusable && !retained ? readOnlyFileIdentity(pathname) : undefined;
+    fresh = reusable
+      ? undefined
+      : retained
+        ? { found: true, database: retained.database }
+        : openOpenClawAgentDatabaseReadOnly({ ...options, agentId }, behavior);
+    if (retained) {
+      identity = retained.identity;
+    } else if (scope && fresh?.found) {
+      // These pathname probes are not SQLite-FD identity or ABA proof. A changed
+      // initial admission serves this read once, but is never retained or replayed.
+      const after = readOnlyFileIdentity(pathname);
+      if (sameReadOnlyFile(before, after)) {
+        identity = after;
+      }
+    }
+    if (fresh && !fresh.found) {
+      return fresh;
+    }
+    const database = reusable ?? fresh!.database;
+    const { db } = database;
+    if (retained && !hasReadableAgentSchema(database)) {
+      return { found: false, reason: "schema-missing" };
+    }
     if (reusable) {
       // Share only this admission's fresh value; a later read must check again.
       const userVersion = assertSupportedAgentSchemaVersion(db, pathname);
       assertCanonicalAgentPersistenceVersion(db, pathname, userVersion);
     }
     try {
-      return { found: true, value: operation(database) };
+      const value = operation(database);
+      succeeded = true;
+      return { found: true, value };
     } catch (error) {
       if (
         error instanceof Error &&
@@ -156,8 +270,24 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
       throw error;
     }
   } finally {
-    if (fresh?.found) {
-      fresh.database.close();
+    try {
+      const owned = fresh?.found ? fresh.database : retained?.database;
+      if (owned) {
+        if (scope?.active && succeeded && identity && !owned.db.isTransaction) {
+          closeReadOnlyScopeConnection(scope);
+          scope.connection = {
+            database: owned,
+            identity,
+            allowExtension: Boolean(behavior.allowExtension),
+          };
+        } else {
+          owned.close();
+        }
+      }
+    } finally {
+      if (!succeeded) {
+        closeReadOnlyScopeConnection(scope);
+      }
     }
   }
 }

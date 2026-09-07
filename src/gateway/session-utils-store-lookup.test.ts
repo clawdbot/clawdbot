@@ -13,7 +13,10 @@ import {
   resolveGatewaySessionStoreTargetWithStore,
   resolveGatewaySessionStoreTargetsReadOnly,
 } from "./session-utils-store-lookup.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+import {
+  loadGatewaySessionEntryReadOnly,
+  withGatewaySessionEntryReadOnlyScope,
+} from "./session-utils-store.js";
 
 vi.mock("./github-publication-availability.js", () => ({
   prepareCurrentGitHubPublicationIdentity: vi.fn(async (agentId: string) => ({
@@ -52,7 +55,7 @@ async function withGlobalSessions(mainKey: string, run: (cfg: OpenClawConfig) =>
 }
 
 describe("global session lookup ownership", () => {
-  it.each(["single", "batch", "read-only"] as const)(
+  it.each(["single", "batch", "read-only", "scoped-read-only"] as const)(
     "preserves qualified main aliases and ordinary global keys through %s reads",
     async (mode) => {
       await withGlobalSessions("work", async (cfg) => {
@@ -70,11 +73,13 @@ describe("global session lookup ownership", () => {
                 cfg,
                 targets: requests.map(({ key }) => ({ key })),
               })
-            : requests.map(({ key }) =>
-                mode === "single"
-                  ? resolveGatewaySessionStoreTargetWithStore({ cfg, key })
-                  : loadGatewaySessionEntryReadOnly(key),
-              );
+            : mode === "scoped-read-only"
+              ? withGatewaySessionEntryReadOnlyScope((read) => requests.map(({ key }) => read(key)))
+              : requests.map(({ key }) =>
+                  mode === "single"
+                    ? resolveGatewaySessionStoreTargetWithStore({ cfg, key })
+                    : loadGatewaySessionEntryReadOnly(key),
+                );
         expect(
           targets.map((target) => ({
             agentId: target.agentId,
@@ -92,7 +97,7 @@ describe("global session lookup ownership", () => {
     },
   );
 
-  it.each(["single", "batch", "read-only"] as const)(
+  it.each(["single", "batch", "read-only", "scoped-read-only"] as const)(
     "rejects contradictory key and fixed-store owners through %s reads",
     async (mode) => {
       await withGlobalSessions("main", async (cfg) => {
@@ -105,7 +110,9 @@ describe("global session lookup ownership", () => {
               })
             : mode === "single"
               ? resolveGatewaySessionStoreTargetWithStore({ cfg: config, key, agentId })
-              : loadGatewaySessionEntryReadOnly(key, { agentId });
+              : mode === "scoped-read-only"
+                ? withGatewaySessionEntryReadOnlyScope((readEntry) => readEntry(key, { agentId }))
+                : loadGatewaySessionEntryReadOnly(key, { agentId });
         };
         for (const key of ["agent:main:main", "agent:main:global"]) {
           expect.soft(() => read(cfg, key, "research")).toThrow('belongs to "main"');

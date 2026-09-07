@@ -156,6 +156,8 @@ export {
   loadExactSessionEntryCandidates,
   loadExactSessionEntryCandidatesReadOnlyBatch,
   loadExactSessionEntryReadOnly,
+  withExactSessionEntryCandidatesReadOnly,
+  type ExactSessionEntryReadOnlyReader,
   loadSessionEntry,
   loadSessionEntryReadOnly,
   openSessionEntryReadView,

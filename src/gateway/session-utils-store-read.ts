@@ -5,6 +5,7 @@ import {
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
   loadExactSessionEntryCandidates,
   loadExactSessionEntryCandidatesReadOnlyBatch,
+  type ExactSessionEntryReadOnlyReader,
   type SessionEntryListScope,
 } from "../config/sessions/session-accessor.js";
 
@@ -70,6 +71,7 @@ function loadGatewaySessionLookupStore(
     cache?: GatewaySessionStoreCache;
     exactKeys?: readonly string[];
     projection?: SessionEntryListScope["projection"];
+    readExactCandidates?: ExactSessionEntryReadOnlyReader;
   } = {},
 ): Record<string, SessionEntry> {
   const cache = options.cache;
@@ -95,13 +97,14 @@ function loadGatewaySessionLookupStoreUncached(
     exactKeys?: readonly string[];
     readOnly?: boolean;
     projection?: SessionEntryListScope["projection"];
+    readExactCandidates?: ExactSessionEntryReadOnlyReader;
   } = {},
 ): Record<string, SessionEntry> {
   try {
     if (options.exactKeys) {
       // Borrowed listing views and probes never create stores; ordinary owned reads may.
       return Object.fromEntries(
-        loadExactSessionEntryCandidates({
+        (options.readExactCandidates ?? loadExactSessionEntryCandidates)({
           ...(agentId ? { agentId } : {}),
           clone: false,
           projection: options.projection,

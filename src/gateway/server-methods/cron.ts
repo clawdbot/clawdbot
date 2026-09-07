@@ -75,7 +75,10 @@ import { authorizeGatewaySessionCreation, operatorSessionCap } from "../operator
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import {
+  loadGatewaySessionEntryReadOnly,
+  withGatewaySessionEntryReadOnlyScope,
+} from "../session-utils.js";
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import {
   applyCronCreateCallerScopeDefault,
@@ -428,7 +431,11 @@ function respondCronJobNotFound(
   );
 }
 
-type CronSessionVisibility = (sessionKey: string, agentId?: string) => boolean;
+type CronSessionVisibility = (
+  sessionKey: string,
+  agentId?: string,
+  readEntry?: typeof loadGatewaySessionEntryReadOnly,
+) => boolean;
 
 function resolveCronSessionVisibility(
   client: GatewayClient | null,
@@ -445,8 +452,8 @@ function resolveCronSessionVisibility(
   if (!entryFilter) {
     return undefined;
   }
-  return (sessionKey, agentId) => {
-    const loaded = loadGatewaySessionEntryReadOnly(sessionKey, agentId ? { agentId } : undefined);
+  return (sessionKey, agentId, readEntry = loadGatewaySessionEntryReadOnly) => {
+    const loaded = readEntry(sessionKey, agentId ? { agentId } : undefined);
     return loaded.entry !== undefined && entryFilter(loaded.canonicalKey, loaded.entry);
   };
 }
@@ -455,6 +462,7 @@ function cronJobIsVisible(
   job: CronJob,
   visibility: CronSessionVisibility | undefined,
   defaultAgentId: string | undefined,
+  readEntry: typeof loadGatewaySessionEntryReadOnly = loadGatewaySessionEntryReadOnly,
 ): boolean {
   if (!visibility) {
     return true;
@@ -464,7 +472,8 @@ function cronJobIsVisible(
     resolveCronSessionTargetSessionKey(job.sessionTarget) ??
     job.sessionKey;
   return Boolean(
-    sessionKey && visibility(sessionKey, job.owner?.agentId ?? job.agentId ?? defaultAgentId),
+    sessionKey &&
+    visibility(sessionKey, job.owner?.agentId ?? job.agentId ?? defaultAgentId, readEntry),
   );
 }
 
@@ -613,13 +622,19 @@ export const cronHandlers: GatewayRequestHandlers = {
         ? await listCronPageWithVisibility({
             context,
             options: listOptions,
-            matchesJob: (job) =>
-              cronJobMatchesCallerScope({
-                job,
-                callerScope,
-                defaultAgentId,
-                allowCurrentJob: true,
-              }) && cronJobIsVisible(job, cronVisibility, defaultAgentId),
+            // Release before the next page await; every job still rereads its current session.
+            filterJobs: (jobs) =>
+              withGatewaySessionEntryReadOnlyScope((readEntry) =>
+                jobs.filter(
+                  (job) =>
+                    cronJobMatchesCallerScope({
+                      job,
+                      callerScope,
+                      defaultAgentId,
+                      allowCurrentJob: true,
+                    }) && cronJobIsVisible(job, cronVisibility, defaultAgentId, readEntry),
+                ),
+              ),
           })
         : await context.cron.listPage(listOptions);
     const jobs = page.jobs.map((job) => ({

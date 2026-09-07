@@ -12,6 +12,7 @@ export { deriveSessionTitle } from "./session-utils-core.js";
 export { resolveDeletedAgentIdFromSessionKey } from "./session-utils-store.js";
 export { loadGatewaySessionEntry as loadSessionEntry } from "./session-utils-store.js";
 export { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+export { withGatewaySessionEntryReadOnlyScope } from "./session-utils-store.js";
 export { resolveCanonicalSessionStoreMatchFromStoreKeys } from "./session-utils-store.js";
 export { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
 export { resolveCanonicalGatewaySessionStoreKey } from "./session-utils-store.js";
