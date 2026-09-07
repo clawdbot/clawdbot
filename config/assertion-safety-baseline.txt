@@ -771,7 +771,6 @@ extensions/memory-wiki/src/compiled-cache.ts	1
 extensions/memory-wiki/src/gateway.ts	3
 extensions/memory-wiki/src/ingest.ts	2
 extensions/memory-wiki/src/log.ts	1
-extensions/memory-wiki/src/markdown.ts	1
 extensions/memory-wiki/src/mutation-coordinator.ts	1
 extensions/memory-wiki/src/okf.ts	1
 extensions/memory-wiki/src/source-sync-state.ts	1
