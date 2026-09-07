@@ -464,6 +464,28 @@ export function getWebAuthAgeMs(authDir: string = resolveDefaultWebAuthDir()): n
   return stats ? Math.max(0, Date.now() - stats.mtimeMs) : null;
 }
 
+/**
+ * True once the credential has completed its first Baileys history sync. Baileys seeds
+ * `accountSyncCounter` at 0 in `initAuthCreds`, bumps it when that sync settles, and reads
+ * `> 0` as a session it will no longer push history to. Bad or missing creds answer false.
+ */
+export function hasWebCredsSyncedHistory(authDir: string = resolveDefaultWebAuthDir()): boolean {
+  try {
+    const raw = readCredsJsonRaw(resolveWebCredsPath(resolveUserPath(authDir)));
+    if (!raw) {
+      return false;
+    }
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || !("accountSyncCounter" in parsed)) {
+      return false;
+    }
+    const counter = parsed.accountSyncCounter;
+    return typeof counter === "number" && counter > 0;
+  } catch {
+    return false;
+  }
+}
+
 export function logWebSelfId(
   authDir: string = resolveDefaultWebAuthDir(),
   runtime: RuntimeEnv = defaultRuntime,
