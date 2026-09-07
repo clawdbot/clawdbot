@@ -704,6 +704,24 @@ export const ChannelsStatusResultSchema = closedObject({
   eventLoop: Type.Optional(ChannelEventLoopHealthSchema),
   partial: Type.Optional(Type.Boolean()),
   warnings: Type.Optional(Type.Array(Type.String())),
+  statusIssues: Type.Optional(
+    Type.Array(
+      closedObject({
+        channel: NonEmptyString,
+        accountId: NonEmptyString,
+        kind: Type.Union([
+          Type.Literal("intent"),
+          Type.Literal("permissions"),
+          Type.Literal("config"),
+          Type.Literal("auth"),
+          Type.Literal("runtime"),
+        ]),
+        message: Type.String(),
+        fix: Type.Optional(Type.String()),
+      }),
+      { maxItems: 50 },
+    ),
+  ),
 });
 
 /** Logs out one channel account. */

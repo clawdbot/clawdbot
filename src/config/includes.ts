@@ -69,6 +69,26 @@ export function resolveConfigIncludeWritePath(params: {
   return canonicalPath;
 }
 
+/**
+ * Whether an include target canonically resolves inside the config directory.
+ * Write eligibility must use the canonical form: a symlink beneath the config
+ * directory can point at an external OPENCLAW_INCLUDE_ROOTS file that reads
+ * accept but the guarded include writer rejects.
+ */
+export function isInternalIncludeWriteTarget(params: {
+  configPath: string;
+  includePath: string;
+}): boolean {
+  const resolvedPath = path.normalize(path.resolve(params.includePath));
+  const configDir = path.normalize(path.dirname(path.resolve(params.configPath)));
+  if (!isPathInside(configDir, resolvedPath)) {
+    return false;
+  }
+  const canonicalPath = path.normalize(resolvePathViaExistingAncestorSync(resolvedPath));
+  const canonicalDir = path.normalize(resolvePathViaExistingAncestorSync(configDir));
+  return isPathInside(canonicalDir, canonicalPath);
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -87,6 +107,8 @@ export type ConfigIncludeOwnership = {
   path: readonly string[];
   kind: "single" | "multiple";
   hasSiblingOverrides: boolean;
+  /** Whether the authored include sits at or below an actual array entry; absent means false. */
+  hasArrayAncestor?: boolean;
   targetPath?: string;
   targetPaths?: readonly string[];
 };
@@ -177,9 +199,9 @@ class IncludeProcessor {
     return this.boundary.configRoot.rootDir;
   }
 
-  process(obj: unknown, logicalPath: readonly string[] = []): unknown {
+  process(obj: unknown, logicalPath: readonly string[] = [], hasArrayAncestor = false): unknown {
     if (Array.isArray(obj)) {
-      return obj.map((item, index) => this.process(item, [...logicalPath, String(index)]));
+      return obj.map((item, index) => this.process(item, [...logicalPath, String(index)], true));
     }
 
     if (!isPlainObject(obj)) {
@@ -187,15 +209,16 @@ class IncludeProcessor {
     }
 
     if (!(INCLUDE_KEY in obj)) {
-      return this.processObject(obj, logicalPath);
+      return this.processObject(obj, logicalPath, hasArrayAncestor);
     }
 
-    return this.processInclude(obj, logicalPath);
+    return this.processInclude(obj, logicalPath, hasArrayAncestor);
   }
 
   private processObject(
     obj: Record<string, unknown>,
     logicalPath: readonly string[],
+    hasArrayAncestor: boolean,
   ): Record<string, unknown> {
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj)) {
@@ -206,25 +229,30 @@ class IncludeProcessor {
       ) {
         continue;
       }
-      result[key] = this.process(value, [...logicalPath, key]);
+      result[key] = this.process(value, [...logicalPath, key], hasArrayAncestor);
     }
     return result;
   }
 
-  private processInclude(obj: Record<string, unknown>, logicalPath: readonly string[]): unknown {
+  private processInclude(
+    obj: Record<string, unknown>,
+    logicalPath: readonly string[],
+    hasArrayAncestor: boolean,
+  ): unknown {
     const includeValue = obj[INCLUDE_KEY];
     const otherKeys = Object.keys(obj).filter(
       (key) =>
         key !== INCLUDE_KEY &&
         (logicalPath.length > 0 || !this.rootProjectionKeys || this.rootProjectionKeys.has(key)),
     );
-    const resolved = this.resolveInclude(includeValue, logicalPath);
+    const resolved = this.resolveInclude(includeValue, logicalPath, hasArrayAncestor);
     const included = resolved.value;
     this.resolver.onIncludeResolved?.({
       path: [...logicalPath],
       value: included,
       kind: Array.isArray(includeValue) ? "multiple" : "single",
       hasSiblingOverrides: otherKeys.length > 0,
+      hasArrayAncestor,
       ...(resolved.targetPath ? { targetPath: resolved.targetPath } : {}),
       ...(resolved.targetPaths ? { targetPaths: resolved.targetPaths } : {}),
     });
@@ -243,7 +271,7 @@ class IncludeProcessor {
     // Merge included content with sibling keys
     const rest: Record<string, unknown> = {};
     for (const key of otherKeys) {
-      rest[key] = this.process(obj[key], [...logicalPath, key]);
+      rest[key] = this.process(obj[key], [...logicalPath, key], hasArrayAncestor);
     }
     return deepMerge(included, rest);
   }
@@ -251,9 +279,10 @@ class IncludeProcessor {
   private resolveInclude(
     value: unknown,
     logicalPath: readonly string[],
+    hasArrayAncestor: boolean,
   ): { value: unknown; targetPath?: string; targetPaths?: string[] } {
     if (typeof value === "string") {
-      return this.loadFile(value, logicalPath);
+      return this.loadFile(value, logicalPath, hasArrayAncestor);
     }
 
     if (Array.isArray(value)) {
@@ -264,7 +293,7 @@ class IncludeProcessor {
             String(item),
           );
         }
-        return this.loadFile(item, logicalPath);
+        return this.loadFile(item, logicalPath, hasArrayAncestor);
       });
       const merged = resolvedEntries.reduce<unknown>(
         (current, entry) => deepMerge(current, entry.value),
@@ -285,6 +314,7 @@ class IncludeProcessor {
   private loadFile(
     includePath: string,
     logicalPath: readonly string[],
+    hasArrayAncestor: boolean,
   ): { value: unknown; targetPath: string } {
     const { resolvedPath, root } = this.resolvePath(includePath);
 
@@ -295,7 +325,7 @@ class IncludeProcessor {
     const parsed = this.parseFile(includePath, resolvedPath, raw);
 
     return {
-      value: this.processNested(resolvedPath, parsed, logicalPath),
+      value: this.processNested(resolvedPath, parsed, logicalPath, hasArrayAncestor),
       targetPath: resolvedPath,
     };
   }
@@ -442,6 +472,7 @@ class IncludeProcessor {
     resolvedPath: string,
     parsed: unknown,
     logicalPath: readonly string[],
+    hasArrayAncestor: boolean,
   ): unknown {
     const nested = new IncludeProcessor(
       resolvedPath,
@@ -451,7 +482,7 @@ class IncludeProcessor {
     );
     nested.visited = new Set([...this.visited, resolvedPath]);
     nested.depth = this.depth + 1;
-    return nested.process(parsed, logicalPath);
+    return nested.process(parsed, logicalPath, hasArrayAncestor);
   }
 }
 

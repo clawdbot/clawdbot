@@ -28,7 +28,9 @@ import {
 } from "openclaw/plugin-sdk/memory-host-core";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, test, expect, vi } from "vitest";
+import { createEmbeddings, isMemoryRecallTimeoutError, runWithTimeout } from "./embeddings.js";
 import memoryPlugin, {
   detectCategory,
   escapeMemoryForPrompt,
@@ -40,7 +42,6 @@ import memoryPlugin, {
   parseMemoryCliFilter,
   sanitizeForMemoryCapture,
   shouldCapture,
-  testing,
 } from "./index.js";
 import { createLanceDbRuntimeLoader } from "./lancedb-runtime.test-support.js";
 import { installTmpDirHarness } from "./test-helpers.js";
@@ -363,6 +364,26 @@ async function withMockedOpenAiMemoryPlugin<T>(
     return await params.run();
   } finally {
     resetMemoryModuleMocks();
+  }
+}
+
+async function embedWithMockedPost(post: ReturnType<typeof vi.fn>): Promise<number[]> {
+  moduleMocks.createOpenAiClient.mockImplementation(() => ({ post }));
+  moduleMocks.ensureGlobalUndiciEnvProxyDispatcher.mockImplementation(() => {});
+  const embeddings = createEmbeddings(createTestPluginApi());
+  try {
+    return await embeddings.embed("main", "embedding fixture", {
+      provider: "openai",
+      apiKey: "fixture-old-key",
+      model: "test-model",
+      dimensions: 2,
+    });
+  } finally {
+    try {
+      await embeddings.close?.();
+    } finally {
+      resetMemoryModuleMocks();
+    }
   }
 }
 
@@ -1717,7 +1738,7 @@ describe("memory plugin e2e", () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       await expect(
-        testing.runWithTimeout({
+        runWithTimeout({
           timeoutMs: Number.MAX_SAFE_INTEGER,
           task: async () => "ok",
         }),
@@ -1735,7 +1756,7 @@ describe("memory plugin e2e", () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       await expect(
-        testing.runWithTimeout({
+        runWithTimeout({
           timeoutMs: Number.NaN,
           task: async () => "ok",
         }),
@@ -1753,7 +1774,7 @@ describe("memory plugin e2e", () => {
     try {
       vi.setSystemTime(0);
       let resolveTask: ((value: string) => void) | undefined;
-      const result = testing.runWithTimeout({
+      const result = runWithTimeout({
         timeoutMs: 15_000,
         task: async () =>
           await new Promise<string>((resolve) => {
@@ -3391,26 +3412,25 @@ describe("memory plugin e2e", () => {
     );
   });
 
-  test("recognizes only structured dimensions-field rejections", () => {
-    expect(
-      testing.isEmbeddingDimensionsRejectedError({
-        status: 400,
-        param: "dimensions",
-        code: "unknown_parameter",
-      }),
-    ).toBe(true);
-    expect(
-      testing.isEmbeddingDimensionsRejectedError(
-        Object.assign(
-          new Error(
-            "422 [{'type': 'extra_forbidden', 'loc': ('body', 'dimensions'), 'msg': 'Extra inputs are not permitted'}]",
-          ),
-          { status: 422 },
+  test.each([
+    {
+      name: "unknown dimensions parameter",
+      error: { status: 400, param: "dimensions", code: "unknown_parameter" },
+      retry: true,
+    },
+    {
+      name: "tuple-style dimensions rejection",
+      error: Object.assign(
+        new Error(
+          "422 [{'type': 'extra_forbidden', 'loc': ('body', 'dimensions'), 'msg': 'Extra inputs are not permitted'}]",
         ),
+        { status: 422 },
       ),
-    ).toBe(true);
-    expect(
-      testing.isEmbeddingDimensionsRejectedError({
+      retry: true,
+    },
+    {
+      name: "nested extra dimensions field",
+      error: {
         status: 422,
         error: {
           detail: [
@@ -3421,72 +3441,108 @@ describe("memory plugin e2e", () => {
             },
           ],
         },
-      }),
-    ).toBe(true);
-    expect(
-      testing.isEmbeddingDimensionsRejectedError({
+      },
+      retry: true,
+    },
+    {
+      name: "unsupported dimensions value",
+      error: {
         status: 400,
         param: "dimensions",
         error: { message: "Unsupported dimensions value: 4" },
-      }),
-    ).toBe(false);
-    expect(
-      testing.isEmbeddingDimensionsRejectedError({
+      },
+      retry: false,
+    },
+    {
+      name: "unsupported parameter value",
+      error: {
         status: 400,
         param: "dimensions",
         error: { message: "Unsupported parameter value for dimensions: 4" },
-      }),
-    ).toBe(false);
-    expect(
-      testing.isEmbeddingDimensionsRejectedError(new Error("400 Unknown parameter: dimensions")),
-    ).toBe(false);
-    expect(
-      testing.isEmbeddingDimensionsRejectedError({
-        status: 500,
-        param: "dimensions",
-        code: "unknown_parameter",
-      }),
-    ).toBe(false);
+      },
+      retry: false,
+    },
+    {
+      name: "message without structured status",
+      error: new Error("400 Unknown parameter: dimensions"),
+      retry: false,
+    },
+    {
+      name: "server failure mentioning dimensions",
+      error: { status: 500, param: "dimensions", code: "unknown_parameter" },
+      retry: false,
+    },
+  ])("retries only dimensions-field rejections: $name", async ({ error, retry }) => {
+    const post = vi
+      .fn()
+      .mockRejectedValueOnce(error)
+      .mockResolvedValue({ data: [{ embedding: [3, 4, 12] }] });
+    const result = embedWithMockedPost(post);
+    if (retry) {
+      await expect(result).resolves.toEqual([0.6, 0.8]);
+      expect(post).toHaveBeenCalledTimes(2);
+      expect(post).toHaveBeenNthCalledWith(2, "/embeddings", {
+        body: { model: "test-model", input: "embedding fixture" },
+      });
+    } else {
+      await expect(result).rejects.toBe(error);
+      expect(post).toHaveBeenCalledOnce();
+    }
+    expect(post).toHaveBeenNthCalledWith(1, "/embeddings", {
+      body: { model: "test-model", input: "embedding fixture", dimensions: 2 },
+    });
   });
 
   test("recognizes embedding timeout errors without classifying fast request failures", () => {
     expect(
-      testing.isMemoryRecallTimeoutError(
+      isMemoryRecallTimeoutError(
         Object.assign(new Error("Request timed out."), {
           name: "APIConnectionTimeoutError",
         }),
       ),
     ).toBe(true);
     expect(
-      testing.isMemoryRecallTimeoutError(
+      isMemoryRecallTimeoutError(
         Object.assign(new Error("socket deadline"), { code: "ETIMEDOUT" }),
       ),
     ).toBe(true);
     expect(
-      testing.isMemoryRecallTimeoutError(
+      isMemoryRecallTimeoutError(
         Object.assign(new Error("provider aborted"), {
           cause: new Error("memory-lancedb embedding timed out"),
         }),
       ),
     ).toBe(true);
     expect(
-      testing.isMemoryRecallTimeoutError(
+      isMemoryRecallTimeoutError(
         Object.assign(new Error("headers deadline"), { code: "UND_ERR_HEADERS_TIMEOUT" }),
       ),
     ).toBe(true);
     expect(
-      testing.isMemoryRecallTimeoutError(
+      isMemoryRecallTimeoutError(
         Object.assign(new Error("bad request"), { status: 400, code: "invalid_request_error" }),
       ),
     ).toBe(false);
   });
 
-  test("normalizes locally truncated embeddings and rejects short vectors", () => {
-    expect(testing.truncateEmbeddingVector([3, 4, 12], 2, "test-model")).toEqual([0.6, 0.8]);
-    expect(testing.truncateEmbeddingVector([0, 0, 1], 2, "test-model")).toEqual([0, 0]);
-    expect(() => testing.truncateEmbeddingVector([1], 2, "test-model")).toThrow(
-      "Embedding model test-model returned 1 dimensions, need at least 2 for local truncation",
-    );
+  test.each([
+    { name: "nonzero prefix", vector: [3, 4, 12], expected: [0.6, 0.8] },
+    { name: "zero prefix", vector: [0, 0, 1], expected: [0, 0] },
+    { name: "short vector", vector: [1], expected: undefined },
+  ])("normalizes fallback embeddings: $name", async ({ vector, expected }) => {
+    const post = vi
+      .fn()
+      .mockRejectedValueOnce({ status: 400, param: "dimensions", code: "unknown_parameter" })
+      .mockResolvedValue({ data: [{ embedding: vector }] });
+    const result = embedWithMockedPost(post);
+    if (expected) {
+      await expect(result).resolves.toEqual(expected);
+    } else {
+      await expect(result).rejects.toThrow(
+        "Embedding model test-model returned 1 dimensions, need at least 2 for local truncation",
+      );
+    }
+    expect(post).toHaveBeenCalledTimes(2);
   });
 
   test("formatRelevantMemoriesContext escapes memory text and marks entries as untrusted", () => {
