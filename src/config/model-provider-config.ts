@@ -247,7 +247,8 @@ export function resolveMergedModelProviderConfig(
 export function projectModelProviderConfig(
   config: OpenClawConfig | undefined,
   providerId: string,
-  overrides: Partial<ModelProviderConfig>,
+  overrides: Pick<ModelProviderConfig, "baseUrl"> &
+    Partial<Pick<ModelProviderConfig, "api" | "auth">>,
 ): OpenClawConfig {
   const provider = normalizeProviderId(providerId);
   const entry = resolveMergedModelProviderEntry(config, provider);
