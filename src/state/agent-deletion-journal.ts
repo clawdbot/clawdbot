@@ -54,6 +54,11 @@ export type AgentDeletionJournalCleanupPath = {
   sourcePaths: string[];
   dev: number | null;
   ino: number | null;
+  // Exact decimal dev/ino for ids past 2^53 (NTFS file ids). dev/ino stay
+  // number|null so pre-137416 readers keep parsing new journals (they ignore
+  // unknown fields); an unsafe part stores null here and its exact value here.
+  devStr?: string;
+  inoStr?: string;
   coversDescendants: boolean;
   done: boolean;
   note?: string;
@@ -318,6 +323,24 @@ function parseDatabasePaths(value: string): string[] {
   return parsed;
 }
 
+// dev/ino keep the pre-137416 shape (number|null) so old readers accept new
+// journals; devStr/inoStr carry exact decimals for unsafe ids and are ignored
+// by old readers. A single `as` keeps the assertion ratchet flat.
+function isCompatibleJournalIdentity(entry: object): boolean {
+  const identity = entry as {
+    dev?: unknown;
+    ino?: unknown;
+    devStr?: unknown;
+    inoStr?: unknown;
+  };
+  return (
+    (identity.dev === null || typeof identity.dev === "number") &&
+    (identity.ino === null || typeof identity.ino === "number") &&
+    (identity.devStr === undefined || typeof identity.devStr === "string") &&
+    (identity.inoStr === undefined || typeof identity.inoStr === "string")
+  );
+}
+
 function parseCleanupPaths(value: string): AgentDeletionJournalCleanupPath[] {
   const parsed: unknown = JSON.parse(value);
   if (
@@ -331,10 +354,7 @@ function parseCleanupPaths(value: string): AgentDeletionJournalCleanupPath[] {
         typeof (entry as { parentPath?: unknown }).parentPath === "string" &&
         ((entry as { kind?: unknown }).kind === "target" ||
           (entry as { kind?: unknown }).kind === "symlink") &&
-        ((entry as { dev?: unknown }).dev === null ||
-          typeof (entry as { dev?: unknown }).dev === "number") &&
-        ((entry as { ino?: unknown }).ino === null ||
-          typeof (entry as { ino?: unknown }).ino === "number") &&
+        isCompatibleJournalIdentity(entry) &&
         typeof (entry as { coversDescendants?: unknown }).coversDescendants === "boolean" &&
         typeof (entry as { done?: unknown }).done === "boolean" &&
         ((entry as { note?: unknown }).note === undefined ||

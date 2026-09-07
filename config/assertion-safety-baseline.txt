@@ -3557,7 +3557,7 @@ src/snapshot/git-backup-codec.ts	9
 src/snapshot/git-backup.ts	2
 src/snapshot/local-repository.ts	8
 src/snapshot/manifest.ts	1
-src/state/agent-deletion-journal.ts	15
+src/state/agent-deletion-journal.ts	12
 src/state/backup-run-records.ts	1
 src/state/config-machine-state.ts	1
 src/state/local-onboarding-state.ts	1

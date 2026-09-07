@@ -130,6 +130,9 @@ const agentsHandlerDeps = {
 };
 
 export const testing = {
+  cleanupPathIdentity,
+  cleanupIdentityEquals,
+  cleanupIdentityFromJournal,
   setDepsForTests(
     overrides: Partial<{
       root: typeof root;
@@ -340,19 +343,98 @@ function cleanupFailure(pathname: string, error: unknown): AgentDeletePathOutcom
   return { failed: { path: pathname, reason: reason || "unknown error" } };
 }
 
-function cleanupPathIdentity(stat: { dev?: number | bigint; ino?: number | bigint } | undefined) {
+// Journal identity: dev/ino stay number|null so pre-137416 readers keep
+// parsing new journals (they ignore devStr/inoStr); unsafe parts store null
+// in dev/ino and the exact decimal in devStr/inoStr.
+type AgentCleanupIdentity = {
+  dev: number | null;
+  ino: number | null;
+  devStr?: string;
+  inoStr?: string;
+};
+
+function cleanupIdentityPart(value: number | bigint): { num: number | null; str?: string } {
+  // Safe ids stay plain numbers so journals match the pre-137416 shape
+  // exactly; only ids past 2^53 become null + exact decimal strings
+  // (JSON cannot hold BigInt).
+  const exact = typeof value === "bigint" ? value.toString() : String(value);
+  if (typeof value === "bigint") {
+    return value <= BigInt(Number.MAX_SAFE_INTEGER) && value >= BigInt(Number.MIN_SAFE_INTEGER)
+      ? { num: Number(value) }
+      : { num: null, str: exact };
+  }
+  return Number.isSafeInteger(value) ? { num: value } : { num: null, str: exact };
+}
+
+function cleanupPathIdentity(
+  stat: { dev?: number | bigint; ino?: number | bigint } | undefined,
+): AgentCleanupIdentity | null {
   if (
     (typeof stat?.dev !== "number" && typeof stat?.dev !== "bigint") ||
     (typeof stat.ino !== "number" && typeof stat.ino !== "bigint")
   ) {
     return null;
   }
-  const dev = Number(stat.dev);
-  const ino = Number(stat.ino);
-  if (!Number.isSafeInteger(dev) || !Number.isSafeInteger(ino)) {
-    throw new Error("cleanup path identity exceeds the safe integer range");
+  // NTFS file ids routinely exceed Number.MAX_SAFE_INTEGER; callers must pass
+  // bigint stats (lstat with { bigint: true }) so unsafe identities are
+  // captured exactly here.
+  const dev = cleanupIdentityPart(stat.dev);
+  const ino = cleanupIdentityPart(stat.ino);
+  const identity: AgentCleanupIdentity = { dev: dev.num, ino: ino.num };
+  if (dev.str !== undefined) {
+    identity.devStr = dev.str;
   }
-  return { dev, ino };
+  if (ino.str !== undefined) {
+    identity.inoStr = ino.str;
+  }
+  return identity;
+}
+
+function cleanupIdentityPartEquals(
+  preparedNum: number | null,
+  preparedStr: string | undefined,
+  freshNum: number | null,
+  freshStr: string | undefined,
+): boolean {
+  // Exact strings win; safe numbers stringify exactly so mixed safe forms
+  // still match. A rounded number recheck of an unsafe prepared id never
+  // matches, so the fence fails closed and the exact re-read gets its chance.
+  const prepared = preparedStr ?? (preparedNum === null ? null : String(preparedNum));
+  const fresh = freshStr ?? (freshNum === null ? null : String(freshNum));
+  return prepared !== null && fresh !== null && prepared === fresh;
+}
+
+// String comparison tells apart unsafe ids that collapse to one double
+// (9007199254740993 vs 9007199254740992).
+function cleanupIdentityEquals(
+  prepared: AgentCleanupIdentity,
+  fresh: AgentCleanupIdentity,
+): boolean {
+  return (
+    cleanupIdentityPartEquals(prepared.dev, prepared.devStr, fresh.dev, fresh.devStr) &&
+    cleanupIdentityPartEquals(prepared.ino, prepared.inoStr, fresh.ino, fresh.inoStr)
+  );
+}
+
+function cleanupIdentityFromJournal(
+  persistedPath: AgentDeletionJournalCleanupPath,
+): AgentCleanupIdentity | null {
+  // A legacy absent identity is null in either numeric part with no exact
+  // string; unsafe parts carry null + devStr/inoStr and must be kept exact.
+  if (
+    (persistedPath.dev === null && persistedPath.devStr === undefined) ||
+    (persistedPath.ino === null && persistedPath.inoStr === undefined)
+  ) {
+    return null;
+  }
+  const identity: AgentCleanupIdentity = { dev: persistedPath.dev, ino: persistedPath.ino };
+  if (persistedPath.devStr !== undefined) {
+    identity.devStr = persistedPath.devStr;
+  }
+  if (persistedPath.inoStr !== undefined) {
+    identity.inoStr = persistedPath.inoStr;
+  }
+  return identity;
 }
 
 async function statAgentCleanupPath(cleanupPath: AgentDeleteCleanupPath) {
@@ -374,18 +456,28 @@ async function statAgentCleanupPath(cleanupPath: AgentDeleteCleanupPath) {
   if (stat.isFile && stat.nlink > 1) {
     throw new AgentCleanupIdentityMismatchError("hardlinked cleanup replacement preserved");
   }
-  const identity = cleanupPathIdentity(stat);
+  let identity = cleanupPathIdentity(stat);
+  if (
+    cleanupPath.preparedIdentity === null ||
+    cleanupPath.preparedIdentity.devStr !== undefined ||
+    cleanupPath.preparedIdentity.inoStr !== undefined
+  ) {
+    // Only unsafe ids carry devStr/inoStr, and the fs-safe stat above is
+    // number-valued (PathStat dev/ino are numbers), so it would arrive rounded
+    // and could never match. Re-read the exact identity instead; a failed
+    // re-read must stay a failure (retryable) — falling back to the rounded
+    // value would mismatch into `skipped`, which the caller marks done while
+    // the files are still on disk. (Same accepted residual race bound as the
+    // rename below: replacement between check and move.)
+    identity = cleanupPathIdentity(await fs.lstat(cleanupPath.trashPath, { bigint: true }));
+  }
   if (cleanupPath.preparedIdentity === null) {
     // The journal fence blocks legitimate claims on prepared-absent paths, so a
     // file that appeared here is leaked deleted-agent state (recreated WAL
     // sidecars, runtime home rewrites). Adopt it and sweep it; preserving it
     // cascades ancestor protection and finishes over a surviving tree.
     cleanupPath.preparedIdentity = identity;
-  } else if (
-    identity === null ||
-    identity.dev !== cleanupPath.preparedIdentity.dev ||
-    identity.ino !== cleanupPath.preparedIdentity.ino
-  ) {
+  } else if (identity === null || !cleanupIdentityEquals(cleanupPath.preparedIdentity, identity)) {
     throw new AgentCleanupIdentityMismatchError("cleanup path identity changed before deletion");
   }
 }
@@ -432,7 +524,7 @@ type AgentDeleteCleanupPath = {
   trashPath: string;
   trashCoversDescendants: boolean;
   kind: "target" | "symlink";
-  preparedIdentity: { dev: number; ino: number } | null;
+  preparedIdentity: AgentCleanupIdentity | null;
   done: boolean;
   note?: string;
   preparationError?: unknown;
@@ -509,10 +601,7 @@ async function prepareAgentDeleteCleanupPaths(
         trashPath,
         trashCoversDescendants: persistedPath.coversDescendants,
         kind: persistedPath.kind,
-        preparedIdentity:
-          persistedPath.dev === null || persistedPath.ino === null
-            ? null
-            : { dev: persistedPath.dev, ino: persistedPath.ino },
+        preparedIdentity: cleanupIdentityFromJournal(persistedPath),
         done: persistedPath.done,
         note: persistedPath.note,
         sourcePaths: persistedPath.sourcePaths.map((sourcePath) => path.resolve(sourcePath)),
@@ -530,9 +619,12 @@ async function prepareAgentDeleteCleanupPaths(
     } catch (error) {
       preparationError = error;
     }
-    let sourceStat: Awaited<ReturnType<typeof fs.lstat>> | undefined;
+    let sourceStat:
+      | { dev?: number | bigint; ino?: number | bigint; isSymbolicLink(): boolean }
+      | undefined;
     try {
-      sourceStat = await fs.lstat(pathname);
+      // bigint: exact dev/ino capture; NTFS ids past 2^53 would round otherwise.
+      sourceStat = await fs.lstat(pathname, { bigint: true });
     } catch (error) {
       if (!isMissingPathError(error)) {
         preparationError ??= error;
@@ -541,7 +633,7 @@ async function prepareAgentDeleteCleanupPaths(
     let targetStat = sourceStat;
     if (resolvedPath !== sourcePath) {
       try {
-        targetStat = await fs.lstat(resolvedPath);
+        targetStat = await fs.lstat(resolvedPath, { bigint: true });
       } catch (error) {
         if (!isMissingPathError(error)) {
           preparationError ??= error;
@@ -1093,6 +1185,12 @@ export const agentsHandlers: GatewayRequestHandlers = {
                       coversDescendants: trashCoversDescendants,
                       done,
                     };
+                    if (preparedIdentity?.devStr !== undefined) {
+                      journalPath.devStr = preparedIdentity.devStr;
+                    }
+                    if (preparedIdentity?.inoStr !== undefined) {
+                      journalPath.inoStr = preparedIdentity.inoStr;
+                    }
                     if (note) {
                       journalPath.note = note;
                     }
