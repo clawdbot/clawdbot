@@ -3889,11 +3889,33 @@ NODE
         OPENCLAW_DOCKER_ALL_LANES: "${{ needs.preflight.outputs.docker_seed_lanes }}",
         OPENCLAW_DOCKER_ALL_LIVE_MODE: "skip",
         OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: "1",
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@latest",
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "legacy-operator-state",
         OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: parallelism,
       },
     });
     expect(parallelism).toContain("&& 3 || 1");
   });
+
+  it.each([
+    { repository: "openclaw/openclaw", ref: "refs/heads/main", expected: true },
+    { repository: "openclaw/openclaw", ref: "refs/heads/feature", expected: false },
+    { repository: "fork/openclaw", ref: "refs/heads/main", expected: false },
+  ])(
+    "gates only canonical main pushes with the published upgrade ($repository $ref)",
+    ({ repository, ref, expected }) => {
+      const result = runCiManifestFixture({
+        bundledPlanner: true,
+        eventName: "push",
+        repository,
+        changedPaths: ["docs/ci.md"],
+        scopeEnv: { GITHUB_REF: ref, OPENCLAW_CI_DOCS_ONLY: "true" },
+      });
+      expect(result.status, result.output).toBe(0);
+      expect(result.outputs.run_docker_seed_e2e).toBe(String(expected));
+      expect(result.outputs.docker_seed_lanes).toBe(expected ? "published-upgrade-survivor" : "");
+    },
+  );
 
   it("splits Windows tests two ways on every runner backend", () => {
     const workflow = readCiWorkflow();

@@ -563,6 +563,10 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLan
     if (!scenario) {
       continue;
     }
+    if (scenario === "legacy-operator-state") {
+      requiredPackages.add("@openclaw/discord");
+      continue;
+    }
     for (const packageName of UPGRADE_SURVIVOR_RUNTIME_COMPANION_PACKAGES) {
       requiredPackages.add(packageName);
     }

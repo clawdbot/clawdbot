@@ -15,8 +15,15 @@ import {
 import { assertUpgradeVolumeMigrated, seedUpgradeVolume } from "./sqlite-volume.mjs";
 
 const command = process.argv[2];
+// Keep unrelated packaged assertion commands independent of agent-turn helpers.
+const legacyOperator =
+  process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO === "legacy-operator-state" ||
+  command?.includes("legacy-operator")
+    ? await import("./legacy-operator-state.mjs")
+    : undefined;
 const SCENARIOS = new Set([
   "base",
+  "legacy-operator-state",
   "mobile-pairing-reconnect",
   "acpx-openclaw-tools-bridge",
   "feishu-channel",
@@ -359,6 +366,10 @@ function seedState() {
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
   const workspace = requireEnv("OPENCLAW_TEST_WORKSPACE_DIR");
   const scenario = getScenario();
+  if (scenario === "legacy-operator-state") {
+    // The scenario has already authored its state with the baseline's own CLI.
+    return;
+  }
 
   write(
     path.join(workspace, "IDENTITY.md"),
@@ -471,6 +482,12 @@ function assertConfigSurvived() {
   const config = getConfig();
   const coverage = getCoverage();
   const scenario = getScenario();
+  if (scenario === "legacy-operator-state") {
+    legacyOperator.assertLegacyOperatorConfig(
+      process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival",
+    );
+    return;
+  }
   if (scenario === "meeting-transcripts-sqlite") {
     // This focused migration fixture proves state import/export across one published
     // baseline; the broad base scenario owns unrelated agent/channel config parity.
@@ -646,6 +663,10 @@ function assertStateSurvived() {
   const workspace = requireEnv("OPENCLAW_TEST_WORKSPACE_DIR");
   const scenario = getScenario();
   const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
+  if (scenario === "legacy-operator-state") {
+    legacyOperator.assertLegacyOperatorConfig(stage);
+    return;
+  }
   assert(fs.existsSync(path.join(workspace, "IDENTITY.md")), "workspace identity file missing");
   if (scenario === "watchos-direct-node" || scenario === "mobile-pairing-reconnect") {
     return;
@@ -1733,8 +1754,20 @@ if (command === "list-scenarios") {
   process.stdout.write(`${JSON.stringify([...SCENARIOS])}\n`);
 } else if (command === "seed") {
   seedState();
+} else if (command === "seed-legacy-operator") {
+  legacyOperator.seedLegacyOperatorState();
+} else if (command === "seed-legacy-operator-gateway") {
+  legacyOperator.seedLegacyOperatorGatewayState();
+} else if (command === "assert-legacy-operator-gateway") {
+  legacyOperator.assertLegacyOperatorGatewayState(process.argv[3] || "candidate");
+} else if (command === "legacy-operator-turn") {
+  legacyOperator.runLegacyOperatorTurn(process.argv[3]);
 } else if (command === "assert-exec-approvals") {
-  if (!["watchos-direct-node", "mobile-pairing-reconnect"].includes(getScenario())) {
+  if (getScenario() === "legacy-operator-state") {
+    legacyOperator.assertLegacyOperatorApprovals(
+      process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival",
+    );
+  } else if (!["watchos-direct-node", "mobile-pairing-reconnect"].includes(getScenario())) {
     assertExecApprovalPolicySurvived(
       requireEnv("OPENCLAW_STATE_DIR"),
       process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival",

@@ -142,16 +142,47 @@ pnpm test:docker:published-upgrade-survivor
 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.7.1-2 \
 OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=sqlite-volume \
 pnpm test:docker:published-upgrade-survivor
+
+OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.6.34 \
+OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=legacy-operator-state \
+pnpm test:docker:published-upgrade-survivor
 ```
 
 Available scenarios: `base`, `acpx-openclaw-tools-bridge`, `feishu-channel`,
 `bootstrap-persona`, `channel-post-core-restore`, `plugin-deps-cleanup`,
 `configured-plugin-installs`, `stale-source-plugin-shadow`, `tilde-log-path`,
 `meeting-transcripts-sqlite`, `versioned-runtime-deps`, `cron-scheduled-authority`,
-and `sqlite-volume`. In aggregate runs,
+`legacy-operator-state`, and `sqlite-volume`. In aggregate runs,
 `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=reported-issues` expands the release-soak
 fixtures but excludes the expensive `sqlite-volume` scenario. Use
 `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=far-reaching` to include it.
+
+The `legacy-operator-state` scenario uses the published baseline's own CLI to
+create a second agent, allowlist exec approvals, and two command cron jobs: one
+without an explicit agent and one owned by `ops`. It leaves `systemAgent`
+unset, installs one version-matched npm plugin through the local registry, and
+preserves a workspace skill. A mock OpenAI server verifies a real agent turn
+before and after the update without provider credentials. After the update,
+the lane checks approvals and legacy-file retirement, effective cron owners,
+the candidate plugin artifact, the candidate state schema, an idempotent update,
+and Gateway health. Assertions run before a standalone Doctor can conceal an
+incomplete update migration.
+
+In `legacy-operator-state`, the `2026.9.2` updater line is a temporary exception
+when the packed candidate needs a database migration. That line introduced the update ledger without the
+transaction fence added in [#138839](https://github.com/openclaw/openclaw/pull/138839).
+Its expected outcome is a typed `update-schema-bump-unfenced` refusal, a
+nonzero update exit, byte-for-byte restoration of the previous package,
+unchanged database schema versions, and a startable baseline Gateway. A generic
+failure, a migrated database, or an unusable Gateway fails the lane. Earlier
+updaters and `2026.9.3` or later expect success. This exception does not permit
+the test to install the candidate directly after a refusal.
+
+Other scenarios keep their existing success assertions. Their deliberately
+injected legacy files can prevent the baseline from starting before an update;
+a refusal leaves those fixtures untouched and remains a failure in aggregate
+runs. The CLI-authored scenario proves the clean-refusal recovery contract
+without repairing or skipping those older migration specimens.
 
 `auth-profile-v2026-7-2-beta-5` is explicitly selectable outside those aggregate
 aliases. It imports the historical JSON credential fixture, verifies credentials
@@ -183,8 +214,12 @@ Scale the fixture with `OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS`,
 idempotent Doctor pass is 60 seconds; override it with
 `OPENCLAW_UPGRADE_SURVIVOR_VOLUME_IDEMPOTENCE_BUDGET_SECONDS` on slower hosts.
 
-The manual `Update Migration` workflow defaults to the latest stable release
-and updates it to the selected `package_ref` artifact (`main` by default).
+The `Update Migration` workflow runs weekly and supports manual dispatch. Its
+default `supported-lines` baseline set resolves npm dist-tags and published
+versions at run time: `latest`, the previous stable release, `extended-stable`
+when that tag exists, and the supported floor `2026.6.34`. Duplicate versions
+run once. It updates each baseline to the selected `package_ref` artifact
+(`main` by default), exercising plugin cleanup and legacy operator state.
 Leave `baselines` blank to use that default. For an explicit historical replay
 from every published stable release since 2026.4.23, pass
 `baselines=all-since-2026.4.23`:
@@ -247,15 +282,18 @@ tolerance, stale plugin dependency cleanup, offline plugin coverage, plugin
 update behavior, and Telegram package QA on the same resolved artifact without
 making the default release package gate walk every published release.
 
-Routine release proof resolves npm `latest` once to an exact stable package
-before Docker fanout and runs every `reported-issues` scenario against that
-baseline. The candidate remains the selected package-under-test tarball.
+Routine release checks use the same `supported-lines` baseline expansion,
+resolved once to exact packages before Docker fanout. The default scenario set
+includes `base` and `legacy-operator-state`; release soak runs `reported-issues`.
+The candidate remains the selected package-under-test tarball. The per-PR
+`docker-seed-e2e` tripwire stays limited to `latest` and `legacy-operator-state`
+and also runs on every canonical `main` push.
 
 For manual historical coverage, `last-stable-4` selects four recent stable
 npm-published releases. Exact versions, `all-since-2026.4.23`, and
 `release-history` remain available through `published_upgrade_survivor_baselines`.
-Use those overrides when replaying a historical migration, rather than adding
-old releases to every routine release run.
+Use those overrides when replaying migrations outside the bounded supported
+baseline set.
 
 When multiple published-upgrade survivor baselines are selected, the reusable
 Docker workflow shards each baseline into its own targeted runner job. Each

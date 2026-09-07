@@ -39,7 +39,7 @@ describe("scripts/resolve-upgrade-survivor-baselines", () => {
     expect(resolveBaselines(new Map([["fallback", "2026.4.23"]]))).toEqual(["openclaw@2026.4.23"]);
   });
 
-  it.each(["package", "update-migration", "historical"])(
+  it.each(["package", "update-migration", "release-checks", "historical"])(
     "pins the %s workflow baseline once before Docker fanout",
     (entrypoint) => {
       const workflow = parse(readFileSync(".github/workflows/package-acceptance.yml", "utf8")) as {
@@ -57,6 +57,15 @@ describe("scripts/resolve-upgrade-survivor-baselines", () => {
         on: { workflow_dispatch: { inputs: { baselines: { default: string } } } };
       };
       const inputs = workflow.on.workflow_call.inputs;
+      const release = parse(
+        readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8"),
+      ) as {
+        jobs: {
+          package_acceptance_release_checks: {
+            with: { published_upgrade_survivor_baselines: string };
+          };
+        };
+      };
       const step = workflow.jobs.resolve_package.steps.find(
         (entry) => entry.id === "upgrade_survivor_baselines",
       );
@@ -67,9 +76,12 @@ describe("scripts/resolve-upgrade-survivor-baselines", () => {
       const requested =
         entrypoint === "update-migration"
           ? migration.on.workflow_dispatch.inputs.baselines.default
-          : entrypoint === "historical"
-            ? "2026.4.23"
-            : inputs.published_upgrade_survivor_baselines.default;
+          : entrypoint === "release-checks"
+            ? release.jobs.package_acceptance_release_checks.with
+                .published_upgrade_survivor_baselines
+            : entrypoint === "historical"
+              ? "2026.4.23"
+              : inputs.published_upgrade_survivor_baselines.default;
 
       withJsonFixture("output", {}, (output) => {
         const root = path.dirname(output);
@@ -83,7 +95,9 @@ describe("scripts/resolve-upgrade-survivor-baselines", () => {
 const fs = require("node:fs");
 const file = process.env.FIXTURE_NPM_CALLS;
 fs.appendFileSync(file, JSON.stringify(process.argv.slice(2)) + "\\n");
-console.log(JSON.stringify(["2026.7.1-2", "2026.8.1"]));
+console.log(JSON.stringify(process.argv[4] === "dist-tags"
+  ? [{ latest: "2026.8.1", "extended-stable": "2026.6.35" }]
+  : ["2026.6.34", "2026.6.35", "2026.7.1-2", "2026.8.1"]));
 `,
           { mode: 0o755 },
         );
@@ -103,18 +117,90 @@ console.log(JSON.stringify(["2026.7.1-2", "2026.8.1"]));
             TARGET_CONTEXT_REF: "",
           },
         });
+        const expanded = entrypoint === "update-migration" || entrypoint === "release-checks";
+        const expectedBaselines = expanded
+          ? "openclaw@2026.8.1 openclaw@2026.7.1-2 openclaw@2026.6.35 openclaw@2026.6.34"
+          : `openclaw@${entrypoint === "historical" ? "2026.4.23" : "2026.7.1-2"}`;
         expect(readFileSync(output, "utf8")).toBe(
-          `baselines=openclaw@${entrypoint === "historical" ? "2026.4.23" : "2026.7.1-2"}\nbaseline=openclaw@2026.7.1-2\n`,
+          `baselines=${expectedBaselines}\nbaseline=openclaw@2026.7.1-2\n`,
         );
         expect(
           readFileSync(calls, "utf8")
             .trim()
             .split("\n")
             .map((line) => JSON.parse(line)),
-        ).toEqual([["view", "openclaw", "versions", "--json", "--silent", "--prefer-online"]]);
+        ).toEqual([
+          ["view", "openclaw", "versions", "--json", "--silent", "--prefer-online"],
+          ...(expanded
+            ? [["view", "openclaw", "dist-tags", "--json", "--silent", "--prefer-online"]]
+            : []),
+        ]);
       });
     },
   );
+
+  it.each([
+    { extended: undefined, expected: ["2026.9.2", "2026.9.1", "2026.6.34"] },
+    { extended: "2026.6.35", expected: ["2026.9.2", "2026.9.1", "2026.6.35", "2026.6.34"] },
+    { extended: "2026.6.34", expected: ["2026.9.2", "2026.9.1", "2026.6.34"] },
+  ])(
+    "resolves supported npm lines with optional/deduplicated extended-stable ($extended)",
+    ({ extended, expected }) => {
+      withJsonFixture(
+        "tags.json",
+        { latest: "2026.9.2", ...(extended ? { "extended-stable": extended } : {}) },
+        (tagsFile) => {
+          withJsonFixture(
+            "versions.json",
+            ["2026.6.34", "2026.6.35", "2026.9.1", "2026.9.2", "2026.9.3-beta.1", "2026.9.3"],
+            (versionsFile) => {
+              expect(
+                resolveBaselines(
+                  new Map([
+                    ["requested", "supported-lines"],
+                    ["npm-dist-tags-json", tagsFile],
+                    ["npm-versions-json", versionsFile],
+                  ]),
+                ),
+              ).toEqual(expected.map((version) => `openclaw@${version}`));
+            },
+          );
+        },
+      );
+    },
+  );
+
+  it.each([
+    {
+      tags: {},
+      versions: ["2026.6.34", "2026.9.2"],
+      error: "npm latest must name a published stable version",
+    },
+    {
+      tags: { latest: "2026.9.2", "extended-stable": "2026.6.99" },
+      versions: ["2026.6.34", "2026.9.2"],
+      error: "npm extended-stable must name a published stable version",
+    },
+    {
+      tags: { latest: "2026.9.2" },
+      versions: ["2026.9.1", "2026.9.2"],
+      error: "oldest supported baseline is not published",
+    },
+  ])("fails closed on unusable supported-line metadata ($error)", ({ tags, versions, error }) => {
+    withJsonFixture("tags.json", tags, (tagsFile) => {
+      withJsonFixture("versions.json", versions, (versionsFile) => {
+        expect(() =>
+          resolveBaselines(
+            new Map([
+              ["requested", "supported-lines"],
+              ["npm-dist-tags-json", tagsFile],
+              ["npm-versions-json", versionsFile],
+            ]),
+          ),
+        ).toThrow(error);
+      });
+    });
+  });
 
   it("resolves release-history to last six stable releases plus explicit legacy anchors", () => {
     const releases = (

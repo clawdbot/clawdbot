@@ -5711,7 +5711,7 @@ test "$package_manager" = "pnpm@12.1.0"
     }
   });
 
-  it("keeps update migration manual with optional historical replays", () => {
+  it("runs secretless weekly supported-line migration with optional manual historical replays", () => {
     const workflow = readFileSync(UPDATE_MIGRATION_WORKFLOW, "utf8");
     const packageWorkflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
     const job = workflowJob(UPDATE_MIGRATION_WORKFLOW, "update_migration");
@@ -5724,24 +5724,24 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(
       readWorkflow(UPDATE_MIGRATION_WORKFLOW).on?.workflow_dispatch?.inputs?.baselines,
     ).toMatchObject({
-      default: "",
+      default: "supported-lines",
       required: false,
     });
     expect(
       readWorkflow(UPDATE_MIGRATION_WORKFLOW).on?.workflow_dispatch?.inputs,
     ).not.toHaveProperty("allow_frozen_target_scenario_omissions");
-    expect(workflow).toContain("default: plugin-deps-cleanup");
-    expect(workflow).not.toMatch(/\n {2}schedule:/u);
+    expect(readWorkflow(UPDATE_MIGRATION_WORKFLOW).on?.schedule).toEqual([{ cron: "17 3 * * 0" }]);
     expect(job.with).toMatchObject({
-      workflow_ref: "${{ inputs.workflow_ref }}",
-      package_ref: "${{ inputs.package_ref }}",
-      published_upgrade_survivor_baselines: "${{ inputs.baselines }}",
-      published_upgrade_survivor_scenarios: "${{ inputs.scenarios }}",
+      workflow_ref: "${{ inputs.workflow_ref || 'main' }}",
+      package_ref: "${{ inputs.package_ref || 'main' }}",
+      published_upgrade_survivor_baselines: "${{ inputs.baselines || 'supported-lines' }}",
+      published_upgrade_survivor_scenarios:
+        "${{ inputs.scenarios || 'plugin-deps-cleanup legacy-operator-state' }}",
     });
     expect(job.with).not.toHaveProperty("allow_frozen_target_scenario_omissions");
     expect(workflow).toContain("telegram_mode: none");
-    expect(workflow).toContain("secrets: inherit");
-    expect(packageWorkflow).toContain("published-upgrade-survivor/update-migration");
+    expect(job.secrets).toBeUndefined();
+    expect(packageWorkflow).toContain("supported-lines for latest/previous/extended/floor");
   });
 });
 
@@ -6636,7 +6636,6 @@ describe("package artifact reuse", () => {
     expect(weekly.with).not.toHaveProperty("docker_e2e_bare_image");
     expect(weekly.with).not.toHaveProperty("docker_e2e_functional_image");
     expect(weekly.with).not.toHaveProperty("allow_frozen_target_scenario_omissions");
-    expect(readWorkflow(UPDATE_MIGRATION_WORKFLOW).on?.schedule).toBeUndefined();
   });
 
   it.each([false, true])(
@@ -8375,9 +8374,9 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "plugin-update",
       "plugin-binding-command-escape",
     ]);
-    expect(packageAcceptanceJob.with?.published_upgrade_survivor_baselines).toBeUndefined();
+    expect(packageAcceptanceJob.with?.published_upgrade_survivor_baselines).toBe("supported-lines");
     expect(workflow).toContain(
-      "published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}",
+      "published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || 'base legacy-operator-state' }}",
     );
     expect(readWorkflow(RELEASE_CHECKS_WORKFLOW).on?.workflow_dispatch?.inputs).toMatchObject({
       skip_package_telegram_e2e: {
