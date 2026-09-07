@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { DEFAULT_SIDEBAR_ENTRIES, serializeSidebarEntry } from "../app-navigation.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
+import { patchSettings } from "../app/settings.ts";
 import { isUpdateActionable } from "../app/update-schedule-projection.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
@@ -109,6 +110,11 @@ export function renderSidebarAgentMenuForController(controller: SidebarMenusCont
     agents,
     identities,
     pinnedAgentIds: host.pinnedAgentIds,
+    rosterMode: host.sidebarAgentsMode === "roster",
+    onToggleRoster: () => {
+      host.sidebarAgentsMode = host.sidebarAgentsMode === "roster" ? "chip" : "roster";
+      patchSettings({ sidebarAgentsMode: host.sidebarAgentsMode });
+    },
     connected: host.connected,
     openMode: controller.agentMenuInteractionState === "open-hover" ? "hover" : "click",
     agentUnreadCount: (agentId) => host.agentUnreadCount(agentId),

@@ -224,6 +224,7 @@ export type UiSettings = {
   sidebarSessionActivePanels?: SidebarSessionActivePanels; // Collapsed active panel per session
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
+  sidebarAgentsMode?: "chip" | "roster";
   sidebarEntries: string[]; // Ordered routes, plugin navigation, and pinned sessions below Home
   sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
   chatMessageMaxWidth?: string; // Browser-local centered chat transcript max width
@@ -481,6 +482,7 @@ export function loadUiPreferences(targetGatewayUrl?: string): UiPreferences {
     catalogOpenTarget: UI_APPEARANCE_DEFAULTS.catalogOpenTarget,
     navCollapsed: false,
     navWidth: NAV_WIDTH_DEFAULT,
+    sidebarAgentsMode: "chip",
     sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
     sidebarLiveActivity: UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
     showAdvancedSettings: false,
@@ -571,6 +573,7 @@ export function loadUiPreferences(targetGatewayUrl?: string): UiPreferences {
         parsed.navWidth <= NAV_WIDTH_MAX
           ? parsed.navWidth
           : defaults.navWidth,
+      sidebarAgentsMode: parsed.sidebarAgentsMode === "roster" ? "roster" : "chip",
       sidebarEntries:
         normalizeSidebarEntries(parsedRecord.sidebarEntries) ??
         migratedSidebarEntries ??
@@ -732,6 +735,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
         }
       : {}),
     navWidth: next.navWidth, // Persist size, not visibility: shared localStorage leaks across tabs.
+    sidebarAgentsMode: next.sidebarAgentsMode === "roster" ? "roster" : "chip",
     sidebarEntries: next.sidebarEntries,
     ...(next.sidebarLiveActivity === false ? { sidebarLiveActivity: false } : {}),
     ...(normalizeChatMessageMaxWidth(next.chatMessageMaxWidth)
