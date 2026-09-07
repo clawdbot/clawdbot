@@ -13,6 +13,7 @@ type CronTestPage = HTMLElement & {
   render: () => typeof nothing;
   cron: CronState;
   cronModelSuggestions: string[];
+  patchForm: (patch: Partial<CronState["cronForm"]>) => void;
 };
 
 export function waitForCronPage(assertion: () => void) {
