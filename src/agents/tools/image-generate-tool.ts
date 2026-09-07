@@ -602,14 +602,32 @@ async function executeImageGenerationJob(params: {
       typeof result.metadata?.requestedSize === "string" &&
       result.metadata.requestedSize === params.size &&
       Boolean(normalizedAspectRatio));
-  const firstImageMetadata = result.images[0]?.metadata;
+  const returnedImageSettings = result.images.map((image) => ({
+    size:
+      typeof image.metadata?.size === "string" && image.metadata.size.trim()
+        ? image.metadata.size
+        : undefined,
+    quality:
+      typeof image.metadata?.quality === "string" && image.metadata.quality.trim()
+        ? image.metadata.quality
+        : undefined,
+  }));
+  const hasReturnedSizes = returnedImageSettings.some((settings) => settings.size);
+  const hasReturnedQualities = returnedImageSettings.some((settings) => settings.quality);
+  const hasReturnedImageSettings = hasReturnedSizes || hasReturnedQualities;
+  const appliedSizes = returnedImageSettings.map((settings) => settings.size);
+  const appliedQualities = returnedImageSettings.map((settings) => settings.quality);
   const appliedSize =
-    typeof firstImageMetadata?.size === "string" && firstImageMetadata.size.trim()
-      ? firstImageMetadata.size
+    appliedSizes.length > 0 &&
+    appliedSizes[0] !== undefined &&
+    appliedSizes.every((size) => size === appliedSizes[0])
+      ? appliedSizes[0]
       : undefined;
   const appliedQuality =
-    typeof firstImageMetadata?.quality === "string" && firstImageMetadata.quality.trim()
-      ? firstImageMetadata.quality
+    appliedQualities.length > 0 &&
+    appliedQualities[0] !== undefined &&
+    appliedQualities.every((quality) => quality === appliedQualities[0])
+      ? appliedQualities[0]
       : undefined;
 
   const mediaMaxBytes = resolveGeneratedMediaMaxBytes(params.effectiveCfg, "image");
@@ -660,6 +678,13 @@ async function executeImageGenerationJob(params: {
       },
       attachments,
       paths: savedImages.map((image) => image.path),
+      ...(hasReturnedImageSettings
+        ? {
+            imageSettings: savedImages.map((image, index) =>
+              Object.assign({ path: image.path }, returnedImageSettings[index]),
+            ),
+          }
+        : {}),
       ...buildTaskRunDetails(params.taskHandle),
       ...buildMediaReferenceDetails({
         entries: params.loadedReferenceImages,
@@ -673,9 +698,13 @@ async function executeImageGenerationJob(params: {
             size: appliedSize,
             ...(params.size && appliedSize !== params.size ? { requestedSize: params.size } : {}),
           }
-        : normalizedSize || (params.size && !sizeTranslatedToAspectRatio)
-          ? { size: normalizedSize ?? params.size }
-          : {}),
+        : hasReturnedSizes
+          ? params.size
+            ? { requestedSize: params.size }
+            : {}
+          : normalizedSize || (params.size && !sizeTranslatedToAspectRatio)
+            ? { size: normalizedSize ?? params.size }
+            : {}),
       ...(normalizedAspectRatio || params.aspectRatio
         ? { aspectRatio: normalizedAspectRatio ?? params.aspectRatio }
         : {}),
@@ -686,9 +715,13 @@ async function executeImageGenerationJob(params: {
               ? { requestedQuality: params.quality }
               : {}),
           }
-        : params.quality
-          ? { quality: params.quality }
-          : {}),
+        : hasReturnedQualities
+          ? params.quality
+            ? { requestedQuality: params.quality }
+            : {}
+          : params.quality
+            ? { quality: params.quality }
+            : {}),
       ...(params.outputFormat ? { outputFormat: params.outputFormat } : {}),
       ...(params.background ? { background: params.background } : {}),
       ...(params.filename ? { filename: params.filename } : {}),

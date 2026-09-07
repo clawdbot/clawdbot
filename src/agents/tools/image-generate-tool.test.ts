@@ -702,7 +702,7 @@ describe("createImageGenerateTool", () => {
         }),
       },
     ]);
-    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+    vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
       provider: "openai",
       model: "gpt-image-1",
       attempts: [],
@@ -754,6 +754,89 @@ describe("createImageGenerateTool", () => {
     expect(details.requestedSize).toBe("2160x3840");
     expect(details.quality).toBe("medium");
     expect(details.requestedQuality).toBe("high");
+    expect(details.imageSettings).toEqual([
+      { path: "/tmp/generated.png", size: "941x1672", quality: "medium" },
+    ]);
+  });
+
+  it("reports heterogeneous applied image settings per output", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "openai",
+        defaultModel: "gpt-image-1",
+        models: ["gpt-image-1"],
+        capabilities: {
+          generate: { maxCount: 4, supportsSize: true },
+          edit: { enabled: false, maxInputImages: 0 },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+    vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("first"),
+          mimeType: "image/png",
+          metadata: { size: "941x1672", quality: "medium" },
+        },
+        {
+          buffer: Buffer.from("second"),
+          mimeType: "image/png",
+          metadata: { size: "1024x1536", quality: "low" },
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer")
+      .mockResolvedValueOnce({
+        path: "/tmp/generated-1.png",
+        id: "generated-1.png",
+        size: 5,
+        contentType: "image/png",
+      })
+      .mockResolvedValueOnce({
+        path: "/tmp/generated-2.png",
+        id: "generated-2.png",
+        size: 6,
+        contentType: "image/png",
+      });
+
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              mediaModels: {
+                image: { primary: "openai/gpt-image-1" },
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/agent",
+      }),
+    );
+    const result = await tool.execute("call-1", {
+      prompt: "Two cats wearing sunglasses",
+      model: "openai/gpt-image-1",
+      count: 2,
+      size: "2160x3840",
+      quality: "high",
+    });
+
+    const details = resultDetails(result);
+    expect(details.size).toBeUndefined();
+    expect(details.quality).toBeUndefined();
+    expect(details.requestedSize).toBe("2160x3840");
+    expect(details.requestedQuality).toBe("high");
+    expect(details.imageSettings).toEqual([
+      { path: "/tmp/generated-1.png", size: "941x1672", quality: "medium" },
+      { path: "/tmp/generated-2.png", size: "1024x1536", quality: "low" },
+    ]);
   });
 
   it("rolls back late image saves after a concurrent persistence failure", async () => {
