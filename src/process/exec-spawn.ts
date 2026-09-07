@@ -51,9 +51,13 @@ function retainCommandProcess<OptionsType extends ExecaOptions>(
   }
   const startedAt = getFileLockProcessStartTime(pid);
   const stop = () => {
-    const currentStart = getFileLockProcessStartTime(pid);
-    if (currentStart !== null && currentStart !== startedAt) {
-      return;
+    const nativeChild = child.nodeChildProcess;
+    // A live direct child holds PID custody even when its optional timestamp probe failed.
+    if (nativeChild.exitCode !== null || nativeChild.signalCode !== null) {
+      const currentStart = getFileLockProcessStartTime(pid);
+      if (currentStart !== null && currentStart !== startedAt) {
+        return;
+      }
     }
     killProcessTree(pid, { detached: true, force: true });
   };
