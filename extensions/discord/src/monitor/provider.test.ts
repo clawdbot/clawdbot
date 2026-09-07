@@ -211,11 +211,10 @@ describe("monitorDiscordProvider", () => {
   };
 
   beforeAll(async () => {
-    vi.doMock("../accounts.js", () => ({
+    vi.doMock("../accounts.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../accounts.js")>()),
       resolveDiscordAccount: (...args: Parameters<typeof resolveDiscordAccountMock>) =>
         resolveDiscordAccountMock(...args),
-      resolveDiscordAccountAllowFrom: () => undefined,
-      resolveDiscordAccountDmPolicy: () => undefined,
     }));
     vi.doMock("../probe.js", () => ({
       fetchDiscordApplicationId: async () => "app-1",

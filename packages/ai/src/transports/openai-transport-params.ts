@@ -10,14 +10,16 @@ import {
   resolveOpenAIProjectedToolsStrictToolFlag,
 } from "../providers/openai-tool-schema.js";
 import { resolveModelRequestTimeoutMs, resolveProviderRequestPolicyConfig } from "./host-policy.js";
-import { resolveOpenAICompletionsCompat } from "./openai-completions-compat.js";
+import {
+  resolveOpenAICompletionsCompat,
+  usesNativeOpenAICodexResponsesBackend,
+} from "./openai-completions-compat.js";
 import { resolveOpenAIReasoningEffortMap } from "./openai-reasoning-compat.js";
 import type { OpenAIModeModel } from "./openai-transport-shared.js";
 import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import { isCodeModeModelVisibleToolName, sha256Hex } from "./transport-utils.js";
 
 const MAX_OPENAI_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS = 256;
-const OPENAI_CODEX_RESPONSES_PROVIDERS = new Set(["openai"]);
 const loggedOpenAIStrictToolDowngradeDiagnosticKeys = new Set<string>();
 
 function readToolPayloadField(record: Record<string, unknown>, field: string): unknown {
@@ -237,42 +239,6 @@ export function assertCodeModeResponsesToolSurface(
   );
 }
 
-function buildOpenAIStrictToolDowngradeDiagnosticKey(
-  diagnostics: ReturnType<typeof findOpenAIStrictToolProjectionDiagnostics>,
-  context: { transport: "responses" | "completions"; model: OpenAIModeModel },
-): string {
-  return sha256Hex(
-    JSON.stringify({
-      transport: context.transport,
-      provider: context.model.provider ?? null,
-      model: context.model.id ?? null,
-      diagnostics: diagnostics.map((entry) => ({
-        toolIndex: entry.toolIndex,
-        toolName: entry.toolName ?? null,
-        violations: entry.violations,
-      })),
-    }),
-  );
-}
-
-function shouldLogOpenAIStrictToolDowngradeDiagnostic(
-  diagnostics: ReturnType<typeof findOpenAIStrictToolProjectionDiagnostics>,
-  context: { transport: "responses" | "completions"; model: OpenAIModeModel },
-): boolean {
-  const key = buildOpenAIStrictToolDowngradeDiagnosticKey(diagnostics, context);
-  if (loggedOpenAIStrictToolDowngradeDiagnosticKeys.has(key)) {
-    return false;
-  }
-  if (
-    loggedOpenAIStrictToolDowngradeDiagnosticKeys.size >=
-    MAX_OPENAI_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS
-  ) {
-    loggedOpenAIStrictToolDowngradeDiagnosticKeys.clear();
-  }
-  loggedOpenAIStrictToolDowngradeDiagnosticKeys.add(key);
-  return true;
-}
-
 export function resolveOpenAIStrictToolFlagWithDiagnostics(
   projection: OpenAIToolProjection,
   strictSetting: boolean | null | undefined,
@@ -280,11 +246,30 @@ export function resolveOpenAIStrictToolFlagWithDiagnostics(
 ): boolean | undefined {
   const strict = resolveOpenAIProjectedToolsStrictToolFlag(projection, strictSetting);
   if (strictSetting === true && strict === false) {
-    const diagnostics = findOpenAIStrictToolProjectionDiagnostics(projection);
     getAiTransportHost().logDebug("openai-transport", () => {
-      if (!shouldLogOpenAIStrictToolDowngradeDiagnostic(diagnostics, context)) {
+      const diagnostics = findOpenAIStrictToolProjectionDiagnostics(projection);
+      const key = sha256Hex(
+        JSON.stringify({
+          transport: context.transport,
+          provider: context.model.provider ?? null,
+          model: context.model.id ?? null,
+          diagnostics: diagnostics.map((entry) => ({
+            toolIndex: entry.toolIndex,
+            toolName: entry.toolName ?? null,
+            violations: entry.violations,
+          })),
+        }),
+      );
+      if (loggedOpenAIStrictToolDowngradeDiagnosticKeys.has(key)) {
         return null;
       }
+      if (
+        loggedOpenAIStrictToolDowngradeDiagnosticKeys.size >=
+        MAX_OPENAI_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS
+      ) {
+        loggedOpenAIStrictToolDowngradeDiagnosticKeys.clear();
+      }
+      loggedOpenAIStrictToolDowngradeDiagnosticKeys.add(key);
       const sample = diagnostics.slice(0, 5).map((entry) => ({
         tool: entry.toolName ?? `tool[${entry.toolIndex}]`,
         violations: entry.violations.slice(0, 8),
@@ -305,44 +290,6 @@ export function resolveOpenAIStrictToolFlagWithDiagnostics(
     });
   }
   return strict;
-}
-
-export function isOpenAICodexResponsesModel(model: Model): boolean {
-  return (
-    OPENAI_CODEX_RESPONSES_PROVIDERS.has(model.provider) &&
-    (model.api === "openai-chatgpt-responses" ||
-      model.api === "openclaw-openai-chatgpt-responses-transport")
-  );
-}
-
-function isNativeOpenAICodexResponsesBaseUrl(baseUrl?: string): boolean {
-  const trimmed = typeof baseUrl === "string" ? baseUrl.trim() : "";
-  if (!trimmed) {
-    return false;
-  }
-  try {
-    const url = new URL(trimmed);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return false;
-    }
-    if (url.hostname.toLowerCase() !== "chatgpt.com") {
-      return false;
-    }
-    const pathname = url.pathname.replace(/\/+$/u, "").toLowerCase();
-    return [
-      "/backend-api",
-      "/backend-api/v1",
-      "/backend-api/codex",
-      "/backend-api/codex/v1",
-      "/backend-api/codex/responses",
-    ].includes(pathname);
-  } catch {
-    return false;
-  }
-}
-
-export function usesNativeOpenAICodexResponsesBackend(model: Model): boolean {
-  return isOpenAICodexResponsesModel(model) && isNativeOpenAICodexResponsesBaseUrl(model.baseUrl);
 }
 
 export function buildOpenAIClientHeaders(

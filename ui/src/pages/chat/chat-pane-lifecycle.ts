@@ -65,7 +65,6 @@ import {
 import { resetChatViewState } from "./chat-view-state.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
-import { clearChatModelSearchOnEscape } from "./components/chat-model-picker.ts";
 import { dismissThreadPortals } from "./components/chat-thread-interactions.ts";
 import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/chat-tool-cards.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
@@ -231,7 +230,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
 
     focusChatComposerFromPrintableKeydown(this, event);
 
-    clearChatModelSearchOnEscape(event);
     if (event.defaultPrevented || event.key !== "Escape") {
       return;
     }

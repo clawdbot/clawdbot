@@ -116,6 +116,7 @@ process.exit(1);
   assert.equal(isProcessAlive(writerPid), true);
   facts.boundaryEstablished = true;
   const result = await outcome;
+  assert.deepEqual(taskkills, [], "an exited CLI PID must not be targeted again");
   const error = result.error;
   retainedFailure = error;
   facts.commandError = error

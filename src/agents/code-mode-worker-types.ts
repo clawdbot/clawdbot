@@ -72,6 +72,7 @@ type CodeModeWorkerInput =
 
 export type CodeModeWorkerPayload = CodeModeWorkerInput & {
   wasmModule: WebAssembly.Module;
+  wasmExtensions: Array<{ name: string; wasm: WebAssembly.Module }>;
 };
 
 export type CodeModeSettlementMode =

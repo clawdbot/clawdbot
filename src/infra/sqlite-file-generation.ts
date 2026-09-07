@@ -1,18 +1,12 @@
-import { createHash } from "node:crypto";
 import fs, { type BigIntStats } from "node:fs";
+import {
+  hashFileDescriptorSync,
+  sameFileMutationFingerprint,
+  type FileMutationFingerprint,
+} from "./file-descriptor.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 
-const SQLITE_GENERATION_HASH_BUFFER_BYTES = 1024 * 1024;
-
-type SqliteFileFingerprint = {
-  birthtimeNs: bigint;
-  ctimeNs: bigint;
-  dev: bigint;
-  ino: bigint;
-  mtimeNs: bigint;
-  sha256: string;
-  size: bigint;
-};
+type SqliteFileFingerprint = FileMutationFingerprint & { sha256: string };
 
 type SerializedSqliteFileFingerprint = {
   birthtimeNs: string;
@@ -46,27 +40,12 @@ function sameFileState(left: BigIntStats, right: BigIntStats): boolean {
   );
 }
 
-function hashFileDescriptor(fd: number): string {
-  const hash = createHash("sha256");
-  const buffer = Buffer.allocUnsafe(SQLITE_GENERATION_HASH_BUFFER_BYTES);
-  let position = 0;
-  while (true) {
-    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, position);
-    if (bytesRead === 0) {
-      break;
-    }
-    hash.update(buffer.subarray(0, bytesRead));
-    position += bytesRead;
-  }
-  return hash.digest("hex");
-}
-
 function fingerprintFile(pathname: string): SqliteFileFingerprint {
   const fd = fs.openSync(pathname, "r");
   try {
     const before = fs.fstatSync(fd, { bigint: true });
     assertRegularFile(before);
-    const sha256 = hashFileDescriptor(fd);
+    const { sha256 } = hashFileDescriptorSync(fd);
     const after = fs.fstatSync(fd, { bigint: true });
     const current = fs.statSync(pathname, { bigint: true });
     if (!sameFileState(before, after) || !sameFileState(after, current)) {
@@ -118,15 +97,7 @@ export function readStableSqliteFileGeneration(pathname: string): SqliteFileGene
 }
 
 function sameFileFingerprint(left: SqliteFileFingerprint, right: SqliteFileFingerprint): boolean {
-  return (
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.birthtimeNs === right.birthtimeNs &&
-    left.ctimeNs === right.ctimeNs &&
-    left.mtimeNs === right.mtimeNs &&
-    left.sha256 === right.sha256 &&
-    left.size === right.size
-  );
+  return sameFileMutationFingerprint(left, right) && left.sha256 === right.sha256;
 }
 
 function sameOptionalFileFingerprint(

@@ -105,6 +105,16 @@ it is omitted. `heartbeat-timeout` records the Gateway's missed-pong decision.
 It does not prove that a ping reached the remote peer or that the peer caused
 the transport failure.
 
+Heartbeat-timeout records also capture these facts before termination:
+
+- `pingWriteState`: `pending` when no write callback has been observed,
+  `completed` after local write completion, or `failed` after a write error.
+  Pending does not prove the ping was unsent; completed does not prove peer receipt.
+- `lastPongAgeMs`: monotonic elapsed milliseconds since the last observed pong,
+  omitted when no pong has been observed.
+- `bufferedBytes`: aggregate local WebSocket buffering at the timeout decision,
+  not the delivery status of an individual ping.
+
 ## Stability recorder
 
 The Gateway records a bounded, payload-free stability stream by default when

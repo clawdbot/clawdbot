@@ -50,16 +50,12 @@ function sanitizeGeminiThoughtSignature(value: string | undefined): string | und
     : undefined;
 }
 
-function toolCallThoughtSignatureReplayKey(block: {
-  id: string;
-  name: string;
-  arguments: unknown;
-}): string {
-  return [
-    block.id,
-    block.name,
-    stableStringifyGoogleToolCallValue(coerceTransportToolCallArguments(block.arguments)),
-  ].join("\u0000");
+function toolCallThoughtSignatureReplayKey(
+  id: string,
+  name: string,
+  args: Record<string, unknown>,
+): string {
+  return [id, name, stableStringifyGoogleToolCallValue(args)].join("\u0000");
 }
 
 export function requiresGoogleToolCallId(modelId: string): boolean {
@@ -192,7 +188,15 @@ export function projectGoogleMessages(params: {
           const ownSignature = isSameProviderAndModel
             ? signature(block.thoughtSignature)
             : undefined;
-          const replayKey = managed ? toolCallThoughtSignatureReplayKey(block) : "";
+          // Keys serve managed signature recording or a possible earlier-turn replay lookup.
+          const replayKey =
+            managed &&
+            (ownSignature ||
+              (params.requiresToolCallSignature &&
+                isSameProviderAndModel &&
+                replaySignatures.size > 0))
+              ? toolCallThoughtSignatureReplayKey(block.id, block.name, args)
+              : "";
           if (managed && ownSignature) {
             nextReplaySignatures.set(replayKey, ownSignature);
           }

@@ -3,6 +3,7 @@
  * launch/restart, Chrome MCP attach, and profile stop handling.
  */
 import fs from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   assertChromeMcpCdpTransportAllowed,
   resolveCdpReachabilityPolicy,
@@ -15,8 +16,13 @@ import {
 } from "./cdp-timeouts.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
-import { diagnoseChromeCdp, formatChromeCdpDiagnostic } from "./chrome.diagnostics.js";
 import {
+  type ChromeCdpDiagnostic,
+  diagnoseChromeCdp,
+  formatChromeCdpDiagnostic,
+} from "./chrome.diagnostics.js";
+import {
+  inspectLocalChromeHeadlessMode,
   isChromeCdpOwnedByPid,
   isChromeCdpReady,
   isChromeReachable,
@@ -175,6 +181,38 @@ export function createProfileAvailability({
 
   const getCdpReachabilityPolicy = () =>
     resolveCdpReachabilityPolicy(profile, state().resolved.ssrfPolicy);
+  const observeExternalBrowserMode = async (
+    diagnostic: ChromeCdpDiagnostic,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ) => {
+    signal?.throwIfAborted();
+    if (!diagnostic.ok) {
+      runtime.externalBrowserMode = undefined;
+      return;
+    }
+    if (runtime.externalBrowserMode?.browserWebSocketUrl !== diagnostic.wsUrl) {
+      // Concurrent callers share the process observation; their cancellation
+      // must not retire work owned by the browser's lifecycle.
+      const observation: NonNullable<ProfileRuntimeState["externalBrowserMode"]> = {
+        browserWebSocketUrl: diagnostic.wsUrl,
+        headless: inspectLocalChromeHeadlessMode({
+          profile,
+          browserWebSocketUrl: diagnostic.wsUrl,
+          timeoutMs,
+          signal: getProfileLifecycle(runtime).controller.signal,
+          ssrfPolicy: getCdpReachabilityPolicy(),
+        }).then((headless) => {
+          if (headless === undefined && runtime.externalBrowserMode === observation) {
+            runtime.externalBrowserMode = undefined;
+          }
+          return headless;
+        }),
+      };
+      runtime.externalBrowserMode = observation;
+    }
+    await waitForProfileOperation(runtime.externalBrowserMode.headless, signal);
+  };
   // Extension profiles probe against the relay server, so it must be listening
   // before any reachability check; starting it reconciles port/token drift and
   // is cheap and idempotent.
@@ -213,6 +251,18 @@ export function createProfileAvailability({
       return true;
     }
     const { httpTimeoutMs, wsTimeoutMs } = resolveTimeouts(timeoutMs);
+    if (profile.attachOnly && capabilities.supportsPerTabWs) {
+      return await isChromeCdpReady(
+        profile.cdpUrl,
+        httpTimeoutMs,
+        wsTimeoutMs,
+        getCdpReachabilityPolicy(),
+        {
+          onDiagnostic: async (diagnostic) =>
+            await observeExternalBrowserMode(diagnostic, wsTimeoutMs, options?.signal),
+        },
+      );
+    }
     return await isChromeCdpReady(
       profile.cdpUrl,
       httpTimeoutMs,
@@ -329,25 +379,12 @@ export function createProfileAvailability({
 
   const waitForPoll = async (delayMs: number, signal: AbortSignal): Promise<void> => {
     signal.throwIfAborted();
-    await new Promise<void>((resolve, reject) => {
-      const finish = () => {
-        signal.removeEventListener("abort", onAbort);
-        resolve();
-      };
-      const timer = setTimeout(finish, delayMs);
-      const onAbort = () => {
-        clearTimeout(timer);
-        signal.removeEventListener("abort", onAbort);
-        reject(
-          signal.reason instanceof Error
-            ? signal.reason
-            : new Error("Browser availability wait aborted.", { cause: signal.reason }),
-        );
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-      if (signal.aborted) {
-        onAbort();
-      }
+    await delay(delayMs, undefined, { signal }).catch((error: unknown) => {
+      throw signal.aborted
+        ? signal.reason instanceof Error
+          ? signal.reason
+          : new Error("Browser availability wait aborted.", { cause: signal.reason })
+        : error;
     });
   };
 

@@ -524,12 +524,12 @@ describe("failed update recovery restart", () => {
       const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
       recordUpdateRunVerification(
         run.runId,
-        { serviceRunning: true, pid: 7376, runningVersion: "2026.9.3", inferenceProbe: "failed" },
+        { serviceRunning: true, pid: 7376, runningVersion: "2026.9.3" },
         { env },
       );
       recordUpdateRunStep(
         run.runId,
-        { step: "gateway verification", status: "failed", detail: "response-mismatch" },
+        { step: "gateway verification", status: "failed", detail: "readyz-unhealthy" },
         { env },
       );
       mocks.readRuntime.mockResolvedValue({ status: "running", pid });
@@ -548,7 +548,7 @@ describe("failed update recovery restart", () => {
       }
       const version = pid === 7376 ? "2026.9.3" : undefined;
       expect(recorded.origin.nextAction).toContain(
-        `The gateway is running${version ? ` ${version}` : ""} but did not pass verification (response-mismatch)`,
+        `The gateway is running${version ? ` ${version}` : ""} but did not pass verification (readyz-unhealthy)`,
       );
       expect(recorded.origin.nextAction).not.toContain("gateway stopped");
       expect(recorded.origin.nextAction).not.toContain("remains stopped");
@@ -562,7 +562,7 @@ describe("failed update recovery restart", () => {
         renderUpdateRunReport(recorded).markdown,
         renderUpdateRunNotice(recorded, "finished"),
       ]) {
-        expect(report).toContain("response-mismatch");
+        expect(report).toContain("readyz-unhealthy");
         expect(report).toContain("triage");
         expect(report).not.toContain("remains stopped");
       }

@@ -25,6 +25,7 @@ import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js
 import type { createCacheTrace } from "../../cache-trace.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
+import { buildRuntimeFactsPrompt } from "../../runtime-facts-prompt.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import {
@@ -59,8 +60,6 @@ import {
 } from "./attempt-llm-boundary.js";
 import type { resolveOrphanRepairPlan } from "./attempt-orphan-repair.js";
 import {
-  prependSystemPromptAddition,
-  resolveAttemptMediaTaskSystemPromptAddition,
   resolvePromptBuildHookResult,
   shouldWarnOnOrphanedUserRepair,
 } from "./attempt-prompt-helpers.js";
@@ -239,24 +238,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
         `(${hookResult?.prependSystemContext?.trim().length ?? 0}+${hookResult?.appendSystemContext?.trim().length ?? 0} chars)`,
     );
   }
-  const mediaTaskSystemPromptAddition = isSettledTurnFinalization
-    ? undefined
-    : resolveAttemptMediaTaskSystemPromptAddition({
-        sessionKey: attempt.sessionKey,
-        agentId: input.sessionAgentId,
-        trigger: attempt.trigger,
-      });
-  if (mediaTaskSystemPromptAddition) {
-    setSystemPrompt(
-      prependSystemPromptAddition({
-        systemPrompt: ensureSystemPromptCacheBoundary(systemPromptText),
-        systemPromptAddition: mediaTaskSystemPromptAddition,
-      }),
-    );
-  }
-
-  // Keep model identity after the stable cache boundary so media-only dynamic
-  // context cannot change the cached prefix between adjacent turns.
+  // Keep current model identity after the stable system cache boundary.
   const modelAwareSystemPrompt = isSettledTurnFinalization
     ? systemPromptText
     : appendModelIdentitySystemPrompt({
@@ -439,6 +421,7 @@ type PromptContextAttempt = Pick<
   | "sessionId"
   | "sessionKey"
   | "suppressNextUserMessagePersistence"
+  | "operation"
 >;
 
 type PromptAssemblyContext = {
@@ -481,6 +464,7 @@ type EmbeddedAttemptPromptContext = {
 export function prepareEmbeddedAttemptPromptContext(input: {
   appendOnlyRuntimeContext?: boolean;
   attempt: PromptContextAttempt;
+  capabilityToolNames: ReadonlySet<string>;
   boundaryTimezone?: string;
   includeBoundaryTimestamp: boolean;
   isRawModelRun: boolean;
@@ -620,15 +604,26 @@ export function prepareEmbeddedAttemptPromptContext(input: {
       input.setActiveSessionSystemPrompt(runtimeSystemPrompt);
     }
   }
-  const runtimeContextForHook = isRuntimeOnlyTurn
-    ? undefined
-    : [
-        currentInboundContextText,
-        promptSubmission.runtimeContext?.trim(),
-        input.heartbeatOutcomeContext?.trim(),
-      ]
-        .filter((value): value is string => Boolean(value))
-        .join("\n\n") || undefined;
+  const runtimeFacts =
+    input.isRawModelRun || attempt.operation === "settled-tool-finalization"
+      ? undefined
+      : buildRuntimeFactsPrompt({
+          capabilityToolNames: input.capabilityToolNames,
+          cfg: attempt.config ?? {},
+          sessionKey: attempt.sessionKey,
+          sessionId: attempt.sessionId,
+          agentId: input.sessionAgentId,
+        });
+  const runtimeContextForHook =
+    [
+      currentInboundContextText,
+      ...(isRuntimeOnlyTurn
+        ? []
+        : [promptSubmission.runtimeContext?.trim(), input.heartbeatOutcomeContext?.trim()]),
+      runtimeFacts,
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join("\n\n") || undefined;
   const runtimeContextMessageForCurrentTurn =
     buildRuntimeContextCustomMessage(runtimeContextForHook);
   const messagesForCurrentPrompt = runtimeContextMessageForCurrentTurn
@@ -648,9 +643,9 @@ export function prepareEmbeddedAttemptPromptContext(input: {
     input.systemPromptReport.currentTurn = {
       ...(attempt.currentInboundEventKind ? { kind: attempt.currentInboundEventKind } : {}),
       promptChars: promptForModel.length,
-      runtimeContextChars: promptSubmission.runtimeOnly
-        ? (runtimeSystemContext?.length ?? 0)
-        : (runtimeContextForHook?.length ?? 0),
+      runtimeContextChars:
+        (runtimeContextForHook?.length ?? 0) +
+        (isRuntimeOnlyTurn ? (runtimeSystemContext?.length ?? 0) : 0),
       // Hook context reaches only the model, so count the delta beyond the
       // transcript prompt or downstream context accounting undercounts it.
       modelOnlyPromptChars: Math.max(0, promptForModel.length - promptForSession.length),

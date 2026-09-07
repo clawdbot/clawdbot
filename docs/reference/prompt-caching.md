@@ -91,6 +91,7 @@ agents:
 
 ### Anthropic (direct API and Vertex AI)
 
+- When caching is enabled and the route supports tool cache control, the tool prefix is checkpointed separately from the system prompt.
 - `cacheRetention` is supported for `anthropic` and `anthropic-vertex` providers, and for Claude models on `amazon-bedrock` and custom `anthropic-messages`-compatible endpoints when `cacheRetention` is set explicitly.
 - When unset, OpenClaw seeds `cacheRetention: "short"` for direct Anthropic (`anthropic` and `anthropic-vertex` providers only; other Anthropic-family routes require an explicit value).
 - Native Anthropic Messages responses expose `cache_read_input_tokens` and `cache_creation_input_tokens`, mapped to `cacheRead` and `cacheWrite`.
@@ -98,18 +99,27 @@ agents:
 
 Source: `packages/ai/src/transports/anthropic-payload-policy.ts` (`resolveAnthropicEphemeralCacheControl`, `isLongTtlEligibleEndpoint`).
 
+### DeepInfra
+
+For `anthropic/*` models, the managed and SDK Chat Completions paths use the
+[shared marker layout](#chat-completions-cache-markers). `cacheRetention: "none"`
+disables these markers. By default, both `"short"` and `"long"` use ephemeral markers without
+a TTL override; OpenClaw does not assume one-hour support for this route.
+
 ### Model Studio / DashScope (Qwen)
 
-OpenClaw's direct-provider adapter enables explicit prompt caching by default on
-native or default Model Studio / DashScope OpenAI-compatible routes, using
-`compat.cacheControlFormat: "anthropic"` and the
-existing system, last-tool, and last-conversation cache markers. Explicit model
-compat settings take precedence over detected defaults. Custom proxy endpoints
-receive no automatic format default; set `compat.cacheControlFormat: "anthropic"`
-explicitly only when the proxy supports these markers.
+Both Chat Completions builders enable the [shared marker layout](#chat-completions-cache-markers)
+on native or default Model Studio / DashScope routes through
+`compat.cacheControlFormat: "anthropic"`. Explicit model compat settings take
+precedence over detected defaults. Custom proxy endpoints receive no automatic
+format default; set `compat.cacheControlFormat: "anthropic"` explicitly only when
+the proxy supports these markers.
 
-The embedded runner's boundary-aware Chat Completions transport does not yet apply
-these markers; detecting the format alone does not enable explicit caching there.
+Model Studio includes tool definitions in the system cache and ignores markers on
+tools themselves, so OpenClaw omits that marker on detected native routes.
+Qwen3.5 and later support message-level checkpoints only: splitting the stable and
+volatile system content into blocks does not guarantee independent reuse of the
+stable block. See [Model Studio explicit cache guidance](https://docs.modelstudio.console.alibabacloud.com/en/model-studio/explicit-cache-guide).
 
 Explicit `cacheRetention` values reach this transport without enabling
 `compat.supportsPromptCacheKey`; leave that flag unset because this route does not
@@ -127,8 +137,11 @@ cache billing are described in [Model Studio context caching](https://www.alibab
 ### OpenAI (direct API)
 
 - Prompt caching is automatic on supported recent models; OpenClaw does not inject block-level cache markers.
-- OpenClaw sends `prompt_cache_key` to keep cache routing stable across turns. Direct `api.openai.com` hosts get this automatically. OpenAI-compatible proxies (oMLX, llama.cpp, custom endpoints) need `compat.supportsPromptCacheKey: true` in model config to opt in - this is never auto-detected for a proxy.
-- `prompt_cache_retention: "24h"` is added only when `cacheRetention: "long"` is selected and the resolved endpoint supports both the cache key and long retention (`compat.supportsLongCacheRetention`, true by default; Together AI and Cloudflare compat profiles disable it). `cacheRetention: "none"` suppresses both fields.
+- OpenClaw sends `prompt_cache_key` to keep cache routing stable across turns. Responses and Chat Completions requests to direct `api.openai.com` hosts get this automatically when a session or explicit cache key is available; `compat.supportsPromptCacheKey: false` disables it. OpenAI-compatible proxies (oMLX, llama.cpp, custom endpoints) need `compat.supportsPromptCacheKey: true` in model config to opt in - this is never auto-detected for a proxy.
+- `cacheRetention: "long"` requests `prompt_cache_options: { ttl: "30m" }` for GPT-5.6 and later on both APIs. Earlier native models receive `prompt_cache_retention: "24h"` only for OpenAI's documented extended-retention models: GPT-5.5 / GPT-5.5 Pro, GPT-5.4, GPT-5.2, GPT-5.1 / Codex / Codex Max / Codex Mini / Chat Latest, GPT-5 / Codex, and GPT-4.1 (including dated snapshots). Other earlier native models receive no lifetime field. See [OpenAI cache lifetime](https://developers.openai.com/api/docs/guides/prompt-caching#cache-lifetime).
+- Lifetime fields require both cache-key support and `compat.supportsLongCacheRetention` (true by default; Together AI and Cloudflare profiles disable it). Opted-in proxies use the same GPT-5.6+ TTL mapping and otherwise receive `"24h"`; disable long-retention support if the proxy rejects lifetime fields.
+- `cacheRetention: "short"` sends the key without lifetime fields, leaving the provider's default lifetime in effect. `cacheRetention: "none"` suppresses the key and both lifetime fields; it does not disable OpenAI's automatic prompt caching.
+- Native ChatGPT-backed Responses routes keep the session cache key, honor `none`, and omit both OpenAI lifetime fields.
 - Cache hits surface via `usage.prompt_tokens_details.cached_tokens` (Chat Completions) or `input_tokens_details.cached_tokens` (Responses API), mapped to `cacheRead`.
 - Responses API payloads can also expose `input_tokens_details.cache_write_tokens`, mapped to `cacheWrite` and priced at the model's cache-write rate; Responses payloads that omit the field keep `cacheWrite` at `0`. OpenAI's Chat Completions API does not document or emit a `cache_write_tokens` counter, but OpenClaw still reads `prompt_tokens_details.cache_write_tokens` there for OpenRouter-compatible and DeepSeek-style proxies that report a separate write count.
 - In practice, OpenAI behaves more like an initial-prefix cache than Anthropic's moving full-history reuse - see [OpenAI live expectations](#openai-live-expectations) below.
@@ -136,12 +149,13 @@ cache billing are described in [Model Studio context caching](https://www.alibab
 ### Amazon Bedrock
 
 - Anthropic Claude model refs (`amazon-bedrock/*anthropic.claude*`, plus AWS system inference profile prefixes `us.`/`eu.`/`global.anthropic.claude*`) support explicit `cacheRetention` pass-through.
+- The stable system prefix is checkpointed separately from dynamic runtime additions. Conversation checkpoints advance through retained history, including tool results; transient runtime-context carriers remain outside the cached prefix. Bedrock Mantle's Anthropic Messages transport also preserves the separate stable system boundary.
 - Non-Anthropic Bedrock models (for example `amazon.nova-*`) resolve to no cache retention at runtime, regardless of any configured `cacheRetention` value.
 - Opaque Bedrock application inference profile ARNs (profile IDs that do not contain `claude`) also resolve to no cache retention unless `cacheRetention` is set explicitly, since the model family cannot be inferred from the ARN alone.
 
 ### OpenRouter
 
-For `openrouter/anthropic/*` model refs, OpenClaw injects Anthropic `cache_control` markers on system/developer prompt blocks, but only when the request still targets a verified OpenRouter route (`openrouter` on its default endpoint, or any provider/base URL that resolves to `openrouter.ai`). Repointing the model at an arbitrary OpenAI-compatible proxy URL stops this injection.
+For `openrouter/anthropic/*` model refs, both Chat Completions builders apply the [shared marker layout](#chat-completions-cache-markers), but only when the request still targets a verified OpenRouter route (`openrouter` on its default endpoint, or any provider/base URL that resolves to `openrouter.ai`). Repointing the model at an arbitrary OpenAI-compatible proxy URL stops automatic marker injection. `cacheRetention: "long"` requests `ttl: "1h"` on these verified routes; `"none"` disables markers. See [OpenRouter prompt caching](https://openrouter.ai/docs/guides/best-practices/prompt-caching).
 
 `contextPruning.mode: "cache-ttl"` is allowed for `openrouter/anthropic/*`, `openrouter/deepseek/*`, `openrouter/moonshot/*`, `openrouter/moonshotai/*`, and `openrouter/zai/*` model refs, because these routes handle provider-side prompt caching without needing OpenClaw's injected markers.
 
@@ -153,7 +167,7 @@ DeepSeek cache construction on OpenRouter is best-effort and can take a few seco
 
 - Direct Gemini transport (`api: "google-generative-ai"`) reports cache hits through upstream `cachedContentTokenCount`, mapped to `cacheRead`.
 - Eligible model families: `gemini-2.5*` and `gemini-3*` (excludes Live/preview variants outside that prefix match, for example `gemini-live-2.5-flash-preview`).
-- When `cacheRetention` is set on an eligible model, OpenClaw automatically creates, reuses, and refreshes a `cachedContents` resource for the system prompt - no manual cached-content handle needed. TTL is `300s` for `cacheRetention: "short"` and `3600s` for `"long"`.
+- When `cacheRetention` is set on an eligible model, OpenClaw automatically creates, reuses, and refreshes a `cachedContents` resource for the final assembled system prompt, including hook-added instructions - no manual cached-content handle needed. TTL is `300s` for `cacheRetention: "short"` and `3600s` for `"long"`.
 - You can still pass a pre-existing Gemini cached-content handle through as `params.cachedContent` (or legacy `params.cached_content`); an explicit handle skips the automatic cache-management path entirely.
 - This is separate from Anthropic/OpenAI prompt-prefix caching: OpenClaw manages a provider-native `cachedContents` resource for Gemini instead of injecting inline cache markers.
 
@@ -171,6 +185,33 @@ Source: `src/agents/cli-output.ts` (`toCliUsage`).
 
 If a provider does not support any of the above cache modes, `cacheRetention` has no effect.
 
+## Chat Completions cache markers
+
+OpenAI-compatible routes with `compat.cacheControlFormat: "anthropic"` share one
+marker policy across the managed transport, SDK builder, and provider wrappers:
+
+- The last tool definition is marked when the route supports tool markers; tools remain sorted by name.
+- The stable system/developer block is marked, with the volatile suffix in a separate unmarked block.
+- The latest eligible user text or tool result is marked, advancing through tool loops and new turns while skipping transient runtime-context carriers.
+
+The layout normally uses three markers and stays within the four-breakpoint
+budget. `cacheRetention: "none"` emits none. A conversation checkpoint covers
+all preceding tools, system content, and messages, so changing the volatile
+system suffix still invalidates that later checkpoint; the earlier stable-system
+checkpoint remains reusable where the backend supports block-level caching.
+Backend token minimums and cache lifetimes still apply.
+
+With `compat.requiresStringContent: true`, managed requests keep message content
+as strings and omit message-block markers, including through provider wrappers.
+The tool-definition marker remains where supported.
+
+Detected defaults request `ttl: "1h"` only on verified OpenRouter routes. For a
+custom endpoint that supports one-hour Anthropic caching, explicitly set
+`compat.cacheControlFormat: "anthropic"`, `compat.supportsLongCacheRetention: true`,
+and `cacheRetention: "long"` to send that TTL. Omitting the capability override
+keeps custom-endpoint markers without a TTL; setting it to `false` disables
+the one-hour TTL even on OpenRouter.
+
 ## System-prompt cache boundary
 
 OpenClaw splits the system prompt into a **stable prefix** and a **volatile suffix** at an internal cache-prefix boundary. Content above the boundary (tool definitions, skills metadata, workspace files) is ordered to stay byte-identical across turns. Content below the boundary (for example runtime timestamps and other per-turn metadata) can change without invalidating the cached prefix.
@@ -186,8 +227,11 @@ If you see unexpected `cacheWrite` spikes after a config or workspace change, ch
 
 ## OpenClaw cache-stability guards
 
+- Active exec sessions, subagent state, and media-generation progress travel in compact Runtime Context carriers after the current user message, so changes do not rewrite the system prompt ahead of conversation history. Project Memory facts, channel-specific ACP hints, delegation/orchestration mode, and the current elevated level stay below the system-prompt cache boundary; static recall, safety, and capability guidance stay above it.
 - Delivery instructions live after the system-prompt cache boundary. Native Codex carries the current delivery and target policy in late turn context, so alternating delivery modes does not rebuild its static prompt or message tool catalog when the available capabilities remain unchanged. Actual capability changes still update the catalog.
 - Bundled MCP tool catalogs are sorted deterministically (by server name, then tool name) before tool registration, so `listTools()` order changes do not churn the tools block and bust prompt-cache prefixes.
+- Message-tool action enums are sorted after policy filtering, keeping identical capabilities stable across channel discovery order changes.
+- Native Ollama requests sort tools by name so discovery order changes do not churn the tools prefix.
 - Legacy sessions with persisted image blocks keep the **3 most recent completed turns** intact (counting all completed turns, not just image-bearing ones). Older already-processed image blocks are replaced with a text marker so image-heavy follow-ups do not keep re-sending large stale payloads.
 
 ## Tuning patterns

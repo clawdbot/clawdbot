@@ -374,6 +374,43 @@ describe("AppSidebar interleaved zone", () => {
     );
   });
 
+  it("does not pin or insert a promoted child dropped from Threads", async () => {
+    const { sidebar, sessions } = await mountZone();
+    const result = await sessions.list();
+    if (!result) {
+      throw new Error("expected a session list result");
+    }
+    const alpha = result.sessions.find((row) => row.key === "agent:main:alpha");
+    if (!alpha) {
+      throw new Error("expected the alpha session row");
+    }
+    const promoted = { ...alpha, spawnedBy: "agent:main:main" };
+    sessions.publishList({
+      result: {
+        ...result,
+        sessions: result.sessions.map((row) => (row === alpha ? promoted : row)),
+      },
+    });
+    sidebar.sidebarEntries = ["route:usage", "route:plugins"];
+    const onUpdate = vi.fn();
+    sidebar.onUpdateSidebarEntries = onUpdate;
+    await sidebar.updateComplete;
+    const source = sidebar.querySelector('[data-session-key="agent:main:alpha"]');
+    if (!source) {
+      throw new Error("expected promoted child session row");
+    }
+    const target = zoneEntry(sidebar, "route:plugins");
+    const dataTransfer = createDataTransferStub();
+    dispatchDragEvent(source, "dragstart", dataTransfer);
+    dispatchDragEvent(target, "dragover", dataTransfer);
+    dispatchDragEvent(target, "drop", dataTransfer);
+    await sidebar.updateComplete;
+    await vi.dynamicImportSettled();
+    expect(sessions.patch).not.toHaveBeenCalled();
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(sidebar.sessionOrganizer.draggingSessionKey).toBeNull();
+  });
+
   it("hides a route dropped into the session-list region", async () => {
     const { sidebar } = await mountZone();
     sidebar.sidebarEntries = ["route:usage", "route:plugins"];
