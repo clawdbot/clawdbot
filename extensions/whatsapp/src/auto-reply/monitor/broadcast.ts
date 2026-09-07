@@ -1,4 +1,5 @@
 // Whatsapp plugin module implements broadcast behavior.
+import { listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { AckReactionHandle } from "openclaw/plugin-sdk/channel-feedback";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -84,8 +85,9 @@ export async function maybeBroadcastMessage(params: {
   const strategy = params.cfg.broadcast?.strategy || "parallel";
   whatsappInboundLog.info(`Broadcasting message to ${broadcastAgents.length} agents (${strategy})`);
 
-  const agentIds = params.cfg.agents?.list?.map((agent) => normalizeAgentId(agent.id));
-  const hasKnownAgents = (agentIds?.length ?? 0) > 0;
+  const agentIds = listAgentIds(params.cfg);
+  const hasKnownAgents =
+    params.cfg.agents?.entries !== undefined || (params.cfg.agents?.list?.length ?? 0) > 0;
   const admission = requireWhatsAppInboundAdmission(params.msg);
   const isGroupConversation = admission.conversation.kind === "group";
   const groupHistorySnapshot = isGroupConversation
@@ -94,8 +96,8 @@ export async function maybeBroadcastMessage(params: {
 
   const processForAgent = async (agentId: string): Promise<boolean> => {
     const normalizedAgentId = normalizeAgentId(agentId);
-    if (hasKnownAgents && !agentIds?.includes(normalizedAgentId)) {
-      whatsappInboundLog.warn(`Broadcast agent ${agentId} not found in agents.list; skipping`);
+    if (hasKnownAgents && !agentIds.includes(normalizedAgentId)) {
+      whatsappInboundLog.warn(`Broadcast agent ${agentId} not found in agents.entries; skipping`);
       return false;
     }
     const routeKeys = buildBroadcastRouteKeys({

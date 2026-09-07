@@ -23,12 +23,19 @@ installWebAutoReplyTestHomeHooks();
 describe("broadcast groups", () => {
   installWebAutoReplyUnitTestHooks();
 
-  it("skips unknown broadcast agent ids when agents.list is present", async () => {
+  it.each([
+    { label: "legacy list", roster: { list: [{ id: "alfred" }] } },
+    { label: "entries", roster: { entries: { alfred: {} } } },
+    {
+      label: "entries overriding legacy list",
+      roster: { entries: { alfred: {} }, list: [{ id: "missing" }] },
+    },
+  ])("skips unknown broadcast agent ids with $label", async ({ roster }) => {
     setLoadConfigMock({
       channels: { whatsapp: { allowFrom: ["*"] } },
       agents: {
         defaults: { maxConcurrent: 10 },
-        list: [{ id: "alfred" }],
+        ...roster,
       },
       broadcast: {
         "+1000": ["alfred", "missing"],

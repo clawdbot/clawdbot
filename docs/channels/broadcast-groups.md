@@ -41,6 +41,8 @@ Add a top-level `broadcast` section (next to `bindings`). Keys are WhatsApp peer
 
 Every listed agent id must exist in `agents.entries`: config validation reports unknown ids, and the runtime skips them with a `Broadcast agent <id> not found in agents.entries; skipping` warning.
 
+Runtime membership uses the canonical `agents.entries` roster when present, including an empty roster. Legacy `agents.list` is used only when `agents.entries` is absent.
+
 ### Processing strategy
 
 `broadcast.strategy` sets how agents process the message:
@@ -358,6 +360,7 @@ interface OpenClawConfig {
 2. **Shared context:** agents do not see each other's responses (by design).
 3. **Message ordering:** parallel responses may arrive in any order.
 4. **Rate limits:** all replies come from one WhatsApp account, so every agent's reply counts toward the same WhatsApp rate limits.
+5. **Team threads:** bounded follow-up rounds and a Control UI team-thread session are not available.
 
 ## Related
 
