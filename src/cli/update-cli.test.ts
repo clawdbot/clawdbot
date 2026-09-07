@@ -56,6 +56,8 @@ const text = vi.fn();
 const spinner = vi.fn(() => ({ start: vi.fn(), stop: vi.fn(), clear: vi.fn() }));
 const isCancel = (value: unknown) => value === "cancel";
 const triageCommand = vi.fn<typeof import("../commands/triage.js").triageCommand>();
+const triageAfterFailure =
+  vi.fn<typeof import("../commands/triage-failure.js").triageAfterFailure>();
 const updateFailureActionMocks = vi.hoisted(() => ({
   runInteractiveUpdateFailureAction: vi.fn(),
 }));
@@ -84,6 +86,10 @@ const managedUpdateHandoff = vi.hoisted(() => ({
   activate: vi.fn(async () => false),
 }));
 const candidateValidation = vi.hoisted(() => vi.fn());
+const pluginAvailabilityPreflight = vi.hoisted(() => vi.fn());
+vi.mock("./update-cli/update-command-plugin-preflight.js", () => ({
+  preflightConfiguredNpmPluginTargets: pluginAvailabilityPreflight,
+}));
 const unattendedRepair = vi.hoisted(() =>
   vi.fn<typeof import("../infra/update-repair-agent.js").prepareUnattendedUpdateRepair>(),
 );
@@ -609,6 +615,7 @@ vi.mock("../runtime.js", async (importOriginal) => ({
   defaultRuntime: runtimeCapture,
 }));
 vi.mock("../commands/triage.js", () => ({ triageCommand }));
+vi.mock("../commands/triage-failure.js", () => ({ triageAfterFailure }));
 vi.mock("./update-cli/update-command-report.js", () => updateFailureActionMocks);
 
 const { runGatewayUpdate } = await import("../infra/update-runner.js");
@@ -1870,6 +1877,8 @@ describe("update-cli", () => {
     }
     restartHealthTestControl.snapshot = undefined;
     vi.resetAllMocks();
+    pluginAvailabilityPreflight.mockResolvedValue(undefined);
+    triageAfterFailure.mockResolvedValue(undefined);
     managedUpdateHandoff.activate.mockResolvedValue(false);
     unattendedRepair.mockResolvedValue({
       status: "unavailable",
@@ -6065,6 +6074,125 @@ describe("update-cli", () => {
     },
   );
 
+  it("reports a same-version channel switch as successful without updating the package", async () => {
+    const root = await mockPackageInstallAtCaseDir();
+    const stateDir = tempDirs.make("openclaw-update-channel-switch-");
+    readPackageVersion.mockResolvedValue("2026.4.22");
+    primeNpmChannelTag("beta", "2026.4.22");
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue(
+      configSnapshot({ update: { channel: "stable" } }),
+    );
+    await writeJsonFixture(path.join(stateDir, "openclaw.json"), {
+      update: { channel: "stable" },
+    });
+    mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      await updateCommand({ channel: "beta", yes: true, restart: true, json: true });
+    });
+
+    expect(lastReplaceConfigCall()?.nextConfig?.update?.channel).toBe("beta");
+    expectNoSideEffects(
+      serviceStop,
+      serviceRestart,
+      runDaemonRestart,
+      candidateValidation,
+      syncPluginsForUpdateChannel,
+      updateNpmInstalledPlugins,
+    );
+    expect(packageInstallCommandCall()?.[0]).toBeUndefined();
+    expect(doctorCommandCall()).toBeUndefined();
+    expect(lastWriteJsonCall()).toMatchObject({ status: "ok" });
+    expect(lastWriteJsonCall()).not.toHaveProperty("reason");
+    const result = lastWriteJsonCall() as UpdateRunResult;
+    expect(
+      getUpdateRun(requireValue(result.runId, "channel switch run id"), {
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      }),
+    ).toMatchObject({ status: "succeeded", downtimeMs: 0 });
+  });
+
+  it("keeps an explicit same-version channel no-op skipped without rewriting config", async () => {
+    const root = await mockPackageInstallAtCaseDir();
+    const stateDir = tempDirs.make("openclaw-update-channel-noop-");
+    readPackageVersion.mockResolvedValue("2026.4.22");
+    primeNpmChannelTag("beta", "2026.4.22");
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue(
+      configSnapshot({ update: { channel: "beta" } }),
+    );
+    await writeJsonFixture(path.join(stateDir, "openclaw.json"), {
+      update: { channel: "beta" },
+    });
+    mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      await updateCommand({ channel: "beta", yes: true, restart: true, json: true });
+    });
+
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expectNoSideEffects(
+      serviceStop,
+      serviceRestart,
+      runDaemonRestart,
+      candidateValidation,
+      syncPluginsForUpdateChannel,
+      updateNpmInstalledPlugins,
+    );
+    expect(packageInstallCommandCall()?.[0]).toBeUndefined();
+    expect(doctorCommandCall()).toBeUndefined();
+    expect(lastWriteJsonCall()).toMatchObject({ status: "skipped", reason: "already-current" });
+  });
+
+  it("completes an equal-version Git-to-package switch", async () => {
+    const { nodeModules, pkgRoot } = await setupInstalledPackageRoot(
+      createCaseDir("openclaw-git-to-package-same-version"),
+      "2026.4.22",
+    );
+    await fs.writeFile(path.join(pkgRoot, "dist", "index.js"), "git runtime\n");
+    await writePackageDistInventory(pkgRoot);
+    mockNpmGlobalCommands(nodeModules, async (argv) => {
+      if (argv[0] !== "npm" || argv[1] !== "i") {
+        return;
+      }
+      await writeNpmPackageInstall(argv, pkgRoot, "2026.4.22");
+      const stagePrefix = requireValue(argv[argv.indexOf("--prefix") + 1], "staged prefix");
+      const stageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
+      await fs.writeFile(path.join(stageRoot, "dist", "index.js"), "package runtime\n");
+      await writePackageDistInventory(stageRoot);
+    });
+    mockCurrentProcessFreshDoctor({ packageRoot: pkgRoot });
+    vi.mocked(resolveUpdateInstallKind).mockResolvedValue("git");
+    vi.mocked(resolveUpdateInstallIdentity).mockResolvedValue({
+      installKind: "git",
+      git: { tag: "v2026.4.22", branch: "main" },
+    });
+    readPackageVersion.mockImplementation(async (root: string) => {
+      const manifest = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8")) as {
+        version: string;
+      };
+      return manifest.version;
+    });
+    primeNpmChannelTag("latest", "2026.4.22");
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue(
+      configSnapshot({ update: { channel: "dev" } }),
+    );
+
+    await updateCommand({ channel: "stable", yes: true, restart: false, json: true });
+
+    expectPackageInstallSpec("openclaw@2026.4.22");
+    expect(candidateValidation).toHaveBeenCalled();
+    await expect(fs.readFile(path.join(pkgRoot, "dist", "index.js"), "utf8")).resolves.toBe(
+      "package runtime\n",
+    );
+    expect(lastReplaceConfigCall()?.nextConfig?.update?.channel).toBe("stable");
+    expect(lastWriteJsonCall()).toMatchObject({
+      status: "ok",
+      mode: "npm",
+      root: pkgRoot,
+    });
+    expect((lastWriteJsonCall() as UpdateRunResult).reason).toBeUndefined();
+  });
+
   it("runs the package update when latest target lookup is unresolved", async () => {
     setTty(false);
     await mockPackageInstallAtCaseDir();
@@ -8759,8 +8887,8 @@ describe("update-cli", () => {
         await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
         expect(defaultRuntime.exit).not.toHaveBeenCalled();
         if (failureKind === "post-core exception") {
-          expect(getTriageFailures()).toContainEqual(
-            expect.objectContaining({ error: failure.message }),
+          expect(triageAfterFailure.mock.calls.map(([, context]) => context)).toContainEqual(
+            expect.objectContaining({ kind: "update", error: failure.message }),
           );
         }
         expect(suspendScheduledTaskAutoStartForUpdate).toHaveBeenCalledOnce();
@@ -11310,6 +11438,43 @@ describe("update-cli", () => {
     expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "reports plugin admission refusal without changing the serving install (dryRun=%s)",
+    async (dryRun) => {
+      const detail =
+        'Plugin "example" requires @openclaw/example@1.0.1: Package not found on npm. Retry later.';
+      const sentinel = await runControlPlaneUpdate({
+        expectedExitCode: 1,
+        meta: {
+          sessionKey: "agent:main:webchat:dm:user-123",
+          handoffId: "plugin-admission",
+        },
+        options: { dryRun, yes: true, json: true },
+        beforeUpdate: async () => {
+          await mockPackageInstallAtCaseDir();
+          const { UpdatePreMutationError } = await import("./update-cli/shared.js");
+          pluginAvailabilityPreflight.mockRejectedValue(
+            new UpdatePreMutationError("plugin-target-unavailable", detail),
+          );
+        },
+      });
+
+      expect(lastWriteJsonCall()).toMatchObject({
+        status: "error",
+        reason: "plugin-target-unavailable",
+      });
+      expect(getErrorOutput()).toContain(detail);
+      expectNoSideEffects(serviceStop, serviceStart, serviceRestart, replaceConfigFile);
+      expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
+      expect(packageInstallCommandCall()?.[0]).toBeUndefined();
+      if (dryRun) {
+        expect(sentinel).toBeNull();
+      } else {
+        expect(sentinel?.payload.stats?.reason).toBe("plugin-target-unavailable");
+      }
+    },
+  );
 
   it("writes an extended-stable selector failure to the control-plane sentinel", async () => {
     const sentinel = await runControlPlaneUpdate({

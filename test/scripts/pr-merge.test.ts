@@ -276,6 +276,77 @@ describePosix("native squash attribution", () => {
     expect(result.mergeBody).toBe(`Repair summary\n\n${previewCredit}\n`);
   });
 
+  it.each([
+    { name: "Codex", email: "codex@openai.com" },
+    { name: "roboclaw-bot", email: "309084314+roboclaw-bot@users.noreply.github.com" },
+  ])(
+    "omits machine author preview credit from a reviewed body while retaining human authors: %j",
+    (machine) => {
+      const humanCredit = "Co-authored-by: Contributor <contributor@example.com>";
+      const result = prepareBody({
+        sourceCommits: [
+          {
+            message: "Repair",
+            author: { name: "Contributor", email: "contributor@example.com" },
+          },
+          {
+            message: "Test fixture",
+            author: machine,
+          },
+        ],
+        previewBody: `Repair summary\n\nCo-authored-by: ${machine.name} <${machine.email}>\n${humanCredit}`,
+        overrideBody: "Reviewed correction.\n",
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.mergeBody).toBe(`Reviewed correction.\n\n${humanCredit}\n`);
+    },
+  );
+
+  it("keeps exact reviewed human credit instead of adding the machine source author", () => {
+    const humanCredit = "Co-authored-by: Takhoffman <781889+Takhoffman@users.noreply.github.com>";
+    const machineCredit =
+      "Co-authored-by: roboclaw-bot <309084314+roboclaw-bot@users.noreply.github.com>";
+    const overrideBody = `Worked on by:\n- @Takhoffman\n\n${humanCredit}\n`;
+    const result = prepareBody({
+      sourceCommits: [
+        {
+          message: `Repair\n\n${humanCredit}`,
+          author: {
+            name: "roboclaw-bot",
+            email: "309084314+roboclaw-bot@users.noreply.github.com",
+          },
+        },
+      ],
+      previewBody: `Repair summary\n\n${humanCredit}\n${machineCredit}`,
+      overrideBody,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.mergeBody).toBe(overrideBody);
+  });
+
+  it.each([false, true])(
+    "rejects a machine source-author preview without a reviewed body (queue=%s)",
+    (previewQueue) => {
+      const result = prepareBody({
+        sourceCommits: [
+          {
+            message: "Repair",
+            author: {
+              name: "roboclaw-bot",
+              email: "309084314+roboclaw-bot@users.noreply.github.com",
+            },
+          },
+        ],
+        previewBody:
+          "Repair\n\nCo-authored-by: roboclaw-bot <309084314+roboclaw-bot@users.noreply.github.com>",
+        previewQueue,
+      });
+      expect(result.status).toBe(1);
+      expect(result.mergeBody).toBeNull();
+      expect(result.stderr).toContain("--body-file");
+    },
+  );
+
   it("does not trust an unpublished local fixup author for preview credit", () => {
     const previewCredit = "Co-authored-by: Local Fixup <local@example.com>";
     const result = prepareBody({
@@ -325,6 +396,15 @@ describePosix("native squash attribution", () => {
     "Co-authored-by: Amp <amp@ampcode.com>",
     "co-authored-by: Amp <AMP@AMPCODE.COM>",
     "Co-Authored-By: Amp\n <amp@ampcode.com>",
+    "Co-authored-by: Codex <codex@openai.com>",
+    "co-authored-by: Codex <CODEX@OPENAI.COM>",
+    "Co-Authored-By: Codex\n <codex@openai.com>",
+    "Co-authored-by: Trae Solo <solo-agent@trae.ai>",
+    "co-authored-by: Trae Solo <SOLO-AGENT@TRAE.AI>",
+    "Co-Authored-By: Trae Solo\n <solo-agent@trae.ai>",
+    "Co-authored-by: roboclaw-bot <309084314+roboclaw-bot@users.noreply.github.com>",
+    "co-authored-by: RoboClaw <309084314+ROBOCLAW-BOT@USERS.NOREPLY.GITHUB.COM>",
+    "Co-Authored-By: RoboClaw\n <309084314+roboclaw-bot@users.noreply.github.com>",
   ])("omits imported machine credit while preserving human credit: %j", (machineCredit) => {
     const humanCredit = [
       "Co-authored-by: Claude <claude@example.com>",
@@ -336,6 +416,17 @@ describePosix("native squash attribution", () => {
       "Co-authored-by: Amp <amp@example.com>",
       "Co-authored-by: Human <person@ampcode.com>",
       "Co-authored-by: Other <amp@ampcode.com.example.org>",
+      "Co-authored-by: Codex <codex@example.com>",
+      "Co-authored-by: Human <person@openai.com>",
+      "Co-authored-by: Other <codex@openai.com.example.org>",
+      "Co-authored-by: Trae Solo <solo-agent@example.com>",
+      "Co-authored-by: Human <person@trae.ai>",
+      "Co-authored-by: Other <solo-agent@trae.ai.example.org>",
+      "Co-authored-by: roboclaw-bot <human@example.com>",
+      "Co-authored-by: Human <781889+Takhoffman@users.noreply.github.com>",
+      "Co-authored-by: Other <309084314+roboclaw-bot@users.noreply.github.com.example.org>",
+      "Co-authored-by: Other <1309084314+roboclaw-bot@users.noreply.github.com>",
+      "Co-authored-by: Other <309084314+roboclaw-bot-human@users.noreply.github.com>",
     ].join("\n");
     const server = "Co-authored-by: Server <server@example.com>";
     const result = prepareBody({
@@ -357,6 +448,9 @@ describePosix("native squash attribution", () => {
     "Reviewed correction.\n\nCo-authored-by: Claude <noreply@anthropic.com>\n",
     "Reviewed correction.\n\nCo-authored-by: Cursor <cursoragent@cursor.com>\n",
     "Reviewed correction.\n\nCo-authored-by: Amp <amp@ampcode.com>\n",
+    "Reviewed correction.\n\nCo-authored-by: Codex <codex@openai.com>\n",
+    "Reviewed correction.\n\nCo-authored-by: Trae Solo <solo-agent@trae.ai>\n",
+    "Reviewed correction.\n\nCo-authored-by: roboclaw-bot <309084314+roboclaw-bot@users.noreply.github.com>\n",
   ])(
     "requires a reviewed body when the chosen message contains machine credit: %j",
     (overrideBody) => {
@@ -376,6 +470,9 @@ describePosix("native squash attribution", () => {
     "Claude <noreply@anthropic.com>",
     "Cursor <cursoragent@cursor.com>",
     "Amp <amp@ampcode.com>",
+    "Codex <codex@openai.com>",
+    "Trae Solo <solo-agent@trae.ai>",
+    "roboclaw-bot <309084314+roboclaw-bot@users.noreply.github.com>",
   ])("rejects machine credit present only in the default server preview: %s", (identity) => {
     const result = prepareBody({
       sourceMessages: ["Repair"],

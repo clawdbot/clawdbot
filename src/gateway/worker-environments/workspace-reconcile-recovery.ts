@@ -191,11 +191,7 @@ export async function createWorkspacePatch(params: {
     if (packed.stdout.byteLength > MAX_RECONCILIATION_TOTAL_BYTES) {
       throw new Error("Cloud workspace recovery snapshot exceeds its byte limit");
     }
-    for (const name of await fs.readdir(temporary)) {
-      if (name !== ".git") {
-        await fs.rm(path.join(temporary, name), { recursive: true, force: true });
-      }
-    }
+    await clearTemporaryWorkspace(temporary);
     for (const entry of params.appliedEntries) {
       await materializeSnapshotEntry({
         root: temporary,
@@ -249,7 +245,8 @@ export async function applyWorkspacePatch(params: {
     return;
   }
   // Run no-index with discovery disabled so workspace .gitattributes and
-  // repository filter config cannot reinterpret authenticated patch bytes.
+  // repository filters cannot reinterpret authenticated bytes. Disable inherited
+  // autocrlf too: no-index still runs Git's working-tree newline conversion.
   const temporary = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-no-git-"),
   );
@@ -257,6 +254,8 @@ export async function applyWorkspacePatch(params: {
     await requireGit(
       params.root,
       [
+        "-c",
+        "core.autocrlf=false",
         "apply",
         "--no-index",
         "--binary",

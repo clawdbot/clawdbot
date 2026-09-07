@@ -79,7 +79,6 @@ const publications: Record<string, string | symbol> = {
   "src/auto-reply/usage-bar/template.ts": Symbol.for("openclaw.usageBarTemplateTestApi"),
   "src/cli/command-secret-gateway.ts": Symbol.for("openclaw.commandSecretGatewayTestApi"),
   "src/cli/gateway-cli/run.ts": Symbol.for("openclaw.gatewayRunTestApi"),
-  "src/commands/backup-shared.ts": Symbol.for("openclaw.backupPlanTestApi"),
   "src/commands/doctor-auth-migration-receipts.ts": Symbol.for(
     "openclaw.authProfileMigrationReceiptsTestApi",
   ),

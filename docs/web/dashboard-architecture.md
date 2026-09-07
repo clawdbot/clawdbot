@@ -42,15 +42,15 @@ Principles:
 
 ## Concepts
 
-| Concept             | Definition                                                                                                                                         |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Session (thread)    | Existing gateway session, keyed by stable `sessionKey`. Owned by an agent.                                                                         |
-| Board               | The widget board of one session. Exists iff the session has widgets/tabs. Survives `/new`/`/reset` (attached to `sessionKey`, not the transcript). |
-| Tab                 | A presentation page of a board: which widgets and their arrangement. Boards start with one implicit tab.                                           |
-| Widget              | Named content cell owned by the session: a native report, HTML/JS, MCP App, or plugin widget. Addressed as `sessionKey` + `name`.                  |
-| Capability manifest | Per-widget declaration of reach: `data` (read bindings), `actions` (allowlisted verbs), `prompt` (send to session), `net` (allowed origins).       |
-| Pin (widget)        | Moving a transcript widget onto the session's board (user affordance or agent tool arg). Unpin removes it from the board.                          |
-| Pin (session)       | Existing sidebar pinning of sessions. Opening a pinned session restores that browser's saved task layout.                                          |
+| Concept             | Definition                                                                                                                                                                         |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Session (thread)    | Existing gateway session, keyed by stable `sessionKey`. Owned by an agent.                                                                                                         |
+| Board               | The widget board of one session. Exists iff the session has widgets/tabs. Survives `/new`/`/reset` (attached to `sessionKey`, not the transcript).                                 |
+| Tab                 | A presentation page of a board: which widgets and their arrangement. Boards start with one implicit tab.                                                                           |
+| Widget              | Named content cell owned by the session: a native report, HTML/JS, MCP App, or plugin widget. Addressed as `sessionKey` + `name`.                                                  |
+| Capability manifest | Per-widget declaration of reach: `data` (read bindings), `actions` (allowlisted verbs), `prompt` (send to session), `net` (allowed origins).                                       |
+| Pin (widget)        | Moving a transcript widget onto the session's board (user affordance or agent tool arg). Unpin removes it from the board.                                                          |
+| Pin (session)       | Only root sessions can be pinned; child/subagent sessions live in their parent's tree and reject pin requests. Opening a pinned session restores that browser's saved task layout. |
 
 ## UX flows
 

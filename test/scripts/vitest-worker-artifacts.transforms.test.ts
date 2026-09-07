@@ -82,7 +82,8 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             expect(fileURLToPath(generation)).toBe(
               path.join(root, "src/infra/sqlite-readonly-location.worker.ts"),
             );
-            expect(observed.args.slice(0, 2)).toEqual(["--import", "tsx"]);
+            expect(observed.args[0]).toBe("--import");
+            expect(observed.args[1]).toMatch(/^file:\/\//);
             expect(fileURLToPath(observed.knn)).toBe(
               path.join(root, "extensions/memory-core/src/memory/manager-search-knn.child.ts"),
             );

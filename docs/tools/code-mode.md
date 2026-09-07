@@ -838,6 +838,18 @@ in `content`, including empty-result messages and truncation notices. Directory
 pages retain `nextAfter`; search results retain their existing limit and
 truncation metadata.
 
+### Reading paginated file data
+
+For text file pages, `read(...)` returns file text in `content`; filename-resolution
+and pagination notices stay in the human-readable tool display, not the structured
+file data. Existing file redaction still applies. Check `kind` before parsing:
+`"truncated"` means more data is available at `continuation`. Read that next page
+with the same path and the returned `offset`, optional `cursor`, and optional
+`limit`. Join line continuations with `"\n"`; append cursor continuations directly.
+Do not strip display-notice patterns from file data: those strings may be actual
+file contents. Each call still honors its explicit `limit`; if more file data
+remains, the result is `"truncated"` and its continuation describes the next page.
+
 ## Declared output contracts
 
 OpenClaw tools can declare `outputSchema` for the structured value placed in
@@ -1046,6 +1058,12 @@ contain them. Unawaited Promises appear as a diagnostic string with `await` and
 `return await Promise.all(handles.map((tool) => tool.describe()));` to return tool
 descriptions. Output serialization does not await nested Promises for you.
 
+Handled `Error` values retain their `name`, `message`, and JSON-compatible
+enumerable custom fields in `text(...)`, `json(...)`, and returned arrays or
+plain objects. Error-specific `toJSON` methods are not invoked. This includes
+rejected reasons from `Promise.allSettled(...)`. Handling an error does not fail
+the cell; uncaught errors still produce a failed result.
+
 Output order matches guest calls. Each nested tool result is bounded separately
 by `maxOutputBytes`. Cumulative guest output and the final value or failure
 diagnostic share one `maxOutputBytes` serialized UTF-8 budget across all waits. Oversized errors retain their leading cause and end
@@ -1176,6 +1194,12 @@ result and the agent can continue normally. Follow the
 effects before choosing another action. Network-controlled tool output and errors
 retain their existing untrusted-content wrapping and sanitization; continuing
 after a failure does not grant new permissions or replay completed side effects.
+
+Nested calls honor each tool’s `executionMode`. A `"sequential"` tool waits for
+earlier catalog calls to finish and blocks later calls until its result has been
+accepted. Parallel-capable calls can overlap before the next sequential call.
+Scheduling is shared across cells using the same run catalog; separate catalogs
+remain independent. Queued calls are canceled when their caller or catalog closes.
 
 Parallel nested calls are allowed up to `maxPendingToolCalls`. An oversized raw
 tool batch fails before any call in that batch is dispatched. [Swarm](/tools/swarm)

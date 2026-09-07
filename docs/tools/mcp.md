@@ -35,7 +35,7 @@ Saving a definition proves nothing about reachability — the probe does. With G
 
 In a Control UI chat, select **+** → **Connectors** → **Add MCP server…**. The dialog uses the same server fields as Settings and requires administrator access.
 
-Choose **This session** for session-only enablement or **Everywhere** for global enablement. Either scope saves a global server definition; session policy is the per-session layer. See [Composer capability menu](/web/control-ui#composer-capability-menu) for the complete scope and tool-access behavior.
+Choose **This session** for session-only enablement or **Everywhere** for global enablement. Either scope saves a global server definition; session policy is the per-session layer. See [Composer capability menu](/web/control-ui/chat#composer-capability-menu) for the complete scope and tool-access behavior.
 
 From an active conversation, open **+ → Connectors → Tool access** to inspect
 or deny individual tools for that session. The view follows the session's
@@ -136,7 +136,7 @@ Follow the printed authorization URL. OpenClaw normally captures the loopback re
 
 ## Related
 
-- [Control UI](/web/control-ui#composer-capability-menu)
+- [Control UI](/web/control-ui/chat#composer-capability-menu)
 - [MCP CLI reference](/cli/mcp)
 - [Manage plugins](/plugins/manage-plugins)
 - [Tool policies](/tools)

@@ -5,23 +5,6 @@ import Testing
 import WebKit
 @testable import OpenClaw
 
-@MainActor
-private final class DashboardNotificationAlertCapture: NSObject {
-    private(set) var textValues: [String] = []
-
-    @objc func captureAndAbortModal() {
-        if let contentView = NSApp.modalWindow?.contentView {
-            self.textValues = Self.textValues(in: contentView)
-        }
-        NSApp.abortModal()
-    }
-
-    private static func textValues(in view: NSView) -> [String] {
-        let current = (view as? NSTextField).map { [$0.stringValue] } ?? []
-        return current + view.subviews.flatMap { self.textValues(in: $0) }
-    }
-}
-
 private struct DashboardNotificationEndpointFailure: Error {}
 
 @MainActor
@@ -69,20 +52,13 @@ extension DashboardWindowOwnershipTests {
         let manager = DashboardManager._testMake(
             primaryEndpointProvider: { _ in throw DashboardNotificationEndpointFailure() })
         defer { manager.close() }
-        let capture = DashboardNotificationAlertCapture()
-        let timer = Timer(
-            timeInterval: 0.01,
-            target: capture,
-            selector: #selector(DashboardNotificationAlertCapture.captureAndAbortModal),
-            userInfo: nil,
-            repeats: false)
-        RunLoop.main.add(timer, forMode: .modalPanel)
 
         let sourceURL = try #require(URL(string: "https://gateway.example"))
         try await manager.openBackgroundSession(
             self.completion(), target: .primary, sourceURL: sourceURL)
 
-        #expect(capture.textValues.contains(expectedTitle))
+        // The failure is presented without a modal loop; read the pending alert directly.
+        #expect(manager._testPendingGatewayAlerts().map(\.messageText).contains(expectedTitle))
         print("\(probeKey)=ok")
     }
 

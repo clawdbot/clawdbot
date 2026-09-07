@@ -10,7 +10,7 @@ import {
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
-import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
+import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { makeTempWorkspace } from "../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
@@ -205,29 +205,28 @@ it
         },
       }),
     );
-    const leasePid = scenario === "parent lease" ? process.ppid : process.pid;
-    const startIdentity = getFileLockProcessStartTime(leasePid);
-    expect(startIdentity).not.toBeNull();
-    const db = openNodeSqliteDatabase(path.join(home, "managed-update-handoffs.sqlite"));
-    try {
-      db.exec(`CREATE TABLE managed_update_handoffs (
-        install_root TEXT PRIMARY KEY, owner TEXT NOT NULL, payload_json TEXT NOT NULL,
-        updated_at_ms INTEGER NOT NULL
-      ) STRICT;`);
-      if (scenario !== "missing lease") {
-        db.prepare("INSERT INTO managed_update_handoffs VALUES (?, ?, ?, ?)").run(
-          root,
-          scenario === "replaced owner" ? "replacement-handoff" : "owned-handoff",
-          JSON.stringify({
-            version: 1,
-            pid: leasePid,
-            startIdentity: scenario === "stale start identity" ? "stale" : String(startIdentity),
-          }),
-          Date.now(),
-        );
+    const store = createManagedHandoffLeaseStore();
+    if (scenario !== "missing lease") {
+      const claim = store.acquire(
+        root,
+        scenario === "replaced owner" ? "replacement-handoff" : "owned-handoff",
+        { kind: "update" },
+      );
+      if (claim.kind !== "acquired") {
+        throw new Error("fixture could not acquire its installation lease");
       }
-    } finally {
-      db.close();
+      if (scenario === "parent lease") {
+        expect(store.bind(claim.lease, process.ppid)).not.toBeNull();
+      } else if (scenario === "stale start identity") {
+        const db = openNodeSqliteDatabase(path.join(home, "managed-update-handoffs.sqlite"));
+        try {
+          db.prepare(
+            "UPDATE managed_update_handoffs SET payload_json = json_set(payload_json, '$.executor.startIdentity', 'stale') WHERE install_root = ?",
+          ).run(root);
+        } finally {
+          db.close();
+        }
+      }
     }
     await withEnvAsync(
       {

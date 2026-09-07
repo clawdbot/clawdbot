@@ -1,6 +1,6 @@
 // Creates compact SQLite snapshots only after verifying both source and output.
 import { createHash, randomUUID } from "node:crypto";
-import fsSync, { type BigIntStats, type Stats } from "node:fs";
+import fsSync, { type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
@@ -15,6 +15,12 @@ import {
   syncDirectory,
 } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
+import {
+  copyFileHandle,
+  hashFileDescriptorSync,
+  sameFileMutationFingerprint,
+  type FileMutationFingerprint,
+} from "./file-descriptor.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import {
   openNodeSqliteDatabase,
@@ -101,30 +107,13 @@ async function copyFileExclusive(
   try {
     target = await fs.open(targetPath, "wx+", 0o600);
     targetIdentity = await target.stat();
-    const buffer = Buffer.allocUnsafe(1024 * 1024);
     const hash = createHash("sha256");
-    let offset = 0;
-    while (true) {
-      const { bytesRead } = await source.read(buffer, 0, buffer.length, offset);
-      if (bytesRead === 0) {
-        break;
-      }
-      hash.update(buffer.subarray(0, bytesRead));
-      let bytesWritten = 0;
-      while (bytesWritten < bytesRead) {
-        const result = await target.write(
-          buffer,
-          bytesWritten,
-          bytesRead - bytesWritten,
-          offset + bytesWritten,
-        );
-        if (result.bytesWritten === 0) {
-          throw new Error(`SQLite snapshot copy made no progress: ${targetPath}`);
-        }
-        bytesWritten += result.bytesWritten;
-      }
-      offset += bytesRead;
-    }
+    const offset = await copyFileHandle(source, target, {
+      noProgressMessage: `SQLite snapshot copy made no progress: ${targetPath}`,
+      onChunk: (chunk) => {
+        hash.update(chunk);
+      },
+    });
     await assertMutationFingerprintUnchanged(source, sourceFingerprint, targetPath);
     await target.sync();
     const currentIdentity = await fs.lstat(targetPath);
@@ -147,11 +136,6 @@ async function copyFileExclusive(
   }
 }
 
-type FileMutationFingerprint = Pick<
-  BigIntStats,
-  "birthtimeNs" | "ctimeNs" | "dev" | "ino" | "mtimeNs" | "size"
->;
-
 async function readMutationFingerprint(handle: FileHandle): Promise<FileMutationFingerprint> {
   const stat = await handle.stat({ bigint: true });
   return {
@@ -170,30 +154,9 @@ async function assertMutationFingerprintUnchanged(
   filePath: string,
 ): Promise<void> {
   const current = await readMutationFingerprint(handle);
-  if (
-    current.birthtimeNs !== expected.birthtimeNs ||
-    current.ctimeNs !== expected.ctimeNs ||
-    current.dev !== expected.dev ||
-    current.ino !== expected.ino ||
-    current.mtimeNs !== expected.mtimeNs ||
-    current.size !== expected.size
-  ) {
+  if (!sameFileMutationFingerprint(current, expected)) {
     throw new Error(`SQLite snapshot file changed while reading: ${filePath}`);
   }
-}
-
-function sameMutationFingerprint(
-  left: FileMutationFingerprint,
-  right: FileMutationFingerprint,
-): boolean {
-  return (
-    left.birthtimeNs === right.birthtimeNs &&
-    left.ctimeNs === right.ctimeNs &&
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mtimeNs === right.mtimeNs &&
-    left.size === right.size
-  );
 }
 
 async function syncFile(filePath: string): Promise<void> {
@@ -301,17 +264,7 @@ function hashPublishedFileSync(filePath: string, expectedIdentity: Stats): Sqlit
       mtimeNs: initialStat.mtimeNs,
       size: initialStat.size,
     };
-    const hash = createHash("sha256");
-    const buffer = Buffer.allocUnsafe(1024 * 1024);
-    let offset = 0;
-    while (true) {
-      const bytesRead = fsSync.readSync(fileDescriptor, buffer, 0, buffer.length, offset);
-      if (bytesRead === 0) {
-        break;
-      }
-      hash.update(buffer.subarray(0, bytesRead));
-      offset += bytesRead;
-    }
+    const content = hashFileDescriptorSync(fileDescriptor);
     const finalStat = fsSync.fstatSync(fileDescriptor, { bigint: true });
     const finalFingerprint: FileMutationFingerprint = {
       birthtimeNs: finalStat.birthtimeNs,
@@ -321,11 +274,11 @@ function hashPublishedFileSync(filePath: string, expectedIdentity: Stats): Sqlit
       mtimeNs: finalStat.mtimeNs,
       size: finalStat.size,
     };
-    if (!sameMutationFingerprint(initialFingerprint, finalFingerprint)) {
+    if (!sameFileMutationFingerprint(initialFingerprint, finalFingerprint)) {
       throw new Error(`SQLite snapshot file changed while reading: ${filePath}`);
     }
     assertOpenFileIdentitySync(fileDescriptor, filePath, expectedIdentity);
-    return { sha256: hash.digest("hex"), sizeBytes: offset };
+    return content;
   } finally {
     fsSync.closeSync(fileDescriptor);
   }

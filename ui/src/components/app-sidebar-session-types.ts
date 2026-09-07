@@ -87,6 +87,7 @@ export type SidebarRecentSession = {
   modelSelectionLocked: boolean;
   kind?: string;
   pinned: boolean;
+  pinnable: boolean;
   archived?: boolean;
   visibility?: SessionVisibility;
   draftOwnedBySelf?: boolean;

@@ -382,6 +382,21 @@ export class TranscriptsStore {
     };
     const now = Date.now();
     this.transaction("meeting-transcripts.session.write", ({ db: database }) => {
+      const previous = executeSqliteQueryTakeFirstSync(
+        database,
+        meetingTranscriptSessionQuery(database, session).selectAll(),
+      );
+      if (previous) {
+        // ID origin belongs to admission, including the absence of that fact in legacy rows.
+        const admittedMetadata = sessionFromRow(previous).metadata;
+        let metadata = session.metadata ? { ...session.metadata } : undefined;
+        if (admittedMetadata && Object.hasOwn(admittedMetadata, "sessionIdOrigin")) {
+          metadata = { ...metadata, sessionIdOrigin: admittedMetadata.sessionIdOrigin };
+        } else if (metadata) {
+          delete metadata.sessionIdOrigin;
+        }
+        sessionValues.metadata_json = metadata ? JSON.stringify(metadata) : null;
+      }
       executeSqliteQuerySync(
         database,
         meetingTranscriptDb(database)

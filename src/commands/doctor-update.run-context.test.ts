@@ -110,6 +110,7 @@ describe("Doctor update run lifecycle", () => {
       expect(mocks.continueMigratedUpdateInFreshProcess).toHaveBeenCalledWith(
         expect.objectContaining({
           opts: { run },
+          mutationStarted: true,
           ownedManagedUpdateEnv: run.env,
           rollbackBlockedReason: "state-migrated-no-rollback",
         }),

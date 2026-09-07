@@ -75,6 +75,7 @@ export const SERVICE_AUDIT_CODES = {
   systemdRestartSec: "systemd-restart-sec",
   systemdWantsNetworkOnline: "systemd-wants-network-online",
   systemdKillModeProcessOrNone: "systemd-kill-mode-process-or-none",
+  systemdKillModeControlGroup: "systemd-kill-mode-control-group",
   systemdUnitBackupUnsafe: "systemd-unit-backup-unsafe",
 } as const;
 
@@ -141,16 +142,11 @@ function parseSystemdUnit(content: string): {
     if (!value) {
       continue;
     }
-    if (key === "After") {
+    if (key === "After" || key === "Wants") {
+      const dependencies = key === "After" ? after : wants;
       for (const entry of value.split(/\s+/)) {
         if (entry) {
-          after.add(entry);
-        }
-      }
-    } else if (key === "Wants") {
-      for (const entry of value.split(/\s+/)) {
-        if (entry) {
-          wants.add(entry);
+          dependencies.add(entry);
         }
       }
     } else if (key === "RestartSec") {
@@ -245,12 +241,15 @@ async function auditSystemdUnit(
       level: "recommended",
     });
   }
-  const killMode = normalizeLowercaseStringOrEmpty(parsed.killMode);
-  if (killMode === "process" || killMode === "none") {
+  const killMode = normalizeLowercaseStringOrEmpty(parsed.killMode) || "control-group";
+  if (killMode !== "mixed") {
     issues.push({
-      code: SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone,
+      code:
+        killMode === "process" || killMode === "none"
+          ? SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone
+          : SERVICE_AUDIT_CODES.systemdKillModeControlGroup,
       message:
-        "KillMode is process/none; service child processes can survive gateway stops and restarts.",
+        "KillMode=mixed is required to drain active turns before final service child cleanup; inspect unit and drop-in overrides.",
       detail: `${unitPath}: ${killMode}`,
       level: "recommended",
     });
