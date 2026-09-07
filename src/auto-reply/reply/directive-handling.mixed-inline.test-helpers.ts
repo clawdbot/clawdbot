@@ -5,6 +5,7 @@ import { createModelVisibilityPolicy } from "../../agents/model-visibility-polic
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { MsgContext } from "../templating.js";
+import type { ElevatedLevel } from "../thinking.js";
 import { parseInlineSessionDirectives, type InlineDirectives } from "./directive-handling.parse.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 
@@ -30,6 +31,7 @@ export async function applyMixedDirectives(params: {
   aliasIndex?: ModelAliasIndex;
   senderIsOwner?: boolean;
   gatewayClientScopes?: string[];
+  currentElevatedLevel?: ElevatedLevel;
   directives?: InlineDirectives;
   resolveDefaultThinkingLevel?: Parameters<
     typeof applyInlineDirectiveOverrides
@@ -124,6 +126,7 @@ export async function applyMixedDirectives(params: {
     initialModelLabel: `${provider}/${model}`,
     formatModelSwitchEvent: (label) => `Model switched to ${label}.`,
     resolvedElevatedLevel: "off",
+    currentElevatedLevel: params.currentElevatedLevel ?? "off",
     defaultActivation: () => "always",
     contextTokens: 8192,
     effectiveModelDirective: directives.rawModelDirective,

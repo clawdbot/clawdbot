@@ -29,6 +29,9 @@ export async function maybeDeliverDiscordDirectStatus(params: {
   commandTargetSessionKey?: string | null;
   channel: "discord";
   senderId: string;
+  senderName?: string;
+  senderUsername?: string;
+  senderTag?: string;
   senderIsOwner: boolean;
   isAuthorizedSender: boolean;
   isGroup: boolean;
@@ -48,6 +51,10 @@ export async function maybeDeliverDiscordDirectStatus(params: {
     sessionKey: params.commandTargetSessionKey?.trim() || params.sessionKey,
     channel: params.channel,
     senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderTag: params.senderTag,
+    accountId: params.accountId,
     senderIsOwner: params.senderIsOwner,
     isAuthorizedSender: params.isAuthorizedSender,
     isGroup: params.isGroup,

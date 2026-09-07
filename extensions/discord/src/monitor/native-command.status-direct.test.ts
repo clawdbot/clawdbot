@@ -155,6 +155,10 @@ function firstStatusCall(): {
   cfg: OpenClawConfig;
   sessionKey: string;
   channel: string;
+  accountId: string;
+  senderName?: string;
+  senderUsername?: string;
+  senderTag?: string;
   isGroup: boolean;
   defaultGroupActivation: () => "always" | "mention";
 } {
@@ -166,6 +170,10 @@ function firstStatusCall(): {
     cfg: OpenClawConfig;
     sessionKey: string;
     channel: string;
+    accountId: string;
+    senderName?: string;
+    senderUsername?: string;
+    senderTag?: string;
     isGroup: boolean;
     defaultGroupActivation: () => "always" | "mention";
   };
@@ -205,6 +213,7 @@ describe("discord native /status", () => {
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
     expect(runtimeModuleMocks.resolveDirectStatusReplyForSession).toHaveBeenCalledTimes(1);
+    expect(firstStatusCall().accountId).toBe("default");
     expect(runtimeModuleMocks.dispatchReplyWithDispatcher).not.toHaveBeenCalled();
     expect(interaction.followUp).toHaveBeenCalledTimes(1);
     expect(firstMockArg(interaction.followUp, "interaction.followUp")).toStrictEqual({
@@ -212,6 +221,23 @@ describe("discord native /status", () => {
       ephemeral: true,
     });
     expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
+  it("passes trusted native sender identity to direct status", async () => {
+    const cfg = createConfig();
+    const command = await createStatusCommand(cfg);
+    const interaction = createInteraction({
+      username: "trusted_user",
+      globalName: "Trusted User",
+    });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(firstStatusCall()).toMatchObject({
+      senderName: "Trusted User",
+      senderUsername: "trusted_user",
+      senderTag: "trusted_user",
+    });
   });
 
   it("delivers an embed-only direct status reply without reporting it unavailable", async () => {

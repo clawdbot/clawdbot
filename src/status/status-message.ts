@@ -827,11 +827,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     args.sessionEntry?.reasoningLevel ??
     args.agent?.reasoningDefault ??
     "off";
-  const elevatedLevel =
-    args.resolvedElevated ??
-    args.sessionEntry?.elevatedLevel ??
-    args.agent?.elevatedDefault ??
-    "on";
+  const elevatedLevel = args.resolvedElevated;
 
   const execution = { label: resolveExecutionLabel(args) };
   const agentRuntimeLabel = resolveAgentRuntimeLabel({

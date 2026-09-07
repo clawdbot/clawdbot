@@ -151,6 +151,58 @@ describe("native /status channel model routing", () => {
     },
   ];
 
+  it("reports the authorized effective elevated default", async () => {
+    const targetSessionKey = "agent:main:telegram:direct:owner";
+    const storePath = path.join(tempDirs.make("openclaw-native-status-elevated-"), "sessions.json");
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: targetSessionKey, storePath },
+      { sessionId: "status-session", updatedAt: Date.now() },
+    );
+
+    await maybeResolveNativeSlashCommandFastReply({
+      ctx: buildTestCtx({
+        Body: "/status",
+        CommandBody: "/status",
+        CommandSource: "native",
+        CommandAuthorized: true,
+        Provider: "telegram",
+        Surface: "telegram",
+        SenderId: "owner",
+        From: "telegram:owner",
+        ChatType: "direct",
+        SessionKey: "telegram:slash:owner",
+        CommandTargetSessionKey: targetSessionKey,
+        CommandTurn: {
+          kind: "native",
+          source: "native",
+          authorized: true,
+          commandName: "status",
+          body: "/status",
+        },
+      }),
+      cfg: markCompleteReplyConfig({
+        session: { store: storePath },
+        agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+        tools: { elevated: { allowFrom: { telegram: ["owner"] } } },
+      } as OpenClawConfig),
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      agentCfg: undefined,
+      commandAuthorized: true,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      aliasIndex: { byKey: new Map(), byAlias: new Map() },
+      provider: "openai",
+      model: "gpt-5.5",
+      workspaceDir: "/tmp/workspace",
+      typing: createTypingController(),
+    });
+
+    expect(buildStatusReplyMock.mock.calls[0]?.[0]).toMatchObject({
+      resolvedElevatedLevel: "on",
+    });
+  });
+
   it.each(statusSelectionCases)(
     "preserves canonical native /status $selection",
     async (testCase) => {

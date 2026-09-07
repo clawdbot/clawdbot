@@ -244,7 +244,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("Runner:");
     expect(normalized).toContain("think medium");
     expect(normalized).not.toContain("verbose");
-    expect(normalized).toContain("elevated");
+    expect(normalized).not.toContain("elevated");
     expect(normalized).toContain("Queue: collect");
     expect(normalized).toContain("- active run");
   });

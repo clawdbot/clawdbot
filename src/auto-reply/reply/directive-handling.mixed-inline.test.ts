@@ -951,6 +951,7 @@ describe("mixed inline directives", () => {
     const { result } = await applyMixedDirectives({
       body: "please reply\n/elevated full",
       sessionEntry: createSessionEntry({ elevatedLevel: "full" }),
+      currentElevatedLevel: "full",
       storePath: "/tmp/sessions.json",
     });
 

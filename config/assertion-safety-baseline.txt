@@ -2105,7 +2105,7 @@ src/auto-reply/reply/commands-system-prompt.ts	2
 src/auto-reply/reply/config-mutations.ts	3
 src/auto-reply/reply/conversation-turn-capture.ts	2
 src/auto-reply/reply/directive-handling.impl.ts	2
-src/auto-reply/reply/directive-handling.levels.ts	9
+src/auto-reply/reply/directive-handling.levels.ts	7
 src/auto-reply/reply/directive-handling.model-picker.ts	1
 src/auto-reply/reply/directive-handling.model.ts	2
 src/auto-reply/reply/directive-handling.parse.ts	2
@@ -2120,7 +2120,7 @@ src/auto-reply/reply/elevated-allowlist-matcher.ts	2
 src/auto-reply/reply/exec/directive.ts	1
 src/auto-reply/reply/followup-delivery-payloads.ts	1
 src/auto-reply/reply/followup-turn-execution.ts	1
-src/auto-reply/reply/get-reply-directives.ts	8
+src/auto-reply/reply/get-reply-directives.ts	6
 src/auto-reply/reply/get-reply-exec-overrides.ts	1
 src/auto-reply/reply/get-reply-fast-path.ts	1
 src/auto-reply/reply/get-reply-inline-actions.ts	5

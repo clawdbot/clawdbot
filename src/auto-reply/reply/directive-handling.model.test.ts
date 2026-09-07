@@ -339,7 +339,6 @@ import {
 } from "../../hooks/internal-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import type { ElevatedLevel } from "../thinking.js";
 import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
 
 let handleDirectiveOnly: typeof import("./directive-handling.impl.js").handleDirectiveOnly;
@@ -671,6 +670,7 @@ async function persistModelDirectiveForTest(params: {
     initialModelLabel: params.initialModelLabel ?? `${provider}/${model}`,
     formatModelSwitchEvent: (label) => label,
     resolvedElevatedLevel: "off",
+    currentElevatedLevel: "off",
     defaultActivation: () => "always",
     contextTokens: 8192,
     effectiveModelDirective: directives.rawModelDirective,
@@ -722,6 +722,7 @@ function createDirectiveHandlingParams(
     sessionKey,
     elevatedEnabled: true,
     elevatedAllowed: true,
+    currentElevatedLevel: "off",
     defaultProvider: "anthropic",
     defaultModel: "claude-opus-4-6",
     aliasIndex: baseAliasIndex(),
@@ -2959,13 +2960,13 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
     const statusReply = await runHandleCommand("/elevated", {
       ...base,
-      currentElevatedLevel: sessionEntry.elevatedLevel as ElevatedLevel | undefined,
+      currentElevatedLevel: "on",
     });
     expect(statusReply?.text).toContain("Current elevated level: on");
 
     const offReply = await runHandleCommand("/elevated off", {
       ...base,
-      currentElevatedLevel: sessionEntry.elevatedLevel as ElevatedLevel | undefined,
+      currentElevatedLevel: "on",
     });
     expect(offReply?.text).toContain("Elevated mode disabled");
     expect(sessionEntry.elevatedLevel).toBe("off");

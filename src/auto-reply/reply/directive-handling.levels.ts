@@ -1,7 +1,6 @@
 // Parses directive level values for reasoning, verbosity, and elevated mode.
 import {
   normalizeFastMode,
-  type ElevatedLevel,
   type FastMode,
   type ReasoningLevel,
   type ThinkLevel,
@@ -15,7 +14,6 @@ export async function resolveCurrentDirectiveLevels(params: {
     fastMode?: unknown;
     verboseLevel?: unknown;
     reasoningLevel?: unknown;
-    elevatedLevel?: unknown;
   };
   agentEntry?: {
     fastModeDefault?: unknown;
@@ -25,7 +23,6 @@ export async function resolveCurrentDirectiveLevels(params: {
     thinkingDefault?: unknown;
     verboseDefault?: unknown;
     reasoningDefault?: unknown;
-    elevatedDefault?: unknown;
   };
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
 }): Promise<{
@@ -33,7 +30,6 @@ export async function resolveCurrentDirectiveLevels(params: {
   currentFastMode: FastMode | undefined;
   currentVerboseLevel: VerboseLevel | undefined;
   currentReasoningLevel: ReasoningLevel;
-  currentElevatedLevel: ElevatedLevel | undefined;
 }> {
   const resolvedDefaultThinkLevel =
     (params.sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
@@ -51,14 +47,10 @@ export async function resolveCurrentDirectiveLevels(params: {
     (params.agentEntry?.reasoningDefault as ReasoningLevel | undefined) ??
     (params.agentCfg?.reasoningDefault as ReasoningLevel | undefined) ??
     "off";
-  const currentElevatedLevel =
-    (params.sessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
-    (params.agentCfg?.elevatedDefault as ElevatedLevel | undefined);
   return {
     currentThinkLevel,
     currentFastMode,
     currentVerboseLevel,
     currentReasoningLevel,
-    currentElevatedLevel,
   };
 }

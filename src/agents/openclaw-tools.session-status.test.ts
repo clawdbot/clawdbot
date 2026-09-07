@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ElevatedLevel } from "../auto-reply/thinking.js";
 import { resolveSessionStoreEntryCore } from "../config/sessions/store-entry.js";
 import { mergeSessionEntry, type SessionEntry } from "../config/sessions/types.js";
 import {
@@ -279,6 +280,7 @@ function createCommandsStatusRuntimeModuleMock() {
       primaryModelLabelOverride?: string;
       includeTranscriptUsage?: boolean;
       taskLineOverride?: string;
+      resolvedElevatedLevel?: ElevatedLevel;
       resolveDefaultThinkingLevel?: () => unknown;
     }) => {
       resolveQueueSettingsMock({
@@ -318,6 +320,7 @@ function createCommandsStatusRuntimeModuleMock() {
         thinkingCatalog: params.thinkingCatalog,
         includeTranscriptUsage: params.includeTranscriptUsage,
         workspaceDir: params.workspaceDir,
+        resolvedElevated: params.resolvedElevatedLevel,
       });
       return formatStatusLines(primary, params.taskLineOverride);
     },
@@ -574,7 +577,11 @@ function latestMockCallArg(mock: ReturnType<typeof vi.fn>, argIndex = 0) {
 
 function getSessionStatusTool(
   agentSessionKey = "main",
-  options?: { sandboxed?: boolean; activeModelProvider?: string; activeModelId?: string },
+  options?: {
+    sandboxed?: boolean;
+    activeModelProvider?: string;
+    activeModelId?: string;
+  },
 ) {
   const tool = createSessionStatusTool({
     agentSessionKey,
@@ -1020,6 +1027,7 @@ describe("session_status tool", () => {
     const tool = createSessionStatusTool({
       agentSessionKey: "agent:main:telegram:default:direct:1234",
       runSessionKey: "agent:main:main",
+      activeElevatedLevel: "on",
       config: mockConfig as never,
     });
 
@@ -1031,6 +1039,7 @@ describe("session_status tool", () => {
     const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
     const sessionEntry = statusArg.sessionEntry as SessionEntry;
     expect(sessionEntry.thinkingLevel).toBe("high");
+    expect(statusArg.resolvedElevated).toBe("on");
   });
 
   it("resolves sessionKey=current to runSessionKey under explicit tree visibility (#76708)", async () => {
