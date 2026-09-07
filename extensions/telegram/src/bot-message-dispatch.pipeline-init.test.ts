@@ -42,7 +42,7 @@ describeTelegramDispatch("dispatchTelegramMessage pipeline-init", () => {
       });
       try {
         // Context assembly queues the acknowledgement before dispatch preparation.
-        controller.setQueued();
+        await controller.setQueued();
         await vi.advanceTimersByTimeAsync(0);
         expect(setReaction).toHaveBeenCalledWith("👀");
         const abortController = new AbortController();
