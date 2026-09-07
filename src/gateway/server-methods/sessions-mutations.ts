@@ -411,6 +411,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       armSessionDiffBaselineCapture: true,
       workerPlacementContext: context,
       assertAuthorizedInstance: sessionMutationAuthorization?.assertCurrent,
+      expectedSessionId: p.expectedSessionId,
     });
     if (!result.ok) {
       respond(false, undefined, result.error);

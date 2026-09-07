@@ -533,6 +533,7 @@ export const SessionsResetParamsSchema = closedObject({
   key: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
   reason: Type.Optional(Type.Union([Type.Literal("new"), Type.Literal("reset")])),
+  expectedSessionId: Type.Optional(NonEmptyString),
 });
 
 /** Reassigns mutable session responsibility without changing provenance or sharing authority. */
