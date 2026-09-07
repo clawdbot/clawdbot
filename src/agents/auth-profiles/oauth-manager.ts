@@ -422,6 +422,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       fence: params.claim.fence,
       claims: params.claims,
       authoritativeSharedCredential,
+      replacement: params.replacement,
     });
   }
 
@@ -721,6 +722,9 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           }
 
           if (storedFence && credentialToRefresh === cred) {
+            if (isPendingOAuthRefreshFence(cred)) {
+              return { kind: "observe", ownerAgentDir, generation: cred };
+            }
             const peerClaims = personalProfile
               ? []
               : await fenceOAuthRefreshPeers({
@@ -730,9 +734,6 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
                   generation: cred,
                   fence: cred,
                 });
-            if (isPendingOAuthRefreshFence(cred)) {
-              return { kind: "observe", ownerAgentDir, generation: cred };
-            }
             failOAuthRefreshPeerClaims({
               profileId: params.profileId,
               fence: cred,
@@ -780,15 +781,6 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
               return { kind: "unavailable" };
             }
             if (isPendingOAuthRefreshFence(current)) {
-              if (!personalProfile) {
-                await fenceOAuthRefreshPeers({
-                  cfg: peerConfig,
-                  ownerDatabasePath: authPath,
-                  profileId: params.profileId,
-                  generation: current,
-                  fence: current,
-                });
-              }
               return {
                 kind: "observe",
                 ownerAgentDir,

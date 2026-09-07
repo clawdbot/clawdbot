@@ -7,6 +7,8 @@ import { captureEnv } from "../../test-utils/env.js";
 import { AUTH_STORE_VERSION, MINIMAX_CLI_PROFILE_ID } from "./constants.js";
 import "./oauth-external-auth-passthrough.test-support.js";
 import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.js";
+import { createOAuthManager } from "./oauth-manager.js";
+import { withOAuthProfileLock } from "./oauth-profile-lock.js";
 import {
   createFailedOAuthRefreshFence,
   createOAuthRefreshFence,
@@ -26,7 +28,7 @@ import {
 import { loadPersistedAuthProfileStore } from "./persisted.js";
 import { removeAuthProfilesWithLock } from "./profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
-import { resolveAuthProfileDatabasePath } from "./sqlite.js";
+import { resolveAuthProfileDatabasePath, writePersistedAuthProfileStoreRaw } from "./sqlite.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
 import { resolvePersistedAuthProfileOwnerAgentDir } from "./store.js";
 import { upsertAuthProfileAfterLoginWithLockOrThrow } from "./upsert-with-lock.js";
@@ -413,6 +415,193 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
       await removeOAuthTestTempRoot(tempRoot);
     }
   }, 10_000);
+
+  it("keeps pending observers read-only until the owner claims a late peer", async () => {
+    const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
+    let tempRoot = "";
+
+    try {
+      resetFileLockStateForTest();
+      clearRuntimeAuthProfileStoreSnapshots();
+      tempRoot = await createOAuthTestTempRoot("openclaw-oauth-late-peer-");
+      const mainAgentDir = await createOAuthMainAgentDir(tempRoot);
+      const latePeerAgentDir = path.join(tempRoot, "agents", "late-peer", "agent");
+      await fs.mkdir(latePeerAgentDir, { recursive: true });
+      const profileId = "openai:default";
+      const provider = "openai";
+      const originalStore = createExpiredOauthStore({
+        profileId,
+        provider,
+        accountId: "acct-a",
+      });
+      const original = originalStore.profiles[profileId];
+      if (original?.type !== "oauth") {
+        throw new Error("expected original OAuth credential");
+      }
+      saveAuthProfileStore(originalStore, mainAgentDir);
+
+      let finishRefresh: (() => void) | undefined;
+      let markRefreshStarted: (() => void) | undefined;
+      const refreshStarted = new Promise<void>((resolve) => {
+        markRefreshStarted = resolve;
+      });
+      const refreshCredential = vi.fn(async () => {
+        markRefreshStarted?.();
+        await new Promise<void>((resolve) => {
+          finishRefresh = resolve;
+        });
+        return {
+          type: "oauth" as const,
+          provider,
+          access: "rotated-a-access",
+          refresh: "rotated-a-refresh",
+          expires: Date.now() + 60 * 60 * 1000,
+          accountId: "acct-a",
+        };
+      });
+      const createManager = (onBootstrap?: () => void) =>
+        createOAuthManager({
+          buildApiKey: async (_provider, credential) => credential.access,
+          refreshCredential,
+          canRefreshCredential: async () => true,
+          readBootstrapCredential: () => {
+            onBootstrap?.();
+            return null;
+          },
+        });
+
+      const owner = createManager().resolveOAuthAccess({
+        store: ensureAuthProfileStore(mainAgentDir),
+        profileId,
+        credential: original,
+        agentDir: mainAgentDir,
+      });
+      await refreshStarted;
+      writePersistedAuthProfileStoreRaw(originalStore, latePeerAgentDir);
+
+      let markObserverEntered: (() => void) | undefined;
+      const observerEntered = new Promise<void>((resolve) => {
+        markObserverEntered = resolve;
+      });
+      const observer = createManager(markObserverEntered).resolveOAuthAccess({
+        store: ensureAuthProfileStore(mainAgentDir),
+        profileId,
+        credential: original,
+        agentDir: mainAgentDir,
+      });
+      await observerEntered;
+      await withOAuthProfileLock({ provider, profileId }, async () => {});
+
+      expect(loadPersistedAuthProfileStore(latePeerAgentDir)?.profiles[profileId]).toEqual(
+        original,
+      );
+      expect(refreshCredential).toHaveBeenCalledOnce();
+
+      finishRefresh?.();
+      await expect(owner).resolves.toEqual(expect.objectContaining({ apiKey: "rotated-a-access" }));
+      await expect(observer).resolves.toEqual(
+        expect.objectContaining({ apiKey: "rotated-a-access" }),
+      );
+      expect(loadPersistedAuthProfileStore(latePeerAgentDir)?.profiles[profileId]).toBeUndefined();
+    } finally {
+      envSnapshot.restore();
+      resetFileLockStateForTest();
+      clearRuntimeAuthProfileStoreSnapshots();
+      await removeOAuthTestTempRoot(tempRoot);
+    }
+  });
+
+  it("allows only one independent manager to own a late local refresh generation", async () => {
+    const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
+    let tempRoot = "";
+
+    try {
+      resetFileLockStateForTest();
+      clearRuntimeAuthProfileStoreSnapshots();
+      tempRoot = await createOAuthTestTempRoot("openclaw-oauth-independent-managers-");
+      await createOAuthMainAgentDir(tempRoot);
+      const firstAgentDir = path.join(tempRoot, "agents", "first", "agent");
+      const secondAgentDir = path.join(tempRoot, "agents", "second", "agent");
+      await Promise.all([
+        fs.mkdir(firstAgentDir, { recursive: true }),
+        fs.mkdir(secondAgentDir, { recursive: true }),
+      ]);
+      const profileId = "openai:default";
+      const provider = "openai";
+      const originalStore = createExpiredOauthStore({
+        profileId,
+        provider,
+        accountId: "acct-a",
+      });
+      const original = originalStore.profiles[profileId];
+      if (original?.type !== "oauth") {
+        throw new Error("expected original OAuth credential");
+      }
+      saveAuthProfileStore(originalStore, firstAgentDir);
+
+      let finishFirstRefresh: (() => void) | undefined;
+      let markFirstRefreshStarted: (() => void) | undefined;
+      const firstRefreshStarted = new Promise<void>((resolve) => {
+        markFirstRefreshStarted = resolve;
+      });
+      const refreshCredential = vi.fn(async () => {
+        if (refreshCredential.mock.calls.length === 1) {
+          markFirstRefreshStarted?.();
+          await new Promise<void>((resolve) => {
+            finishFirstRefresh = resolve;
+          });
+        }
+        return {
+          type: "oauth" as const,
+          provider,
+          access: "rotated-a-access",
+          refresh: "rotated-a-refresh",
+          expires: Date.now() + 60 * 60 * 1000,
+          accountId: "acct-a",
+        };
+      });
+      const createManager = () =>
+        createOAuthManager({
+          buildApiKey: async (_provider, credential) => credential.access,
+          refreshCredential,
+          canRefreshCredential: async () => true,
+          readBootstrapCredential: () => null,
+        });
+
+      const first = createManager().resolveOAuthAccess({
+        store: ensureAuthProfileStore(firstAgentDir),
+        profileId,
+        credential: original,
+        agentDir: firstAgentDir,
+      });
+      await firstRefreshStarted;
+      const firstFence = loadPersistedAuthProfileStore(firstAgentDir)?.profiles[profileId];
+      expect(firstFence?.type === "oauth" && isPendingOAuthRefreshFence(firstFence)).toBe(true);
+
+      writePersistedAuthProfileStoreRaw(originalStore, secondAgentDir);
+      await expect(
+        createManager().resolveOAuthAccess({
+          store: ensureAuthProfileStore(secondAgentDir),
+          profileId,
+          credential: original,
+          agentDir: secondAgentDir,
+        }),
+      ).rejects.toThrow("historical OAuth refresh peer");
+
+      expect(refreshCredential).toHaveBeenCalledOnce();
+      expect(loadPersistedAuthProfileStore(firstAgentDir)?.profiles[profileId]).toEqual(firstFence);
+      expect(loadPersistedAuthProfileStore(secondAgentDir)?.profiles[profileId]).toEqual(original);
+
+      finishFirstRefresh?.();
+      await expect(first).resolves.toEqual(expect.objectContaining({ apiKey: "rotated-a-access" }));
+      expect(loadPersistedAuthProfileStore(secondAgentDir)?.profiles[profileId]).toBeUndefined();
+    } finally {
+      envSnapshot.restore();
+      resetFileLockStateForTest();
+      clearRuntimeAuthProfileStoreSnapshots();
+      await removeOAuthTestTempRoot(tempRoot);
+    }
+  });
 
   it("terminally fences a copied generation when its main owner already failed", async () => {
     const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);

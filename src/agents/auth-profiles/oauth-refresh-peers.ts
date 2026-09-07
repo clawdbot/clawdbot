@@ -16,7 +16,7 @@ import {
   isOAuthRefreshFence,
   isSameOAuthRefreshGeneration,
 } from "./oauth-refresh-marker.js";
-import { isSafeToAdoptMainStoreOAuthIdentity } from "./oauth-shared.js";
+import { hasMatchingOAuthIdentity } from "./oauth-shared.js";
 import { getRuntimeExternalCliProfileIds } from "./runtime-external-profile-references.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
@@ -73,7 +73,7 @@ function isEligibleHistoricalOAuthPeer(params: {
   );
 }
 
-function assertExternalOwnershipAllowsClaim(params: {
+function assertCredentialAllowsClaim(params: {
   candidate: CandidateAuthProfileStore;
   store: AuthProfileStore;
   profileId: string;
@@ -88,6 +88,11 @@ function assertExternalOwnershipAllowsClaim(params: {
     })
   ) {
     return;
+  }
+  if (isOAuthRefreshFence(params.credential)) {
+    throw new Error(
+      `OAuth refresh generation is already claimed by another owner: ${params.candidate.databasePath}`,
+    );
   }
   if (!isExternalProfileOwned(params.store, params.profileId, params.credential)) {
     return;
@@ -150,7 +155,7 @@ export async function fenceOAuthRefreshPeers(params: {
         claims.push({ candidate });
         continue;
       }
-      assertExternalOwnershipAllowsClaim({
+      assertCredentialAllowsClaim({
         candidate,
         store,
         profileId: params.profileId,
@@ -189,7 +194,7 @@ export async function fenceOAuthRefreshPeers(params: {
           continue;
         }
         if (current?.type === "oauth") {
-          assertExternalOwnershipAllowsClaim({
+          assertCredentialAllowsClaim({
             candidate,
             store: updated.store,
             profileId: params.profileId,
@@ -287,6 +292,7 @@ export function settleOAuthRefreshPeerClaims(params: {
   fence: OAuthCredential;
   claims: readonly OAuthRefreshPeerClaim[];
   authoritativeSharedCredential?: OAuthCredential;
+  replacement: OAuthCredential;
 }): void {
   let firstError: Error | undefined;
   for (const claim of params.claims) {
@@ -308,7 +314,8 @@ export function settleOAuthRefreshPeerClaims(params: {
             inherited !== undefined &&
             inherited.provider === claim.original.provider &&
             hasUsableOAuthCredential(inherited) &&
-            isSafeToAdoptMainStoreOAuthIdentity(claim.original, inherited);
+            (isExactOAuthCredential(inherited, params.replacement) ||
+              hasMatchingOAuthIdentity(claim.original, inherited));
           if (canInherit) {
             delete store.profiles[params.profileId];
           } else {
