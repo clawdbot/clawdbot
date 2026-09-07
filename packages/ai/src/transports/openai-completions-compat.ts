@@ -62,6 +62,30 @@ function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) 
   return provider !== undefined && ids.includes(provider);
 }
 
+/** Native OpenAI defaults never apply to a configured proxy endpoint. */
+export function isNativeOpenAIEndpoint(model: { provider?: string; baseUrl?: string }): boolean {
+  const baseUrl = model.baseUrl?.trim();
+  if (!baseUrl) {
+    return model.provider === "openai";
+  }
+  const endpoint = URL.parse(baseUrl);
+  return (
+    endpoint?.protocol === "https:" &&
+    (endpoint.hostname === "api.openai.com" || endpoint.hostname.endsWith(".api.openai.com"))
+  );
+}
+
+export function resolveOpenAIPromptCacheKeySupport(model: {
+  provider?: string;
+  baseUrl?: string;
+  compat?: Pick<
+    OpenAICompletionsCompat,
+    "supportsPromptCacheKey" | "supportsLongCacheRetention"
+  > | null;
+}): boolean {
+  return model.compat?.supportsPromptCacheKey ?? isNativeOpenAIEndpoint(model);
+}
+
 /** Resolves default request flags for an OpenAI-compatible completions endpoint. */
 function resolveOpenAICompletionsCompatDefaults(
   input: OpenAICompletionsCompatDefaultsInput,
@@ -277,7 +301,7 @@ export function resolveOpenAICompletionsCompat(
       configured?.supportsJsonSchemaResponseFormat ?? defaults.supportsJsonSchemaResponseFormat,
     cacheControlFormat: configured?.cacheControlFormat ?? defaults.cacheControlFormat,
     sessionAffinity: resolveSessionAffinity(model, defaults.sessionAffinityFormat),
-    supportsPromptCacheKey: configured?.supportsPromptCacheKey ?? false,
+    supportsPromptCacheKey: resolveOpenAIPromptCacheKeySupport(model),
     supportsLongCacheRetention:
       configured?.supportsLongCacheRetention ?? defaults.supportsLongCacheRetention,
     configuredSupportsLongCacheRetention: configured?.supportsLongCacheRetention,

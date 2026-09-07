@@ -753,7 +753,11 @@ describe("OpenAI-compatible completions compatibility", () => {
         provider: "openai",
         baseUrl: "https://api.openai.com/v1",
       }),
-      expected: { ...defaultResolvedCompat, supportsJsonSchemaResponseFormat: true },
+      expected: {
+        ...defaultResolvedCompat,
+        supportsJsonSchemaResponseFormat: true,
+        supportsPromptCacheKey: true,
+      },
     },
     {
       name: "Azure OpenAI",
@@ -776,7 +780,7 @@ describe("OpenAI-compatible completions compatibility", () => {
         provider: "openai",
         baseUrl: "https://api.openai.com/v1",
       }),
-      expected: defaultResolvedCompat,
+      expected: { ...defaultResolvedCompat, supportsPromptCacheKey: true },
     },
     {
       name: "custom proxy",

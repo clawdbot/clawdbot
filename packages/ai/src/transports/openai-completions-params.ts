@@ -2,6 +2,7 @@ import type { Context, Model } from "@openclaw/llm-core";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
+import { resolveOpenAIPromptCacheParams } from "../providers/openai-prompt-cache.js";
 import {
   isOpenAIGpt54MiniModel,
   isOpenAIGpt55Model,
@@ -323,6 +324,7 @@ export function buildOpenAICompletionsParams(
       ? flattenCompletionMessagesToStringContent(messages)
       : messages,
     stream: true,
+    ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat),
   };
   if (compat.supportsUsageInStreaming) {
     params.stream_options = { include_usage: true };
@@ -332,14 +334,6 @@ export function buildOpenAICompletionsParams(
   }
   if (compat.supportsPromptCacheKey && promptCacheKey) {
     params.prompt_cache_key = promptCacheKey;
-    // When the caller explicitly opted into long retention, forward the
-    // canonical prompt_cache_retention value alongside the cache key so
-    // OpenAI-compatible completions backends (oMLX, llama.cpp, official
-    // OpenAI, etc.) can honor the 24h prefix-cache lifetime. Without this
-    // the key reaches the wire but the retention preference is silently dropped.
-    if (cacheRetention === "long" && compat.supportsLongCacheRetention) {
-      params.prompt_cache_retention = "24h";
-    }
   }
   if (options?.temperature !== undefined) {
     params.temperature = options.temperature;

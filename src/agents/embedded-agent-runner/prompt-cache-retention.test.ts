@@ -3,6 +3,44 @@ import { describe, expect, it } from "vitest";
 import { isGooglePromptCacheEligible, resolveCacheRetention } from "./prompt-cache-retention.js";
 
 describe("prompt cache retention", () => {
+  it.each(["openai-responses", "openai-chatgpt-responses", "openai-completions"])(
+    "forwards native OpenAI retention for %s and keeps proxies opt-in",
+    (api) => {
+      for (const cacheRetention of ["none", "short", "long"] as const) {
+        expect(
+          resolveCacheRetention(
+            { cacheRetention },
+            "openai",
+            api,
+            "gpt-5.4",
+            undefined,
+            "https://api.openai.com/v1",
+          ),
+        ).toBe(cacheRetention);
+        expect(
+          resolveCacheRetention(
+            { cacheRetention },
+            "openai",
+            api,
+            "gpt-5.4",
+            undefined,
+            "https://proxy.example/v1",
+          ),
+        ).toBeUndefined();
+        expect(
+          resolveCacheRetention(
+            { cacheRetention },
+            "custom",
+            api,
+            "gpt-5.4",
+            { supportsPromptCacheKey: true },
+            "https://proxy.example/v1",
+          ),
+        ).toBe(cacheRetention);
+      }
+    },
+  );
+
   it.each([undefined, "none", "short", "long"] as const)(
     "honors explicit retention %s for Anthropic-marker completions without cache keys",
     (cacheRetention) => {
