@@ -21,19 +21,19 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("../extensions/googlechat/src/auth.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../extensions/googlechat/src/auth.js")>()),
+vi.mock("./auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth.js")>()),
   getGoogleChatAccessToken: vi.fn(async () => "transport-proof-token"),
 }));
 
-import { googlechatPlugin } from "../extensions/googlechat/api.js";
-import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
-import type { OpenClawConfig } from "../src/config/config.js";
-import { upsertSessionEntryCore } from "../src/config/sessions/session-accessor.sqlite-entry.js";
-import { runMessageAction } from "../src/infra/outbound/message-action-runner.js";
-import { setActivePluginRegistry } from "../src/plugins/runtime.js";
-import { createTestRegistry } from "../src/test-utils/channel-plugins.js";
-import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
+import { createMessageTool } from "../../../src/agents/tools/message-tool-execution.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
+import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.sqlite-entry.js";
+import { runMessageAction } from "../../../src/infra/outbound/message-action-runner.js";
+import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
+import { createTestRegistry } from "../../../src/test-utils/channel-plugins.js";
+import { withOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.js";
+import { googlechatPlugin } from "../api.js";
 
 const CANONICAL_SPACE = "spaces/AAQA1bC2dEf";
 const FOLDED_SPACE = "spaces/aaqa1bc2def";
@@ -98,7 +98,7 @@ describe("session-derived Google Chat delivery", () => {
           updatedAt: Date.now(),
           delivery: {
             kind: "external",
-            route: { channel: "googlechat", to: `googlechat:${CANONICAL_SPACE}` },
+            route: { channel: "googlechat", target: { to: `googlechat:${CANONICAL_SPACE}` } },
             context: { channel: "googlechat", to: `googlechat:${CANONICAL_SPACE}` },
             origin: { provider: "googlechat", to: `googlechat:${CANONICAL_SPACE}` },
           },
