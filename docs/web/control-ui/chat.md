@@ -273,7 +273,9 @@ edit the conversation or send a message.
 Open **Bookmarks** in the existing three-dot session menu to search names and
 revisit saved locations in the current conversation. Select **All conversations** to
 manage saved references from other or deleted conversations without opening them.
-The position rail sits on the left; bookmarked points use the same claw. Nearby bookmarks share a marker:
+The position rail sits on the right, with claws and ticks pointing toward the conversation.
+On mouse-hover devices, hover its edge area to reveal it; keyboard focus also keeps it visible.
+On devices without hover, it remains visible when there is enough gutter space. Nearby bookmarks share a marker:
 activate it repeatedly to cycle through them, or choose a name in the menu.
 The rail hides when the pane has insufficient gutter space. Existing transcript
 display settings remain unchanged. Opening a bookmark closes transcript search

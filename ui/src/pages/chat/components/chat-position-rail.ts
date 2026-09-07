@@ -219,6 +219,7 @@ class ChatPositionRailDirective extends AsyncDirective {
     return html`
       <aside
         class="chat-position-rail"
+        ?data-keyboard-focus=${interaction.focusedId !== null}
         aria-label=${t("chat.thread.positionRail")}
         @pointerleave=${() => {
           interaction.hoveredId = null;
@@ -246,7 +247,6 @@ class ChatPositionRailDirective extends AsyncDirective {
                   data-position-marker-id=${marker.id}
                   tabindex=${marker.id === rovingMarker.id ? "0" : "-1"}
                   aria-label=${t("chat.thread.positionMarker", { position: String(index + 1), count: String(count), label: marker.label })}
-                  title=${marker.label}
                   aria-description=${marker.bookmarks.length > 1 ? t("chat.bookmarks.collision", { count: String(marker.bookmarks.length) }) : `${marker.preview}. ${t("chat.thread.positionMarkerHint")}`}
                   aria-current=${marker.id === activeMarker.id ? "true" : "false"}
                   @pointerenter=${() => {
@@ -254,8 +254,17 @@ class ChatPositionRailDirective extends AsyncDirective {
                     interaction.dismissed = false;
                     requestUpdate();
                   }}
-                  @focus=${() => {
-                    interaction.focusedId = marker.id;
+                  @pointerdown=${() => {
+                    // Reusing the keyboard-focused button does not emit another focus event.
+                    interaction.focusedId = null;
+                    requestUpdate();
+                  }}
+                  @focus=${(event: FocusEvent) => {
+                    interaction.focusedId =
+                      event.currentTarget instanceof HTMLButtonElement &&
+                      event.currentTarget.matches(":focus-visible")
+                        ? marker.id
+                        : null;
                     interaction.rovingId = marker.id;
                     interaction.dismissed = false;
                     requestUpdate();
@@ -271,6 +280,9 @@ class ChatPositionRailDirective extends AsyncDirective {
                       )
                     ) {
                       moveFocus(event, index);
+                      interaction.focusedId = interaction.rovingId;
+                      interaction.dismissed = false;
+                      requestUpdate();
                     }
                   }}
                   @click=${() => {

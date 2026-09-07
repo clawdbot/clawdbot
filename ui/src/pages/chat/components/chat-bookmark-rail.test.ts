@@ -45,7 +45,7 @@ it("keeps crowded bookmarks keyboard reachable with names and cycles every sourc
   draw();
   const markers = container.querySelectorAll<HTMLButtonElement>(".chat-position-rail__marker");
   expect(markers).toHaveLength(10);
-  expect(markers[0]?.title).toBe("3 nearby bookmarks");
+  expect(markers[0]?.getAttribute("aria-label")).toContain("3 nearby bookmarks");
   expect(markers[0]?.getAttribute("aria-description")).toContain("3 nearby bookmarks");
   for (const bookmark of access.bookmarks) {
     markers[0]!.click();
@@ -79,7 +79,7 @@ it("shows a named bookmark for a one-message conversation", () => {
     container,
   );
   const marker = container.querySelector<HTMLButtonElement>(".chat-position-rail__marker")!;
-  expect(marker.title).toBe("Decision one");
+  expect(marker.getAttribute("aria-label")).toContain("Decision one");
   marker.click();
   expect(access.open).toHaveBeenCalledWith(access.bookmarks[0]);
 });

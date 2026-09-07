@@ -57,6 +57,7 @@
 .chat-position-rail__bookmark svg {
   width: 16px;
   height: 16px;
+  transform: scaleX(-1);
 }
 
 .chat-position-rail__marker--selected .chat-position-rail__bookmark {

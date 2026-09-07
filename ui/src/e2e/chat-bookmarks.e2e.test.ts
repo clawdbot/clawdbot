@@ -278,6 +278,14 @@ suite.define(() => {
         expect(
           await page.locator(".chat-position-rail__marker--bookmark .claw-icon__jaw").count(),
         ).toBeGreaterThan(0);
+        const railBookmark = page.locator(".chat-position-rail__marker--bookmark").first();
+        await railBookmark.hover();
+        expect(
+          await railBookmark
+            .locator("svg")
+            .evaluate((element) => getComputedStyle(element).transform),
+        ).toBe("matrix(-1, 0, 0, 1, 0, 0)");
+        await captureUiProof(suite, page, "chat-bookmarks", "right-rail-hover.png");
         const hiddenTool = page.locator('.chat-bubble[data-entry-id="hidden-tool"]');
         const hiddenCommentary = page.locator('.chat-bubble[data-entry-id="hidden-commentary"]');
         await hiddenTool.waitFor({ state: "hidden" });

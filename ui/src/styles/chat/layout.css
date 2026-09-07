@@ -1437,6 +1437,13 @@ openclaw-chat-video-player {
   pointer-events: none;
 }
 
+/* Leave the right-hand navigation targets clear; its hover preview may float above the tray. */
+.chat-main__conversation:has(.chat-thread[data-position-rail-gutter] > .chat-position-rail)
+  > .chat-gutter-stack {
+  right: 80px;
+  width: min(450px, calc(100% - 94px));
+}
+
 .chat-gutter-stack > * {
   pointer-events: auto;
 }
