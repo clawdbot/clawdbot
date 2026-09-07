@@ -49,6 +49,9 @@ export async function runWorkspaceCommand(params: {
   if (result.termination !== "exit" || result.code !== 0) {
     throw new Error(`workspace transfer apply failed: ${(result.stderr || result.stdout).trim()}`);
   }
+  if (result.stdoutTruncatedBytes || result.outputLimitExceeded) {
+    throw new Error("workspace transfer apply failed: command output was truncated");
+  }
   return result.stdout;
 }
 
