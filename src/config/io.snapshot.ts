@@ -535,23 +535,27 @@ export async function readConfigFileSnapshotForWriteFromContext(
 export async function readBestEffortConfigSnapshotFromContext(
   context: ConfigIoContext,
 ): Promise<BestEffortConfigSnapshot> {
-  const result = await readConfigFileSnapshotInternal(context);
-  if (!result.snapshot.valid) {
+  const operation = async () => {
+    const result = await readConfigFileSnapshotInternal(context);
+    if (!result.snapshot.valid) {
+      return {
+        config: result.snapshot.config,
+        sourceConfig: result.snapshot.sourceConfig,
+        configDiagnostics: {
+          path: result.snapshot.path,
+          issues: result.snapshot.issues,
+        },
+      };
+    }
     return {
-      config: result.snapshot.config,
+      // The snapshot already materialized under the caller's plugin-validation policy.
+      config: context.finalizeLoadedRuntimeConfig(result.snapshot.config),
       sourceConfig: result.snapshot.sourceConfig,
-      configDiagnostics: {
-        path: result.snapshot.path,
-        issues: result.snapshot.issues,
-      },
+      configDiagnostics: null,
     };
-  }
-  return {
-    // The snapshot already materialized under the caller's plugin-validation policy.
-    config: context.finalizeLoadedRuntimeConfig(result.snapshot.config),
-    sourceConfig: result.snapshot.sourceConfig,
-    configDiagnostics: null,
   };
+  // Unobserved CLI reads resolve plugin metadata before command-specific admission.
+  return await (context.deps.observe ? operation() : withArtifactPreservingStateReads(operation));
 }
 
 export async function readSourceConfigBestEffortFromContext(
