@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { inspectLocalChromeHeadlessMode, isChromeCdpReady } from "./chrome.js";
@@ -66,7 +67,7 @@ describe("external browser mode availability", () => {
     const second = availability.isReachable().then(secondReady);
     await vi.waitFor(() => expect(isChromeCdpReady).toHaveBeenCalledTimes(2));
     // Advance a turn so any incorrectly completed second request becomes visible.
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await setImmediate();
     expect(secondReady).not.toHaveBeenCalled();
 
     observation.resolve(false);
@@ -104,11 +105,15 @@ describe("external browser mode availability", () => {
     vi.mocked(inspectLocalChromeHeadlessMode).mockImplementation(({ signal }) => {
       observing.resolve();
       return new Promise((_resolve, reject) => {
-        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        signal?.addEventListener(
+          "abort",
+          () => reject(new Error("mode observation aborted", { cause: signal.reason })),
+          { once: true },
+        );
       });
     });
     const pending = availability.isReachable();
-    const rejected = expect(pending).rejects.toThrow("test transition");
+    const rejected = expect(pending).rejects.toThrow("mode observation aborted");
     await observing.promise;
     await beginProfileTransition({
       state,
