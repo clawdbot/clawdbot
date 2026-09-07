@@ -39,6 +39,7 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
       ? { status: "available", credential, apiKey: credential.access }
       : { status: "unhandled" };
   },
+  resolveProviderOAuthRefreshCapabilityWithPlugin: async () => ({ status: "unhandled" }),
 }));
 
 vi.mock("./doctor.js", () => ({
@@ -55,8 +56,6 @@ vi.mock("./external-cli-sync.js", () => ({
   readExternalCliBootstrapCredential: () => null,
   resolveExternalCliAuthProfiles: () => [],
   shouldBootstrapFromExternalCliCredential: () => false,
-  shouldReplaceStoredOAuthCredential: (existing: unknown, incoming: unknown) =>
-    existing !== incoming,
 }));
 
 afterAll(() => {

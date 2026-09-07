@@ -12,6 +12,7 @@ import { overlayExternalAuthProfiles } from "./external-auth-runtime.js";
 import { syncPersistedExternalCliAuthProfiles } from "./external-auth.js";
 import { testing } from "./external-auth.test-support.js";
 import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
+import { createFailedOAuthRefreshFence, createOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import { getRuntimeExternalCliProfileIds } from "./runtime-external-profile-references.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -552,6 +553,100 @@ describe("auth external oauth helpers", () => {
     expect(managedCredential?.access).toBe("fresh-cli-access-token");
     expect(managedCredential?.refresh).toBe("fresh-cli-refresh-token");
     expect(managedCredential?.accountId).toBe("acct-cli");
+  });
+
+  it("never clears a fenced Codex profile from an unordered external snapshot", () => {
+    const profileId = "openai:default";
+    const claimed = createCredential({
+      access: "claimed-access",
+      refresh: "claimed-refresh",
+      expires: 1,
+      accountId: "acct-cli",
+      email: "user@example.test",
+    });
+    const fence = createOAuthRefreshFence({ profileId, credential: claimed });
+    const store = createStore({ [profileId]: fence });
+
+    const resolveCandidate = (candidate: OAuthCredential) => {
+      readCodexCliCredentialsCachedMock.mockReturnValue(candidate);
+      return readExternalCliBootstrapCredential({
+        store,
+        profileId,
+        credential: fence,
+      });
+    };
+
+    expect(
+      resolveCandidate(
+        createCredential({
+          access: "claimed-access",
+          refresh: "claimed-refresh",
+          expires: createUsableOAuthExpiry(),
+          accountId: "acct-cli",
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      resolveCandidate(
+        createCredential({
+          access: "claimed-access",
+          refresh: "new-generation-refresh",
+          expires: createUsableOAuthExpiry(),
+          accountId: "acct-cli",
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      resolveCandidate(
+        createCredential({
+          access: "new-generation-access",
+          refresh: "claimed-refresh",
+          expires: 1,
+          accountId: "acct-cli",
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      resolveCandidate(
+        createCredential({
+          access: "new-generation-access",
+          refresh: "claimed-refresh",
+          expires: createUsableOAuthExpiry(),
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      resolveCandidate(
+        createCredential({
+          access: "other-account-access",
+          refresh: "other-account-refresh",
+          expires: createUsableOAuthExpiry(),
+          accountId: "acct-other",
+        }),
+      ),
+    ).toBeNull();
+
+    const failedFence = createFailedOAuthRefreshFence(fence);
+    readCodexCliCredentialsCachedMock.mockReturnValue(
+      createCredential({
+        access: "new-generation-access",
+        refresh: "new-generation-refresh",
+        expires: createUsableOAuthExpiry(),
+        accountId: "acct-cli",
+      }),
+    );
+    expect(
+      readExternalCliBootstrapCredential({
+        store: createStore({ [profileId]: failedFence }),
+        profileId,
+        credential: failedFence,
+      }),
+    ).toBeNull();
+    expect(
+      syncPersistedExternalCliAuthProfiles(store, {
+        externalCliProfileIds: [profileId],
+      }).profiles[profileId],
+    ).toEqual(fence);
   });
 
   it("keeps healthy local oauth even when external cli has a fresher token", () => {

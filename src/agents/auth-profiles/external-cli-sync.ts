@@ -16,6 +16,7 @@ import {
 } from "./constants.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import { isSafeToCopyOAuthIdentity } from "./oauth-identity.js";
+import { isOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import {
   areOAuthCredentialsEquivalent,
   isSafeToAdoptBootstrapOAuthIdentity,
@@ -163,6 +164,7 @@ function hasManagedProviderOAuth(
     (credential) =>
       credential?.type === "oauth" &&
       listExternalCliProviderIds(providerConfig).includes(credential.provider) &&
+      !isOAuthRefreshFence(credential) &&
       hasInlineOAuthTokenMaterial(credential),
   );
 }
@@ -185,14 +187,21 @@ export function readExternalCliBootstrapCredential(params: {
   if (
     provider.bootstrapOnly &&
     !params.allowInlineOAuthTokenMaterial &&
+    !isOAuthRefreshFence(params.credential) &&
     hasInlineOAuthTokenMaterial(params.credential)
   ) {
     return null;
   }
-  return normalizeExternalCliCredentialProvider(
+  const imported = normalizeExternalCliCredentialProvider(
     provider.readCredentials({ allowKeychainPrompt: params.allowKeychainPrompt }),
     params.credential.provider,
   );
+  if (imported && isOAuthRefreshFence(params.credential)) {
+    // An external snapshot has no generation ordering proof. It must not clear
+    // a fence and make an older single-use refresh token replayable.
+    return null;
+  }
+  return imported;
 }
 
 function normalizeProviderScope(values: Iterable<string> | undefined): Set<string> | undefined {
@@ -360,6 +369,7 @@ export function resolveExternalCliAuthProfiles(
       if (
         providerConfig.bootstrapOnly &&
         existingOAuth &&
+        !isOAuthRefreshFence(existingOAuth) &&
         hasInlineOAuthTokenMaterial(existingOAuth)
       ) {
         authProfilesLog.debug("kept local oauth over external cli bootstrap-only provider", {
@@ -396,6 +406,13 @@ export function resolveExternalCliAuthProfiles(
         existingOAuth?.provider ?? providerConfig.provider,
       );
       if (!creds) {
+        continue;
+      }
+      if (existingOAuth && isOAuthRefreshFence(existingOAuth)) {
+        authProfilesLog.warn("refused unordered external cli oauth recovery for a fenced profile", {
+          profileId,
+          provider: providerConfig.provider,
+        });
         continue;
       }
       if (existingOAuth && !isSafeToUseExternalCliCredential(existingOAuth, creds)) {

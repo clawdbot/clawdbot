@@ -23,7 +23,6 @@ import {
   resetOAuthProviderRuntimeMocks,
 } from "./oauth-test-utils.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
-import { resetOAuthRefreshQueuesForTest } from "./oauth.test-support.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
@@ -86,7 +85,6 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     caseIndex += 1;
     const caseRoot = path.join(tempRoot, `case-${caseIndex}`);
     mainAgentDir = await createOAuthMainAgentDir(caseRoot);
-    resetOAuthRefreshQueuesForTest();
   });
 
   afterEach(async () => {
@@ -94,7 +92,6 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     resetFileLockStateForTest();
     externalAuthTesting.resetResolveExternalAuthProfilesForTest();
     clearRuntimeAuthProfileStoreSnapshots();
-    resetOAuthRefreshQueuesForTest();
   });
 
   afterAll(async () => {

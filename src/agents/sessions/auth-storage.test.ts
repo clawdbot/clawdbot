@@ -620,7 +620,7 @@ describe("SQLite auth storage", () => {
     );
   });
 
-  it("serializes asynchronous OAuth refreshes across SQLite-backed instances", async () => {
+  it("fences peer refreshes until the SQLite owner commits its rotation", async () => {
     const agentDir = makeAgentDir();
     writePersistedAuthProfileStoreRaw(
       {
@@ -674,6 +674,7 @@ describe("SQLite auth storage", () => {
     ).resolves.toEqual(["fake-fresh-access", "fake-fresh-access"]);
     expect(refreshCalls).toBe(1);
     expect(maxActiveRefreshes).toBe(1);
+    await expect(right.getApiKey("test-oauth")).resolves.toBe("fake-fresh-access");
   });
 
   it("falls back to environment auth when a stored token is expired", async () => {

@@ -81,6 +81,7 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
       ? { status: "available", credential, apiKey: credential.access }
       : { status: "unhandled" };
   },
+  resolveProviderOAuthRefreshCapabilityWithPlugin: async () => ({ status: "unhandled" }),
   formatProviderAuthProfileApiKeyWithPlugin: formatProviderAuthProfileApiKeyWithPluginMock,
   buildProviderAuthDoctorHintWithPlugin: buildProviderAuthDoctorHintWithPluginMock,
 }));
@@ -312,6 +313,14 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     );
     expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
     expect(getOAuthApiKeyMock).not.toHaveBeenCalled();
+    const persisted = await readPersistedStore(agentDir);
+    const fenced = requireOAuthProfile(persisted, profileId);
+    expect(fenced.access).toMatch(
+      /^openclaw-oauth-refresh-fence:v1:[a-f0-9]{32}:failed:access:[a-f0-9]{64}$/,
+    );
+    expect(fenced.refresh).toMatch(
+      /^openclaw-oauth-refresh-fence:v1:[a-f0-9]{32}:failed:refresh:[a-f0-9]{64}$/,
+    );
   });
 
   it("surfaces refresh contention once without local lock details", async () => {
@@ -708,8 +717,14 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     const persisted = await readPersistedStore(agentDir);
     const persistedProfile = requireOAuthProfile(persisted, profileId);
     expect(persistedProfile.accountId).toBe("acct-shared");
-    expect(persistedProfile.access).toBe("local-access-token");
-    expect(persistedProfile.refresh).toBe("local-refresh-token");
+    expect(persistedProfile.access).toMatch(
+      /^openclaw-oauth-refresh-fence:v1:[a-f0-9]{32}:failed:access:[a-f0-9]{64}$/,
+    );
+    expect(persistedProfile.refresh).toMatch(
+      /^openclaw-oauth-refresh-fence:v1:[a-f0-9]{32}:failed:refresh:[a-f0-9]{64}$/,
+    );
+    expect(JSON.stringify(persisted)).not.toContain("local-access-token");
+    expect(JSON.stringify(persisted)).not.toContain("local-refresh-token");
     expect(JSON.stringify(persisted)).not.toContain("codex-cli-access-token");
     expect(JSON.stringify(persisted)).not.toContain("codex-cli-refresh-token");
   });
@@ -759,8 +774,14 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     const persisted = await readPersistedStore(agentDir);
     const persistedProfile = requireOAuthProfile(persisted, profileId);
     expect(persistedProfile.accountId).toBe("acct-shared");
-    expect(persistedProfile.access).toBe("local-access-token");
-    expect(persistedProfile.refresh).toBe("local-refresh-token");
+    expect(persistedProfile.access).toMatch(
+      /^openclaw-oauth-refresh-fence:v1:[a-f0-9]{32}:failed:access:[a-f0-9]{64}$/,
+    );
+    expect(persistedProfile.refresh).toMatch(
+      /^openclaw-oauth-refresh-fence:v1:[a-f0-9]{32}:failed:refresh:[a-f0-9]{64}$/,
+    );
+    expect(JSON.stringify(persisted)).not.toContain("local-access-token");
+    expect(JSON.stringify(persisted)).not.toContain("local-refresh-token");
     expect(JSON.stringify(persisted)).not.toContain("codex-cli-access-token");
     expect(JSON.stringify(persisted)).not.toContain("codex-cli-refresh-token");
   });
@@ -1271,7 +1292,7 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     expect(ensureAuthProfileStore(agentDir).lastGood?.openai).toBe(healthyProfileId);
   });
 
-  it("retries Codex refresh once after refresh_token_reused updates only the stored refresh token", async () => {
+  it("does not retry after refresh_token_reused updates only the stored refresh token", async () => {
     const profileId = "openai:default";
     saveAuthProfileStore(
       createExpiredOauthStore({
@@ -1302,16 +1323,8 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
           '401 {"error":{"message":"Your refresh token has already been used to generate a new access token.","code":"refresh_token_reused"}}',
         );
       })
-      .mockImplementationOnce(async (_provider, creds) => {
-        expect(creds["openai"]?.refresh).toBe("rotated-refresh-token");
-        return {
-          apiKey: "retried-access-token",
-          newCredentials: {
-            access: "retried-access-token",
-            refresh: "retried-refresh-token",
-            expires: Date.now() + 10 * 60_000,
-          },
-        };
+      .mockImplementationOnce(async () => {
+        throw new Error("same refresh generation must not be retried");
       });
 
     await expect(
@@ -1320,19 +1333,15 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
         profileId,
         agentDir,
       }),
-    ).resolves.toEqual({
-      apiKey: "retried-access-token",
-      provider: "openai",
-      email: undefined,
-    });
+    ).rejects.toThrow(/OAuth token refresh failed for openai/);
 
-    expect(getOAuthApiKeyMock).toHaveBeenCalledTimes(2);
+    expect(getOAuthApiKeyMock).toHaveBeenCalledTimes(1);
     const persisted = await readPersistedStore(agentDir);
     expectPersistedOpenAICodexProfile(
       expectDefined(persisted.profiles[profileId], "persisted.profiles[profileId] test invariant"),
       {
-        access: "retried-access-token",
-        refresh: "retried-refresh-token",
+        access: "still-expired-access-token",
+        refresh: "rotated-refresh-token",
       },
     );
   });

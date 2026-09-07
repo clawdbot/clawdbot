@@ -18,6 +18,7 @@ import {
   SECRETREF_ENV_HEADER_MARKER_PREFIX,
 } from "../model-auth-markers.js";
 import { hasUsableOAuthCredential, resolveTokenExpiryState } from "./credential-state.js";
+import { isOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import type { AuthProfileCredential } from "./types.js";
 
 type ReadOnlyCredentialAvailability = boolean | undefined;
@@ -116,6 +117,9 @@ export function resolveStoredCredentialReadOnlyAvailability(params: {
   }
   if (hasUsableOAuthCredential(credential, { now })) {
     return true;
+  }
+  if (isOAuthRefreshFence(credential)) {
+    return false;
   }
   // Refresh material is runnable only when the caller owns a refresh path.
   // Ref-only OAuth may hydrate from the runtime snapshot, so it stays unknown.

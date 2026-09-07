@@ -1,8 +1,4 @@
-/**
- * Tests in-process OAuth refresh queuing.
- * Ensures concurrent refresh attempts serialize and queue gates release after
- * both success and failure.
- */
+/** Tests durable ownership after an OAuth refresh failure. */
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
@@ -20,7 +16,6 @@ import {
   resetOAuthProviderRuntimeMocks,
 } from "./oauth-test-utils.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
-import { resetOAuthRefreshQueuesForTest } from "./oauth.test-support.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store-runtime.js";
 
@@ -34,7 +29,7 @@ vi.mock("../../llm/oauth.js", () => ({
   getOAuthProviders: () => [{ id: "openai" }],
 }));
 
-describe("OAuth refresh in-process queue", () => {
+describe("OAuth refresh failure ownership", () => {
   const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
   let tempRoot = "";
   let agentDir = "";
@@ -53,21 +48,19 @@ describe("OAuth refresh in-process queue", () => {
     clearRuntimeAuthProfileStoreSnapshots();
     const caseRoot = path.join(tempRoot, `case-${++caseIndex}`);
     agentDir = await createOAuthMainAgentDir(caseRoot);
-    resetOAuthRefreshQueuesForTest();
   });
 
   afterEach(async () => {
     envSnapshot.restore();
     resetFileLockStateForTest();
     clearRuntimeAuthProfileStoreSnapshots();
-    resetOAuthRefreshQueuesForTest();
   });
 
   afterAll(async () => {
     await removeOAuthTestTempRoot(tempRoot);
   });
 
-  it("releases the queue even when the refresh throws", async () => {
+  it("fences the failed generation instead of retrying it", async () => {
     const profileId = "openai:default";
     const provider = "openai";
     saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), agentDir);
@@ -78,8 +71,7 @@ describe("OAuth refresh in-process queue", () => {
       if (callCount === 1) {
         throw new Error("simulated upstream failure");
       }
-      // Second caller must actually get a chance to run (proves the gate
-      // released despite the first caller throwing).
+      // A failed owner leaves its generation fenced. No peer may replay it.
       return {
         type: "oauth",
         provider,
@@ -103,67 +95,7 @@ describe("OAuth refresh in-process queue", () => {
     ]);
 
     expect(first).toBeInstanceOf(Error);
-    expect(callCount).toBeGreaterThanOrEqual(1);
-    // Second caller was not blocked forever \u2014 it either got the fresh token
-    // (if the queue let it run) or adopted from main. Either way, it resolved.
-    expect(second).toEqual({
-      apiKey: "second-try-access",
-      email: undefined,
-      provider: "openai",
-    });
-  });
-
-  it("serializes a 10-caller burst so later arrivals never pass an earlier caller", async () => {
-    // Burst-arrival stress: 10 same-PID callers all fire concurrently.
-    // The queue must chain them so each refresh completes fully before the
-    // next one begins — i.e. no overlap between running refresh calls.
-    const profileId = "openai:default";
-    const provider = "openai";
-    saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), agentDir);
-
-    const startOrder: number[] = [];
-    const endOrder: number[] = [];
-    let inFlight = 0;
-    let maxInFlight = 0;
-    let seq = 0;
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
-      const n = ++seq;
-      startOrder.push(n);
-      inFlight += 1;
-      maxInFlight = Math.max(maxInFlight, inFlight);
-      // Yield once so any non-serialized overlap is observable without wall-clock sleep.
-      await Promise.resolve();
-      inFlight -= 1;
-      endOrder.push(n);
-      return {
-        type: "oauth",
-        provider,
-        access: `refreshed-${n}`,
-        refresh: `refresh-${n}`,
-        // Re-expire immediately so each queued caller also enters the
-        // refresh path (otherwise later callers would adopt the fresh
-        // cred and the serialization chain wouldn't be exercised).
-        expires: Date.now() - 1_000,
-      } as never;
-    });
-
-    const results = await Promise.all(
-      Array.from({ length: 10 }, () =>
-        resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
-          store: ensureAuthProfileStore(agentDir),
-          profileId,
-          agentDir,
-        }).catch((e: unknown) => e),
-      ),
-    );
-
-    // Every caller must have run to completion (null result or error —
-    // either is fine; what matters is that no caller is lost or blocked).
-    expect(results).toHaveLength(10);
-    // FIFO: start order matches end order (no overlap – each caller fully
-    // completed before the next started).
-    expect(startOrder).toEqual(endOrder);
-    // At no point did two refresh calls run concurrently.
-    expect(maxInFlight).toBe(1);
+    expect(callCount).toBe(1);
+    expect(second).toBeNull();
   });
 });

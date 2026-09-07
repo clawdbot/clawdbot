@@ -40,6 +40,7 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
   formatProviderAuthProfileApiKeyWithPlugin: async (params: { context?: { access?: string } }) =>
     params.context?.access,
   resolveProviderOAuthCredentialWithPlugin: async () => ({ status: "unhandled" }),
+  resolveProviderOAuthRefreshCapabilityWithPlugin: async () => ({ status: "unhandled" }),
 }));
 
 vi.mock("../../plugins/provider-external-auth-core.js", () => ({

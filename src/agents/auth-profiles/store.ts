@@ -674,6 +674,7 @@ export function resolvePersistedAuthProfileOwnerAgentDir(params: {
   const requestedProfile = requestedStore?.profiles[params.profileId];
   if (requestedProfile) {
     return shouldUseMainOwnerForLocalOAuthCredential({
+      profileId: params.profileId,
       local: requestedProfile,
       main: mainStore?.profiles[params.profileId],
     })
