@@ -2016,6 +2016,11 @@ describe("update-cli", () => {
       if (argv[1] === "--version") {
         return commandResult({ stdout: "12.0.0\n" });
       }
+      if (argv[2] === "gateway" && argv[3] === "stop") {
+        return commandResult({
+          stdout: JSON.stringify({ action: "stop", ok: true, result: "stopped" }),
+        });
+      }
       if (argv[0] === "npm" && argv[1] === "pack") {
         const destination = argv[argv.indexOf("--pack-destination") + 1];
         if (destination) {
@@ -3853,6 +3858,7 @@ describe("update-cli", () => {
   );
 
   it("post-core resume returns package work without running core update or Doctor completion", async () => {
+    readPackageVersion.mockResolvedValue("2026.9.4");
     await runPostCoreCommand({ restart: false }, { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" });
 
     expect(runGatewayUpdate).not.toHaveBeenCalled();
@@ -3872,6 +3878,10 @@ describe("update-cli", () => {
     expect(vi.mocked(runExec).mock.calls.filter(([, args]) => args[1] === "doctor")).toEqual([]);
     expect(syncPluginsForUpdateChannel).toHaveBeenCalledTimes(1);
     expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
+    expect(lastNpmPluginUpdateCall()).toMatchObject({
+      coreVersion: "2026.9.4",
+      versionBoundPluginIds: new Set(["codex"]),
+    });
     expect(spawn).not.toHaveBeenCalled();
   });
 
@@ -9686,7 +9696,14 @@ describe("update-cli", () => {
     });
     await expect(updateCommand({ yes: true })).rejects.toEqual(new ExitError(1));
 
-    expect(serviceStop).toHaveBeenCalledTimes(2);
+    expect(serviceStop).toHaveBeenCalledOnce();
+    const stopCallIndex = vi
+      .mocked(runCommandWithTimeout)
+      .mock.calls.findIndex(([args]) => args[2] === "gateway" && args[3] === "stop");
+    expect(vi.mocked(runCommandWithTimeout).mock.calls[stopCallIndex]).toEqual([
+      [expect.any(String), serviceEntrypoint, "gateway", "stop", "--force", "--json"],
+      expect.objectContaining({ cwd: process.cwd() }),
+    ]);
     expect(runRestartScript).toHaveBeenCalledOnce();
     const firstRestartOrder = requireValue(
       runRestartScript.mock.invocationCallOrder[0],
@@ -9697,7 +9714,7 @@ describe("update-cli", () => {
       "plugin packages",
     );
     const secondStopOrder = requireValue(
-      serviceStop.mock.invocationCallOrder[1],
+      vi.mocked(runCommandWithTimeout).mock.invocationCallOrder[stopCallIndex],
       "plugin maintenance stop",
     );
     const doctorCallIndex = vi

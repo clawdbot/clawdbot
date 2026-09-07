@@ -3125,23 +3125,29 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     },
     { availability: "registry outage", channel: "stable", error: "registry connection timed out" },
     { availability: "published version", channel: "stable" },
+    { availability: "already-current floating package", channel: "stable" },
     { availability: "beta-only package", channel: "beta" },
     { availability: "unknown core version", channel: "stable" },
   ] as const)(
-    "preflights a stale exact Codex pin with $availability before any plugin mutation",
+    "preflights Codex with $availability before any plugin mutation",
     async ({ availability, channel, ...outcome }) => {
+      const alreadyCurrent = availability === "already-current floating package";
+      const installedVersion = alreadyCurrent ? "2026.9.3" : "2026.9.1";
+      if (alreadyCurrent) {
+        useManifestCatalogResolvers();
+      }
       const installDir = tempDirs.make("openclaw-plugin-availability-");
       createColdPluginFixture({
         rootDir: installDir,
         pluginId: "codex",
         packageName: "@openclaw/codex",
-        packageVersion: "2026.9.1",
+        packageVersion: installedVersion,
       });
       const packageFile = path.join(installDir, "package.json");
       const originalPackage = fs.readFileSync(packageFile, "utf8");
       const records = installedRecords("codex", {
-        spec: "@openclaw/codex@2026.9.1",
-        resolvedVersion: "2026.9.1",
+        spec: alreadyCurrent ? "@openclaw/codex" : "@openclaw/codex@2026.9.1",
+        resolvedVersion: installedVersion,
         installPath: installDir,
       });
       const config: OpenClawConfig = { plugins: { entries: { codex: { enabled: true } } } };
@@ -3149,7 +3155,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       const originalRecords = structuredClone(records);
       mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
       mocks.loadPluginMetadataSnapshot.mockReturnValue({
-        plugins: [{ id: "codex", packageVersion: "2026.9.1", channels: [] }],
+        plugins: [{ id: "codex", packageVersion: installedVersion, channels: [] }],
         diagnostics: [],
       });
       mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
@@ -3162,7 +3168,12 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         if (availability === "beta-only package" && spec === "@openclaw/codex@latest") {
           return { ok: false, error: "No latest release for @openclaw/codex." };
         }
-        const version = spec.endsWith("@beta") ? "2026.9.3-beta.1" : spec.split("@").at(-1);
+        const version =
+          spec === "@openclaw/codex"
+            ? "2026.9.2"
+            : spec.endsWith("@beta")
+              ? "2026.9.3-beta.1"
+              : spec.split("@").at(-1);
         return {
           ok: true,
           metadata: {
