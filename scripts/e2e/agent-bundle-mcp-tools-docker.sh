@@ -35,6 +35,8 @@ if [ "$OPENCLAW_FROZEN_TARGET_AGENT_BUNDLE_MCP_MODE" = "legacy" ]; then
   CLIENT_PATH="$LEGACY_CLIENT_ROOT/scripts/e2e/agent-bundle-mcp-tools-docker-client.ts"
   ln -s /app/dist "$LEGACY_CLIENT_SOURCE_ROOT/dist"
   ln -s /app/node_modules "$LEGACY_CLIENT_SOURCE_ROOT/node_modules"
+  # The functional image runs as UID 1001 and must traverse this host-owned staging root.
+  chmod 0755 "$LEGACY_CLIENT_SOURCE_ROOT"
   CLIENT_MOUNT_ARGS=(
     -v "$LEGACY_CLIENT_SOURCE_ROOT:$LEGACY_CLIENT_ROOT:ro"
   )
