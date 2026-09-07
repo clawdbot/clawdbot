@@ -76,19 +76,8 @@ function sanitizeJsonString(value: string): string {
     .replace(JSON_CONTROL_CHAR_REGEX, "");
 }
 
-function sanitizeJsonValue(value: unknown): unknown {
-  if (typeof value === "string") {
-    return sanitizeJsonString(value);
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => sanitizeJsonValue(item));
-  }
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entryValue]) => [key, sanitizeJsonValue(entryValue)]),
-    );
-  }
-  return value;
+function sanitizeJsonValue(_key: string, value: unknown): unknown {
+  return typeof value === "string" ? sanitizeJsonString(value) : value;
 }
 function formatSkillName(skill: SkillStatusEntry): string {
   const emoji = normalizeSkillEmoji(skill.emoji);
@@ -117,7 +106,7 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
   const skills = opts.eligible ? report.skills.filter(isReadyForAgent) : report.skills;
 
   if (opts.json) {
-    const jsonReport = sanitizeJsonValue({
+    const jsonReport = {
       workspaceDir: report.workspaceDir,
       managedSkillsDir: report.managedSkillsDir,
       skills: skills.map((s) => ({
@@ -137,8 +126,8 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
         homepage: s.homepage,
         missing: s.missing,
       })),
-    });
-    return JSON.stringify(jsonReport, null, 2);
+    };
+    return JSON.stringify(jsonReport, sanitizeJsonValue, 2);
   }
 
   if (skills.length === 0) {
@@ -190,20 +179,20 @@ export function formatSkillInfo(
   opts: SkillInfoOptions,
 ): string {
   const requestedName = skillName.trim();
-  const safeRequestedName = sanitizeJsonString(sanitizeForLog(requestedName));
   const skill = resolveSkillStatusEntry(report.skills, requestedName);
 
   if (!skill) {
     if (opts.json) {
       return JSON.stringify(
-        sanitizeJsonValue({
+        {
           ...formatCliJsonFailure(`Skill "${requestedName}" not found.`),
           skill: requestedName,
-        }),
-        null,
+        },
+        sanitizeJsonValue,
         2,
       );
     }
+    const safeRequestedName = sanitizeJsonString(sanitizeForLog(requestedName));
     return appendClawHubHint(
       `Skill "${safeRequestedName}" not found. Run \`${formatCliCommand("openclaw skills list")}\` to see available skills.`,
       opts.json,
@@ -211,7 +200,7 @@ export function formatSkillInfo(
   }
 
   if (opts.json) {
-    return JSON.stringify(sanitizeJsonValue(skill), null, 2);
+    return JSON.stringify(skill, sanitizeJsonValue, 2);
   }
 
   const lines: string[] = [];
@@ -321,7 +310,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
 
   if (opts.json) {
     return JSON.stringify(
-      sanitizeJsonValue({
+      {
         agentId,
         agentSkillFilter: report.agentSkillFilter,
         workspaceDir: report.workspaceDir,
@@ -352,8 +341,8 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
           missing: s.missing,
           install: s.install,
         })),
-      }),
-      null,
+      },
+      sanitizeJsonValue,
       2,
     );
   }
