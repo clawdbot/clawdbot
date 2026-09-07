@@ -2,14 +2,16 @@ import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 
 // Nextcloud Talk guarded fetches own their dispatcher until the response body
-// settles. Cancel unread bodies before release so streaming responses cannot
-// keep the dispatcher alive after an early return.
+// settles. Start cancellation of unread bodies before release so streaming
+// responses cannot keep the dispatcher alive after an early return.
+// Do not await cancel: debug capture tees the stream and awaiting the other
+// branch deadlocks release (same invariant as Google Chat fetchOk).
 export async function releaseNextcloudTalkGuardedResponse(params: {
   response: Response;
   release: () => Promise<void>;
 }): Promise<void> {
   if (!params.response.bodyUsed) {
-    await params.response.body?.cancel().catch(() => undefined);
+    void params.response.body?.cancel().catch(() => undefined);
   }
   await params.release();
 }
