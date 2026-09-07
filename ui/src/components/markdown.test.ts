@@ -289,6 +289,37 @@ describe("toSanitizedMarkdownHtml", () => {
       return `\`\`\`json\n[\n${values.join("\n")}\n]\n\`\`\``;
     };
 
+    async function expectCodeCopy(fragment: HTMLElement, text: string) {
+      const writeText = vi.fn(async () => undefined);
+      const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+      const schedule = vi.spyOn(globalThis, "setTimeout");
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText },
+      });
+      fragment.addEventListener("click", handleMarkdownCodeBlockClick);
+      try {
+        const button = fragment.querySelector<HTMLButtonElement>(".code-block-copy");
+        expect(button).toBeInstanceOf(HTMLButtonElement);
+        button!.click();
+        await vi.waitFor(() => expect(button!.getAttribute("aria-label")).toBe("Copied!"));
+        expect(writeText).toHaveBeenCalledWith(text);
+      } finally {
+        fragment.removeEventListener("click", handleMarkdownCodeBlockClick);
+        for (const [index, [, delay]] of schedule.mock.calls.entries()) {
+          if (delay === 1_500) {
+            globalThis.clearTimeout(schedule.mock.results[index]?.value);
+          }
+        }
+        schedule.mockRestore();
+        if (originalClipboard) {
+          Object.defineProperty(navigator, "clipboard", originalClipboard);
+        } else {
+          Reflect.deleteProperty(navigator, "clipboard");
+        }
+      }
+    }
+
     it("renders raw block art as a whitespace-preserving code block", () => {
       const html = toSanitizedMarkdownHtml(blockArt);
       const fragment = htmlFragment(html);
@@ -317,33 +348,11 @@ describe("toSanitizedMarkdownHtml", () => {
     });
 
     it("copies fenced block art with its quiet-zone whitespace intact", async () => {
-      const writeText = vi.fn(async () => undefined);
-      const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
-      Object.defineProperty(navigator, "clipboard", {
-        configurable: true,
-        value: { writeText },
-      });
-      try {
-        const fragment = htmlFragment(toSanitizedMarkdownHtml(`\`\`\`\n${blockArt}\n\`\`\``));
-        const button = fragment.querySelector<HTMLButtonElement>(".code-block-copy");
-        if (!button) {
-          throw new Error("expected code copy button");
-        }
-
-        fragment.addEventListener("click", handleMarkdownCodeBlockClick);
-        button.click();
-
-        await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(blockArt));
-      } finally {
-        if (originalClipboard) {
-          Object.defineProperty(navigator, "clipboard", originalClipboard);
-        } else {
-          Reflect.deleteProperty(navigator, "clipboard");
-        }
-      }
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(`\`\`\`\n${blockArt}\n\`\`\``));
+      await expectCodeCopy(fragment, blockArt);
     });
 
-    it("renders indented code blocks", () => {
+    it("renders indented code blocks", async () => {
       // markdown-it requires a blank line before indented code
       const html = toSanitizedMarkdownHtml("text\n\n    indented code");
       const fragment = htmlFragment(html);
@@ -351,18 +360,16 @@ describe("toSanitizedMarkdownHtml", () => {
       expect(fragment.querySelector("p")?.textContent).toBe("text");
       expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("Code");
       expect(fragment.querySelector("pre code")?.textContent).toBe("indented code\n");
-      expect(fragment.querySelector(".code-block-copy")?.getAttribute("data-code")).toBe(
-        "indented code",
-      );
+      await expectCodeCopy(fragment, "indented code");
     });
 
-    it("includes copy button", () => {
+    it("includes copy button", async () => {
       const html = toSanitizedMarkdownHtml("```\ncode\n```");
       const fragment = htmlFragment(html);
 
       expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("Code");
       expect(fragment.querySelector(".code-block-copy__idle")).toBeInstanceOf(HTMLSpanElement);
-      expect(fragment.querySelector(".code-block-copy")?.getAttribute("data-code")).toBe("code");
+      await expectCodeCopy(fragment, "code");
     });
 
     it("omits copy chrome when rendering user-preserved code blocks", () => {

@@ -309,20 +309,34 @@ describe("gateway presence audience", () => {
         sockets.push(unauthenticated);
         const unauthenticatedEvents = observePresence(unauthenticated);
         const readers = recipients.filter(({ canRead }) => canRead);
+        const typingStartedAt = Date.now();
         const eventPromises = readers.map(({ ws }) =>
           onceMessage<{ type: string; event: string; payload: { presence: SystemPresence[] } }>(
             ws,
-            (frame) => frame.type === "event" && frame.event === "presence",
+            (frame) =>
+              frame.type === "event" &&
+              frame.event === "presence" &&
+              frame.payload.presence.some(
+                (entry) =>
+                  entry.instanceId === watcherInstanceId &&
+                  entry.lastActivityAt !== undefined &&
+                  entry.lastActivityAt >= typingStartedAt,
+              ),
           ),
         );
         // Own event rejections before the typing request can fail or time out.
         const [events] = await Promise.all([
           Promise.all(eventPromises),
-          rpcReq(watcher.ws, "session.typing", {
-            sessionKey: sharedKey,
-            sessionId: sharedSessionId,
-            typing: true,
-          }).then((response) => expect(response).toMatchObject({ ok: true })),
+          // A late connection publishes an older snapshot before the typing activity.
+          openRecipient("late-reader", ["operator.read"])
+            .then(() =>
+              rpcReq(watcher.ws, "session.typing", {
+                sessionKey: sharedKey,
+                sessionId: sharedSessionId,
+                typing: true,
+              }),
+            )
+            .then((response) => expect(response).toMatchObject({ ok: true })),
         ]);
         const activeWatcher = listSystemPresence().find(
           (entry) => entry.instanceId === watcherInstanceId,

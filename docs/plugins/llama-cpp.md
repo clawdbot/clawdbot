@@ -49,9 +49,10 @@ does not pass that check. Each verification check has a 90-second deadline;
 changing `agents.defaults.timeoutSeconds` does not extend setup verification.
 Failures identify whether the response check or tool-use check timed out.
 
-Managed setup also enables [local model lean mode](/concepts/experimental-features#local-model-lean-mode)
-unless you have explicitly configured it. By default, large tool catalogs use Tool Search,
-reducing the input the model must process before replying. Normal chats still
+Managed local models automatically use structured [Tool Search](/tools/tool-search)
+unless you have explicitly configured it. Optional capabilities remain available;
+their schemas load as needed, reducing the input the model must process before
+replying. Setup does not enable lean mode. Normal chats still
 include your agent's instructions. On CPU-only hosts, the first reply can take
 several minutes even after setup verification succeeds.
 
@@ -112,6 +113,12 @@ verification leaves the previous default model selected. A setup candidate has
 its own server preset, so verification does not rewrite an existing managed
 server's preset. Downloaded files may remain cached for a retry. Setup verifies and reuses cached
 recommendations, and charges disk space only for missing model and runtime files.
+
+Managed router presets retain configured chat models in deterministic order and
+remove model sections outside that inventory. Chat and embedding preparation
+update their owned settings while preserving the header, `[*]` defaults,
+comments, and additional options on retained models. Embedding-only setup uses
+a fresh preset.
 
 ### Set up only local embeddings
 
@@ -189,6 +196,12 @@ OpenClaw reads `/health`, `/models` (falling back to `/v1/models`), and
 `/props`. Router property probes use `autoload=false`; discovery never loads,
 wakes, unloads, downloads, or reloads models. Explicit configured model rows
 remain authoritative over discovered rows with the same ID.
+
+Refreshing a configured external server reports authentication rejection or
+unavailability when discovery fails. Previously discovered models remain visible
+only while their endpoint and credentials are unchanged. A successful empty list
+removes discovered rows; explicit configured models remain. Restore the server or
+correct its credentials, then refresh again to recover the live inventory.
 
 ### Authentication and endpoint replacement
 

@@ -88,6 +88,11 @@ describe("createReasoningTagTextPartitioner", () => {
       expected: { text: "a\r\n    ", thinking: "x" },
     },
     {
+      name: "a whitespace-only CRLF blank line starts a new indented code block",
+      input: "a\r\n \t\r\n    <think>x</think>",
+      expected: { text: "a\r\n \t\r\n    <think>x</think>", thinking: "" },
+    },
+    {
       name: "compaction retains context for a following empty list item",
       input: "    `\n\n-\n      <think>x</think>",
       expected: { text: "    `\n\n-\n      ", thinking: "x" },

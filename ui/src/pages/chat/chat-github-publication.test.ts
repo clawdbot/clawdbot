@@ -11,7 +11,7 @@ import {
 type GitHubPublicationScope = Parameters<GitHubPublicationPresentationBinding["sync"]>[0] & {
   client: Pick<GatewayBrowserClient, "request">;
   key: string;
-  sessionKey: string;
+  target: ConstructorParameters<typeof GitHubPublicationController>[0]["target"];
 };
 
 const shared = { source: "system-configured" as const, accountId: 1, login: "system-bot" };
@@ -62,7 +62,7 @@ function setup(initialOptions = options) {
   const scope: GitHubPublicationScope = {
     client: { request },
     key: "gateway:alice:session:1",
-    sessionKey: "agent:main:one",
+    target: { sessionKey: "agent:main:one", agentId: "main" },
     canWrite: true,
     personalReady: true,
     isPresented: () => true,
@@ -73,7 +73,7 @@ function setup(initialOptions = options) {
   const create = (owner: GitHubPublicationScope) =>
     new GitHubPublicationController({
       client: owner.client,
-      sessionKey: owner.sessionKey,
+      target: owner.target,
       isCurrent: () => current.key === owner.key && current.isCurrent(),
       reserve: () => {},
       release: () => {},
@@ -123,6 +123,7 @@ describe("explicit GitHub publication", () => {
     await settled(controller);
     expect(request).toHaveBeenLastCalledWith("sessions.github.publish", {
       sessionKey: "agent:main:one",
+      agentId: "main",
       idempotencyKey: expect.any(String),
       selection: { source: "shared", expected: shared },
     });
@@ -274,6 +275,7 @@ describe("explicit GitHub publication", () => {
     await settled(controller);
     expect(request).toHaveBeenLastCalledWith("sessions.github.confirm", {
       sessionKey: "agent:main:one",
+      agentId: "main",
       requestId,
       generation,
       account,
@@ -305,6 +307,7 @@ describe("explicit GitHub publication", () => {
     const failed = await settled(controller);
     expect(request).toHaveBeenLastCalledWith("sessions.github.status", {
       sessionKey: "agent:main:one",
+      agentId: "main",
       requestId,
     });
     expect(failed.onConfirm).toBeUndefined();

@@ -22,14 +22,14 @@ describe("sanitizeOpenAICodexResponsesParams", () => {
   it.each([
     "https://chatgpt.com/backend-api/codex",
     "https://chatgpt.com/backend-api/codex/responses",
-  ])("restores stateless Codex payload policy for provider-stream aliases at %s", (baseUrl) => {
-    const providerStreamModel = {
+  ])("restores stateless Codex payload policy after hooks at %s", (baseUrl) => {
+    const codexModel = {
       ...reasoningModel,
-      api: `openclaw-provider-stream:openai:gpt-5.6-luna:openai-chatgpt-responses:${encodeURIComponent(baseUrl)}`,
+      api: "openai-chatgpt-responses",
       baseUrl,
-    } as Model;
-    const params = sanitizeOpenAICodexResponsesParams(providerStreamModel, {
-      model: providerStreamModel.id,
+    } satisfies Model;
+    const params = sanitizeOpenAICodexResponsesParams(codexModel, {
+      model: codexModel.id,
       store: true,
       max_output_tokens: 128,
       metadata: { purpose: "dashboard-title" },

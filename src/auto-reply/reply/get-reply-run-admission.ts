@@ -60,7 +60,7 @@ import {
   resolveRoutedDeliveryThreadId,
 } from "./routed-delivery-thread.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
-import { getReplySystemEventSessionKey } from "./system-event-session-key.js";
+import { getReplySystemEventContext } from "./system-event-session-key.js";
 
 export async function prepareReplyRunAdmission(context: PreparedReplyRunContext) {
   const {
@@ -150,9 +150,11 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     if (useFastReplyRuntime) {
       return;
     }
-    const routeSystemEventSessionKey = normalizeOptionalString(getReplySystemEventSessionKey(opts));
-    const systemEventSessionKeys =
-      routeSystemEventSessionKey && routeSystemEventSessionKey !== sessionKey
+    const eventContext = getReplySystemEventContext(opts);
+    const routeSystemEventSessionKey = normalizeOptionalString(eventContext?.sessionKey);
+    const systemEventSessionKeys = context.isHeartbeat
+      ? [routeSystemEventSessionKey ?? sessionKey]
+      : routeSystemEventSessionKey && routeSystemEventSessionKey !== sessionKey
         ? [routeSystemEventSessionKey, sessionKey]
         : [sessionKey];
     for (const systemEventSessionKey of systemEventSessionKeys) {
@@ -163,7 +165,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         sessionKey: systemEventSessionKey,
         isMainSession: isCurrentSession && isMainSession,
         isNewSession: isCurrentSession && isNewSession,
-        suppressHeartbeatOwnedEvents: context.isHeartbeat,
+        // A heartbeat may consume only its prepared generic selection, never
+        // dedicated reminders or arrivals that were not part of this turn.
+        events: context.isHeartbeat ? (eventContext?.events ?? []) : undefined,
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);

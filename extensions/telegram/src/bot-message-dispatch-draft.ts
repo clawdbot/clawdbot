@@ -14,7 +14,7 @@ import type {
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import { createTelegramDraftStream, type TelegramDraftPreview } from "./draft-stream.js";
 import { renderTelegramHtmlText } from "./format.js";
-import type { DraftLaneState, LaneName } from "./lane-delivery.js";
+import type { DraftLaneState, LaneName } from "./lane-delivery-text-deliverer.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import { splitTelegramReasoningText } from "./reasoning-lane-coordinator.js";
@@ -104,7 +104,7 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
           replyToMode: params.replyToMode,
           richMessages: params.telegramCfg.richMessages,
           linkPreview: params.telegramCfg.linkPreview,
-          minInitialChars: params.streamMode === "progress" ? 0 : DRAFT_MIN_INITIAL_CHARS,
+          minInitialChars: DRAFT_MIN_INITIAL_CHARS,
           renderText: renderDraftText,
           onRetainedPage: (page) => {
             lanes[laneName].retainedPromptContextPages.push({
@@ -250,7 +250,7 @@ export async function rotateAnswerLaneAfterToolProgress(turn: Turn): Promise<boo
     return false;
   }
   repositionLaneForNewMessage(turn, turn.answerLane);
-  turn.progressCompositor.suppress();
+  turn.progressCompositor.resetActivity({ suppressed: true });
   turn.rotateAnswerLaneWhenQueuedBlocksSettle = false;
   return true;
 }
@@ -347,7 +347,7 @@ function updateTelegramDraftFromPartial(
   }
   if (lane === turn.answerLane) {
     turn.activeAnswerDraftIsToolProgressOnly = false;
-    turn.progressCompositor.suppress();
+    turn.progressCompositor.resetActivity({ suppressed: true });
     turn.lastAnswerPartialText = nextText;
   }
   lane.hasStreamedMessage = true;
@@ -465,7 +465,9 @@ export async function prepareQueuedAnswerBlock(
   ) {
     return;
   }
-  turn.progressCompositor.reset();
+  if (turn.streamMode !== "progress") {
+    turn.progressCompositor.resetActivity();
+  }
   const assistantMessageIndex = blockContext?.assistantMessageIndex;
   if (assistantMessageIndex === undefined) {
     turn.queuedAnswerBlockRotations.push({

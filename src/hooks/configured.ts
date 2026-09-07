@@ -2,6 +2,9 @@
 import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
+import { shouldIncludeHook } from "./config.js";
+import { resolveHookKey } from "./frontmatter.js";
+import type { HookPolicyEntry } from "./types.js";
 
 /** Capture discovery and explicit selection from one config/install snapshot. */
 export function resolveInternalHookSelection(config: OpenClawConfig): {
@@ -51,4 +54,24 @@ export function resolveInternalHookSelection(config: OpenClawConfig): {
           : names,
     declaredNames,
   };
+}
+
+/** True when an explicit selection names this entry, by hook name or resolved hook key. */
+export function isHookNameSelected(
+  names: Set<string> | undefined,
+  entry: HookPolicyEntry,
+): boolean {
+  return Boolean(names?.has(entry.hook.name) || names?.has(resolveHookKey(entry.hook.name, entry)));
+}
+
+/** Shared selection and eligibility gate; importing handlers remains the loader's job. */
+export function isHookLoadable(params: {
+  entry: HookPolicyEntry;
+  config: OpenClawConfig;
+  names: Set<string> | null;
+}): boolean {
+  return (
+    (!params.names || isHookNameSelected(params.names, params.entry)) &&
+    shouldIncludeHook({ entry: params.entry, config: params.config })
+  );
 }

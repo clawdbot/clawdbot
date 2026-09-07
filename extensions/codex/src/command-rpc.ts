@@ -1,17 +1,20 @@
 import { prepareAgentRuntimeAuth } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  resolveAgentDir,
+  resolveSessionAgentIdsStrict,
+} from "openclaw/plugin-sdk/agent-scope-runtime";
 import { resolveSessionModelRef } from "openclaw/plugin-sdk/model-session-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeCodexStartupClientBestEffort } from "./app-server/attempt-client-cleanup.js";
 import { prepareCodexAppServerAuthBinding } from "./app-server/auth-binding.js";
+import { resolveCodexAppServerPreparedAuthHandoff } from "./app-server/auth-bridge.js";
 import {
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileStore,
-  resolveCodexAppServerPreparedAuthHandoff,
   type resolveCodexAppServerAuthProfileIdForAgent,
-} from "./app-server/auth-bridge.js";
+} from "./app-server/auth-profile.js";
 import {
   CODEX_CONTROL_METHODS,
   describeControlFailure,

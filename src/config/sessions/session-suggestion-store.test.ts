@@ -183,7 +183,11 @@ describe("session suggestion store", () => {
     });
   });
 
-  it("bounds pending suggestions per author", async () => {
+  it.each([
+    ["ordinary", "alice", true],
+    ["embedded NUL", "a\0b", true],
+    ["lone surrogate", "\ud800", false],
+  ] as const)("bounds pending suggestions for %s author IDs", async (_, authorId, capped) => {
     await withTestDir({ prefix: "openclaw-session-suggestions-limit-" }, async (dir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
@@ -191,18 +195,22 @@ describe("session suggestion store", () => {
       for (let index = 0; index < MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR; index += 1) {
         addSessionSuggestion(scope, {
           id: `suggestion-${index}`,
-          authorId: "alice",
+          authorId,
           text: `idea ${index}`,
           expectedSessionId: "session-a",
         });
       }
-      expect(() =>
+      const addAtLimit = () =>
         addSessionSuggestion(scope, {
-          authorId: "alice",
+          authorId,
           text: "one too many",
           expectedSessionId: "session-a",
-        }),
-      ).toThrow(/author pending suggestion limit/);
+        });
+      if (capped) {
+        expect(addAtLimit).toThrow(/author pending suggestion limit/);
+      } else {
+        expect(addAtLimit).not.toThrow();
+      }
 
       resolvePendingSuggestion({
         scope,
@@ -212,11 +220,39 @@ describe("session suggestion store", () => {
       });
       expect(() =>
         addSessionSuggestion(scope, {
-          authorId: "alice",
+          authorId,
           text: "replacement",
           expectedSessionId: "session-a",
         }),
       ).not.toThrow();
+    });
+  });
+
+  it("checks the session cap before the author cap and frees admission after resolution", async () => {
+    await withTestDir({ prefix: "openclaw-session-suggestions-session-limit-" }, async (dir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+      await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
+      for (let index = 0; index < 100; index += 1) {
+        addSessionSuggestion(scope, {
+          id: `suggestion-${index}`,
+          authorId: `author-${Math.floor(index / MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR)}`,
+          text: "idea",
+          expectedSessionId: "session-a",
+        });
+      }
+      const add = (authorId: string) =>
+        addSessionSuggestion(scope, { authorId, text: "next", expectedSessionId: "session-a" });
+      expect(() => add("author-0")).toThrow("session pending suggestion limit reached");
+      resolvePendingSuggestion({
+        scope,
+        id: "suggestion-20",
+        state: "dismissed",
+        expectedSessionId: "session-a",
+      });
+      expect(() => add("author-0")).toThrow("author pending suggestion limit reached");
+      expect(() => add("author-1")).not.toThrow();
+      expect(listSessionSuggestions(scope, { pendingOnly: true })).toHaveLength(100);
     });
   });
 
@@ -226,18 +262,18 @@ describe("session suggestion store", () => {
       const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
       await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
       for (let index = 0; index <= MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS; index += 1) {
-        const id = `resolved-${index}`;
+        const id = index === 0 ? "z-oldest" : index === 1 ? "a-oldest" : `resolved-${index}`;
         addSessionSuggestion(scope, {
           id,
           authorId: "alice",
           text: `resolved ${index}`,
-          createdAt: index + 1,
+          createdAt: index < 2 ? 1 : index + 1,
           expectedSessionId: "session-a",
         });
         resolvePendingSuggestion({
           scope,
           id,
-          state: "dismissed",
+          state: index % 2 === 0 ? "accepted" : "dismissed",
           expectedSessionId: "session-a",
         });
       }
@@ -245,7 +281,8 @@ describe("session suggestion store", () => {
       expect(rows.filter((row) => row.state !== "pending")).toHaveLength(
         MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS,
       );
-      expect(rows.some((row) => row.id === "resolved-0")).toBe(false);
+      expect(rows.some((row) => row.id === "a-oldest")).toBe(false);
+      expect(rows.some((row) => row.id === "z-oldest")).toBe(true);
     });
   });
 

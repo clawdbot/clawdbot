@@ -381,7 +381,7 @@ final class WatchDirectNode {
         defer { releaseActiveSession(session) }
         self.isConnected = true
         self.statusText = self.voiceConnection == nil
-            ? String(localized: "Connected directly. Enable voice from iPhone Settings.")
+            ? String(localized: "Connected directly. Reconnect from iPhone Settings → Apple Watch to add voice.")
             : String(localized: "Connected directly. Voice setup saved.")
         while self.isCurrentConnection(generation, configuration: configuration) {
             let pollData = try await request(

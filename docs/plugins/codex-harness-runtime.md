@@ -59,6 +59,14 @@ active agent workspace profile files. Skill catalogs and tool-routed
 instructions. When memory tools are unavailable, active `BOOTSTRAP.md` content
 and full `MEMORY.md` fall back to plain turn input context instead.
 
+Delivery mode and the current message target requirement arrive as compact
+application context before each user turn. They explicitly supersede earlier
+delivery guidance while preserving permission and temporal context. With the
+same available tools, switching between automatic replies and message-tool-only
+replies keeps the static instructions and message tool definition unchanged.
+If the message tool is unavailable on a message-tool-only turn, final text stays
+private to the invoking workflow; it is not delivered to the source conversation.
+
 When `openclaw_direct.sessions_yield` is available, those instructions also
 tell a native Codex parent to end the current turn when a child's result should
 arrive in a later turn. Native `wait_agent` remains for an intentional same-turn
@@ -509,12 +517,20 @@ bundle.
 
 ## Compaction and transcript mirror
 
-When the selected model uses the Codex harness, native thread compaction
-belongs to Codex app-server. OpenClaw does not run preflight compaction for
-Codex turns, replace Codex compaction with context-engine compaction, or fall
-back to OpenClaw or public OpenAI summarization when native compaction cannot
-be started. OpenClaw keeps a transcript mirror for channel history, search,
-`/new`, `/reset`, and future model or harness switching.
+When the selected model uses the Codex harness, Codex app-server owns native
+token-pressure and manual thread compaction. OpenClaw separately owns its
+transcript mirror. When `agents.defaults.compaction.maxActiveTranscriptBytes`
+is set to a positive value, OpenClaw checks that mirror before ordinary and
+heartbeat turns. When the byte guard trips, OpenClaw requires semantic
+compaction through its selected host context engine before admitting the turn.
+This host compaction does not itself replace or rewrite Codex's canonical
+native thread.
+
+After host mirror compaction commits, OpenClaw may request
+`thread/compact/start` to synchronize an eligible native thread. This request
+is secondary: OpenClaw does not send it for host-isolated operations or
+bindings with restricted native authority, and unavailable or failed native
+synchronization does not roll back committed host compaction.
 
 Explicit compaction requests, such as `/compact` or a plugin-requested manual
 compact operation, start native Codex compaction with `thread/compact/start`.
@@ -528,9 +544,10 @@ period, OpenClaw retires the connection before releasing the fence. Remote
 connections also detach the matching thread binding so later work cannot
 overlap an unconfirmed remote turn. Other turns on a retired connection fail
 and can retry on a fresh client. Client closure, request cancellation, or a
-failed compaction turn returns a failed operation. Automatic context-pressure
-compaction is Codex's job; OpenClaw only starts native compaction for manually
-requested triggers.
+failed compaction turn returns a failed operation. Automatic native
+token-pressure compaction remains Codex's job. Outside the secondary
+synchronization described above, OpenClaw starts native compaction only for
+explicit manual requests.
 
 A standalone cold compact operation does not run prompt-build hooks or establish
 ordinary-turn configuration. It releases its subscription after the operation;

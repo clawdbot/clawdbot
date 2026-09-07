@@ -9,6 +9,45 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct StatusMenuSummariesTests {
+    @Test func `Automations shows the full enabled count beyond its preview`() async throws {
+        try await self.withFixture(cronJobCount: 201) { fixture in
+            _ = try await fixture.control.request(method: "health")
+            try #require(fixture.control.state == .connected)
+            let lease = try #require(await fixture.gateway.captureServerLease())
+            await fixture.cron.refreshJobs()
+            let jobs = fixture.cron.summary.jobs
+            _ = AppKitTestSupport.application
+            let item = NSMenuItem()
+            fixture.summaries.configureAutomations(item)
+            let preview = try #require(item.submenu).items.filter {
+                ($0.representedObject as? String)?.hasPrefix("cron.job.") == true
+            }
+            let row = try #require(item.view)
+            let window = NSWindow(contentRect: row.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = row
+            defer {
+                window.orderOut(nil)
+                window.contentView = nil
+                window.close()
+                item.view = nil
+            }
+            window.orderFront(nil)
+            row.layoutSubtreeIfNeeded()
+            let elements = try await AppKitTestSupport.accessibilityElements(in: row)
+            let texts = elements.filter { $0.accessibilityRole?() == .staticText }.compactMap {
+                let value: Any? = $0.accessibilityValue?()
+                return value as? String
+            }
+            try #require(fixture.gateway.serverLeaseMatchesCurrentRoute(lease))
+            try #require(!jobs.isEmpty)
+            try #require(fixture.requests.value.contains { $0.method == "cron.list" && $0.owner == "A" })
+            try #require(preview.count == 8)
+            let text = try #require(texts.first { $0.hasPrefix("\(item.title), ") })
+            #expect(text == "\(item.title), 201")
+        }
+    }
+
     @Test
     func `retiring a Gateway invalidates the observed usage cache`() async throws {
         try await self.withFixture { fixture in
@@ -102,7 +141,10 @@ struct StatusMenuSummariesTests {
         }
     }
 
-    private func withFixture(_ operation: (UsageGatewayFixture) async throws -> Void) async throws {
+    private func withFixture(
+        cronJobCount: Int = 0,
+        _ operation: (UsageGatewayFixture) async throws -> Void) async throws
+    {
         try await TestIsolation.withIsolatedState {
             let state = AppStateStore.shared
             let previousMode = state.connectionMode
@@ -112,7 +154,7 @@ struct StatusMenuSummariesTests {
                 state.connectionMode = previousMode
                 state.profileAccentHex = previousAccent
             }
-            let fixture = UsageGatewayFixture()
+            let fixture = UsageGatewayFixture(cronJobCount: cronJobCount)
             do {
                 try await operation(fixture)
                 await fixture.close()
@@ -137,9 +179,10 @@ private final class UsageGatewayFixture {
     let session: GatewayTestWebSocketSession
     let gateway: GatewayConnection
     let control: ControlChannel
+    let cron: CronJobsStore
     let summaries: StatusMenuSummaries
 
-    init() {
+    init(cronJobCount: Int) {
         let revision = self.revision
         let requests = self.requests
         let coldUsage = self.coldUsage
@@ -180,6 +223,25 @@ private final class UsageGatewayFixture {
                     payload = #"{"updatedAt":1800000000000,"days":30,"daily":\#(daily),"totals":{\#(totals)}}"#
                 case "node.list":
                     payload = #"{"nodes":[]}"#
+                case "cron.list":
+                    let params = frame["params"] as? [String: Any]
+                    let limit = min(params?["limit"] as? Int ?? 200, 200)
+                    let count = min(cronJobCount, limit)
+                    // GRDB also overloads joined; these interpolations must remain JSON strings.
+                    let jobs = (0..<count).map { index -> String in
+                        let id = String(format: "job-%03d", index)
+                        return #"""
+                        {"id":"\#(id)","name":"Automation \#(index)","enabled":true,
+                        "createdAtMs":0,"updatedAtMs":0,"schedule":{"kind":"every","everyMs":1000},
+                        "sessionTarget":"main","wakeMode":"now",
+                        "payload":{"kind":"systemEvent","text":"fixture"},"state":{}}
+                        """#
+                    }.joined(separator: ",")
+                    let nextOffset = count < cronJobCount ? String(count) : "null"
+                    payload = #"""
+                    {"jobs":[\#(jobs)],"total":\#(cronJobCount),"offset":0,"limit":\#(limit),
+                    "snapshotRevision":"fixture","hasMore":\#(count < cronJobCount),"nextOffset":\#(nextOffset)}
+                    """#
                 default:
                     payload = #"{"ok":true}"#
                 }
@@ -198,10 +260,11 @@ private final class UsageGatewayFixture {
             currentEndpointRevision: { revision.value },
             sessionBox: WebSocketSessionBox(session: self.session))
         self.control = ControlChannel(gateway: self.gateway, endpointRevision: { revision.value })
+        self.cron = CronJobsStore(gateway: self.gateway, isPreview: true)
         self.summaries = StatusMenuSummaries(
             control: self.control,
             nodes: NodesStore(control: self.control, localNodeIDLoader: { _ in "synthetic-local-node" }),
-            cron: CronJobsStore(gateway: self.gateway, isPreview: true))
+            cron: self.cron)
     }
 
     var hasCostChart: Bool {

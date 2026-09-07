@@ -382,13 +382,13 @@ class SettingsScreensTest {
   @Test
   fun terminalNoticeRendersAsStandaloneDismissibleBannerRegardlessOfRemainingCards() {
     val source = settingsScreensSource()
-    // Terminal outcomes retire their card before the notice publishes, so any
+    // Terminal outcomes publish their notice with the card retired, so any
     // card-scoped or empty-inbox-only rendering hides losing outcomes whenever
     // another approval card remains visible.
     assertFalse(source.contains("execApprovalNoticeForCard"))
     assertFalse(source.contains("execApprovalEmptyInboxNotice"))
     val screenStart = source.indexOf("private fun ApprovalsSettingsScreen(")
-    val bannerCall = source.indexOf("execApprovalsNotice?.let", screenStart)
+    val bannerCall = source.indexOf("inbox.notice?.let", screenStart)
     val listPanelCall = source.indexOf("ExecApprovalsPanel(", screenStart)
     assertTrue(screenStart >= 0 && bannerCall > screenStart && listPanelCall > bannerCall)
 

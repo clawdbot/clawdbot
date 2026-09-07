@@ -29,7 +29,7 @@ import {
 import { resolveReplayInvalidFlag } from "./incomplete-turn-resolution.js";
 import { resolveRunRetryKind, type RunRetryKind } from "./retry-budget.js";
 import { handleRetryLimitExhaustion } from "./retry-limit.js";
-import type { dispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
+import type { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
 import {
   hasCompletedModelProgressForIdleBreaker,
   normalizeEmbeddedRunAttemptResult,
@@ -51,7 +51,9 @@ type ReplayState = ReturnType<typeof createEmbeddedRunReplayState>;
 export async function normalizeEmbeddedRunAttempt(input: {
   runInput: PreparedEmbeddedRunInput;
   preparedRuntime: PreparedRuntime;
-  dispatchedAttempt: Awaited<ReturnType<typeof dispatchEmbeddedRunAttempt>>;
+  dispatchedAttempt: Awaited<
+    ReturnType<typeof prepareAndDispatchEmbeddedRunAttempt>
+  >["dispatchedAttempt"];
   sessionPromptState: SessionPromptState;
   provider: string;
   modelId: string;

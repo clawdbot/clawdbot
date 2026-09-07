@@ -163,6 +163,9 @@ export type SessionMcpRuntime = {
   ) => Promise<ListResourceTemplatesResult>;
   listPrompts?: (serverName: string) => Promise<unknown>;
   getPrompt?: (serverName: string, name: string, args?: Record<string, string>) => Promise<unknown>;
+  /** Joins cleanup already owned by this runtime, without closing live shared peers.
+   * Rejects when an earlier retirement or disposal could not confirm closure. */
+  joinCleanup?: () => Promise<void>;
   dispose: () => Promise<void>;
 };
 

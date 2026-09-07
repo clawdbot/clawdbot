@@ -1,11 +1,16 @@
 // Verifies host hook cleanup behavior for session-store state.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  loadSessionEntry,
+  patchSessionEntryCore,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../config/sessions/store-writer-state.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import * as jsonFiles from "../infra/json-files.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
@@ -26,7 +31,7 @@ describe("plugin host cleanup session stores", () => {
     stateDir = undefined;
   });
 
-  it("does not rewrite session stores when cleanup scans find no plugin-owned state", async () => {
+  it("leaves entries unchanged when cleanup finds no plugin-owned state", async () => {
     stateDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-cleanup-noop-"),
     );
@@ -36,7 +41,7 @@ describe("plugin host cleanup session stores", () => {
       sessionId: "session-id",
       updatedAt: Date.now(),
     } satisfies SessionEntry);
-    const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
+    const before = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
 
     const result = await runPluginHostCleanup({
       cfg: { session: { store: storePath } },
@@ -46,8 +51,118 @@ describe("plugin host cleanup session stores", () => {
     });
 
     expect(result).toEqual({ cleanupCount: 0, failures: [] });
-    expect(writeSpy).not.toHaveBeenCalled();
+    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toEqual(before);
   });
+
+  it.each(["cancelled", "already-cleared", "locked", "revoked", "committed"] as const)(
+    "revalidates queued cleanup and counts only committed changes (%s)",
+    async (mode) => {
+      stateDir = await fs.realpath(
+        await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cleanup-queued-")),
+      );
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:cleanup-target",
+        storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
+      };
+      await replaceSessionEntry(scope, {
+        sessionId: "cleanup-target",
+        updatedAt: 100,
+        pluginExtensions: { fixture: { state: true }, other: { state: true } },
+      });
+      const before = loadSessionEntry(scope);
+      const registry = createEmptyPluginRegistry();
+      registry.agentHarnesses.push({
+        pluginId: "fixture",
+        source: "test",
+        harness: {
+          id: "fixture-harness",
+          label: "Fixture harness",
+          supports: () => ({ supported: true }),
+          runAttempt: async () => {
+            throw new Error("unused test harness");
+          },
+        },
+      });
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const blocker = patchSessionEntryCore(
+        scope,
+        async (entry) => {
+          entered.resolve();
+          await release.promise;
+          if (mode === "already-cleared") {
+            entry.pluginExtensions = { other: { state: true } };
+            return entry;
+          }
+          if (mode === "locked") {
+            entry.modelSelectionLocked = true;
+            entry.agentHarnessId = "fixture-harness";
+            return entry;
+          }
+          return null;
+        },
+        { replaceEntry: true, skipMaintenance: true },
+      );
+      await entered.promise;
+      let current = true;
+      const revoked = new Error("session reset authority changed");
+      const cleanup = runPluginHostCleanup({
+        cfg: {},
+        registry,
+        reason: mode === "revoked" ? "reset" : "disable",
+        pluginId: "fixture",
+        sessionKey: scope.sessionKey,
+        sessionStoreTargets: [{ agentId: scope.agentId, storePath: scope.storePath }],
+        shouldCleanup: () => {
+          if (!current && mode === "revoked") {
+            throw revoked;
+          }
+          return current;
+        },
+      });
+      const settled = Promise.allSettled([blocker, cleanup]);
+      try {
+        expect(
+          [...SQLITE_SESSION_WRITER_QUEUES.values()].reduce(
+            (count, queue) => count + queue.pending.length,
+            0,
+          ),
+        ).toBe(1);
+        current = mode !== "cancelled" && mode !== "revoked";
+        release.resolve();
+        const [blockedWrite, result] = await settled;
+        expect(blockedWrite.status).toBe("fulfilled");
+        expect(result).toEqual(
+          mode === "revoked"
+            ? { status: "rejected", reason: revoked }
+            : {
+                status: "fulfilled",
+                value: { cleanupCount: mode === "committed" ? 1 : 0, failures: [] },
+              },
+        );
+        const after = loadSessionEntry(scope);
+        if (mode === "committed") {
+          expect(after?.pluginExtensions).toEqual({ other: { state: true } });
+          expect(after?.updatedAt).toBeGreaterThan(100);
+        } else if (mode === "already-cleared") {
+          expect(after).toEqual({ ...before, pluginExtensions: { other: { state: true } } });
+        } else if (mode === "locked") {
+          expect(after).toEqual({
+            ...before,
+            modelSelectionLocked: true,
+            agentHarnessId: "fixture-harness",
+          });
+        } else {
+          expect(after).toEqual(before);
+        }
+      } finally {
+        release.resolve();
+        await settled;
+      }
+    },
+  );
 
   it("can defer persistent session-state cleanup to an atomic owner", async () => {
     stateDir = await fs.mkdtemp(

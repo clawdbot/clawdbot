@@ -108,7 +108,7 @@ also lists declared channels, providers, tools, hooks, MCP servers, CLI
 commands and backends, skills, and dangerous configuration flags, along with
 the operator grants that apply to hooks, model access, and subagents.
 
-Bundled plugins and verified first-party plugins from OpenClaw's official
+Outside AI onboarding, bundled plugins and verified first-party plugins from OpenClaw's official
 catalog do not require this capability review during install, enable, update,
 or Doctor repair. For separately installed first-party plugins, OpenClaw checks
 the actual package identity against its catalog and verified npm source record
@@ -117,6 +117,10 @@ package name alone is insufficient: local copies, archives, git installs,
 custom ClawHub registries, and conflicting source records still require review.
 This exemption does not grant OAuth access, operating-system permissions, or
 runtime tool approvals, and does not create an operator acceptance record.
+
+AI onboarding also requests a review when you choose an installable provider or
+required runtime from the official catalog. After you accept, setup continues
+with that provider.
 
 The review token hashes the exact declared capability surface, not the plugin's
 executable files. Acceptance separately records installer-provided artifact

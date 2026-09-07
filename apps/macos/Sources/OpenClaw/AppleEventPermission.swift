@@ -158,9 +158,6 @@ enum TerminalAutomationPermission {
 
     @MainActor
     private static func openAutomationSettings() {
-        SystemSettingsURLSupport.openFirst([
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation",
-            "x-apple.systempreferences:com.apple.preference.security",
-        ])
+        SystemSettingsURLSupport.openFirst(SystemSettingsURLSupport.settingsCandidates(for: .appleScript))
     }
 }

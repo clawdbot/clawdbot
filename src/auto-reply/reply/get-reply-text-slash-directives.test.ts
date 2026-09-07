@@ -12,6 +12,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { markCompleteReplyConfig } from "./get-reply-fast-path.test-support.js";
+import { prepareReplyConversation } from "./prompt-session-context.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createTypingController } from "./typing.js";
 
@@ -88,7 +89,7 @@ async function resolveTextSlashDirective(
     sessionKey,
     storePath,
     sessionScope: "per-sender",
-    groupResolution: undefined,
+    conversation: prepareReplyConversation({ ctx, sessionEntry }),
     isGroup: false,
     triggerBodyNormalized: body,
     resetTriggered: false,

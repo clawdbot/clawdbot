@@ -7,8 +7,21 @@ on:
     - cron: "11 5 * * *"
   workflow_dispatch:
     inputs:
+      mode:
+        description: Performance mode
+        required: false
+        default: kova
+        type: choice
+        options:
+          - kova
+          - vitest-pair
       target_ref:
         description: OpenClaw ref to benchmark; defaults to the workflow ref
+        required: false
+        default: ""
+        type: string
+      baseline_ref:
+        description: Exact baseline SHA for vitest-pair mode
         required: false
         default: ""
         type: string
@@ -85,6 +98,7 @@ env:
 jobs:
   resolve_target:
     name: Resolve target ref
+    if: ${{ github.event_name == 'schedule' || inputs.mode != 'vitest-pair' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -214,6 +228,7 @@ jobs:
   kova:
     name: ${{ matrix.title }}
     needs: resolve_target
+    if: ${{ github.event_name == 'schedule' || inputs.mode != 'vitest-pair' }}
     permissions:
       contents: read
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
@@ -713,6 +728,7 @@ jobs:
   source_performance:
     name: OpenClaw source performance probes
     needs: resolve_target
+    if: ${{ github.event_name == 'schedule' || inputs.mode != 'vitest-pair' }}
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 120
     env:
@@ -1049,7 +1065,7 @@ jobs:
   publish:
     name: Publish ${{ matrix.title }} report
     needs: [resolve_target, kova, source_performance]
-    if: ${{ always() && needs.resolve_target.outputs.secret_eligible == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}
+    if: ${{ always() && (github.event_name == 'schedule' || inputs.mode != 'vitest-pair') && needs.resolve_target.outputs.secret_eligible == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -1499,7 +1515,7 @@ jobs:
   artifact_only_guard:
     name: Verify artifact-only report mode
     needs: [resolve_target, kova, publish]
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.publish_reports != true }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.mode != 'vitest-pair' && inputs.publish_reports != true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -1520,3 +1536,158 @@ jobs:
             echo
             echo "Clawgrit report publication stayed disabled; Kova evidence is available only as workflow artifacts."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  vitest_pair:
+    name: Vitest paired benchmark
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'vitest-pair' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    env:
+      VITEST_PAIR_ROOT: ${{ github.workspace }}/.artifacts/vitest-pair
+      VITEST_PAIR_OUTPUT: ${{ github.workspace }}/.artifacts/vitest-pair/results
+    steps:
+      - name: Initialize Vitest pair artifact
+        shell: bash
+        run: mkdir -p "$VITEST_PAIR_OUTPUT"
+
+      - name: Validate Vitest pair request
+        env:
+          BASELINE_REF: ${{ inputs.baseline_ref }}
+          TARGET_REF: ${{ inputs.target_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail() {
+            printf '{"version":1,"status":"failure","phase":"input-validation","error":"%s"}\n' "$1" \
+              > "$VITEST_PAIR_OUTPUT/terminal-manifest.json"
+            echo "::error::$1"
+            exit 1
+          }
+          [[ "$RUN_ATTEMPT" == "1" ]] ||
+            fail "vitest-pair refuses workflow reruns; dispatch a fresh run"
+          [[ "$BASELINE_REF" =~ ^[0-9a-f]{40}$ ]] ||
+            fail "baseline_ref must be an exact lowercase 40-character SHA"
+          [[ "$TARGET_REF" =~ ^[0-9a-f]{40}$ ]] ||
+            fail "target_ref must be an exact lowercase 40-character SHA"
+          [[ "$TARGET_REF" == "$WORKFLOW_SHA" ]] ||
+            fail "target_ref must equal github.workflow_sha for vitest-pair mode"
+
+      - name: Checkout Vitest pair helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .artifacts/vitest-pair/helper
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout Vitest pair candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .artifacts/vitest-pair/candidate
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout Vitest pair baseline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.baseline_ref }}
+          path: .artifacts/vitest-pair/baseline
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up benchmark Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+          check-latest: false
+
+      - name: Install benchmark pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm_prefix="$RUNNER_TEMP/vitest-pair-pnpm"
+          npm_config_cache="$RUNNER_TEMP/vitest-pair-npm-cache" \
+            npm install --global --prefix "$pnpm_prefix" pnpm@12.3.4
+          pnpm_bin="$pnpm_prefix/bin/pnpm"
+          [[ "$("$pnpm_bin" --version)" == "12.3.4" ]]
+          echo "VITEST_PAIR_PNPM_BIN=$pnpm_bin" >> "$GITHUB_ENV"
+
+      - name: Run Vitest pair benchmark
+        env:
+          BASELINE_REF: ${{ inputs.baseline_ref }}
+          TARGET_REF: ${{ inputs.target_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node "$VITEST_PAIR_ROOT/helper/scripts/vitest-pair-benchmark.mts" \
+            --baseline "$VITEST_PAIR_ROOT/baseline" \
+            --baseline-sha "$BASELINE_REF" \
+            --candidate "$VITEST_PAIR_ROOT/candidate" \
+            --candidate-sha "$TARGET_REF" \
+            --manifest "$VITEST_PAIR_ROOT/helper/scripts/vitest-pair-benchmark-lanes.json" \
+            --output "$VITEST_PAIR_OUTPUT" \
+            --pnpm-bin "$VITEST_PAIR_PNPM_BIN" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --scratch "$VITEST_PAIR_ROOT/scratch"
+
+      - name: Finalize Vitest pair artifact
+        if: ${{ always() }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -f "$VITEST_PAIR_OUTPUT/terminal-manifest.json" ]]; then
+            printf '{"version":1,"status":"failure","phase":"workflow","jobStatus":"%s"}\n' \
+              "$JOB_STATUS" > "$VITEST_PAIR_OUTPUT/terminal-manifest.json"
+          fi
+
+      - name: Upload Vitest pair artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vitest-pair-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/vitest-pair/results
+          if-no-files-found: error
+          retention-days: 30
+
+  vitest_pair_guard:
+    name: Verify Vitest pair isolation
+    needs: [resolve_target, kova, source_performance, publish, artifact_only_guard, vitest_pair]
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.mode == 'vitest-pair' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Verify isolated Vitest pair result
+        env:
+          RESOLVE_RESULT: ${{ needs.resolve_target.result }}
+          KOVA_RESULT: ${{ needs.kova.result }}
+          SOURCE_RESULT: ${{ needs.source_performance.result }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          ARTIFACT_ONLY_RESULT: ${{ needs.artifact_only_guard.result }}
+          VITEST_PAIR_RESULT: ${{ needs.vitest_pair.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for result in \
+            "$RESOLVE_RESULT" \
+            "$KOVA_RESULT" \
+            "$SOURCE_RESULT" \
+            "$PUBLISH_RESULT" \
+            "$ARTIFACT_ONLY_RESULT"; do
+            if [[ "$result" != "skipped" ]]; then
+              echo "::error::vitest-pair requires every Kova/report job to stay skipped; got ${result}."
+              exit 1
+            fi
+          done
+          if [[ "$VITEST_PAIR_RESULT" != "success" ]]; then
+            echo "::error::vitest-pair benchmark did not succeed; got ${VITEST_PAIR_RESULT}. Inspect its uploaded terminal artifact."
+            exit 1
+          fi

@@ -448,6 +448,11 @@ else
   "$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"
 fi
 
+echo "📦 Staging browser sign-in helper"
+for arch in "${BUILD_ARCHS[@]}"; do
+  bash "$ROOT_DIR/scripts/stage-cloudflared-macos.sh" "$arch" "$APP_ROOT/Contents/Resources/cloudflared"
+done
+
 echo "📦 Copying CLI installer"
 INSTALL_CLI_SRC="$ROOT_DIR/scripts/install-cli.sh"
 if [ ! -f "$INSTALL_CLI_SRC" ]; then

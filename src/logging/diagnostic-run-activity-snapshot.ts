@@ -20,6 +20,8 @@ export type DiagnosticSessionActivitySnapshot = {
   lastProgressReason?: string;
   repeatedRequestNoProgressAgeMs?: number;
   activeModelCallRequestTimeoutMs?: number;
+  /** Absolute quiet deadline validated against the exact executing backend owner. */
+  activeBackendLivenessDeadlineAtMs?: number;
 };
 
 type SnapshotTool = {
@@ -104,16 +106,28 @@ export const RUN_STALE_TAKEOVER_MS = 10 * 60_000;
 export function resolveRunStaleThresholdMs(
   activity: Pick<
     DiagnosticSessionActivitySnapshot,
-    "activeWorkKind" | "activeToolDeadlineAtMs" | "lastProgressAgeMs"
+    | "activeWorkKind"
+    | "activeToolDeadlineAtMs"
+    | "lastProgressAgeMs"
+    | "activeModelCallRequestTimeoutMs"
+    | "activeBackendLivenessDeadlineAtMs"
   >,
   evidenceAgeMs = activity.lastProgressAgeMs ?? 0,
+  minimumMs = RUN_STALE_TAKEOVER_MS,
 ): number {
   if (activity.activeToolDeadlineAtMs !== undefined) {
     // Use the same age the caller compares: subtracting it leaves only the
     // absolute deadline, even when reply activity and tool progress differ.
     return Math.max(0, evidenceAgeMs + activity.activeToolDeadlineAtMs - Date.now());
   }
-  return activity.activeWorkKind === "tool_call"
-    ? Math.max(RUN_STALE_TAKEOVER_MS, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS)
-    : RUN_STALE_TAKEOVER_MS;
+  if (activity.activeWorkKind === "tool_call") {
+    return Math.max(minimumMs, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS);
+  }
+  // The backend starts its quiet allowance at execution, not session admission.
+  // Translate its absolute deadline into the same evidence age the caller compares.
+  const backendThresholdMs =
+    activity.activeBackendLivenessDeadlineAtMs === undefined
+      ? 0
+      : evidenceAgeMs + activity.activeBackendLivenessDeadlineAtMs - Date.now();
+  return Math.max(minimumMs, activity.activeModelCallRequestTimeoutMs ?? 0, backendThresholdMs);
 }

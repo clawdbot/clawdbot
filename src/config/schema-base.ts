@@ -1,13 +1,7 @@
 // Builds base config schema metadata shared across generated config surfaces.
-import { isSensitiveUrlConfigPath } from "@openclaw/net-policy/redact-sensitive-url";
 import { VERSION } from "../version.js";
 import { FIELD_HELP } from "./schema.help.js";
-import {
-  applySensitiveUrlHints,
-  buildBaseHints,
-  collectMatchingSchemaPaths,
-  mapSensitivePaths,
-} from "./schema.hints.js";
+import { buildBaseHints, mapSensitivePaths } from "./schema.hints.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import {
   asSchemaObject,
@@ -133,19 +127,11 @@ function computeBaseConfigSchemaStablePayload(): BaseConfigSchemaStablePayload {
     applyFieldDocumentation(schemaRoot);
   }
   const baseHints = mapSensitivePaths(OpenClawSchema, "", buildBaseHints());
-  const sensitiveUrlPaths = collectMatchingSchemaPaths(
-    OpenClawSchema,
-    "",
-    isSensitiveUrlConfigPath,
-  );
   const publicSchema = preparePublicSchema(schema);
   const stablePayload = {
     schema: publicSchema,
     uiHints: applyDerivedTags(
-      applyResolvedConfigTierHints(
-        publicSchema,
-        applyDerivedTags(applySensitiveUrlHints(baseHints, sensitiveUrlPaths)),
-      ),
+      applyResolvedConfigTierHints(publicSchema, applyDerivedTags(baseHints)),
     ),
     version: VERSION,
   } satisfies BaseConfigSchemaStablePayload;

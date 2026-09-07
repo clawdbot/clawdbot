@@ -3,6 +3,7 @@ import type { Static } from "typebox";
 import type {
   GitHubPublicationPublisher,
   GitHubPublicationSelection,
+  SessionGitHubOptionsParamsSchema,
   SessionGitHubOptionsResultSchema,
   SessionGitHubPublicationResult,
   SessionGitHubStatusResult,
@@ -20,7 +21,7 @@ type GitHubPublicationPresentation = {
 };
 type PublicationOwner = {
   client: Pick<GatewayBrowserClient, "request">;
-  sessionKey: string;
+  target: Static<typeof SessionGitHubOptionsParamsSchema>;
   isCurrent: () => boolean;
   reserve: () => void;
   release: () => void;
@@ -240,7 +241,7 @@ export class GitHubPublicationController {
     requestId: string,
   ): Promise<void> {
     const status = await scope.client.request<SessionGitHubStatusResult>("sessions.github.status", {
-      sessionKey: scope.sessionKey,
+      ...scope.target,
       requestId,
     });
     if (current()) {
@@ -257,9 +258,7 @@ export class GitHubPublicationController {
       }
       const options = await scope.client.request<GitHubPublicationOptions>(
         "sessions.github.options",
-        {
-          sessionKey: scope.sessionKey,
-        },
+        scope.target,
       );
       if (!current()) {
         return;
@@ -301,7 +300,7 @@ export class GitHubPublicationController {
       this.attempt = attempt;
       const result = await owner.client
         .request<SessionGitHubPublicationResult>("sessions.github.publish", {
-          sessionKey: owner.sessionKey,
+          ...owner.target,
           ...attempt,
         })
         .catch((error: unknown) => {
@@ -345,7 +344,7 @@ export class GitHubPublicationController {
       const result = await scope.client.request<SessionGitHubPublicationResult>(
         "sessions.github.confirm",
         {
-          sessionKey: scope.sessionKey,
+          ...scope.target,
           requestId,
           generation: confirmation.generation,
           account: confirmation.account,

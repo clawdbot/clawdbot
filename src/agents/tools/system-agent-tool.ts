@@ -11,6 +11,7 @@ import {
   isSystemAgentNavigationOperation,
   type SystemAgentNavigationOperation,
 } from "../../system-agent/operation-types.js";
+import { assertConfigWriteDoesNotBypassInferenceVerification } from "../../system-agent/operations-execution-helpers.js";
 import {
   executeSystemAgentOperation,
   isPersistentSystemAgentOperation,
@@ -130,8 +131,11 @@ export function resolveSystemAgentProposalTransition(params: {
       operation,
     };
   }
-  // Executed or errored mutation: an armed approval is single-use either way.
-  return { proposal: undefined };
+  // Only admission consumes approval. A prevalidation error leaves the
+  // in-process proposal untouched and must do the same in CLI mirrors.
+  return params.resultText.startsWith(SYSTEM_AGENT_APPROVED_OPERATION_PREFIX)
+    ? { proposal: undefined }
+    : null;
 }
 
 const SYSTEM_AGENT_TOOL_ACTIONS = [
@@ -454,6 +458,13 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
       }
       const persistent = isPersistentSystemAgentOperation(operation);
       if (persistent) {
+        // Validate before approval-state reads: owner lookup can yield, and
+        // a rejected or cancelled operation must never become a proposal.
+        if (operation.kind === "config-set" || operation.kind === "config-set-ref") {
+          signal?.throwIfAborted();
+          await assertConfigWriteDoesNotBypassInferenceVerification(operation);
+          signal?.throwIfAborted();
+        }
         const operationHash = hashSystemAgentOperation(operation);
         const armedForThisOperation =
           params.approved === true &&

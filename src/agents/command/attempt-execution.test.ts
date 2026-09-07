@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
@@ -569,57 +570,52 @@ describe("claudeCliSessionTranscriptHasContent", () => {
       })}\n`,
     );
 
+    const graceStarted = createDeferred();
+    const releaseGrace = createDeferred();
+    const schedule = globalThis.setTimeout;
     let graceFires = 0;
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
-      handler: (...args: unknown[]) => void,
-      delay?: number,
-    ) => {
-      if (delay === GRACE_MS) {
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((handler, delay, ...args) => {
+        if (delay !== GRACE_MS) {
+          return schedule(handler, delay, ...args);
+        }
+        // Hold only this probe's grace sleep; worker completion must retain native timers.
+        setTimeoutSpy.mockRestore();
         graceFires += 1;
-        const flush = fs.appendFile(
-          file,
-          `${JSON.stringify({
-            type: "assistant",
-            message: { role: "assistant", content: [{ type: "text", text: "ack" }] },
-          })}\n`,
-          "utf-8",
-        );
-        void flush.then(() => {
-          handler();
-        });
-        return 0 as unknown as ReturnType<typeof setTimeout>;
-      }
-      return 0 as unknown as ReturnType<typeof setTimeout>;
-    }) as typeof setTimeout);
-
+        graceStarted.resolve();
+        return schedule(() => {
+          void releaseGrace.promise.then(() => handler(...args));
+        }, delay);
+      });
+    const probe = claudeCliSessionTranscriptHasContent({
+      sessionId,
+      workspaceDir,
+      homeDir: tmpDir,
+    });
     try {
-      expect(
-        await claudeCliSessionTranscriptHasContent({
-          sessionId,
-          workspaceDir,
-          homeDir: tmpDir,
-        }),
-      ).toBe(true);
+      await Promise.race([graceStarted.promise, probe]);
       expect(graceFires).toBe(1);
+      await fs.appendFile(
+        file,
+        `${JSON.stringify({
+          type: "assistant",
+          message: { role: "assistant", content: [{ type: "text", text: "ack" }] },
+        })}\n`,
+        "utf-8",
+      );
+      releaseGrace.resolve();
+      expect(await probe).toBe(true);
     } finally {
       setTimeoutSpy.mockRestore();
+      releaseGrace.resolve();
+      await probe;
     }
   });
 
   it("returns false and emits a structured v4 warn when the JSONL never appears", async () => {
     const workspaceDir = await makeWorkspace();
     const warnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => undefined);
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
-      handler: (...args: unknown[]) => void,
-      delay?: number,
-    ) => {
-      if (delay === GRACE_MS) {
-        handler();
-        return 0 as unknown as ReturnType<typeof setTimeout>;
-      }
-      return 0 as unknown as ReturnType<typeof setTimeout>;
-    }) as typeof setTimeout);
-
     try {
       expect(
         await claudeCliSessionTranscriptHasContent({
@@ -644,7 +640,6 @@ describe("claudeCliSessionTranscriptHasContent", () => {
         })}`,
       );
     } finally {
-      setTimeoutSpy.mockRestore();
       warnSpy.mockRestore();
     }
   });
@@ -662,17 +657,6 @@ describe("claudeCliSessionTranscriptHasContent", () => {
     );
 
     const warnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => undefined);
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
-      handler: (...args: unknown[]) => void,
-      delay?: number,
-    ) => {
-      if (delay === GRACE_MS) {
-        handler();
-        return 0 as unknown as ReturnType<typeof setTimeout>;
-      }
-      return 0 as unknown as ReturnType<typeof setTimeout>;
-    }) as typeof setTimeout);
-
     try {
       expect(
         await claudeCliSessionTranscriptHasContent({
@@ -687,7 +671,6 @@ describe("claudeCliSessionTranscriptHasContent", () => {
       expect(v4Warnings).toHaveLength(1);
       expect(v4Warnings[0]?.[0]).toContain("fileExists=true");
     } finally {
-      setTimeoutSpy.mockRestore();
       warnSpy.mockRestore();
     }
   });

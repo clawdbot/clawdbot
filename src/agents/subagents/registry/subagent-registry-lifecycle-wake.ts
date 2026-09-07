@@ -21,6 +21,7 @@ import type {
 } from "./subagent-registry-lifecycle-context.js";
 import {
   buildSafeLifecycleErrorMeta,
+  clearSubagentPendingDelivery,
   markRequesterSettleWakePending,
   maskLifecycleIdentifier,
   safeSetSubagentTaskDeliveryStatus,
@@ -106,7 +107,7 @@ const completeRequesterSettleWakeBatch = (
   }
   const requesterSessionKeys = new Set(entries.map((entry) => entry.requesterSessionKey));
   const previousStates = entries.map((entry) => ({
-    delivery: structuredClone(entry.delivery),
+    delivery: outcome?.delivered ? entry.delivery : structuredClone(entry.delivery),
     requesterSettleWake: structuredClone(entry.requesterSettleWake),
     retireAfterRequesterTurn: entry.retireAfterRequesterTurn,
     suppressCompletionDelivery: entry.suppressCompletionDelivery,
@@ -114,6 +115,11 @@ const completeRequesterSettleWakeBatch = (
   const settledDeliveries: SubagentRunRecord[] = [];
   for (const entry of entries) {
     const { runId } = entry;
+    if (outcome?.delivered && entry.expectsCompletionMessage === true) {
+      // Replace the receipt owner even if an older multipart send already committed a chunk.
+      // Its retained guard must stay closed after this wake is cleared.
+      entry.delivery = { ...ensureDeliveryState(entry) };
+    }
     if (
       outcome &&
       entry.expectsCompletionMessage === true &&
@@ -126,7 +132,7 @@ const completeRequesterSettleWakeBatch = (
         delivery.disposition = "delivered";
         delivery.deliveredAt = deliveredAt;
         delivery.announcedAt = deliveredAt;
-        delivery.lastError = undefined;
+        clearSubagentPendingDelivery(entry);
         delivery.lastDropReason = undefined;
       } else {
         const error = outcome.error ?? outcome.reason ?? "requester settle wake failed";

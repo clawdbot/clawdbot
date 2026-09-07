@@ -1,8 +1,8 @@
 // Channel setup discovery tests cover visible setup choices from bundled, installed, and trusted catalog sources.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginAutoEnableResult } from "../../config/plugin-auto-enable.js";
+import type { InstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
 
-const loadPluginRegistrySnapshot = vi.hoisted(() => vi.fn());
 const listPluginContributionIds = vi.hoisted(() =>
   vi.fn((_index?: unknown, _contribution?: unknown, _options?: unknown): string[] => []),
 );
@@ -20,7 +20,6 @@ const applyPluginAutoEnable = vi.hoisted(() =>
 
 vi.mock("../../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: [] }),
-  loadPluginRegistrySnapshot: (...args: unknown[]) => loadPluginRegistrySnapshot(...args),
   listPluginContributionIds: (args: unknown) => listPluginContributionIds(args),
 }));
 
@@ -41,10 +40,6 @@ import { listManifestInstalledChannelIds, resolveChannelSetupEntries } from "./d
 
 describe("listManifestInstalledChannelIds", () => {
   beforeEach(() => {
-    loadPluginRegistrySnapshot.mockReset().mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
     listPluginContributionIds.mockReset().mockReturnValue([]);
     listChannelPluginCatalogEntries.mockReset().mockReturnValue([]);
     listChatChannels.mockReset().mockReturnValue([]);
@@ -55,7 +50,18 @@ describe("listManifestInstalledChannelIds", () => {
     }));
   });
 
-  it("uses the auto-enabled config snapshot for manifest discovery", () => {
+  it.each([false, true])("uses the auto-enabled config with a provided index: %s", (provided) => {
+    const index: InstalledPluginIndex = {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash: "test",
+      generatedAtMs: 0,
+      installRecords: {},
+      plugins: [],
+      diagnostics: [],
+    };
     const autoEnabledConfig = {
       channels: { slack: { enabled: true } },
       plugins: { allow: ["slack"] },
@@ -68,33 +74,22 @@ describe("listManifestInstalledChannelIds", () => {
         slack: ["slack configured"],
       },
     });
-    loadPluginRegistrySnapshot.mockReturnValue({
-      plugins: [{ pluginId: "slack" }],
-      diagnostics: [],
-    });
     listPluginContributionIds.mockReturnValue(["slack"]);
 
     const installedIds = listManifestInstalledChannelIds({
       cfg: {} as never,
       workspaceDir: "/tmp/workspace",
       env: { OPENCLAW_HOME: "/tmp/home" } as NodeJS.ProcessEnv,
+      ...(provided ? { index } : {}),
     });
 
     expect(applyPluginAutoEnable).toHaveBeenCalledWith({
       config: {},
       env: { OPENCLAW_HOME: "/tmp/home" },
     });
-    expect(loadPluginRegistrySnapshot).toHaveBeenCalledWith({
-      config: autoEnabledConfig,
-      workspaceDir: "/tmp/workspace",
-      env: { OPENCLAW_HOME: "/tmp/home" },
-    });
     expect(listPluginContributionIds).toHaveBeenCalledWith({
-      index: {
-        plugins: [{ pluginId: "slack" }],
-        diagnostics: [],
-      },
       contribution: "channels",
+      ...(provided ? { index } : {}),
       config: autoEnabledConfig,
       workspaceDir: "/tmp/workspace",
       env: { OPENCLAW_HOME: "/tmp/home" },

@@ -13,6 +13,7 @@ import { resolveModelRequestTimeoutMs, resolveProviderRequestPolicyConfig } from
 import { resolveOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { resolveOpenAIReasoningEffortMap } from "./openai-reasoning-compat.js";
 import type { OpenAIModeModel } from "./openai-transport-shared.js";
+import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import { isCodeModeModelVisibleToolName, sha256Hex } from "./transport-utils.js";
 
 const MAX_OPENAI_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS = 256;
@@ -306,27 +307,11 @@ export function resolveOpenAIStrictToolFlagWithDiagnostics(
   return strict;
 }
 
-function isOpenAIChatGPTResponsesApi(api: string): boolean {
-  if (api === "openai-chatgpt-responses" || api === "openclaw-openai-chatgpt-responses-transport") {
-    return true;
-  }
-  if (!api.startsWith("openclaw-provider-stream:")) {
-    return false;
-  }
-  const sourceApi = api.split(":")[3];
-  if (!sourceApi) {
-    return false;
-  }
-  try {
-    return decodeURIComponent(sourceApi) === "openai-chatgpt-responses";
-  } catch {
-    return false;
-  }
-}
-
 export function isOpenAICodexResponsesModel(model: Model): boolean {
   return (
-    OPENAI_CODEX_RESPONSES_PROVIDERS.has(model.provider) && isOpenAIChatGPTResponsesApi(model.api)
+    OPENAI_CODEX_RESPONSES_PROVIDERS.has(model.provider) &&
+    (model.api === "openai-chatgpt-responses" ||
+      model.api === "openclaw-openai-chatgpt-responses-transport")
   );
 }
 
@@ -399,7 +384,9 @@ export function buildOpenAIClientHeaders(
     // (companion/btw effects sessions) 400 without this clamp.
     resolvedHeaders.session_id = clampOpenAIPromptCacheKey(sessionId) ?? sessionId;
   }
-  return resolvedHeaders;
+  return (
+    resolveOpencodeSessionHeaders(model, { sessionId, headers: resolvedHeaders }) ?? resolvedHeaders
+  );
 }
 
 function resolveOpenAISdkTimeoutMs(model: Model, timeoutMs?: number): number | undefined {

@@ -1,5 +1,9 @@
 import { asProtocolRecord } from "./protocol-value-normalization.js";
 
+/** Display projection for an assistant failure without visible reply content. */
+export const GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT =
+  "The agent run failed before producing a reply.";
+
 /** Gateway JSON-RPC style error codes shared by clients and server handlers. */
 export const ErrorCodes = {
   /** @deprecated Retained for source compatibility; no current server emitter. */

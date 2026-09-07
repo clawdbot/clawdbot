@@ -10,7 +10,10 @@ import {
   upsertSessionEntryCore,
   type TranscriptEvent,
 } from "./session-accessor.js";
-import { resolveTranscriptMessageAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
+import {
+  isTranscriptEntryOnActivePathInTransaction,
+  resolveTranscriptMessageAppendParent,
+} from "./session-accessor.sqlite-transcript-parent.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -125,5 +128,59 @@ describe("SQLite transcript append ancestry", () => {
         }),
       ),
     ).toBe("root");
+  });
+
+  it("checks active ancestry directly without adopting another branch", async () => {
+    const { database, scope } = await createTranscript([
+      message("active-root", null),
+      message("active-tail", "active-root"),
+      message("other-root", null),
+      {
+        type: "leaf",
+        id: "select-active",
+        parentId: "other-root",
+        targetId: "active-tail",
+        appendParentId: "active-tail",
+      },
+    ]);
+
+    expect(
+      isTranscriptEntryOnActivePathInTransaction(database, scope.sessionId, "active-root"),
+    ).toBe(true);
+    expect(
+      isTranscriptEntryOnActivePathInTransaction(database, scope.sessionId, "active-tail"),
+    ).toBe(true);
+    expect(
+      isTranscriptEntryOnActivePathInTransaction(database, scope.sessionId, "other-root"),
+    ).toBe(false);
+    expect(isTranscriptEntryOnActivePathInTransaction(database, scope.sessionId, "missing")).toBe(
+      false,
+    );
+  });
+
+  it("checks selected visible ancestry instead of a disjoint append cursor", async () => {
+    const { database, scope } = await createTranscript([
+      message("visible", null),
+      message("hidden-user", "visible"),
+      {
+        type: "leaf",
+        id: "select-visible",
+        parentId: "hidden-user",
+        targetId: "visible",
+        appendParentId: "hidden-user",
+        appendMode: "side",
+      },
+      message("continued", "hidden-user"),
+    ]);
+
+    expect(isTranscriptEntryOnActivePathInTransaction(database, scope.sessionId, "visible")).toBe(
+      true,
+    );
+    expect(
+      isTranscriptEntryOnActivePathInTransaction(database, scope.sessionId, "hidden-user"),
+    ).toBe(false);
+    expect(isTranscriptEntryOnActivePathInTransaction(database, scope.sessionId, "continued")).toBe(
+      true,
+    );
   });
 });

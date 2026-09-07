@@ -102,6 +102,8 @@ Provide tools with `tools: [{ type: "function", name, description?, parameters? 
 
 If the agent calls a tool, the response returns a `function_call` output item. Send a follow-up request with `function_call_output` to continue the turn.
 
+If a tool produces no text, return `output: ""` with its `call_id`. The empty result still completes that tool call and can be the only new input item in a continuation.
+
 Clients that manage their own history can append `response.output` to `input`, then append new user messages or `function_call_output` items. Keep returned assistant metadata and function-call IDs, names, and arguments unchanged. Alternatively, supply `previous_response_id` and only the new input items.
 
 For `tool_choice: "required"` and function-pinned `tool_choice`, the endpoint narrows the exposed client function-tool set, instructs the runtime to call a client tool before responding, and rejects the turn if it does not include a matching structured client-tool call, matching the `/v1/chat/completions` contract. Non-streaming requests return `502` with an `api_error`; streaming requests emit a `response.failed` event.
@@ -233,6 +235,8 @@ Security note: URL allowlists are enforced before fetch and on redirect hops. Al
 
 ## Streaming (SSE)
 
+Streaming preserves repeated content from separate assistant messages. If a correction cannot be represented by appending to text already sent, the stream emits `response.failed` rather than completing with inconsistent content.
+
 Set `stream: true` to receive Server-Sent Events:
 
 - `Content-Type: text/event-stream`
@@ -242,6 +246,8 @@ Set `stream: true` to receive Server-Sent Events:
 Event types currently emitted: `response.created`, `response.in_progress`, `response.output_item.added`, `response.content_part.added`, `response.output_text.delta`, `response.output_text.done`, `response.content_part.done`, `response.output_item.done`, `response.completed`, `response.failed` (on error).
 
 Failed agent runs, including whole-agent timeouts, return a failed response. Streaming failures emit `response.failed` followed by `[DONE]`; partial content may already have reached the client. Timeout settings follow the [agent loop](/concepts/agent-loop#timeouts).
+
+Disconnecting the HTTP client cancels active source-URL downloads and the agent run. If cancellation happens while preparing input, the Gateway releases that download and does not start another input download or the agent run. This applies to both streaming and non-streaming requests.
 
 ## Usage
 

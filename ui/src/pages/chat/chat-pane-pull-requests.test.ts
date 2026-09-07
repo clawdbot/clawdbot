@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { setImmediate as nextFrame } from "node:timers/promises";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
@@ -7,15 +8,22 @@ import {
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-requests.ts";
+import {
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+  sessionPullRequestsForGateway,
+} from "../../lib/session-pull-requests.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { resetChatHistoryProjection } from "./chat-history-state.ts";
+import { makeChatHost } from "./chat-host.test-support.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
   createRenderTestChatPane,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { reduceChatSessionProjection } from "./history-merge.ts";
 
 function pullRequest(
   number: number,
@@ -69,7 +77,9 @@ function emitSnapshot(
   });
 }
 
-function createPublicationPane() {
+function createPublicationPane(scope?: "global" | "per-sender") {
+  const agentId = scope ? "research" : "main";
+  const sessionKey = scope ? "global" : "agent:main:publication";
   const shared = { source: "system-configured", accountId: 1, login: "system-bot" };
   const account = { accountId: 2, login: "alice-tools" };
   const generation = "bdca439a-e787-4f9f-b5f3-a878c662cc76";
@@ -78,7 +88,7 @@ function createPublicationPane() {
     personal: { state: "connected", generation, account },
     pendingPersonal: null,
   };
-  const request = vi.fn(async (method: string, _params?: unknown) => {
+  const request = vi.fn(async (method: string, _params?: unknown): Promise<unknown> => {
     if (method === "sessions.github.options") {
       return options;
     }
@@ -92,25 +102,44 @@ function createPublicationPane() {
   });
   const client = createGatewayBrowserClientFixture({ request });
   const initial = createInitializationContext();
+  const hello = gatewayHelloForMethods(
+    ["sessions.github.publish", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
+    ["operator.read", "operator.write"],
+  );
+  if (scope) {
+    hello.snapshot = {
+      sessionDefaults: {
+        defaultAgentId: "ops",
+        mainKey: "main",
+        mainSessionKey: scope === "global" ? "global" : "agent:ops:main",
+      },
+    };
+  }
   const gateway: ApplicationContext["gateway"] = {
     ...initial.gateway,
     snapshot: {
       ...initial.gateway.snapshot,
       client,
       phase: "connected",
-      hello: gatewayHelloForMethods(
-        ["sessions.github.publish", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
-        ["operator.read", "operator.write"],
-      ),
+      hello,
+      assistantAgentId: agentId,
+      sessionKey,
+      selfUser: {
+        id: "publication-person",
+        identity: { type: "profile", id: "publication-person" },
+      },
     },
+  };
+  const selection = {
+    ...initial.agentSelection,
+    state: { selectedId: agentId, scopeId: agentId },
+    subscribe: () => () => {},
   };
   const context: ApplicationContext = {
     ...initial,
     gateway,
-    sessions: createSessionCapability(gateway, {
-      state: { selectedId: "main" },
-      subscribe: () => () => {},
-    }),
+    agentSelection: selection,
+    sessions: createSessionCapability(gateway, selection),
   };
   const pane = createRenderTestChatPane();
   Object.defineProperties(pane, {
@@ -124,13 +153,23 @@ function createPublicationPane() {
   });
   state.client = client;
   state.connected = true;
-  state.sessionKey = "agent:main:publication";
+  state.sessionKey = sessionKey;
+  state.assistantAgentId = agentId;
+  state.sessionsResultAgentId = agentId;
   state.sessionsResult = {
     ts: 1,
     path: "",
     count: 1,
     defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: [{ key: state.sessionKey, sessionId: "publication", kind: "direct", updatedAt: 1 }],
+    // Scoped lists may carry the owner only at the result/route level.
+    sessions: [
+      {
+        key: sessionKey,
+        sessionId: "publication",
+        kind: scope ? "global" : "direct",
+        updatedAt: 1,
+      },
+    ],
   };
   const settled = async () => {
     await vi.waitFor(() => {
@@ -139,10 +178,74 @@ function createPublicationPane() {
     });
     return pane.chatProps!.githubPublication!;
   };
-  return { pane, state, context, request, shared, account, generation, settled };
+  return { pane, state, context, request, options, shared, account, generation, settled };
 }
 
 describe("chat pane pushed pull request state", () => {
+  it.each(["global", "per-sender"] as const)(
+    "preserves the selected raw-global owner through publication RPCs in %s scope",
+    async (scope) => {
+      const { pane, request, options, account, generation, settled } = createPublicationPane(scope);
+      const requestId = "bdca439a-e787-4f9f-b5f3-a878c662cc77";
+      const result = {
+        requestId,
+        publisher: { source: "personal", ...account },
+        status: "needs_confirmation",
+      };
+      const confirmation = {
+        account,
+        generation,
+        requestDigest: "a".repeat(64),
+        repository: "team/demo",
+        pushRepository: "alice-tools/demo",
+        branch: "feature/research",
+        baseBranch: "main",
+        sourceHeadCommit: "1".repeat(40),
+        sourceIndexTree: "2".repeat(40),
+        workspaceTree: "3".repeat(40),
+      };
+      request.mockImplementation(async (method) => {
+        switch (method) {
+          case "sessions.github.options":
+            return options;
+          case "sessions.github.publish":
+            return result;
+          case "sessions.github.status":
+            return { result, confirmation };
+          case "sessions.github.confirm":
+            return { ...result, status: "published" };
+          case SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD:
+            return { subscribed: true };
+          default:
+            throw new Error(`Unexpected request: ${method}`);
+        }
+      });
+      (await settled()).onSelect?.("personal");
+      pane.render();
+      pane.chatProps!.githubPublication!.onPublish?.();
+      (await settled()).onConfirm?.();
+      await settled();
+      expect(
+        request.mock.calls
+          .map(([method]) => method)
+          .filter((method) => method.startsWith("sessions.github.")),
+      ).toEqual([
+        "sessions.github.options",
+        "sessions.github.publish",
+        "sessions.github.status",
+        "sessions.github.confirm",
+      ]);
+      for (const method of ["options", "publish", "status", "confirm"]) {
+        expect
+          .soft(request)
+          .toHaveBeenCalledWith(
+            `sessions.github.${method}`,
+            expect.objectContaining({ sessionKey: "global", agentId: "research" }),
+          );
+      }
+    },
+  );
+
   it.each(["shared", "personal"] as const)(
     "retains an unknown %s publication across a retained-pane navigation",
     async (source) => {
@@ -156,6 +259,7 @@ describe("chat pane pushed pull request state", () => {
       const first = request.mock.calls.find(([method]) => method === "sessions.github.publish");
       expect(first?.[1]).toEqual({
         sessionKey: state.sessionKey,
+        agentId: "main",
         idempotencyKey: expect.any(String),
         selection:
           source === "shared" ? { source, expected: shared } : { source, generation, account },
@@ -202,21 +306,25 @@ describe("chat pane pushed pull request state", () => {
       setPullRequestSummary: vi.fn(),
     } as unknown as SessionCapability);
 
-    await pane.refreshSessionPullRequests();
+    pane.refreshSessionPullRequests();
+    await Promise.resolve();
     state.sessionKey = "agent:main:current-2";
-    await pane.refreshSessionPullRequests();
+    pane.refreshSessionPullRequests();
+    await Promise.resolve();
     emitSnapshot(emitGatewayEvent, "agent:main:current", {
       pullRequests: [pullRequest(1, "open")],
       rateLimited: false,
       status: "ready",
     });
-    await pane.refreshSessionPullRequests();
+    pane.refreshSessionPullRequests();
+    await Promise.resolve();
     emitSnapshot(emitGatewayEvent, "agent:main:current-2", {
       pullRequests: [pullRequest(2, "open")],
       rateLimited: false,
       status: "ready",
     });
-    await pane.refreshSessionPullRequests();
+    pane.refreshSessionPullRequests();
+    await Promise.resolve();
 
     expect(pane.sessionPullRequests).toEqual([expect.objectContaining({ number: 2 })]);
   });
@@ -229,7 +337,8 @@ describe("chat pane pushed pull request state", () => {
       setPullRequestSummary,
     } as unknown as SessionCapability);
 
-    await pane.refreshSessionPullRequests({ refresh: true });
+    pane.refreshSessionPullRequests({ refresh: true });
+    await Promise.resolve();
     await Promise.resolve();
     expect(request).toHaveBeenCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
       sessionKeys: ["agent:main:current"],
@@ -240,7 +349,8 @@ describe("chat pane pushed pull request state", () => {
       rateLimited: false,
       status: "ready",
     });
-    await pane.refreshSessionPullRequests();
+    pane.refreshSessionPullRequests();
+    await Promise.resolve();
 
     expect(setPullRequestSummary).toHaveBeenCalledWith(
       "agent:main:current",
@@ -258,13 +368,15 @@ describe("chat pane pushed pull request state", () => {
       capturePullRequestEpoch: vi.fn(() => epoch),
       setPullRequestSummary,
     } as unknown as SessionCapability);
-    await pane.refreshSessionPullRequests();
+    pane.refreshSessionPullRequests();
+    await Promise.resolve();
     emitSnapshot(emitGatewayEvent, "agent:main:current", {
       pullRequests: [current, ...older],
       rateLimited: false,
       status: "ready",
     });
-    await pane.refreshSessionPullRequests();
+    pane.refreshSessionPullRequests();
+    await Promise.resolve();
 
     expect(setPullRequestSummary).toHaveBeenCalledWith(
       "agent:main:current",
@@ -295,7 +407,8 @@ describe("chat pane pushed pull request state", () => {
       capturePullRequestEpoch: vi.fn(() => epoch),
       setPullRequestSummary,
     } as unknown as SessionCapability);
-    await pane.refreshSessionPullRequests();
+    pane.refreshSessionPullRequests();
+    await Promise.resolve();
     emitSnapshot(emitGatewayEvent, "agent:main:current", {
       branch: {
         owner: "openclaw",
@@ -307,7 +420,8 @@ describe("chat pane pushed pull request state", () => {
       rateLimited: false,
       status: "ready",
     });
-    await pane.refreshSessionPullRequests();
+    pane.refreshSessionPullRequests();
+    await Promise.resolve();
     expect(pane.sessionPullRequests).toHaveLength(1);
 
     emitGatewayEvent("sessions.changed", {
@@ -315,7 +429,8 @@ describe("chat pane pushed pull request state", () => {
       agentId: "main",
       reason: "branch-switch",
     });
-    await pane.refreshSessionPullRequests();
+    pane.refreshSessionPullRequests();
+    await Promise.resolve();
 
     expect(pane.sessionPullRequests).toEqual([]);
     expect(pane.sessionPullRequestsBranch).toBeUndefined();
@@ -328,13 +443,15 @@ describe("chat pane pushed pull request state", () => {
       capturePullRequestEpoch: vi.fn(() => ({})),
       setPullRequestSummary,
     } as unknown as SessionCapability);
-    await pane.refreshSessionPullRequests();
+    pane.refreshSessionPullRequests();
+    await Promise.resolve();
     emitSnapshot(emitGatewayEvent, "agent:main:current", {
       pullRequests: [],
       rateLimited: true,
       status: "rate-limited",
     });
-    await pane.refreshSessionPullRequests();
+    pane.refreshSessionPullRequests();
+    await Promise.resolve();
 
     expect(setPullRequestSummary).not.toHaveBeenCalled();
   });
@@ -346,13 +463,15 @@ describe("chat pane pushed pull request state", () => {
       capturePullRequestEpoch: vi.fn(() => epoch),
       setPullRequestSummary,
     } as unknown as SessionCapability);
-    await pane.refreshSessionPullRequests();
+    pane.refreshSessionPullRequests();
+    await Promise.resolve();
     emitSnapshot(emitGatewayEvent, "agent:main:current", {
       pullRequests: [pullRequest(111532, "merged")],
       rateLimited: false,
       status: "ready",
     });
-    await pane.refreshSessionPullRequests();
+    pane.refreshSessionPullRequests();
+    await Promise.resolve();
 
     expect(setPullRequestSummary).toHaveBeenCalledWith(
       "agent:main:current",
@@ -389,3 +508,182 @@ it.each(["incarnation", "sharing", "archive-projection"] as const)(
     pane.render();
   },
 );
+
+describe("PR refresh wire ownership", () => {
+  it.each([
+    { name: "identical finals on separate frames", texts: ["Opened", "Opened"], expected: 1 },
+    { name: "distinct finals in the same run", texts: ["Opened", "Merged"], expected: 2 },
+    { name: "the first live final after history", texts: ["Opened"], history: true, expected: 1 },
+    {
+      name: "the first presented final after hidden delivery",
+      texts: ["Opened", "Opened"],
+      hiddenFirst: true,
+      expected: 1,
+    },
+    {
+      name: "a stream announcement followed by its final",
+      texts: ["Opened"],
+      stream: true,
+      expected: 2,
+    },
+    {
+      name: "a final whose queued refresh lost its last watch before sync",
+      texts: ["Opened", "Opened"],
+      loseWatchBeforeSync: true,
+      expected: 1,
+    },
+    { name: "a same-session background final", texts: ["Opened"], background: true, expected: 1 },
+    {
+      name: "reconnect between final deliveries",
+      texts: ["Opened", "Opened"],
+      reconnect: true,
+      expected: 2,
+    },
+    {
+      name: "explicit history reset between finals",
+      texts: ["Opened", "Opened"],
+      reset: true,
+      expected: 2,
+    },
+    {
+      name: "ordinary history between final replays",
+      texts: ["Opened", "Opened"],
+      historyBetween: true,
+      expected: 1,
+    },
+    {
+      name: "a genuine branch switch before the next final",
+      texts: ["Opened", "Opened"],
+      branchSwitch: true,
+      expected: 3,
+    },
+  ])(
+    "keeps subscription force scoped for $name",
+    async ({
+      texts,
+      expected,
+      history,
+      hiddenFirst,
+      stream,
+      background,
+      reconnect,
+      reset,
+      historyBetween,
+      branchSwitch,
+      loseWatchBeforeSync,
+    }) => {
+      const sessions = makeChatHost().sessions;
+      onTestFinished(() => sessions.dispose());
+      const { pane, state, request, emitGatewayEvent } = createPullRequestPane(sessions);
+      Object.assign(
+        state,
+        makeChatHost({
+          client: state.client,
+          connectionEpoch: state.connectionEpoch,
+          sessionKey: state.sessionKey,
+          sessions: state.sessions,
+        }),
+        {
+          chatMessagesBySession: new Map(),
+          pendingSessionMessageReloadSessionKey: null,
+          requestUpdate: vi.fn(),
+        },
+      );
+      state.refreshSessionPullRequests = (options) => pane.refreshSessionPullRequests(options);
+      state.chatRunId = background ? "foreground-run" : "wire-pr-run";
+      const key = state.sessionKey;
+      const otherKey = "agent:main:unrelated";
+      const store = sessionPullRequestsForGateway(pane.context.gateway);
+      const otherOwner = {};
+      store.watch(otherOwner, [otherKey]);
+      onTestFinished(() => store.unwatch(otherOwner));
+      pane.refreshSessionPullRequests();
+      await Promise.resolve();
+      await nextFrame();
+      request.mockClear();
+      const message = (text: string) => ({
+        role: "assistant",
+        content: [
+          { type: "text", text: `${text} https://github.com/openclaw/openclaw/pull/111532` },
+        ],
+      });
+      if (history) {
+        reduceChatSessionProjection(state, {
+          type: "snapshotLoaded",
+          messages: [message("Opened")],
+        });
+        reduceChatSessionProjection(state, {
+          type: "runTerminal",
+          runId: "wire-pr-run",
+          status: "completed",
+        });
+        state.chatRunId = null;
+      }
+      if (stream) {
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "chat",
+          payload: {
+            state: "delta",
+            runId: "wire-pr-run",
+            sessionKey: key,
+            deltaText: "Opened https://github.com/openclaw/openclaw/pull/111532 ",
+          },
+        });
+        await nextFrame();
+      }
+      for (const [index, text] of texts.entries()) {
+        if (index > 0 && reconnect) {
+          pane.connectionGeneration += 1;
+          state.connectionEpoch = pane.connectionGeneration;
+        }
+        if (index > 0 && reset) {
+          resetChatHistoryProjection(state);
+        }
+        if (index > 0 && historyBetween) {
+          reduceChatSessionProjection(state, {
+            type: "snapshotLoaded",
+            messages: [message("Opened")],
+          });
+        }
+        if (index > 0 && branchSwitch) {
+          const payload = { sessionKey: key, agentId: "main", reason: "branch-switch" };
+          handlePageGatewayEvent(
+            state,
+            { type: "event", event: "sessions.changed", payload },
+            () => false,
+          );
+          emitGatewayEvent("sessions.changed", payload);
+          await nextFrame();
+        }
+        pane.presented = !(hiddenFirst && index === 0);
+        handlePageGatewayEvent(state, {
+          type: "event",
+          event: "chat",
+          payload: {
+            state: "final",
+            runId: "wire-pr-run",
+            sessionKey: key,
+            message: message(text),
+          },
+        });
+        if (index === 0 && loseWatchBeforeSync) {
+          pane.presented = false;
+        }
+        // Separate WebSocket frame deliveries let the store's microtask and
+        // subscribe acknowledgement finish before the next announcement arrives.
+        await nextFrame();
+      }
+      const forces = request.mock.calls.filter(
+        ([method, params]) =>
+          method === SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD &&
+          Array.isArray(params?.refreshSessionKeys) &&
+          params.refreshSessionKeys.length > 0,
+      );
+      for (const [, params] of forces) {
+        expect(params).toEqual({ sessionKeys: [key, otherKey], refreshSessionKeys: [key] });
+      }
+      expect(forces).toHaveLength(expected);
+    },
+  );
+});

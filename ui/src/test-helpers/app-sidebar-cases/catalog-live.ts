@@ -3,7 +3,7 @@ import type {
   SessionsCatalogHostEvent,
   SessionsCatalogListResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   catalogPage,
@@ -18,81 +18,25 @@ import {
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar session catalog pagination", () => {
-  it("falls back to final pages when an older Gateway rejects progressId", async () => {
+  it("ignores a catalog response that settles after the Gateway client changes", async () => {
     vi.useFakeTimers();
     try {
-      const request = vi
-        .fn()
-        .mockRejectedValueOnce(
-          new GatewayRequestError({
-            code: "INVALID_REQUEST",
-            message:
-              "invalid sessions.catalog.list params: at root: unexpected property 'progressId'",
-          }),
-        )
-        .mockResolvedValue(catalogPage([]));
-      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-      gateway.publish({
-        hello: {
-          features: { methods: ["sessions.catalog.list"] },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
-      const { sidebar } = await mountSidebar(
-        gateway.gateway,
-        createSessions("main", ["agent:main:main"]),
-      );
-      sidebar.connected = true;
-      await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(0);
-
-      expect(request).toHaveBeenNthCalledWith(1, "sessions.catalog.list", {
-        agentId: "main",
-        limitPerHost: 40,
-        progressId: expect.any(String),
-      });
-      expect(request).toHaveBeenNthCalledWith(2, "sessions.catalog.list", {
-        agentId: "main",
-        limitPerHost: 40,
-      });
-
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.list", {
-        agentId: "main",
-        limitPerHost: 40,
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("ignores a legacy fallback that settles after the Gateway client changes", async () => {
-    vi.useFakeTimers();
-    try {
-      const legacyFallback = deferred<SessionsCatalogListResult>();
-      const legacyRequest = vi
-        .fn()
-        .mockRejectedValueOnce(
-          new GatewayRequestError({
-            code: "INVALID_REQUEST",
-            message:
-              "invalid sessions.catalog.list params: at root: unexpected property 'progressId'",
-          }),
-        )
-        .mockReturnValueOnce(legacyFallback.promise);
-      const legacyGateway = createGatewayHarness({
-        request: legacyRequest,
+      const staleResponse = deferred<SessionsCatalogListResult>();
+      const previousRequest = vi.fn().mockReturnValueOnce(staleResponse.promise);
+      const previousGateway = createGatewayHarness({
+        request: previousRequest,
       } as unknown as GatewayBrowserClient);
-      legacyGateway.publish({
+      previousGateway.publish({
         hello: {
           features: { methods: ["sessions.catalog.list"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       const sessions = createSessions("main", ["agent:main:main"]);
-      const { provider, sidebar } = await mountSidebar(legacyGateway.gateway, sessions);
+      const { provider, sidebar } = await mountSidebar(previousGateway.gateway, sessions);
       sidebar.connected = true;
       await sidebar.updateComplete;
       await vi.advanceTimersByTimeAsync(0);
-      expect(legacyRequest).toHaveBeenCalledTimes(2);
+      expect(previousRequest).toHaveBeenCalledTimes(1);
 
       const currentRequest = vi.fn().mockResolvedValue(catalogPage([]));
       const currentGateway = createGatewayHarness({
@@ -107,8 +51,10 @@ describe("AppSidebar session catalog pagination", () => {
       await sidebar.updateComplete;
       await vi.advanceTimersByTimeAsync(50);
 
-      legacyFallback.resolve(catalogPage([]));
+      staleResponse.resolve(catalogPage([{ threadId: "thread-stale", name: "Stale session" }]));
       await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+      expect(sidebar.textContent).not.toContain("Stale session");
       await vi.advanceTimersByTimeAsync(30_000);
 
       expect(currentRequest).toHaveBeenCalledTimes(2);

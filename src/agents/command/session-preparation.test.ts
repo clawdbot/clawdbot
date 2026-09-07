@@ -8,7 +8,7 @@ import {
 import { prepareEmbeddedSessionState } from "./session-preparation.js";
 
 vi.mock("../embedded-agent-runner/runs.js", () => ({
-  resolveEmbeddedAgentRunProgressState: () => undefined,
+  resolveEmbeddedAgentSessionProgressState: () => undefined,
 }));
 vi.mock("../subagents/registry/subagent-registry-read.js", () => ({
   getLatestLiveSubagentRunByChildSessionKey: () => undefined,

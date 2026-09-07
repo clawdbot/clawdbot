@@ -95,75 +95,16 @@ export function evaluateSystemRunPolicy(params: {
   const analysisOk = shellWrapperBlocked ? false : params.analysisOk;
   const allowlistSatisfied = shellWrapperBlocked ? false : params.allowlistSatisfied;
   const approvedByAsk = params.approvalDecision !== null || params.approved === true;
-
-  if (params.security === "deny") {
-    return {
-      allowed: false,
-      eventReason: "security=deny",
-      errorMessage: "SYSTEM_RUN_DISABLED: security=deny",
+  const requiresAsk =
+    params.security !== "deny" &&
+    requiresExecApproval({
+      ask: params.ask,
+      security: params.security,
       analysisOk,
       allowlistSatisfied,
-      shellWrapperBlocked,
-      windowsShellWrapperBlocked,
-      requiresAsk: false,
-      approvalDecision: params.approvalDecision,
-      approvedByAsk,
-    };
-  }
-
-  const requiresAsk = requiresExecApproval({
-    ask: params.ask,
-    security: params.security,
-    analysisOk,
-    allowlistSatisfied,
-    durableApprovalSatisfied: params.durableApprovalSatisfied,
-  });
-  if (requiresAsk && !approvedByAsk) {
-    return {
-      allowed: false,
-      eventReason: "approval-required",
-      errorMessage: "SYSTEM_RUN_DENIED: approval required",
-      analysisOk,
-      allowlistSatisfied,
-      shellWrapperBlocked,
-      windowsShellWrapperBlocked,
-      requiresAsk,
-      approvalDecision: params.approvalDecision,
-      approvedByAsk,
-    };
-  }
-
-  if (params.security === "allowlist" && (!analysisOk || !allowlistSatisfied) && !approvedByAsk) {
-    if (params.durableApprovalSatisfied) {
-      return {
-        allowed: true,
-        analysisOk,
-        allowlistSatisfied,
-        shellWrapperBlocked,
-        windowsShellWrapperBlocked,
-        requiresAsk,
-        approvalDecision: params.approvalDecision,
-        approvedByAsk,
-      };
-    }
-    return {
-      allowed: false,
-      eventReason: "allowlist-miss",
-      errorMessage: formatSystemRunAllowlistMissMessage({
-        windowsShellWrapperBlocked,
-      }),
-      analysisOk,
-      allowlistSatisfied,
-      shellWrapperBlocked,
-      windowsShellWrapperBlocked,
-      requiresAsk,
-      approvalDecision: params.approvalDecision,
-      approvedByAsk,
-    };
-  }
-
-  return {
-    allowed: true,
+      durableApprovalSatisfied: params.durableApprovalSatisfied,
+    });
+  const context = {
     analysisOk,
     allowlistSatisfied,
     shellWrapperBlocked,
@@ -171,5 +112,44 @@ export function evaluateSystemRunPolicy(params: {
     requiresAsk,
     approvalDecision: params.approvalDecision,
     approvedByAsk,
+  };
+
+  if (params.security === "deny") {
+    return {
+      allowed: false,
+      eventReason: "security=deny",
+      errorMessage: "SYSTEM_RUN_DISABLED: security=deny",
+      ...context,
+    };
+  }
+
+  if (requiresAsk && !approvedByAsk) {
+    return {
+      allowed: false,
+      eventReason: "approval-required",
+      errorMessage: "SYSTEM_RUN_DENIED: approval required",
+      ...context,
+    };
+  }
+
+  if (
+    params.security === "allowlist" &&
+    (!analysisOk || !allowlistSatisfied) &&
+    !approvedByAsk &&
+    !params.durableApprovalSatisfied
+  ) {
+    return {
+      allowed: false,
+      eventReason: "allowlist-miss",
+      errorMessage: formatSystemRunAllowlistMissMessage({
+        windowsShellWrapperBlocked,
+      }),
+      ...context,
+    };
+  }
+
+  return {
+    allowed: true,
+    ...context,
   };
 }
