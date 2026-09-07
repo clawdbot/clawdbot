@@ -591,6 +591,18 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
       await waitForSessionTranscriptProjection(target);
       const bounded = SessionManager.openBounded(target, { maxBytes: 64_000, maxEvents: 20 });
       expect(bounded.buildSessionContext()).toEqual(manager.buildSessionContext());
+      const detached = SessionManager.openDetachedBounded(target, {
+        maxBytes: 64_000,
+        maxEvents: 20,
+      });
+      expect(detached.buildSessionContext()).toEqual(manager.buildSessionContext());
+      const rowsBeforeDetachedAppend = await loadTranscriptEvents(target);
+      detached.appendMessage({ role: "user", content: "detached turn", timestamp: 5 });
+      expect(detached.buildSessionContext().messages).toEqual([
+        ...manager.buildSessionContext().messages,
+        { role: "user", content: "detached turn", timestamp: 5 },
+      ]);
+      expect(await loadTranscriptEvents(target)).toEqual(rowsBeforeDetachedAppend);
       expect(SessionManager.openModelContext(target).buildSessionContext()).toEqual(
         manager.buildSessionContext(),
       );
@@ -627,6 +639,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
         SessionManager.openBounded(target, { maxBytes: 64_000, maxEvents: 20 }),
         SessionManager.openModelContext(target),
         await SessionManager.openModelContextAsync(target),
+        SessionManager.openDetachedBounded(target, { maxBytes: 64_000, maxEvents: 20 }),
       ]) {
         expect(selected.buildSessionContext()).toEqual(expected);
       }
@@ -641,6 +654,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
         SessionManager.openBounded(branched, { maxBytes: 64_000, maxEvents: 20 }),
         SessionManager.openModelContext(branched),
         await SessionManager.openModelContextAsync(branched),
+        SessionManager.openDetachedBounded(branched, { maxBytes: 64_000, maxEvents: 20 }),
       ]) {
         expect(selected.buildSessionContext()).toEqual(expected);
       }

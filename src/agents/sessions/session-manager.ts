@@ -18,9 +18,9 @@ import {
   validateSessionTranscriptContextAnchor,
   validateSessionTranscriptContextVersion,
 } from "../../config/sessions/session-accessor.sqlite-model-context.js";
-import { assertCurrentSessionTranscriptHeader } from "../../config/sessions/session-entry-codec.js";
 import { loadTranscriptReadSnapshotSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
+import { assertCurrentSessionTranscriptHeader } from "../../config/sessions/session-entry-codec.js";
 import { readSessionTranscriptModelContextAsync } from "../../config/sessions/session-model-context-worker-runtime.js";
 import {
   resolveSessionTranscriptReadFence,
@@ -228,7 +228,7 @@ export class SessionManager extends SessionManagerBranching {
   ): SessionManager {
     const source = SessionManager.openBounded(target, options);
     // Normalize opaque parents and retained cuts before discarding persistence and bounded state.
-    return SessionManager.fromOwnedEntries(
+    return SessionManager.fromSelectedEntries(
       [source.getHeader(), ...source.getBranch()],
       source.getCwd(),
     );
@@ -246,7 +246,7 @@ export class SessionManager extends SessionManagerBranching {
     const context = withSessionContextAdmission(target, options.admission, () =>
       readSessionTranscriptModelContext(target, options.through),
     );
-    return SessionManager.fromModelContextEntries(context.events, options.cwd);
+    return SessionManager.fromSelectedEntries(context.events, options.cwd);
   }
 
   /** The same detached model view, with durable transcript scanning off the event loop. */
@@ -277,10 +277,10 @@ export class SessionManager extends SessionManagerBranching {
     if (through) {
       validateSessionTranscriptContextAnchor(readTarget, through);
     }
-    return SessionManager.fromModelContextEntries(context.events, options.cwd);
+    return SessionManager.fromSelectedEntries(context.events, options.cwd);
   }
 
-  private static fromModelContextEntries(contextEntries: unknown[], cwd?: string): SessionManager {
+  private static fromSelectedEntries(contextEntries: unknown[], cwd?: string): SessionManager {
     // SAFETY: The transcript owner preserves the entry union; the constructor applies the normal codec.
     const entries = contextEntries as FileEntry[];
     const header = entries.find((entry) => entry.type === "session");
