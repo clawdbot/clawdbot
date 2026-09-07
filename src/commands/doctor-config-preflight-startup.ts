@@ -8,10 +8,15 @@ import type {
   StartupMigrationLease,
 } from "../infra/startup-migration-checkpoint.js";
 import {
+  DoctorStateMigrationRefusalError,
   formatStartupMigrationFailure,
   recordStartupMigrationWarnings,
+  throwIfDoctorStateMigrationRefused,
 } from "../infra/state-migrations.messages.js";
-import type { MigrationMessages } from "../infra/state-migrations.types.js";
+import type {
+  LegacyStateMigrationStepReceipt,
+  MigrationMessages,
+} from "../infra/state-migrations.types.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import {
   migrationCheckpointIdentitiesMatch,
@@ -179,6 +184,29 @@ export async function completeStartupMigrationPreflight(params: {
     });
   }
   return snapshotRead;
+}
+
+export async function assertDoctorPreflightMigrationsComplete(params: {
+  cfg: OpenClawConfig;
+  stepReceipts: readonly LegacyStateMigrationStepReceipt[];
+  report: (result: MigrationMessages) => void;
+}): Promise<void> {
+  try {
+    throwIfDoctorStateMigrationRefused(params.stepReceipts);
+  } catch (error) {
+    if (error instanceof DoctorStateMigrationRefusalError) {
+      // A refused owner stops all later repairs. Still diagnose canonical
+      // workspace state read-only before final completion becomes unreachable.
+      const { assertConfiguredWorkspaceStateReady } =
+        await import("../agents/workspace-state-dirs.js");
+      try {
+        assertConfiguredWorkspaceStateReady({ cfg: params.cfg, operation: "doctor" });
+      } catch (workspaceError) {
+        params.report({ changes: [], warnings: [String(workspaceError)] });
+      }
+    }
+    throw error;
+  }
 }
 
 export function noteStateMigrationResult(result: MigrationMessages): void {

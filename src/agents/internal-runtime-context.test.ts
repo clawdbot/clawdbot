@@ -1,5 +1,5 @@
 /**
- * Regression coverage for internal runtime-context stripping and extraction.
+ * Regression coverage for internal runtime-context stripping.
  * Verifies protected delimiters, legacy blocks, and custom-message filtering.
  */
 
@@ -7,7 +7,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   escapeInternalRuntimeContextDelimiters,
-  extractInternalRuntimeContext,
   hasInternalRuntimeContext,
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -64,7 +63,7 @@ describe("internal runtime context codec", () => {
     expect(stripInternalRuntimeContext(input)).toBe("Visible intro\n\nVisible outro");
   });
 
-  it("extracts marked internal runtime blocks and preserves surrounding text", () => {
+  it("strips multiple marked internal runtime blocks and preserves surrounding text", () => {
     const first = [
       INTERNAL_RUNTIME_CONTEXT_BEGIN,
       "first secret",
@@ -77,13 +76,10 @@ describe("internal runtime context codec", () => {
     ].join("\n");
     const input = ["Visible intro", "", first, "", "Visible middle", "", second].join("\n");
 
-    expect(extractInternalRuntimeContext(input)).toEqual({
-      text: "Visible intro\n\nVisible middle",
-      runtimeContext: [first, "", second].join("\n"),
-    });
+    expect(stripInternalRuntimeContext(input)).toBe("Visible intro\n\nVisible middle");
   });
 
-  it("fails closed when extracting malformed marked internal runtime blocks", () => {
+  it("strips an unterminated internal runtime block from display", () => {
     const input = [
       "Visible intro",
       "",
@@ -93,9 +89,7 @@ describe("internal runtime context codec", () => {
       "Visible-looking tail",
     ].join("\n");
 
-    expect(extractInternalRuntimeContext(input)).toEqual({
-      text: "Visible intro",
-    });
+    expect(stripInternalRuntimeContext(input)).toBe("Visible intro");
   });
 
   it("detects canonical runtime context and ignores inline marker mentions", () => {

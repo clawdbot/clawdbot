@@ -326,6 +326,20 @@ Runtime caps such as cron `toolsAllow` are normalized and group-expanded by
 OpenClaw before this contract is built. Native tools are disabled, and a
 backend without a complete declared enforcement path fails before execution.
 
+Rooted runs such as [Skill Workshop reviews](/tools/skill-workshop) also require
+`isolatesInstructionsWithExactTools: true` on the backend registration. Declare
+this optional capability only when exact-tool execution suppresses ambient
+instruction files, skills, hooks, and plugins for both fresh and resumed runs.
+The host-prepared instruction snapshot must remain authoritative. OpenClaw
+rejects rooted runs when this declaration is absent, even if the backend can
+enforce exact tools. Existing non-rooted runs do not require this field.
+
+The bundled Claude CLI backend declares this capability. Rooted execution
+disables its native tools and serves the selected OpenClaw tools through the
+host-owned MCP grant, which retains the root, filesystem policy, and configured
+sandbox. The declaration does not grant filesystem or approval authority to
+the backend.
+
 A backend whose native tools are model-callable may declare
 `projectNativeToolAuthority(nativeTools)` so that automations created from its
 sessions keep the creator's native capabilities. For Claude stream-JSON, the

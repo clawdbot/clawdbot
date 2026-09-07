@@ -165,6 +165,19 @@ describe("update run ledger", () => {
     },
   );
 
+  it("reads rows persisted with the retired inferenceProbe verification fact", () => {
+    const options = isolatedOptions();
+    const run = createUpdateRun({ trigger: "cli" }, options);
+    recordUpdateRunVerification(run.runId, { serviceRunning: true }, options);
+    // Rows written before verification stopped recording inference keep the key;
+    // the non-strict record schema drops it instead of rejecting the run.
+    openOpenClawStateDatabase(options)
+      .db.prepare("UPDATE update_runs SET verification_json = ? WHERE run_id = ?")
+      .run(JSON.stringify({ serviceRunning: true, inferenceProbe: "passed" }), run.runId);
+
+    expect(getUpdateRun(run.runId, options)?.verification).toEqual({ serviceRunning: true });
+  });
+
   it("leaves a cold store without the history table unchanged", () => {
     const options = isolatedOptions();
     const { db } = openOpenClawStateDatabase(options);
@@ -305,7 +318,6 @@ describe("update run ledger", () => {
         settled: true,
         channelsReady: true,
         pluginErrors: [],
-        inferenceProbe: "unavailable",
       },
       options,
     );

@@ -2,7 +2,6 @@ import type { APIChannel, APIGuildForumChannel, APIGuildMediaChannel } from "dis
 import { ChannelType } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import type { OutboundMediaAccess, PollInput } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { resolveChunkMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
@@ -10,8 +9,8 @@ import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createChannelMessage, createThread, type RequestClient } from "./internal/discord.js";
-import { renderDiscordMarkdown } from "./markdown.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
+import { prepareDiscordOutboundText } from "./outbound-text.js";
 import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
 import {
   createReusableDiscordReplyReference,
@@ -181,12 +180,6 @@ export async function sendMessageDiscord(
 ): Promise<DiscordSendResult> {
   const cfg = requireRuntimeConfig(opts.cfg, "Discord send");
   const { token, rest, request, account: accountInfo } = createDiscordClient({ ...opts, cfg });
-  const tableMode = resolveMarkdownTableMode({
-    cfg,
-    channel: "discord",
-    accountId: accountInfo.accountId,
-  });
-  const effectiveTableMode = opts.tableMode ?? tableMode;
   const chunkMode = opts.chunkMode ?? resolveChunkMode(cfg, "discord", accountInfo.accountId);
   const maxLinesPerMessage = opts.maxLinesPerMessage ?? accountInfo.config.maxLinesPerMessage;
   const suppressEmbeds = resolveDiscordSuppressEmbeds({
@@ -201,10 +194,10 @@ export async function sendMessageDiscord(
     typeof accountInfo.config.mediaMaxMb === "number"
       ? accountInfo.config.mediaMaxMb * 1024 * 1024
       : DEFAULT_DISCORD_MEDIA_MAX_MB * 1024 * 1024;
-  const renderedText = renderDiscordMarkdown(text ?? "", effectiveTableMode);
-  const textWithMentions = rewriteDiscordKnownMentions(renderedText, {
-    accountId: accountInfo.accountId,
-    mentionAliases: accountInfo.config.mentionAliases,
+  const { renderedText, textWithMentions } = prepareDiscordOutboundText(text ?? "", {
+    cfg,
+    account: accountInfo,
+    tableMode: opts.tableMode,
   });
   const recipient = await parseAndResolveChannelRecipient(to, cfg, accountInfo.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);

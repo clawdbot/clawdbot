@@ -197,6 +197,16 @@ describe("native app i18n inventory", () => {
     );
   });
 
+  it("inventories SwiftUI Tab titles as UI calls", () => {
+    const sources = extractNativeI18nCandidates(
+      "apple",
+      "apps/macos/Fixture.swift",
+      `Tab("Connection", systemImage: "network", value: FixtureTab.connection) { EmptyView() }`,
+    ).map((entry) => entry.source);
+
+    expect(sources).toEqual(["Connection"]);
+  });
+
   it("joins adjacent literals across supported Swift and Kotlin UI expressions", () => {
     const swift = extractNativeI18nCandidates(
       "apple",

@@ -48,12 +48,6 @@ vi.mock("../runtime.js", () => ({
   },
 }));
 
-function firstConfigReadyCall() {
-  return ensureConfigReadyMock.mock.calls[0]?.[0] as
-    | { runtime?: unknown; commandPath?: unknown; suppressDoctorStdout?: boolean }
-    | undefined;
-}
-
 describe("tryRouteCli", () => {
   let tryRouteCli: typeof import("./route.js").tryRouteCli;
   // Capture the same loggingState reference that route.js uses.
@@ -163,8 +157,7 @@ describe("tryRouteCli", () => {
       tryRouteCli(["node", "openclaw", "config", "unset", "gateway.port"]),
     ).resolves.toBe(true);
 
-    expect(ensureConfigReadyMock).toHaveBeenCalledTimes(1);
-    expect(firstConfigReadyCall()?.commandPath).toEqual(["config", "unset"]);
+    expect(ensureConfigReadyMock.mock.calls[0]?.[0].commandPath).toEqual(["config", "unset"]);
     expect(events).toEqual(["config-ready", "action"]);
   });
 
@@ -178,6 +171,15 @@ describe("tryRouteCli", () => {
 
     expect(runRouteMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("propagates action failure without falling back to Commander", async () => {
+    const error = new Error("synthetic command failure");
+    runRouteMock.mockRejectedValueOnce(error);
+
+    await expect(tryRouteCli(["node", "openclaw", "status", "--json"])).rejects.toBe(error);
+
+    expect(runRouteMock).toHaveBeenCalledOnce();
   });
 
   it("keeps action logs routed to stderr for routed --json commands", async () => {

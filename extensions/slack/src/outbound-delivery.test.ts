@@ -126,6 +126,89 @@ describe("slack outbound shared hook wiring", () => {
     });
   });
 
+  it("delivers a valid field-rich section through the outbound adapter", async () => {
+    const client = createSlackSendTestClient();
+    sendMessageSlackMock.mockImplementation(
+      async (to: string, text: string, opts: Parameters<typeof sendMessageSlack>[2]) =>
+        await sendMessageSlack(to, text, { ...opts, client }),
+    );
+    const fields = ["Alpha", "Beta", "Gamma"].map((label) => ({
+      type: "plain_text",
+      text: label.padEnd(1_500, "."),
+    }));
+    const blocks = [{ type: "section", fields }];
+
+    const result = await sendDurableMessageBatch({
+      cfg,
+      channel: "slack",
+      to: "C123",
+      payloads: [{ channelData: { slack: { blocks } } }],
+      accountId: "default",
+    });
+
+    assert(result.status === "sent", "error" in result ? String(result.error) : result.status);
+    expect(client.chat.postMessage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        blocks,
+        text: fields.map((field) => field.text).join("\n"),
+        mrkdwn: false,
+      }),
+    );
+    expect(result.results[0]?.receipt?.platformMessageIds).toEqual(["171234.567"]);
+  });
+
+  it("preserves a field-rich section and every receipt when native table delivery falls back", async () => {
+    const client = createSlackSendTestClient();
+    client.chat.postMessage
+      .mockRejectedValueOnce({ data: { error: "invalid_blocks" } })
+      .mockResolvedValueOnce({ ts: "171234.1" })
+      .mockResolvedValueOnce({ ts: "171234.2" });
+    sendMessageSlackMock.mockImplementation(
+      async (to: string, text: string, opts: Parameters<typeof sendMessageSlack>[2]) =>
+        await sendMessageSlack(to, text, { ...opts, client }),
+    );
+    const fields = ["Alpha", "Beta", "Gamma"].map((label) => ({
+      type: "plain_text",
+      text: label.padEnd(1_500, "."),
+    }));
+    const section = { type: "section", fields };
+    const footer = { type: "section", text: { type: "plain_text", text: "End of report" } };
+    const blocks = [
+      section,
+      {
+        type: "data_table",
+        caption: "Pipeline",
+        rows: [[{ type: "raw_text", text: "Account" }], [{ type: "raw_text", text: "Acme" }]],
+      },
+      footer,
+    ];
+
+    const result = await sendDurableMessageBatch({
+      cfg,
+      channel: "slack",
+      to: "C123",
+      payloads: [{ channelData: { slack: { blocks } } }],
+      accountId: "default",
+    });
+
+    assert(result.status === "sent", "error" in result ? String(result.error) : result.status);
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(3);
+    expect(client.chat.postMessage.mock.calls[1]?.[0]).toMatchObject({
+      blocks: [section],
+      text: fields.map((field) => field.text).join("\n"),
+      mrkdwn: false,
+    });
+    expect(client.chat.postMessage.mock.calls[2]?.[0]).toMatchObject({
+      blocks: [
+        { type: "section", text: { type: "plain_text", text: "Pipeline (table)\nAccount\nAcme" } },
+        footer,
+      ],
+      text: "Pipeline (table)\nAccount\nAcme\n\nEnd of report",
+      mrkdwn: false,
+    });
+    expect(result.results[0]?.receipt?.platformMessageIds).toEqual(["171234.1", "171234.2"]);
+  });
+
   it("fires message_sending once with shared routing fields", async () => {
     const hookRegistry = createEmptyPluginRegistry();
     const handler = vi.fn().mockResolvedValue(undefined);

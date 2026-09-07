@@ -403,6 +403,9 @@ final class NodeAppModel {
     var gatewayAgents: [AgentSummary] = []
     var lastShareEventText: String = "No share events yet."
     var openChatRequestID: Int = 0
+    @ObservationIgnored private var consumedOpenChatRequestID: Int = 0
+    private(set) var pendingLiveVoiceStart = false
+    var liveVoiceStartError: String?
     var newChatRequestID: Int = 0
     // RootTabs has one chat destination; keep its acknowledgement here so recreating
     // that destination cannot replay a request that the prior view already handled.
@@ -3454,6 +3457,40 @@ extension NodeAppModel {
     func openChat(sessionKey: String?) {
         self.focusChatSession(sessionKey)
         self.openChatRequestID &+= 1
+    }
+
+    func consumeOpenChatRequest(_ requestID: Int) -> Bool {
+        guard requestID != 0,
+              requestID == self.openChatRequestID,
+              requestID != self.consumedOpenChatRequestID
+        else { return false }
+        self.consumedOpenChatRequestID = requestID
+        return true
+    }
+
+    func requestLiveVoiceStart() {
+        self.pendingLiveVoiceStart = true
+    }
+
+    func consumeLiveVoiceStartRequest(
+        isSceneActive: Bool,
+        isOnboardingPresented: Bool,
+        hasGatewayConfiguration: Bool)
+    {
+        guard self.pendingLiveVoiceStart, isSceneActive else { return }
+        // Consume before admission: finishing onboarding must not start a forgotten request.
+        self.pendingLiveVoiceStart = false
+        self.liveVoiceStartError = nil
+        guard !isOnboardingPresented, hasGatewayConfiguration else {
+            self.liveVoiceStartError = String(localized: "Connect to your Gateway, then run Start Live Voice again.")
+            return
+        }
+        self.openChat(sessionKey: self.chatSessionKey)
+        guard !self.talkMode.isEnabled else { return }
+        self.setTalkEnabled(true)
+        if !self.talkMode.isEnabled {
+            self.liveVoiceStartError = self.talkMode.statusText
+        }
     }
 
     func requestNewChat() {

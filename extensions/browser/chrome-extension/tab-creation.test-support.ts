@@ -45,8 +45,14 @@ export async function assertRelayTabCreation(params: {
     await expect.poll(() => createdPages.length, { message: JSON.stringify(opened) }).toBe(1);
     const created = createdPages[0];
     assert(created);
-    const tabs = await extensionPage.evaluate(async () => await chrome.tabs.query({}));
-    const newTabs = tabs.filter((tab) => !existingTabs.some((existing) => existing.id === tab.id));
+    // Playwright reports the page before the extension's tab index lists it;
+    // a single query here raced and saw zero new tabs on hosted runners.
+    const queryNewTabs = async () => {
+      const tabs = await extensionPage.evaluate(async () => await chrome.tabs.query({}));
+      return { tabs, newTabs: tabs.filter((tab) => !existingTabs.some((e) => e.id === tab.id)) };
+    };
+    await expect.poll(async () => (await queryNewTabs()).newTabs.length).toBe(1);
+    const { tabs, newTabs } = await queryNewTabs();
     const unchanged = await Promise.all(
       existingPages.map(
         async ({ page, url: previousUrl, title }) =>

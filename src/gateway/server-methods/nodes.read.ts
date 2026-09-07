@@ -34,7 +34,7 @@ import {
   refreshClientPluginNodeCapability,
 } from "../plugin-node-capability.js";
 import { nodeInvokePolicy } from "./nodes-policy.js";
-import { respondUnavailableOnThrow } from "./nodes.helpers.js";
+import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./shared-types.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";

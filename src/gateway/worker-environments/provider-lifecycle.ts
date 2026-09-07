@@ -208,12 +208,15 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
   };
 
   const finishProvision = async (
-    record: WorkerEnvironmentRecord,
+    initialRecord: WorkerEnvironmentRecord,
     provider: WorkerProvider,
     preparedInstallation?: WorkerInstallationArtifact,
     cancellation?: ReturnType<typeof createWorkerProvisionCancellation>,
   ) => {
+    let record = initialRecord;
     let lease: WorkerLease;
+    let attemptOpen = true;
+    let preparationComplete = false;
     let executionMode: WorkerExecutionMode | undefined;
     let enrollmentOperation: ReturnType<typeof nodeProvisioning.createEnrollmentOperation>;
     let projectOperation: ReturnType<typeof createWorkerProjectPreparation> | undefined;
@@ -292,12 +295,31 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
             }
           : undefined;
       cancellation?.assertActive();
-      const provision = () => {
-        const current = requireCurrentOwner(record);
-        if (options.isStopping() || current.destroyRequestedAtMs !== null) {
-          throw new Error("Worker provisioning operation is closed");
+      const provision = async () => {
+        const assertCurrent = () => {
+          cancellation?.assertActive();
+          const current = requireCurrentOwner(record);
+          if (!attemptOpen || options.isStopping() || current.destroyRequestedAtMs !== null) {
+            throw new Error("Worker provisioning operation is closed");
+          }
+        };
+        assertCurrent();
+        const preparedProvision = await provider.prepareProvision?.(
+          profile,
+          record.provisionOperationId,
+          provisionOptions,
+        );
+        assertCurrent();
+        if (provider.prepareProvision && typeof preparedProvision !== "function") {
+          throw new Error("Worker provider preparation must return an allocation operation");
         }
-        return provider.provision(profile, record.provisionOperationId, provisionOptions);
+        // Preparation and allocation share one timeout and settlement owner. Only a
+        // fresh requested row proves there was no earlier allocation to clean up.
+        record = record.state === "requested" ? move(record, "provisioning") : record;
+        preparationComplete = true;
+        return preparedProvision
+          ? preparedProvision()
+          : provider.provision(profile, record.provisionOperationId, provisionOptions);
       };
       lease = requireWorkerLease(
         await callProvider(
@@ -314,16 +336,22 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       // provider error looks permanent. Keep it available for canonical teardown.
       cancellation?.assertActive();
       const detail = boundedError(error);
-      if (
-        error instanceof WorkerProviderError ||
-        options.isServiceError(error, "invalid_profile")
-      ) {
+      const permanent =
+        error instanceof WorkerProviderError || options.isServiceError(error, "invalid_profile");
+      if (record.state === "requested" || (preparationComplete && permanent)) {
         move(record, "failed", { lastError: detail });
-        throw serviceError("invalid_profile", `Worker provider rejected profile: ${detail}`);
+        throw serviceError(
+          permanent ? "invalid_profile" : "provider_failure",
+          permanent
+            ? `Worker provider rejected profile: ${detail}`
+            : `Worker provider preparation failed: ${detail}`,
+        );
       }
       saveError(record, error);
       throw serviceError("provider_failure", `Worker provider operation failed: ${detail}`);
     } finally {
+      // A replay keeps its durable owner after timeout; this invocation must still close.
+      attemptOpen = false;
       projectOperation?.close();
       enrollmentOperation?.close();
     }
@@ -419,8 +447,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         }
         cancellation?.assertActive();
       }
-      const provisioning = record.state === "requested" ? move(record, "provisioning") : record;
-      return await finishProvision(provisioning, provider, installation, cancellation);
+      return await finishProvision(record, provider, installation, cancellation);
     } finally {
       cancellation?.close();
     }

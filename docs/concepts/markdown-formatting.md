@@ -95,6 +95,8 @@ channels:
   channels render the closing fence correctly.
 - List and blockquote prefixes are part of the IR text, so chunking never
   splits mid-prefix.
+- Paragraphs, headings, and code blocks inside a list item stay separated in
+  the IR, including paragraphs nested inside a quoted list item.
 - Inline styles never split across chunks; the renderer reopens an open
   style at the start of the next chunk.
 

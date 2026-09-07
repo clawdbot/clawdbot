@@ -68,7 +68,11 @@ const REMAINING_ESC_SEQUENCE_REGEX = new RegExp(
   String.raw`\u001b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])`,
   "g",
 );
-const JSON_CONTROL_CHAR_REGEX = new RegExp(String.raw`[\u0000-\u001f\u007f-\u009f]`, "g");
+// JSON escapes tabs and line endings; preserve their meaning in descriptions and paths.
+const JSON_CONTROL_CHAR_REGEX = new RegExp(
+  String.raw`[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]`,
+  "g",
+);
 
 function sanitizeJsonString(value: string): string {
   return stripAnsi(value)
@@ -76,8 +80,12 @@ function sanitizeJsonString(value: string): string {
     .replace(JSON_CONTROL_CHAR_REGEX, "");
 }
 
-function sanitizeJsonValue(_key: string, value: unknown): unknown {
-  return typeof value === "string" ? sanitizeJsonString(value) : value;
+function formatSkillsJson(value: unknown): string {
+  return JSON.stringify(
+    value,
+    (_key, entry: unknown) => (typeof entry === "string" ? sanitizeJsonString(entry) : entry),
+    2,
+  );
 }
 function formatSkillName(skill: SkillStatusEntry): string {
   const emoji = normalizeSkillEmoji(skill.emoji);
@@ -106,7 +114,7 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
   const skills = opts.eligible ? report.skills.filter(isReadyForAgent) : report.skills;
 
   if (opts.json) {
-    const jsonReport = {
+    return formatSkillsJson({
       workspaceDir: report.workspaceDir,
       managedSkillsDir: report.managedSkillsDir,
       skills: skills.map((s) => ({
@@ -126,8 +134,7 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
         homepage: s.homepage,
         missing: s.missing,
       })),
-    };
-    return JSON.stringify(jsonReport, sanitizeJsonValue, 2);
+    });
   }
 
   if (skills.length === 0) {
@@ -183,14 +190,10 @@ export function formatSkillInfo(
 
   if (!skill) {
     if (opts.json) {
-      return JSON.stringify(
-        {
-          ...formatCliJsonFailure(`Skill "${requestedName}" not found.`),
-          skill: requestedName,
-        },
-        sanitizeJsonValue,
-        2,
-      );
+      return formatSkillsJson({
+        ...formatCliJsonFailure(`Skill "${requestedName}" not found.`),
+        skill: requestedName,
+      });
     }
     const safeRequestedName = sanitizeJsonString(sanitizeForLog(requestedName));
     return appendClawHubHint(
@@ -200,7 +203,7 @@ export function formatSkillInfo(
   }
 
   if (opts.json) {
-    return JSON.stringify(skill, sanitizeJsonValue, 2);
+    return formatSkillsJson(skill);
   }
 
   const lines: string[] = [];
@@ -309,42 +312,38 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
   const agentId = report.agentId ?? opts.agent;
 
   if (opts.json) {
-    return JSON.stringify(
-      {
-        agentId,
-        agentSkillFilter: report.agentSkillFilter,
-        workspaceDir: report.workspaceDir,
-        managedSkillsDir: report.managedSkillsDir,
-        summary: {
-          total: report.skills.length,
-          eligible: eligible.length,
-          modelVisible: modelVisible.length,
-          commandVisible: commandVisible.length,
-          disabled: disabled.length,
-          blocked: blocked.length,
-          agentFiltered: agentFiltered.length,
-          notInjected: promptHidden.length,
-          missingRequirements: missingReqs.length,
-        },
-        eligible: eligible.map((s) => s.name),
-        modelVisible: modelVisible.map((s) => s.name),
-        commandVisible: commandVisible.map((s) => s.name),
-        disabled: disabled.map((s) => s.name),
-        blocked: blocked.map((s) => s.name),
-        agentFiltered: agentFiltered.map((s) => s.name),
-        notInjected: promptHidden.map((s) => ({
-          name: s.name,
-          reason: "disable-model-invocation",
-        })),
-        missingRequirements: missingReqs.map((s) => ({
-          name: s.name,
-          missing: s.missing,
-          install: s.install,
-        })),
+    return formatSkillsJson({
+      agentId,
+      agentSkillFilter: report.agentSkillFilter,
+      workspaceDir: report.workspaceDir,
+      managedSkillsDir: report.managedSkillsDir,
+      summary: {
+        total: report.skills.length,
+        eligible: eligible.length,
+        modelVisible: modelVisible.length,
+        commandVisible: commandVisible.length,
+        disabled: disabled.length,
+        blocked: blocked.length,
+        agentFiltered: agentFiltered.length,
+        notInjected: promptHidden.length,
+        missingRequirements: missingReqs.length,
       },
-      sanitizeJsonValue,
-      2,
-    );
+      eligible: eligible.map((s) => s.name),
+      modelVisible: modelVisible.map((s) => s.name),
+      commandVisible: commandVisible.map((s) => s.name),
+      disabled: disabled.map((s) => s.name),
+      blocked: blocked.map((s) => s.name),
+      agentFiltered: agentFiltered.map((s) => s.name),
+      notInjected: promptHidden.map((s) => ({
+        name: s.name,
+        reason: "disable-model-invocation",
+      })),
+      missingRequirements: missingReqs.map((s) => ({
+        name: s.name,
+        missing: s.missing,
+        install: s.install,
+      })),
+    });
   }
 
   const lines: string[] = [];

@@ -18,6 +18,7 @@ import {
   validateSessionTranscriptContextAnchor,
   validateSessionTranscriptContextVersion,
 } from "../../config/sessions/session-accessor.sqlite-model-context.js";
+import { assertCurrentSessionTranscriptHeader } from "../../config/sessions/session-entry-codec.js";
 import { readSessionTranscriptModelContextAsync } from "../../config/sessions/session-model-context-worker-runtime.js";
 import {
   resolveSessionTranscriptReadFence,
@@ -135,6 +136,19 @@ export class SessionManager extends SessionManagerBranching {
     });
   }
 
+  /** Consumes a fresh bounded read as a detached branch, without copying its owned payloads. */
+  static openDetachedBounded(
+    target: SessionTranscriptRuntimeTarget,
+    options: Parameters<typeof SessionManager.openBounded>[1],
+  ): SessionManager {
+    const source = SessionManager.openBounded(target, options);
+    // Normalize opaque parents and retained cuts before discarding persistence and bounded state.
+    return SessionManager.fromOwnedEntries(
+      [source.getHeader(), ...source.getBranch()],
+      source.getCwd(),
+    );
+  }
+
   /** Detached model view: selected payloads plus lightweight ancestry, never raw replay evidence. */
   static openModelContext(
     target: SessionTranscriptRuntimeTarget,
@@ -185,10 +199,8 @@ export class SessionManager extends SessionManagerBranching {
     // SAFETY: The transcript owner preserves the entry union; the constructor applies the normal codec.
     const entries = contextEntries as FileEntry[];
     const header = entries.find((entry) => entry.type === "session");
-    if (entries.length > 0 && (!header || (header.version ?? 1) < CURRENT_SESSION_VERSION)) {
-      throw new Error(
-        "Persisted legacy session transcripts require doctor/import migration before runtime use",
-      );
+    if (entries.length > 0) {
+      assertCurrentSessionTranscriptHeader(header);
     }
     return new SessionManager(cwd ?? header?.cwd ?? process.cwd(), undefined, entries);
   }
@@ -230,7 +242,14 @@ export class SessionManager extends SessionManagerBranching {
   }
 
   static fromEntries(entries: readonly unknown[], cwdOverride?: string): SessionManager {
-    const fileEntries = structuredClone(entries) as FileEntry[];
+    return SessionManager.fromOwnedEntries(structuredClone(entries), cwdOverride);
+  }
+
+  private static fromOwnedEntries(
+    entries: readonly unknown[],
+    cwdOverride?: string,
+  ): SessionManager {
+    const fileEntries = entries as FileEntry[];
     const header = fileEntries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );

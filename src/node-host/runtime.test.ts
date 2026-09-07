@@ -549,14 +549,9 @@ describe("node-host invoke input dispatch", () => {
 
       await vi.waitFor(() => expect(mocks.progressWrite).toHaveBeenCalledTimes(2));
       expect(received).toHaveBeenCalledWith(Uint8Array.from([0, 255, 1]));
-      expect(JSON.parse(mocks.progressWrite.mock.calls[1]?.[0] ?? "null")).toMatchObject({
-        v: 1,
-        kind: "data",
-        message: 0,
-        index: 0,
-        last: true,
-        data: "AP8B",
-      });
+      expect(mocks.progressWrite.mock.calls[1]?.[0]).toBe(
+        '{"v":1,"kind":"data","message":0,"index":0,"last":true,"data":"AP8B"}',
+      );
     } finally {
       held.release();
       await invoking;

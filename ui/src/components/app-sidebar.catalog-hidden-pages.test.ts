@@ -195,6 +195,67 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
     expect(request).toHaveBeenCalledTimes(4);
   });
 
+  it("keeps resources retired during a detached update and resumes on reconnect", async () => {
+    const observed = new Set<Element>();
+    const observe = vi.fn((target: Element) => observed.add(target));
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        private targets = new Set<Element>();
+        observe(target: Element) {
+          this.targets.add(target);
+          observe(target);
+        }
+        disconnect() {
+          for (const target of this.targets) {
+            observed.delete(target);
+          }
+          this.targets.clear();
+        }
+        unobserve(target: Element) {
+          this.targets.delete(target);
+          observed.delete(target);
+        }
+      },
+    );
+    let mounted: Awaited<ReturnType<typeof mountExpanded>> | undefined;
+    try {
+      const request = vi.fn((_method, params: { cursors?: Record<string, string> }) => {
+        const cursor = params.cursors?.["gateway:local"];
+        return Promise.resolve(page(cursor === "page-2" ? 2 : cursor === "page-3" ? 3 : 1));
+      });
+      mounted = await mountExpanded(request);
+      const { sidebar, provider } = mounted;
+      const scrollBody = sidebar.querySelector(".sidebar-shell__body");
+      expect(scrollBody).not.toBeNull();
+      expect(observed.has(scrollBody!)).toBe(true);
+
+      sidebar.requestUpdate();
+      provider.remove();
+      expect(observed.has(scrollBody!)).toBe(false);
+      const timersAfterDetach = vi.getTimerCount();
+      const observationsAfterDetach = observe.mock.calls.length;
+      await sidebar.updateComplete;
+      expect.soft(vi.getTimerCount()).toBe(timersAfterDetach);
+      expect.soft(observe).toHaveBeenCalledTimes(observationsAfterDetach);
+      expect.soft(observed.has(scrollBody!)).toBe(false);
+
+      document.body.append(provider);
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(50);
+      await settle(sidebar);
+      expect(observed.has(sidebar.querySelector(".sidebar-shell__body")!)).toBe(true);
+      expect(request).toHaveBeenCalledTimes(4);
+      expect(sidebar.textContent).toContain("Original 1");
+    } finally {
+      mounted?.provider.remove();
+      await mounted?.sidebar.updateComplete;
+      // A red lifecycle assertion must not leave its retired resources in the next test.
+      vi.clearAllTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("accepts a complete exhausted first page while hidden", async () => {
     const pending = deferred<SessionsCatalogListResult>();
     const request = vi

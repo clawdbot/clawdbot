@@ -64,7 +64,7 @@ record, so offline nodes keep showing last-known stats with the original
 and `openclaw nodes describe` show a compact stats summary with a last-known age
 for offline nodes. Windows omits load averages, and unavailable disk capacity is
 omitted. See
-[Node host stats](/gateway/protocol#node-host-stats) for the wire contract.
+[Node host stats](/gateway/protocol/presence#node-host-stats) for the wire contract.
 
 ## Version skew and upgrade order
 
@@ -108,7 +108,7 @@ A Gateway can remain healthy for browser users while node hosting is unavailable
 - **Node onboarding URL:** With `gateway.bind: "loopback"`, configure Tailscale Serve, `gateway.remote.url`, or `plugins.entries.device-pair.config.publicUrl` before minting a join code. Otherwise `openclaw devices join-code` reports: `Gateway is only bound to loopback. Set gateway.bind=lan, enable tailscale serve, or configure plugins.entries.device-pair.config.publicUrl.`
 - **Node onboarding plugin:** Join codes and `openclaw connect` require the bundled `device-pair` plugin. If it is disabled or excluded by plugin policy, set `plugins.entries.device-pair.enabled: true`, make sure `device-pair` is allowed, and restart the Gateway.
 - **Device session runtime:** Paired-device runners support the embedded OpenClaw runtime and explicitly authorized Codex `remote-exec`; ACPX routes cannot dispatch to a paired device. Codex requires `codex.exec-server.stdio.v1` in `gateway.nodes.commands.allow` plus its normal pairing and invocation approvals. Runtime policy belongs on provider/model routes, not the ignored whole-agent runtime keys. Multi-agent rosters must also set `agents.ownership: "explicit"`. See [Codex paired-device placement](/plugins/codex-harness#run-codex-on-a-paired-device) and [runtime policy](/gateway/config-agents#runtime-policy).
-- **Edge routing:** When a reverse proxy or access edge fronts the Gateway, the node must satisfy edge auth on the join request, its main Gateway WebSocket, and the worker WebSocket. Keep WebSocket upgrade enabled for `/__openclaw__/worker`. You can instead exempt `/j/*` and `/__openclaw__/worker` from edge identity auth because both routes enforce their own short-lived credentials. See [worker protocol](/gateway/protocol#worker-role-and-closed-protocol).
+- **Edge routing:** When a reverse proxy or access edge fronts the Gateway, the node must satisfy edge auth on the join request, its main Gateway WebSocket, and the worker WebSocket. Keep WebSocket upgrade enabled for `/__openclaw__/worker`. You can instead exempt `/j/*` and `/__openclaw__/worker` from edge identity auth because both routes enforce their own short-lived credentials. See [worker protocol](/gateway/protocol/handshake#worker-role-and-closed-protocol).
 
 For a Cloudflare Access-fronted Gateway:
 
@@ -494,13 +494,20 @@ do not start a second CLI node for the same Mac. Its native camera, screen, and
 desktop capabilities remain on that identity. If the shared runtime cannot
 start, native capabilities remain available, but session hosting is unavailable.
 
-On the first session dispatch
-for a Gateway build, the node downloads one sealed worker artifact from that
-paired Gateway, verifies its exact content hash, and publishes it atomically
-under the Gateway-namespaced node-host bundle root. The artifact already
-contains its complete JavaScript dependency closure; the node does not install
-packages or execute lifecycle scripts. Later turns reuse the immutable artifact
-while its receipt still matches the Gateway's current build.
+When a session first needs the current worker build, the Gateway sends its sealed
+worker artifact to the paired host. The node verifies the exact content hash,
+publishes the artifact atomically, and prewarms it when supported by the execution mode.
+The artifact contains its complete JavaScript dependency closure; the node does
+not install packages or execute lifecycle scripts. Installation belongs to the
+session request and receives its cancellation signal. Reconnect maintenance does
+not install or prewarm a worker build.
+
+Once installed, persistent nodes retain one current worker artifact per Gateway
+namespace, even with no sessions. Older builds remain only while a live or
+recoverable placement needs them; normal maintenance removes unreferenced builds.
+Each new dispatch still validates the installed artifact and reuses it when valid,
+avoiding another download. Cloud-enrolled nodes keep their own execution-mode-specific
+installation and retention lifecycle.
 
 You can also enroll and enable a service host in one step with
 `openclaw connect --service --session-host`. In Control UI New Session, a
@@ -512,9 +519,9 @@ device placement becomes active. New Session does not bind `execNode` or browse
 the device filesystem.
 
 The Devices page shows the validated Gateway-owned worker version in the node's
-metadata. If the retained artifact is missing or fails validation, Devices shows
-a **worker missing** warning; start a new session on that device to reinstall the
-current bundle. This status is observational and reconnect-scoped: launch still
+metadata. If the current artifact is missing or fails validation, Devices shows
+a **worker missing** warning; an explicit new session installs the current bundle.
+This status is observational and reconnect-scoped: launch still
 requires the exact durable receipt and current node authority.
 
 Node hosts must support the current private worker-supervisor dialect before

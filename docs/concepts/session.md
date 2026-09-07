@@ -66,7 +66,7 @@ visible to Bob.
 Slack Agent View and Assistant View DMs are the exception: each visible root gets
 its own `:thread:<rootTs>` session on top of the base that `dmScope` selects, so
 those conversations stay isolated even under `main`. See
-[Agent View DMs](/channels/slack#agent-view-dms).
+[Agent View DMs](/channels/slack/threads-and-sessions#agent-view-dms).
 
 <Tip>
 If the same person contacts you from multiple channels, use
@@ -269,9 +269,13 @@ the cap. Existing explicit limits remain unchanged.
 When pressure exceeds the cap, cleanup archives the oldest eligible ordinary
 sessions instead of deleting their transcripts. Synthetic runtime sessions such
 as cron, hooks, heartbeat, ACP, and sub-agents remain disposable and may be
-removed. Pinned sessions, active or admitted work, model-locked sessions, and
+removed. Pinned root sessions, active or admitted work, model-locked sessions, and
 durable external conversation pointers are protected; the unarchived total can
 therefore remain above the cap when protected rows alone exceed it.
+
+Only root sessions can be pinned; child/subagent sessions live in their parent's
+tree and reject pin requests. Existing child pins disappear and no longer protect
+the session from maintenance.
 
 Gateway model-run probe sessions are short-lived by default. Rows matching
 `agent:*:explicit:model-run-<uuid>` use fixed `24h` retention, but cleanup is

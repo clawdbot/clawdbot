@@ -432,7 +432,7 @@ export async function assertSkillProposalSupportTargetUnchanged(params: {
 export function transitionPendingSkillProposalToStale(params: {
   record: SkillProposalRecord;
   reason: string;
-  input: SkillProposalTransitionInput;
+  input: Omit<SkillProposalTransitionInput, "workspaceDir">;
 }): { record: SkillProposalRecord; event: SkillProposalEvent } {
   const now = new Date().toISOString();
   const stale: SkillProposalRecord = {
