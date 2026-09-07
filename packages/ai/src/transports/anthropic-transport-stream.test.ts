@@ -1989,6 +1989,15 @@ describe("anthropic transport stream", () => {
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toBe("Provider completed tool call with malformed JSON arguments");
     expect(result.errorMessage).not.toContain("SECRET.md");
+    // Bounded diagnostics survive projection onto the terminal message without the content.
+    expect(result.errorCode).toBe("malformed_tool_call_arguments");
+    expect(JSON.parse(result.errorBody ?? "{}")).toEqual({
+      code: "malformed_tool_call_arguments",
+      argumentChars: '{"path":"SECRET.md"'.length,
+      argumentHash: expect.stringMatching(/^[0-9a-z]+$/),
+      repairAttempted: true,
+    });
+    expect(result.errorBody).not.toContain("SECRET.md");
     expect(eventTypes).not.toContain("toolcall_end");
     expect(eventTypes).not.toContain("done");
   });
@@ -2018,10 +2027,11 @@ describe("anthropic transport stream", () => {
           input: {},
         }),
         // Fine-grained tool streaming skips server-side JSON validation, so a finished
-        // block can carry a literal newline inside a string value.
+        // block can carry a literal newline inside a string value. The sibling oldText
+        // holds a valid \n escape after a "C:" prefix that the repair must leave intact.
         anthropicContentBlockDelta(1, {
           type: "input_json_delta",
-          partial_json: '{"path":"a.py","oldText":"x = 1","newText":"x = 1\ny = 2"}',
+          partial_json: '{"path":"a.py","oldText":"C:\\nnext","newText":"x = 1\ny = 2"}',
         }),
         { type: "content_block_stop", index: 1 },
         anthropicMessageDelta({ stop_reason: "tool_use" }, { input_tokens: 2, output_tokens: 2 }),
@@ -2048,7 +2058,7 @@ describe("anthropic transport stream", () => {
     expect(result.errorMessage).toBeUndefined();
     expect(toolCallEnds).toEqual([
       { path: "README.md" },
-      { path: "a.py", oldText: "x = 1", newText: "x = 1\ny = 2" },
+      { path: "a.py", oldText: "C:\nnext", newText: "x = 1\ny = 2" },
     ]);
   });
 

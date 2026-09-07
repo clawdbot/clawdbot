@@ -624,12 +624,16 @@ export async function consumeAnthropicStream(params: {
     if ([...blockIndexes.values()].some((index) => blocks[index]?.type === "toolCall")) {
       throw new Error("Provider completed stream with an incomplete tool call");
     }
+    // Fine-grained tool streaming delivers tool input without server-side JSON
+    // validation, so repair invalid string literals before rejecting the turn.
     finalizeTerminalToolCallArguments(
       sealedToolCalls.map(({ block }) => block),
       (block) =>
         block.partialJson && block.partialJson.length > 0
           ? block.partialJson
           : seededToolArguments.get(block),
+      undefined,
+      { repairStringLiterals: true },
     );
     for (const sealed of sealedToolCalls) {
       delete sealed.block.partialJson;
