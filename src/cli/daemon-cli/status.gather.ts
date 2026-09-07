@@ -494,10 +494,7 @@ export async function gatherDaemonStatus(
       });
     if (probeUrlOverride || explicitAuth.token || explicitAuth.password) {
       daemonProbeAuth = explicitAuth;
-    } else if (
-      daemonCfg.gateway?.auth?.mode === "none" ||
-      daemonCfg.gateway?.auth?.mode === "trusted-proxy"
-    ) {
+    } else if (daemonCfg.gateway?.auth?.mode === "none") {
       daemonProbeAuth = {};
     } else if (canResolveProbeAuth) {
       const probeAuthResolution = await loadGatewayProbeAuthModule().then(

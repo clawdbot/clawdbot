@@ -672,18 +672,34 @@ describe("gatherDaemonStatus", () => {
       { auth: { password: "explicit-password" }, remoteUrl: "wss://explicit.example:19445" },
       { auth: { token: "explicit-token" }, remoteUrl: "wss://remote.example:19443" },
       { auth: { token: "explicit-token" }, remoteUrl: "wss://explicit.example:19445/other" },
-    ].flatMap(({ auth, remoteUrl }) =>
-      [false, true].map((requireRpc) => ({ auth, remoteUrl, requireRpc })),
+      { auth: {}, remoteUrl: "wss://explicit.example:19445", authMode: "trusted-proxy" },
+      {
+        auth: { token: "explicit-token" },
+        remoteUrl: "wss://explicit.example:19445",
+        authMode: "trusted-proxy",
+      },
+      {
+        auth: { password: "explicit-password" },
+        remoteUrl: "wss://explicit.example:19445",
+        authMode: "trusted-proxy",
+      },
+    ].flatMap(({ auth, remoteUrl, authMode = "token" }) =>
+      [false, true].map((requireRpc) => ({ auth, remoteUrl, authMode, requireRpc })),
     ),
   )(
-    "isolates explicit status credentials $auth with remote=$remoteUrl and requireRpc=$requireRpc",
-    async ({ auth, remoteUrl, requireRpc }) => {
+    "isolates explicit status credentials $auth with mode=$authMode, remote=$remoteUrl and requireRpc=$requireRpc",
+    async ({ auth, remoteUrl, authMode, requireRpc }) => {
       const edgeAuth = { "X-Test-Edge-Auth": "synthetic-status-edge-auth" };
       daemonLoadedConfig = {
         gateway: {
           mode: "remote",
           tls: { enabled: true },
-          auth: { mode: "token", token: "service-token" },
+          auth: {
+            mode: authMode,
+            ...(authMode === "trusted-proxy"
+              ? { password: "service-password" }
+              : { token: "service-token" }),
+          },
           remote: {
             url: remoteUrl,
             edgeAuth,
@@ -1622,29 +1638,70 @@ describe("gatherDaemonStatus", () => {
     );
   });
 
-  it("resolves daemon gateway auth password SecretRef values before probing", async () => {
-    daemonLoadedConfig = {
-      gateway: {
-        bind: "lan",
-        tls: { enabled: true },
-        auth: {
-          password: { source: "env", provider: "default", id: "DAEMON_GATEWAY_PASSWORD" },
+  it.each([undefined, "trusted-proxy"])(
+    "resolves daemon gateway auth password SecretRef values before probing with mode=%s",
+    async (mode) => {
+      daemonLoadedConfig = {
+        gateway: {
+          bind: "lan",
+          tls: { enabled: true },
+          auth: {
+            mode,
+            password: { source: "env", provider: "default", id: "DAEMON_GATEWAY_PASSWORD" },
+          },
         },
-      },
-      secrets: {
-        providers: {
-          default: { source: "env" },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
         },
-      },
-    };
-    setTestEnvValue("DAEMON_GATEWAY_PASSWORD", "daemon-secretref-password"); // pragma: allowlist secret
+      };
+      setTestEnvValue("DAEMON_GATEWAY_PASSWORD", "daemon-secretref-password"); // pragma: allowlist secret
 
-    await gatherStatus();
+      await gatherStatus();
 
-    expect((callArg(callGatewayStatusProbe) as { password?: string }).password).toBe(
-      "daemon-secretref-password",
-    ); // pragma: allowlist secret
-  });
+      expect((callArg(callGatewayStatusProbe) as { password?: string }).password).toBe(
+        "daemon-secretref-password",
+      ); // pragma: allowlist secret
+      expect(callGatewayStatusProbe.mock.calls[0]?.[0].urlOverride).toBeUndefined();
+    },
+  );
+
+  it.each([
+    {
+      mode: "trusted-proxy",
+      password: "service-password",
+      rpc: {},
+      expected: { password: "service-password" },
+    },
+    { mode: "trusted-proxy", password: undefined, rpc: {}, expected: {} },
+    { mode: "none", password: "service-password", rpc: {}, expected: {} },
+    {
+      mode: "trusted-proxy",
+      password: "service-password",
+      rpc: { token: "explicit-token" },
+      expected: { token: "explicit-token" },
+    },
+    {
+      mode: "trusted-proxy",
+      password: "service-password",
+      rpc: { password: "explicit-password" },
+      expected: { password: "explicit-password" },
+    },
+  ])(
+    "uses $expected for service mode=$mode, password=$password and rpc=$rpc",
+    async ({ mode, password, rpc, expected }) => {
+      daemonLoadedConfig = { gateway: { auth: { mode, password } } };
+
+      await gatherStatus({ rpc });
+
+      const input = callGatewayStatusProbe.mock.calls[0]?.[0];
+      assert(input);
+      expect({ token: input.token, password: input.password }).toEqual(expected);
+      expect(input.urlOverride).toBeUndefined();
+      expect(input.config?.gateway?.auth).toEqual({ mode });
+    },
+  );
 
   it("resolves daemon gateway auth token SecretRef values before probing", async () => {
     daemonLoadedConfig = {
@@ -1671,38 +1728,44 @@ describe("gatherDaemonStatus", () => {
     );
   });
 
-  it("skips daemon exec SecretRef probe auth when exec refs are disabled", async () => {
-    daemonLoadedConfig = {
-      gateway: {
-        bind: "lan",
-        tls: { enabled: true },
-        auth: {
-          mode: "token",
-          token: { source: "exec", provider: "vault", id: "gateway/token" },
+  it.each([
+    { mode: "token", credential: "token" },
+    { mode: "trusted-proxy", credential: "password" },
+  ])(
+    "skips daemon $mode exec SecretRef probe auth when exec refs are disabled",
+    async ({ mode, credential }) => {
+      daemonLoadedConfig = {
+        gateway: {
+          bind: "lan",
+          tls: { enabled: true },
+          auth: {
+            mode,
+            [credential]: { source: "exec", provider: "vault", id: `gateway/${credential}` },
+          },
         },
-      },
-      secrets: {
-        providers: {
-          vault: { source: "exec", command: "/bin/false" },
+        secrets: {
+          providers: {
+            vault: { source: "exec", command: "/bin/false" },
+          },
         },
-      },
-    };
+      };
 
-    const status = await gatherStatus({ allowExecSecretRefs: false });
+      const status = await gatherStatus({ allowExecSecretRefs: false });
 
-    expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).not.toHaveBeenCalled();
-    const probeInput = callArg(callGatewayStatusProbe) as {
-      token?: string;
-      password?: string;
-      allowRpcConfigCredentials?: boolean;
-    };
-    expect(probeInput.token).toBeUndefined();
-    expect(probeInput.password).toBeUndefined();
-    expect(probeInput.allowRpcConfigCredentials).toBe(false);
-    expect(status.rpc?.authWarning).toContain(
-      "gateway credentials use an exec SecretRef and exec SecretRefs are disabled",
-    );
-  });
+      expect(resolveGatewayProbeAuthSafeWithSecretInputsCalls).not.toHaveBeenCalled();
+      const probeInput = callArg(callGatewayStatusProbe) as {
+        token?: string;
+        password?: string;
+        allowRpcConfigCredentials?: boolean;
+      };
+      expect(probeInput.token).toBeUndefined();
+      expect(probeInput.password).toBeUndefined();
+      expect(probeInput.allowRpcConfigCredentials).toBe(false);
+      expect(status.rpc?.authWarning).toContain(
+        "gateway credentials use an exec SecretRef and exec SecretRefs are disabled",
+      );
+    },
+  );
 
   it("keeps service password auth independent of unused remote exec SecretRefs", async () => {
     daemonLoadedConfig = {
