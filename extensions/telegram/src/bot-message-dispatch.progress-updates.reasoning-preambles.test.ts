@@ -181,7 +181,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates reasoning and
     expect(headlinePreview?.text).not.toMatch(/<(h[1-6]|hr|ul|ol|li|p|div)\b/u);
   });
 
-  it("hands preambles to the interleaved commentary lane when it is enabled", async () => {
+  it("keeps the latest preamble headline above the interleaved commentary lane", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
@@ -205,11 +205,9 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates reasoning and
       },
     });
 
-    // The opt-in 💬 lane owns preambles; the status headline stays out of the
-    // way so the documented interleaved lines keep rendering.
     const lastPreview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
     expect(lastPreview?.text).toContain("💬");
-    expect(lastPreview?.text).toContain("Checking recent context");
+    expect(lastPreview?.text.match(/Checking recent context/gu)).toHaveLength(2);
   });
 
   it.each([
@@ -245,11 +243,10 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates reasoning and
         },
       });
 
-      const updates = draftStream.updatePreview.mock.calls
-        .map(([preview]) => preview.text)
-        .join("\n");
-      // The draft owns commentary: exactly one visible copy per preamble.
-      expect(updates.split("Checking recent context")).toHaveLength(2);
+      const lastPreview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
+      // The draft owns both the current-status headline and its bounded history row.
+      expect(lastPreview?.text).toContain("💬");
+      expect(lastPreview?.text.match(/Checking recent context/gu)).toHaveLength(2);
     },
   );
 

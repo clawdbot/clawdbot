@@ -4221,7 +4221,9 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
           run: async () => {
             checkpoint();
             expect(postedMessageId).toBe("171234.567");
-            expect(draftUpdateTexts(draftStream)).toEqual(["_I will check the result._"]);
+            expect(draftUpdateTexts(draftStream)).toEqual([
+              "I will check the result.\n\n_I will check the result._",
+            ]);
           },
         },
         {
@@ -4235,7 +4237,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
           kind: "checkpoint",
           run: async () => {
             checkpoint();
-            expectLastDraftUpdateText(draftStream, "_The result_");
+            expectLastDraftUpdateText(draftStream, "The result\n\n_The result_");
           },
         },
         {
@@ -4267,14 +4269,14 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       // Assert the intermediate observations ran; the final text alone cannot
       // prove that Slack never received a first-token notification.
       expect(checkpoint).toHaveBeenCalledTimes(4);
-      expectLastDraftUpdateText(draftStream, "_The result is ready._");
+      expectLastDraftUpdateText(draftStream, "The result is ready.\n\n_The result is ready._");
       expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
       expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
       expect(draftStream.clear).toHaveBeenCalledOnce();
     },
   );
 
-  it("keeps only the latest Slack commentary when tool progress is disabled", async () => {
+  it("keeps the latest Slack commentary as both headline and bounded history", async () => {
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "progress";
@@ -4317,7 +4319,10 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(capturedReplyOptions?.commentaryPayloadsEnabled).toBe(true);
     expect(capturedReplyOptions?.shouldDeliverCommentaryPayloads?.()).toBe(false);
     expect(capturedReplyOptions?.suppressDefaultToolProgressMessages).toBe(true);
-    expectLastDraftUpdateText(draftStream, "_Preparing the smallest fix_");
+    expectLastDraftUpdateText(
+      draftStream,
+      "Preparing the smallest fix\n\n_Preparing the smallest fix_",
+    );
     expect(draftUpdateTexts(draftStream).join("\n")).not.toContain("pnpm test");
 
     const updateCount = draftStream.update.mock.calls.length;
@@ -4357,7 +4362,10 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       }),
     );
 
-    expectLastDraftUpdateText(draftStream, "_I’m using the `monorepo` skill on Linux x86_64._");
+    expectLastDraftUpdateText(
+      draftStream,
+      "I’m using the `monorepo` skill on Linux x86_64.\n\n_I’m using the `monorepo` skill on Linux x86_64._",
+    );
   });
 
   it("renders italic draft commentary with inline code and neutralized mentions", async () => {
@@ -4410,7 +4418,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expectLastDraftUpdateText(
       draftStream,
-      "_checking &lt;@U123&gt; in &lt;#C123&gt; and &lt;!channel&gt; with urgent context `src/one.ts`_",
+      "checking &lt;@U123&gt; in &lt;#C123&gt; and &lt;!channel&gt; with *urgent* _context_ `src/one.ts`\n\n_checking &lt;@U123&gt; in &lt;#C123&gt; and &lt;!channel&gt; with urgent context `src/one.ts`_",
     );
   });
 
@@ -4457,8 +4465,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       }),
     );
 
-    expect(draftUpdateTexts(draftStream)).toContain(`_${firstPreamble}_`);
-    expectLastDraftUpdateText(draftStream, `_${latestPreamble}_`);
+    expect(draftUpdateTexts(draftStream)).toContain(`${firstPreamble}\n\n_${firstPreamble}_`);
+    expectLastDraftUpdateText(draftStream, `${latestPreamble}\n\n_${latestPreamble}_`);
     expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
     expectMockCallArgFields(finalizeSlackPreviewEditMock, 0, "progress final edit", {
       channelId: "C123",
@@ -4569,10 +4577,10 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         true,
       );
       expect(draftUpdateTexts(draftStream)).toEqual([
-        "_Checking the current Slack behavior._",
-        "🧠 _Considering the transport choice._",
-        "_The fix is ready; I’m checking the result._",
-        "🛠️ exit 1",
+        "Checking the current Slack behavior.\n\n_Checking the current Slack behavior._",
+        "Checking the current Slack behavior.\n\n🧠 _Considering the transport choice._",
+        "The fix is ready; I’m checking the result.\n\n_The fix is ready; I’m checking the result._",
+        "The fix is ready; I’m checking the result.\n\n🛠️ exit 1",
       ]);
       expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
       expect(deliverRepliesMock).toHaveBeenCalledOnce();
@@ -4720,7 +4728,10 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(createSlackDraftStreamMock).toHaveBeenCalledWith(
       expect.objectContaining({ eventScope }),
     );
-    expectLastDraftUpdateText(draftStream, "_Using the scoped listener client_");
+    expectLastDraftUpdateText(
+      draftStream,
+      "Using the scoped listener client\n\n_Using the scoped listener client_",
+    );
   });
 
   it("renders the latest Slack preamble as the status headline by default", async () => {

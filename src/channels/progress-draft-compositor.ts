@@ -583,17 +583,11 @@ export function createChannelProgressDraftCompositor(params: {
       }
       return params.mode === "progress" ? await startAndRender() : await publish({ flush: true });
     },
-    async pushPreambleHeadline(text?: string, options?: { itemId?: string }) {
+    async pushPreambleHeadline(
+      text?: string,
+      options?: { itemId?: string; deferRender?: boolean },
+    ) {
       if (!params.active || params.mode !== "progress" || progressSuppressed) {
-        return false;
-      }
-      // The opt-in commentary lane already renders every preamble as an
-      // interleaved 💬 line; letting the headline also consume it would
-      // replace those documented lines with a duplicate status paragraph.
-      // Deliberate: the headline itself is default-on presentation of the
-      // typed preamble (owner decision, #105872); `commentary` only picks the
-      // interleaved-lane presentation, it is not a preamble kill switch.
-      if (commentaryProgressEnabled) {
         return false;
       }
       if (finalReplyStarted || finalReplyDelivered) {
@@ -613,7 +607,7 @@ export function createChannelProgressDraftCompositor(params: {
         preambleItemId = undefined;
         preambleAt = undefined;
         clearPreambleExpiryTimer();
-        return await renderAfterRetraction();
+        return options?.deferRender ? false : await renderAfterRetraction();
       }
       const isNewPreambleItem = Boolean(itemId && itemId !== preambleItemId);
       if (isNewPreambleItem) {
@@ -629,7 +623,7 @@ export function createChannelProgressDraftCompositor(params: {
       schedulePreambleExpiryRefresh();
       // Work activity owns the delayed start gate. Retain preambles from fast
       // turns without making their draft visible.
-      return gate.hasStarted ? await render() : false;
+      return options?.deferRender || !gate.hasStarted ? false : await render();
     },
     async pushNarrationProgress(text?: string) {
       if (!params.active || params.mode !== "progress" || progressSuppressed) {
@@ -731,7 +725,10 @@ export function createChannelProgressDraftCompositor(params: {
         // Empty commentary with an item id means the producer retracted that
         // item; remove its draft line if it was already rendered.
         if (lineId) {
-          await clearLine(lineId);
+          const cleared = await clearLine(lineId);
+          if (!cleared && gate.hasStarted) {
+            await renderAfterRetraction();
+          }
         }
         return false;
       }

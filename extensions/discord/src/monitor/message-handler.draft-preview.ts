@@ -244,6 +244,7 @@ export function createDiscordDraftPreviewController(params: {
     async pushPreambleItemEvent(payload: { itemId?: string; progressText?: string }) {
       const headlineAccepted = await progressDraft.pushPreambleHeadline(payload.progressText, {
         itemId: payload.itemId,
+        deferRender: progressDraft.commentaryProgressEnabled,
       });
       if (!progressDraft.commentaryProgressEnabled) {
         return headlineAccepted;

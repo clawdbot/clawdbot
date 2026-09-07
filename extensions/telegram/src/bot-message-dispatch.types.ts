@@ -158,7 +158,10 @@ type TelegramProgressCompositor = {
     steps?: AgentPlanStep[],
     options?: { explanation?: string },
   ) => Promise<boolean>;
-  pushPreambleHeadline: (text?: string, options?: { itemId?: string }) => Promise<boolean>;
+  pushPreambleHeadline: (
+    text?: string,
+    options?: { itemId?: string; deferRender?: boolean },
+  ) => Promise<boolean>;
   pushToolEvent: (payload: CallbackPayload<"onToolStart">) => Promise<boolean>;
   pushItemEvent: (payload: CallbackPayload<"onItemEvent">) => Promise<boolean>;
   pushApprovalEvent: (payload: CallbackPayload<"onApprovalEvent">) => Promise<boolean>;

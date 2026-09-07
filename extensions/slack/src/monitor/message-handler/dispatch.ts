@@ -570,6 +570,7 @@ async function dispatchSlackMessageWithSetup(
               payload.progressText,
               {
                 itemId: payload.itemId,
+                deferRender: progress.commentaryProgressEnabled,
               },
             );
             if (progress.commentaryProgressEnabled) {

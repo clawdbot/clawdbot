@@ -567,22 +567,40 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n🛠️ Wc", expect.anything());
   });
 
-  it("hands preambles to the commentary lane when it is enabled", async () => {
+  it("keeps the preamble headline alongside the commentary lane when it is enabled", async () => {
     const update = vi.fn();
     const progress = createTestProgressDraftCompositor({
       entry: {
         streaming: {
           mode: "progress",
-          progress: { toolProgress: true, label: "Shelling", commentary: true },
+          progress: { label: false, commentary: true, toolProgress: true, maxLines: 1 },
         },
       },
       update,
     });
 
-    // The opt-in 💬 lane renders every preamble as an interleaved line; the
-    // headline must decline so it cannot replace those documented lines.
-    expect(await progress.pushPreambleHeadline("Reading the workspace.")).toBe(false);
-    expect(progress.hasStatusHeadline).toBe(false);
+    await progress.pushToolProgress("🛠️ Setup", { startImmediately: true });
+    update.mockClear();
+    expect(
+      await progress.pushPreambleHeadline("Reading the workspace.", {
+        itemId: "preamble-1",
+        deferRender: true,
+      }),
+    ).toBe(false);
+    expect(progress.hasStatusHeadline).toBe(true);
+    expect(update).not.toHaveBeenCalled();
+    expect(
+      await progress.pushCommentaryProgress("Reading the workspace.", {
+        itemId: "preamble-1",
+      }),
+    ).toBe(true);
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update.mock.lastCall?.[0]).toBe("Reading the workspace.\n\n_Reading the workspace._");
+
+    update.mockClear();
+    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update.mock.lastCall?.[0]).toBe("Reading the workspace.\n\n🛠️ Exec");
   });
 
   it("holds a preamble headline until the gate starts and hides the implicit label", async () => {

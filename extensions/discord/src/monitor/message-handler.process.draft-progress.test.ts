@@ -101,7 +101,7 @@ describe("processDiscordMessage draft streaming progress", () => {
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
 
-  it("keeps opt-in commentary receipts independent from hidden tool progress", async () => {
+  it("keeps the latest commentary headline above the preserved commentary timeline", async () => {
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
@@ -152,7 +152,7 @@ describe("processDiscordMessage draft streaming progress", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenLastCalledWith(
-      "💬 Checking the current weather source before summarizing clearly.\n💬 Checking route impacts.",
+      "Checking route impacts.\n\n💬 Checking the current weather source before summarizing clearly.\n💬 Checking route impacts.",
       { complete: true },
     );
     const updates = draftStream.update.mock.calls.map((call) => call[0]).join("\n");
@@ -408,7 +408,7 @@ describe("processDiscordMessage draft streaming progress", () => {
     await runProcessDiscordMessage(ctx);
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates).toEqual(["💬 Checking source data."]);
+    expect(updates).toEqual(["Checking source data.\n\n💬 Checking source data."]);
     expectFinalAnswerText("done");
   });
 

@@ -99,6 +99,7 @@ export function createProgressState(
           richMessages: config.telegramCfg.richMessages === true,
           maxLines: resolveChannelProgressDraftMaxLines(config.telegramCfg),
           maxLineChars: resolveChannelProgressDraftMaxLineChars(config.telegramCfg),
+          commentaryProgressEnabled: progressCompositor.commentaryProgressEnabled,
         }),
       );
       if (options.flush) {
@@ -257,12 +258,17 @@ export async function handleItemEvent(
     if (turn.streamMode === "progress") {
       rendered = await turn.progressCompositor.pushPreambleHeadline(payload.progressText, {
         itemId: payload.itemId,
+        deferRender: turn.progressCompositor.commentaryProgressEnabled,
       });
     }
     if (turn.streamMode === "progress" && turn.progressCompositor.commentaryProgressEnabled) {
-      rendered ||= await turn.progressCompositor.pushCommentaryProgress(payload.progressText, {
-        itemId: payload.itemId,
-      });
+      const commentaryRendered = await turn.progressCompositor.pushCommentaryProgress(
+        payload.progressText,
+        {
+          itemId: payload.itemId,
+        },
+      );
+      rendered = commentaryRendered || rendered;
     }
     return rendered;
   }

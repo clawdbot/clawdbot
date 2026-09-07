@@ -59,12 +59,12 @@ migration, see [Streaming and chunking](/concepts/streaming).
 
 ## What users see
 
-| Part            | Purpose                                                                       |
-| --------------- | ----------------------------------------------------------------------------- |
-| Status headline | On Discord and Telegram, the model preamble; Discord adds a utility filler.   |
-| Label           | Optional starter/status line such as `Working`.                               |
-| Progress lines  | Plan milestones, enabled commentary/reasoning, and approval or failure lines. |
-| Tool log        | Optional tool rows using the same icons and detail formatter as `/verbose`.   |
+| Part            | Purpose                                                                                    |
+| --------------- | ------------------------------------------------------------------------------------------ |
+| Status headline | On Discord, Telegram, and Slack, the latest model preamble; Discord adds a utility filler. |
+| Label           | Optional starter/status line such as `Working`.                                            |
+| Progress lines  | Plan milestones, enabled commentary/reasoning, and approval or failure lines.              |
+| Tool log        | Optional tool rows using the same icons and detail formatter as `/verbose`.                |
 
 The status headline sits above the progress lines. With
 `progress.toolProgress: true`, tool rows remain visible underneath it.
@@ -278,18 +278,19 @@ pre-tool commentary/preamble narration (💬, for example "I'll check... then
 [Streaming and chunking](/concepts/streaming#commentary-progress-lane) for the
 shared config shape across channels.
 
-With the commentary lane enabled, preambles render only as those interleaved
-💬 lines; the status headline below stays out of the way so the lane keeps its
-documented shape.
+With the commentary lane enabled, the latest accepted preamble can supply the
+status headline while the same item also stays in the interleaved commentary
+history. The two positions are intentional: the bounded line history can scroll
+under the configured `maxLines` budget while the current status remains visible.
 
 ### Status headline
 
-On Discord and Telegram in progress mode, the model's typed pre-tool preamble
-becomes the draft's status headline whenever it is available. Other
+On Discord, Telegram, and Slack in progress mode, the model's typed pre-tool
+preamble becomes the draft's status headline whenever it is available. Other
 progress-mode channels keep their existing status behavior. The headline is on
-by default and does not bypass the normal activity gate for short turns;
-enabling `streaming.progress.commentary` hands preambles to the interleaved
-commentary lane instead.
+by default and does not bypass the normal activity gate for short turns.
+`streaming.progress.commentary` controls only whether the same preambles also
+appear in the bounded interleaved commentary history.
 
 On Discord, when a utility model resolves for the agent — an explicit
 [`utilityModel`](/gateway/config-agents/models#agents-defaults-model), or the primary
