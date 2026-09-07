@@ -7,6 +7,7 @@ import {
   prepareSystemAgentRunAdmission,
   type AdmittedRunContext,
 } from "../../admitted-run-context.js";
+import { resolveAgentRunSessionTarget } from "../../run-session-target.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
@@ -58,6 +59,23 @@ vi.mock("./backend.js", () => ({
 }));
 vi.mock("../../../plugin-sdk/session-transcript-runtime.js", () => ({
   appendAssistantMirrorMessageByIdentity: transcriptMocks.appendAssistantMirrorMessageByIdentity,
+}));
+// This suite stubs persistence; resolve its synthetic paths without opening a
+// host database. The runner boundary suite uses the real resolver and SQLite.
+vi.mock("../../run-session-target.js", () => ({
+  resolveAgentRunSessionTarget: vi.fn(
+    async (params: {
+      agentId?: string;
+      sessionId: string;
+      sessionKey?: string;
+      sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
+    }) => ({
+      agentId: params.sessionTarget?.agentId ?? params.agentId ?? "main",
+      sessionId: params.sessionTarget?.sessionId ?? params.sessionId,
+      sessionKey: params.sessionTarget?.sessionKey ?? params.sessionKey ?? "agent:main:settled",
+      storePath: params.sessionTarget?.storePath ?? "/synthetic/sessions.json",
+    }),
+  ),
 }));
 
 function settledFailedAttempt(): EmbeddedRunAttemptWithReceiptEvidence {
@@ -883,6 +901,20 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     ]);
   });
 
+  it("keeps the honest fallback when its transcript target cannot be resolved", async () => {
+    const input = finalizationInput(settledSuccessfulAttempt());
+    input.finalization.preparedAttempt.sessionKey = "agent:main:settled";
+    backendMocks.runSettledFinalization.mockRejectedValueOnce(new Error("summary unavailable"));
+    vi.mocked(resolveAgentRunSessionTarget).mockRejectedValueOnce(new Error("store unavailable"));
+
+    const result = await prepareTerminalWithSettledTurnFinalization(input);
+
+    expect(result.prepared.payloadsWithToolMedia).toEqual([
+      expect.objectContaining({ text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT }),
+    ]);
+    expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).not.toHaveBeenCalled();
+  });
+
   it("does not construct a fallback after its transcript writer is superseded", async () => {
     const attempt = settledSuccessfulAttempt();
     const input = finalizationInput(attempt);
@@ -945,6 +977,16 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
 
     await expect(prepareTerminalWithSettledTurnFinalization(input)).rejects.toBeInstanceOf(
       SessionTranscriptWriterClaimReboundError,
+    );
+    expect(backendMocks.runSettledFinalization).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionTarget: expect.objectContaining({
+          expectedLifecycleRevision: "revision-committed",
+          expectedWriterRunId: "run-settled",
+        }),
+      }),
+      attempt,
+      input.finalization.harness,
     );
     expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -6,7 +6,10 @@
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import type { SubagentRunReadRecord, SubagentRunRecord } from "./subagent-registry.types.js";
-import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
+import {
+  compareSubagentRunGeneration,
+  recordLatestSubagentRun,
+} from "./subagent-run-generation.js";
 import { hasSubagentRunEnded, isLiveUnendedSubagentRun } from "./subagent-run-liveness.js";
 
 function resolveControllerSessionKey(
@@ -105,17 +108,6 @@ export type LatestSubagentRunReadIndex = {
   getLatestSubagentRun(childSessionKey: string): SubagentRunRecord | null;
 };
 
-function rememberLatestRunEntry<T extends SubagentRunReadRecord>(
-  map: Map<string, T>,
-  key: string,
-  entry: T,
-): void {
-  const existing = map.get(key);
-  if (!existing || compareSubagentRunGeneration(entry, existing) > 0) {
-    map.set(key, entry);
-  }
-}
-
 /** Builds a reusable latest-generation lookup from one registry snapshot. */
 export function buildLatestSubagentRunReadIndexFromRuns(
   runs: Map<string, SubagentRunRecord>,
@@ -126,7 +118,7 @@ export function buildLatestSubagentRunReadIndexFromRuns(
     if (!childSessionKey) {
       continue;
     }
-    rememberLatestRunEntry(latestRunByChildSessionKey, childSessionKey, entry);
+    recordLatestSubagentRun(latestRunByChildSessionKey, childSessionKey, entry);
   }
   return {
     getLatestSubagentRun: (childSessionKey) =>
@@ -157,7 +149,7 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     if (!childSessionKey) {
       continue;
     }
-    rememberLatestRunEntry(inMemoryDisplayByChildSessionKey, childSessionKey, entry);
+    recordLatestSubagentRun(inMemoryDisplayByChildSessionKey, childSessionKey, entry);
   }
 
   for (const [, entry] of runs.entries()) {
@@ -183,8 +175,8 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     const displayRuns = isLiveUnendedSubagentRun(entry, now)
       ? latestSnapshotActiveByChildSessionKey
       : latestSnapshotEndedByChildSessionKey;
-    rememberLatestRunEntry(displayRuns, childSessionKey, entry);
-    rememberLatestRunEntry(latestRunsByChildSessionKey, childSessionKey, entry);
+    recordLatestSubagentRun(displayRuns, childSessionKey, entry);
+    recordLatestSubagentRun(latestRunsByChildSessionKey, childSessionKey, entry);
 
     const requesterSessionKey = entry.requesterSessionKey;
     if (!requesterSessionKey) {
@@ -195,7 +187,7 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
       latestByChild = new Map<string, T>();
       latestRunByRequesterAndChildSessionKey.set(requesterSessionKey, latestByChild);
     }
-    rememberLatestRunEntry(latestByChild, childSessionKey, entry);
+    recordLatestSubagentRun(latestByChild, childSessionKey, entry);
   }
 
   const getDisplaySubagentRun = (childSessionKey: string): T | null => {
@@ -463,7 +455,7 @@ export function countActiveRunsForSessionFromRuns(
     if (options?.requesterAgentId && entry.requesterAgentId !== options.requesterAgentId) {
       continue;
     }
-    rememberLatestRunEntry(latestByChildSessionKey, entry.childSessionKey, entry);
+    recordLatestSubagentRun(latestByChildSessionKey, entry.childSessionKey, entry);
   }
 
   let count = 0;

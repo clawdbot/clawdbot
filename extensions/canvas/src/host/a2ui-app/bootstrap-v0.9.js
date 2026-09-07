@@ -46,13 +46,14 @@ class OpenClawA2UIV09Host extends LitElement {
     }
   `;
 
-  surfaces = [];
-  error = "";
   #processor;
   #subscriptions = [];
 
   constructor() {
     super();
+    // Native class fields would shadow Lit's reactive accessors.
+    this.surfaces = [];
+    this.error = "";
     this.#processor = this.#createProcessor();
   }
 
@@ -114,7 +115,6 @@ class OpenClawA2UIV09Host extends LitElement {
 
   #syncSurfaces() {
     this.surfaces = Array.from(this.#processor.model.surfacesMap.entries());
-    this.requestUpdate();
   }
 
   render() {

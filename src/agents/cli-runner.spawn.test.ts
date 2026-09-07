@@ -1164,14 +1164,8 @@ describe("runCliAgent spawn path", () => {
       expect(input.argv).toContain("soft-cli-session");
       expect(input.argv?.join(" ")).toContain("/tmp/openclaw-soft-resume-system-prompt.md");
       return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: "ok",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
     const context = buildPreparedCliRunContext({
@@ -1692,14 +1686,8 @@ describe("runCliAgent spawn path", () => {
     const logInfoSpy = vi.spyOn(cliBackendLog, "info").mockImplementation(() => undefined);
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: "ok",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       }),
     );
 
@@ -1752,14 +1740,10 @@ describe("runCliAgent spawn path", () => {
   it("returns process diagnostics with byte counts and bounded output hashes", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
+        ...createSuccessfulProcessExit(),
         durationMs: 75,
         stdout: "ok",
         stderr: "warn\n",
-        timedOut: false,
-        noOutputTimedOut: false,
       }),
     );
 
@@ -1839,14 +1823,8 @@ describe("runCliAgent spawn path", () => {
         "utf-8",
       );
       return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
+        ...createSuccessfulProcessExit(),
         stdout: "ok",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
       });
     });
 

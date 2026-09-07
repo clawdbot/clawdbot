@@ -209,8 +209,17 @@ openclaw_e2e_wait_gateway_ready() {
   return "$PROBE_READY_STATUS"
 }
 check_gateway_status() { printf 'authenticated\\n' >>"$PROBE_EVENTS"; }
-# Only the independent updater boundary is substituted; preparation and phases are real.
-update_candidate() { printf 'update\\n' >>"$PROBE_EVENTS"; }
+# Independent preparation is covered separately; preserve this probe's service manager.
+prepare_restart_inference() { :; }
+install_update_restart_systemctl_shim() { :; }
+prepare_restart_fixture() {
+  restart_fixture_package="$RUNTIME_ROOT/future.tgz"
+  restart_fixture_version="2100.1.0"
+}
+update_candidate() {
+  [ "$#" -eq 3 ] && [ "$1" = 1 ] && [ "$2" = "file:$RUNTIME_ROOT/future.tgz" ] && [ "$3" = 2100.1.0 ] || return 99
+  printf 'update\\n' >>"$PROBE_EVENTS"
+}
 assert_survival() { printf 'assert-survival\\n' >>"$PROBE_EVENTS"; }
 probe_status=0
 repair_fixture_plugin_consent || probe_status=$?
@@ -273,7 +282,17 @@ exit "$probe_status"
       }
       const phases = readFileSync(path.join(root, "artifacts", "phases.jsonl"), "utf8");
       if (expected) {
-        expect(phases).not.toContain('"status":"passed"');
+        const completedPhases = phases
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(
+          completedPhases.filter((event) => event.status === "passed").map((event) => event.phase),
+        ).toEqual([
+          "prepare-restart-inference",
+          "prepare-restart-fixture",
+          "prepare-restart-manager",
+        ]);
         expect(phases).not.toContain("recovery-update-restart");
       }
     },

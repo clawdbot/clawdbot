@@ -176,23 +176,6 @@ const DEFAULT_MEMORY_DEEP_DREAMING_SOURCES: MemoryDeepDreamingSource[] = [
 ];
 const DEFAULT_MEMORY_REM_DREAMING_SOURCES: MemoryRemDreamingSource[] = ["memory", "daily", "deep"];
 
-function normalizeNonNegativeInt(value: unknown, fallback: number): number {
-  // Config integers are decimal-only; Number() would accept hex/exponent forms.
-  return parseStrictNonNegativeInteger(value) ?? fallback;
-}
-
-function normalizeOptionalPositiveInt(value: unknown): number | undefined {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  // Same strict decimal contract as normalizeNonNegativeInt for optional fields.
-  return parseStrictPositiveInteger(value);
-}
-
-function normalizeBoolean(value: unknown, fallback: boolean): boolean {
-  return parseBoolean(value) ?? fallback;
-}
-
 function normalizeScore(value: unknown, fallback: number): number {
   const normalized = normalizeStringifiedOptionalString(value);
   if (typeof value === "string" && !normalized) {
@@ -203,10 +186,6 @@ function normalizeScore(value: unknown, fallback: number): number {
     return fallback;
   }
   return num;
-}
-
-function normalizeSimilarity(value: unknown, fallback: number): number {
-  return normalizeScore(value, fallback);
 }
 
 function normalizeStringArray<T extends string>(
@@ -268,8 +247,8 @@ function resolveExecutionConfig(
   fallback: MemoryDreamingExecutionConfig,
 ): MemoryDreamingExecutionConfig {
   const record = asNullableRecord(value);
-  const maxOutputTokens = normalizeOptionalPositiveInt(record?.maxOutputTokens);
-  const timeoutMs = normalizeOptionalPositiveInt(record?.timeoutMs);
+  const maxOutputTokens = parseStrictPositiveInteger(record?.maxOutputTokens);
+  const timeoutMs = parseStrictPositiveInteger(record?.timeoutMs);
   const temperatureRaw = record?.temperature;
   const temperature =
     typeof temperatureRaw === "number" && Number.isFinite(temperatureRaw) && temperatureRaw >= 0
@@ -347,37 +326,32 @@ export function resolveMemoryDreamingConfig(params: {
   const deep = asNullableRecord(phases?.deep);
   const rem = asNullableRecord(phases?.rem);
   const deepRecovery = asNullableRecord(deep?.recovery);
-  const maxAgeDays = normalizeOptionalPositiveInt(deep?.maxAgeDays);
-  const maxPromotedSnippetTokens = normalizeOptionalPositiveInt(deep?.maxPromotedSnippetTokens);
+  const maxAgeDays = parseStrictPositiveInteger(deep?.maxAgeDays);
+  const maxPromotedSnippetTokens = parseStrictPositiveInteger(deep?.maxPromotedSnippetTokens);
 
   return {
-    enabled: normalizeBoolean(dreaming?.enabled, DEFAULT_MEMORY_DREAMING_ENABLED),
+    enabled: parseBoolean(dreaming?.enabled) ?? DEFAULT_MEMORY_DREAMING_ENABLED,
     frequency,
     ...(timezone ? { timezone } : {}),
-    verboseLogging: normalizeBoolean(
-      dreaming?.verboseLogging,
-      DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING,
-    ),
+    verboseLogging:
+      parseBoolean(dreaming?.verboseLogging) ?? DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING,
     storage: {
       mode: normalizeStorageMode(storage?.mode),
-      separateReports: normalizeBoolean(
-        storage?.separateReports,
-        DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS,
-      ),
+      separateReports:
+        parseBoolean(storage?.separateReports) ?? DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS,
     },
     execution: {
       defaults: defaultExecution,
     },
     phases: {
       light: {
-        enabled: normalizeBoolean(light?.enabled, true),
+        enabled: parseBoolean(light?.enabled) ?? true,
         cron: frequency,
-        lookbackDays: normalizeNonNegativeInt(
-          light?.lookbackDays,
+        lookbackDays:
+          parseStrictNonNegativeInteger(light?.lookbackDays) ??
           DEFAULT_MEMORY_LIGHT_DREAMING_LOOKBACK_DAYS,
-        ),
-        limit: normalizeNonNegativeInt(light?.limit, DEFAULT_MEMORY_LIGHT_DREAMING_LIMIT),
-        dedupeSimilarity: normalizeSimilarity(
+        limit: parseStrictNonNegativeInteger(light?.limit) ?? DEFAULT_MEMORY_LIGHT_DREAMING_LIMIT,
+        dedupeSimilarity: normalizeScore(
           light?.dedupeSimilarity,
           DEFAULT_MEMORY_LIGHT_DREAMING_DEDUPE_SIMILARITY,
         ),
@@ -394,22 +368,19 @@ export function resolveMemoryDreamingConfig(params: {
         }),
       },
       deep: {
-        enabled: normalizeBoolean(deep?.enabled, true),
+        enabled: parseBoolean(deep?.enabled) ?? true,
         cron: frequency,
-        limit: normalizeNonNegativeInt(deep?.limit, DEFAULT_MEMORY_DEEP_DREAMING_LIMIT),
+        limit: parseStrictNonNegativeInteger(deep?.limit) ?? DEFAULT_MEMORY_DEEP_DREAMING_LIMIT,
         minScore: normalizeScore(deep?.minScore, DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE),
-        minRecallCount: normalizeNonNegativeInt(
-          deep?.minRecallCount,
+        minRecallCount:
+          parseStrictNonNegativeInteger(deep?.minRecallCount) ??
           DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT,
-        ),
-        minUniqueQueries: normalizeNonNegativeInt(
-          deep?.minUniqueQueries,
+        minUniqueQueries:
+          parseStrictNonNegativeInteger(deep?.minUniqueQueries) ??
           DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES,
-        ),
-        recencyHalfLifeDays: normalizeNonNegativeInt(
-          deep?.recencyHalfLifeDays,
+        recencyHalfLifeDays:
+          parseStrictNonNegativeInteger(deep?.recencyHalfLifeDays) ??
           DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS,
-        ),
         ...(typeof maxAgeDays === "number"
           ? { maxAgeDays }
           : typeof DEFAULT_MEMORY_DEEP_DREAMING_MAX_AGE_DAYS === "number"
@@ -427,22 +398,18 @@ export function resolveMemoryDreamingConfig(params: {
           DEFAULT_MEMORY_DEEP_DREAMING_SOURCES,
         ),
         recovery: {
-          enabled: normalizeBoolean(
-            deepRecovery?.enabled,
-            DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_ENABLED,
-          ),
+          enabled:
+            parseBoolean(deepRecovery?.enabled) ?? DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_ENABLED,
           triggerBelowHealth: normalizeScore(
             deepRecovery?.triggerBelowHealth,
             DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_TRIGGER_BELOW_HEALTH,
           ),
-          lookbackDays: normalizeNonNegativeInt(
-            deepRecovery?.lookbackDays,
+          lookbackDays:
+            parseStrictNonNegativeInteger(deepRecovery?.lookbackDays) ??
             DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_LOOKBACK_DAYS,
-          ),
-          maxRecoveredCandidates: normalizeNonNegativeInt(
-            deepRecovery?.maxRecoveredCandidates,
+          maxRecoveredCandidates:
+            parseStrictNonNegativeInteger(deepRecovery?.maxRecoveredCandidates) ??
             DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_MAX_CANDIDATES,
-          ),
           minRecoveryConfidence: normalizeScore(
             deepRecovery?.minRecoveryConfidence,
             DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_MIN_CONFIDENCE,
@@ -460,13 +427,12 @@ export function resolveMemoryDreamingConfig(params: {
         }),
       },
       rem: {
-        enabled: normalizeBoolean(rem?.enabled, true),
+        enabled: parseBoolean(rem?.enabled) ?? true,
         cron: frequency,
-        lookbackDays: normalizeNonNegativeInt(
-          rem?.lookbackDays,
+        lookbackDays:
+          parseStrictNonNegativeInteger(rem?.lookbackDays) ??
           DEFAULT_MEMORY_REM_DREAMING_LOOKBACK_DAYS,
-        ),
-        limit: normalizeNonNegativeInt(rem?.limit, DEFAULT_MEMORY_REM_DREAMING_LIMIT),
+        limit: parseStrictNonNegativeInteger(rem?.limit) ?? DEFAULT_MEMORY_REM_DREAMING_LIMIT,
         minPatternStrength: normalizeScore(
           rem?.minPatternStrength,
           DEFAULT_MEMORY_REM_DREAMING_MIN_PATTERN_STRENGTH,

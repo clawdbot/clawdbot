@@ -352,7 +352,7 @@ See [Audit records](/cli/audit) for the full field reference and query filters.
 
 ## Message lifecycle events
 
-Set [`logging.audit.messages`](/gateway/configuration-reference#audit) to choose what
+Set [`logging.audit.messages`](/gateway/config-observability#audit) to choose what
 is recorded, then restart the Gateway:
 
 - `off` (default): no message records.
@@ -520,7 +520,7 @@ correlation alone.
 - Gateway RPC: `audit.activity.list` (requires `operator.read`) returns the
   versioned V1 activity event union; the shipped `audit.list` RPC is unchanged
   for older run/tool clients. See
-  [Gateway protocol](/gateway/protocol#audit-ledger-rpc).
+  [Gateway protocol](/gateway/protocol/ledgers#audit-ledger-rpc).
 - Identity RPC: `audit.run.inspect` (requires `operator.read`) accepts one
   `executionId` for exact inspection or one `runId` for bounded discovery. It
   returns the immutable V1 context plus paged safe displays for admission,
@@ -582,6 +582,6 @@ boundaries alongside the operator behavior above:
 ## Related
 
 - [Audit records CLI](/cli/audit)
-- [Configuration reference](/gateway/configuration-reference#audit)
-- [Gateway protocol](/gateway/protocol#audit-ledger-rpc)
+- [Configuration reference](/gateway/config-observability#audit)
+- [Gateway protocol](/gateway/protocol/ledgers#audit-ledger-rpc)
 - [OpenTelemetry](/gateway/opentelemetry)

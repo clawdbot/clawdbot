@@ -1,9 +1,7 @@
-import { createHash } from "node:crypto";
 // Doctor lint tests cover health-check registry integration and lint warning output.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as bundledHealthChecks from "../flows/bundled-health-checks.js";
@@ -14,6 +12,10 @@ import { writePersistedInstalledPluginIndexInstallRecords } from "../plugins/ins
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
+import {
+  createDoctorLintSemanticIndex,
+  snapshotDoctorLintSqliteFamily,
+} from "./doctor-lint.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   actualOpenNodeSqliteDatabase: vi.fn(),
@@ -161,6 +163,12 @@ describe("runDoctorLintCli", () => {
       path: "/tmp/openclaw.json",
     });
     mocks.callGateway.mockResolvedValue({
+      secretEgressProxy: {
+        state: "degraded",
+        caExpiresAt: "2036-09-01T00:00:00.000Z",
+        failedCertificates: 1,
+        message: "Check OpenSSL, then retry the request.",
+      },
       degradedSecretOwners: [
         {
           ownerKind: "account",
@@ -207,6 +215,7 @@ describe("runDoctorLintCli", () => {
       expect(exitCode).toBe(1);
       expect(output).toContain("core/doctor/gateway-health");
       expect(output).toContain("cold account:discord:ops");
+      expect(output).toContain("Secret egress proxy: Check OpenSSL, then retry the request.");
       expect(output).toContain("channels.discord.accounts.ops.token");
       expect(output).toContain("openclaw secrets reload");
       expect(output).not.toContain("SYNTHETIC_GATEWAY_SECRET");
@@ -223,6 +232,12 @@ describe("runDoctorLintCli", () => {
               severity: "warning",
               path: "channels.discord.accounts.ops.token",
               target: "account:discord:ops",
+            },
+            {
+              checkId: "core/doctor/gateway-health",
+              severity: "warning",
+              path: "secrets.egressProxy.enabled",
+              target: "capability:secret-egress-proxy",
             },
           ],
         });
@@ -593,7 +608,7 @@ describe("runDoctorLintCli", () => {
     );
     const databasePath = resolveOpenClawStateSqlitePath(env);
     closeOpenClawStateDatabaseByPath(databasePath);
-    const before = snapshotSqliteFamily(databasePath);
+    const before = snapshotDoctorLintSqliteFamily(databasePath);
     mocks.openNodeSqliteDatabase.mockClear();
     const sourceOpenStacks: string[] = [];
     mocks.openNodeSqliteDatabase.mockImplementation((...args: unknown[]) => {
@@ -644,7 +659,7 @@ describe("runDoctorLintCli", () => {
       expect(inspectSourceConfig).toHaveBeenCalledOnce();
       expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
       expect(sourceOpenStacks).toEqual([]);
-      expect(snapshotSqliteFamily(databasePath)).toEqual(before);
+      expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
     } finally {
       stdout.mockRestore();
       restoreDoctorLintTestEnv(originalEnv);
@@ -674,7 +689,7 @@ describe("runDoctorLintCli", () => {
     );
     const databasePath = resolveOpenClawStateSqlitePath(env);
     closeOpenClawStateDatabaseByPath(databasePath);
-    const before = snapshotSqliteFamily(databasePath);
+    const before = snapshotDoctorLintSqliteFamily(databasePath);
     const originalEnv = {
       HOME: process.env.HOME,
       OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
@@ -706,7 +721,7 @@ describe("runDoctorLintCli", () => {
       });
       expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
       expect(mocks.prepareSqliteReadOnlyLocationSync).not.toHaveBeenCalled();
-      expect(snapshotSqliteFamily(databasePath)).toEqual(before);
+      expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
     } finally {
       stdout.mockRestore();
       restoreDoctorLintTestEnv(originalEnv);
@@ -738,8 +753,8 @@ describe("runDoctorLintCli", () => {
     const databasePath = resolveOpenClawStateSqlitePath(env);
     closeOpenClawStateDatabaseByPath(databasePath);
     clearLoadInstalledPluginIndexInstallRecordsCache();
-    createSemanticIndex(stateDir);
-    const before = snapshotSqliteFamily(databasePath);
+    createDoctorLintSemanticIndex(stateDir);
+    const before = snapshotDoctorLintSqliteFamily(databasePath);
     mocks.openNodeSqliteDatabase.mockClear();
     const sourceOpenStacks: string[] = [];
     mocks.openNodeSqliteDatabase.mockImplementation((...args: unknown[]) => {
@@ -782,7 +797,7 @@ describe("runDoctorLintCli", () => {
         ],
       });
       expect(sourceOpenStacks).toEqual([]);
-      expect(snapshotSqliteFamily(databasePath)).toEqual(before);
+      expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
     } finally {
       stdout.mockRestore();
       restoreDoctorLintTestEnv(originalEnv);
@@ -812,7 +827,7 @@ describe("runDoctorLintCli", () => {
     );
     const pluginDatabasePath = resolveOpenClawStateSqlitePath(env);
     closeOpenClawStateDatabaseByPath(pluginDatabasePath);
-    createSemanticIndex(stateDir);
+    createDoctorLintSemanticIndex(stateDir);
     const originalEnv = {
       HOME: process.env.HOME,
       OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
@@ -884,7 +899,7 @@ describe("runDoctorLintCli", () => {
     );
     const pluginDatabasePath = resolveOpenClawStateSqlitePath(env);
     closeOpenClawStateDatabaseByPath(pluginDatabasePath);
-    createSemanticIndex(stateDir);
+    createDoctorLintSemanticIndex(stateDir);
     const originalEnv = {
       HOME: process.env.HOME,
       OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
@@ -994,33 +1009,6 @@ describe("runDoctorLintCli", () => {
     );
   });
 });
-
-function createSemanticIndex(stateDir: string): string {
-  const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-  const database = new DatabaseSync(databasePath);
-  database.exec(
-    "CREATE TABLE memory_index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT",
-  );
-  database
-    .prepare("INSERT INTO memory_index_meta (key, value) VALUES (?, ?)")
-    .run("memory_index_meta_v1", JSON.stringify({ model: "embeddinggemma-300m", vectorDims: 768 }));
-  database.close();
-  return databasePath;
-}
-
-function snapshotSqliteFamily(databasePath: string): Array<{
-  path: string;
-  sha256: string;
-}> {
-  return ["", "-journal", "-shm", "-wal"]
-    .map((suffix) => `${databasePath}${suffix}`)
-    .filter((candidate) => fs.existsSync(candidate))
-    .map((candidate) => ({
-      path: candidate,
-      sha256: createHash("sha256").update(fs.readFileSync(candidate)).digest("hex"),
-    }));
-}
 
 function restoreDoctorLintTestEnv(values: {
   HOME: string | undefined;

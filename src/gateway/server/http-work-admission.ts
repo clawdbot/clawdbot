@@ -3,6 +3,7 @@ import type { ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { waitForHttpRequestRejection } from "../../infra/http-request-lifecycle.js";
 import { tryBeginGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
+import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
 
 type GatewayBoundaryHandler = () => Promise<boolean> | boolean;
 
@@ -59,16 +60,10 @@ export function rejectGatewayUpgradeServiceUnavailable(
   socket: Pick<Duplex, "end" | "destroy">,
   body: string,
 ): void {
-  // Reused HTTP sockets can buffer upgrade writes; destroy only after flushing.
-  socket.end(
-    "HTTP/1.1 503 Service Unavailable\r\n" +
-      "Connection: close\r\n" +
-      "Content-Type: text/plain; charset=utf-8\r\n" +
-      `Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n` +
-      "\r\n" +
-      body,
-    () => socket.destroy(),
-  );
+  rejectWebSocketUpgrade(socket, {
+    status: 503,
+    body: { contentType: "text/plain; charset=utf-8", text: body },
+  });
 }
 
 /** Holds upgrade admission until one plugin handler owns or declines the socket. */

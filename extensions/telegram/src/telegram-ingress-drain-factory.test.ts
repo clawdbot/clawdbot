@@ -11,7 +11,6 @@ import {
   type TelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
 import { takeTelegramCallbackQueryAdmissionAnswer } from "./callback-query-answer-state.js";
-import type { TelegramIngressDrainLifecycle } from "./telegram-ingress-drain.js";
 
 const mocks = vi.hoisted(() => ({
   createTelegramIngressMonitor: vi.fn((params: unknown) => params),
@@ -33,10 +32,7 @@ const { createTelegramTransportIngressMonitor } =
 
 type CapturedMonitor = {
   onDurableAdmission: (update: unknown, context: { isNew: boolean }) => void | Promise<void>;
-  dispatch: (
-    update: unknown,
-    lifecycle: TelegramIngressDrainLifecycle,
-  ) => Promise<TelegramMessageProcessingResult | void>;
+  dispatch: (update: unknown) => Promise<TelegramMessageProcessingResult | void>;
 };
 
 describe("Telegram transport ingress outcome handoff", () => {
@@ -196,9 +192,7 @@ describe("Telegram transport ingress outcome handoff", () => {
       const monitor = mocks.createTelegramIngressMonitor.mock.calls[0]?.[0] as CapturedMonitor;
       const update = { update_id: 123 };
 
-      await expect(monitor.dispatch(update, {} as TelegramIngressDrainLifecycle)).resolves.toBe(
-        outcome,
-      );
+      await expect(monitor.dispatch(update)).resolves.toBe(outcome);
       expect(bot.handleUpdate).toHaveBeenCalledWith(update);
     },
   );
@@ -218,9 +212,7 @@ describe("Telegram transport ingress outcome handoff", () => {
     });
     const monitor = mocks.createTelegramIngressMonitor.mock.calls[0]?.[0] as CapturedMonitor;
 
-    await expect(
-      monitor.dispatch({ update_id: 124 }, {} as TelegramIngressDrainLifecycle),
-    ).resolves.toBeUndefined();
+    await expect(monitor.dispatch({ update_id: 124 })).resolves.toBeUndefined();
   });
 
   it("keeps an existing explicit skip when middleware applies its completion default", async () => {
@@ -241,8 +233,6 @@ describe("Telegram transport ingress outcome handoff", () => {
     });
     const monitor = mocks.createTelegramIngressMonitor.mock.calls[0]?.[0] as CapturedMonitor;
 
-    await expect(
-      monitor.dispatch({ update_id: 125 }, {} as TelegramIngressDrainLifecycle),
-    ).resolves.toEqual({ kind: "skipped" });
+    await expect(monitor.dispatch({ update_id: 125 })).resolves.toEqual({ kind: "skipped" });
   });
 });

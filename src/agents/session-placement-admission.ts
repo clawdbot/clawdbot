@@ -229,13 +229,18 @@ function settleYieldedRequesterAfterPlacementRelease(
   if (!claim.sessionKey || result.meta.yielded !== true || !result.acceptedSessionSpawns?.length) {
     return;
   }
-  settleRequesterAfterSessionSpawns({
+  const settled = settleRequesterAfterSessionSpawns({
     requesterSessionKey: claim.sessionKey,
     requesterAgentId: claim.agentId,
     requesterTurnRunId: claim.runId,
     requesterYielded: true,
     acceptedSessionSpawns: result.acceptedSessionSpawns,
   });
+  if (settled) {
+    // Native attempts may already have settled before placement released.
+    // A second no-op must preserve their earlier successful result.
+    result.requesterContinuationSettled = true;
+  }
 }
 
 /** Resolves an authoritative sandbox only when the live placement owns remote execution. */

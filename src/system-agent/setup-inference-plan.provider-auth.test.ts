@@ -78,6 +78,66 @@ describe("catalog-only provider preparation", () => {
     expect(persistAuthProfiles).not.toHaveBeenCalled();
   });
 
+  it.each(["matching-last", "missing-match"] as const)(
+    "selects the model provider's credential from %s auth profiles",
+    async (profileCase) => {
+      const matchingCredential = {
+        type: "api_key" as const,
+        provider: "FIXTURE",
+        key: "synthetic-selected-key",
+      };
+      vi.mocked(prepareAuthChoiceLoadedPluginProvider).mockResolvedValue({
+        config,
+        agentModelOverride: "fixture/starter-alias",
+        provider: {
+          id: "fixture",
+          label: "Fixture",
+          auth: [],
+          normalizeModelId: () => "test-model",
+        },
+        authProfiles: [
+          {
+            profileId: "other:default",
+            credential: {
+              type: "api_key",
+              provider: "other",
+              key: "synthetic-unrelated-key",
+            },
+          },
+          ...(profileCase === "matching-last"
+            ? [{ profileId: "fixture:default", credential: matchingCredential }]
+            : []),
+        ],
+        persistAuthProfiles,
+      });
+      const plan = await buildTestPlan({
+        kind: "provider-auth",
+        authChoice: "fixture-api-key",
+        cfg: config,
+        sourceCfg: config,
+        workspaceDir: "/tmp/isolated-provider-probe",
+        pluginWorkspaceDir: "/tmp/selected-workspace",
+        agentDir: "/tmp/isolated-provider-probe/agent",
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() as never },
+        prompter: createWizardPrompter(),
+        deps: { resolveManifestProviderAuthChoice: () => undefined },
+      });
+      expect(persistAuthProfiles).not.toHaveBeenCalled();
+      if (profileCase === "missing-match") {
+        expect(plan).toEqual({ error: expect.stringContaining("did not return credentials") });
+        return;
+      }
+      expect(plan).toMatchObject({
+        modelRef: "fixture/test-model",
+        manualAuth: { profiles: [{ credential: matchingCredential }] },
+      });
+      if ("error" in plan) {
+        throw new Error(plan.error);
+      }
+      expect(plan.authProfileId).toBe(plan.manualAuth?.profiles[0]?.profileId);
+    },
+  );
+
   it.each(["openclaw", "fixture-cli"])(
     "normalizes the starter while retaining trusted installation and the selected %s runtime",
     async (runtimeId) => {

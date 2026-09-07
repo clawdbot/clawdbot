@@ -7,7 +7,6 @@ import {
   getGatewayPluginMetadataSnapshot,
   getCurrentPluginMetadataSnapshotState,
   setCurrentPluginMetadataSnapshotState,
-  type CurrentPluginMetadataSnapshotRevision,
 } from "./current-plugin-metadata-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import {
@@ -29,12 +28,6 @@ import type {
 } from "./plugin-metadata-snapshot.types.js";
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
 
-type CurrentPluginMetadataSnapshotState = ReturnType<
-  typeof getCurrentPluginMetadataSnapshotState
-> & {
-  configIdentities: WeakSet<OpenClawConfig>;
-};
-
 type CurrentPluginMetadataSnapshotOptions = {
   config?: OpenClawConfig;
   compatibleConfigs?: readonly OpenClawConfig[];
@@ -42,17 +35,6 @@ type CurrentPluginMetadataSnapshotOptions = {
   /** Only immutable runtime generations may trust identity across policy drift. */
   trustConfigIdentity?: boolean;
   workspaceDir?: string;
-};
-
-type TemporaryPluginMetadataSnapshotLeaseState = {
-  parent: TemporaryPluginMetadataSnapshotLeaseState | undefined;
-  previousState: CurrentPluginMetadataSnapshotState;
-  revision: CurrentPluginMetadataSnapshotRevision;
-  released: boolean;
-};
-
-type TemporaryPluginMetadataSnapshotLease = {
-  release: () => boolean;
 };
 
 type CurrentPluginMetadataSnapshotParams = {
@@ -89,10 +71,6 @@ export type PluginMetadataSnapshotScopeRunner = <T>(
   run: () => T,
 ) => T;
 
-let activeTemporaryPluginMetadataSnapshotLease:
-  | TemporaryPluginMetadataSnapshotLeaseState
-  | undefined;
-
 const SCOPED_PLUGIN_METADATA_SNAPSHOT_KEY = Symbol.for("openclaw.scopedPluginMetadataSnapshot");
 const scopedPluginMetadataSnapshot = resolveGlobalSingleton<
   AsyncLocalStorage<ScopedPluginMetadataSnapshot>
@@ -112,7 +90,7 @@ function publishCurrentPluginMetadataSnapshot(
   snapshot: PluginMetadataSnapshot,
   options: CurrentPluginMetadataSnapshotOptions,
   owner: "gateway" | "operation" = "operation",
-): CurrentPluginMetadataSnapshotRevision {
+): void {
   if (getCurrentPluginMetadataSnapshotState().owner === "gateway") {
     throw new Error("Gateway plugin metadata can only be replaced after shutdown");
   }
@@ -136,7 +114,7 @@ function publishCurrentPluginMetadataSnapshot(
     configFingerprint === defaultDiscoveryConfigFingerprint ||
     snapshot.configFingerprint === defaultDiscoveryConfigFingerprint ||
     Boolean(compatibleConfigFingerprints?.includes(defaultDiscoveryConfigFingerprint));
-  const revision = setCurrentPluginMetadataSnapshotState(
+  setCurrentPluginMetadataSnapshotState(
     snapshot,
     configFingerprint,
     compatiblePolicyHashes,
@@ -160,7 +138,6 @@ function publishCurrentPluginMetadataSnapshot(
   for (const config of options.compatibleConfigs ?? []) {
     currentPluginMetadataConfigIdentityCache.add(config);
   }
-  return revision;
 }
 
 /** Publishes package facts once; config reload only replaces their runtime bindings. */
@@ -178,7 +155,6 @@ export function setGatewayPluginMetadataSnapshot(
     throw new Error("Gateway plugin metadata can only be replaced after shutdown");
   }
   adoptProcessPluginCache(getPluginMetadataSnapshotCache(snapshot));
-  activeTemporaryPluginMetadataSnapshotLease = undefined;
   publishCurrentPluginMetadataSnapshot(snapshot, options, "gateway");
 }
 
@@ -193,7 +169,6 @@ export function adoptCurrentPluginMetadataSnapshotIfAbsent(
   ) {
     return;
   }
-  activeTemporaryPluginMetadataSnapshotLease = undefined;
   publishCurrentPluginMetadataSnapshot(snapshot, options);
 }
 
@@ -204,88 +179,6 @@ function isScopedSnapshotInCurrentCache(scoped: ScopedPluginMetadataSnapshot): b
     !scoped.snapshot ||
     getPluginMetadataSnapshotCache(scoped.snapshot) === cache
   );
-}
-
-function captureCurrentPluginMetadataSnapshotState(): CurrentPluginMetadataSnapshotState {
-  return {
-    ...getCurrentPluginMetadataSnapshotState(),
-    configIdentities: currentPluginMetadataConfigIdentityCache.capture(),
-  };
-}
-
-function restoreCapturedCurrentPluginMetadataSnapshotState(
-  state: CurrentPluginMetadataSnapshotState,
-): CurrentPluginMetadataSnapshotRevision {
-  currentPluginMetadataConfigIdentityCache.restore(state.configIdentities);
-  return setCurrentPluginMetadataSnapshotState(
-    state.snapshot,
-    state.configFingerprint,
-    state.compatiblePolicyHashes,
-    state.compatibleConfigFingerprints,
-    state.modelIdNormalizationPolicies,
-    state.owner,
-    state.envFingerprint,
-    state.defaultDiscoveryCompatible,
-  );
-}
-
-function resolveTemporaryPluginMetadataSnapshotLeaseParent():
-  | TemporaryPluginMetadataSnapshotLeaseState
-  | undefined {
-  const active = activeTemporaryPluginMetadataSnapshotLease;
-  if (active && getCurrentPluginMetadataSnapshotState().revision !== active.revision) {
-    activeTemporaryPluginMetadataSnapshotLease = undefined;
-    return undefined;
-  }
-  return active;
-}
-
-function releaseTemporaryPluginMetadataSnapshotLease(
-  lease: TemporaryPluginMetadataSnapshotLeaseState,
-): boolean {
-  if (lease.released) {
-    return false;
-  }
-  lease.released = true;
-  if (activeTemporaryPluginMetadataSnapshotLease !== lease) {
-    return false;
-  }
-
-  let restored = false;
-  while (activeTemporaryPluginMetadataSnapshotLease?.released) {
-    const current: TemporaryPluginMetadataSnapshotLeaseState =
-      activeTemporaryPluginMetadataSnapshotLease;
-    if (getCurrentPluginMetadataSnapshotState().revision !== current.revision) {
-      activeTemporaryPluginMetadataSnapshotLease = undefined;
-      return restored;
-    }
-    const restoredRevision = restoreCapturedCurrentPluginMetadataSnapshotState(
-      current.previousState,
-    );
-    activeTemporaryPluginMetadataSnapshotLease = current.parent;
-    if (activeTemporaryPluginMetadataSnapshotLease) {
-      activeTemporaryPluginMetadataSnapshotLease.revision = restoredRevision;
-    }
-    restored = true;
-  }
-  return restored;
-}
-
-/** Temporarily publishes metadata without restoring over lifecycle-owned replacements. */
-export function installTemporaryCurrentPluginMetadataSnapshot(
-  snapshot: PluginMetadataSnapshot,
-  options: CurrentPluginMetadataSnapshotOptions = {},
-): TemporaryPluginMetadataSnapshotLease {
-  const lease: TemporaryPluginMetadataSnapshotLeaseState = {
-    parent: resolveTemporaryPluginMetadataSnapshotLeaseParent(),
-    previousState: captureCurrentPluginMetadataSnapshotState(),
-    revision: publishCurrentPluginMetadataSnapshot(snapshot, options),
-    released: false,
-  };
-  activeTemporaryPluginMetadataSnapshotLease = lease;
-  return {
-    release: () => releaseTemporaryPluginMetadataSnapshotLease(lease),
-  };
 }
 
 /** Carries one owner-prepared metadata generation through nested async plugin lookups. */

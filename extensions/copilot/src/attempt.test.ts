@@ -289,54 +289,23 @@ function requireCreateSessionConfig(sdk: FakeSdk): Record<string, unknown> {
 }
 
 function expectTranscriptCredentialSafety(instructions: string): void {
-  const credentialGuidance = instructions
-    .split("\n")
-    .filter((line) => /credentials?|secrets?|authentication|pairing codes?/iu.test(line));
-
-  expect(
-    credentialGuidance.some(
-      (line) =>
-        /(?:never|do not)/iu.test(line) &&
-        /(?:ask for|request)/iu.test(line) &&
-        /(?:chat|conversation|message|reply|transcript)/iu.test(line),
-    ),
-  ).toBe(true);
-  expect(
-    credentialGuidance.some(
-      (line) =>
-        /(?:never|do not)/iu.test(line) &&
-        /(?:echo|repeat)/iu.test(line) &&
-        /(?:chat|conversation|message|reply|transcript)/iu.test(line),
-    ),
-  ).toBe(true);
-  expect(
-    credentialGuidance.some(
-      (line) =>
-        /(?:never|do not)/iu.test(line) &&
-        /(?:place|put|include)/iu.test(line) &&
-        /(?:recommend|suggest)/iu.test(line) &&
-        /(?:command(?:-line)?|arguments?)/iu.test(line) &&
-        /urls?/iu.test(line) &&
-        /shell/iu.test(line) &&
-        /(?:variable|interpolat)/iu.test(line),
-    ),
-  ).toBe(true);
-  expect(
-    credentialGuidance.some(
-      (line) =>
-        /(?:never|do not)/iu.test(line) &&
-        /(?:ask|request)/iu.test(line) &&
-        /(?:report|share|provide)/iu.test(line) &&
-        /(?:authentication|pairing)/iu.test(line) &&
-        /codes?/iu.test(line) &&
-        /(?:chat|conversation|message|reply|transcript)/iu.test(line),
-    ),
-  ).toBe(true);
-  expect(
-    credentialGuidance.some(
-      (line) => /(?:masked|secure)/iu.test(line) && /(?:entry|input|setup|wizard)/iu.test(line),
-    ),
-  ).toBe(true);
+  expect(instructions).toContain("their request already authorizes the handoff");
+  expect(instructions).toContain(
+    "first select a private conversation with the requesting user from trusted conversation context",
+  );
+  expect(instructions).toContain("recovery/backup codes, and hidden device tokens");
+  expect(instructions).toContain(
+    "Keep these secrets out of chat, tool arguments, URLs, logs, and shell text",
+  );
+  expect(instructions).toContain("host-owned masked credential entry");
+  expect(instructions).toContain(
+    "trusted flow's short-lived user-facing code and verification URL only there",
+  );
+  expect(instructions).toContain("user-provided short-lived one-time codes or OAuth callbacks");
+  expect(instructions).toContain("same pending flow");
+  expect(instructions).toContain(
+    "Keep messages intact unless the user requests deletion. Confirm completion from the login result.",
+  );
 }
 
 function requireResumeSessionConfig(sdk: FakeSdk): Record<string, unknown> {

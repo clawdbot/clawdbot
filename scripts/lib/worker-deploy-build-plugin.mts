@@ -40,6 +40,14 @@ export function resolveWorkerDeployGeneratorInputs(rootDir = process.cwd()) {
   ] as const;
 }
 
+/** The worker archive stages entry files only; emitted runtime auxiliaries have no owner. */
+export function isUnstagedWorkerDeployRuntimeArtifact(
+  fileName: string,
+  entrypoints: ReadonlySet<string>,
+): boolean {
+  return !entrypoints.has(fileName) && /\.(?:mjs|node|wasm)$/u.test(fileName);
+}
+
 /** Composes bundled-plugin runtime and removes dependency package reads from the worker build. */
 export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
   const playwrightRoot = fs.realpathSync(path.resolve(rootDir, "node_modules/playwright-core"));
@@ -73,6 +81,22 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
 
   return {
     name: WORKER_DEPLOY_BUILD_PLUGIN_NAME,
+    generateBundle(
+      this: { error(message: string): never },
+      _options: unknown,
+      bundle: Record<string, { type: string; fileName: string; isEntry?: boolean }>,
+    ) {
+      const files = Object.values(bundle);
+      const entrypoints = new Set(
+        files.filter((file) => file.type === "chunk" && file.isEntry).map((file) => file.fileName),
+      );
+      // Check the complete emitted graph: a root facade is outside the later worker-directory scan.
+      for (const file of files) {
+        if (isUnstagedWorkerDeployRuntimeArtifact(file.fileName, entrypoints)) {
+          this.error(`Worker deploy artifact emits unstaged runtime asset ${file.fileName}.`);
+        }
+      }
+    },
     load(id: string) {
       return id === WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID
         ? 'throw new Error("optional host-native dependency unavailable in portable worker runtime");'

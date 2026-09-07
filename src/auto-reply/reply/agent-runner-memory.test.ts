@@ -12,6 +12,7 @@ import {
 } from "../../agents/admitted-run-context.js";
 import { createAssistantErrorTranscript } from "../../agents/assistant-error-transcript.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import { resetContextWindowCacheForTest } from "../../agents/context.js";
 import { acceptCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
@@ -549,6 +550,103 @@ describe("runMemoryFlushIfNeeded", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     clearMemoryPluginState();
     await fs.rm(rootDir, { recursive: true, force: true });
+  });
+
+  it.each([
+    {
+      name: "prepared-flush",
+      tokens: 177_000,
+      prepared: true,
+      cap: undefined,
+      preflight: false,
+      calls: 0,
+    },
+    {
+      name: "prepared-preflight",
+      tokens: 190_000,
+      prepared: true,
+      cap: undefined,
+      preflight: true,
+      calls: 0,
+    },
+    {
+      name: "authored-cap",
+      tokens: 78_000,
+      prepared: true,
+      cap: 100_000,
+      preflight: false,
+      calls: 1,
+    },
+    {
+      name: "provider-mismatch",
+      tokens: 177_000,
+      prepared: true,
+      preparedProvider: "other-provider",
+      cap: undefined,
+      preflight: false,
+      calls: 1,
+    },
+    {
+      name: "missing-catalog",
+      tokens: 177_000,
+      prepared: false,
+      cap: undefined,
+      preflight: false,
+      calls: 1,
+    },
+  ])("uses $name catalog facts for maintenance decisions", async (testCase) => {
+    resetContextWindowCacheForTest();
+    const provider = "catalog-fixture";
+    const model = "catalog-window";
+    const entry = createFlushSessionEntry({ totalTokens: testCase.tokens, compactionCount: 0 });
+    const storePath = path.join(rootDir, "catalog-session.json");
+    await writeTestSessionStore(storePath, "main", entry);
+    const followupRun = createTestFollowupRun({
+      provider,
+      model,
+      thinkingCatalog: testCase.prepared
+        ? [{ provider: testCase.preparedProvider ?? provider, id: model, contextWindow: 1_000_000 }]
+        : undefined,
+    });
+    const overrides = {
+      cfg: {
+        agents: { defaults: { compaction: { memoryFlush: {} } } },
+        models: {
+          providers: {
+            [provider]: {
+              baseUrl: "https://catalog-fixture.invalid/v1",
+              // Keep input preparation local while each case owns its catalog budget facts.
+              models: [
+                {
+                  id: model,
+                  name: model,
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  maxTokens: 4_096,
+                },
+              ],
+            },
+          },
+        },
+      } satisfies MemoryFlushTestParams["cfg"],
+      followupRun,
+      storePath,
+      modelContextTokens: testCase.cap,
+      promptForEstimate: "",
+    };
+    if (testCase.preflight) {
+      await runDefaultPreflight(entry, overrides);
+      expect(compactEmbeddedAgentSessionMock.mock.calls.length, "CATALOG_WINDOW_PREFLIGHT").toBe(
+        testCase.calls,
+      );
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    } else {
+      const result = await runDefaultMemoryFlush(entry, overrides);
+      expect(runEmbeddedAgentMock.mock.calls.length, "CATALOG_WINDOW_FLUSH").toBe(testCase.calls);
+      expect(result.outcome).toBe(testCase.calls === 0 ? "skipped" : "completed");
+      expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+    }
   });
 
   it("preserves an external memory provider's disabled maintenance thresholds", async () => {

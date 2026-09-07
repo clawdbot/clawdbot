@@ -26,7 +26,7 @@ The macOS app deliberately uses the native permission flow instead of browser pu
 
 ## Enable browser notifications
 
-The Control UI asks for notification permission automatically the first time you send a chat message, once per browser and origin. **Settings → Notifications** remains the manual path for enabling or repairing notifications, including after you deny the automatic prompt.
+The Control UI asks for notification permission automatically the first time you send a chat message, including from **New Session** or **Start in background**, once per browser and origin. **Settings → Notifications** remains the manual path for enabling or repairing notifications, including after you deny the automatic prompt.
 
 1. Open the Control UI in a browser that supports service workers, `PushManager`, and notifications.
 2. Make sure the Control UI is connected to the Gateway.
@@ -49,6 +49,8 @@ Single-user Gateways use their durable owner profile for account defaults, so th
 
 The default preserves the original behavior: approval request and resolution notifications are enabled, while newly added attention categories are opt-in. Quiet hours suppress matching sends rather than queueing stale alerts for later delivery.
 
+Selecting an attention notification opens its question, conversation, or automation run on the Gateway that produced it. **Agent finished** waits for completion; a parent waiting for child agents does not count as finished. Automation failures use **Scheduled task failures**, without also generating a **Background task failures** alert for the same run.
+
 The detail levels are:
 
 - **Private** — generic attention text only.
@@ -67,7 +69,7 @@ After subscribing in a supported browser or installed Control UI PWA, turn on **
 
 Only browsers bound to the mentioned profile receive the alert. Each delivery rechecks the device, current profile and role, read scope, and session visibility, then applies the category setting, quiet hours, and agent filter. Being online is not required. With **Private** detail, the alert says only that someone mentioned you in a conversation; **Names only** and **Detailed** may include the sanitized sender and session labels, never the message excerpt. Selecting it opens the session through the normal authenticated Control UI route.
 
-Your [mentions Inbox](/concepts/multi-user#temporary-mentions-inbox) does not depend on Web Push permission or this setting. Opening the Inbox or reconnecting does not resend its old entries as browser notifications. The service worker displays browser alerts; the live Inbox update does not create a second OS notification. Human mention alerts are not implemented through the native macOS or iOS/Android push paths.
+Your [mentions Inbox](/concepts/multi-user#temporary-mentions-inbox) does not depend on Web Push permission or this setting. Its entries and dismissals survive Gateway restarts within the seven-day retention window. Opening the Inbox, reconnecting, or restarting the Gateway does not resend old entries as browser notifications. The service worker displays browser alerts; the live Inbox update does not create a second OS notification. Human mention alerts are not implemented through the native macOS or iOS/Android push paths.
 
 To verify targeting, have another eligible signed-in person select you from the chat `@` picker and send a normal message. Check **Inbox → Mentions**, then check the enabled browser alert. **Send test** only checks browser push transport and can reach every registered subscription; it does not prove that a human mention was selected, committed, or addressed to your profile. Delivery is best-effort, not an exactly-once guarantee.
 
@@ -110,6 +112,10 @@ Either the browser lacks the required Web Push APIs or the Control UI is not con
 
 A denied browser permission cannot be reopened from the page. Allow notifications for the Control UI origin in the browser's site settings, then reload Settings.
 
+### Permission is granted but the browser is not subscribed
+
+Browser permission and the Gateway subscription are separate. Select **Enable notifications** to register this browser, then enable the categories you want, such as **Someone mentions me**. Reloading or sending another message does not automatically subscribe a browser whose permission is already granted; this preserves an intentional unsubscribe.
+
 ### Service worker is not ready
 
 The Control UI waits up to 10 seconds for its service worker. If that times out right after an update, hard-refresh the page. If an old worker sticks around, clear site data for the dashboard origin and reconnect.
@@ -128,10 +134,10 @@ For a single PWA that switches among Gateways, also verify that every Gateway us
 
 Confirm the sender selected your profile from the picker rather than only typing your name, and that the original message reached the transcript. Sign in with the same profile and check that you still have access to the session. Incognito, Goal, catalog, suggestion-only, and command-send modes do not support human mentions.
 
-If the entry is in **Inbox → Mentions**, check this browser's subscription, **Someone mentions me**, quiet hours, mute overrides, and agent filter. An Inbox entry does not imply permission to display a browser notification. If the entry disappeared, it may have been dismissed from another browser using your profile, expired, evicted, or cleared by a Gateway restart. The retained chat message is independent of that temporary Inbox entry.
+If the entry is in **Inbox → Mentions**, check this browser's subscription, **Someone mentions me**, quiet hours, mute overrides, and agent filter. An Inbox entry does not imply permission to display a browser notification. If the entry disappeared, it may have been dismissed from another browser using your profile, expired, evicted, or become inaccessible after a session access change. Gateway restarts preserve retained entries and dismissals. The retained chat message is independent of the Inbox entry; entries already lost before durable storage was introduced are not recovered from old messages.
 
 ## Related
 
-- [Control UI PWA and Web Push](/web/control-ui#pwa-install-and-web-push)
+- [Control UI PWA and Web Push](/web/control-ui/connect-and-pair#pwa-install-and-web-push)
 - [iOS push delivery](/platforms/ios)
 - [Node notification commands](/nodes)

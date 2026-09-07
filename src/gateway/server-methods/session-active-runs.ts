@@ -241,7 +241,12 @@ export function resolveVisibleActiveSessionRunState(params: {
     ...(params.projectedAgentRunIndex ? { index: params.projectedAgentRunIndex } : {}),
   });
   const embeddedRunState =
-    sessionId === undefined ? undefined : resolveEmbeddedAgentSessionProgressState(sessionId);
+    sessionId === undefined
+      ? undefined
+      : resolveEmbeddedAgentSessionProgressState(sessionId, {
+          agentId: resolvedAgentId,
+          defaultAgentId: params.defaultAgentId,
+        });
   // Connection, worker-lifecycle, and embedded registries are independent owners.
   // Settlement in one must not hide live work owned by another.
   const running =

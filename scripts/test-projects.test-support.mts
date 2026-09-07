@@ -1225,10 +1225,7 @@ function listExplicitTestTargetFilesFromGit(cwd: string) {
   if (result.status !== 0) {
     return null;
   }
-  return result.stdout
-    .split("\0")
-    .map((line) => normalizePathPattern(line.trim()))
-    .filter((line) => line.length > 0 && isImportableGraphFile(line));
+  return result.stdout.split("\0").filter((line) => line.length > 0 && isImportableGraphFile(line));
 }
 
 function listExplicitTestTargetFilesForCwd(cwd: string) {
@@ -1694,7 +1691,7 @@ function listImportGraphGrepMatches(
   };
   const result = spawnSync(
     "git",
-    ["grep", "-l", "--fixed-strings", "-f", "-", "--", ...grepPaths],
+    ["grep", "-l", "-z", "--fixed-strings", "-f", "-", "--", ...grepPaths],
     spawnOptions,
   );
   for (const term of missing) {
@@ -1705,10 +1702,7 @@ function listImportGraphGrepMatches(
     // Source archives use the same filesystem inventory and native reader as the full graph.
     const candidates = (
       result.status === 0
-        ? result.stdout
-            .split("\n")
-            .map((line) => normalizePathPattern(line.trim()))
-            .filter((file) => trackedFiles.has(file))
+        ? result.stdout.split("\0").filter((file) => trackedFiles.has(file))
         : [...trackedFiles].filter((file) => !testFilesOnly || isTestFileTarget(file))
     ).toSorted((left, right) => left.localeCompare(right));
     // Per-term membership protects the broad cap and helper first-success rule.
@@ -1771,18 +1765,17 @@ function resolveAffectedTestsFromTargetedImportScan(
   cwd: string,
   options: ImportGraphOptions & { direct?: boolean } = {},
 ) {
-  const normalized = normalizePathPattern(changedPath);
   const tooling = options.tooling === true;
   const files = listImportGraphFilesForCwd(cwd, { tooling });
   const fileSet = new Set(files);
-  if (!fileSet.has(normalized)) {
+  if (!fileSet.has(changedPath)) {
     return [];
   }
 
   const testFiles = new Set(
     files.filter((file) => isTestFileTarget(file) && !file.endsWith(".live.test.ts")),
   );
-  let frontier = [normalized];
+  let frontier = [changedPath];
   const seen = new Set(frontier);
   const targets = [];
   const extensions = tooling ? TOOLING_IMPORTABLE_FILE_EXTENSIONS : IMPORTABLE_FILE_EXTENSIONS;
@@ -1850,14 +1843,12 @@ export function hasImportGraphImpactOnTargets(
   cwd = process.cwd(),
   options: ImportGraphOptions = {},
 ) {
-  const changed = new Set(changedPaths.map(normalizePathPattern));
+  const changed = new Set(changedPaths);
   if (changed.size === 0) {
     return false;
   }
   const files = listImportGraphFilesForCwd(cwd, options);
-  const targets = Array.isArray(targetPaths)
-    ? targetPaths.map(normalizePathPattern)
-    : files.filter(targetPaths);
+  const targets = Array.isArray(targetPaths) ? targetPaths : files.filter(targetPaths);
   if (targets.some((file) => changed.has(file))) {
     return true;
   }
@@ -1898,16 +1889,15 @@ function resolveAffectedTestsFromImportGraph(
   cwd: string,
   options: { forceFull?: boolean } = {},
 ) {
-  const normalized = normalizePathPattern(changedPath);
   if (options.forceFull !== true) {
-    const targetedTargets = resolveAffectedTestsFromTargetedImportScan(normalized, cwd);
+    const targetedTargets = resolveAffectedTestsFromTargetedImportScan(changedPath, cwd);
     if (targetedTargets !== null) {
       return targetedTargets;
     }
   }
 
   const { reverseImports, testFiles } = getImportGraph(cwd);
-  const queue = [normalized];
+  const queue = [changedPath];
   const seen = new Set(queue);
   const targets = [];
 
@@ -3118,10 +3108,9 @@ function resolveGithubYamlGuardTargets(changedPath: string) {
 }
 
 function resolveDirectToolingReferenceTests(changedPath: string, cwd: string) {
-  const normalized = normalizePathPattern(changedPath);
   return (
-    listImportGraphGrepMatches(cwd, [normalized], { tooling: true, testFilesOnly: true }).get(
-      normalized,
+    listImportGraphGrepMatches(cwd, [changedPath], { tooling: true, testFilesOnly: true }).get(
+      changedPath,
     ) ?? []
   )
     .filter(
@@ -3129,7 +3118,7 @@ function resolveDirectToolingReferenceTests(changedPath: string, cwd: string) {
         file !== "test/scripts/test-projects.test.ts" &&
         !file.endsWith(".live.test.ts") &&
         isTestFileTarget(file) &&
-        references.has(normalized),
+        references.has(changedPath),
     )
     .map(({ file }) => file);
 }

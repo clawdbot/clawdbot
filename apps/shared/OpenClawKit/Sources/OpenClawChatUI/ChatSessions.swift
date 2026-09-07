@@ -698,6 +698,29 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.thinkingDefault = thinkingDefault
     }
 
+    static func placeholder(key: String) -> OpenClawChatSessionEntry {
+        OpenClawChatSessionEntry(
+            key: key,
+            kind: nil,
+            displayName: nil,
+            surface: nil,
+            subject: nil,
+            room: nil,
+            space: nil,
+            updatedAt: nil,
+            sessionId: nil,
+            systemSent: nil,
+            abortedLastRun: nil,
+            thinkingLevel: nil,
+            verboseLevel: nil,
+            inputTokens: nil,
+            outputTokens: nil,
+            totalTokens: nil,
+            modelProvider: nil,
+            model: nil,
+            contextTokens: nil)
+    }
+
     public var isPinned: Bool {
         self.pinned == true
     }

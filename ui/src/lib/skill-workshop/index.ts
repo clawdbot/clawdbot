@@ -2,7 +2,7 @@ import type {
   SkillProposalEvaluation,
   SkillsProposalsListResult,
 } from "@openclaw/gateway-protocol";
-import type { computeLineDiff } from "../chat/tool-call-diff.ts";
+import type { computeSkillWorkshopDiff } from "./diff.ts";
 
 export type SkillWorkshopProposalStatus = SkillsProposalsListResult["proposals"][number]["status"];
 
@@ -48,6 +48,7 @@ export type SkillWorkshopProposal = {
    */
   bodyLoaded: boolean;
   status: SkillWorkshopProposalStatus;
+  degradedState?: SkillsProposalsListResult["proposals"][number]["degradedState"];
   origin?: {
     agentId?: string;
     sessionKey?: string;
@@ -73,7 +74,7 @@ export type SkillWorkshopInstalledSkill = SkillsProposalsListResult["installedSk
 
 export type SkillWorkshopInstalledSelection =
   | { status: "idle" }
-  | { status: "loading"; name: string }
+  | { status: "loading"; name: string; content?: string }
   | {
       status: "ready";
       name: string;
@@ -81,7 +82,7 @@ export type SkillWorkshopInstalledSelection =
       savedVersions: Array<{
         key: string;
         appliedAt?: string;
-        diff: ReturnType<typeof computeLineDiff>;
+        diff: ReturnType<typeof computeSkillWorkshopDiff>;
       }>;
       savedVersionsError?: string;
     }
@@ -90,12 +91,7 @@ export type SkillWorkshopInstalledSelection =
 export function changedSkillWorkshopVersion(read: SkillWorkshopInstalledSelection | undefined) {
   return read?.status === "ready"
     ? read.savedVersions.find(
-        (version) =>
-          // computeLineDiff marks unequal full inputs as truncated even when its
-          // bounded preview contains none of the edits.
-          version.diff.kind === "truncated" ||
-          version.diff.stat.added > 0 ||
-          version.diff.stat.removed > 0,
+        (version) => version.diff.stat.added > 0 || version.diff.stat.removed > 0,
       )
     : undefined;
 }

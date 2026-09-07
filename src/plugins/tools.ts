@@ -6,6 +6,7 @@ import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { normalizeConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import { isInvalidConfigError } from "../config/io.invalid-config.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   getLoadedRuntimePluginRegistry,
@@ -17,6 +18,7 @@ import {
   registrationIncludesHostRestrictedConversationReadTool,
 } from "./compat/conversation-read-tools.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
+import { createInstalledPluginEnabledPredicate } from "./installed-plugin-index.js";
 import { loadPluginRegistryHandle, type PluginLoadOptions } from "./loader.js";
 import {
   isManifestPluginAvailableForControlPlane,
@@ -368,7 +370,7 @@ function resolvePluginToolFactoryEntry(params: {
     // sets diagnosticEmitted). Directly-created or wrapped tagged errors have
     // no prior log, so they still need the resolver diagnostic here.
     if (!(isInvalidConfigError(err) && err.diagnosticEmitted)) {
-      params.logError(`plugin tool failed (${params.entry.pluginId}): ${String(err)}`);
+      params.logError(`plugin tool failed (${params.entry.pluginId}): ${formatErrorMessage(err)}`);
     }
   }
 
@@ -547,6 +549,10 @@ function resolvePluginToolRuntimePluginIds(params: {
       workspaceDir: params.workspaceDir,
       env: params.env,
     });
+  const isInstalledPluginEnabled = createInstalledPluginEnabledPredicate(
+    snapshot.index.plugins,
+    params.config,
+  );
   for (const plugin of snapshot.plugins) {
     if (
       !isManifestPluginAvailableForControlPlane({
@@ -554,6 +560,7 @@ function resolvePluginToolRuntimePluginIds(params: {
         plugin,
         config: params.config,
         normalizedConfig: normalizedPlugins,
+        isInstalledPluginEnabled,
       })
     ) {
       continue;
@@ -665,7 +672,6 @@ function resolvePluginToolLoadState(params: {
       loadOptions: PluginLoadOptions;
       onlyPluginIds: string[];
       allowlist: PluginToolAllowlist;
-      runtimeOptions: PluginLoadOptions["runtimeOptions"];
       snapshot: PluginMetadataManifestView;
     }
   | undefined {
@@ -714,7 +720,7 @@ function resolvePluginToolLoadState(params: {
     onlyPluginIds,
     runtimeOptions,
   });
-  return { context, env, loadOptions, onlyPluginIds, allowlist, runtimeOptions, snapshot };
+  return { context, env, loadOptions, onlyPluginIds, allowlist, snapshot };
 }
 
 export function ensureStandalonePluginToolRegistryLoaded(params: {
@@ -758,7 +764,7 @@ export function resolvePluginTools(params: {
   if (!loadState) {
     return [];
   }
-  const { context, env, onlyPluginIds, allowlist, runtimeOptions, snapshot } = loadState;
+  const { context, env, onlyPluginIds, allowlist, loadOptions, snapshot } = loadState;
   const tools: AnyAgentTool[] = [];
   const existing = params.existingToolNames ?? new Set<string>();
   const existingNormalized = new Set(Array.from(existing, (tool) => normalizeToolPolicyName(tool)));
@@ -775,12 +781,6 @@ export function resolvePluginTools(params: {
   if (onlyPluginIds.length === 0) {
     return tools;
   }
-  const loadOptions = buildPluginRuntimeLoadOptions(context, {
-    activate: false,
-    toolDiscovery: true,
-    onlyPluginIds,
-    runtimeOptions,
-  });
   const registry = resolvePluginToolRegistry({
     loadOptions,
     onlyPluginIds,

@@ -187,21 +187,11 @@ export async function buildTestPlan(params: {
         config: enableResult.config,
         result,
       });
-      const matchingProfile = result.profiles.find(
-        (profile) =>
-          normalizeProviderId(profile.credential.provider) === normalizeProviderId(ref.provider),
-      );
-      if (result.profiles.length > 0 && !matchingProfile) {
-        return {
-          error: `${choice.choiceLabel} did not return credentials for its detected model.`,
-        };
-      }
       return buildPreparedProviderTestPlan({
         cfg,
         sourceCfg: params.sourceCfg,
         preparedConfig,
         profiles: result.profiles,
-        selectedProfileId: matchingProfile?.profileId,
         modelRef,
         pluginId: choice.pluginId,
         agentDir: params.agentDir,
@@ -491,7 +481,6 @@ export async function buildTestPlan(params: {
           sourceCfg: params.sourceCfg,
           preparedConfig: prepared.config,
           profiles: prepared.authProfiles,
-          selectedProfileId: prepared.authProfiles[0]?.profileId,
           providerPlugin: prepared.provider,
           modelRef,
           pluginId: managedWizardChoice.pluginId,
@@ -660,21 +649,11 @@ export async function buildTestPlan(params: {
           error: `${resolved.provider.label} returned an invalid starter model.`,
         };
       }
-      const matchingProfile = result.profiles.find(
-        (profile) =>
-          normalizeProviderId(profile.credential.provider) === normalizeProviderId(ref.provider),
-      );
-      if (result.profiles.length > 0 && !matchingProfile) {
-        return {
-          error: `${resolved.provider.label} did not return credentials for its starter model.`,
-        };
-      }
       return buildPreparedProviderTestPlan({
         cfg,
         sourceCfg: params.sourceCfg,
         preparedConfig,
         profiles: result.profiles,
-        selectedProfileId: matchingProfile?.profileId,
         modelRef,
         pluginId: resolved.provider.pluginId,
         ...(interactive && choice.appGuidedDiscovery === true

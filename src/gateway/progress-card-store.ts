@@ -11,7 +11,12 @@ export type ProgressCardStore = {
   get(sessionKey: string, agentId?: string): ProgressCard | null;
   put(
     sessionKey: string,
-    input: { markdown?: string; steps?: ProgressCardStep[]; expectedRevision?: number },
+    input: {
+      markdown?: string;
+      steps?: ProgressCardStep[];
+      expectedRevision?: number;
+      assertCurrent?: () => void;
+    },
     agentId?: string,
   ): { card: ProgressCard | null };
 };
@@ -28,8 +33,10 @@ export const progressCardStore: ProgressCardStore = {
   put(sessionKey, input, agentId) {
     const resolved = resolveGatewaySessionDatabase(sessionKey, agentId);
     const result = runOpenClawAgentWriteTransaction(
-      (transactionDatabase) =>
-        writeSessionProgressCard(transactionDatabase.db, resolved.sessionKey, input),
+      (transactionDatabase) => {
+        input.assertCurrent?.();
+        return writeSessionProgressCard(transactionDatabase.db, resolved.sessionKey, input);
+      },
       resolved,
       { operationLabel: "progress-card.put" },
     );

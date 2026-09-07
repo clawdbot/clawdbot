@@ -1,10 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import * as processUrls from "./runtime-process-url.js";
+import { assertSqliteIntegrityInWorker } from "./sqlite-integrity-worker.js";
 import {
   assertSqliteIntegrity,
   confirmSqliteFileIntegrity,
@@ -230,5 +233,43 @@ describe("confirmSqliteFileIntegrity", () => {
     } finally {
       open.mockRestore();
     }
+  });
+});
+
+describe("SQLite integrity child", () => {
+  afterEach(() => vi.restoreAllMocks());
+  it("kills a stuck scan at its deadline before releasing ownership", async () => {
+    const root = tempDirs.make("openclaw-integrity-timeout-");
+    const source = path.join(root, "source.sqlite");
+    fs.writeFileSync(source, "retained source");
+    const worker = path.join(root, "blocked.mjs");
+    fs.writeFileSync(
+      worker,
+      `process.on('message', () => {}); process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 35000);`,
+    );
+    vi.spyOn(processUrls, "resolveRuntimeProcessEntrypointUrl").mockReturnValue(
+      pathToFileURL(worker),
+    );
+    const started = performance.now();
+    await expect(
+      assertSqliteIntegrityInWorker(source, 250, new AbortController().signal),
+    ).rejects.toThrow(/integrity check timed out after 30 seconds.*Stop the Gateway service/);
+    expect(performance.now() - started).toBeLessThan(33_000);
+    expect(fs.readFileSync(source, "utf8")).toBe("retained source");
+  }, 40_000);
+
+  it("preserves native integrity errors across the process boundary", async () => {
+    const source = path.join(tempDirs.make("openclaw-integrity-native-"), "source.sqlite");
+    const db = new (requireNodeSqlite().DatabaseSync)(source);
+    db.exec(
+      "PRAGMA foreign_keys = OFF; CREATE TABLE parent(id INTEGER PRIMARY KEY); CREATE TABLE child(parent_id INTEGER REFERENCES parent(id)); INSERT INTO child VALUES (42);",
+    );
+    db.close();
+    await expect(
+      assertSqliteIntegrityInWorker(source, 250, new AbortController().signal),
+    ).rejects.toMatchObject({
+      name: "SqliteIntegrityError",
+      message: expect.stringContaining("foreign_key_check failed"),
+    });
   });
 });

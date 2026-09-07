@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { html as staticHtml, literal } from "lit/static-html.js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
@@ -44,9 +45,9 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 import { renderNewSessionLink } from "./new-session-link.ts";
 import { HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
+import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
 import {
   renderSessionAttentionIcon,
-  renderSessionRunSpinner,
   sessionAttentionSubtitle,
 } from "./session-attention-presentation.ts";
 import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
@@ -207,13 +208,13 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
     attentionLabel || (activeRunLabel && unreadLabel)
       ? [attentionLabel, activeRunLabel, unreadLabel].filter(Boolean).join(" · ")
       : "";
-  // Home keeps its page/attention glyph leading and shares trailing activity with session rows.
   const homeGlyph = renderSessionGlyph({
     content:
       attention.kind === "none"
         ? html`<span class="nav-item__icon" aria-hidden="true">${icons.home}</span>`
         : renderSessionAttentionIcon(attention),
-    running: false,
+    running,
+    queued,
     badge: unread && !running ? renderSessionUnreadBadge() : nothing,
   });
   return html`
@@ -247,9 +248,8 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
       }
       <span class="nav-item__text">${t("nav.home")}</span>
       ${
-        running || outboxAttentionCount > 0 || hasComposerDraft
+        outboxAttentionCount > 0 || hasComposerDraft
           ? html`<span class="nav-item__state sidebar-home-session-states">
-              ${running ? renderSessionRunSpinner(true, queued) : nothing}
               ${renderSessionRowBadges({
                 outboxAttentionCount,
                 hasComposerDraft,
@@ -297,6 +297,10 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
   if (users.length === 0) {
     return nothing;
   }
+  const routing = personActivityRouting(
+    { basePath: host.basePath, navigate: (route, options) => host.onNavigate?.(route, options) },
+    () => host.dismissTransientMenus(),
+  );
   return html`
     <section class="sidebar-online" aria-label=${label} data-session-section=${sectionId}>
       ${renderSidebarSessionSectionHeader({
@@ -336,22 +340,28 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
           ? nothing
           : html`<div class="sidebar-online__list">
               ${repeat(users, presenceUserKey, (user) => {
-                return html`<div
+                const activity = personActivityLink(user.identity?.id, routing, user.name);
+                const tag = activity ? literal`a` : literal`button`;
+                return staticHtml`<div
                   class="sidebar-online__row"
                   data-person-card
                   data-person-card-section="online"
                 >
-                  <button
+                  <${tag}
                     class="sidebar-online__person ${
                       isPresenceViewerIdle(user) ? "sidebar-online__person--away" : ""
                     }"
-                    type="button"
+                    type=${activity ? nothing : "button"}
+                    href=${activity?.href ?? nothing}
+                    @click=${activity?.open ?? nothing}
                     data-online-user-id=${user.id}
                     data-person-card-key=${presenceUserKey(user)}
                     data-person-card-trigger
                     aria-haspopup="dialog"
                     aria-expanded="false"
-                    aria-label=${t("presence.card.details", { name: presenceViewerLabel(user) })}
+                    aria-label=${t(activity ? "presence.card.ariaLabel" : "presence.card.details", {
+                      name: presenceViewerLabel(user),
+                    })}
                   >
                     <openclaw-viewer-avatar
                       .user=${user}
@@ -363,7 +373,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                     <span class="sidebar-online__person-action" aria-hidden="true"
                       >${icons.chevronRight}</span
                     >
-                  </button>
+                  </${tag}>
                 </div>`;
               })}
             </div>`

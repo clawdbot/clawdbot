@@ -250,11 +250,11 @@ export type SessionMaintenanceMode = "enforce" | "warn";
 export type SessionMaintenanceConfig = {
   /** Whether to enforce maintenance or warn only. Default: "enforce". */
   mode?: SessionMaintenanceMode;
-  /** Remove session entries older than this duration (e.g. "30d", "12h"). Default: "30d". */
+  /** Archive eligible conversations and remove disposable entries older than this duration. Default: "30d". */
   pruneAfter?: string | number;
   /** Archive inactive dashboard sessions after this duration. Default: "7d"; false or 0 disables. */
   archiveDashboardAfter?: string | number | false;
-  /** Maximum total session entries to keep when protection permits. Default: 500. */
+  /** Maximum unarchived entries when protection permits; durable overflow is archived. Default: 5000. */
   maxEntries?: number;
   /** Protect interactive sessions active within this duration. Default and false: disabled. */
   preserveRecent?: string | number | false;
@@ -265,9 +265,9 @@ export type SessionMaintenanceConfig = {
    */
   resetArchiveRetention?: string | number | false;
   /**
-   * Per-agent sessions-directory disk budget (e.g. "500mb"). Default: "10gb".
-   * When exceeded, warn (mode=warn) or enforce oldest-first cleanup
-   * (mode=enforce). Set `false`, `0`, or `"0"` to disable the budget entirely.
+   * Per-agent physical budget for SQLite main/WAL and counted session-directory artifacts. Default: "10gb".
+   * Warn mode reports pressure; enforce mode applies oldest-first cleanup.
+   * Protected data may exceed the target. Set `false`, `0`, or `"0"` to disable.
    */
   maxDiskBytes?: number | string | false;
   /**

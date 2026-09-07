@@ -1199,10 +1199,14 @@ describe("dispatchReplyFromConfig", () => {
       boundConversationBinding.conversation,
     );
     expect(sessionStoreMocks.loadSessionEntry).toHaveBeenCalledWith({
+      agentId: "main",
       storePath: sourceStorePath,
       sessionKey: sourceSessionKey,
       readConsistency: "latest",
     });
+    expect(sessionStoreMocks.loadSessionEntry).not.toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "opencode", sessionKey: sourceSessionKey }),
+    );
     expect(sessionStoreMocks.loadSessionEntry).not.toHaveBeenCalledWith(
       expect.objectContaining({
         storePath: targetStorePath,

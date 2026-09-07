@@ -569,4 +569,53 @@ describe("repairLoadedGatewayServiceForStart", () => {
     expect(installMock).not.toHaveBeenCalled();
     expect(buildGatewayInstallPlanMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { action: "start", probe: "throws" },
+    { action: "restart", probe: "throws" },
+    { action: "start", probe: "returns false" },
+    { action: "restart", probe: "returns false" },
+  ] as const)(
+    "fails $action repair when the post-install probe $probe",
+    async ({ action, probe }) => {
+      const error = new Error("systemd show failed");
+      const service = {
+        install: vi.fn(async () => {}),
+        isLoaded: vi.fn(async () => {
+          if (probe === "throws") {
+            throw error;
+          }
+          return false;
+        }),
+      };
+      const state: GatewayServiceState = {
+        installed: true,
+        loadState: { status: "loaded" },
+        running: false,
+        env: {},
+        command: {
+          programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+          environment: { HOME: "/home/openclaw" },
+        },
+      };
+      const params = {
+        service,
+        state,
+        issues: [{ code: "port-mismatch" as const, message: "old port" }],
+        json: true,
+        stdout: process.stdout,
+      };
+      const repair =
+        action === "restart"
+          ? repairLoadedGatewayServiceForStart({ ...params, action })
+          : repairLoadedGatewayServiceForStart(params);
+
+      if (probe === "throws") {
+        await expect(repair).rejects.toBe(error);
+      } else {
+        await expect(repair).rejects.toThrow("Gateway service is not loaded after repair.");
+      }
+      expect(service.install).toHaveBeenCalledTimes(1);
+    },
+  );
 });

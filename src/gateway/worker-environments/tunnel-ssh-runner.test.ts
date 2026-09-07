@@ -153,6 +153,10 @@ describe("worker SSH process runner", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(exitedSettled).toBe(false);
+
+    child.emit("close", null, "SIGKILL");
+    await expect(process.exited).resolves.toEqual({ code: null, signal: "SIGKILL" });
+    await expect(process.stop()).resolves.toBeUndefined();
   });
 
   it("keeps exited pending when a live child emits error without close", async () => {

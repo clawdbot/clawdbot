@@ -7,16 +7,16 @@ struct NodeManagerPathsTests {
         let home = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: home) }
 
-        let v22Node = home
-            .appendingPathComponent(".local/share/fnm/node-versions/v22.22.3/installation/bin/node")
-        let v25Node = home
-            .appendingPathComponent(".local/share/fnm/node-versions/v25.9.0/installation/bin/node")
-        try makeExecutableForTests(at: v22Node)
-        try makeExecutableForTests(at: v25Node)
+        let v24Node = home
+            .appendingPathComponent(".local/share/fnm/node-versions/v24.16.0/installation/bin/node")
+        let v26Node = home
+            .appendingPathComponent(".local/share/fnm/node-versions/v26.1.0/installation/bin/node")
+        try makeExecutableForTests(at: v24Node)
+        try makeExecutableForTests(at: v26Node)
 
         let paths = CommandResolver.preferredPaths(home: home, current: [], projectRoot: home)
-        let newestIndex = try #require(paths.firstIndex(of: v25Node.deletingLastPathComponent().path))
-        let olderIndex = try #require(paths.firstIndex(of: v22Node.deletingLastPathComponent().path))
+        let newestIndex = try #require(paths.firstIndex(of: v26Node.deletingLastPathComponent().path))
+        let olderIndex = try #require(paths.firstIndex(of: v24Node.deletingLastPathComponent().path))
 
         #expect(newestIndex < olderIndex)
     }
@@ -31,7 +31,7 @@ struct NodeManagerPathsTests {
     {
         let home = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: home) }
-        let versions = ["v25.8.1", "v24.15.0", "v23.11.0", "v22.22.3"]
+        let versions = ["v26.0.0", "v24.16.0", "v25.9.0", "v22.23.2"]
 
         for version in versions {
             let node = home
@@ -46,11 +46,11 @@ struct NodeManagerPathsTests {
 
         let unsupported = home
             .appendingPathComponent(managerRoot)
-            .appendingPathComponent("v25.8.1")
+            .appendingPathComponent("v26.0.0")
             .appendingPathComponent(binarySuffix)
         let expectedNode = home
             .appendingPathComponent(managerRoot)
-            .appendingPathComponent("v24.15.0")
+            .appendingPathComponent("v24.16.0")
             .appendingPathComponent(binarySuffix)
             .appendingPathComponent("node")
         let searchPaths = CommandResolver.preferredPaths(
@@ -65,7 +65,7 @@ struct NodeManagerPathsTests {
             return
         }
         #expect(runtime.path == expectedNode.path)
-        #expect(runtime.version == RuntimeVersion(major: 24, minor: 15, patch: 0))
+        #expect(runtime.version == RuntimeVersion(major: 24, minor: 16, patch: 0))
     }
 
     @Test func `ignores entries without node executable`() throws {

@@ -1,4 +1,8 @@
-import { bucketRelativeTimeMs, type RelativeTimeUnit } from "@openclaw/normalization-core";
+import {
+  bucketRelativeTimeMs,
+  formatCompactTokenCount as formatTokenUnits,
+  type RelativeTimeUnit,
+} from "@openclaw/normalization-core";
 // Control UI module implements format behavior.
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -259,8 +263,7 @@ export function formatCost(cost: number | null | undefined, fallback = "$0.00"):
   return `$${cost.toFixed(2)}`;
 }
 
-// The one token formatter: every surface showing the same count must render the
-// same string, or a session reads "16k" in one pane and "15.6k" in another.
+// Keep token presentation consistent across UI session and usage surfaces.
 export function formatCompactTokenCount(
   tokens: number | null | undefined,
   options: { thousandsSuffix?: string; millionsSuffix?: string; trimTrailingZero?: boolean } = {},
@@ -268,25 +271,12 @@ export function formatCompactTokenCount(
   if (tokens == null || !Number.isFinite(tokens)) {
     return "0";
   }
-  const thousandsSuffix = options.thousandsSuffix ?? "k";
-  const millionsSuffix = options.millionsSuffix ?? "M";
-  const trimTrailingZero = options.trimTrailingZero ?? true;
-  const trim = (value: string) => (trimTrailingZero ? value.replace(/\.0$/, "") : value);
-  // Month-scale provider totals can cross a billion; keep the suffix ladder closed.
-  if (tokens >= 1_000_000_000) {
-    return `${trim((tokens / 1_000_000_000).toFixed(1))}B`;
-  }
-  if (tokens >= 1_000_000) {
-    return `${trim((tokens / 1_000_000).toFixed(1))}${millionsSuffix}`;
-  }
-  if (tokens >= 1_000) {
-    const thousands = (tokens / 1_000).toFixed(1);
-    if (Number(thousands) >= 1_000) {
-      return `${trim((tokens / 1_000_000).toFixed(1))}${millionsSuffix}`;
-    }
-    return `${trim(thousands)}${thousandsSuffix}`;
-  }
-  return String(Math.round(tokens));
+  return formatTokenUnits(tokens, {
+    thousandsSuffix: options.thousandsSuffix,
+    millionsSuffix: options.millionsSuffix ?? "M",
+    trimTrailingZero: options.trimTrailingZero ?? true,
+    maxUnit: "billion",
+  });
 }
 
 export function formatContextTokenCapacity(tokens: number): string {

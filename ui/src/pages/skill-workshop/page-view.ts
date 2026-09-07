@@ -36,7 +36,9 @@ export function renderSkillWorkshopPage(
   } = renderContext;
   const access = resolveWorkshopAccess(context.gateway.snapshot);
   const selectInstalled = (name: string) => {
-    void selectSkillWorkshopInstalledSkill(state, context, name).finally(requestUpdate);
+    void selectSkillWorkshopInstalledSkill(state, context, name, {
+      onProgress: requestUpdate,
+    }).finally(requestUpdate);
     requestUpdate();
   };
   const selectMode = (mode: SkillWorkshopMode) => {
@@ -124,7 +126,9 @@ export function renderSkillWorkshopPage(
               proposals: state.skillWorkshopProposals,
               installedSkills: state.skillWorkshopInstalledSkills,
               installedSelection: state.skillWorkshopInstalledSkills.find(
-                (skill) => skill.name === state.skillWorkshopInstalledName,
+                (skill) =>
+                  skill.name ===
+                  (state.skillWorkshopInstalledName ?? state.skillWorkshopInstalledSkills[0]?.name),
               )?.read ?? { status: "idle" },
               onSelectInstalled: selectInstalled,
               onRetryInstalled: () => {
@@ -132,6 +136,7 @@ export function renderSkillWorkshopPage(
                 if (name) {
                   void selectSkillWorkshopInstalledSkill(state, context, name, {
                     force: true,
+                    onProgress: requestUpdate,
                   }).finally(requestUpdate);
                   requestUpdate();
                 }

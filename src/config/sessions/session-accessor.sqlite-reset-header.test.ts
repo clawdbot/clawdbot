@@ -19,6 +19,7 @@ import {
 } from "./session-accessor.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { CURRENT_SESSION_VERSION } from "./version.js";
 
 describe("SQLite reset boundary transcript header", () => {
   let testState: OpenClawTestState;
@@ -88,10 +89,10 @@ describe("SQLite reset boundary transcript header", () => {
           sessionId: "empty-window",
           storePath,
         }).getHeader(),
-      ).toMatchObject({ version: 3, cwd: "/tmp/reset-session-workspace" });
+      ).toMatchObject({ version: CURRENT_SESSION_VERSION, cwd: "/tmp/reset-session-workspace" });
       const events = readEvents("empty-window");
       expect(events[0]?.type).toBe("session");
-      expect(events[0]?.version).toBe(3);
+      expect(events[0]?.version).toBe(CURRENT_SESSION_VERSION);
       // The header must record the session workspace, not the service process cwd.
       expect(events[0]?.cwd).toBe("/tmp/reset-session-workspace");
       expect(events[1]?.type).toBe("reset");
@@ -130,7 +131,10 @@ describe("SQLite reset boundary transcript header", () => {
           sessionId: "projection-window",
           storePath,
         }).getHeader(),
-      ).toMatchObject({ version: 3, cwd: "/tmp/projection-session-workspace" });
+      ).toMatchObject({
+        version: CURRENT_SESSION_VERSION,
+        cwd: "/tmp/projection-session-workspace",
+      });
       const events = readEvents("projection-window");
       expect(events[0]?.type).toBe("session");
       expect(events[0]?.cwd).toBe("/tmp/projection-session-workspace");

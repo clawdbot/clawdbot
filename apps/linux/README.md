@@ -170,7 +170,7 @@ menu bar images into. Non-Apple platforms keep the full-color `32x32.png`.
 
 ## Packaging
 
-Build a `.deb` and AppImage locally (the same command CI runs):
+Build a `.deb` and AppImage locally (the same command manual CI runs):
 
 ```bash
 plugins=$(mktemp -d)
@@ -191,9 +191,18 @@ apps/linux/scripts/finalize-appimage.sh \
   apps/linux/src-tauri/target/release/bundle/appimage
 ```
 
-Bundles land in `target/release/bundle/{deb,appimage}/`. The `Linux App` CI
-workflow uploads them as the `openclaw-linux-companion` artifact on pull
-requests touching `apps/linux/**` and on manual dispatch.
+Bundles land in `target/release/bundle/{deb,appimage}/`.
+
+The `Linux App` workflow checks affected pull requests with Rust formatting,
+`cargo test --locked --all-targets` on Linux and macOS, and the packaged runtime
+ABI scanner's unit tests. These checks compile, link, and run the native tests;
+they do not build bundles or run graphical first-run and AppImage runtime checks.
+
+Manually dispatch `Linux App` on the branch to validate packaging before a
+release. It retains all pull-request checks, builds the `.deb` and AppImage,
+runs both native first-run cases and the packaged AppImage runtime smoke, and
+uploads the bundles as the `openclaw-linux-companion` workflow artifact. This
+validation does not publish a release.
 
 ## Releases
 

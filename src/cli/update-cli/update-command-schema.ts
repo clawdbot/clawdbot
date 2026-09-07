@@ -28,6 +28,7 @@ export async function preflightUpdateCommandSchemas(params: {
   channel: UpdateChannel;
   devTarget?: DevUpdateTarget;
   packageTargetSchemaVersions?: OpenClawSchemaVersions;
+  packageTargetVersion?: string;
   opts: Pick<UpdateCommandOptions, "dryRun" | "json" | "run">;
   refuseUpdate: (reason: string, message?: string) => Promise<void>;
 }): Promise<
@@ -87,6 +88,18 @@ export async function preflightUpdateCommandSchemas(params: {
         target.schemaVersions,
         admission.contexts,
       );
+      if (opts.dryRun && updateInstallKind === "package") {
+        const { preflightConfiguredNpmPluginTargets } =
+          await import("./update-command-plugin-preflight.js");
+        const context = admission.contexts.at(-1)!;
+        await preflightConfiguredNpmPluginTargets({
+          config: context.configSnapshot.sourceConfig,
+          env: context.env,
+          targetVersion: params.packageTargetVersion ?? null,
+          channel,
+          timeoutMs: updateStepTimeoutMs,
+        });
+      }
     } catch (error) {
       if (!opts.dryRun) {
         if (error instanceof UpdatePreMutationError) {

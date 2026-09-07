@@ -1,13 +1,18 @@
 import type { ProjectsAddResult } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  autoPromptNotificationsOnSend,
+  hasActiveNotificationPromptGesture,
+  shouldAutoPromptNotificationsOnSend,
+} from "../../app/notifications-auto-prompt.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
+import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import { trimHumanMentions, updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
-import { openTerminalSessionInTerminal } from "../../lib/sessions/catalog-terminal.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import type { SessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
@@ -439,9 +444,20 @@ export class DraftSubmissionFlow {
       }
       this.startedSession.current = null;
       const placementTarget = startup ? null : this.placement().target;
-      const hasInitialTurn = message || apiAttachments?.length;
+      // Creation and placement can await; permission must keep the original input event.
+      if (
+        shouldAutoPromptNotificationsOnSend({
+          connected: context.gateway.snapshot.phase === "connected",
+          directComposerSend: !startup && !pendingPlacement && hasActiveNotificationPromptGesture(),
+          message,
+          hasAttachments: Boolean(apiAttachments?.length),
+          isCommand: parseSlashCommand(message) !== null,
+        })
+      ) {
+        autoPromptNotificationsOnSend(context);
+      }
       const remoteProject =
-        !startup && !pendingPlacement && !placementTarget && !hasInitialTurn
+        !startup && !pendingPlacement && !placementTarget && !message && !apiAttachments?.length
           ? this.place.browser.remoteProject
           : null;
       if (remoteProject && !remoteProject.projectId && !this.place.browser.projectId) {
@@ -691,7 +707,6 @@ export class DraftSubmissionFlow {
       this.messageValue = "";
       this.mentionsValue = [];
       this.attachmentDraft.clearAfterSubmit(true);
-      openTerminalSessionInTerminal(result.sessionId);
     } catch (error) {
       if (requestId === this.submitRequestToken && this.gateway.client === client) {
         this.error = error instanceof Error ? error.message : String(error);

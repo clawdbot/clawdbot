@@ -538,9 +538,9 @@ describe("image generation task status", () => {
 
     const context = buildActiveImageGenerationTaskPromptContextForSession("agent:main");
 
-    expect(context).toContain("An active image generation background task already exists");
-    expect(context).toContain("Task task-running is currently running via openai.");
-    expect(context).toContain('call `image_generate` with `action:"status"`');
+    expect(context).toBe(
+      '- tool=image_generate; task=task-running; status=running; provider_json="openai"; progress_json="Generating image"',
+    );
   });
 });
 
@@ -672,8 +672,8 @@ describe("video generation task status", () => {
 
     const context = buildActiveVideoGenerationTaskPromptContextForSession("agent:main");
 
-    expect(context).toContain("An active video generation background task already exists");
-    expect(context).toContain("Task task-running is currently running via openai.");
-    expect(context).toContain('call `video_generate` with `action:"status"`');
+    expect(context).toBe(
+      '- tool=video_generate; task=task-running; status=running; provider_json="openai"; progress_json="Generating video"',
+    );
   });
 });

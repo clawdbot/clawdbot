@@ -35,8 +35,9 @@ openclaw update --channel beta
 openclaw update --channel dev
 ```
 
-`--channel` persists the choice to `update.channel` in config and drives both
-install paths:
+`--channel` drives the update and persists the choice to `update.channel` in
+config after core update success. A refused or failed core update keeps the
+previous channel. The selected channel drives both install paths:
 
 | Channel           | npm/package installs                                                                                                                                                                   | git installs                                                                                       |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |

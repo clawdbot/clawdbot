@@ -222,7 +222,8 @@ describe("Doctor workspace persistence", () => {
             expect(saved.valid).toBe(true);
             expect(saved.config.agents?.ownership).toBe("explicit");
             expect(saved.config.agents?.entries?.main?.workspace).toBe(workspace);
-            expect(saved.config.agents?.defaults?.systemAgent).toBeUndefined();
+            expect(saved.config.agents?.defaults?.systemAgent).toEqual({ agentId: "main" });
+            expect(saved.config.agents?.defaults?.heartbeat).toEqual({ agentId: "main" });
             expect(saved.config.bindings).toBeUndefined();
             expect(resolveAgentWorkspaceDir(saved.config, "main")).toBe(workspace);
             for (const [name, content] of Object.entries(originals)) {
@@ -280,7 +281,7 @@ describe("Doctor workspace persistence", () => {
     },
   );
 
-  it("repairs a legacy candidate without writing when include ownership blocks migration", async () => {
+  it("refuses a legacy candidate that mixes an include-owned repair with root changes", async () => {
     await withTempHome(async (home) => {
       await withEnvOverride({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
         const configPath = await writeOpenClawConfig(home, {
@@ -303,8 +304,12 @@ describe("Doctor workspace persistence", () => {
         );
 
         const ctx = await prepareDoctorContext(configPath);
-        expect(ctx.configResult.shouldWriteConfig).toBe(false);
+        // The nested include owns the otel repair, but the legacy roster needs the
+        // root writer; one file cannot take both, so the writer refuses and
+        // Doctor records the refusal instead of flattening the include.
+        expect(ctx.configResult.shouldWriteConfig).toBe(true);
         await runInitialConfigWriteHealth(ctx);
+        expect(ctx.configWriteRefusal).toBe("include-ownership");
         expect(await fs.readFile(configPath, "utf-8")).toBe(original);
         expect(JSON.parse(await fs.readFile(includePath, "utf-8"))).toEqual({ protocol: "grpc" });
       });

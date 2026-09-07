@@ -6,9 +6,10 @@ import {
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
-import { resolveRequestedChatAgentId } from "./chat-origin-routing.js";
+import { normalizeOptionalChatText } from "./chat-text-normalization.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
 import { resolveAuthenticatedProfileId } from "./users-profile-access.js";
@@ -27,11 +28,11 @@ export async function handleChatMetadataRequest({
   const metadataParams = params;
   const cfg = context.getRuntimeConfig();
   if (metadataParams.sessionKey) {
-    const requested = resolveRequestedChatAgentId({
+    const requested = resolveRequestedSessionAgentId(
       cfg,
-      requestedSessionKey: metadataParams.sessionKey,
-      agentId: metadataParams.agentId,
-    });
+      metadataParams.sessionKey,
+      normalizeOptionalChatText(metadataParams.agentId),
+    );
     if (!requested.ok) {
       respond(false, undefined, requested.error);
       return;

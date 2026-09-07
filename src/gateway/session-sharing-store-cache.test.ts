@@ -48,6 +48,53 @@ function identifiedClient(userId: string): GatewayClient {
 }
 
 describe("session mutation authorization store caches", () => {
+  it.each(["sessions.patch", "chat.send", "sessions.patchMany"])(
+    "bounds single-target metadata work and refreshes every %s guard",
+    async (method) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const sessionKey = "agent:main:scalar-authorization";
+        const entry = { sessionId: "scalar-authorization", updatedAt: 1 };
+        await sessionAccessor.upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
+        for (let index = 0; index < 24; index += 1) {
+          await sessionAccessor.upsertSessionEntryCore(
+            { agentId: "main", sessionKey: `agent:main:unrelated-${index}` },
+            { sessionId: `unrelated-${index}`, updatedAt: 1 },
+          );
+        }
+        sessionAccessor.listSessionEntriesCore({
+          agentId: "main",
+          clone: false,
+          projection: "list",
+        });
+        const inventory = vi.spyOn(sessionAccessor, "listSessionEntriesCore");
+        const result = resolveSessionMutationAuthorization({
+          client: identifiedClient("viewer@example.test"),
+          method,
+          requestParams:
+            method === "sessions.patchMany"
+              ? { targets: [{ key: sessionKey }], patch: { unread: false } }
+              : method === "sessions.patch"
+                ? { key: sessionKey, unread: false }
+                : { sessionKey },
+          context: { chatAbortControllers: new Map(), getRuntimeConfig: () => ({}) } as never,
+        });
+        expect(result.error).toBeNull();
+        expect(result.authorization).toBeDefined();
+        expect(() => result.authorization!.assertCurrent()).not.toThrow();
+        expect(() => result.authorization!.assertCurrent()).not.toThrow();
+        expect(inventory).not.toHaveBeenCalled();
+
+        await sessionAccessor.upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          { ...entry, updatedAt: 2, visibility: "draft" },
+        );
+        expect(() => result.authorization!.assertCurrent()).toThrow(
+          "session is draft for this connection",
+        );
+      });
+    },
+  );
+
   it.each([
     { key: "agent:research:main", agentId: undefined, expectedAgent: "research" },
     { key: "global", agentId: "research", expectedAgent: "research" },

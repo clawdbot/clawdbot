@@ -8,7 +8,7 @@ import {
   resolveInstallConfigMutationPreflights,
   selectInstallMutationWriteOptions,
   type ConfigSnapshotForInstallPersist,
-} from "../../plugins/install-persistence.js";
+} from "../../plugins/install-config-mutation.js";
 import { createInstalledPluginOwnershipResolver } from "../../plugins/installed-plugin-package-ownership.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";

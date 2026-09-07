@@ -1534,6 +1534,33 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("google-meet");
   });
 
+  test.each([
+    { pluginId: "community-plugin", reason: /Plugin "community-plugin" is neither\./ },
+    { pluginId: "missing-plugin", reason: /Plugin "missing-plugin" is neither\./ },
+    { pluginId: undefined, reason: /This call carries no plugin identity\./ },
+  ])("explains the Gateway refusal for plugin identity $pluginId", async ({ pluginId, reason }) => {
+    loadOpenClawPlugins.mockReturnValue(
+      addLoadedPlugin(createRegistry([]), { id: "community-plugin", origin: "global" }),
+    );
+    loadGatewayStartupPluginsForTest();
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("plugin-gateway-refused"));
+    const runtime = createRuntimeFromLastGatewayLoad();
+
+    const request = pluginId
+      ? gatewayRequestScopeModule.withPluginRuntimePluginScope(
+          { pluginId, pluginOrigin: "global" },
+          () => runtime.gateway.request("sessions.list", {}),
+        )
+      : runtime.gateway.request("sessions.list", {});
+
+    await expect(request).rejects.toThrow(reason);
+    await expect(request).rejects.toThrow("bundled or trusted official plugins");
+    await expect(request).rejects.toThrow(
+      "https://docs.openclaw.ai/plugins/sdk-runtime#api-runtime-gateway",
+    );
+    expect(handleGatewayRequest).not.toHaveBeenCalled();
+  });
+
   test("lets trusted official plugins request explicit Gateway scopes", async () => {
     loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "google-meet" }));
     loadGatewayStartupPluginsForTest();

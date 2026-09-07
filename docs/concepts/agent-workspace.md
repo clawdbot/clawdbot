@@ -63,6 +63,8 @@ Keep each agent's workspace path explicit when retaining older directories. Befo
 
 ## Workspace file map
 
+Use **Settings → Agents → Files** in the Control UI to edit these files. **Preview** shows the current draft; **Edit** returns to the editor so you can continue typing, while **Close** returns to **Preview**.
+
 Standard files OpenClaw expects inside the workspace:
 
 <AccordionGroup>

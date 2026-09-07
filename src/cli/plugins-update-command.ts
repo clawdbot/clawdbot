@@ -24,7 +24,7 @@ import {
   resolveCombinedPluginAndHookConfigMutationPreflight,
   resolveInstallConfigMutationPreflights,
   selectInstallMutationWriteOptions,
-} from "../plugins/install-persistence.js";
+} from "../plugins/install-config-mutation.js";
 import {
   commitPluginInstallRecordsOnly,
   commitPluginInstallRecordsWithConfig,

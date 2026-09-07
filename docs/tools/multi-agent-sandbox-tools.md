@@ -438,7 +438,7 @@ After configuring multi-agent sandbox and tools:
 
 - [Elevated mode](/tools/elevated)
 - [Multi-agent routing](/concepts/multi-agent)
-- [Sandbox configuration](/gateway/config-agents#agentsdefaultssandbox)
+- [Sandbox configuration](/gateway/config-agents/sandbox#agentsdefaultssandbox)
 - [Sandbox vs tool policy vs elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) — debugging "why is this blocked?"
 - [Sandboxing](/gateway/sandboxing) — full sandbox reference (modes, scopes, backends, images)
 - [Session management](/concepts/session)

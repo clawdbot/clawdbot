@@ -57,6 +57,8 @@ export const RELEASE_PATH_PROFILE = "release-path";
 type LiveMode = "all" | "only" | "skip";
 type DockerProfile = typeof DEFAULT_PROFILE | typeof RELEASE_PATH_PROFILE;
 type UpgradeSurvivorExpansion = { lanes: DockerE2eLane[]; omittedLaneNames: string[] };
+const UPDATE_FIRST_HOP_COMPAT_OUTPUTS = ["shared-DTaQo6Hi.js", "shared-Y6bNiw2w.js"];
+const IOS_WATCH_RELAY_COMMANDS = ['"watch.status"', '"watch.notify"'];
 type DockerE2ePlanOptions = {
   allowFrozenTargetScenarioOmissions?: boolean;
   includeOpenWebUI: boolean;
@@ -118,6 +120,10 @@ const UPGRADE_SURVIVOR_RUNTIME_COMPANION_PACKAGES = ["@openclaw/codex"];
 // Pre-protocol catalogs are content-addressed. Unknown legacy blocks fail
 // closed instead of requiring a dependency or reimplementing a JavaScript parser.
 const LEGACY_UPGRADE_SURVIVOR_SCENARIO_CATALOGS = new Map([
+  [
+    "9c3b79d2fc1317a9b8033f59cb6ae350aebf8bd6ec9575d9704ed8d4b34b210d",
+    "base legacy-operator-state mobile-pairing-reconnect acpx-openclaw-tools-bridge feishu-channel bootstrap-persona channel-post-core-restore codex-allowlist-survival plugin-deps-cleanup configured-plugin-installs stale-source-plugin-shadow prerelease-plugin-registry tilde-log-path meeting-transcripts-sqlite versioned-runtime-deps cron-scheduled-authority sqlite-volume recovery-cleanup auth-profile-v2026-7-2-beta-5 watchos-direct-node",
+  ],
   [
     "28758bbf9d4069d9718fb3325c59ad66a3bc6880248c104aa71b0d7769c54ba3",
     "base mobile-pairing-reconnect acpx-openclaw-tools-bridge feishu-channel bootstrap-persona channel-post-core-restore codex-allowlist-survival plugin-deps-cleanup configured-plugin-installs stale-source-plugin-shadow prerelease-plugin-registry tilde-log-path meeting-transcripts-sqlite versioned-runtime-deps cron-scheduled-authority sqlite-volume recovery-cleanup auth-profile-v2026-7-2-beta-5 watchos-direct-node",
@@ -282,6 +288,35 @@ function filterUpgradeSurvivorScenariosForTarget(
   return scenarios.filter(
     (scenario) =>
       isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario) || supportedScenarios.has(scenario),
+  );
+}
+
+function supportsUpdateFirstHopCompatForTarget(targetRoot: string | undefined): boolean {
+  if (!targetRoot) {
+    return true;
+  }
+  const runtimePostbuild = resolve(targetRoot, "scripts/runtime-postbuild.mts");
+  if (!existsSync(runtimePostbuild)) {
+    return false;
+  }
+  const source = readFileSync(runtimePostbuild, "utf8");
+  return UPDATE_FIRST_HOP_COMPAT_OUTPUTS.every((name) => source.includes(`dest: "dist/${name}"`));
+}
+
+function supportsMobilePairingReconnectForTarget(targetRoot: string | undefined): boolean {
+  if (!targetRoot) {
+    return true;
+  }
+  const policy = resolve(targetRoot, "src/gateway/node-command-policy.ts");
+  if (!existsSync(policy)) {
+    return false;
+  }
+  const source = readFileSync(policy, "utf8");
+  return (
+    IOS_WATCH_RELAY_COMMANDS.every((command) => source.includes(command)) &&
+    source.includes('platformId === "ios"') &&
+    source.includes('normalizeDeviceMetadataForPolicy(node?.deviceFamily) === "iphone"') &&
+    source.includes("...watchRelayCommands")
   );
 }
 
@@ -563,6 +598,11 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLan
     if (!scenario) {
       continue;
     }
+    if (scenario === "legacy-operator-state") {
+      requiredPackages.add("@openclaw/discord");
+      requiredPackages.add("@openclaw/duckduckgo-plugin");
+      continue;
+    }
     for (const packageName of UPGRADE_SURVIVOR_RUNTIME_COMPANION_PACKAGES) {
       requiredPackages.add(packageName);
     }
@@ -746,13 +786,39 @@ export function resolveDockerE2ePlan(options: DockerE2ePlanOptions) {
           return [];
         })
       : undefined;
-  const configuredLanes = selectedLanes
+  let configuredLanes = selectedLanes
     ? selectedLanes
     : releaseLanes
       ? applyLiveMode(releaseLanes, options.liveMode)
       : options.liveMode === "only"
         ? applyLiveMode([...retriedMainLanes, ...retriedTailLanes], options.liveMode)
         : applyLiveMode(retriedMainLanes, options.liveMode);
+  if (
+    options.allowFrozenTargetScenarioOmissions &&
+    !supportsUpdateFirstHopCompatForTarget(options.upgradeSurvivorTargetRoot)
+  ) {
+    const filteredLanes = configuredLanes.filter((lane) => lane.name !== "update-first-hop-compat");
+    if (filteredLanes.length !== configuredLanes.length) {
+      omittedUnsupportedLaneNames.add("update-first-hop-compat");
+      configuredLanes = filteredLanes;
+    }
+  }
+  if (
+    options.allowFrozenTargetScenarioOmissions &&
+    !supportsMobilePairingReconnectForTarget(options.upgradeSurvivorTargetRoot)
+  ) {
+    const filteredLanes = configuredLanes.filter(
+      (lane) => !lane.name.includes("mobile-pairing-reconnect"),
+    );
+    if (filteredLanes.length !== configuredLanes.length) {
+      for (const lane of configuredLanes) {
+        if (lane.name.includes("mobile-pairing-reconnect")) {
+          omittedUnsupportedLaneNames.add(lane.name);
+        }
+      }
+      configuredLanes = filteredLanes;
+    }
+  }
   const configuredTailLanes =
     selectedLanes || releaseLanes
       ? []

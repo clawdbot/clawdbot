@@ -6,14 +6,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { inspectGoogleChatAccount } from "./accounts.js";
 import {
   registerGoogleChatApprovalCardBinding,
-  unregisterGoogleChatApprovalCardBindings,
+  googleChatApprovalControls,
 } from "./approval-card-actions.js";
 import { googlechatPlugin } from "./channel.js";
 import { googlechatSetupPlugin } from "./channel.setup.js";
 
 describe("googlechatPlugin config adapter", () => {
   afterEach(() => {
-    unregisterGoogleChatApprovalCardBindings(["token-1"]);
+    googleChatApprovalControls.unregister(["token-1"]);
   });
 
   it.each([

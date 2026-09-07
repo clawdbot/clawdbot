@@ -1142,6 +1142,32 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     ]);
   });
 
+  it("plans legacy operator state with tracked and formerly bundled plugins and serial admission", () => {
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.6.33 2026.6.34 2026.9.1",
+      upgradeSurvivorScenarios: "legacy-operator-state",
+    });
+    expect(plan.lanes.map((lane) => lane.name)).toEqual([
+      "published-upgrade-survivor-2026.6.34-legacy-operator-state",
+      "published-upgrade-survivor-2026.9.1-legacy-operator-state",
+    ]);
+    expect(plan.requiredPrepublishPluginPackages).toEqual([
+      "@openclaw/discord",
+      "@openclaw/duckduckgo-plugin",
+    ]);
+    expect(plan.lanes.every((lane) => lane.weight === 3)).toBe(true);
+    for (const alias of ["reported-issues", "far-reaching"]) {
+      expect(
+        planFor({
+          selectedLaneNames: ["published-upgrade-survivor"],
+          upgradeSurvivorBaselines: "2026.6.34",
+          upgradeSurvivorScenarios: alias,
+        }).lanes.map((lane) => lane.name),
+      ).toContain("published-upgrade-survivor-2026.6.34-legacy-operator-state");
+    }
+  });
+
   it("keeps platform survivors out of release aliases", () => {
     const scenariosFor = (
       upgradeSurvivorScenarios: string,
@@ -1334,13 +1360,15 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     });
 
     expect(plan.lanes.map((lane) => lane.name)).toEqual([
+      "update-migration-2026.8.1-watchos-direct-node",
+    ]);
+    expect(plan.omittedUnsupportedLanes).toEqual([
       "update-migration-2026.7.1-mobile-pairing-reconnect",
       "update-migration-2026.8.1-mobile-pairing-reconnect",
-      "update-migration-2026.8.1-watchos-direct-node",
     ]);
   });
 
-  it("runs trusted-harness-owned mobile pairing against frozen package targets", () => {
+  it("keeps mobile pairing when an unapproved target lacks a source-qualified omission", () => {
     const targetRoot = tempDirs.make("openclaw-frozen-mobile-package-target-");
     writeFrozenScenarioContract(targetRoot, ["base"]);
 
@@ -1356,6 +1384,51 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       "update-migration-2026.7.1-mobile-pairing-reconnect",
     ]);
     expect(plan.omittedUnsupportedLanes).toEqual([]);
+  });
+
+  it("keeps mobile pairing when the selected Gateway admits iPhone watch relay", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-mobile-watch-relay-");
+    writeFrozenScenarioContract(targetRoot, ["base"]);
+    const policy = join(targetRoot, "src/gateway/node-command-policy.ts");
+    mkdirSync(dirname(policy), { recursive: true });
+    writeFileSync(
+      policy,
+      'const commands = ["watch.status", "watch.notify"];\nplatformId === "ios";\nnormalizeDeviceMetadataForPolicy(node?.deviceFamily) === "iphone";\nnew Set([...watchRelayCommands]);\n',
+    );
+
+    const plan = planFor({
+      selectedLaneNames: ["update-migration"],
+      upgradeSurvivorBaselines: "2026.7.1",
+      upgradeSurvivorScenarios: "mobile-pairing-reconnect",
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).toEqual([
+      "update-migration-2026.7.1-mobile-pairing-reconnect",
+    ]);
+  });
+
+  it("omits mobile pairing when the selected Gateway does not admit its declared relay commands", () => {
+    const targetRoot = tempDirs.make("openclaw-frozen-mobile-watch-relay-unadmitted-");
+    writeFrozenScenarioContract(targetRoot, ["base"]);
+    const policy = join(targetRoot, "src/gateway/node-command-policy.ts");
+    mkdirSync(dirname(policy), { recursive: true });
+    writeFileSync(
+      policy,
+      'const commands = ["watch.status", "watch.notify"];\nplatformId === "ios";\nnormalizeDeviceMetadataForPolicy(node?.deviceFamily) === "iphone";\n',
+    );
+
+    const plan = planFor({
+      selectedLaneNames: ["update-migration"],
+      upgradeSurvivorBaselines: "2026.7.1",
+      upgradeSurvivorScenarios: "mobile-pairing-reconnect",
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+
+    expect(plan.lanes).toEqual([]);
+    expect(plan.omittedUnsupportedLanes).toEqual([
+      "update-migration-2026.7.1-mobile-pairing-reconnect",
+    ]);
   });
 
   it("omits survivor lanes when the target exposes none of the requested scenarios", () => {
@@ -1415,7 +1488,7 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     });
 
     expect(plan.lanes.map((lane) => lane.name)).toEqual(["plugin-binding-command-escape"]);
-    expect(plan.omittedUnsupportedLanes).toHaveLength(12);
+    expect(plan.omittedUnsupportedLanes).toHaveLength(13);
     expect(plan.omittedUnsupportedLanes).toContain("published-upgrade-survivor");
     expect(plan.omittedUnsupportedLanes).toContain(
       "published-upgrade-survivor-versioned-runtime-deps",

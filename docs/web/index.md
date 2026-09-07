@@ -28,7 +28,7 @@ Control UI is **enabled by default** when assets are present (`dist/control-ui`)
 
 ## Webhooks
 
-When `hooks.enabled=true`, the Gateway also exposes a webhook endpoint on the same HTTP server. See `hooks` in [Gateway configuration reference](/gateway/configuration-reference#hooks) for auth and payloads.
+When `hooks.enabled=true`, the Gateway also exposes a webhook endpoint on the same HTTP server. See `hooks` in [Gateway configuration reference](/gateway/config-hooks#hooks) for auth and payloads.
 
 ## Admin HTTP RPC
 

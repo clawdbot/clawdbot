@@ -6,8 +6,9 @@ import { transcribeAudioFile } from "openclaw/plugin-sdk/media-understanding-run
 import { vi } from "vitest";
 import { loadDiscordVoiceTestHarness } from "../extensions/discord/test-api.js";
 import type { MediaUnderstandingModelConfig } from "../src/config/types.tools.js";
+import { createPluginMetadataSnapshotFixture } from "../src/plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
-import { withPluginRuntimeRegistryScope } from "../src/plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "../src/plugins/runtime/generation-scope.js";
 
 const { defineDiscordVoiceTests } = await loadDiscordVoiceTestHarness();
 const cli = vi.hoisted(() => vi.fn());
@@ -54,6 +55,16 @@ defineDiscordVoiceTests(
           pluginId: "synthetic-audio",
           source: "test/transcripts-discord-audio.integration.test.ts",
           provider: { id: "synthetic-audio", capabilities: ["audio"], transcribeAudio: provider },
+        });
+        // Keep the synthetic runtime and discovery inventory in one generation;
+        // transcription must not materialize unrelated bundled plugin owners.
+        const metadataSnapshot = createPluginMetadataSnapshotFixture({
+          plugins: [
+            {
+              id: "synthetic-audio",
+              contracts: { mediaUnderstandingProviders: ["synthetic-audio"] },
+            },
+          ],
         });
         const apiModel: MediaUnderstandingModelConfig = {
           provider: "synthetic-audio",
@@ -122,8 +133,9 @@ defineDiscordVoiceTests(
         transcribeAudioFileMock.mockImplementation(async (params) => {
           wavPaths.push(params.filePath);
           wavSizes.push((await fs.stat(params.filePath)).size);
-          const result = await withPluginRuntimeRegistryScope(registry, () =>
-            transcribeAudioFile(params),
+          const result = await withPluginRuntimeGenerationScope(
+            { metadataSnapshot, pluginRegistry: registry },
+            () => transcribeAudioFile(params),
           );
           results.push(result);
           return result;

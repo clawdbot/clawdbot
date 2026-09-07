@@ -73,6 +73,45 @@ describe("Crabbox runtime preflight cleanup", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["spawn", "config", "setup-env"])(
+    "settles fresh %s preflight failure without inventing a provider cleanup obligation",
+    async (failure) => {
+      support.getDevelopmentProfile().provider = "crabbox";
+      support.getDevelopmentProfile().settings = { ...PROFILE, provider: "aws" };
+      if (failure === "setup-env") {
+        vi.stubEnv(SETUP_ENV, undefined);
+      }
+      const runCommand = vi
+        .spyOn(processRuntime, "runCommandWithTimeout")
+        .mockImplementation(async (argv) => {
+          expect(argv.slice(1)).toEqual(["config", "show", "--json"]);
+          if (failure === "spawn") {
+            throw new Error("synthetic executable could not start");
+          }
+          return commandResult({ code: 2, stderr: "synthetic config preflight failure" });
+        });
+      const service = support.createService(await registerProvider(), {
+        prepareNodeEnrollment: vi.fn(),
+      });
+      await expect(service.create("development", "fresh-preflight")).rejects.toMatchObject({
+        code: "provider_failure",
+      });
+      const failed = expectDefined(support.testState.store.list()[0], "failed fresh intent");
+      expect(failed).toMatchObject({ state: "failed", leaseId: null, destroyRequestedAtMs: null });
+      await expect(service.destroy(failed.environmentId)).resolves.toMatchObject({
+        state: "failed",
+        leaseId: null,
+      });
+      await support.reopenWorkerEnvironmentStore();
+      const restarted = support.createService(await registerProvider(), {
+        prepareNodeEnrollment: vi.fn(),
+      });
+      await restarted.reconcileOnce();
+      expect(support.testState.store.get(failed.environmentId)).toEqual(failed);
+      expect(runCommand).toHaveBeenCalledTimes(failure === "setup-env" ? 0 : 1);
+    },
+  );
+
   it.each(["restart reconciliation", "direct destroy"])(
     "retains unresolved legacy allocation responsibility after %s and cleanup restart",
     async (entrance) => {
@@ -96,7 +135,7 @@ describe("Crabbox runtime preflight cleanup", () => {
       const prepareNodeEnrollment = vi.fn();
       await support.reopenWorkerEnvironmentStore();
       const provider = await registerProvider();
-      const provision = vi.spyOn(provider, "provision");
+      const provision = vi.spyOn(provider, "prepareProvision");
       const resolveAllocation = vi.spyOn(provider, "resolveAllocation");
       let service = support.createService(provider, { prepareNodeEnrollment });
       if (entrance === "restart reconciliation") {
@@ -128,7 +167,7 @@ describe("Crabbox runtime preflight cleanup", () => {
 
       await support.reopenWorkerEnvironmentStore();
       const restartedProvider = await registerProvider();
-      const restartedProvision = vi.spyOn(restartedProvider, "provision");
+      const restartedProvision = vi.spyOn(restartedProvider, "prepareProvision");
       const restartedResolution = vi.spyOn(restartedProvider, "resolveAllocation");
       service = support.createService(restartedProvider, { prepareNodeEnrollment });
       await service.reconcileOnce();
@@ -155,6 +194,11 @@ describe("Crabbox runtime preflight cleanup", () => {
     { kind: "config", name: "config command failure", result: commandResult({ code: 2 }) },
     { kind: "config", name: "invalid config JSON", result: commandResult({ stdout: "{" }) },
     { kind: "config", name: "removed coordinator", result: commandResult({ stdout: "{}" }) },
+    {
+      kind: "aws-profile",
+      name: "attached AWS profile",
+      result: commandResult({ stdout: JSON.stringify({ aws: { instanceProfile: "new-role" } }) }),
+    },
     { kind: "modes", name: "changed advertised modes" },
     { kind: "timeout", name: "invalid timeout metadata" },
     ...[
@@ -173,6 +217,7 @@ describe("Crabbox runtime preflight cleanup", () => {
     const profile = {
       ...PROFILE,
       ...(scenario.kind === "config" ? { provider: "hetzner", desktop: true } : {}),
+      ...(scenario.kind === "aws-profile" ? { provider: "aws" } : {}),
     };
     support.getDevelopmentProfile().provider = "crabbox";
     support.getDevelopmentProfile().settings = profile;
@@ -191,6 +236,7 @@ describe("Crabbox runtime preflight cleanup", () => {
               stdout: JSON.stringify({
                 coordinator: "https://coordinator.example.test",
                 brokerMode: "managed",
+                aws: { instanceProfile: "" },
               }),
             });
       }

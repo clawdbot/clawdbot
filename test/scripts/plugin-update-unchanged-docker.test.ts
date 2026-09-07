@@ -351,43 +351,32 @@ describe("plugin update unchanged Docker E2E", () => {
     );
     expect(
       script.match(/openclaw_e2e_maybe_timeout "\$\{update_timeout_seconds\}s" \\/gu)?.length,
-    ).toBe(2);
+    ).toBe(1);
     expect(script).toContain("--channel beta");
-    expect(script.match(/--timeout "\$update_step_timeout_seconds"/g)).toHaveLength(2);
-    expect(script).toContain("OPENCLAW_UPDATE_POST_CORE=1");
+    expect(script.match(/--timeout "\$update_step_timeout_seconds"/g)).toHaveLength(1);
+    expect(script).not.toContain("OPENCLAW_UPDATE_POST_CORE=1");
     expect(script).not.toContain(
       'node "$entry" update --channel beta --tag "${OPENCLAW_CURRENT_PACKAGE_TGZ',
     );
     expect(script).toContain(
       "openclaw update failed or timed out after ${update_timeout_seconds}s",
     );
-    expect(script).toContain(
-      "updated OpenClaw entry failed or timed out after ${update_timeout_seconds}s",
-    );
-    expect(script.match(/openclaw_e2e_print_log \/tmp\/openclaw-update-corrupt-/g)).toHaveLength(7);
-    expect(script).toContain('openclaw_e2e_print_log "$post_core_result_path"');
+    expect(script.match(/openclaw_e2e_print_log \/tmp\/openclaw-update-corrupt-/g)).toHaveLength(5);
     expect(script).not.toContain("cat /tmp/openclaw-update-corrupt-");
-    expect(script.match(/assert-corrupt-policy-preserved/g)).toHaveLength(3);
+    expect(script.match(/assert-corrupt-policy-preserved/g)).toHaveLength(2);
   });
 
-  it("inherits the shared upgrade-survivor baseline for corrupt plugin updates", () => {
-    const result = runCorruptUpdateDockerBaseline({
-      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.7.1-2",
-    });
-
-    expect(result.result.status, result.result.stderr).toBe(0);
-    expect(result.baseline).toBe("OPENCLAW_UPDATE_CORRUPT_PLUGIN_BASELINE=openclaw@2026.7.1-2");
-  });
-
-  it("keeps an explicit corrupt-plugin baseline ahead of the shared baseline", () => {
-    const result = runCorruptUpdateDockerBaseline({
-      OPENCLAW_UPDATE_CORRUPT_PLUGIN_BASELINE: "openclaw@2026.6.34",
-      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.7.1-2",
-    });
-
-    expect(result.result.status, result.result.stderr).toBe(0);
-    expect(result.baseline).toBe("OPENCLAW_UPDATE_CORRUPT_PLUGIN_BASELINE=openclaw@2026.6.34");
-  });
+  it.each(["2026.9.2", "2026.8.2"])(
+    "keeps a historical %s override out of the same-schema repair lane",
+    (version) => {
+      const result = runCorruptUpdateDockerBaseline({
+        OPENCLAW_UPDATE_CORRUPT_PLUGIN_BASELINE: `openclaw@${version}`,
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: `openclaw@${version}`,
+      });
+      expect(result.result.status, result.result.stderr).toBe(0);
+      expect(result.baseline).toBeUndefined();
+    },
+  );
 
   it.each([
     ["explicit disable", { enabled: false }, [CORRUPT_PLUGIN_ID]],

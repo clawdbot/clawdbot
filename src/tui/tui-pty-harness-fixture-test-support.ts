@@ -541,6 +541,10 @@ export async function writeTuiPtyFixtureScript(dir: string) {
 
         async patchSession(opts: Parameters<TuiBackend["patchSession"]>[0]) {
           record("patchSession", opts);
+          const releasePath = process.env.OPENCLAW_TUI_PTY_PATCH_RELEASE_PATH;
+          while (releasePath && !existsSync(releasePath)) {
+            await new Promise((resolve) => setTimeout(resolve, 5));
+          }
           if (opts.model) {
             currentModel = opts.model;
           }

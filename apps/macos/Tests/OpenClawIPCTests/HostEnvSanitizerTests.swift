@@ -2,6 +2,35 @@ import Testing
 @testable import OpenClaw
 
 struct HostEnvSanitizerTests {
+    @Test(arguments: ["cat", ""])
+    func `no pager overrides never forward an executable`(value: String) {
+        let overrides = ["GIT_PAGER": value, "PAGER": value]
+        let diagnostics = HostEnvSanitizer.inspectOverrides(overrides: overrides)
+        #expect(diagnostics.blockedKeys.isEmpty)
+        #expect(diagnostics.invalidKeys.isEmpty)
+        for shellWrapper in [false, true] {
+            let env = HostEnvSanitizer.sanitize(overrides: overrides, shellWrapper: shellWrapper)
+            #expect(env["GIT_PAGER"] == "")
+            #expect(env["PAGER"] == "")
+        }
+    }
+
+    @Test(arguments: ["less", "/bin/cat", "./cat", "CAT", " cat", "cat ", "cat\n", "cat -u", "cat; id", "$(id)"])
+    func `executable and near miss pager overrides stay blocked`(value: String) {
+        let diagnostics = HostEnvSanitizer.inspectOverrides(overrides: [
+            " git_pager ": value, "PaGeR": value,
+        ])
+        #expect(diagnostics.blockedKeys == ["GIT_PAGER", "PAGER"])
+    }
+
+    @Test func `pager exception does not relax other denials`() {
+        let diagnostics = HostEnvSanitizer.inspectOverrides(overrides: [
+            "MANPAGER": "cat", "PATH": "cat", "LD_PRELOAD": "", "BAD-KEY": "cat",
+        ])
+        #expect(diagnostics.blockedKeys == ["LD_PRELOAD", "MANPAGER", "PATH"])
+        #expect(diagnostics.invalidKeys == ["BAD-KEY"])
+    }
+
     @Test func `sanitize blocks shell trace variables`() {
         let env = HostEnvSanitizer.sanitize(overrides: [
             "SHELLOPTS": "xtrace",

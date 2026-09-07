@@ -28,7 +28,7 @@ openclaw-chat-pane {
 .chat-split-view__column {
   display: flex;
   flex-direction: column;
-  min-width: 320px;
+  min-width: min(320px, 100%);
   min-height: 0;
 }
 

@@ -160,8 +160,12 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
     plugins: [controlUiLocaleModulesPlugin()],
     optimizeDeps: {
       include: [
+        "@lit/context",
+        "@noble/ed25519",
+        "@noble/hashes/sha2.js",
         "@openclaw/uirouter",
         "dompurify",
+        "file-type",
         "highlight.js/lib/core",
         "highlight.js/lib/languages/{bash,cpp,css,diff,java,javascript,json,markdown,python,rust,typescript,xml,yaml}",
         "lit/async-directive.js",

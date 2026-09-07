@@ -987,20 +987,28 @@ describe("launchd runtime parsing", () => {
 });
 
 describe("launchd runtime state", () => {
-  it.runIf(process.platform === "darwin")(
-    "fails soft within the supplied deadline when launchctl blocks",
-    async () => {
+  it.runIf(process.platform === "darwin").each(["runtime", "enabled"] as const)(
+    "bounds the %s read by the supplied deadline when launchctl blocks",
+    async (read) => {
       const realFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
       const tempDir = await realFs.mkdtemp(`${process.env.TMPDIR ?? "/tmp"}/openclaw-launchd-`);
-      await realFs.writeFile(`${tempDir}/launchctl`, "#!/bin/sh\nsleep 2\n", { mode: 0o755 });
+      await realFs.writeFile(`${tempDir}/launchctl`, "#!/bin/sh\nexec /bin/sleep 2\n", {
+        mode: 0o755,
+      });
       state.realExecFile = true;
 
       try {
         await withEnvAsync({ PATH: `${tempDir}:${process.env.PATH ?? ""}` }, async () => {
           const startedAt = Date.now();
-          const runtime = await readLaunchAgentRuntime({ HOME: tempDir }, { timeoutMs: 100 });
+          if (read === "enabled") {
+            await expect(
+              isLaunchAgentEnabled({ env: { HOME: tempDir }, timeoutMs: 100 }),
+            ).rejects.toThrow("launchctl print-disabled failed");
+          } else {
+            const runtime = await readLaunchAgentRuntime({ HOME: tempDir }, { timeoutMs: 100 });
+            expect(runtime.status).toBe("unknown");
+          }
           expect(Date.now() - startedAt).toBeLessThan(1_000);
-          expect(runtime.status).toBe("unknown");
         });
       } finally {
         state.realExecFile = false;

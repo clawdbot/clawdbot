@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "../infra/errors.js";
+import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
   includeContributionOwnsAgentRoster,
@@ -361,6 +362,9 @@ export async function readConfigFileSnapshotInternal(
       ),
     );
   } catch (error) {
+    if (findStartupMaintenanceRequiredError(error)) {
+      throw error;
+    }
     const nodeError = error as NodeJS.ErrnoException;
     let message: string;
     if (nodeError?.code === "EACCES") {

@@ -35,7 +35,7 @@ import type { MemoryPluginStatus, MemoryStatusSnapshot } from "./status.scan.sha
 
 type StatusDegradationSummary = Pick<
   StatusSummary,
-  "degradedSecretOwners" | "degradedPlugins" | "startupMigrationWarning"
+  "degradedSecretOwners" | "degradedPlugins" | "startupMigrationWarning" | "secretEgressProxy"
 >;
 
 function buildStatusDegradationRows(
@@ -45,6 +45,16 @@ function buildStatusDegradationRows(
   const rows: Array<{ Item: string; Value: string }> = [];
   if (summary.startupMigrationWarning) {
     rows.push({ Item: "Startup migrations", Value: decorate(summary.startupMigrationWarning) });
+  }
+  if (summary.secretEgressProxy) {
+    const status = summary.secretEgressProxy;
+    rows.push({
+      Item: "Secret egress proxy",
+      Value:
+        status.state === "ready"
+          ? `ready · CA expires ${status.caExpiresAt}`
+          : decorate(status.message ?? "Certificate preparation unavailable"),
+    });
   }
   const secretOwners = summary.degradedSecretOwners ?? [];
   if (secretOwners.length > 0) {

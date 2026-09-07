@@ -85,15 +85,17 @@ not overwrite the existing skill.
   `openclaw doctor --fix` first when creation reports legacy-session or
   shared-auth ownership still attached to the old `main` installation.
 - `--flow quickstart`: opens the classic wizard with minimal prompts, uses
-  token auth by default, and generates a token when no stored or explicit
-  credential applies. Explicit local Gateway flags such as
+  a generated Gateway secret by default, without asking you to choose token or
+  password. Existing password-mode configurations are preserved. Explicit local Gateway flags such as
   `--gateway-port`, `--gateway-bind`, `--gateway-auth`, and `--tailscale`
   override the corresponding stored or default quickstart values; omitted
   options keep their current values.
 - `--flow manual` (alias `advanced`): opens the classic wizard's **Manual
-  setup** flow with full prompts for port, bind, and auth.
+  setup** flow with full prompts for port, bind, and secret storage. It generates
+  the Gateway secret by default; use `--gateway-auth password` or
+  `--gateway-password <value>` to choose your own password.
 - `--flow import`: runs a detected migration provider (for example Hermes via `--import-from hermes`) against a fresh setup. After confirmation, onboarding stages config, credentials, workspace files, memory, and skills under private temporary targets; imported inference must pass a live completion before workspace and agent state are promoted and configuration is committed. Failure or cancellation before promotion leaves the live target untouched. External activation steps that cannot be rolled back, such as Codex plugin installation, run afterward and remain retryable from the migration report. Migration import options (`--flow import`, `--import-from`, `--import-source`, and `--import-secrets`) cannot be combined with `--reset`; run the import without `--reset`. Use [`openclaw migrate`](/cli/migrate) for dry-run plans, overwrite mode, verified backups, reports, and exact mappings.
-- `--remote-url`, `--remote-token`, and `--remote-password`: prefill the classic remote Gateway step and override stored remote values for this run. Pass either a token or a password, not both. Changing the URL does not reuse stored credentials unless you also provide a new token or password. Credentials stay masked in prompts and follow the wizard's existing plaintext or SecretRef storage choice.
+- `--remote-url`, `--remote-token`, and `--remote-password`: prefill the classic remote Gateway step and override stored remote values for this run. Pass either a token or a password, not both. Changing the URL does not reuse stored credentials unless you also provide a new token or password. The interactive step asks for one **Gateway secret**, whether the remote Gateway calls it a token or password, and stores it as `gateway.remote.token`. Credentials stay masked and follow the plaintext or SecretRef storage choice. Leave the secret blank and confirm to keep an existing credential. To connect without a shared secret, leave it blank, decline keeping an existing credential if offered, then explicitly confirm **Continue without a Gateway secret?**. Reference storage offers the same confirmation before asking for the reference.
 - `--modern` is a compatibility alias for the OpenClaw conversational setup
   assistant. It uses the same live-inference gate as `openclaw setup` and
   accepts only `--workspace`, `--agent-name`, `--accept-risk`,
@@ -153,7 +155,7 @@ applies the standard setup automatically — workspace, Gateway, and sessions,
 the same plan the conversational `openclaw setup` chat would apply on "yes" —
 then offers plugin and skill recommendations from installed apps; app names
 are matched through your configured model and ClawHub search, and the step can
-be disabled with [`wizard.appRecommendations`](/gateway/configuration-reference#wizard).
+be disabled with [`wizard.appRecommendations`](/gateway/config-runtime#wizard).
 When the platform has a supported browser opener, it then opens the authenticated
 Control UI dashboard and waits up to 60 seconds for the browser client to
 connect. The short-lived handoff gives that exact signed browser a durable
@@ -331,7 +333,9 @@ With `--secret-input-mode ref`, onboarding stores new credentials as refs instea
 
 ### Gateway auth (non-interactive)
 
-- `--gateway-auth token --gateway-token <token>` stores a plaintext token. `token` is the default auth mode.
+- Without auth flags or an existing credential, onboarding generates a Gateway secret and stores it as `gateway.auth.token` with `gateway.auth.mode: "token"`. Quickstart keeps its existing plaintext storage default; `--secret-input-mode ref` explicitly requests a reference. Run `openclaw dashboard` to open the Control UI.
+- `--gateway-auth token --gateway-token <token>` stores a supplied plaintext secret.
+- `--gateway-password <value>` selects password mode without an auth-choice prompt; `--gateway-auth password` also explicitly selects password mode. An existing password-mode config stays in password mode on rerun.
 - `--gateway-auth token --gateway-token-ref-env <name>` stores `gateway.auth.token` as an env SecretRef. Requires a non-empty env var of that name in the onboarding process environment.
 - `--gateway-token` and `--gateway-token-ref-env` are mutually exclusive.
 - Remote onboarding uses `--remote-token <token>` or `--remote-password <password>` for `gateway.remote` credentials. `--gateway-token`, `--gateway-token-ref-env`, and `--gateway-password` configure local Gateway auth and are not valid in remote mode. For remote token SecretRefs, set `OPENCLAW_GATEWAY_TOKEN` and use `--remote-token` with `--secret-input-mode ref`.

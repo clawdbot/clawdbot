@@ -128,7 +128,7 @@ export function loadOpenClawPluginsCore(
     const borrowedNodes = activeGatewayRuntime
       ? createDeferredGatewayNodesRuntime(activeGatewayRuntime)
       : undefined;
-    const lazyRuntime = createLazyPluginRuntime({
+    const runtimeParams = {
       devSourceRoot: context.devSourceRoot,
       pluginSdkResolution: options.pluginSdkResolution,
       runtimeOptions: {
@@ -140,12 +140,12 @@ export function loadOpenClawPluginsCore(
         nodes: options.runtimeOptions?.nodes ?? borrowedNodes,
       },
       loadPluginModule,
-    });
+    };
     const runtime = overrides?.runtime
       ? // Restricted discovery must not initialize full host services.
         // SAFETY: bundled-capability-runtime uses this base only for uncached, non-activating registration.
         (overrides.runtime as PluginRuntime)
-      : lazyRuntime;
+      : createLazyPluginRuntime(runtimeParams);
     const capabilityCatalogContext =
       options.capabilityCatalogContext ??
       options.capabilityCatalog?.context ??

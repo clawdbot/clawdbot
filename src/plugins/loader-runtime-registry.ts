@@ -17,8 +17,5 @@ export function createPluginRuntimeRegistryResolver(
     }
     return loadRegistry({ ...options, activate: false });
   }
-  return {
-    resolveRuntimePluginRegistry,
-    getRuntimePluginRegistryForLoadOptions: resolveRuntimePluginRegistry,
-  };
+  return resolveRuntimePluginRegistry;
 }

@@ -2,6 +2,7 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, type Mock, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { ModelDefinitionConfig } from "../../config/types.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
@@ -440,6 +441,7 @@ async function withOpenAIStatusFixture<T>(
     providerApiKey?: unknown;
     providerApi?: "openai-chatgpt-responses";
     providerBaseUrl?: string;
+    providerModels?: ModelDefinitionConfig[];
     agentRuntime?: string;
     catalog?: unknown[];
     routeVariants?: unknown[];
@@ -485,14 +487,15 @@ async function withOpenAIStatusFixture<T>(
         params.providerAuth ||
         params.providerApiKey !== undefined ||
         params.providerApi ||
-        params.providerBaseUrl
+        params.providerBaseUrl ||
+        params.providerModels
           ? {
               openai: {
                 ...(params.providerAuth ? { auth: params.providerAuth } : {}),
                 ...(params.providerApiKey !== undefined ? { apiKey: params.providerApiKey } : {}),
                 ...(params.providerApi ? { api: params.providerApi } : {}),
                 ...(params.providerBaseUrl ? { baseUrl: params.providerBaseUrl } : {}),
-                models: [],
+                models: params.providerModels ?? [],
               },
             }
           : {},
@@ -673,7 +676,7 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 
-  it("does not restore over plugin metadata published while status is running", async () => {
+  it("keeps status metadata scoped while another operation publishes metadata", async () => {
     const originalLoadModelCatalog = mocks.loadModelCatalog.getMockImplementation();
     const config = mocks.loadConfig();
     const workspaceDir = "/tmp/openclaw-agent/workspace";
@@ -696,6 +699,9 @@ describe("modelsStatusCommand auth overview", () => {
     try {
       await catalogStarted.promise;
       expect(replacement).toBeDefined();
+      expect(
+        getCurrentPluginMetadataSnapshot({ config, workspaceDir, env: process.env }),
+      ).toBeUndefined();
       clearPluginMetadataLifecycleCaches();
       setCurrentPluginMetadataSnapshot(replacement!, {
         config,
@@ -1484,6 +1490,55 @@ describe("modelsStatusCommand auth overview", () => {
     expect(payload.auth.modelRouteIssues).toEqual([]);
     expect(localRuntime.exit).not.toHaveBeenCalledWith(1);
   });
+
+  it.each(["Writer", "rEaDeR"])(
+    "keeps model status independent of %s routes",
+    async (responsesId) => {
+      const localRuntime = createRuntime();
+      const baseUrl = "https://models.example.test/v1";
+      const model = (id: string, api?: ModelDefinitionConfig["api"]): ModelDefinitionConfig => ({
+        id,
+        name: id,
+        api,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 1024,
+      });
+      const providerModels = [
+        model("Reader", "openai-completions"),
+        model(responsesId, "openai-responses"),
+        model("reader"),
+      ];
+      const catalog = providerModels.map((entry) => ({ ...entry, provider: "openai", baseUrl }));
+      const fallbacks = [`openai/${responsesId}`, "openai/reader"];
+      await withOpenAIStatusFixture(
+        {
+          primary: "openai/Reader",
+          fallbacks,
+          profiles: {
+            "openai:default": { type: "api_key", provider: "openai", key: "status-proof" },
+          },
+          providerBaseUrl: baseUrl,
+          providerModels,
+          catalog,
+          routeVariants: catalog,
+        },
+        async () => {
+          await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+        },
+      );
+
+      const payload = parseFirstJsonLog(localRuntime);
+      expect(payload.defaultModel).toBe("openai/Reader");
+      expect(payload.fallbacks).toEqual(fallbacks);
+      expect(payload.auth.modelRouteIssues).toEqual([]);
+      expect(payload.auth.missingProvidersInUse).toEqual([]);
+      expect(payload.auth.runtimeAuthRoutes).toEqual([]);
+      expect(localRuntime.exit).toHaveBeenCalledWith(0);
+    },
+  );
 
   it("keeps API-key SecretRef profiles usable for a concrete OpenAI route", async () => {
     const localRuntime = createRuntime();

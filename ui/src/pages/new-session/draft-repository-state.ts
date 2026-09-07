@@ -234,6 +234,12 @@ export class DraftRepositoryController {
       });
   }
 
+  synchronize() {
+    if (!this.matchesCurrentRepo()) {
+      this.load();
+    }
+  }
+
   private adoptResolvedRepository(state: ResolvedRepository) {
     // Worktree preferences can arrive while discovery is pending.
     this.repositoryValue = state;

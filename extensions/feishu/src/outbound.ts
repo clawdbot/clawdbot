@@ -54,6 +54,7 @@ import {
   renderFeishuPresentationPayload,
   renderFeishuPresentationFallbackText,
   resolveFeishuRichReply,
+  withinCardTableLimit,
 } from "./presentation-card.js";
 import {
   createFeishuPartialReplyDeliveryError,
@@ -302,7 +303,9 @@ async function sendOutboundText(params: {
   // Decide card routing on the original text so card content is never
   // modified by post-md newline normalization. Only the post path below
   // materializes CommonMark soft breaks for Feishu rendering.
-  const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+  const useCard =
+    (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) &&
+    withinCardTableLimit(text);
 
   // Tables need contiguous source rows, so convert them before the parser
   // materializes prose soft breaks for Feishu post rendering.

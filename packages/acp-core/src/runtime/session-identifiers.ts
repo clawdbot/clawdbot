@@ -1,4 +1,3 @@
-// ACP Core module implements session identifiers behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString as normalizeText,

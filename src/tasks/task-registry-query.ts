@@ -197,6 +197,11 @@ export async function listTaskRecordPage(params: {
       // Yield only when another batch exists; completed pages keep their revision.
       if (scannedCount > 0) {
         await yieldToEventLoop();
+        // A carried revision cannot recover; skip unrelated reads once it is stale.
+        // Cursorless scans still finish their attempt before retrying.
+        if (params.expectedRevision !== undefined && revision !== readTaskRegistryRevision()) {
+          return err("cursor_stale");
+        }
       }
       const batch: TaskRecord[] = [];
       while (!current.done && batch.length < 32 && scannedCount < scanLimit) {

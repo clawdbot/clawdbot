@@ -620,6 +620,10 @@ openclaw gateway restart
 openclaw gateway uninstall
 ```
 
+`gateway stop` remains available when plugin configuration needs Doctor migration.
+It still validates core configuration and refuses configuration written by a newer
+OpenClaw binary. Start and restart continue to validate plugin configuration.
+
 ### Recover an unreadable native service definition
 
 If installation or a managed update reports `SERVICE_DEFINITION_UNKNOWN`, first

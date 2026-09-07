@@ -1,10 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { listPluginDoctorStateMigrationEntries } from "../plugins/doctor-contract-registry.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import {
+  listPluginDoctorStateMigrationEntries,
+  resolveLivePluginDoctorStateMigrationInventory,
+} from "../plugins/doctor-contract-registry.js";
 import { clearPluginDoctorContractRegistryCache } from "../plugins/doctor-contract-registry.test-fixtures.js";
+import { writePersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store-write.js";
+import { readPersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store.js";
+import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
+import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { loadPluginRegistrySnapshotWithMetadata } from "../plugins/plugin-registry-snapshot.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -24,6 +35,128 @@ afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   await tempDirs.cleanup();
+});
+
+it("repairs a planned bundled owner omitted by a partial index after acquiring fresh maintenance ownership", async () => {
+  const root = await tempDirs.make("openclaw-doctor-partial-inventory-");
+  const stateDir = path.join(root, "state");
+  const configPath = path.join(root, "openclaw.json");
+  const bundledRoot = path.join(root, "bundled");
+  const pluginIds = ["kept-owner", "omitted-owner"];
+  const action = { id: "session-action", phase: "after-session-repair", doctorOnly: true };
+  for (const pluginId of pluginIds) {
+    const pluginRoot = path.join(bundledRoot, pluginId);
+    const markerPath = path.join(stateDir, `${pluginId}-migrated`);
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        name: `@test/${pluginId}`,
+        version: "0.0.0",
+        type: "commonjs",
+        openclaw: { extensions: ["./index.cjs"] },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: pluginId,
+        configSchema: {},
+        doctorContract: { stateMigrations: [action] },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "index.cjs"),
+      "throw new Error('metadata discovery loaded plugin runtime');\n",
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "doctor-contract-api.cjs"),
+      `const fs = require("node:fs");
+module.exports = { stateMigrations: [{
+  ...${JSON.stringify(action)}, label: ${JSON.stringify(pluginId)},
+  detectLegacyState: () => fs.existsSync(${JSON.stringify(markerPath)}) ? null : { preview: ["pending"] },
+  migrateLegacyState: () => {
+    fs.writeFileSync(${JSON.stringify(markerPath)}, "migrated");
+    return { changes: [${JSON.stringify(`migrated ${pluginId}`)}], warnings: [] };
+  },
+}] };\n`,
+    );
+  }
+  const config: OpenClawConfig = {
+    agents: { entries: { main: { workspace: path.join(root, "workspace") } } },
+    plugins: { allow: ["kept-owner"] },
+  };
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: root,
+    OPENCLAW_HOME: root,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+  };
+  fs.writeFileSync(configPath, JSON.stringify(config));
+  const fullIndex = withPluginCache(createPluginCache(), () =>
+    loadInstalledPluginIndex({ config, env }),
+  );
+  // Older Doctor initialization persisted a projection with otherwise current metadata.
+  writePersistedInstalledPluginIndexSync(
+    {
+      ...fullIndex,
+      refreshReason: "migration",
+      plugins: fullIndex.plugins.filter((plugin) => plugin.pluginId === "kept-owner"),
+    },
+    { env },
+  );
+  withPluginCache(createPluginCache(), () => {
+    const cached = loadPluginRegistrySnapshotWithMetadata({ config, env });
+    expect(cached.source).toBe("persisted");
+    expect(cached.snapshot.plugins.map((plugin) => plugin.pluginId)).toEqual(["kept-owner"]);
+  });
+
+  await withPluginCache(createPluginCache(), async () => {
+    const snapshot = loadPluginMetadataSnapshot({ config, env, index: fullIndex });
+    await withPluginMetadataSnapshotScope(
+      snapshot,
+      async () => {
+        const inventory = resolveLivePluginDoctorStateMigrationInventory({ config, env });
+        const plannedActions = inventory.descriptors.map(({ pluginId, id }) => ({ pluginId, id }));
+        expect(plannedActions).toEqual([
+          { pluginId: "kept-owner", id: "session-action" },
+          { pluginId: "omitted-owner", id: "session-action" },
+        ]);
+        const repair = () =>
+          withDoctorSqliteMaintenanceLock({
+            env,
+            operation: "plugin session repair",
+            run: (maintenanceAuthority) =>
+              runPostSessionPluginDoctorStateRepairs({
+                config,
+                env,
+                maintenanceAuthority,
+                plannedActions,
+              }),
+          });
+
+        await expect(repair()).resolves.toEqual({
+          changes: ["migrated kept-owner", "migrated omitted-owner"],
+          warnings: [],
+        });
+        for (const pluginId of pluginIds) {
+          expect(fs.readFileSync(path.join(stateDir, `${pluginId}-migrated`), "utf8")).toBe(
+            "migrated",
+          );
+        }
+        await expect(repair()).resolves.toEqual({ changes: [], warnings: [] });
+      },
+      { config, env },
+    );
+  });
+  const persisted = withPluginCache(createPluginCache(), () =>
+    readPersistedInstalledPluginIndexSync({ env }),
+  );
+  expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual(["kept-owner"]);
 });
 
 it.each([

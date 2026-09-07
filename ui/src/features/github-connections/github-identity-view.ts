@@ -384,6 +384,7 @@ export function renderGitHubIdentity(
   return renderSettingsSection(
     {
       title: t("githubConnections.agentTitle"),
+      description: t("githubConnections.agentDescription"),
       actions: controller.statusReadable
         ? html`<button
             class="btn btn--sm"

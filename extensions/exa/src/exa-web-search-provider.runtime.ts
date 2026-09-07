@@ -75,12 +75,8 @@ type ExaSearchResponse = {
   results?: unknown;
 };
 
-async function readExaSearchResults(
-  response: Response,
-  opts?: { maxBytes?: number },
-): Promise<ExaSearchResult[]> {
-  const maxBytes = opts?.maxBytes ?? EXA_SEARCH_JSON_MAX_BYTES;
-  const bytes = await readResponseWithLimit(response, maxBytes, {
+async function readExaSearchResults(response: Response): Promise<ExaSearchResult[]> {
+  const bytes = await readResponseWithLimit(response, EXA_SEARCH_JSON_MAX_BYTES, {
     onOverflow: ({ maxBytes: maxBytesLocal }) =>
       new Error(`Exa API response exceeds ${maxBytesLocal} bytes`),
   });
@@ -558,8 +554,3 @@ export async function executeExaWebSearchProviderTool(
   writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
   return payload;
 }
-
-export const testing = {
-  readExaErrorDetail,
-  readExaSearchResults,
-} as const;

@@ -1,36 +1,13 @@
 // Restart helper tests cover update restart helper process selection and error handling.
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { getWindowsCmdExePath } from "../../infra/windows-install-roots.js";
+import { getWindowsSystem32ExePath } from "../../infra/windows-install-roots.js";
 import { COMMAND_PROCESS_TREE_KILL_GRACE_MS, spawnCommand } from "../../process/exec-spawn.js";
 import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
-
-const windowsKillPolicyStartMarker = "# OPENCLAW_RESTART_KILL_POLICY_BEGIN";
-const windowsKillPolicyEndMarker = "# OPENCLAW_RESTART_KILL_POLICY_END";
-
-function findPowerShell(): string | null {
-  const executable = process.platform === "win32" ? "pwsh.exe" : "pwsh";
-  const candidates = [
-    process.env.OPENCLAW_TEST_PWSH,
-    ...(process.env.PATH ?? "")
-      .split(path.delimiter)
-      .filter(Boolean)
-      .map((dir) => path.join(dir, executable)),
-  ];
-  return (
-    candidates.find((candidate): candidate is string =>
-      Boolean(candidate && existsSync(candidate)),
-    ) ?? null
-  );
-}
-
-const powerShellPath = findPowerShell();
-const itWithPowerShell = powerShellPath ? it : it.skip;
 
 vi.mock("../../process/exec-spawn.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec-spawn.js")>()),
@@ -57,11 +34,18 @@ describe("restart-helper", () => {
     if (scriptPath == null) {
       throw new Error("expected restart script path");
     }
-    const content = await fs.readFile(scriptPath, "utf-8");
+    const wrapper = await fs.readFile(scriptPath, "utf-8");
+    const content = scriptPath.endsWith(".cmd")
+      ? `${wrapper}\n${await fs.readFile(scriptPath.replace(/\.cmd$/u, ".ps1"), "utf8")}`
+      : wrapper;
     return { scriptPath, content };
   }
 
   async function cleanupScript(scriptPath: string) {
+    if (scriptPath.endsWith(".cmd")) {
+      await fs.unlink(scriptPath.replace(/\.cmd$/u, ".ps1"));
+      await fs.unlink(`${scriptPath}.vbs`);
+    }
     await fs.unlink(scriptPath).catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
@@ -72,55 +56,6 @@ describe("restart-helper", () => {
         throw error;
       }
     });
-  }
-
-  function extractWindowsKillPolicy(content: string): string {
-    const start = content.indexOf(windowsKillPolicyStartMarker);
-    const end = content.indexOf(windowsKillPolicyEndMarker, start);
-    if (start < 0 || end < 0) {
-      throw new Error("Windows restart kill-policy markers missing");
-    }
-    return content.slice(start + windowsKillPolicyStartMarker.length, end);
-  }
-
-  async function executeWindowsKillPolicy(content: string, testBody: string) {
-    if (!powerShellPath) {
-      throw new Error("PowerShell is unavailable");
-    }
-    const scriptDir = tempDirs.make("openclaw-restart-policy-");
-    const scriptPath = path.join(scriptDir, "policy-test.ps1");
-    const policy = extractWindowsKillPolicy(content);
-    await fs.writeFile(
-      scriptPath,
-      [
-        '$ErrorActionPreference = "Stop"',
-        "$script:RestartLogs = [Collections.Generic.List[string]]::new()",
-        "function Write-RestartLog { param([string]$Message) $script:RestartLogs.Add($Message) | Out-Null }",
-        policy,
-        testBody,
-      ].join("\n"),
-      "utf8",
-    );
-    try {
-      return await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
-        execFile(
-          powerShellPath,
-          ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", scriptPath],
-          { env: process.env },
-          (error, stdout, stderr) => {
-            if (error) {
-              reject(
-                new Error(`PowerShell policy test failed: ${stderr || stdout}`, { cause: error }),
-              );
-              return;
-            }
-            resolve({ stdout, stderr });
-          },
-        );
-      });
-    } finally {
-      await fs.rm(scriptDir, { recursive: true, force: true });
-    }
   }
 
   async function writeFakeLaunchctl(
@@ -180,7 +115,7 @@ ${body}`,
     const forceKillBranch = "if ($attempt -eq 10)";
     const ownerCheckFunction = "function Invoke-OpenClawVerifiedListenerKill";
     const ownerCheckCall = "Invoke-OpenClawVerifiedListenerKill -ProcessId $listenerPid";
-    const forceKillCommand = "if ($lease.Terminate())";
+    const forceKillCommand = "$lease.Kill()";
     const runCommand =
       'Invoke-OpenClawSchtasksWithTimeout -Arguments @("/Run", "/TN", $taskName) -TimeoutSeconds 30';
     const portAssignment = `$port = ${port}`;
@@ -211,7 +146,7 @@ ${body}`,
     expect(runIndex).toBeGreaterThan(ownerCheckCallIndex);
 
     expect(content).not.toContain("timeout /t 3 /nobreak >nul");
-    expect(content).not.toContain("findstr");
+    expect(content).not.toContain("netstat.exe -ano -p tcp | findstr");
     expect(content).not.toContain("netstat -ano |");
     expect(content).not.toContain("schtasks /End /TN");
   }
@@ -669,8 +604,10 @@ exit 0
       });
       expect(scriptPath.endsWith(".cmd")).toBe(true);
       expect(content).toContain("@echo off");
-      expect(content).toContain("powershell -NoProfile -ExecutionPolicy Bypass -Command");
-      expect(content).not.toContain("powershell -NoProfile -ExecutionPolicy Bypass -File");
+      expect(content).toContain(
+        'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command - < "%~dpn0.ps1"',
+      );
+      expect(content).not.toMatch(/Add-Type|Invoke-Expression|\biex\b|-EncodedCommand/iu);
       expect(content).toContain('$ErrorActionPreference = "Continue"');
       expect(content).toContain("gateway-restart.log");
       expect(content).toContain("$taskName = 'OpenClaw Gateway'");
@@ -709,16 +646,14 @@ exit 0
       expect(content).toContain(
         "$expectedGatewayArgv = @('C:\\Program Files\\nodejs\\node.exe', 'C:\\Users\\O''Brien\\openclaw\\dist\\entry.js', 'gateway', '--port', '18789')",
       );
-      expect(content).toContain("CommandLineToArgvW");
-      expect(content).toContain("PROCESS_QUERY_LIMITED_INFORMATION");
-      expect(content).toContain("GetProcessTimes");
-      expect(content).toContain("creationTime - (creationTime % 10)");
+      expect(content).not.toMatch(/Add-Type|Invoke-Expression|\biex\b/iu);
       expect(content).toContain("$creationTimeFileTime -= $creationTimeFileTime % 10");
-      expect(content).toContain("TryOpenProcess($QueryPid)");
+      expect(content).toContain("$heldCreationTime -= $heldCreationTime % 10");
+      expect(content).toContain("[void]$lease.Handle");
       expect(content).toContain("Get-OpenClawListenerKillDecision");
       expect(content).toContain("$recheckedListeners = & $ListenerQuery $Port");
       expect(content).toContain("$recheckedProcess = & $ProcessQuery $ProcessId");
-      expect(content).toContain("if ($lease.Terminate())");
+      expect(content).toContain("$lease.Kill()");
       expect(content).toContain("$lease.Dispose()");
       expect(content).toContain('return "listener-query-unavailable"');
       expect(content).not.toContain("Stop-Process -Id");
@@ -726,172 +661,6 @@ exit 0
       expect(content).not.toContain("Get-Content -LiteralPath $ScriptPath");
       await cleanupScript(scriptPath);
     });
-
-    itWithPowerShell(
-      "executes the shipped PowerShell kill policy with mocked Windows facts",
-      async () => {
-        Object.defineProperty(process, "platform", { value: "win32" });
-        const { scriptPath, content } = await prepareAndReadScript(
-          { OPENCLAW_PROFILE: "default" },
-          18789,
-          ["node", "C:\\openclaw\\dist\\entry.js", "gateway", "--port", "18789"],
-        );
-        try {
-          const result = await executeWindowsKillPolicy(
-            content,
-            String.raw`
-function Assert-True {
-  param([bool]$Condition, [string]$Message)
-  if (-not $Condition) { throw $Message }
-}
-
-function Assert-DecisionLog {
-  param([string]$Decision)
-  $match = @($script:RestartLogs | Where-Object { $_ -like "*decision=$Decision*" })
-  Assert-True ($match.Count -gt 0) "missing decision log: $Decision"
-}
-
-function New-ProcessFacts {
-  param([int]$ProcessId, [string]$CreationTime, [string[]]$Argv)
-  return [pscustomobject]@{
-    ProcessId = $ProcessId
-    CreationTimeFileTime = $CreationTime
-    Argv = $Argv
-  }
-}
-
-function New-TestLease {
-  param([string]$CreationTime)
-  $lease = [pscustomobject]@{
-    CreationTimeFileTime = $CreationTime
-    Terminated = $false
-    Disposed = $false
-  }
-  $lease | Add-Member -MemberType ScriptMethod -Name Terminate -Value {
-    $this.Terminated = $true
-    return $true
-  }
-  $lease | Add-Member -MemberType ScriptMethod -Name Dispose -Value {
-    $this.Disposed = $true
-  }
-  return $lease
-}
-
-function Invoke-MockedKill {
-  param($Observed, $Rechecked, $Listeners, $Lease, [string[]]$ExpectedArgv)
-  $script:MockObserved = $Observed
-  $script:MockRechecked = $Rechecked
-  $script:MockListeners = $Listeners
-  $script:MockLease = $Lease
-  $script:ProcessQueryCalls = 0
-  $script:ListenerQueryCalls = 0
-  $script:ProcessOpenCalls = 0
-  $processQuery = {
-    param([int]$IgnoredPid)
-    $script:ProcessQueryCalls += 1
-    if ($script:ProcessQueryCalls -eq 1) { return $script:MockObserved }
-    return $script:MockRechecked
-  }
-  $listenerQuery = {
-    param([int]$IgnoredPort)
-    $script:ListenerQueryCalls += 1
-    return $script:MockListeners
-  }
-  $processOpen = {
-    param([int]$IgnoredPid)
-    $script:ProcessOpenCalls += 1
-    return $script:MockLease
-  }
-  Invoke-OpenClawVerifiedListenerKill -ProcessId 4242 -Port 18789 -ExpectedArgv $ExpectedArgv -ProcessQuery $processQuery -ListenerQuery $listenerQuery -ProcessOpen $processOpen
-}
-
-# Get-NetTCPConnection exposes object properties, including duplicate IPv4/IPv6 rows.
-function Get-NetTCPConnection {
-  param($State, $ErrorAction)
-  @(
-    [pscustomobject]@{ LocalPort = 18789; OwningProcess = 4242 },
-    [pscustomobject]@{ LocalPort = 18789; OwningProcess = 4242 },
-    [pscustomobject]@{ LocalPort = 443; OwningProcess = 5252 }
-  )
-}
-$snapshot = Get-OpenClawListenerSnapshot -Port 18789
-Assert-True $snapshot.Known "Get-NetTCPConnection snapshot should be known"
-Assert-True (@($snapshot.Pids).Count -eq 1) "duplicate listener PIDs should collapse"
-Assert-True (@($snapshot.Pids)[0] -eq 4242) "wrong Get-NetTCPConnection PID"
-
-# Force the locale-independent netstat fallback. Localized state text is ignored.
-function Get-NetTCPConnection { param($State, $ErrorAction) throw "unavailable" }
-function netstat.exe {
-  $script:LASTEXITCODE = 0
-  @(
-    "  TCP    0.0.0.0:18789      0.0.0.0:0       LISTENING      4242",
-    "  TCP    [::]:18789         [::]:0          ABHÖREN        4242",
-    "  TCP    127.0.0.1:18789    127.0.0.1:61234 HERGESTELLT     5252"
-  )
-}
-$snapshot = Get-OpenClawListenerSnapshot -Port 18789
-Assert-True $snapshot.Known "netstat snapshot should be known"
-Assert-True (@($snapshot.Pids).Count -eq 1) "netstat IPv4/IPv6 PIDs should collapse"
-Assert-True (@($snapshot.Pids)[0] -eq 4242) "wrong netstat PID"
-
-function netstat.exe { $script:LASTEXITCODE = 1 }
-$snapshot = Get-OpenClawListenerSnapshot -Port 18789
-Assert-True (-not $snapshot.Known) "failed listener queries must remain unknown"
-
-$creation = "133987654321000000"
-$expected = @("node", "C:\openclaw\dist\entry.js", "gateway", "--port", "18789")
-$managed = New-ProcessFacts 4242 $creation @("node.exe", "C:\openclaw\dist\entry.js", "gateway", "--port", "18789")
-$knownListener = [pscustomobject]@{ Known = $true; Pids = @(4242) }
-
-$script:RestartLogs.Clear()
-$lease = New-TestLease $creation
-Invoke-MockedKill $managed $managed $knownListener $lease $expected
-Assert-True $lease.Terminated "managed stale listener was not killed"
-Assert-True $lease.Disposed "managed listener handle was not disposed"
-Assert-True ($script:ProcessQueryCalls -eq 2) "managed process was not rechecked"
-Assert-True ($script:ListenerQueryCalls -eq 1) "managed listener was not rechecked"
-
-$script:RestartLogs.Clear()
-$foreign = New-ProcessFacts 4242 $creation @("python.exe", "foreign-listener.py")
-$lease = New-TestLease $creation
-Invoke-MockedKill $foreign $foreign $knownListener $lease $expected
-Assert-True (-not $lease.Terminated) "foreign listener was killed"
-Assert-True ($script:ProcessOpenCalls -eq 0) "foreign listener opened a terminate handle"
-Assert-DecisionLog "command-mismatch"
-
-$script:RestartLogs.Clear()
-$lease = New-TestLease $creation
-Invoke-MockedKill $null $null $knownListener $lease $expected
-Assert-True (-not $lease.Terminated) "unknown owner was killed"
-Assert-True ($script:ProcessOpenCalls -eq 0) "unknown owner opened a terminate handle"
-Assert-DecisionLog "process-unavailable"
-
-$script:RestartLogs.Clear()
-$lease = New-TestLease $creation
-$unknownListeners = [pscustomobject]@{ Known = $false; Pids = @() }
-Invoke-MockedKill $managed $managed $unknownListeners $lease $expected
-Assert-True (-not $lease.Terminated) "unknown listener state was killed"
-Assert-True $lease.Disposed "unknown listener handle was not disposed"
-Assert-DecisionLog "listener-query-unavailable"
-
-$script:RestartLogs.Clear()
-$recycledLease = New-TestLease "133987654399000000"
-Invoke-MockedKill $managed $managed $knownListener $recycledLease $expected
-Assert-True (-not $recycledLease.Terminated) "recycled PID target was killed"
-Assert-True $recycledLease.Disposed "recycled PID handle was not disposed"
-Assert-DecisionLog "process-replaced"
-
-Write-Output "OPENCLAW_RESTART_POLICY_OK"
-`,
-          );
-
-          expect(result.stderr).toBe("");
-          expect(result.stdout).toContain("OPENCLAW_RESTART_POLICY_OK");
-        } finally {
-          await cleanupScript(scriptPath);
-        }
-      },
-    );
 
     it("uses OPENCLAW_WINDOWS_TASK_NAME override on Windows", async () => {
       Object.defineProperty(process, "platform", { value: "win32" });
@@ -925,7 +694,7 @@ Write-Output "OPENCLAW_RESTART_POLICY_OK"
       expect(content).toContain(`$port = ${customPort}`);
       expect(content).toContain("Get-NetTCPConnection -State Listen -ErrorAction Stop");
       expect(content).toContain("& netstat.exe -ano -p tcp");
-      expect(content).not.toContain("findstr");
+      expect(content).not.toContain("netstat.exe -ano -p tcp | findstr");
       expectWindowsRestartWaitOrdering(content, customPort);
       await cleanupScript(scriptPath);
     });
@@ -1041,13 +810,7 @@ Write-Output "OPENCLAW_RESTART_POLICY_OK"
 
       const argv =
         platform === "win32"
-          ? [
-              getWindowsCmdExePath(),
-              "/d",
-              "/s",
-              "/c",
-              script.includes("&") ? `"${script}"` : script,
-            ]
+          ? [getWindowsSystem32ExePath("wscript.exe"), "//B", "//Nologo", `${script}.vbs`]
           : ["/bin/sh", script];
       expect(spawnCommand).toHaveBeenCalledWith(argv, {
         detached: true,

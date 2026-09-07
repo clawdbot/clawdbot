@@ -32,16 +32,11 @@ import type { ProviderPlugin } from "./types.js";
 
 export function createProviderRegistryResolver(dependencies: {
   loadOpenClawPlugins: (options: PluginLoadOptions) => PluginRegistry;
-  getRuntimePluginRegistryForLoadOptions: (
-    options?: PluginLoadOptions,
-  ) => PluginRegistry | undefined;
+  resolveRuntimePluginRegistry: (options?: PluginLoadOptions) => PluginRegistry | undefined;
   isPluginRegistryLoadInFlight: (options?: PluginLoadOptions) => boolean;
 }) {
-  const {
-    loadOpenClawPlugins,
-    getRuntimePluginRegistryForLoadOptions,
-    isPluginRegistryLoadInFlight,
-  } = dependencies;
+  const { loadOpenClawPlugins, resolveRuntimePluginRegistry, isPluginRegistryLoadInFlight } =
+    dependencies;
 
   function resolveExplicitProviderOwnerPluginIds(
     params: {
@@ -185,7 +180,7 @@ export function createProviderRegistryResolver(dependencies: {
     return { env, workspaceDir, snapshot };
   }
 
-  function resolveSetupProviderPluginLoadState(
+  function resolveSetupProviderPluginLoadOptions(
     params: Parameters<typeof resolvePluginProvidersCore>[0],
     base: ReturnType<typeof resolvePluginProviderLoadBase>,
     snapshot: PluginMetadataRegistryView,
@@ -216,7 +211,7 @@ export function createProviderRegistryResolver(dependencies: {
       config: base.rawConfig,
       pluginIds: setupPluginIds,
     });
-    const loadOptions = buildPluginRuntimeLoadOptionsFromValues(
+    return buildPluginRuntimeLoadOptionsFromValues(
       {
         config: setupConfig,
         activationSourceConfig: setupConfig,
@@ -234,10 +229,9 @@ export function createProviderRegistryResolver(dependencies: {
         activate: params.activate ?? false,
       },
     );
-    return { loadOptions };
   }
 
-  function resolveRuntimeProviderPluginLoadState(
+  function resolveRuntimeProviderPluginLoadOptions(
     params: Parameters<typeof resolvePluginProvidersCore>[0],
     base: ReturnType<typeof resolvePluginProviderLoadBase>,
     snapshot: PluginMetadataRegistryView,
@@ -281,7 +275,7 @@ export function createProviderRegistryResolver(dependencies: {
       }),
       explicitOwnerPluginIds,
     );
-    const loadOptions = buildPluginRuntimeLoadOptionsFromValues(
+    return buildPluginRuntimeLoadOptionsFromValues(
       {
         config: activation.config,
         activationSourceConfig: activation.activationSourceConfig,
@@ -299,7 +293,6 @@ export function createProviderRegistryResolver(dependencies: {
         activate: params.activate ?? false,
       },
     );
-    return { loadOptions };
   }
 
   function isPluginProvidersLoadInFlight(
@@ -307,14 +300,14 @@ export function createProviderRegistryResolver(dependencies: {
   ): boolean {
     const { env, workspaceDir, snapshot } = resolveProviderMetadataLookup(params);
     const base = resolvePluginProviderLoadBase({ ...params, workspaceDir, env }, snapshot);
-    const loadState =
+    const loadOptions =
       params.mode === "setup"
-        ? resolveSetupProviderPluginLoadState(params, base, snapshot)
-        : resolveRuntimeProviderPluginLoadState(params, base, snapshot);
-    if (!loadState) {
+        ? resolveSetupProviderPluginLoadOptions(params, base, snapshot)
+        : resolveRuntimeProviderPluginLoadOptions(params, base, snapshot);
+    if (!loadOptions) {
       return false;
     }
-    return isPluginRegistryLoadInFlight(loadState.loadOptions);
+    return isPluginRegistryLoadInFlight(loadOptions);
   }
 
   function resolvePluginProvidersCore(params: {
@@ -339,28 +332,28 @@ export function createProviderRegistryResolver(dependencies: {
     const { env, workspaceDir, snapshot } = resolveProviderMetadataLookup(params);
     const base = resolvePluginProviderLoadBase({ ...params, workspaceDir, env }, snapshot);
     if (params.mode === "setup") {
-      const loadState = resolveSetupProviderPluginLoadState(params, base, snapshot);
-      if (!loadState) {
+      const loadOptions = resolveSetupProviderPluginLoadOptions(params, base, snapshot);
+      if (!loadOptions) {
         return [];
       }
-      if (params.skipIfLoadInFlight && isPluginRegistryLoadInFlight(loadState.loadOptions)) {
+      if (params.skipIfLoadInFlight && isPluginRegistryLoadInFlight(loadOptions)) {
         return [];
       }
-      const registry = loadOpenClawPlugins(loadState.loadOptions);
+      const registry = loadOpenClawPlugins(loadOptions);
       return registry.providers.map((entry) =>
         Object.assign({}, entry.provider, { pluginId: entry.pluginId }),
       );
     }
-    const loadState = resolveRuntimeProviderPluginLoadState(params, base, snapshot);
+    const loadOptions = resolveRuntimeProviderPluginLoadOptions(params, base, snapshot);
     const generationRegistry = getPluginRuntimeGenerationRegistry();
     if (
       !generationRegistry &&
       params.skipIfLoadInFlight &&
-      isPluginRegistryLoadInFlight(loadState.loadOptions)
+      isPluginRegistryLoadInFlight(loadOptions)
     ) {
       return [];
     }
-    const onlyPluginIds = loadState.loadOptions.onlyPluginIds;
+    const onlyPluginIds = loadOptions.onlyPluginIds;
     // Prepared discovery must retain its exact runtime artifacts, including an empty selection.
     const registry =
       onlyPluginIds?.length === 0
@@ -368,11 +361,11 @@ export function createProviderRegistryResolver(dependencies: {
         : (generationRegistry ??
           getLoadedRuntimePluginRegistry({
             env: base.env,
-            loadOptions: loadState.loadOptions,
+            loadOptions,
             workspaceDir: base.workspaceDir,
             requiredPluginIds: onlyPluginIds,
           }) ??
-          getRuntimePluginRegistryForLoadOptions(loadState.loadOptions));
+          resolveRuntimePluginRegistry(loadOptions));
     if (!registry) {
       return [];
     }

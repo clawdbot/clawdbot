@@ -92,6 +92,7 @@ import { resolveFeishuGroupToolPolicy } from "./policy.js";
 import {
   assertFeishuCardWithinEnvelope,
   buildFeishuPresentationCard,
+  feishuCardWithinTableLimit,
   FEISHU_PRESENTATION_CAPABILITIES,
   isFeishuCardWithinEnvelope,
   resolveFeishuRichReply,
@@ -1261,7 +1262,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 })
               : undefined;
             const presentationCard =
-              generatedCard && isFeishuCardWithinEnvelope(generatedCard)
+              generatedCard &&
+              feishuCardWithinTableLimit(generatedCard) &&
+              isFeishuCardWithinEnvelope(generatedCard)
                 ? generatedCard
                 : undefined;
             const presentationFellBack = Boolean(generatedCard && !presentationCard);

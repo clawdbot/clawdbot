@@ -235,6 +235,25 @@ export function resolveCrabboxWarmImageProfile(
   };
 }
 
+export function resolveCrabboxWarmImageProfileKey(
+  profile: CrabboxProfile,
+  projectKey?: string,
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        backendProvider: profile.provider,
+        setup: profile.setup ?? "",
+        setupEnvKeys: [...(profile.setupEnv ?? [])].toSorted(),
+        desktop: profile.desktop ?? false,
+        // Exact class is intentionally conservative; cross-class reuse comes later.
+        machineClass: profile.class,
+        ...(projectKey ? { projectKey } : {}),
+      }),
+    )
+    .digest("hex");
+}
+
 type CrabboxProvisionProfile = CrabboxProfile &
   ({ warmImage: false } | { warmImage: true; class: string });
 

@@ -69,7 +69,6 @@ export const UpdateRunRecordSchema = z.object({
     channelsReady: z.boolean().optional(),
     readyz: z.boolean().optional(),
     settled: z.boolean().optional(),
-    inferenceProbe: z.enum(["passed", "failed", "skipped", "unavailable"]).optional(),
     noticeDelivered: z.boolean().optional(),
     doctorHint: text.optional(),
   }),

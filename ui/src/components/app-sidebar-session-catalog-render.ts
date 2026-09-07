@@ -39,10 +39,10 @@ import {
   visibleCatalogHosts,
 } from "./app-sidebar-session-catalogs.ts";
 import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section-header.ts";
-import { sidebarSessionStateId } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 import { renderNewSessionLink } from "./new-session-link.ts";
 import { hasProviderBrandIcon, renderProviderBrandIcon } from "./provider-icon.ts";
+import { renderSessionGlyph } from "./session-glyph.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 
 type SessionCatalogGroupsParams = {
@@ -565,8 +565,6 @@ function renderCatalogSessionRow(
   const { href, options: navigation } = target;
   const active = key === params.routeSessionKey;
   const running = session.status === "active" || session.status === "running";
-  const stateDescription = running ? t("sessionsView.activeRun") : "";
-  const stateId = running ? sidebarSessionStateId(key) : undefined;
   const canOpenTerminal = session.canOpenTerminal === true && params.terminalAvailable;
   const openTerminal = () => params.onOpenTerminal(catalogKey, params.newSessionAgentId);
   const openMenu = (x: number, y: number, trigger?: HTMLElement) =>
@@ -577,6 +575,8 @@ function renderCatalogSessionRow(
         routeId,
         navigation,
         canOpenTerminal: session.canOpenTerminal === true,
+        canDelete: session.canArchive && catalog.capabilities.archive,
+        name: session.name ?? session.threadId,
         meta,
       },
       x,
@@ -621,7 +621,6 @@ function renderCatalogSessionRow(
         href=${withSidebarNavCollapseIntent(href)}
         class="sidebar-recent-session__link"
         aria-current=${active ? "page" : nothing}
-        aria-describedby=${stateId ?? nothing}
         @click=${(event: MouseEvent) => {
           if (!shouldHandleNavigationClick(event)) {
             return;
@@ -634,7 +633,9 @@ function renderCatalogSessionRow(
           }
         }}
       >
-        <span class="sidebar-session-indicator"></span>
+        <span class="sidebar-session-indicator">
+          ${running ? renderSessionGlyph({ content: nothing, running }) : nothing}
+        </span>
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__title-row"> ${marqueeLabel} </span>
           <span class="sidebar-recent-session__details">
@@ -642,19 +643,6 @@ function renderCatalogSessionRow(
               ${renderSessionRowBadges({
                 pullRequest: session.pullRequest,
               })}
-              ${
-                running
-                  ? html`<span class="session-row-aside">
-                      <span
-                        class="session-row-state"
-                        id=${stateId}
-                        role="img"
-                        aria-label=${stateDescription}
-                        >${renderSessionRunSpinner(false)}</span
-                      >
-                    </span>`
-                  : nothing
-              }
             </span>
           </span>
         </span>

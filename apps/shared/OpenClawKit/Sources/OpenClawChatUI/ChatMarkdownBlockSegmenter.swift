@@ -94,6 +94,18 @@ enum ChatMarkdownBlockSyntax {
             || (includesSetextUnderline && self.matches(line, #"^\s{0,3}={3,}$"#))
     }
 
+    static func isEscaped(at index: String.Index, in source: String) -> Bool {
+        var cursor = index
+        var count = 0
+        while cursor > source.startIndex {
+            let previous = source.index(before: cursor)
+            guard source[previous] == "\\" else { break }
+            count += 1
+            cursor = previous
+        }
+        return count.isMultiple(of: 2) == false
+    }
+
     private static func matches(_ line: String, _ pattern: String) -> Bool {
         line.range(of: pattern, options: .regularExpression) != nil
     }
@@ -705,7 +717,7 @@ enum ChatMarkdownBlockSegmenter {
             let matches = self.tagExpression.matches(in: line, range: fullRange)
             let tags = matches.compactMap { match -> Tag? in
                 guard let range = Range(match.range, in: line),
-                      !self.isEscaped(line, at: range.lowerBound),
+                      !ChatMarkdownBlockSyntax.isEscaped(at: range.lowerBound, in: line),
                       !codeRanges.contains(where: { $0.contains(range.lowerBound) })
                 else { return nil }
                 let raw = String(line[range])
@@ -727,18 +739,6 @@ enum ChatMarkdownBlockSegmenter {
                 if lower.hasPrefix("<details") { return .unsupportedDetailsOpen }
                 return .unsupportedSummary
             }
-        }
-
-        private static func isEscaped(_ line: String, at index: String.Index) -> Bool {
-            var cursor = index
-            var count = 0
-            while cursor > line.startIndex {
-                let previous = line.index(before: cursor)
-                guard line[previous] == "\\" else { break }
-                count += 1
-                cursor = previous
-            }
-            return count.isMultiple(of: 2) == false
         }
 
         private static func inlineCodeRanges(in line: String) -> [Range<String.Index>] {

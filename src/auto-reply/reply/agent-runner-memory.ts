@@ -19,6 +19,7 @@ import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-en
 import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import { createToolResultPromptProjectionState } from "../../agents/embedded-agent-runner/session-prompt-state.js";
+import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
@@ -77,12 +78,12 @@ import type { CompactionNoticePhase } from "./compaction-notice.js";
 import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveMaxActiveTranscriptBytes,
-  resolveMemoryFlushContextWindowTokens,
   resolveCompactionThreshold,
   resolveResponsesServerCompactionThreshold,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
+import { resolveContextTokens } from "./model-selection-context.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import { isRenderablePayload } from "./reply-payloads-base.js";
@@ -756,14 +757,21 @@ export async function runSessionCompactionIfNeeded(params: {
     storePath: compactionStorePath,
   };
 
-  const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
+  const catalogModel = findModelInCatalog(
+    params.followupRun.run.thinkingCatalog ?? [],
+    params.followupRun.run.provider,
+    params.followupRun.run.model ?? params.defaultModel,
+  );
+  const contextWindowTokens = resolveContextTokens({
     cfg: params.cfg,
     provider: resolveContextConfigProviderForRuntime({
       provider: params.followupRun.run.provider,
       runtimeId,
       config: params.cfg,
     }),
-    modelId: params.followupRun.run.model ?? params.defaultModel,
+    model: params.followupRun.run.model ?? params.defaultModel,
+    modelContextWindow: catalogModel?.contextWindow,
+    modelContextTokens: catalogModel?.contextTokens,
   });
   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg, contextWindowTokens });
   const reserveTokensFloor =
@@ -777,6 +785,7 @@ export async function runSessionCompactionIfNeeded(params: {
     params.promptForEstimate ?? params.followupRun.prompt,
   );
   const responsesServerCompactionThreshold = resolveResponsesServerCompactionThreshold({
+    contextWindowTokens,
     cfg: params.cfg,
     provider: params.followupRun.run.provider,
     modelId: params.followupRun.run.model ?? params.defaultModel,
@@ -1293,14 +1302,21 @@ export async function runMemoryFlushIfNeeded(params: {
   let activeSessionEntry = entry ?? params.sessionEntry;
   const recordFailure = (error: unknown) =>
     recordMemoryFlushFailure(error, params, activeSessionEntry);
-  const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
+  const catalogModel = findModelInCatalog(
+    params.followupRun.run.thinkingCatalog ?? [],
+    params.followupRun.run.provider,
+    params.followupRun.run.model ?? params.defaultModel,
+  );
+  const contextWindowTokens = resolveContextTokens({
     cfg: params.cfg,
     provider: resolveContextConfigProviderForRuntime({
       provider: params.followupRun.run.provider,
       runtimeId,
       config: params.cfg,
     }),
-    modelId: params.followupRun.run.model ?? params.defaultModel,
+    model: params.followupRun.run.model ?? params.defaultModel,
+    modelContextWindow: catalogModel?.contextWindow,
+    modelContextTokens: catalogModel?.contextTokens,
   });
   let memoryFlushPlan: MemoryFlushPlan | null;
   try {

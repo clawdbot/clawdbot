@@ -29,6 +29,8 @@ export type TalkRealtimeProviderOption = {
   aliases: readonly string[];
   models: readonly string[];
   voices: readonly string[];
+  activeVoices?: readonly string[];
+  activeVoiceSelectionPolicy?: "allowlist-default";
   voicesByModel?: Record<string, readonly string[]>;
   /** Empty when the catalog does not declare transports for the provider. */
   transports: readonly string[];
@@ -54,6 +56,7 @@ type TalkViewProps = {
   voiceWake?: { state: VoiceWakeEditorState; onInput: (text: string) => void; onRetry: () => void };
   selection: TalkRealtimeSelection;
   catalog: TalkCatalogState;
+  modelDefaultPending?: boolean;
   configBusy: boolean;
   onProviderChange: (providerId: string | null) => void;
   onModelChange: (model: string | null) => void;
@@ -234,8 +237,21 @@ function renderModelRow(props: TalkViewProps) {
 function renderVoiceRow(props: TalkViewProps) {
   const provider = selectedTalkProviderOption(props.catalog, props.selection);
   const { model, speakerVoice: voice } = effectiveTalkValues(props.selection, provider);
-  const voices =
-    provider?.voicesByModel?.[model ?? provider.defaultModel ?? ""] ?? provider?.voices ?? [];
+  // A sanitized missing model represents the active route. An explicit reset
+  // stays on public provider-default metadata until the config write is acked.
+  const publicModel = props.modelDefaultPending ? provider?.defaultModel : model;
+  const publicVoices = provider?.voicesByModel?.[publicModel ?? ""];
+  const usesActiveRoute =
+    props.modelDefaultPending !== true &&
+    (model === null || (isTalkGptLiveModel(model) && publicVoices === undefined));
+  const voices = usesActiveRoute
+    ? (provider?.activeVoices ?? provider?.voices ?? [])
+    : (publicVoices ?? provider?.voices ?? []);
+  const unsupported =
+    usesActiveRoute &&
+    provider?.activeVoiceSelectionPolicy === "allowlist-default" &&
+    voice !== null &&
+    !voices.includes(voice);
   if (voices.length === 0) {
     return renderSettingsRow({
       title: t("talkPage.voice.title"),
@@ -246,11 +262,20 @@ function renderVoiceRow(props: TalkViewProps) {
   const options = [
     { value: TALK_PICKER_UNSET, label: t("talkPage.voice.default") },
     ...voices.map((value) => ({ value, label: value })),
-    ...(voice && !voices.includes(voice) ? [{ value: voice, label: voice }] : []),
+    ...(voice && !voices.includes(voice)
+      ? [
+          {
+            value: voice,
+            label: unsupported ? `${voice} (${t("talkPage.voice.unsupported")})` : voice,
+          },
+        ]
+      : []),
   ];
   return renderSettingsSelectRow({
     title: t("talkPage.voice.title"),
-    description: t("talkPage.voice.description"),
+    description: unsupported
+      ? t("talkPage.voice.unsupportedDefault")
+      : t("talkPage.voice.description"),
     value: voice ?? TALK_PICKER_UNSET,
     options,
     disabled: props.configBusy,
@@ -259,9 +284,8 @@ function renderVoiceRow(props: TalkViewProps) {
 }
 
 /**
- * GPT-Live is the one model family whose auth differs from the rest of the
- * provider (ChatGPT OAuth works, no Platform key needed), so it gets its own
- * explainer row instead of a footnote in the provider description.
+ * The account-issued route has distinct setup and runtime constraints, so it
+ * gets its own explainer row instead of a footnote in the provider description.
  */
 function renderGptLiveRow(props: TalkViewProps) {
   const provider = selectedTalkProviderOption(props.catalog, props.selection);

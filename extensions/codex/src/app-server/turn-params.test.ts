@@ -1,3 +1,4 @@
+import { resolveThinkingDefault } from "openclaw/plugin-sdk/agent-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createAppServerOptions,
@@ -9,6 +10,48 @@ import { buildTurnStartParams } from "./turn-params.js";
 afterEach(() => {
   resetThreadLifecycleTestFixtures();
   vi.restoreAllMocks();
+});
+
+describe("buildTurnStartParams model thinking defaults", () => {
+  it.each([
+    { thinking: undefined, thinkingDefault: undefined, expected: "low" },
+    { thinking: undefined, thinkingDefault: "high" as const, expected: "high" },
+    { thinking: "medium", thinkingDefault: "high" as const, expected: "medium" },
+  ])("sends $expected for Astra with configured effort $thinking/$thinkingDefault", (testCase) => {
+    const modelId = "gpt-6-astra";
+    const config = {
+      agents: {
+        defaults: {
+          thinkingDefault: testCase.thinkingDefault,
+          models: { [`openai/${modelId}`]: { params: { thinking: testCase.thinking } } },
+        },
+      },
+    };
+    const params = createParams("/tmp/session.jsonl", "/repo", config);
+    params.provider = "openai";
+    params.modelId = modelId;
+    params.model = {
+      ...params.model,
+      provider: "openai",
+      id: modelId,
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+    };
+    params.thinkLevel = resolveThinkingDefault({
+      cfg: config,
+      provider: params.provider,
+      model: modelId,
+      agentRuntime: "codex",
+      catalog: [{ provider: "openai", id: modelId, name: "Astra", reasoning: true }],
+    });
+
+    const turn = buildTurnStartParams(params, {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: createAppServerOptions(),
+    });
+    expect(turn.effort).toBe(testCase.expected);
+    expect(turn.collaborationMode?.settings.reasoning_effort).toBe(testCase.expected);
+  });
 });
 
 describe("buildTurnStartParams temporal context", () => {

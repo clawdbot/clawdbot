@@ -14,10 +14,11 @@ import {
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { adjustTextareaHeight } from "../chat/components/chat-composer-dom.ts";
+import { buildLocalUserMessage } from "../chat/user-message-content.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import { NewSessionComposerTextareaController } from "./composer.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
-import { renderNewSessionDraftComposer } from "./draft-composer.ts";
+import { renderNewSessionBody, renderNewSessionDraftComposer } from "./draft-composer.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
 const attachmentDrafts: NewSessionAttachmentDraft[] = [];
@@ -144,6 +145,45 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   replaceSlashCommands(buildFallbackSlashCommands());
+});
+
+describe("new-session submission preview", () => {
+  it.each([
+    { userId: "profile-alex", placement: "gutter" },
+    { userId: null, placement: "footer" },
+  ])("immediately shows the own-user avatar in the $placement", ({ userId, placement }) => {
+    const container = document.createElement("div");
+    const avatarUrl = "/api/users/profile-alex/avatar?v=1";
+    render(
+      renderNewSessionBody({
+        error: null,
+        pendingMessage: buildLocalUserMessage({
+          createdAt: 1,
+          text: "Hello from Alex",
+          sender: {
+            identity: { type: "profile", id: "profile-alex" },
+            name: "Alex",
+            profileAvatarUrl: avatarUrl,
+          },
+        }),
+        userId,
+        submitting: true,
+        renderDraft: () => html``,
+        onOpenImage: () => {},
+      }),
+      container,
+    );
+
+    const group = container.querySelector(".chat-group.user");
+    const avatar = group?.querySelector(
+      placement === "gutter"
+        ? ":scope > .chat-avatar-slot img"
+        : ":scope > .chat-group-footer > .chat-group-footer__meta .chat-author-avatar img",
+    );
+    expect(avatar?.getAttribute("src")).toBe(avatarUrl);
+    expect(group?.classList.contains("chat-group--with-footer")).toBe(true);
+    expect(group?.closest(".chat-thread--direct") !== null).toBe(placement === "footer");
+  });
 });
 
 describe("new-session composer keyboard submission", () => {

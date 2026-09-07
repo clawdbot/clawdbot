@@ -1983,6 +1983,7 @@ jobs:
       - name: Run Telegram live lane
         id: run_lane
         env:
+          TELEGRAM_E2E_SKILL_DIR: ${{ github.workspace }}/.agents/skills/telegram-e2e-userbot
           CANDIDATE_ROOT: ${{ steps.create_sut.outputs.candidate_root }}
           EVIDENCE_RELATIVE: ${{ steps.create_sut.outputs.evidence_relative }}
           EVIDENCE_ROOT: ${{ steps.create_sut.outputs.evidence_root }}

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { discoverConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -269,6 +270,30 @@ describe("Doctor plugin persistence", () => {
               .toSorted(),
           ).toEqual(["preflight-alpha", "preflight-beta"]);
           const sourceConfig = initial.snapshot.sourceConfig;
+          withPluginCache(createPluginCache(), () => {
+            const discovered = discoverConfigWidePluginManifestRegistry({
+              config: sourceConfig,
+              env: process.env,
+            });
+            expect(
+              discovered.plugins
+                .filter((plugin) => plugin.id.startsWith("preflight-"))
+                .map((plugin) => plugin.id)
+                .toSorted(),
+            ).toEqual(["preflight-alpha", "preflight-beta"]);
+            for (const name of names) {
+              const scoped = discoverConfigWidePluginManifestRegistry({
+                config: sourceConfig,
+                env: process.env,
+                workspaceDir: workspaces[name],
+              });
+              expect(
+                scoped.plugins
+                  .filter((plugin) => plugin.id.startsWith("preflight-"))
+                  .map((plugin) => plugin.id),
+              ).toEqual([`preflight-${name}`]);
+            }
+          });
           const metadataScope = createDoctorPluginMetadataSnapshotScope({
             baseSnapshot: aggregate,
           });
@@ -398,6 +423,19 @@ describe("Doctor plugin persistence", () => {
             await fs.writeFile(
               manifestPath,
               JSON.stringify({ ...manifest, id: "preflight-alpha" }),
+            );
+            const discovered = withPluginCache(createPluginCache(), () =>
+              discoverConfigWidePluginManifestRegistry({ config, env: process.env }),
+            );
+            expect(discovered.plugins.some((plugin) => plugin.id === "preflight-alpha")).toBe(
+              false,
+            );
+            expect(discovered.diagnostics).toContainEqual(
+              expect.objectContaining({
+                level: "error",
+                pluginId: "preflight-alpha",
+                message: expect.stringContaining("present in multiple agent workspaces"),
+              }),
             );
           }
           const result = await runDoctorConfigPreflight({

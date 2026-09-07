@@ -75,22 +75,41 @@ function createAncestryFixture(options: {
   const root = mkdtempSync(join(tmpdir(), "openclaw-release-ancestry-"));
   const origin = join(root, "origin.git");
   fixtureGit(root, ["init", "--quiet", "--bare", origin]);
-  const tree = fixtureGit(root, [`--git-dir=${origin}`, "mktree"], "");
-  const sourceRoot = fixtureCommit(origin, tree, undefined, "source root");
-  const targetRoot = options.related
-    ? sourceRoot
-    : fixtureCommit(origin, tree, undefined, "target root");
+  const commits: string[] = [];
+  const sourceRef = "refs/heads/release-source";
+  const targetRef = "refs/heads/main";
+  const commit = (ref: string, parent: number | undefined, label: string) => {
+    const mark = commits.length + 1;
+    const message = `${label}\n`;
+    commits.push(`commit ${ref}
+mark :${mark}
+committer fixture <fixture@example.invalid> ${mark} +0000
+data ${Buffer.byteLength(message)}
+${message}${parent ? `from :${parent}\n` : ""}
+`);
+    return mark;
+  };
+  const sourceRoot = commit(sourceRef, undefined, "source root");
+  const targetRoot = options.related ? sourceRoot : commit(targetRef, undefined, "target root");
   let source = sourceRoot;
   for (let index = 0; index < options.sourceDistance; index++) {
-    source = fixtureCommit(origin, tree, source, `source ${String(index)}`);
+    source = commit(sourceRef, source, `source ${String(index)}`);
   }
   let target = targetRoot;
   for (let index = 0; index < options.targetDistance; index++) {
-    target = fixtureCommit(origin, tree, target, `target ${String(index)}`);
+    target = commit(targetRef, target, `target ${String(index)}`);
   }
-  fixtureGit(root, [`--git-dir=${origin}`, "update-ref", "refs/heads/release-source", source]);
-  fixtureGit(root, [`--git-dir=${origin}`, "update-ref", "refs/heads/main", target]);
-  return { origin, root, source, target };
+  fixtureGit(
+    origin,
+    ["fast-import", "--quiet"],
+    `${commits.join("")}reset ${sourceRef}\nfrom :${source}\n\nreset ${targetRef}\nfrom :${target}\n\n`,
+  );
+  return {
+    origin,
+    root,
+    source: fixtureGit(origin, ["rev-parse", sourceRef]),
+    target: fixtureGit(origin, ["rev-parse", targetRef]),
+  };
 }
 
 function createProvisionalMergeBaseFixture(): AncestryFixture & { base: string } {

@@ -1,5 +1,6 @@
 // Generate Dependency Release Evidence tests cover generate dependency release evidence script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,6 +10,7 @@ import {
   DEPENDENCY_EVIDENCE_REPORTS,
   collectDependencyEvidenceSummaryCounts,
   createDependencyEvidenceManifest,
+  generateDependencyReleaseEvidence,
   parseArgs,
   renderDependencyEvidenceStepSummary,
   renderDependencyEvidenceSummary,
@@ -139,6 +141,7 @@ describe("generate-dependency-release-evidence", () => {
         { command: "pnpm deps:transitive-risk:report", policy: "report-only" },
         { command: "pnpm deps:ownership-surface:report", policy: "report-only" },
         { command: "pnpm deps:changes:report", policy: "report-only" },
+        { command: "pnpm deps:npm-lock:report", policy: "report-only" },
       ],
     );
   });
@@ -170,6 +173,110 @@ describe("generate-dependency-release-evidence", () => {
       dependencyChangeBaseRef: "v2026.5.1",
       reports: DEPENDENCY_EVIDENCE_REPORTS,
     });
+  });
+
+  it("runs the npm lock report from tooling and retains it in the manifest and summaries", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-release-lock-evidence-test-"));
+    try {
+      const source = path.join(dir, "source");
+      const outputDir = path.join(dir, "evidence");
+      const stepSummary = path.join(dir, "step-summary.md");
+      await mkdir(source);
+      await writeJson(source, "package.json", { version: "2026.9.1" });
+      const reportData: Record<string, unknown> = {
+        "dependency-vulnerability-gate.json": {
+          blockers: [],
+          findings: [],
+          coverage: {
+            npm: "checked",
+            upstream: {
+              status: "checked",
+              source: "fixture",
+              mappedPackageVersions: 0,
+              packageVersions: 0,
+              checkedRepositories: 0,
+              repositories: 0,
+              issues: [],
+            },
+          },
+        },
+        "transitive-manifest-risk-report.json": {
+          findingCount: 0,
+          metadataFailures: [],
+          workspaceExcludedFindingCount: 0,
+        },
+        "dependency-ownership-surface-report.json": {
+          summary: { buildRiskPackageCount: 0, lockfilePackageCount: 0 },
+        },
+        "dependency-changes-report.json": {
+          summary: {
+            addedPackages: 0,
+            changedPackages: 0,
+            dependencyFileChanges: 0,
+            removedPackages: 0,
+          },
+        },
+        "npm-package-locks.json": {
+          packagesWithOmittedWorkspaceDependencies: 1,
+          packages: [
+            { bundleRuntimeDependencies: false, omittedWorkspaceDependencies: ["@openclaw/ai"] },
+            { bundleRuntimeDependencies: true, omittedWorkspaceDependencies: [] },
+          ],
+        },
+      };
+      const commands: string[] = [];
+      const result = await generateDependencyReleaseEvidence({
+        rootDir: source,
+        outputDir,
+        releaseRef: "v2026.9.1",
+        npmDistTag: "latest",
+        baseRef: "v2026.8.31",
+        githubOutput: "",
+        githubStepSummary: stepSummary,
+        execFileSyncImpl: (command, commandArgs, options) => {
+          const args = commandArgs ?? [];
+          if (command === "git") {
+            return "a".repeat(40);
+          }
+          expect(command).toBe("pnpm");
+          expect(options).toMatchObject({ cwd: path.resolve(".") });
+          expect(args[args.indexOf("--root") + 1]).toBe(source);
+          commands.push(args[0]!);
+          const jsonPath = args[args.indexOf("--json") + 1]!;
+          const value = reportData[path.basename(jsonPath)];
+          if (!value) {
+            throw new Error(`Unexpected report ${jsonPath}`);
+          }
+          writeFileSync(jsonPath, JSON.stringify(value));
+          writeFileSync(args[args.indexOf("--markdown") + 1]!, "# Fixture report\n");
+          return null;
+        },
+      });
+      expect(commands).toContain("deps:npm-lock:report");
+      const manifest = JSON.parse(
+        await readFile(path.join(outputDir, "dependency-evidence-manifest.json"), "utf8"),
+      );
+      expect(manifest.reports).toContainEqual({
+        name: "npm package-lock mirrors",
+        command: "pnpm deps:npm-lock:report",
+        policy: "report-only",
+        json: "npm-package-locks.json",
+        markdown: "npm-package-locks.md",
+      });
+      expect(result.counts).toMatchObject({
+        npmLockPackages: 2,
+        npmLocklessPackages: 1,
+        npmPartialLockPackages: 1,
+      });
+      for (const file of [stepSummary, path.join(outputDir, "dependency-evidence-summary.md")]) {
+        const rendered = await readFile(file, "utf8");
+        expect(rendered).toContain("- npm package-lock mirrors: 2");
+        expect(rendered).toContain("- Lockless packages (bundleRuntimeDependencies=false): 1");
+        expect(rendered).toContain("- Partial npm package-lock mirrors (workspace omissions): 1");
+      }
+    } finally {
+      await rm(dir, { force: true, recursive: true });
+    }
   });
 
   it("uses a synthetic release tag for validation-only SHA preflight input", () => {
@@ -517,6 +624,17 @@ describe("generate-dependency-release-evidence", () => {
           },
         });
 
+        await writeJson(dir, "npm-package-locks.json", {
+          packagesWithOmittedWorkspaceDependencies: 2,
+          packages: [
+            { bundleRuntimeDependencies: false, omittedWorkspaceDependencies: ["@openclaw/ai"] },
+            {
+              bundleRuntimeDependencies: true,
+              omittedWorkspaceDependencies: ["@openclaw/gateway-protocol"],
+            },
+            { bundleRuntimeDependencies: false, omittedWorkspaceDependencies: [] },
+          ],
+        });
         const counts = await collectDependencyEvidenceSummaryCounts(dir);
         expect(counts).toEqual({
           vulnerabilityBlockers: 2,
@@ -532,6 +650,9 @@ describe("generate-dependency-release-evidence", () => {
           dependencyAddedPackages: 5,
           dependencyRemovedPackages: 6,
           dependencyChangedPackages: 7,
+          npmLockPackages: 3,
+          npmLocklessPackages: 2,
+          npmPartialLockPackages: 2,
         });
 
         const summary = renderDependencyEvidenceSummary({
@@ -552,7 +673,11 @@ describe("generate-dependency-release-evidence", () => {
         expect(stepSummary).toContain(
           "- Evidence artifact: `openclaw-release-dependency-evidence-v2026.5.13`",
         );
+        expect(summary).toContain("- `npm-package-locks.md`");
         for (const rendered of [summary, stepSummary]) {
+          expect(rendered).toContain("- npm package-lock mirrors: 3");
+          expect(rendered).toContain("- Lockless packages (bundleRuntimeDependencies=false): 2");
+          expect(rendered).toContain("- Partial npm package-lock mirrors (workspace omissions): 2");
           expect(rendered).toContain("- npm advisory coverage: checked");
           expect(rendered).toContain(
             `- Upstream public repository advisory coverage: ${upstream.status}`,

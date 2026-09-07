@@ -39,7 +39,10 @@ import {
   type MainSessionRecoveryObservation,
   type MainSessionRecoveryReservation,
 } from "./main-session-recovery-state.js";
-import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
+import {
+  commitMainSessionRecovery,
+  type MainSessionRecoveryStoreTarget,
+} from "./main-session-recovery-store.js";
 import { dispatchRestartRecoveryUntilStarted } from "./main-session-restart-dispatch-start.js";
 import { normalizeFiniteTimestamp } from "./main-session-restart-recovery-shared.js";
 
@@ -143,6 +146,7 @@ async function probeRestartRecoveryTerminalStatus(
 }
 
 async function settleRestartRecoveryDispatch(params: {
+  agentId?: string;
   expectedRecoveryRunId: string;
   expectedRecoverySourceRunId?: string;
   expectedSessionId: string;
@@ -152,6 +156,7 @@ async function settleRestartRecoveryDispatch(params: {
   terminalStatus?: RestartRecoveryTerminalStatus;
 }): Promise<void> {
   await applySessionEntryReplacements({
+    agentId: params.agentId,
     sessionKeys: params.sessionKeys,
     storePath: params.storePath,
     update: (entries) => {
@@ -233,18 +238,13 @@ function isExactRestartRecoveryDispatchAdmission(params: {
   );
 }
 
-async function settleAcceptedRestartRecovery(params: {
-  expectedRecoveryRunId: string;
-  expectedRecoverySourceRunId?: string;
-  expectedSessionId: string;
-  lifecycleGeneration: string;
-  reservation?: MainSessionRecoveryReservation;
-  sessionKey: string;
-  sessionKeys: readonly string[];
-  shouldContinue?: () => boolean;
-  storePath: string;
-  terminalStatus?: RestartRecoveryTerminalStatus;
-}): Promise<boolean> {
+async function settleAcceptedRestartRecovery(
+  params: Parameters<typeof settleRestartRecoveryDispatch>[0] & {
+    lifecycleGeneration: string;
+    reservation?: MainSessionRecoveryReservation;
+    sessionKey: string;
+  },
+): Promise<boolean> {
   const admission = await commitMainSessionRecovery({
     command: {
       kind: "admit_recovery",
@@ -254,7 +254,7 @@ async function settleAcceptedRestartRecovery(params: {
       sessionId: params.expectedSessionId,
     },
     shouldContinue: params.shouldContinue,
-    target: { sessionKey: params.sessionKey, storePath: params.storePath },
+    target: params,
   });
   if (
     admission.transition.kind !== "admitted_recovery" &&
@@ -274,7 +274,7 @@ async function settleAcceptedRestartRecovery(params: {
   if (params.reservation) {
     await commitMainSessionRecovery({
       command: { kind: "abandon_reservation", reservation: params.reservation },
-      target: { sessionKey: params.sessionKey, storePath: params.storePath },
+      target: params,
     });
   }
   if (params.shouldContinue?.() !== false) {
@@ -285,17 +285,17 @@ async function settleAcceptedRestartRecovery(params: {
 
 type MainSessionResumeResult = "started" | "settled" | "skipped" | "failed";
 
-async function rollbackRestartRecoveryReservation(params: {
-  kind: "abandon_reservation" | "cancel_reservation";
-  reservation: MainSessionRecoveryReservation;
-  sessionKey: string;
-  storePath: string;
-}) {
+async function rollbackRestartRecoveryReservation(
+  params: MainSessionRecoveryStoreTarget & {
+    kind: "abandon_reservation" | "cancel_reservation";
+    reservation: MainSessionRecoveryReservation;
+  },
+) {
   return await retryMainSessionRecoveryMutation(async () =>
     commitMainSessionRecovery({
       command: { kind: params.kind, reservation: params.reservation },
       requireWriteSuccess: true,
-      target: { sessionKey: params.sessionKey, storePath: params.storePath },
+      target: params,
     }),
   );
 }
@@ -319,6 +319,7 @@ function scheduleRestartRecoveryReservationRollback(
         isMainSessionRecoveryPending(entry, sessionKey)
       ) {
         scheduleMainSessionRecoveryPendingTarget({
+          agentId: params.agentId,
           sessionId: entry.sessionId,
           sessionKey,
           storePath: params.storePath,
@@ -380,6 +381,11 @@ export async function resumeMainSession(params: {
   const reusingRecoveryRunId = recoveryRunId === claimedRunId;
   const dispatchSessionKey = params.canonicalSessionKey ?? params.sessionKey;
   const recoverySessionKeys = Array.from(new Set([dispatchSessionKey, params.sessionKey]));
+  const target = {
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  };
   let reservation: MainSessionRecoveryReservation | undefined;
   let dispatchStarted = false;
   let dispatchAccepted = false;
@@ -392,10 +398,9 @@ export async function resumeMainSession(params: {
     }
     const current = reservation;
     const result = await rollbackRestartRecoveryReservation({
+      ...target,
       kind,
       reservation: current,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
     });
     reservation = undefined;
     return { current, result };
@@ -414,16 +419,16 @@ export async function resumeMainSession(params: {
       },
       requireWriteSuccess: true,
       shouldContinue: params.shouldContinue,
-      target: { sessionKey: params.sessionKey, storePath: params.storePath },
+      target,
     });
     return params.shouldContinue?.() !== false &&
       restored.transition.kind === "applied" &&
       restored.entry &&
       restored.sessionKey
       ? {
+          ...target,
           sessionId: restored.entry.sessionId,
           sessionKey: restored.sessionKey,
-          storePath: params.storePath,
         }
       : undefined;
   };
@@ -458,7 +463,7 @@ export async function resumeMainSession(params: {
       },
       requireWriteSuccess: true,
       shouldContinue: params.shouldContinue,
-      target: { sessionKey: params.sessionKey, storePath: params.storePath },
+      target,
     });
     if (reserved.transition.kind !== "reserved") {
       return "skipped";
@@ -471,6 +476,7 @@ export async function resumeMainSession(params: {
     // Persist one stable RPC id before dispatch. A transport rejection is
     // ambiguous; retries must reuse this id so accepted work cannot duplicate.
     const recoveryStatePrepared = await applySessionEntryReplacements({
+      agentId: target.agentId,
       sessionKeys: [params.sessionKey],
       storePath: params.storePath,
       update: (entries) => {
@@ -602,14 +608,13 @@ export async function resumeMainSession(params: {
     }
     if (
       !(await settleAcceptedRestartRecovery({
+        ...target,
         expectedRecoveryRunId: recoveryRunId,
         expectedRecoverySourceRunId: sourceRunId,
         expectedSessionId: params.entry.sessionId,
         lifecycleGeneration,
-        sessionKey: params.sessionKey,
         sessionKeys: recoverySessionKeys,
         shouldContinue: params.shouldContinue,
-        storePath: params.storePath,
         terminalStatus,
       }))
     ) {
@@ -654,15 +659,14 @@ export async function resumeMainSession(params: {
         );
         if (terminalStatus && params.shouldContinue?.() !== false) {
           const settled = await settleAcceptedRestartRecovery({
+            ...target,
             expectedRecoveryRunId: recoveryRunId,
             expectedRecoverySourceRunId: sourceRunId,
             expectedSessionId: params.entry.sessionId,
             lifecycleGeneration,
             reservation,
-            sessionKey: params.sessionKey,
             sessionKeys: recoverySessionKeys,
             shouldContinue: params.shouldContinue,
-            storePath: params.storePath,
             terminalStatus,
           });
           if (!settled) {
@@ -689,10 +693,9 @@ export async function resumeMainSession(params: {
           `failed to roll back interrupted main session recovery attempt ${params.sessionKey}: ${String(rollbackError)}`,
         );
         scheduleRestartRecoveryReservationRollback({
+          ...target,
           kind: rollbackKind,
           reservation: reservation!,
-          sessionKey: params.sessionKey,
-          storePath: params.storePath,
         });
       });
     }

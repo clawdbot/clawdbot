@@ -83,7 +83,6 @@ export const UpdateRunRecordSchema = closedObject({
     channelsReady: Type.Optional(Type.Boolean()),
     readyz: Type.Optional(Type.Boolean()),
     settled: Type.Optional(Type.Boolean()),
-    inferenceProbe: Type.Optional(Type.Enum(["passed", "failed", "skipped", "unavailable"])),
     noticeDelivered: Type.Optional(Type.Boolean()),
     doctorHint: Type.Optional(text),
   }),

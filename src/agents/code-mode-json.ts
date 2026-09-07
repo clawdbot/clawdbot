@@ -139,14 +139,6 @@ function createTruncationMarker(source: CodeModeJsonSource, maxBytes: number) {
   };
 }
 
-/** Nested bridge markers are ordinary guest data when later emitted or returned. */
-export function boundCodeModeValue(value: unknown, maxBytes: number): unknown {
-  const source = captureCodeModeValue(value, maxBytes);
-  return source.kind === "complete" && sourceBytes(source) <= maxBytes
-    ? (JSON.parse(source.json) as unknown)
-    : createTruncationMarker(source, maxBytes)(maxBytes);
-}
-
 function createErrorFitter(error: string, maxBytes: number) {
   const suffix = " [error truncated]";
   const fit = createJsonPrefixFitter(error, maxBytes, () => suffix.length);

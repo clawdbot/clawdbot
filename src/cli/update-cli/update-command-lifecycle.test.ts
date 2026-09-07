@@ -43,6 +43,14 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
   readConfigFileSnapshot: mocks.readConfig,
 }));
 
+// This fixture proves lease ordering; process tests cover durable ledger writes.
+vi.mock("../../infra/update-run-ledger.js", () => ({
+  createUpdateRun: vi.fn(() => ({ runId: "lease-order-fixture" })),
+  recordUpdateRunStep: vi.fn(),
+  finishUpdateRun: vi.fn(),
+  recordUpdateRunDiagnostic: vi.fn(),
+}));
+
 vi.mock("../../plugins/installed-plugin-index-records.js", () => ({
   loadInstalledPluginIndexInstallRecords: vi.fn(async () => {
     record("installed-records");

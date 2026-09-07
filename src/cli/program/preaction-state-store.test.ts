@@ -24,10 +24,6 @@ vi.mock("../../runtime.js", () => ({
 vi.mock("../command-execution-startup.js", () => ({
   applyCliExecutionStartupPresentation: vi.fn(async () => {}),
   ensureCliExecutionBootstrap: mocks.ensureBootstrap,
-  resolveCliExecutionStartupContext: ({ commandPath }: { commandPath: string[] }) => ({
-    commandPath,
-    startupPolicy: { skipConfigGuard: true },
-  }),
 }));
 
 let program: Command;

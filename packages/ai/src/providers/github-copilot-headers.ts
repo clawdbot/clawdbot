@@ -1,24 +1,9 @@
 // GitHub Copilot header helpers build request headers for Copilot-backed providers.
 import type { Message } from "../types.js";
+import { projectCopilotRequestFacts } from "./github-copilot-request-facts.js";
 
-// Copilot expects X-Initiator to indicate whether the request is user-initiated
-// or agent-initiated (e.g. follow-up after assistant/tool messages).
-function inferCopilotInitiator(messages: Message[]): "user" | "agent" {
-  const last = messages[messages.length - 1];
-  return last && last.role !== "user" ? "agent" : "user";
-}
-
-// Copilot requires Copilot-Vision-Request header when sending images
 export function hasCopilotVisionInput(messages: Message[]): boolean {
-  return messages.some((msg) => {
-    if (msg.role === "user" && Array.isArray(msg.content)) {
-      return msg.content.some((c) => c.type === "image");
-    }
-    if (msg.role === "toolResult" && Array.isArray(msg.content)) {
-      return msg.content.some((c) => c.type === "image");
-    }
-    return false;
-  });
+  return projectCopilotRequestFacts(messages, "direct").hasImages;
 }
 
 export function buildCopilotDynamicHeaders(params: {
@@ -26,7 +11,8 @@ export function buildCopilotDynamicHeaders(params: {
   hasImages: boolean;
 }): Record<string, string> {
   const headers: Record<string, string> = {
-    "X-Initiator": inferCopilotInitiator(params.messages),
+    "X-Initiator": projectCopilotRequestFacts(params.messages, "direct", params.hasImages)
+      .initiator,
     "Openai-Intent": "conversation-edits",
   };
 

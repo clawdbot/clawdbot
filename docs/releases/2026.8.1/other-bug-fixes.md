@@ -2209,7 +2209,7 @@ Affected [Google Meet and Teams sessions](/plugins/meeting-plugins) now wait for
 
 <Accordion title="Documentation">
 
-Documentation links now reach their intended external destinations and cross-page headings, while contributor attribution follows renamed accounts correctly. The [external-link checker](/ci#pipeline-overview) reports future drift on weekly or manual runs without blocking pull requests.
+Documentation links now reach their intended external destinations and cross-page headings, while contributor attribution follows renamed accounts correctly. The [external-link checker](/ci/pipeline#pipeline-overview) reports future drift on weekly or manual runs without blocking pull requests.
 
 <details class="release-source-toggle">
 <summary>Sources and complete change list</summary>

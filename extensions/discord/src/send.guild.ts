@@ -7,6 +7,7 @@ import type {
   APIVoiceState,
   RESTPostAPIGuildScheduledEventJSONBody,
 } from "discord-api-types/v10";
+import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
 import {
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
@@ -33,6 +34,7 @@ import {
 import { resolveDiscordRest } from "./send.shared.js";
 import type {
   DiscordModerationTarget,
+  DiscordOutboundMediaOpts,
   DiscordReactOpts,
   DiscordRoleChange,
   DiscordTimeoutTarget,
@@ -136,11 +138,18 @@ const ALLOWED_EVENT_COVER_TYPES = new Set(["image/png", "image/jpeg", "image/jpg
 // Loads an image from a URL or path and returns a data URI suitable for the Discord API.
 export async function resolveEventCoverImage(
   imageUrl: string,
-  opts?: { localRoots?: readonly string[] },
+  opts?: DiscordOutboundMediaOpts,
 ): Promise<string> {
-  const media = await loadWebMediaRaw(imageUrl, DISCORD_MAX_EVENT_COVER_BYTES, {
-    localRoots: opts?.localRoots,
-  });
+  // Security: cover images are host-local reads, so the sender-scoped policy bounds them too.
+  const media = await loadWebMediaRaw(
+    imageUrl,
+    buildOutboundMediaLoadOptions({
+      maxBytes: DISCORD_MAX_EVENT_COVER_BYTES,
+      mediaAccess: opts?.mediaAccess,
+      mediaLocalRoots: opts?.mediaLocalRoots,
+      mediaReadFile: opts?.mediaReadFile,
+    }),
+  );
   const contentType = normalizeOptionalLowercaseString(media.contentType);
   if (!contentType || !ALLOWED_EVENT_COVER_TYPES.has(contentType)) {
     throw new Error(

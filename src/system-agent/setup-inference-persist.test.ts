@@ -123,6 +123,9 @@ function createFreshProviderPlan() {
     routeAgentId: "main",
     agentDir: path.join(root, "state", "agents", "main", "agent"),
   });
+  if ("error" in plan) {
+    throw new Error(plan.error);
+  }
   if (!plan.manualAuth) {
     throw new Error("Prepared provider plan omitted manual auth");
   }
@@ -302,6 +305,9 @@ describe("provider installation changes runtime defaults without editing source"
           routeAgentId: "main",
           agentDir: path.join(stateDir, "agents", "main", "agent"),
         });
+        if ("error" in plan) {
+          throw new Error(plan.error);
+        }
         const manualAuth = plan.manualAuth;
         if (!manualAuth) {
           throw new Error("Prepared provider plan omitted manual auth");

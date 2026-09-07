@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import OpenClawKit
 import SwiftUI
 import WebKit
@@ -137,13 +138,7 @@ enum AuthenticatedControlUI {
 
     static func webContentIdentity(config: GatewayConnectConfig?, storedOperatorToken: String?) -> Int {
         var hasher = Hasher()
-        hasher.combine(config?.url)
-        hasher.combine(config?.tls?.required)
-        hasher.combine(config?.tls?.expectedFingerprint)
-        hasher.combine(config?.tls?.allowTOFU)
-        hasher.combine(config?.tls?.storeKey)
-        hasher.combine(config?.token)
-        hasher.combine(config?.password)
+        hasher.combine(config?.controlUIInputs)
         hasher.combine(storedOperatorToken?.trimmingCharacters(in: .whitespacesAndNewlines))
         return hasher.finalize()
     }
@@ -253,23 +248,180 @@ enum AuthenticatedControlUIWebViewNavigationDecision: Equatable {
 }
 
 @MainActor
+@Observable
+final class DashboardEmbedCompatibility {
+    private var documentID: UUID?
+    private var receivedStatus = false
+    private var hasEmbedMarker = false
+    private var deadlineReached = false
+    @ObservationIgnored private var deadlineTask: Task<Void, Never>?
+    @ObservationIgnored private var markerTask: Task<Void, Never>?
+    @ObservationIgnored private weak var loadedWebView: WKWebView?
+
+    var needsGatewayUpgrade: Bool {
+        self.deadlineReached && !(self.receivedStatus && self.hasEmbedMarker)
+    }
+
+    func beginDocument() -> UUID {
+        self.cancelChecks()
+        let id = UUID()
+        self.documentID = id
+        self.receivedStatus = false
+        self.hasEmbedMarker = false
+        self.deadlineReached = false
+        return id
+    }
+
+    func didReceiveStatusRequest() {
+        guard let documentID else { return }
+        self.receivedStatus = true
+        if let loadedWebView {
+            self.probeEmbedMarker(documentID: documentID, in: loadedWebView)
+        }
+    }
+
+    func didFinishLoading(documentID: UUID, in webView: WKWebView) {
+        guard self.documentID == documentID else { return }
+        self.loadedWebView = webView
+        self.probeEmbedMarker(documentID: documentID, in: webView)
+        self.deadlineTask?.cancel()
+        self.deadlineTask = Task { [weak self, weak webView] in
+            do {
+                try await Task.sleep(for: .seconds(5))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, let self, self.documentID == documentID else { return }
+            // A stalled web process must not prevent the native upgrade guidance from appearing.
+            self.deadlineReached = true
+            if let webView {
+                self.probeEmbedMarker(documentID: documentID, in: webView)
+            }
+        }
+    }
+
+    func retireDocument(_ documentID: UUID) {
+        guard self.documentID == documentID else { return }
+        self.cancelChecks()
+        self.documentID = nil
+        self.receivedStatus = false
+        self.hasEmbedMarker = false
+        self.deadlineReached = false
+    }
+
+    private func probeEmbedMarker(documentID: UUID, in webView: WKWebView) {
+        self.markerTask?.cancel()
+        self.markerTask = Task { [weak self, weak webView] in
+            guard let webView else { return }
+            let marker = try? await webView.evaluateJavaScript(
+                "document.querySelector('.openclaw-native-embed') !== null")
+            guard !Task.isCancelled, let self, self.documentID == documentID else { return }
+            self.hasEmbedMarker = marker as? Bool == true
+        }
+    }
+
+    private func cancelChecks() {
+        self.deadlineTask?.cancel()
+        self.deadlineTask = nil
+        self.markerTask?.cancel()
+        self.markerTask = nil
+        self.loadedWebView = nil
+    }
+}
+
+@MainActor
 final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDelegate {
+    let deviceSettingsBridge: IOSDeviceSettingsBridge?
+    private let embedCompatibility: DashboardEmbedCompatibility?
+    private var compatibilityDocumentID: UUID?
+    private let url: URL
+    private let authScript: String?
+    private let usesNativeEmbed: Bool
     private let expectedOrigin: GatewayTLSAuthority?
     private let allowedMainFramePathPrefix: String?
     private let onMainFrameNavigationOutsideScope: (() -> Void)?
     private let tls: GatewayTLSParams?
     private var hasExitedNavigationScope = false
+    private var activeNavigation: WKNavigation?
 
     init(
         url: URL,
         tls: GatewayTLSParams?,
         allowedMainFramePathPrefix: String? = nil,
-        onMainFrameNavigationOutsideScope: (() -> Void)? = nil)
+        onMainFrameNavigationOutsideScope: (() -> Void)? = nil,
+        authScript: String? = nil,
+        deviceSettingsBridge: IOSDeviceSettingsBridge? = nil,
+        usesNativeEmbed: Bool = false,
+        embedCompatibility: DashboardEmbedCompatibility? = nil)
     {
+        self.url = url
+        self.authScript = authScript
+        self.deviceSettingsBridge = deviceSettingsBridge
+        self.usesNativeEmbed = usesNativeEmbed
+        self.embedCompatibility = embedCompatibility
         self.expectedOrigin = GatewayTLSAuthority(url: url)
         self.allowedMainFramePathPrefix = allowedMainFramePathPrefix.map(Self.normalizedPath)
         self.onMainFrameNavigationOutsideScope = onMainFrameNavigationOutsideScope
         self.tls = tls
+    }
+
+    func installUserScripts(in controller: WKUserContentController) {
+        controller.removeAllUserScripts()
+        let embedScript = self.usesNativeEmbed ? Self.embedScript(url: self.url) : nil
+        for script in [self.authScript, embedScript, self.deviceSettingsBridge?.seedScript(for: self.url)] {
+            guard let script else { continue }
+            controller.addUserScript(WKUserScript(
+                source: script,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true))
+        }
+    }
+
+    static func embedScript(url: URL, isPad: Bool = UIDevice.current.userInterfaceIdiom == .pad) -> String? {
+        let formFactor = isPad ? "pad" : "phone"
+        return IOSDeviceSettingsBridge.originGatedScript(
+            "window.__OPENCLAW_NATIVE_EMBED__ = { platform: 'ios', formFactor: '\(formFactor)' };", url: url)
+    }
+
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        self.activeNavigation = navigation
+        self.deviceSettingsBridge?.willNavigate(in: webView)
+        self.installUserScripts(in: webView.configuration.userContentController)
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        guard self.activeNavigation === navigation else { return }
+        // WebKit retains the previous committed page when a provisional navigation fails.
+        self.compatibilityDocumentID = self.embedCompatibility?.beginDocument()
+        self.deviceSettingsBridge?.didCommitDocument(in: webView)
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard self.activeNavigation === navigation, let compatibilityDocumentID else { return }
+        self.embedCompatibility?.didFinishLoading(documentID: compatibilityDocumentID, in: webView)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError _: any Error) {
+        guard self.activeNavigation === navigation else { return }
+        self.retireEmbedCompatibility()
+        self.deviceSettingsBridge?.retireDocument(in: webView)
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError _: any Error) {
+        guard self.activeNavigation === navigation else { return }
+        self.deviceSettingsBridge?.didFailProvisionalNavigation(in: webView)
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        self.activeNavigation = nil
+        self.retireEmbedCompatibility()
+        self.deviceSettingsBridge?.retireDocument(in: webView)
+    }
+
+    func retireEmbedCompatibility() {
+        guard let compatibilityDocumentID else { return }
+        self.embedCompatibility?.retireDocument(compatibilityDocumentID)
+        self.compatibilityDocumentID = nil
     }
 
     func webView(
@@ -379,19 +531,28 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
     let tls: GatewayTLSParams?
     let allowedMainFramePathPrefix: String?
     let onMainFrameNavigationOutsideScope: (() -> Void)?
+    let deviceSettingsBridge: IOSDeviceSettingsBridge?
+    let usesNativeEmbed: Bool
+    let embedCompatibility: DashboardEmbedCompatibility?
 
     init(
         url: URL,
         authScript: String?,
         tls: GatewayTLSParams?,
         allowedMainFramePathPrefix: String? = nil,
-        onMainFrameNavigationOutsideScope: (() -> Void)? = nil)
+        onMainFrameNavigationOutsideScope: (() -> Void)? = nil,
+        deviceSettingsBridge: IOSDeviceSettingsBridge? = nil,
+        usesNativeEmbed: Bool = false,
+        embedCompatibility: DashboardEmbedCompatibility? = nil)
     {
         self.url = url
         self.authScript = authScript
         self.tls = tls
         self.allowedMainFramePathPrefix = allowedMainFramePathPrefix
         self.onMainFrameNavigationOutsideScope = onMainFrameNavigationOutsideScope
+        self.deviceSettingsBridge = deviceSettingsBridge
+        self.usesNativeEmbed = usesNativeEmbed
+        self.embedCompatibility = embedCompatibility
     }
 
     func makeCoordinator() -> AuthenticatedControlUIWebViewCoordinator {
@@ -399,7 +560,11 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
             url: self.url,
             tls: self.tls,
             allowedMainFramePathPrefix: self.allowedMainFramePathPrefix,
-            onMainFrameNavigationOutsideScope: self.onMainFrameNavigationOutsideScope)
+            onMainFrameNavigationOutsideScope: self.onMainFrameNavigationOutsideScope,
+            authScript: self.authScript,
+            deviceSettingsBridge: self.deviceSettingsBridge,
+            usesNativeEmbed: self.usesNativeEmbed,
+            embedCompatibility: self.embedCompatibility)
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -407,14 +572,17 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         configuration.websiteDataStore = .nonPersistent()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-        if let authScript {
-            configuration.userContentController.addUserScript(WKUserScript(
-                source: authScript,
-                injectionTime: .atDocumentStart,
-                forMainFrameOnly: true))
+        context.coordinator.installUserScripts(in: configuration.userContentController)
+        if let deviceSettingsBridge {
+            configuration.userContentController.addScriptMessageHandler(
+                deviceSettingsBridge, contentWorld: .page, name: IOSDeviceSettingsBridge.messageHandlerName)
         }
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
+        self.deviceSettingsBridge?.attach(to: webView) { [weak coordinator = context.coordinator, weak webView] in
+            guard let coordinator, let webView else { return }
+            coordinator.installUserScripts(in: webView.configuration.userContentController)
+        }
         self.applyAppearance(to: webView)
         webView.navigationDelegate = context.coordinator
         webView.isOpaque = true
@@ -445,8 +613,12 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
 
     static func dismantleUIView(
         _ webView: WKWebView,
-        coordinator _: AuthenticatedControlUIWebViewCoordinator)
+        coordinator: AuthenticatedControlUIWebViewCoordinator)
     {
+        coordinator.retireEmbedCompatibility()
+        coordinator.deviceSettingsBridge?.detach(from: webView)
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: IOSDeviceSettingsBridge.messageHandlerName, contentWorld: .page)
         webView.stopLoading()
         webView.navigationDelegate = nil
     }

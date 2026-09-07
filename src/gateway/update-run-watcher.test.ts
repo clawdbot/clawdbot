@@ -10,6 +10,9 @@ const ledger = vi.hoisted(() => ({
   reads: vi.fn(),
   notice: vi.fn(async (_run: UpdateRunRecord) => {}),
 }));
+vi.mock("../state/openclaw-state-db.js", () => ({
+  reconcileOpenClawStateSchemaPublication: () => undefined,
+}));
 vi.mock("./update-run-notice.runtime.js", () => ({ notifyUpdateRunPhase: ledger.notice }));
 vi.mock("../infra/update-run-ledger.js", () => ({
   findActiveUpdateRun: () => {

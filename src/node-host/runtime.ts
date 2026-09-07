@@ -590,7 +590,7 @@ export async function prepareNodeHostRuntime(params?: {
             input && progress
               ? createNodeDuplexEndpoint({
                   ...(claudeSkills ? { maxMessageBytes: NODE_CLAUDE_SKILLS_MESSAGE_BYTES } : {}),
-                  sendFrame: async (payloadJSON) => await progress.write(payloadJSON),
+                  sendFrame: async (payload) => await progress.write(JSON.stringify(payload)),
                   onError: (error) => {
                     active.framedFailure = error;
                     controller.abort(error);

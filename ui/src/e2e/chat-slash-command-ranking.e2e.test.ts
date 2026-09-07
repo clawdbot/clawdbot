@@ -104,6 +104,116 @@ suite.define(() => {
     });
   });
 
+  it.each(["Enter", "Tab", "pointer"])(
+    "shows the first argument after selecting from a scrolled command menu with %s",
+    async (selection) => {
+      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+        const choices = Array.from(
+          { length: 16 },
+          (_, index) => `choice-${String(index).padStart(2, "0")}`,
+        );
+        const commands = Array.from({ length: 16 }, (_, index) => ({
+          acceptsArgs: true,
+          args: [{ name: "choice", choices }],
+          category: "tools",
+          description: "Choose a synthetic viewport option.",
+          name: `viewport-${String(index).padStart(2, "0")}`,
+          scope: "both",
+          source: "plugin",
+          textAliases: [`/viewport-${String(index).padStart(2, "0")}`],
+        }));
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "chat.startup": {
+              agentsList: {
+                agents: [{ id: "main", name: "OpenClaw" }],
+                defaultId: "main",
+                mainKey: "main",
+                scope: "agent",
+              },
+              messages: [],
+              metadata: { commands, models: [] },
+              sessionId: "slash-viewport-session",
+              thinkingLevel: null,
+            },
+            "chat.metadata": { commands, models: [] },
+            "commands.list": { commands },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.waitForRequest("chat.startup");
+        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        await composer.waitFor({ state: "visible" });
+        await expect.poll(() => composer.isEnabled()).toBe(true);
+        await composer.fill("/viewport-");
+
+        const picker = page.locator(".slash-menu[role='listbox']");
+        const scroll = picker.locator(".slash-menu__scroll");
+        const options = picker.getByRole("option");
+        await expect.poll(() => options.count()).toBeGreaterThanOrEqual(commands.length);
+        const targetIndex = await options
+          .locator(".slash-menu-name")
+          .evaluateAll((names) =>
+            names.findIndex((name) => name.textContent?.trim().startsWith("/viewport-15")),
+          );
+        expect(targetIndex).toBeGreaterThan(10);
+        for (let index = 0; index < targetIndex; index += 1) {
+          await composer.press("ArrowDown");
+        }
+        await expect
+          .poll(() => options.nth(targetIndex).getAttribute("aria-selected"))
+          .toBe("true");
+        await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+        if (selection === "pointer") {
+          await options.nth(targetIndex).click();
+          await page.mouse.move(0, 0);
+        } else {
+          await composer.press(selection);
+        }
+
+        await expect.poll(() => composer.inputValue()).toBe("/viewport-15 ");
+        const active = picker.locator("[role='option'][aria-selected='true']");
+        const first = options.first();
+        await expect.poll(() => first.locator(".slash-menu-name").textContent()).toBe("choice-00");
+        // Pointer selection may activate the option under the cursor after the viewport changes.
+        if (selection !== "pointer") {
+          await expect
+            .poll(() => active.locator(".slash-menu-name").textContent())
+            .toBe("choice-00");
+        }
+        expect(
+          await scroll.evaluate((element) => element.scrollHeight > element.clientHeight),
+        ).toBe(true);
+        await expect
+          .poll(() =>
+            first.evaluate((element) => {
+              const viewport = element.closest(".slash-menu__scroll")?.getBoundingClientRect();
+              const option = element.getBoundingClientRect();
+              return Boolean(
+                viewport && option.top >= viewport.top && option.bottom <= viewport.bottom,
+              );
+            }),
+          )
+          .toBe(true);
+
+        const activeIndex = choices.indexOf(
+          (await active.locator(".slash-menu-name").textContent())?.trim() ?? "",
+        );
+        expect(activeIndex).toBeGreaterThanOrEqual(0);
+        for (let index = activeIndex; index < choices.length - 1; index += 1) {
+          await composer.press("ArrowDown");
+        }
+        await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+        await composer.fill("/viewport-");
+        await expect
+          .poll(() => active.locator(".slash-menu-name").textContent())
+          .toContain("/viewport-00");
+        await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBe(0);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      });
+    },
+  );
+
   it("keeps visible search results and keyboard selection in relevance order", async () => {
     const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactRoot

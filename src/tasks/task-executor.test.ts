@@ -1160,7 +1160,9 @@ describe("task-executor", () => {
       expect(hoisted.killSubagentRunAdminMock).toHaveBeenCalledWith({
         cfg: {} as never,
         sessionKey: "agent:codex:subagent:child",
-        expectedRunId: "run-subagent-cancel",
+        expectedTaskRunId: "run-subagent-cancel",
+        expectedGeneration: 1,
+        expectedOwnerKey: "agent:main:main",
         onResult: expect.any(Function),
       });
     });
