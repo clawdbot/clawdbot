@@ -348,7 +348,7 @@ export function buildOpenAISdkClientOptions(model: Model): { timeout?: number; m
 export function buildOpenAISdkRequestOptions(
   model: Model,
   signal?: AbortSignal,
-  options?: { stream?: boolean; timeoutMs?: number; headers?: Record<string, string> },
+  options?: { stream?: boolean; timeoutMs?: number },
 ):
   | {
       signal?: AbortSignal;
@@ -361,17 +361,8 @@ export function buildOpenAISdkRequestOptions(
   | undefined {
   const timeout = resolveOpenAISdkTimeoutMs(model, options?.timeoutMs);
   const headers =
-    options?.stream === true
-      ? {
-          // Default SSE to identity without overriding explicitly resolved headers.
-          // Some compatible endpoints truncate compressed streams before the terminal event.
-          ...(Object.keys(options.headers ?? {}).some(
-            (key) => normalizeLowercaseStringOrEmpty(key) === "accept-encoding",
-          )
-            ? {}
-            : { "Accept-Encoding": "identity" }),
-          ...(usesNativeOpenAICodexResponsesBackend(model) ? { Accept: "text/event-stream" } : {}),
-        }
+    options?.stream === true && usesNativeOpenAICodexResponsesBackend(model)
+      ? { Accept: "text/event-stream" }
       : undefined;
   if (timeout === undefined && !signal && !headers) {
     return undefined;

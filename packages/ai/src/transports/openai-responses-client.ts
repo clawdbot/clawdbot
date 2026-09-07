@@ -205,6 +205,23 @@ type ResponsesTransportExecutorOptions = {
   ) => ResponsesPricingOptions;
 };
 
+function withDefaultResponsesStreamEncoding(
+  fetch: typeof globalThis.fetch,
+): typeof globalThis.fetch {
+  return (input, init) => {
+    // Apply the SSE default after the SDK merges environment and caller headers.
+    const headers = new Headers(
+      init?.headers ?? (input instanceof Request ? input.headers : undefined),
+    );
+    if (headers.has("accept-encoding")) {
+      return fetch(input, init);
+    }
+    // Some compatible endpoints truncate compressed streams before the terminal event.
+    headers.set("accept-encoding", "identity");
+    return fetch(input, { ...init, headers });
+  };
+}
+
 function createResponsesTransportExecutor(config: ResponsesTransportExecutorOptions): StreamFn {
   return (model, context, options) => {
     const responsesOptions = options as OpenAIResponsesOptions | undefined;
@@ -245,7 +262,9 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           options?.sessionId,
           compactRequest
             ? createBoundedOpenAIResponsesCompactionFetch(buildGuardedModelFetch(model))
-            : undefined,
+            : config.streamRequest
+              ? withDefaultResponsesStreamEncoding(buildGuardedModelFetch(model))
+              : undefined,
         );
         const nativeAstra =
           model.id === "gpt-6-astra" && supportsNativeOpenAIResponsesEndpoint(model);
@@ -377,13 +396,6 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         const requestOptions = buildOpenAISdkRequestOptions(model, firstEvent.signal, {
           stream: config.streamRequest,
           timeoutMs: options?.timeoutMs,
-          headers: buildOpenAIClientHeaders(
-            model,
-            context,
-            options?.headers,
-            turnState?.headers,
-            options?.sessionId,
-          ),
         });
         const websocketSignal = combineWebSocketTimeoutSignal(
           firstEvent.signal,
