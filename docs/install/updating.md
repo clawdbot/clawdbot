@@ -111,7 +111,10 @@ unable to finish or safely restore the previous release.
 
 The refusal reports the on-disk and target schema versions and, when readable,
 the driving updater version. Let the failed update finish restoring the previous
-package, then run the manual update from a shell outside the Gateway. Replace
+package. OpenClaw 2026.9.2 treats any failed post-install verification as unsafe
+for an automatic restart and leaves the Gateway service stopped; run
+`openclaw gateway start` to bring the previous release back on its untouched
+database, then run the manual update from a shell outside the Gateway. Replace
 `<target>` with the exact target version from the refusal:
 
 ```bash
