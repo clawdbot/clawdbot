@@ -301,4 +301,16 @@ describe("transcripts CLI", () => {
       '"text":"Action item: Ship CLI"',
     );
   });
+
+  it.each([
+    ["--dir", "--metadata"],
+    ["--dir", "--transcript"],
+    ["--metadata", "--transcript"],
+  ])("rejects conflicting artifact selectors %s and %s", async (...selectors) => {
+    await writeSession(stateDir, "design-review");
+
+    await expect(runTranscriptsCli(["path", "design-review", ...selectors])).rejects.toThrow(
+      `transcripts path accepts only one artifact selector; received ${selectors.join(", ")}`,
+    );
+  });
 });

@@ -107,6 +107,16 @@ async function showCommand(sessionSelector: string, options: TranscriptsCliOptio
 }
 
 function selectedArtifactKind(options: TranscriptsPathOptions): TranscriptArtifactKind {
+  const selected = [
+    options.dir ? "--dir" : undefined,
+    options.metadata ? "--metadata" : undefined,
+    options.transcript ? "--transcript" : undefined,
+  ].filter((option): option is string => option !== undefined);
+  if (selected.length > 1) {
+    throw new Error(
+      `transcripts path accepts only one artifact selector; received ${selected.join(", ")}`,
+    );
+  }
   if (options.dir) {
     return "all";
   }
