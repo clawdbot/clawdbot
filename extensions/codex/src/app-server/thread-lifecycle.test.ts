@@ -2400,35 +2400,14 @@ describe("Codex app-server turn input image sanitizing", () => {
     });
   });
 
-  it("attaches turn-scoped developer instructions without changing thread config", () => {
+  it("leaves ordinary collaboration developer instructions to the model catalog", () => {
     const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
       threadId: "thread-1",
       cwd: "/repo",
       appServer: createAppServerOptions() as never,
-      turnScopedDeveloperInstructions: "SOUL.md turn-only context",
     });
 
-    expect(request.collaborationMode?.settings.developer_instructions).toContain(
-      "# Collaboration Mode: Default",
-    );
-    expect(request.collaborationMode?.settings.developer_instructions).toContain(
-      "SOUL.md turn-only context",
-    );
-  });
-
-  it("places workspace collaboration instructions before memory", () => {
-    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
-      threadId: "thread-1",
-      cwd: "/repo",
-      appServer: createAppServerOptions() as never,
-      turnScopedDeveloperInstructions: "SOUL.md turn-only context",
-      memoryCollaborationInstructions: "MEMORY.md pointer",
-    });
-    const developerInstructions = request.collaborationMode?.settings.developer_instructions ?? "";
-
-    expect(developerInstructions.indexOf("SOUL.md turn-only context")).toBeLessThan(
-      developerInstructions.indexOf("MEMORY.md pointer"),
-    );
+    expect(request.collaborationMode?.settings.developer_instructions).toBeNull();
   });
 
   it("replaces malformed inline images before turn/start", () => {
@@ -2541,14 +2520,6 @@ describe("Codex app-server turn params", () => {
     expect(heartbeatCollaborationMode.settings.model).toBe("gpt-5.4-codex");
     expect(heartbeatCollaborationMode.settings.reasoning_effort).toBe("medium");
     expect(heartbeatCollaborationMode.settings.developer_instructions).toBeNull();
-
-    const workspaceInstructions = buildTurnCollaborationMode(params, {
-      turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
-    }).settings.developer_instructions;
-    expect(workspaceInstructions).toContain("Turn-only workspace instructions.");
-    expect(workspaceInstructions).toContain("# Collaboration Mode: Default");
-    expect(workspaceInstructions).not.toContain("This is an OpenClaw heartbeat turn");
-    expect(workspaceInstructions).not.toContain("### Heartbeats");
   });
 
   it("uses turn-scoped collaboration instructions for cron Codex turns", () => {
@@ -2557,9 +2528,7 @@ describe("Codex app-server turn params", () => {
     params.thinkLevel = "medium";
     params.trigger = "cron";
 
-    const cronCollaborationMode = buildTurnCollaborationMode(params, {
-      turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
-    });
+    const cronCollaborationMode = buildTurnCollaborationMode(params);
     expect(cronCollaborationMode.mode).toBe("default");
     expect(cronCollaborationMode.settings.model).toBe("gpt-5.4-codex");
     expect(cronCollaborationMode.settings.reasoning_effort).toBe("medium");
@@ -2572,9 +2541,7 @@ describe("Codex app-server turn params", () => {
     expect(cronCollaborationMode.settings.developer_instructions).toContain(
       "Use context already provided by the runtime",
     );
-    expect(cronCollaborationMode.settings.developer_instructions).toContain(
-      "Turn-only workspace instructions.",
-    );
+    expect(cronCollaborationMode.settings.developer_instructions).not.toContain("<AGENT_SOUL>");
   });
 });
 

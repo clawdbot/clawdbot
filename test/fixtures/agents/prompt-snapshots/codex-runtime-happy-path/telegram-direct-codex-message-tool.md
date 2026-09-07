@@ -161,7 +161,7 @@
   "collaborationMode": {
     "mode": "default",
     "settings": {
-      "developer_instructions": "# Collaboration Mode: Default\n\nYou are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.\n\nYour active mode changes only when new developer instructions with a different `<collaboration_mode>...</collaboration_mode>` change it; user requests or tool descriptions do not change mode by themselves. Known mode names are Default and Plan.\n\n## request_user_input availability\n\nUse the `request_user_input` tool only when it is listed in the available tools for this turn.\n\nIn Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.\n\n## OpenClaw Agent Soul\n\nOpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.\n\n### /tmp/openclaw-happy-path/workspace/IDENTITY.md\n\n<IDENTITY.md contents will be here>\n\n### /tmp/openclaw-happy-path/workspace/SOUL.md\n\n<SOUL.md contents will be here>\n\n### /tmp/openclaw-happy-path/workspace/USER.md\n\n<USER.md contents will be here>",
+      "developer_instructions": null,
       "model": "gpt-5.5",
       "reasoning_effort": "medium"
     }
@@ -235,8 +235,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 221
   },
   "codexCollaborationModeDeveloperInstructions": {
-    "chars": 1433,
-    "roughTokens": 359
+    "chars": 0,
+    "roughTokens": 0
   },
   "codexModelInstructions": {
     "chars": 21335,
@@ -255,16 +255,16 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 14456
   },
   "openClawDeveloperInstructions": {
-    "chars": 2862,
-    "roughTokens": 716
+    "chars": 3371,
+    "roughTokens": 843
   },
   "totalTextOnly": {
-    "chars": 27692,
-    "roughTokens": 6923
+    "chars": 26766,
+    "roughTokens": 6692
   },
   "totalWithDynamicToolsJson": {
-    "chars": 85515,
-    "roughTokens": 21379
+    "chars": 84589,
+    "roughTokens": 21148
   },
   "userInputText": {
     "chars": 863,
@@ -483,22 +483,6 @@ When explicitly_mentioned_bot is true, the incoming message mentions your channe
 
 
 You are in a Telegram direct conversation. Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation. If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation.
-````
-
-### Developer: Codex Collaboration Mode Instructions
-
-```text
-# Collaboration Mode: Default
-
-You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
-
-Your active mode changes only when new developer instructions with a different `<collaboration_mode>...</collaboration_mode>` change it; user requests or tool descriptions do not change mode by themselves. Known mode names are Default and Plan.
-
-## request_user_input availability
-
-Use the `request_user_input` tool only when it is listed in the available tools for this turn.
-
-In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
 
 ## OpenClaw Agent Soul
 
@@ -515,7 +499,11 @@ OpenClaw loaded these workspace instruction files from the active agent workspac
 ### /tmp/openclaw-happy-path/workspace/USER.md
 
 <USER.md contents will be here>
-```
+````
+
+### Developer: Codex Collaboration Mode Instructions
+
+This turn asks Codex app-server to resolve its built-in Default collaboration-mode instructions at runtime.
 
 ### User: OpenClaw Additional Context (openclaw_current_sender)
 

@@ -60,19 +60,19 @@ export async function refreshCodexThreadPolicy(
 }
 
 /**
- * Refreshes only the skill catalog on a live thread whose generic policy cannot
+ * Refreshes workspace instructions on a live thread whose generic policy cannot
  * change (ephemeral threads have no resume source). The refresh is a client-authored
  * developer message, so it must be re-delivered after every compaction.
  */
-export async function refreshCodexThreadSkillsCatalog(
-  params: CodexThreadHandoffParams & { skillsInstructions: string | undefined },
+export async function refreshCodexThreadInstructions(
+  params: CodexThreadHandoffParams & { refreshableInstructions: string | undefined },
 ): Promise<void> {
   const notice =
-    "The following is the complete current OpenClaw skills catalog. It replaces the earlier OpenClaw skills catalog in this conversation.\n\n";
+    "The following is the complete current OpenClaw refreshable thread instructions. It replaces earlier OpenClaw-supplied skills, persona, and memory instructions in this conversation.\n\n";
   const text =
     notice +
-    (params.skillsInstructions ??
-      "The current OpenClaw skills catalog is empty; the earlier catalog is withdrawn.");
+    (params.refreshableInstructions ??
+      "The current OpenClaw refreshable thread instructions are empty; earlier OpenClaw-supplied skills, persona, and memory instructions are withdrawn.");
   await injectCodexThreadDeveloperHandoff(params, text);
 }
 
@@ -80,25 +80,25 @@ export async function refreshCodexThreadSkillsCatalog(
  * Compaction rebuilds initial context from the thread's creation-time developer
  * instructions and drops client-authored developer messages unless
  * `retain_client_developer_messages` is enabled, which is off by default
- * (codex-rs/core/src/compact_remote_v2.rs). A catalog refreshed in place therefore
- * reverts to the creation-time catalog, while the host still records the refreshed
+ * (codex-rs/core/src/compact_remote_v2.rs). Instructions refreshed in place therefore
+ * revert to the creation-time section, while the host still records the refreshed
  * value as delivered and skips reinjection on later turns. Re-deliver the current
- * catalog after every compaction, including compaction inside an active turn.
+ * instructions after every compaction, including compaction inside an active turn.
  */
-export async function restoreCodexThreadSkillsCatalogAfterCompaction(
+export async function restoreCodexThreadInstructionsAfterCompaction(
   params: CodexThreadHandoffParams & {
     ephemeralPolicy: CodexEphemeralThreadPolicy | undefined;
   },
 ): Promise<void> {
   const policy = params.ephemeralPolicy;
-  // A thread still carrying its creation-time catalog natively needs no restore:
-  // compaction rebuilds that exact catalog from the developer instructions.
-  if (!policy || policy.skillsInstructions === policy.nativeSkillsInstructions) {
+  // A thread still carrying its creation-time section natively needs no restore:
+  // compaction rebuilds that exact section from the developer instructions.
+  if (!policy || policy.refreshableInstructions === policy.nativeRefreshableInstructions) {
     return;
   }
-  await refreshCodexThreadSkillsCatalog({
+  await refreshCodexThreadInstructions({
     ...params,
-    skillsInstructions: policy.skillsInstructions,
+    refreshableInstructions: policy.refreshableInstructions,
   });
 }
 

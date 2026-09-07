@@ -28,7 +28,7 @@ OpenClaw assembles its own system prompt on every run. It includes:
   `60000`).
   - Native Codex turns do not paste raw `MEMORY.md` when memory tools are
     available for that workspace; they get a small memory pointer in
-    turn-scoped collaboration developer instructions instead and use memory
+    refreshable thread developer instructions instead and use memory
     tools on demand. If tools are disabled, memory search is unavailable, or
     the active workspace differs from the agent memory workspace, `MEMORY.md`
     falls back to the normal bounded turn-context path.

@@ -66,7 +66,7 @@ type PendingSupervisionMaterializationParams = {
   dynamicTools: CodexDynamicToolSpec[];
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
-  skillsInstructions?: string;
+  refreshableInstructions?: string;
   config?: JsonObject;
   shellEnvironment?: Readonly<Record<string, string>>;
   disableLoginShell?: boolean;
@@ -235,7 +235,7 @@ export async function materializePendingSupervisionBranch(
       dynamicTools: params.dynamicTools,
       appServer: params.appServer,
       developerInstructions: params.developerInstructions,
-      skillsInstructions: params.skillsInstructions,
+      refreshableInstructions: params.refreshableInstructions,
       config: params.config,
       nativeCodeModeEnabled: params.nativeCodeModeEnabled,
       nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,

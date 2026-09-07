@@ -99,7 +99,7 @@ describe("Codex app-server skill catalog delivery", () => {
       label: "a withdrawn catalog",
       refreshed: undefined,
       expectRestored: (text: string) => {
-        expect(text).toContain("skills catalog is empty");
+        expect(text).toContain("refreshable thread instructions are empty");
         expect(text).not.toContain(FIRST_CATALOG);
       },
     },

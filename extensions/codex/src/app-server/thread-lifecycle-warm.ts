@@ -38,7 +38,7 @@ import type {
 import { retainCodexAppServerBindingSubscription } from "./thread-ownership.js";
 import {
   CodexIncognitoPolicyChangeError,
-  refreshCodexThreadSkillsCatalog,
+  refreshCodexThreadInstructions,
 } from "./thread-policy.js";
 import { buildThreadResumeParams } from "./thread-requests.js";
 
@@ -281,7 +281,7 @@ export async function tryReuseCodexLiveThread(
         appServer: params.appServer,
         dynamicTools: params.dynamicTools,
         developerInstructions: params.developerInstructions,
-        skillsInstructions: params.skillsInstructions,
+        refreshableInstructions: params.refreshableInstructions,
         config: applyCodexNativeSkillIsolation(resumeConfig, nativeSkillIsolation),
         nativeCodeModeEnabled: params.nativeCodeModeEnabled,
         nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
@@ -309,7 +309,7 @@ export async function tryReuseCodexLiveThread(
           dynamicToolsFingerprint,
         );
     // Ephemeral threads cannot cold-resume, so only the exact creation policy may
-    // continue. The skill catalog is refreshed in place below, never compared here.
+    // continue. Workspace instructions refresh in place below, never compared here.
     const ephemeralPolicy = retainedThread.ephemeralPolicy;
     if (
       incognito &&
@@ -335,19 +335,22 @@ export async function tryReuseCodexLiveThread(
       assertCurrent: assertWarmOwner,
     });
     assertWarmOwner();
-    if (ephemeralPolicy && ephemeralPolicy.skillsInstructions !== params.skillsInstructions) {
+    if (
+      ephemeralPolicy &&
+      ephemeralPolicy.refreshableInstructions !== params.refreshableInstructions
+    ) {
       try {
-        await refreshCodexThreadSkillsCatalog({
+        await refreshCodexThreadInstructions({
           client: params.client,
           threadId: binding.threadId,
-          skillsInstructions: params.skillsInstructions,
+          refreshableInstructions: params.refreshableInstructions,
           timeoutMs: params.appServer.requestTimeoutMs,
           signal: params.signal,
           assertCurrent: assertWarmOwner,
         });
       } catch (error) {
-        // The ephemeral conversation survives a failed catalog handoff; the retained
-        // record still names the old catalog, so the next turn delivers it again.
+        // The ephemeral conversation survives a failed instructions handoff; the retained
+        // record still names the old section, so the next turn delivers it again.
         preserveSubscription = true;
         throw error;
       }
@@ -401,7 +404,7 @@ export async function tryReuseCodexLiveThread(
         liveThreadConfigFingerprint,
         liveThreadEphemeralPolicy: ephemeralPolicy && {
           ...ephemeralPolicy,
-          skillsInstructions: params.skillsInstructions,
+          refreshableInstructions: params.refreshableInstructions,
         },
         liveThreadOwnership: retainedThread,
         ...(!incognito && retainedThread.serviceTier && resumeParams.serviceTier === undefined

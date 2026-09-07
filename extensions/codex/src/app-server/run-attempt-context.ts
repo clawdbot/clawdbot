@@ -173,12 +173,18 @@ export async function prepareCodexAttemptContext(
     ? (connection.mutable.startupBinding?.agentWorkspaceDeveloperInstructions ??
       workspaceBootstrapContext.threadDeveloperInstructions)
     : undefined;
-  // The catalog joins the thread developer carrier at request build; it stays out
-  // of the generic policy so a catalog refresh never reads as a policy change.
+  // Refreshable workspace instructions join the thread developer carrier at request
+  // build; they stay out of the generic policy so edits do not read as policy changes.
   const skillsInstructions = renderCodexSkillsInstructions({
     attempt: runtimeParams,
     skillsPrompt: params.skillsSnapshot?.prompt,
   });
+  const refreshableInstructions =
+    joinPresentSections(
+      skillsInstructions,
+      workspaceBootstrapContext.turnScopedDeveloperInstructions,
+      workspaceBootstrapContext.memoryCollaborationInstructions,
+    ) || undefined;
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(runtimeParams, {
       dynamicTools: toolBridge.availableSpecs,
@@ -232,6 +238,7 @@ export async function prepareCodexAttemptContext(
     baseDeveloperInstructions,
     openClawPromptContext,
     skillsInstructions,
+    refreshableInstructions,
     promptState,
     codexContextProjectionMaxChars,
     codexContinuityProjectionMaxChars,

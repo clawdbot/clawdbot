@@ -1032,7 +1032,8 @@ a withdrawal, not a fallback to older instructions.
 
 Ordinary incognito turns can reuse unchanged generic policy, but changed or emptied
 policy is rejected without sending another native turn or discarding the live
-conversation. Turn-scoped collaboration instructions remain a separate surface.
+conversation. Cron collaboration instructions remain a separate turn-scoped surface.
+Refreshable workspace instructions remain a separate lifecycle input.
 See [Hook boundaries](/plugins/codex-harness-runtime#hook-boundaries) for recovery.
 
 Codex normally handles `AGENTS.md` itself through native project-doc discovery.
@@ -1048,33 +1049,31 @@ For OpenClaw workspace parity, local tool notes live in the `## Tools` section
 of `AGENTS.md` and normally ride Codex's native project-doc discovery. The
 Codex harness forwards the other bootstrap files as developer instructions:
 
-- `SOUL.md`, `IDENTITY.md`, and `USER.md` are forwarded as **turn-scoped**
-  collaboration instructions. Native Codex subagents do not inherit them,
-  which keeps subagent turns from picking up the parent agent's persona and
-  user profile.
-- The compact loaded OpenClaw skills list is forwarded with the thread
-  developer instructions, after the generic policy. Model-owned
-  collaboration-mode messages cannot replace this catalog. The catalog is
-  refreshable context rather than generic policy: a changed catalog resumes a
+- The compact loaded OpenClaw skills list, the `SOUL.md` / `IDENTITY.md` /
+  `USER.md` persona block, and the workspace-memory pointer are forwarded with
+  the thread developer instructions, after the generic policy and in that
+  order. Model-owned collaboration-mode messages cannot replace them. Native
+  Codex subagents inherit this thread carrier, including the persona and memory
+  guidance; that inheritance is intentional and has no extra isolation layer.
+  The combined section is refreshable context rather than generic policy: a
+  changed section resumes a
   persistent thread through the normal policy handoff, while a live incognito
-  thread receives the complete current catalog as an injected developer
+  thread receives the complete current section as an injected developer
   message and keeps its conversation. Compaction rebuilds a thread's initial
   context from its creation-time developer instructions and discards injected
-  developer messages, so an incognito thread whose catalog was refreshed in
-  place is sent the current catalog again as soon as a compaction completes,
+  developer messages, so an incognito thread whose workspace instructions were
+  refreshed in place is sent the current section again as soon as compaction completes,
   including a compaction inside a turn. That turn's own continuation request
-  may already have been built, so the model reliably sees the restored catalog
+  may already have been built, so the model reliably sees the restored section
   from the following request onward. A generic policy change on a live
-  incognito thread still refuses the turn. Native Codex subagents can inherit
-  the catalog with the parent thread's developer instructions; this does not
-  move workspace persona or memory context into that carrier.
+  incognito thread still refuses the turn.
 - Heartbeat turns receive generic initiative guidance through collaboration
   mode. Monitor cron scratch is appended to the heartbeat prompt instead of
   injected as workspace context.
 - `MEMORY.md` content from the configured agent workspace is not pasted into
   native Codex turn input when memory tools are available for that
   workspace; when it exists, the harness adds a small workspace-memory
-  pointer to turn-scoped collaboration developer instructions and Codex
+  pointer to the refreshable thread developer instructions and Codex
   should use `memory_search` or `memory_get` when durable memory is relevant.
   If tools are disabled, memory search is unavailable, or the active
   workspace differs from the agent memory workspace, `MEMORY.md` uses the

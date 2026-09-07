@@ -42,18 +42,18 @@ type ThreadReleaseTransition = {
 
 /**
  * Exact lifecycle inputs a live ephemeral thread was told. The generic policy is
- * creation-owned and cannot be refreshed or cold-resumed; the skill catalog is the
- * one refreshable section and records the catalog last delivered to the thread.
+ * creation-owned and cannot be refreshed or cold-resumed; workspace instructions
+ * are refreshable and record the complete section last delivered to the thread.
  */
 export type CodexEphemeralThreadPolicy = {
   developerInstructions?: string;
-  skillsInstructions?: string;
+  refreshableInstructions?: string;
   /**
-   * Catalog carried by the thread's creation-time native developer instructions.
+   * Refreshable section carried by the creation-time native developer instructions.
    * Compaction rebuilds initial context from those instructions and drops the
-   * client-authored refresh, so this is the catalog a compacted thread reverts to.
+   * client-authored refresh, so this is the section a compacted thread reverts to.
    */
-  nativeSkillsInstructions?: string;
+  nativeRefreshableInstructions?: string;
 };
 
 export type CodexAppServerLiveThreadOwnership = {
@@ -562,11 +562,11 @@ function claimCodexAppServerThreadOwnership(
 
 /**
  * Records that compaction rebuilt this thread from its creation-time developer
- * instructions and discarded the injected catalog refresh. Incognito compaction
+ * instructions and discarded the injected refreshable instructions. Incognito compaction
  * keeps its separately owned subscription, so there is no claim/retain cycle to
  * carry the reversion and the retained record has to be corrected in place.
  */
-export function revertCodexAppServerLiveThreadSkillsCatalog(
+export function revertCodexAppServerLiveThreadInstructions(
   client: CodexAppServerClient,
   threadId: string,
 ): void {
@@ -581,7 +581,7 @@ export function revertCodexAppServerLiveThreadSkillsCatalog(
   }
   retained.ephemeralPolicy = {
     ...ephemeralPolicy,
-    skillsInstructions: ephemeralPolicy.nativeSkillsInstructions,
+    refreshableInstructions: ephemeralPolicy.nativeRefreshableInstructions,
   };
 }
 

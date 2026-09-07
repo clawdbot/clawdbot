@@ -2489,7 +2489,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(resumed.liveThreadConfigFingerprint).not.toBe(started.liveThreadConfigFingerprint);
   });
 
-  it("resumes a retained persistent thread with the refreshed skill catalog", async () => {
+  it("starts and resumes with ordered refreshable workspace instructions", async () => {
     const sessionFile = path.join(tempDir, "warm-skills-session.jsonl");
     const workspaceDir = path.join(tempDir, "warm-skills-workspace");
     const params = createParams(sessionFile, workspaceDir);
@@ -2519,12 +2519,19 @@ describe("Codex app-server thread lifecycle bindings", () => {
       userMcpServersEnabled: false,
       developerInstructions: "generic policy",
     };
-    const firstSkills = "## OpenClaw Skills\n\nweather";
-    const secondSkills = "## OpenClaw Skills\n\nweather (edited description)";
-    const started = await startOrResumeThread({ ...common, skillsInstructions: firstSkills });
-    // The catalog rides the thread developer carrier, after the generic policy.
+    const skills = "## OpenClaw Skills\n\nweather";
+    const firstPersona = "<AGENT_SOUL>persona A</AGENT_SOUL>";
+    const secondPersona = "<AGENT_SOUL>persona B</AGENT_SOUL>";
+    const memory = "## OpenClaw Workspace Memory\n\nMEMORY.md pointer";
+    const firstInstructions = `${skills}\n\n${firstPersona}\n\n${memory}`;
+    const secondInstructions = `${skills}\n\n${secondPersona}\n\n${memory}`;
+    const started = await startOrResumeThread({
+      ...common,
+      refreshableInstructions: firstInstructions,
+    });
+    // The complete refreshable section follows the generic policy in exact order.
     expect(request.mock.calls.find(([method]) => method === "thread/start")?.[1]).toMatchObject({
-      developerInstructions: `generic policy\n\n${firstSkills}`,
+      developerInstructions: `generic policy\n\n${firstInstructions}`,
     });
     await retainCodexAppServerLiveThread(
       client,
@@ -2533,10 +2540,12 @@ describe("Codex app-server thread lifecycle bindings", () => {
       started.liveThreadConfigFingerprint,
     );
 
-    // Editing a skill must reach a live persistent conversation. The catalog is part
-    // of the thread carrier, so warm reuse is invalidated and the same thread is
-    // cold-resumed with the new catalog instead of losing the conversation.
-    const resumed = await startOrResumeThread({ ...common, skillsInstructions: secondSkills });
+    // Editing persona must reach a live persistent conversation. The refreshable
+    // section invalidates warm reuse so the same thread cold-resumes with the edit.
+    const resumed = await startOrResumeThread({
+      ...common,
+      refreshableInstructions: secondInstructions,
+    });
 
     expect(resumed).toMatchObject({
       threadId: "thread-warm-skills",
@@ -2556,10 +2565,10 @@ describe("Codex app-server thread lifecycle bindings", () => {
     ]);
     const resumeParams = request.mock.calls.find(([method]) => method === "thread/resume")?.[1];
     expect(resumeParams).toMatchObject({
-      developerInstructions: `generic policy\n\n${secondSkills}`,
+      developerInstructions: `generic policy\n\n${secondInstructions}`,
     });
-    // The refreshed catalog also reaches the live conversation through the existing
-    // generic policy handoff, so the resumed turn is not answered from the old catalog.
+    // The refreshed section also reaches the live conversation through the existing
+    // generic policy handoff, so the resumed turn is not answered from stale persona.
     const injected = request.mock.calls.find(([method]) => method === "thread/inject_items")?.[1];
     expect(injected).toMatchObject({
       threadId: "thread-warm-skills",
@@ -2567,7 +2576,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
         {
           type: "message",
           role: "developer",
-          content: [{ type: "input_text", text: expect.stringContaining(secondSkills) }],
+          content: [{ type: "input_text", text: expect.stringContaining(secondInstructions) }],
         },
       ],
     });
@@ -2925,12 +2934,20 @@ describe("Codex app-server thread lifecycle bindings", () => {
   );
 
   it.each([
-    { change: "skills", policy: "generic policy", skills: "## OpenClaw Skills\n\nedited weather" },
-    { change: "policy", policy: "generic policy v2", skills: "## OpenClaw Skills\n\nweather" },
-    { change: "skills", policy: "generic policy", skills: undefined },
+    {
+      change: "instructions",
+      policy: "generic policy",
+      instructions: "## OpenClaw Skills\n\nweather\n\n<AGENT_SOUL>persona B</AGENT_SOUL>",
+    },
+    {
+      change: "policy",
+      policy: "generic policy v2",
+      instructions: "## OpenClaw Skills\n\nweather\n\n<AGENT_SOUL>persona A</AGENT_SOUL>",
+    },
+    { change: "instructions", policy: "generic policy", instructions: undefined },
   ] as const)(
-    "refreshes the live incognito skill catalog but refuses generic policy drift ($change: $skills)",
-    async ({ change, policy, skills }) => {
+    "refreshes live incognito workspace instructions but refuses generic policy drift ($change)",
+    async ({ change, policy, instructions }) => {
       const sessionFile = path.join(tempDir, "incognito-session.jsonl");
       const workspaceDir = path.join(tempDir, "incognito-workspace");
       const params = createParams(sessionFile, workspaceDir);
@@ -2966,22 +2983,23 @@ describe("Codex app-server thread lifecycle bindings", () => {
         appServer: createThreadLifecycleAppServerOptions(),
         userMcpServersEnabled: false,
       };
-      const firstSkills = "## OpenClaw Skills\n\nweather";
+      const firstInstructions =
+        "## OpenClaw Skills\n\nweather\n\n<AGENT_SOUL>persona A</AGENT_SOUL>";
       const first = await startOrResumeThread({
         ...common,
         developerInstructions: "generic policy",
-        skillsInstructions: firstSkills,
+        refreshableInstructions: firstInstructions,
       });
       expect(first.liveThreadEphemeralPolicy).toEqual({
         developerInstructions: "generic policy",
-        skillsInstructions: firstSkills,
-        // Creation carries the catalog natively, so compaction restores this one.
-        nativeSkillsInstructions: firstSkills,
+        refreshableInstructions: firstInstructions,
+        // Creation carries the section natively, so compaction restores this one.
+        nativeRefreshableInstructions: firstInstructions,
       });
       expect(request.mock.calls.find(([method]) => method === "thread/start")?.[1]).toEqual(
         expect.objectContaining({
           ephemeral: true,
-          developerInstructions: `generic policy\n\n${firstSkills}`,
+          developerInstructions: `generic policy\n\n${firstInstructions}`,
         }),
       );
       await retainCodexAppServerLiveThread(
@@ -2996,7 +3014,11 @@ describe("Codex app-server thread lifecycle bindings", () => {
         request.mock.calls
           .filter(([method]) => method.startsWith("thread/"))
           .map(([method, requestParams]) => [method, requestParams]);
-      const secondTurn = { ...common, developerInstructions: policy, skillsInstructions: skills };
+      const secondTurn = {
+        ...common,
+        developerInstructions: policy,
+        refreshableInstructions: instructions,
+      };
 
       if (change === "policy") {
         await expect(startOrResumeThread(secondTurn)).rejects.toBeInstanceOf(
@@ -3014,10 +3036,10 @@ describe("Codex app-server thread lifecycle bindings", () => {
         lifecycle: { action: "resumed" },
         liveThreadEphemeralPolicy: {
           developerInstructions: "generic policy",
-          skillsInstructions: skills,
+          refreshableInstructions: instructions,
           // A refresh never rewrites native instructions, so the creation-time
-          // catalog stays recorded as the one compaction will restore.
-          nativeSkillsInstructions: firstSkills,
+          // section stays recorded as the one compaction will restore.
+          nativeRefreshableInstructions: firstInstructions,
         },
       });
       expect(threadCalls()).toEqual([
@@ -3034,7 +3056,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
                   {
                     type: "input_text",
                     text: expect.stringContaining(
-                      skills ?? "The current OpenClaw skills catalog is empty",
+                      instructions ?? "refreshable thread instructions are empty",
                     ),
                   },
                 ],
@@ -3043,8 +3065,8 @@ describe("Codex app-server thread lifecycle bindings", () => {
           },
         ],
       ]);
-      // The delivered catalog travels with the binding so cleanup retains it and
-      // an unchanged catalog on the next turn is not re-delivered.
+      // The delivered section travels with the binding so cleanup retains it and
+      // an unchanged section on the next turn is not re-delivered.
       await retainCodexAppServerLiveThread(
         client,
         second.threadId,

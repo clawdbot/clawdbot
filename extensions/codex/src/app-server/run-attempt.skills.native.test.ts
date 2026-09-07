@@ -20,6 +20,8 @@ const NATIVE_FIRST_CATALOG =
   "<available_skills><skill><name>alpha-native</name><description>Creation-time catalog.</description></skill></available_skills>";
 const NATIVE_SECOND_CATALOG =
   "<available_skills><skill><name>bravo-native</name><description>Refreshed catalog.</description></skill></available_skills>";
+const NATIVE_FIRST_SOUL = "Creation-time native persona.";
+const NATIVE_SECOND_SOUL = "Refreshed native persona.";
 
 /**
  * Serves the Responses wire for the real Codex binary and records every request
@@ -159,8 +161,8 @@ function developerMessageText(request: JsonObject | undefined): string {
   return JSON.stringify(input.filter((item) => isJsonObject(item) && item.role === "developer"));
 }
 
-describe("native Codex skill delivery", () => {
-  it("delivers the ordinary root catalog when model metadata owns collaboration instructions", async () => {
+describe("native Codex refreshable instruction delivery", () => {
+  it("delivers skills, persona, and memory when model metadata owns collaboration instructions", async () => {
     const root = await fs.realpath(tempDir);
     const native = await createCodexNativeTestState(root);
     for (const [name, value] of Object.entries(native.env)) {
@@ -260,6 +262,9 @@ describe("native Codex skill delivery", () => {
     let client: Awaited<ReturnType<typeof createIsolatedCodexAppServerClient>> | undefined;
     try {
       const params = createNativeRunParams(path.join(root, "session.jsonl"), native.cwd);
+      await fs.writeFile(path.join(native.cwd, "SOUL.md"), NATIVE_FIRST_SOUL);
+      await fs.writeFile(path.join(native.cwd, "IDENTITY.md"), "Native identity.");
+      await fs.writeFile(path.join(native.cwd, "USER.md"), "Native user profile.");
       params.modelId = modelId;
       params.model = { ...params.model, id: modelId };
       params.prompt = "What is the weather in Wilmington today?";
@@ -294,6 +299,10 @@ describe("native Codex skill delivery", () => {
       const developerText = JSON.stringify(developerMessages);
       expect(developerText).toContain("Synthetic model-owned Default policy.");
       expect(developerText).toContain(params.skillsSnapshot.prompt);
+      expect(developerText).toContain("<AGENT_SOUL>");
+      expect(developerText).toContain(NATIVE_FIRST_SOUL);
+      expect(developerText).toContain("Native identity.");
+      expect(developerText).toContain("Native user profile.");
     } finally {
       if (client) {
         expect(await client.closeAndWait()).toMatchObject({ exited: true });
@@ -309,16 +318,14 @@ describe("native Codex skill delivery", () => {
     {
       label: "an edited catalog",
       refreshed: NATIVE_SECOND_CATALOG,
-      current: NATIVE_SECOND_CATALOG,
     },
     {
       label: "a withdrawn catalog",
       refreshed: undefined,
-      current: "skills catalog is empty",
     },
   ])(
     "keeps $label visible to the model after native compaction rebuilds the incognito thread",
-    async ({ refreshed, current }) => {
+    async ({ refreshed }) => {
       const root = await fs.realpath(tempDir);
       const native = await createCodexNativeTestState(root);
       for (const [name, value] of Object.entries(native.env)) {
@@ -344,8 +351,14 @@ describe("native Codex skill delivery", () => {
       const sessionFile = path.join(root, "incognito-compaction-session.jsonl");
       let client: Awaited<ReturnType<typeof createIsolatedCodexAppServerClient>> | undefined;
       try {
-        const runTurn = async (runId: string, catalog: string | undefined, prompt: string) => {
+        const runTurn = async (
+          runId: string,
+          catalog: string | undefined,
+          soul: string,
+          prompt: string,
+        ) => {
           const before = fixture.requests.length;
+          await fs.writeFile(path.join(native.cwd, "SOUL.md"), soul);
           const params = createNativeRunParams(sessionFile, native.cwd, sessionKey);
           // A native-tool-restricted turn always starts a transient thread, which
           // would replace the live incognito thread this regression depends on.
@@ -373,15 +386,31 @@ describe("native Codex skill delivery", () => {
           return fixture.requests.slice(before);
         };
 
-        const [creationRequest] = await runTurn("run-1", NATIVE_FIRST_CATALOG, "first");
+        const [creationRequest] = await runTurn(
+          "run-1",
+          NATIVE_FIRST_CATALOG,
+          NATIVE_FIRST_SOUL,
+          "first",
+        );
         expect(developerMessageText(creationRequest)).toContain(NATIVE_FIRST_CATALOG);
+        expect(developerMessageText(creationRequest)).toContain(NATIVE_FIRST_SOUL);
 
         fixture.usage.tokens = overAutoCompactLimitTokens;
-        const [refreshRequest] = await runTurn("run-2", refreshed, "second");
-        expect(developerMessageText(refreshRequest)).toContain(current);
+        const currentSoul = refreshed ? NATIVE_SECOND_SOUL : NATIVE_FIRST_SOUL;
+        const [refreshRequest] = await runTurn("run-2", refreshed, currentSoul, "second");
+        const refreshText = developerMessageText(refreshRequest);
+        if (refreshed) {
+          expect(refreshText).toContain(refreshed);
+        } else {
+          // The later complete section keeps persona while omitting the old catalog.
+          expect(refreshText.lastIndexOf(currentSoul)).toBeGreaterThan(
+            refreshText.lastIndexOf(NATIVE_FIRST_CATALOG),
+          );
+        }
+        expect(refreshText).toContain(currentSoul);
 
         fixture.usage.tokens = 10;
-        const compactionTurn = await runTurn("run-3", refreshed, "third");
+        const compactionTurn = await runTurn("run-3", refreshed, currentSoul, "third");
         // Codex summarizes, then resumes the same turn against the rebuilt context.
         const summarizationIndex = compactionTurn.findIndex((request) =>
           JSON.stringify(request).includes("You are performing a CONTEXT CHECKPOINT COMPACTION."),
@@ -392,16 +421,33 @@ describe("native Codex skill delivery", () => {
         // The rebuilt context restores the creation-time carrier and drops the
         // client-authored refresh, which is exactly the reversion under test.
         expect(developerMessageText(continuationRequest)).toContain(NATIVE_FIRST_CATALOG);
-        expect(developerMessageText(continuationRequest)).not.toContain(current);
+        if (refreshed) {
+          expect(developerMessageText(continuationRequest)).not.toContain(refreshed);
+        }
+        expect(developerMessageText(continuationRequest)).toContain(NATIVE_FIRST_SOUL);
+        if (currentSoul !== NATIVE_FIRST_SOUL) {
+          expect(developerMessageText(continuationRequest)).not.toContain(currentSoul);
+        }
 
-        const [restoredRequest] = await runTurn("run-4", refreshed, "fourth");
+        const [restoredRequest] = await runTurn("run-4", refreshed, currentSoul, "fourth");
         const restored = developerMessageText(restoredRequest);
-        expect(restored).toContain(current);
-        // The creation-time catalog is immutable on an ephemeral thread, so the
-        // proof is that the current catalog is the model's latest instruction.
-        expect(restored.lastIndexOf(current)).toBeGreaterThan(
-          restored.lastIndexOf(NATIVE_FIRST_CATALOG),
-        );
+        expect(restored).toContain(currentSoul);
+        // Creation-time instructions are immutable on an ephemeral thread, so the
+        // proof is that the current complete section is the latest instruction.
+        if (refreshed) {
+          expect(restored.lastIndexOf(refreshed)).toBeGreaterThan(
+            restored.lastIndexOf(NATIVE_FIRST_CATALOG),
+          );
+        } else {
+          expect(restored.lastIndexOf(currentSoul)).toBeGreaterThan(
+            restored.lastIndexOf(NATIVE_FIRST_CATALOG),
+          );
+        }
+        if (currentSoul !== NATIVE_FIRST_SOUL) {
+          expect(restored.lastIndexOf(currentSoul)).toBeGreaterThan(
+            restored.lastIndexOf(NATIVE_FIRST_SOUL),
+          );
+        }
       } finally {
         if (client) {
           await client.closeAndWait();

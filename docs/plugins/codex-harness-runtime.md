@@ -54,16 +54,18 @@ internal turns suppress project-doc loading and that fallback carrier.
 
 OpenClaw developer instructions cover OpenClaw runtime concerns: source-channel
 delivery, OpenClaw dynamic tools, ACP delegation, adapter context, and the
-active agent workspace profile files. The eligible skill catalog is carried
-with those thread developer instructions, after the generic policy, because
+active agent workspace profile files. The eligible skill catalog, persona
+(`SOUL.md`, `IDENTITY.md`, and `USER.md`), and memory guidance are carried
+with those thread developer instructions, after the generic policy and in that order, because
 Codex prefers model-catalog collaboration messages over caller collaboration
-instructions. The catalog is refreshable context, not generic policy: a changed
-catalog reaches a persistent thread through the normal policy resume, and
+instructions. This combined section is refreshable context, not generic policy: a changed
+section reaches a persistent thread through the normal policy resume, and
 reaches a live incognito thread as an injected developer message, so editing a
-skill does not end an incognito conversation. Tool-routed `MEMORY.md` pointers
-are projected as turn-scoped collaboration developer instructions. When memory
+skill or persona file does not end an incognito conversation. Native Codex
+subagents intentionally inherit the persona and memory guidance from the thread
+carrier. Tool-routed `MEMORY.md` pointers use the same carrier. When memory
 tools are unavailable, active `BOOTSTRAP.md` content and full `MEMORY.md` fall
-back to plain turn input context instead.
+back to bounded turn input context instead.
 
 Delivery mode and the current message target requirement arrive as compact
 application context before each user turn. They explicitly supersede earlier

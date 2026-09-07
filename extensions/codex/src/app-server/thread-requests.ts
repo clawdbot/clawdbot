@@ -170,7 +170,7 @@ type CodexThreadConfigurationOptions = {
   dynamicTools?: CodexDynamicToolSpec[];
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
-  skillsInstructions?: string;
+  refreshableInstructions?: string;
   config?: JsonObject;
   nativeCodeModeEnabled?: boolean;
   nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
@@ -215,12 +215,13 @@ export function buildCodexThreadConfiguration(
       disableLoginShell: options.disableLoginShell,
     }),
     // Catalog-owned collaboration messages replace caller collaboration instructions
-    // (codex-rs/core/src/context/world_state/collaboration_mode.rs), so the skill
-    // catalog rides the thread developer carrier after the immutable generic policy.
+    // (codex-rs/core/src/context/world_state/collaboration_mode.rs), so refreshable
+    // skills, persona, and memory context ride the thread developer carrier after
+    // the immutable generic policy.
     developerInstructions: joinPresentSections(
       options.developerInstructions ??
         buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
-      options.skillsInstructions,
+      options.refreshableInstructions,
     ),
   };
 }

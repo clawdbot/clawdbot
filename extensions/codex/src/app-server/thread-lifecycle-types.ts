@@ -76,8 +76,8 @@ export type CodexStartOrResumeThreadParams = {
   webSearchAllowed?: boolean;
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
-  /** Skill catalog carried with thread developer instructions; refreshable, never generic policy. */
-  skillsInstructions?: string;
+  /** Skills, persona, and memory carried with thread instructions; refreshable, never generic. */
+  refreshableInstructions?: string;
   agentWorkspaceDeveloperInstructions?: string;
   config?: JsonObject;
   shellEnvironment?: Readonly<Record<string, string>>;

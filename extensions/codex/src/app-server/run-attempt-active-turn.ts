@@ -26,7 +26,7 @@ import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-co
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
-import { restoreCodexThreadSkillsCatalogAfterCompaction } from "./thread-policy.js";
+import { restoreCodexThreadInstructionsAfterCompaction } from "./thread-policy.js";
 import {
   codexTranscriptMirrorRuntime,
   createCodexAppServerUserMessagePersistenceNotifier,
@@ -213,8 +213,8 @@ export function activateCodexAttemptTurn(
         }
         try {
           // Compaction rebuilds initial context from the creation-time developer
-          // instructions, so a catalog refreshed in place is dropped here.
-          await restoreCodexThreadSkillsCatalogAfterCompaction({
+          // instructions, so refreshable instructions injected in place are dropped here.
+          await restoreCodexThreadInstructionsAfterCompaction({
             client: resourceState.client,
             threadId: resourceState.thread.threadId,
             ephemeralPolicy: resourceState.thread.liveThreadEphemeralPolicy,
@@ -222,18 +222,18 @@ export function activateCodexAttemptTurn(
             signal: runAbortController.signal,
           });
         } catch (error) {
-          // Nothing else re-delivers this catalog, so the record must name what
+          // Nothing else re-delivers these instructions, so the record must name what
           // compaction actually restored. Claiming the refresh is still live
           // would make every later turn skip it and strand the conversation on
-          // the creation-time catalog.
+          // the creation-time section.
           const ephemeralPolicy = resourceState.thread.liveThreadEphemeralPolicy;
           if (ephemeralPolicy) {
             resourceState.thread.liveThreadEphemeralPolicy = {
               ...ephemeralPolicy,
-              skillsInstructions: ephemeralPolicy.nativeSkillsInstructions,
+              refreshableInstructions: ephemeralPolicy.nativeRefreshableInstructions,
             };
           }
-          embeddedAgentLog.warn("failed to restore Codex skill catalog after compaction", {
+          embeddedAgentLog.warn("failed to restore Codex thread instructions after compaction", {
             runId: params.runId,
             threadId: resourceState.thread.threadId,
             error: formatErrorMessage(error),

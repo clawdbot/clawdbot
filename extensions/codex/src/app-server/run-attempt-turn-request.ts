@@ -30,7 +30,7 @@ export async function prepareCodexAttemptTurnRequest(
 ) {
   const { prompt, state: resourceState, releaseCurrentRoute } = resources;
   const { context, turnState, buildRenderedCodexDeveloperInstructions } = prompt;
-  const { runtime, attemptTools, hookContextWindowFields, workspaceBootstrapContext } = context;
+  const { runtime, attemptTools, hookContextWindowFields } = context;
   const { connection, runtimeParams, effectiveRuntimeProviderId, effectiveRuntimeModelId } =
     runtime;
   const { tools, toolBridge } = attemptTools;
@@ -134,8 +134,6 @@ export async function prepareCodexAttemptTurnRequest(
               model: resourceState.thread.model,
               modelProvider: resourceState.thread.modelProvider,
             }),
-        turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
-        memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
         preserveNativeTurnSettings: usesSupervisionConnection,
         messageToolAvailable: toolBridge.availableTools.some((tool) => tool.name === "message"),
         requireExplicitMessageTarget: attemptTools.requireExplicitMessageTarget,

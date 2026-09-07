@@ -290,10 +290,10 @@ describe("happy path prompt snapshots", () => {
     const agentSoulHeading = "## OpenClaw Agent Soul";
 
     expect(direct).toContain('"collaborationMode": {');
-    expect(direct).toContain('"developer_instructions": "# Collaboration Mode: Default');
+    expect(direct).toContain('"developer_instructions": null');
     expect(direct).toContain(agentSoulHeading);
     expect(group).toContain('"collaborationMode": {');
-    expect(group).toContain('"developer_instructions": "# Collaboration Mode: Default');
+    expect(group).toContain('"developer_instructions": null');
     expect(group).toContain(agentSoulHeading);
     expect(direct).not.toContain(heartbeatPhrase);
     expect(group).not.toContain(heartbeatPhrase);
@@ -301,7 +301,7 @@ describe("happy path prompt snapshots", () => {
     expect(group).not.toContain("This is an OpenClaw heartbeat turn.");
 
     expect(heartbeat).toContain('"collaborationMode": {');
-    expect(heartbeat).toContain('"developer_instructions": "# Collaboration Mode: Default');
+    expect(heartbeat).toContain('"developer_instructions": null');
     expect(heartbeat).toContain(agentSoulHeading);
     const openClawRuntimeInstructions = renderedPromptSection(
       heartbeat,

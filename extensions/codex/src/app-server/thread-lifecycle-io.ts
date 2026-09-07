@@ -147,7 +147,7 @@ export async function resumeExistingCodexThread(
         appServer: params.appServer,
         dynamicTools: params.dynamicTools,
         developerInstructions: params.developerInstructions,
-        skillsInstructions: params.skillsInstructions,
+        refreshableInstructions: params.refreshableInstructions,
         config: resumeConfig,
         nativeCodeModeEnabled: params.nativeCodeModeEnabled,
         nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
@@ -465,7 +465,7 @@ export async function startFreshCodexThread(
       dynamicTools: params.dynamicTools,
       appServer: params.appServer,
       developerInstructions: params.developerInstructions,
-      skillsInstructions: params.skillsInstructions,
+      refreshableInstructions: params.refreshableInstructions,
       config,
       nativeCodeModeEnabled: params.nativeCodeModeEnabled,
       nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
@@ -650,9 +650,9 @@ export async function startFreshCodexThread(
       ? {
           liveThreadEphemeralPolicy: {
             developerInstructions: params.developerInstructions,
-            skillsInstructions: params.skillsInstructions,
-            // Creation carries the catalog natively, so compaction restores exactly this one.
-            nativeSkillsInstructions: params.skillsInstructions,
+            refreshableInstructions: params.refreshableInstructions,
+            // Creation carries this section natively, so compaction restores exactly this one.
+            nativeRefreshableInstructions: params.refreshableInstructions,
           },
         }
       : {}),
