@@ -1,4 +1,5 @@
 // Coverage for sanitizing replay messages at the LLM boundary.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
@@ -1034,6 +1035,10 @@ describe("normalizeMessagesForLlmBoundary", () => {
     const unarmed = await session.agent.transformContext(messages);
     armed = true;
     const armedResult = await session.agent.transformContext(messages);
+    const steeredResult = await session.agent.transformContext([
+      ...messages,
+      { role: "user", content: "steering update", timestamp: 2 },
+    ]);
     cleanup();
     const unarmedRecords = unarmed as Array<{ content?: unknown }>;
     const armedRecords = armedResult as Array<{ content?: unknown }>;
@@ -1046,7 +1051,29 @@ describe("normalizeMessagesForLlmBoundary", () => {
       "__openclawTranscriptPromptText",
       "visible transcript prompt",
     );
-    expect(captured).toHaveLength(2);
+    expect(steeredResult[0]).toEqual(armedResult[0]);
+    expect(steeredResult[1]).toMatchObject({ content: "steering update" });
+    const runtimeMessage = expectDefined(messages[0], "original prompt fixture");
+    const boundaryOptions = {
+      currentUserTimestampOverride: {
+        timestamp: 1,
+        runtimeTimestamp: 1,
+        text: "visible transcript prompt",
+        alternateText: "private model prompt",
+      },
+      userTranscriptContexts: [
+        {
+          runtimeMessage,
+          transcriptMessage: Object.assign({}, runtimeMessage, {
+            __openclaw: { senderName: "Alice" },
+          }),
+        },
+      ],
+    };
+    expect(normalizeMessagesForLlmBoundary(steeredResult, boundaryOptions)[0]).toEqual(
+      normalizeMessagesForLlmBoundary(armedResult, boundaryOptions)[0],
+    );
+    expect(captured).toHaveLength(3);
     expect(session.agent.transformContext).not.toBeUndefined();
   });
 

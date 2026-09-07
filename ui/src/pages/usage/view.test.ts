@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { buildAggregatesFromSessions } from "./metrics.ts";
+import { buildUsageFilterOptions } from "./query.ts";
 import type { UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
 import { renderUsage } from "./view.ts";
 
@@ -100,18 +101,18 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
       context: {
         weight: undefined,
         loading: false,
-        status: { error: null, hasLoaded: false, stale: false },
+        status: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
       },
       timeSeriesMode: "cumulative",
       timeSeriesBreakdownMode: "total",
       timeSeries: null,
       timeSeriesLoading: false,
-      timeSeriesStatus: { error: null, hasLoaded: false, stale: false },
+      timeSeriesStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
       timeSeriesCursorStart: null,
       timeSeriesCursorEnd: null,
       sessionLogs: null,
       sessionLogsLoading: false,
-      sessionLogsStatus: { error: null, hasLoaded: false, stale: false },
+      sessionLogsStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
       sessionLogsExpanded: false,
       logFilters: {
         roles: [],
@@ -160,9 +161,6 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
         onTimeSeriesModeChange: noop,
         onTimeSeriesBreakdownChange: noop,
         onTimeSeriesCursorRangeChange: noop,
-        onRetryTimeSeries: noop,
-        onRetrySessionLogs: noop,
-        onRetryContextWeight: noop,
       },
     },
     ...overrides,
@@ -550,6 +548,85 @@ describe("renderUsage", () => {
     expect(onQueryDraftChange).toHaveBeenCalledWith(expect.stringContaining("provider:clear"));
   });
 
+  it("keeps bounded filter inventories in source order across observed and aggregate values", () => {
+    const sessions = ["observed-a", "observed-b", "observed-a"].map((provider, index) =>
+      Object.assign(usageSession(`session-${index}`, "main", provider), {
+        providerOverride: `override-${index}`,
+        modelOverride: "override-only-model",
+        channel: index === 0 ? "" : "Chat",
+      }),
+    );
+    const aggregates = buildAggregatesFromSessions(
+      Array.from({ length: 14 }, (_, index) =>
+        usageSession(`aggregate-${index}`, "other", `aggregate-${index}`),
+      ),
+    );
+    aggregates.tools.tools = Array.from({ length: 14 }, (_, index) => ({
+      name: `tool-${index}`,
+      count: 1,
+    }));
+    const options = buildUsageFilterOptions(sessions, aggregates);
+    expect(options.channel).toEqual(["Chat"]);
+    expect(options.provider).toEqual([
+      "observed-a",
+      "observed-b",
+      "override-0",
+      "override-1",
+      "override-2",
+      ...Array.from({ length: 7 }, (_, index) => `aggregate-${index}`),
+    ]);
+    expect(options.model).toEqual([
+      "observed-a-model",
+      "observed-b-model",
+      ...Array.from({ length: 10 }, (_, index) => `aggregate-${index}-model`),
+    ]);
+    expect(options.tool).toEqual(Array.from({ length: 12 }, (_, index) => `tool-${index}`));
+  });
+
+  it("refreshes filter order and draft selections when chart mode, agent, or source changes", () => {
+    const container = document.createElement("div");
+    const props = createUsageProps();
+    props.data.sessions = [
+      usageSession("first", "main", "first", { totalTokens: 200, totalCost: 1 }),
+      usageSession("second", "other", "second", { totalTokens: 100, totalCost: 2 }),
+    ];
+    props.filters.query = "provider:absent";
+    props.filters.queryDraft = 'label:"Team  Planning" provider:second';
+    props.callbacks.filters.onQueryDraftChange = vi.fn();
+    const providerOptions = () =>
+      [...container.querySelectorAll<HTMLElement>(".usage-filter-select")]
+        .find(
+          (menu) => menu.querySelector(".usage-filter-trigger span")?.textContent === "Provider",
+        )!
+        .querySelectorAll<HTMLElement & { checked: boolean }>(".usage-filter-option");
+    const values = () => [...providerOptions()].map((option) => option.textContent?.trim());
+
+    render(renderUsage(props), container);
+    expect(values()).toEqual(["first", "second"]);
+    expect([...providerOptions()].find((option) => option.checked)?.textContent?.trim()).toBe(
+      "second",
+    );
+    expect(container.querySelector(".usage-query-suggestion")?.textContent?.trim()).toBe(
+      "provider:second",
+    );
+
+    props.display.chartMode = "cost";
+    render(renderUsage(props), container);
+    expect(values()).toEqual(["second", "first"]);
+    props.filters.agentId = "main";
+    render(renderUsage(props), container);
+    expect(values()).toEqual(["first"]);
+    expect(container.querySelector(".usage-query-suggestion")).toBeNull();
+
+    props.data.sessions = [usageSession("replacement", "main", "second-new")];
+    render(renderUsage(props), container);
+    expect(values()).toEqual(["second-new"]);
+    container.querySelector<HTMLButtonElement>(".usage-query-suggestion")?.click();
+    expect(props.callbacks.filters.onQueryDraftChange).toHaveBeenCalledWith(
+      'label:"Team  Planning" provider:second-new ',
+    );
+  });
+
   it("reports a stalled provider refresh instead of hiding the section", () => {
     const container = document.createElement("div");
 
@@ -630,6 +707,8 @@ describe("renderUsage", () => {
                     limit: 20,
                     unit: "USD",
                   },
+                  { type: "budget", used: 12.5, limit: 20, unit: " jPy " },
+                  { type: "budget", used: 1.5, limit: 3, unit: " Credits " },
                 ],
               },
             ],
@@ -645,77 +724,12 @@ describe("renderUsage", () => {
     expect(card?.textContent).toContain("75% left");
     expect(card?.textContent).toContain("$64.50");
     expect(card?.textContent).toContain("$5.00 / $20.00");
-  });
-
-  it("renders provider-reported cost history and attribution", () => {
-    const container = document.createElement("div");
-
-    render(
-      renderUsage(
-        createUsageProps({
-          data: {
-            ...createUsageProps().data,
-            providerUsage: [
-              {
-                provider: "openai",
-                displayName: "OpenAI",
-                plan: "Admin API",
-                windows: [],
-                costHistory: {
-                  unit: "USD",
-                  periodDays: 30,
-                  daily: [
-                    {
-                      date: new Date().toISOString().slice(0, 10),
-                      amount: 12.5,
-                      requests: 42,
-                      inputTokens: 1_000,
-                      cacheReadTokens: 400,
-                      cacheWriteTokens: 0,
-                      outputTokens: 250,
-                      totalTokens: 1_250,
-                    },
-                    {
-                      date: "2026-01-01",
-                      amount: 0,
-                      requests: 1,
-                      inputTokens: 50,
-                      cacheReadTokens: 0,
-                      cacheWriteTokens: 0,
-                      outputTokens: 10,
-                      totalTokens: 60,
-                    },
-                  ],
-                  models: [
-                    {
-                      name: "gpt-5.5",
-                      requests: 42,
-                      inputTokens: 1_000,
-                      cacheReadTokens: 400,
-                      cacheWriteTokens: 0,
-                      outputTokens: 250,
-                      totalTokens: 1_250,
-                    },
-                  ],
-                  categories: [{ name: "Responses", amount: 12.5 }],
-                },
-              },
-            ],
-          },
-        }),
+    expect(
+      Array.from(
+        container.querySelectorAll(".provider-usage-billing-row strong"),
+        (value) => value.textContent,
       ),
-      container,
-    );
-
-    const card = container.querySelector(".provider-usage-card");
-    expect(card?.textContent).toContain("$12.50");
-    expect(card?.textContent).toContain("43 requests");
-    expect(card?.textContent).toContain("gpt-5.5");
-    expect(card?.textContent).toContain("Responses");
-    const bars = card?.querySelectorAll<HTMLElement>(".provider-cost-chart span");
-    expect(bars).toHaveLength(2);
-    expect(bars?.[0]?.style.height).toBe("100%");
-    expect(bars?.[1]?.style.height).toBe("0%");
+    ).toEqual(["$64.50", "$5.00 / $20.00", "¥13 / ¥20", "1.5  Credits  / 3  Credits "]);
   });
 
   it("filters visible sessions when an agent scope is selected", () => {

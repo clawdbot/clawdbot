@@ -510,7 +510,9 @@ describe("host-owned current admission annotation", () => {
     await withAdmission(
       async (f) => {
         const before = structuredClone(f.recorder.getPersistedMessage?.());
+        const stored = asOptionalRecord((await loadTranscriptEvents(f.target)).at(-1))?.message;
         await f.annotate();
+        expect(before).toStrictEqual(stored);
         expect(f.recorder.getPersistedMessage?.()).toEqual({
           ...before,
           __openclaw: { ...before?.["__openclaw"], ...nativeAnnotation(), runId: f.attempt.runId },
@@ -524,6 +526,7 @@ describe("host-owned current admission annotation", () => {
           media: [{ path: "/tmp/fixture-image.png", contentType: "image/png" }],
           replyToId: "prior",
           replyToPreview: { text: "prior prompt" },
+          transport: { channel: "webchat", messageId: undefined },
         },
         beforeMessageWrite: hook,
       },

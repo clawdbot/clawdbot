@@ -1539,7 +1539,7 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(result.childSessionKey).toMatch(/^agent:main:subagent:/);
 
     const childSessionKey = result.childSessionKey as string;
-    expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(2);
+    expect(hoisted.updateSessionStoreMock).toHaveBeenCalledOnce();
     expect(persistedStore?.[childSessionKey]).toMatchObject({
       sessionId: expect.any(String),
       lifecycleRevision: expect.any(String),
@@ -1660,6 +1660,32 @@ describe("spawnSubagentDirect seam flow", () => {
     const result = await spawnSubagentDirect(
       { task: "try an unsandboxed child" },
       { agentSessionKey: "agent:main:main" },
+    );
+    expect(result).toMatchObject({
+      status: "forbidden",
+      error: expect.stringContaining("cannot spawn unsandboxed"),
+    });
+    expectNoChildSpawnSideEffects();
+  });
+
+  it("rejects a split-key sandboxed requester spawning an unsandboxed native child via the explicit sandboxed flag", async () => {
+    // Regression for the ClawSweeper P1 finding on #137779: when the durable parent-lineage
+    // key (agent:main:main) replaces a sandboxed non-main policy key, key-derived sandbox
+    // status alone would classify the requester as unsandboxed and admit an unsandboxed child.
+    // The active classification must be preserved via the explicit ctx.sandboxed flag, mirroring
+    // the visible/ACP spawn paths, so admission still rejects before child persistence/launch.
+    hoisted.resolveSandboxRuntimeStatusMock.mockImplementation(() => ({
+      // Durable lineage key is not itself classified as sandboxed; only the original policy
+      // key was. This isolates the test from key-derived status.
+      sandboxed: false,
+      sandboxRequired: false,
+    }));
+    const result = await spawnSubagentDirect(
+      { task: "try an unsandboxed child from a split-key sandboxed parent" },
+      {
+        agentSessionKey: "agent:main:main",
+        sandboxed: true,
+      },
     );
     expect(result).toMatchObject({
       status: "forbidden",

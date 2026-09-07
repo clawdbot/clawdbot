@@ -1,5 +1,6 @@
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 import { html, nothing } from "lit";
+import { TERMINAL_UPLOAD_RETENTION_MS } from "../../../../packages/gateway-protocol/src/schema/terminal-constants.js";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { renderDockDestinations } from "../dock-destination-controls.ts";
@@ -31,6 +32,7 @@ type TerminalUploadBatch = {
   tab: TerminalUploadTab;
   files: File[];
   paths: string[];
+  expiresAtMs: number | null;
   nextIndex: number;
   state: "uploading" | "failed";
   error: string | null;
@@ -40,6 +42,7 @@ type TerminalUploadBatch = {
 
 type TerminalUploadProgress = {
   completed: number;
+  canInsert: boolean;
   current: number;
   error: string | null;
   fileName: string;
@@ -83,6 +86,8 @@ export class TerminalPanelUploadController {
     const currentIndex = Math.min(batch.nextIndex, total - 1);
     return {
       completed: batch.nextIndex,
+      canInsert:
+        batch.paths.length > 0 && (batch.expiresAtMs === null || Date.now() < batch.expiresAtMs),
       current: currentIndex + 1,
       error: batch.error,
       fileName: batch.files[currentIndex]?.name ?? "",
@@ -162,6 +167,7 @@ export class TerminalPanelUploadController {
       tab,
       files,
       paths: [],
+      expiresAtMs: null,
       nextIndex: 0,
       state: "uploading",
       error: null,
@@ -198,6 +204,14 @@ export class TerminalPanelUploadController {
     this.host.requestUpdate();
   }
 
+  private ensureUploadsRetained(batch: TerminalUploadBatch): boolean {
+    if (batch.expiresAtMs !== null && Date.now() >= batch.expiresAtMs) {
+      this.failBatch(batch, new Error(t("terminal.uploadExpired")), false);
+      return false;
+    }
+    return true;
+  }
+
   private async runBatch(batch: TerminalUploadBatch): Promise<void> {
     const client = this.host.client();
     if (!client || !this.ensureCurrent(batch)) {
@@ -206,7 +220,7 @@ export class TerminalPanelUploadController {
     }
     while (batch.nextIndex < batch.files.length) {
       const file = batch.files[batch.nextIndex];
-      if (!file || !this.ensureCurrent(batch)) {
+      if (!file || !this.ensureCurrent(batch) || !this.ensureUploadsRetained(batch)) {
         return;
       }
       this.host.requestUpdate();
@@ -223,6 +237,7 @@ export class TerminalPanelUploadController {
       }
 
       let uploadedPath: string;
+      const uploadStartedAtMs = Date.now();
       try {
         const result = await uploadTerminalFile(
           client,
@@ -246,11 +261,18 @@ export class TerminalPanelUploadController {
       }
 
       batch.paths.push(uploadedPath);
+      // Start conservatively before staging: a retained batch must never paste
+      // its early paths after the host's cleanup deadline may have passed.
+      batch.expiresAtMs ??= uploadStartedAtMs + TERMINAL_UPLOAD_RETENTION_MS;
       batch.nextIndex += 1;
       this.host.requestUpdate();
     }
 
-    if (!this.ensureCurrent(batch)) {
+    this.insertPaths(batch);
+  }
+
+  private insertPaths(batch: TerminalUploadBatch): void {
+    if (!this.ensureCurrent(batch) || !this.ensureUploadsRetained(batch)) {
       return;
     }
     // Ghostty preserves bracketed-paste mode. This produces editable input,
@@ -261,6 +283,13 @@ export class TerminalPanelUploadController {
     this.host.requestUpdate();
   }
 
+  insertCompleted = (): void => {
+    const batch = this.batch;
+    if (batch?.state === "failed" && batch.paths.length > 0) {
+      this.insertPaths(batch);
+    }
+  };
+
   retry = (): void => {
     const batch = this.batch;
     if (!batch || batch.state !== "failed" || !batch.retryable) {
@@ -268,6 +297,9 @@ export class TerminalPanelUploadController {
     }
     if (!this.host.isCurrent(batch.tab) || !this.host.client()) {
       this.cancelBatch(batch);
+      return;
+    }
+    if (!this.ensureUploadsRetained(batch)) {
       return;
     }
     batch.state = "uploading";
@@ -481,6 +513,19 @@ export function renderTerminalUploadLayer(upload: TerminalPanelUploadController)
           ${
             progress.error
               ? html`<div class="tp-upload-card__error">${progress.error}</div>`
+              : nothing
+          }
+          ${
+            progress.state === "failed" && progress.canInsert
+              ? html`<div class="tp-upload-card__recovery">
+                  <button
+                    class="tp-upload-card__action tp-upload-insert"
+                    type="button"
+                    @click=${upload.insertCompleted}
+                  >
+                    ${t("terminal.insertUploadedPaths")}
+                  </button>
+                </div>`
               : nothing
           }
         </div>`

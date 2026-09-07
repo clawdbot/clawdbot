@@ -54,7 +54,7 @@ scenario:
         - After the second Gateway-recovery system message, perform only checkpoint 3.
         - After the third Gateway-recovery system message, perform the audit and final report.
 
-        For each checkpoint phase, make exactly one `exec` call with `restartSafe: true`. Its JavaScript must search for `qa_restart_wait`, call the single match with `{}`, and return only that phase's literal (`CHECKPOINT-1`, `CHECKPOINT-2`, or `CHECKPOINT-3`). Once `exec` reports waiting, call `wait` exactly once with its run id. Do not issue another `exec` until a new Gateway-recovery system message arrives. Do not read audit files, search for the unsafe probe, or write the final report during a checkpoint phase.
+        For each checkpoint phase, make exactly one `exec` call with `restartSafe: true`. Its JavaScript must search for `qa_restart_wait`, bind the single match as `target`, explicitly suspend with `await Promise.all([target({}), yield_control("restart checkpoint")])`, and then return only that phase's literal (`CHECKPOINT-1`, `CHECKPOINT-2`, or `CHECKPOINT-3`). `yield_control` is a built-in function; never search for or redeclare it. Once `exec` reports waiting, call `wait` exactly once with its run id. Do not issue another `exec` until a new Gateway-recovery system message arrives. Do not read audit files, search for the unsafe probe, or write the final report during a checkpoint phase.
 
         A Gateway restart will interrupt each checkpoint wait. A failed, unavailable, expired, or aborted `wait` result after restart is expected checkpoint evidence, not an audit failure; do not retry the old wait. Checkpoint literals are internal tool output. Never echo them or send assistant text during a checkpoint phase.
 

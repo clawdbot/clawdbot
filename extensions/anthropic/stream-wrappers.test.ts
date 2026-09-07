@@ -1,4 +1,5 @@
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
+import { calculateUsageCost } from "@openclaw/llm-core";
 // Anthropic tests cover stream wrappers plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
@@ -113,15 +114,16 @@ function runNativeFastModeWrapper(params?: {
   enabled?: boolean;
   headers?: Record<string, string>;
   modelId?: string;
+  cost?: Parameters<StreamFn>[0]["cost"];
 }) {
   const captured: {
     headers?: Record<string, string>;
-    model?: { cost: { input: number; output: number; cacheRead: number; cacheWrite: number } };
+    model?: Parameters<StreamFn>[0];
     payload?: Record<string, unknown>;
   } = {};
   const base: StreamFn = (model, _context, options) => {
     captured.headers = options?.headers;
-    captured.model = model as typeof captured.model;
+    captured.model = model;
     const payload = {} as Record<string, unknown>;
     options?.onPayload?.(payload as never, model as never);
     captured.payload = payload;
@@ -134,7 +136,7 @@ function runNativeFastModeWrapper(params?: {
       api: params?.api ?? "anthropic-messages",
       baseUrl: params?.baseUrl,
       id: params?.modelId ?? "claude-opus-5",
-      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      cost: params?.cost ?? { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
     } as never,
     {} as never,
     {
@@ -358,6 +360,40 @@ describe("anthropic stream wrappers", () => {
       cacheWrite: 12.5,
     });
   });
+
+  it.each([
+    {
+      cacheRead: 100_000,
+      expected: { input: 0.01, output: 0.005, cacheRead: 0.1, cacheWrite: 0.2875, total: 0.4025 },
+    },
+    {
+      cacheRead: 250_000,
+      expected: { input: 0.02, output: 0.01, cacheRead: 0.5, cacheWrite: 0.575, total: 1.105 },
+    },
+  ])(
+    "prices fast-mode tiers and mixed cache writes with $cacheRead cached tokens",
+    ({ cacheRead, expected }) => {
+      const cost: Parameters<StreamFn>[0]["cost"] = {
+        input: 5,
+        output: 25,
+        cacheRead: 0.5,
+        cacheWrite: 6.25,
+        tieredPricing: [
+          { range: [0, 200_000], input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+          { range: [200_000, Infinity], input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+        ],
+      };
+      const original = structuredClone(cost);
+      const captured = runNativeFastModeWrapper({ cost });
+      const pricedModel = expectDefined(captured.model, "fast-mode model");
+      const usageCost = calculateUsageCost(
+        { input: 1_000, output: 100, cacheRead, cacheWrite: 20_000, cacheWrite1h: 5_000 },
+        pricedModel.cost,
+      );
+      expect(usageCost).toEqual({ ...expected, total: expect.closeTo(expected.total, 10) });
+      expect(cost).toEqual(original);
+    },
+  );
 
   it("uses native fast mode for Claude Opus 4.8", () => {
     const captured = runNativeFastModeWrapper({ modelId: "claude-opus-4.8" });

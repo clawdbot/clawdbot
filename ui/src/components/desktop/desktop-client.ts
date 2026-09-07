@@ -1,3 +1,5 @@
+import { resolveGatewayWebSocketUrl } from "../../lib/gateway-websocket-url.ts";
+
 export type DesktopDisconnectDetail = {
   clean: boolean;
   code?: number;
@@ -26,15 +28,16 @@ type DesktopConnectOptions = {
 export type DesktopConnectionHandle = {
   disconnect(): void;
   disableInput(): void;
-  sendBackspace?(): void;
-  sendKeyboardEvent?(event: KeyboardEvent): void;
-  sendText?(text: string): void;
-  setScaleViewport?(enabled: boolean): void;
+  sendBackspace(): void;
+  sendKeyboardEvent(event: KeyboardEvent): void;
+  sendText(text: string): void;
+  setScaleViewport(enabled: boolean): void;
 };
 
 type RfbClient = EventTarget & {
   background: string;
   disconnect(): void;
+  sendKey(keysym: number, code: string | null, down?: boolean): void;
   scaleViewport: boolean;
   viewOnly: boolean;
 };
@@ -55,25 +58,6 @@ const loadDefaultRfb: RfbLoader = async () => {
   return module.default;
 };
 
-function resolveDesktopWebSocketUrl(wsUrl: string, gatewayUrl = globalThis.location?.href): string {
-  const base = new URL(gatewayUrl ?? globalThis.location.href, globalThis.location?.href);
-  if (base.protocol === "http:") {
-    base.protocol = "ws:";
-  } else if (base.protocol === "https:") {
-    base.protocol = "wss:";
-  }
-  const resolved = new URL(wsUrl, base);
-  if (resolved.protocol === "http:") {
-    resolved.protocol = "ws:";
-  } else if (resolved.protocol === "https:") {
-    resolved.protocol = "wss:";
-  }
-  if (resolved.protocol !== "ws:" && resolved.protocol !== "wss:") {
-    throw new Error("Desktop observer URL must use WebSocket transport");
-  }
-  return resolved.toString();
-}
-
 /** Thin owner for one noVNC RFB lifecycle. */
 export class DesktopClient {
   constructor(
@@ -84,7 +68,7 @@ export class DesktopClient {
 
   async connect(options: DesktopConnectOptions): Promise<DesktopConnectionHandle> {
     const Rfb = this.rfbConstructor ?? (await this.loadRfb());
-    const wsUrl = resolveDesktopWebSocketUrl(options.wsUrl, options.gatewayUrl);
+    const wsUrl = resolveGatewayWebSocketUrl(options.wsUrl, options.gatewayUrl);
     // The socket claims control before RFB authentication; canceled lazy loads must not open it.
     if (!options.isCurrent()) {
       throw new DOMException("Desktop connection is no longer current", "AbortError");
@@ -154,10 +138,16 @@ export class DesktopClient {
         // keyboard owner to translate each inserted character and emit a
         // balanced press/release. Line breaks need Enter rather than Unicode LF.
         const normalizedText = text.replace(/\r\n?/g, "\n");
-        for (let index = 0; index < normalizedText.length; index += 1) {
+        for (const character of normalizedText) {
+          // noVNC 1.7's DOM key translator only accepts BMP characters. Its
+          // public RFB sender supports the full Unicode scalar keysym directly.
+          if (character.length === 2) {
+            rfb.sendKey(0x01000000 | character.codePointAt(0)!, null);
+            continue;
+          }
           dispatchKeyboardEvent(
             new KeyboardEvent("keydown", {
-              key: normalizedText.charAt(index) === "\n" ? "Enter" : normalizedText.charAt(index),
+              key: character === "\n" ? "Enter" : character,
               code: "Unidentified",
               bubbles: true,
               cancelable: true,
@@ -165,18 +155,7 @@ export class DesktopClient {
           );
         }
       },
-      sendBackspace: () => {
-        for (const type of ["keydown", "keyup"]) {
-          dispatchKeyboardEvent(
-            new KeyboardEvent(type, {
-              key: "Backspace",
-              code: "Backspace",
-              bubbles: true,
-              cancelable: true,
-            }),
-          );
-        }
-      },
+      sendBackspace: () => rfb.sendKey(0xff08, "Backspace"),
     };
   }
 }

@@ -2,6 +2,7 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelCatalogResult } from "../api/types.ts";
 import { invalidateChatMetadataStore } from "./chat/chat-metadata-store.ts";
+import { subscribeToSharedRequest } from "./shared-request-subscription.ts";
 
 const MODEL_CATALOG_CACHE_TTL_MS = 60_000;
 // A picker open is an operator signal to revalidate, but full provider discovery can be slow.
@@ -71,13 +72,13 @@ export async function loadModelCatalog(
     !pendingRequestAborted &&
     cached.inFlightRefresh === true
   ) {
-    return await subscribeToModelCatalogRequest(cached.inFlight, opts.signal);
+    return await subscribeToSharedRequest(cached.inFlight, {}, opts.signal);
   }
   if (!refresh && cached?.result && (cached.expiresAt > now || refreshCooldownActive)) {
     return cached.result;
   }
   if (cached?.inFlight && !pendingRequestAborted && (!refresh || cached.inFlightRefresh === true)) {
-    return await subscribeToModelCatalogRequest(cached.inFlight, opts.signal);
+    return await subscribeToSharedRequest(cached.inFlight, {}, opts.signal);
   }
 
   // The cache write happens here, gated on inFlight identity: a refresh call
@@ -140,44 +141,5 @@ export async function loadModelCatalog(
     inFlight,
     ...(refresh ? { inFlightRefresh: true } : {}),
   });
-  return await subscribeToModelCatalogRequest(inFlight, opts.signal);
-}
-
-async function subscribeToModelCatalogRequest(
-  pending: ModelCatalogPendingRequest,
-  signal: AbortSignal | undefined,
-): Promise<ModelCatalogResult> {
-  const subscriber = {};
-  pending.subscribers.add(subscriber);
-  if (!signal) {
-    try {
-      return await pending.promise;
-    } finally {
-      pending.subscribers.delete(subscriber);
-    }
-  }
-
-  let rejectAbort: (reason: unknown) => void = () => undefined;
-  const aborted = new Promise<never>((_resolve, reject) => {
-    rejectAbort = reject;
-  });
-  const onAbort = () => {
-    pending.subscribers.delete(subscriber);
-    // The request is shared: one retired page must not cancel another active
-    // consumer, while the final subscriber should stop the Gateway request.
-    if (pending.subscribers.size === 0) {
-      pending.controller?.abort(signal.reason);
-    }
-    rejectAbort(signal.reason);
-  };
-  signal.addEventListener("abort", onAbort, { once: true });
-  if (signal.aborted) {
-    onAbort();
-  }
-  try {
-    return await Promise.race([pending.promise, aborted]);
-  } finally {
-    signal.removeEventListener("abort", onAbort);
-    pending.subscribers.delete(subscriber);
-  }
+  return await subscribeToSharedRequest(inFlight, {}, opts.signal);
 }

@@ -43,6 +43,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   consumeTrustedToolNoStartError,
+  copyInternalToolResultState,
   getCoreTtsToolResultMediaUrls,
 } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
@@ -63,6 +64,7 @@ import {
   estimateToolResultTextChars,
   resolveLiveToolResultMaxChars,
   sliceToolResultTextToBudget,
+  sliceUtf16Safe,
 } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CodexDynamicToolsLoading } from "./config.js";
 import { finalizeCodexToolAvailability } from "./dynamic-tool-availability.js";
@@ -550,12 +552,12 @@ export function createCodexDynamicToolBridge(params: {
     ...availableProjection.quarantinedTools,
     ...registeredProjection.quarantinedTools,
   ]);
-  warnQuarantinedDynamicTools({
+  reportQuarantinedDynamicTools({
     tools: quarantinedTools,
     availableToolCount: availableTools.length,
     registeredToolCount: registeredSpecTools.length,
+    hookContext: params.hookContext,
   });
-  emitQuarantinedDynamicToolDiagnostics(quarantinedTools, params.hookContext);
   const telemetry: CodexDynamicToolBridge["telemetry"] = {
     didSendViaMessagingTool: false,
     didDeliverSourceReplyViaMessageTool: false,
@@ -928,6 +930,7 @@ export function createCodexDynamicToolBridge(params: {
           (!asyncStarted &&
             isReplaySafeToolInstance(toolEntry.tool) &&
             isReplaySafeToolCall(toolName, executedArgs));
+        copyInternalToolResultState(rawResult, response);
         return withDynamicToolExecutionState(response, {
           executedArguments: executedArgs,
           executionStarted: didStartExecution && !executionPrevented,
@@ -1026,14 +1029,31 @@ function projectCodexExecutableDynamicToolSurface(
   tools: ProjectedCodexDynamicTool[];
   quarantinedTools: CodexDynamicToolSchemaQuarantine[];
 } {
-  const projected = projectCodexDynamicTools(tools);
-  const wrapped = wrapProjectedCodexDynamicTools(projected.tools, hookContext);
+  const { tools: projectedTools, quarantinedTools } = projectCodexDynamicTools(tools);
+  const wrappedTools: ProjectedCodexDynamicTool[] = [];
+  for (const entry of projectedTools) {
+    try {
+      if (isToolWrappedWithBeforeToolCallHook(entry.tool)) {
+        setBeforeToolCallDiagnosticsEnabled(entry.tool, false);
+        wrappedTools.push(entry);
+        continue;
+      }
+      wrappedTools.push({
+        ...entry,
+        tool: wrapToolWithBeforeToolCallHook(entry.tool, hookContext, {
+          emitDiagnostics: false,
+        }),
+      });
+    } catch {
+      quarantinedTools.push({
+        tool: entry.name,
+        violations: [`${entry.name} could not be wrapped for before-tool-call hooks`],
+      });
+    }
+  }
   return {
-    tools: wrapped.tools,
-    quarantinedTools: dedupeQuarantinedDynamicTools([
-      ...projected.quarantinedTools,
-      ...wrapped.quarantinedTools,
-    ]),
+    tools: wrappedTools,
+    quarantinedTools: dedupeQuarantinedDynamicTools(quarantinedTools),
   };
 }
 
@@ -1066,9 +1086,8 @@ function notifyAgentToolResult(
       isError,
     });
   } catch (error) {
-    embeddedAgentLog.warn(
-      `onAgentToolResult handler failed: tool=${toolName} error=${String(error)}`,
-    );
+    const message = formatToolExecutionErrorMessage(error, "Unknown error");
+    embeddedAgentLog.warn(`onAgentToolResult handler failed: tool=${toolName} error=${message}`);
   }
 }
 
@@ -1082,71 +1101,30 @@ function failedToolResult(
   };
 }
 
-function wrapProjectedCodexDynamicTools(
-  tools: readonly ProjectedCodexDynamicTool[],
-  hookContext: CodexDynamicToolHookContext | undefined,
-): {
-  tools: ProjectedCodexDynamicTool[];
-  quarantinedTools: CodexDynamicToolSchemaQuarantine[];
-} {
-  const wrappedTools: ProjectedCodexDynamicTool[] = [];
-  const quarantinedTools: CodexDynamicToolSchemaQuarantine[] = [];
-  for (const entry of tools) {
-    try {
-      if (isToolWrappedWithBeforeToolCallHook(entry.tool)) {
-        setBeforeToolCallDiagnosticsEnabled(entry.tool, false);
-        wrappedTools.push(entry);
-        continue;
-      }
-      wrappedTools.push({
-        ...entry,
-        tool: wrapToolWithBeforeToolCallHook(entry.tool, hookContext, {
-          emitDiagnostics: false,
-        }),
-      });
-    } catch {
-      quarantinedTools.push({
-        tool: entry.name,
-        violations: [`${entry.name} could not be wrapped for before-tool-call hooks`],
-      });
-    }
-  }
-  return { tools: wrappedTools, quarantinedTools };
-}
-
-function warnQuarantinedDynamicTools(params: {
+function reportQuarantinedDynamicTools(params: {
   tools: readonly CodexDynamicToolSchemaQuarantine[];
   availableToolCount: number;
   registeredToolCount: number;
+  hookContext?: CodexDynamicToolHookContext;
 }): void {
   if (params.tools.length === 0) {
     return;
   }
-  const unique = new Map<string, readonly string[]>();
-  for (const tool of params.tools) {
-    unique.set(tool.tool, tool.violations);
-  }
   embeddedAgentLog.warn(
-    `codex app-server quarantined ${unique.size} unsupported dynamic tool ${unique.size === 1 ? "definition" : "definitions"}: ${[...unique.keys()].join(", ")}; retained ${params.availableToolCount} available and ${params.registeredToolCount} registered tools`,
+    `codex app-server quarantined ${params.tools.length} unsupported dynamic tool ${params.tools.length === 1 ? "definition" : "definitions"}: ${params.tools.map((tool) => tool.tool).join(", ")}; retained ${params.availableToolCount} available and ${params.registeredToolCount} registered tools`,
     {
-      tools: [...unique.entries()].map(([tool, violations]) => ({ tool, violations })),
+      tools: params.tools.map(({ tool, violations }) => ({ tool, violations })),
       availableToolCount: params.availableToolCount,
       registeredToolCount: params.registeredToolCount,
     },
   );
-}
-
-function emitQuarantinedDynamicToolDiagnostics(
-  tools: readonly CodexDynamicToolSchemaQuarantine[],
-  ctx: CodexDynamicToolHookContext | undefined,
-): void {
-  for (const tool of tools) {
+  for (const tool of params.tools) {
     emitTrustedDiagnosticEvent({
       type: "tool.execution.blocked",
-      agentId: ctx?.agentId,
-      runId: ctx?.runId,
-      sessionId: ctx?.sessionId,
-      sessionKey: ctx?.sessionKey,
+      agentId: params.hookContext?.agentId,
+      runId: params.hookContext?.runId,
+      sessionId: params.hookContext?.sessionId,
+      sessionKey: params.hookContext?.sessionKey,
       toolName: tool.tool,
       deniedReason: "unsupported_tool_schema",
       reason: tool.violations.join(", "),
@@ -1413,10 +1391,53 @@ function normalizeToolResultMaxChars(maxChars: number): number {
     ? Math.floor(maxChars)
     : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 }
+function sanitizeToolTextRuns(
+  rawContent: Array<TextContent | ImageContent>,
+): Array<TextContent | ImageContent> {
+  const content: Array<TextContent | ImageContent> = [];
+  for (let index = 0; index < rawContent.length;) {
+    const item = rawContent[index]!;
+    if (item.type !== "text") {
+      content.push(item);
+      index += 1;
+      continue;
+    }
+
+    const textRun: TextContent[] = [];
+    while (index < rawContent.length) {
+      const next = rawContent[index]!;
+      if (next.type !== "text") {
+        break;
+      }
+      textRun.push(next);
+      index += 1;
+    }
+
+    const sanitizedText = sanitizeToolResult(textRun.map((entry) => entry.text).join(""));
+    let offset = 0;
+    content.push(
+      ...textRun.map((entry, runIndex) => {
+        const targetEnd =
+          runIndex === textRun.length - 1
+            ? sanitizedText.length
+            : Math.min(sanitizedText.length, offset + entry.text.length);
+        const text = sliceUtf16Safe(sanitizedText, offset, targetEnd);
+        const sanitized = Object.assign({}, entry, { text });
+        offset += text.length;
+        return sanitized;
+      }),
+    );
+  }
+  return content;
+}
 function convertToolContents(
-  content: Array<TextContent | ImageContent>,
+  rawContent: Array<TextContent | ImageContent>,
   toolResultMaxChars = DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
 ): CodexDynamicToolCallOutputContentItem[] {
+  // Adjacent text items form one model-visible stream, so sanitize each full run before
+  // repartitioning and budgeting. Image blocks keep their bytes; the storage-oriented
+  // whole-result branch of sanitizeToolResult would drop them.
+  const content = sanitizeToolTextRuns(rawContent);
   const maxChars = normalizeToolResultMaxChars(toolResultMaxChars);
   const totalTextChars = content.reduce(
     (total, item) => total + (item.type === "text" ? item.text.length : 0),

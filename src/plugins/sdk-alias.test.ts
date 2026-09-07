@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   buildPluginLoaderAliasMap,
   createPluginLoaderModuleCacheKey,
@@ -1272,6 +1273,12 @@ describe("plugin sdk alias helpers", () => {
       ["@openclaw/gateway-protocol", "gateway-protocol", "index"],
       ["@openclaw/gateway-protocol/schema", "gateway-protocol", "schema"],
       ["@openclaw/gateway-protocol/frame-guards", "gateway-protocol", "frame-guards"],
+      [
+        "@openclaw/gateway-protocol/gateway-error-details",
+        "gateway-protocol",
+        "gateway-error-details",
+      ],
+      ["@openclaw/gateway-protocol/restart-unavailable", "gateway-protocol", "restart-unavailable"],
       ["@openclaw/markdown-core", "markdown-core", "index"],
       ["@openclaw/markdown-core/tables", "markdown-core", "tables"],
       ["@openclaw/media-generation-core", "media-generation-core", "index"],
@@ -1327,6 +1334,12 @@ describe("plugin sdk alias helpers", () => {
         "connect-error-details",
       ],
       ["@openclaw/gateway-protocol/frame-guards", "gateway-protocol", "frame-guards"],
+      [
+        "@openclaw/gateway-protocol/gateway-error-details",
+        "gateway-protocol",
+        "gateway-error-details",
+      ],
+      ["@openclaw/gateway-protocol/restart-unavailable", "gateway-protocol", "restart-unavailable"],
       ["@openclaw/markdown-core/render", "markdown-core", "render"],
       ["@openclaw/media-generation-core/catalog", "media-generation-core", "catalog"],
       ["@openclaw/media-core/attachment-classify", "media-core", "attachment-classify"],
@@ -1688,6 +1701,30 @@ describe("plugin sdk alias helpers", () => {
     });
 
     expect(second).toBe(first);
+  });
+
+  it("retains missing SDK targets until a new generation, including deferred complete maps", () => {
+    const { fixture, distPluginEntryPath } = createPluginSdkAliasTargetFixture();
+    const owner = createPluginCache();
+    const other = createPluginCache();
+    const params = {
+      modulePath: writePluginEntry(fixture.root, bundledDistPluginFile("demo", "index.js")),
+      pluginSdkResolution: "dist" as const,
+    };
+    fs.unlinkSync(distPluginEntryPath);
+    fs.unlinkSync(path.join(fixture.root, "src", "plugin-sdk", "plugin-entry.ts"));
+    const prepared = withPluginCache(owner, () => preparePluginLoaderAliases(params));
+    expect(prepared.resolveAlias("openclaw/plugin-sdk/plugin-entry")).toBeUndefined();
+    fs.writeFileSync(distPluginEntryPath, "export const marker = 'new-generation';\n", "utf8");
+
+    withPluginCache(other, () => {
+      expect(prepared.resolveAlias("openclaw/plugin-sdk/plugin-entry")).toBeUndefined();
+      expect(prepared.getAliasMap()["openclaw/plugin-sdk/plugin-entry"]).toBeUndefined();
+      const fresh = preparePluginLoaderAliases(params);
+      expect(fs.realpathSync(fresh.resolveAlias("openclaw/plugin-sdk/plugin-entry") ?? "")).toBe(
+        fs.realpathSync(distPluginEntryPath),
+      );
+    });
   });
 
   it("scopes prepared alias authority by effective resolution", () => {

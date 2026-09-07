@@ -56,8 +56,10 @@ const WORKER_DEPLOY_ARTIFACT_SCOPE_RE =
   /^src\/(?:agents\/github-exec-(?:launcher|credential)\.ts|shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$/;
 const IOS_BUILD_RE =
   /^(apps\/ios\/|apps\/shared\/|apps\/swabble\/|Swabble\/|scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|scripts\/(?:ios-(?:configure-signing|screenshots|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|scripts\/lib\/(?:ios-fastlane\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$)/;
+// Tests and WatchTests Swift sources belong only to retained native unit-test targets.
+// UITests, resources, and project changes still prove the screenshot target graph.
 const IOS_SCREENSHOT_APP_SCOPE_RE =
-  /^(?:apps\/ios\/|apps\/shared\/OpenClawKit\/|apps\/swabble\/|Swabble\/)/;
+  /^(?:apps\/ios\/(?!(?:Tests|WatchTests)\/.*\.swift$)|apps\/shared\/OpenClawKit\/|apps\/swabble\/|Swabble\/)/;
 const IOS_SCREENSHOT_SCRIPT_SCOPE_RE =
   /^scripts\/(?:check-swift-tools|format-swift|install-swift-tools|install-xcodegen|lint-swift)\.sh$|^scripts\/(?:ios-(?:configure-signing|screenshots|team-id|write-version-xcconfig)\.sh|ios-screenshot-evidence\.(?:mjs|d\.mts)|ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$|^scripts\/lib\/(?:ios-fastlane\.sh|ios-version\.ts|release-version\.mjs|version-script-args\.ts)$/;
 const ANDROID_NATIVE_RE = /^(apps\/android\/|apps\/shared\/)/;
@@ -108,7 +110,7 @@ const WINDOWS_WORKSPACE_QUIESCENCE_SCOPE_RE =
 const WINDOWS_WORKER_BUNDLE_SCOPE_RE =
   /^src\/(?:shared\/worker-bundle-(?:archive|hash)(?:\.test)?|gateway\/worker-environments\/bundle(?:-staging)?(?:\.test)?|node-host\/node-worker-bundle-installer(?:\.test)?)\.ts$/;
 const WINDOWS_WORKER_WORKSPACE_SCOPE_RE =
-  /^src\/(?:node-host\/node-worker-transfer-client(?:\.test)?|gateway\/worker-environments\/(?:node-worker-tunnel(?:\.test)?|workspace-sync-(?:scripts|manifest\.test)))\.ts$/;
+  /^src\/(?:infra\/git-exec(?:\.test)?|agents\/worktrees\/(?:git|base-ref)(?:\.test)?|node-host\/node-worker-transfer-client(?:\.test)?|gateway\/worker-environments\/(?:node-worker-tunnel(?:\.test)?|workspace-result-(?:git(?:\.test)?|staging|ref-mutation\.test)|session-repository-checkpoints(?:\.test)?|workspace-sync-(?:scripts|manifest\.test)))\.ts$/;
 const CONTROL_UI_I18N_SCOPE_RE =
   /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/control-ui-i18n-(?:(?:catalog|config|raw-copy|sync-plan)\.ts|config\.json))$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
 const CONTROL_UI_RAW_COPY_SOURCE_RE = /^ui\/src\/(?:app|components|lib|pages)\/.*\.tsx?$/;
@@ -120,9 +122,9 @@ class ControlUiGeneratedArtifactsMixedError extends Error {}
 class NativeGeneratedArtifactsMixedError extends Error {}
 // Browser setup and sharding inputs must select the same proof as the config;
 // matching the harness family also covers per-project bundle setup owners.
-// The UI E2E config explicitly owns the QA Lab media-transcript browser suite.
+// QA Lab real-Gateway suites share the same Chromium owner.
 const CHROMIUM_UI_TEST_SCOPE_RE =
-  /^(ui\/|extensions\/browser\/chrome-extension\/|extensions\/qa-lab\/src\/control-ui-media-transcript\.real-gateway\.e2e\.test\.ts$|test\/vitest\/vitest\.(?:shared\.config\.ts|ui-(?:e2e|browser)\.[^/]+\.ts|(?:pattern-file|performance-config|timeouts|weighted-sharding)\.ts|ui-(?:isolated-)?paths\.mjs)$|test\/helpers\/temp-dir\.ts$|scripts\/(?:ensure-playwright-chromium\.mts|check-control-ui-(?:performance(?:-base)?|precompressed-assets)\.mts|ui\.(?:mts|js)|control-ui-mock-[^/]+\.ts|lib\/(?:ci-test-timings(?:-schema)?|vitest-local-scheduling)\.mts)$|config\/(?:ci-test-timings|control-ui-startup-budget-baseline)\.json$|package\.json$|\.github\/workflows\/ci\.yml$)/;
+  /^(ui\/|extensions\/[^/]+\/browser(?:\/|$)|extensions\/browser\/chrome-extension\/|extensions\/qa-lab\/src\/[^/]+\.real-gateway\.e2e\.test\.ts$|test\/vitest\/vitest\.(?:shared\.config\.ts|ui-(?:e2e|browser)(?:-[^/.]+)?\.[^/]+\.ts|(?:pattern-file|performance-config|timeouts|weighted-sharding)\.ts|ui-(?:isolated-)?paths\.mjs)$|test\/helpers\/temp-dir\.ts$|scripts\/(?:ensure-playwright-chromium\.mts|check-control-ui-(?:performance(?:-base)?|precompressed-assets)\.mts|ui\.(?:mts|js)|control-ui-mock-[^/]+\.ts|lib\/(?:ci-test-timings(?:-schema)?|vitest-local-scheduling)\.mts)$|config\/(?:ci-test-timings|control-ui-startup-budget-baseline)\.json$|package\.json$|\.github\/workflows\/ci\.yml$)/;
 const NATIVE_I18N_SCOPE_RE =
   /^(?:apps\/\.i18n\/|apps\/android\/(?:app\/src\/(?:main|play|thirdParty)\/|wear\/src\/main\/)|apps\/ios\/|apps\/macos\/Sources\/|apps\/shared\/OpenClawKit\/Sources\/|scripts\/(?:android-app-i18n|apple-app-i18n|native-(?:app-i18n|i18n-locales))\.ts$|test\/scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.test\.ts$|\.github\/workflows\/(?:ci|native-app-locale-refresh)\.yml$)/;
 // Android base resources are co-owned: source PRs edit their English content,
@@ -564,7 +566,7 @@ export function shouldRunNativeI18n(changedPaths) {
   return (
     !Array.isArray(changedPaths) ||
     changedPaths.length === 0 ||
-    changedPaths.some((path) => NATIVE_I18N_SCOPE_RE.test(path.trim()))
+    changedPaths.some((path) => NATIVE_I18N_SCOPE_RE.test(path))
   );
 }
 
@@ -668,15 +670,16 @@ export function listChangedPaths(
     cwd,
     preferFirstParent: preferMergeHeadFirstParent,
   });
-  const output = execFileSync("git", ["diff", "--no-renames", "--name-only", diffBase, head], {
-    cwd,
-    stdio: ["ignore", "pipe", "pipe"],
-    encoding: "utf8",
-  });
-  return output
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+  const output = execFileSync(
+    "git",
+    ["diff", "--no-renames", "--name-only", "-z", diffBase, head],
+    {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+    },
+  );
+  return output.split("\0").filter(Boolean);
 }
 
 /**

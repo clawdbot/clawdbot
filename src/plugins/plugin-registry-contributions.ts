@@ -13,6 +13,10 @@ import type {
   PluginManifestRecord,
   PluginManifestRegistry,
 } from "./manifest-registry.js";
+import {
+  listPluginManifestContributionIds,
+  type PluginMetadataContributionKey,
+} from "./plugin-metadata-contributions.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -44,23 +48,13 @@ type LoadPluginRegistryManifestParams = LoadPluginRegistryParams & {
   bundledChannelConfigCollector?: BundledChannelConfigCollector;
 };
 
-export type PluginRegistryContributionKey =
-  | "providers"
-  | "channels"
-  | "channelConfigs"
-  | "setupProviders"
-  | "cliBackends"
-  | "modelCatalogProviders"
-  | "commandAliases"
-  | "contracts";
-
 type ResolvePluginContributionOwnersParams = PluginRegistryContributionOptions & {
-  contribution: PluginRegistryContributionKey;
+  contribution: PluginMetadataContributionKey;
   matches: string | ((contributionId: string) => boolean);
 };
 
 type ListPluginContributionIdsParams = PluginRegistryContributionOptions & {
-  contribution: PluginRegistryContributionKey;
+  contribution: PluginMetadataContributionKey;
 };
 
 type ManifestContractLookupParams = LoadPluginRegistryParams & {
@@ -81,20 +75,6 @@ type ResolveManifestContractOwnerPluginIdParams = ManifestContractLookupParams &
 
 function normalizeContributionId(value: string): string {
   return value.trim();
-}
-
-function collectObjectKeys(value: Record<string, unknown> | undefined): readonly string[] {
-  return value ? Object.keys(value) : [];
-}
-
-function collectContractKeys(plugin: PluginManifestRecord): readonly string[] {
-  const contracts = plugin.contracts;
-  if (!contracts) {
-    return [];
-  }
-  return Object.entries(contracts).flatMap(([key, value]) =>
-    Array.isArray(value) && value.length > 0 ? [key] : [],
-  );
 }
 
 function listManifestContractValues(
@@ -142,34 +122,6 @@ function loadManifestContractRecords(
   }
   const pluginIds = new Set(params.onlyPluginIds);
   return records.filter((record) => pluginIds.has(record.id));
-}
-
-function listManifestContributionIds(
-  plugin: PluginManifestRecord,
-  contribution: PluginRegistryContributionKey,
-): readonly string[] {
-  switch (contribution) {
-    case "providers":
-      return plugin.providers;
-    case "channels":
-      return plugin.channels;
-    case "channelConfigs":
-      return collectObjectKeys(plugin.channelConfigs);
-    case "setupProviders":
-      return plugin.setup?.providers?.map((provider) => provider.id) ?? [];
-    case "cliBackends":
-      return [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])];
-    case "modelCatalogProviders":
-      return [
-        ...collectObjectKeys(plugin.modelCatalog?.providers),
-        ...collectObjectKeys(plugin.modelCatalog?.aliases),
-      ];
-    case "commandAliases":
-      return plugin.commandAliases?.map((alias) => alias.name) ?? [];
-    case "contracts":
-      return collectContractKeys(plugin);
-  }
-  return [];
 }
 
 function createContributionPluginFilter(
@@ -256,7 +208,7 @@ export function listPluginContributionIds(
   const index = params.lookUpTable?.index ?? loadPluginRegistrySnapshot(params);
   const plugins = listContributionManifestPlugins({ ...params, index });
   return normalizeSortedUniqueStringEntries(
-    plugins.flatMap((plugin) => listManifestContributionIds(plugin, params.contribution)),
+    plugins.flatMap((plugin) => listPluginManifestContributionIds(plugin, params.contribution)),
   );
 }
 
@@ -280,7 +232,9 @@ export function resolvePluginContributionOwners(
   const plugins = listContributionManifestPlugins({ ...params, index });
   return normalizeSortedUniqueStringEntries(
     plugins.flatMap((plugin) =>
-      listManifestContributionIds(plugin, params.contribution).some(matcher) ? [plugin.id] : [],
+      listPluginManifestContributionIds(plugin, params.contribution).some(matcher)
+        ? [plugin.id]
+        : [],
     ),
   );
 }

@@ -210,6 +210,11 @@ if (process.argv[2].includes('/x86_64/') && fs.existsSync(${JSON.stringify(path.
   for (const arch of ["arm64", "x86_64"] as const) {
     const canonical = path.join(root, "canonical", arch);
     await write(path.join(canonical, "matching.node"), binaries[arch]);
+    await write(
+      path.join(canonical, "opposite.node"),
+      binaries[arch === "arm64" ? "x86_64" : "arm64"],
+    );
+    await write(path.join(canonical, "universal.node"), binaries.universal);
     await write(path.join(canonical, "foreign.node"), binaries.elf);
     await write(
       path.join(canonical, "nested/win32/build.mjs"),
@@ -289,7 +294,7 @@ function expectWorkerScratchCleaned(fixture: Awaited<ReturnType<typeof stagingFi
 }
 
 export function registerMacWorkerMaterializationTests() {
-  describe.skipIf(process.platform !== "darwin")("elevation worker materialization", () => {
+  describe.skipIf(process.platform !== "darwin")("Mac worker materialization", () => {
     const it = createMacScriptTest();
     it.for(["standard", "elevation-host"])(
       "keeps %s worker scratch in caller temp and publishes runtimes by same-volume moves",
@@ -334,9 +339,7 @@ export function registerMacWorkerMaterializationTests() {
             const arch = index === 0 ? "arm64" : "x86_64";
             const [node, runtime, expected] = call.split("|");
             expect(node).toBe(`${runtime}/bin/node`);
-            expect(runtime).toContain(
-              `/${arch}/${variant === "standard" ? "runtime" : "elevation"}`,
-            );
+            expect(runtime).toContain(`/${arch}/runtime`);
             expect(expected).toBe(path.join(fixture.root, "dist/build-info.json"));
             const scratch = path.resolve(runtime!, "../..");
             expect(path.dirname(scratch)).toBe(path.dirname(fixture.destination));
@@ -350,7 +353,7 @@ export function registerMacWorkerMaterializationTests() {
             ).toBe(verified!.productInode);
             expect(snapshot(path.join(fixture.destination, arch))).toEqual(
               snapshot(path.join(fixture.root, "canonical", arch)).filter(
-                (entry) => variant === "standard" || entry.path !== "foreign.node",
+                (entry) => !["foreign.node", "opposite.node"].includes(entry.path),
               ),
             );
           }

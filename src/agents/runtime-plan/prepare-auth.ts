@@ -13,6 +13,7 @@ import {
   resolveAuthProfileOrderWithMetadata,
 } from "../auth-profiles/order.js";
 import { resolveStoredCredentialReadOnlyAvailability } from "../auth-profiles/read-only-availability.js";
+import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/selection-error.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isProfileInCooldown } from "../auth-profiles/usage-state.js";
 import { resolveProviderDirectAuthPlanningEvidence } from "../model-auth-env.js";
@@ -44,7 +45,7 @@ type PrepareAgentRuntimeAuthPlanParams = {
   env?: NodeJS.ProcessEnv;
   agentDir?: string;
   workspaceDir?: string;
-  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
+  metadataSnapshot?: PluginMetadataSnapshot;
   authProfileStore?: AuthProfileStore;
   sessionAuthProfileId?: string;
   sessionAuthProfileSource?: "auto" | "user" | "user-link";
@@ -171,17 +172,13 @@ function resolveProfile(
   };
 }
 
-type ProviderEntryProfileParams = Pick<
-  PrepareAgentRuntimeAuthPlanParams,
-  "config" | "modelId" | "provider"
-> & {
-  store: AuthProfileStore;
-};
-
 /** Applies terminal provider-entry credential policy before route selection. */
-function resolvePreparedProviderEntryApiKeyProfileReference(params: ProviderEntryProfileParams) {
+function resolvePreparedProviderEntryApiKeyProfileReference(
+  params: PrepareAgentRuntimeAuthPlanParams & { store: AuthProfileStore },
+) {
   const reference = resolveProviderEntryApiKeyProfileReference({
     cfg: params.config,
+    authAliasLookupParams: params,
     provider: params.provider,
     store: params.store,
   });
@@ -190,6 +187,7 @@ function resolvePreparedProviderEntryApiKeyProfileReference(params: ProviderEntr
   }
   const eligibility = resolveAuthProfileEligibility({
     cfg: params.config,
+    authAliasLookupParams: params,
     store: params.store,
     provider: params.provider,
     profileId: reference.profileId,
@@ -236,12 +234,23 @@ export function prepareAgentRuntimeAuth(
     const eligibility = store
       ? resolveAuthProfileEligibility({
           cfg: params.config,
+          authAliasLookupParams: params,
           store,
           provider: authProfileSelectionProvider,
           profileId: userPinnedProfileId,
         })
       : { eligible: false };
     if (!eligibility.eligible) {
+      if (
+        !store?.profiles[userPinnedProfileId] &&
+        params.config?.auth?.profiles?.[userPinnedProfileId]?.mode !== "aws-sdk"
+      ) {
+        throw createSelectedAuthProfileUnavailableError({
+          profileId: userPinnedProfileId,
+          provider: authProfileSelectionProvider,
+          modelId: params.modelId,
+        });
+      }
       throw new Error(
         `Auth profile "${userPinnedProfileId}" is not configured for ${authProfileSelectionProvider}.`,
       );
@@ -261,9 +270,7 @@ export function prepareAgentRuntimeAuth(
   const providerBinding =
     harnessAllowsAuthProfileForwarding && !userPinnedProfileId && store && !configuredAwsSdkAuth
       ? resolvePreparedProviderEntryApiKeyProfileReference({
-          config: params.config,
-          modelId: params.modelId,
-          provider: params.provider,
+          ...params,
           store,
         })
       : { kind: "none" as const };
@@ -305,6 +312,7 @@ export function prepareAgentRuntimeAuth(
         }
       : resolveAuthProfileOrderWithMetadata({
           cfg: params.config,
+          authAliasLookupParams: params,
           store,
           provider: authProfileSelectionProvider,
           preferredProfile: requestedProfileId,
@@ -362,6 +370,7 @@ export function prepareAgentRuntimeAuth(
         {
           config: params.config,
           workspaceDir: params.workspaceDir,
+          metadataSnapshot: params.metadataSnapshot,
         },
       )
     : null;
@@ -470,6 +479,7 @@ export function prepareAgentRuntimeAuth(
           ? classifyProviderModelAuthSource(attempt.source)
           : { kind: "none" },
         config: params.config,
+        env: params.env,
         workspaceDir: params.workspaceDir,
         metadataSnapshot: params.metadataSnapshot,
         harnessId: params.harnessId,
@@ -533,6 +543,7 @@ export function prepareAgentRuntimeAuth(
       provider: params.provider,
       modelId: params.modelId,
       config: params.config,
+      env: params.env,
       workspaceDir: params.workspaceDir,
       metadataSnapshot: params.metadataSnapshot,
       harnessId: params.harnessId,
@@ -577,6 +588,7 @@ export function prepareAgentRuntimeAuth(
         : { kind: "none" },
       modelRoute: toPreparedRoute(route),
       config: params.config,
+      env: params.env,
       workspaceDir: params.workspaceDir,
       metadataSnapshot: params.metadataSnapshot,
       harnessId: params.harnessId,

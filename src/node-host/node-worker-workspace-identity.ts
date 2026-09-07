@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isPathInside } from "../infra/path-guards.js";
 
 const GATEWAY_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
@@ -12,6 +13,22 @@ export type NodeWorkerManagedWorkspaceRequest = {
   sessionId: string;
   ownerEpoch: number;
   sessionKey: string;
+};
+
+export type NodeWorkerWorkspaceLaunchReference = {
+  gatewayNamespace: string;
+  environmentId: string;
+  sessionId: string;
+  ownerEpoch: number;
+};
+
+export type NodeWorkerWorkspaceSession = {
+  gatewayNamespace: string;
+  environmentHash: string;
+  sessionHash: string;
+  workspacesRoot: string;
+  environmentRoot: string;
+  sessionRoot: string;
 };
 
 export function hashNodeWorkerWorkspaceComponent(value: string, length: number): string {
@@ -32,12 +49,9 @@ export function nodeWorkerWorkspaceGenerationKey(params: {
   ].join("/");
 }
 
-export function nodeWorkerWorkspaceLaunchGenerationKey(reference: {
-  gatewayNamespace: string;
-  environmentId: string;
-  sessionId: string;
-  ownerEpoch: number;
-}): string {
+export function nodeWorkerWorkspaceLaunchGenerationKey(
+  reference: NodeWorkerWorkspaceLaunchReference,
+): string {
   return nodeWorkerWorkspaceGenerationKey({
     gatewayNamespace: reference.gatewayNamespace,
     environmentHash: hashNodeWorkerWorkspaceComponent(reference.environmentId, 16),
@@ -134,4 +148,52 @@ export function resolveNodeManagedWorkspaceIdentity(
       generation: request.ownerEpoch,
     }),
   };
+}
+
+export function ensureContainedDirectory(parent: string, name: string): string {
+  const candidate = path.join(parent, name);
+  fs.mkdirSync(candidate, { recursive: true });
+  const stats = fs.lstatSync(candidate);
+  const resolved = fs.realpathSync.native(candidate);
+  if (stats.isSymbolicLink() || !stats.isDirectory() || !isPathInside(parent, resolved)) {
+    throw new Error("INVALID_REQUEST: node worker workspace path escaped its owner root");
+  }
+  return resolved;
+}
+
+function resolveArgumentPath(workspaceDir: string, arg: string): string | undefined {
+  if (path.isAbsolute(arg)) {
+    return arg;
+  }
+  if (arg.startsWith(".") || arg.includes("/") || (path.sep === "\\" && arg.includes("\\"))) {
+    return path.resolve(workspaceDir, arg);
+  }
+  return undefined;
+}
+
+export function assertWorkspaceArgv(workspaceDir: string, argv: readonly string[]): void {
+  // This private transport owns cwd and direct path operands; it is not the user-facing
+  // system.run policy domain, so absolute/relative escapes must never cross its workspace.
+  for (const [index, arg] of argv.entries()) {
+    // Canonical workspace helpers travel as the source operand to `node -e`.
+    // Treating JavaScript slash characters as host paths rejects the shipped scripts.
+    if (index > 0 && argv[index - 1] === "-e" && path.basename(argv[0] ?? "") === "node") {
+      continue;
+    }
+    const candidate = resolveArgumentPath(workspaceDir, arg);
+    if (!candidate) {
+      continue;
+    }
+    let resolved = candidate;
+    try {
+      resolved = fs.realpathSync.native(candidate);
+    } catch (error) {
+      if (extractErrorCode(error) !== "ENOENT") {
+        throw error;
+      }
+    }
+    if (resolved !== workspaceDir && !isPathInside(workspaceDir, resolved)) {
+      throw new Error("INVALID_REQUEST: workspace command argv resolves outside its workspace");
+    }
+  }
 }

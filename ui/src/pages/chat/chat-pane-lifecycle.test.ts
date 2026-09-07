@@ -34,52 +34,48 @@ const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
 const confirmationOwners = new Set<HTMLElement>();
 
 describe("chat pane composer prefill attention", () => {
-  function createComposerAttentionFixture() {
+  it.each([
+    { label: "draft prefill", draft: "Prefilled prompt", repeat: false, attention: true },
+    { label: "repeated draft prefill", draft: "Prefilled prompt", repeat: true, attention: true },
+    { label: "plain focus", draft: undefined, repeat: false, attention: false },
+    { label: "empty draft", draft: "", repeat: false, attention: false },
+  ])("focuses with the expected attention cue for $label", ({ draft, repeat, attention }) => {
+    vi.useFakeTimers();
     const { pane } = createTestChatPane({
       client: {} as GatewayBrowserClient,
       sessions: {} as SessionCapability,
     });
-    const input = document.createElement("div");
+    const input = document.body.appendChild(document.createElement("div"));
     input.className = "agent-chat__input";
-    const textarea = document.createElement("textarea");
-    input.append(textarea);
-    document.body.append(input);
+    const textarea = input.appendChild(document.createElement("textarea"));
     vi.spyOn(pane, "querySelector").mockReturnValue(textarea);
     const lifecycle = pane as TestChatPane & {
+      draft?: string;
       focusComposer: boolean;
       updated: (changedProperties?: Map<PropertyKey, unknown>) => void;
     };
     lifecycle.focusComposer = true;
-    return { input, lifecycle, textarea };
-  }
-
-  it("focuses and clears the one-shot composer cue for an explicit route hint", () => {
-    vi.useFakeTimers();
-    const { input, lifecycle, textarea } = createComposerAttentionFixture();
-
+    lifecycle.draft = draft;
+    const attentionClass = "agent-chat__input--prefill-attention";
+    const mutations = new MutationObserver(() => {});
+    mutations.observe(input, { attributeFilter: ["class"], attributeOldValue: true });
     lifecycle.updated(new Map([["focusComposer", false]]));
-
     expect(document.activeElement).toBe(textarea);
-    expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(true);
+    expect(input.classList.contains(attentionClass)).toBe(attention);
+    if (repeat) {
+      vi.advanceTimersByTime(300);
+      lifecycle.updated(new Map([["focusComposer", false]]));
+    }
     vi.advanceTimersByTime(599);
-    expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(true);
+    expect(input.classList.contains(attentionClass)).toBe(attention);
     vi.advanceTimersByTime(1);
-    expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(false);
-    input.remove();
-  });
-
-  it("restarts the cue without letting the prior timer clear it", () => {
-    vi.useFakeTimers();
-    const { input, lifecycle } = createComposerAttentionFixture();
-
-    lifecycle.updated(new Map([["focusComposer", false]]));
-    vi.advanceTimersByTime(300);
-    lifecycle.updated(new Map([["focusComposer", false]]));
-    vi.advanceTimersByTime(599);
-
-    expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(true);
-    vi.advanceTimersByTime(1);
-    expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(false);
+    expect(input.classList.contains(attentionClass)).toBe(false);
+    if (!attention) {
+      expect(
+        mutations.takeRecords().some(({ oldValue }) => oldValue?.includes(attentionClass)),
+      ).toBe(false);
+    }
+    mutations.disconnect();
     input.remove();
   });
 });
@@ -747,6 +743,37 @@ describe("chat pane presentation teardown", () => {
 });
 
 describe("chat pane connection lifecycle", () => {
+  it("notifies the owning shell after a pane leaves its DOM subtree", async () => {
+    const { pane } = createTestChatPane({
+      client: { request: vi.fn() } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    const lifecycle = pane as TestChatPane & {
+      render: () => unknown;
+      readonly conversationPresented: boolean;
+    };
+    lifecycle.render = () => null;
+    const shell = document.createElement("openclaw-app-shell");
+    const presentations: Array<{ paneCount: number; conversationPresented: boolean }> = [];
+    shell.addEventListener("openclaw-chat-pane-lifecycle-changed", () => {
+      presentations.push({
+        paneCount: shell.querySelectorAll("openclaw-chat-pane").length,
+        conversationPresented: lifecycle.conversationPresented,
+      });
+    });
+    shell.append(pane);
+    ChatPaneBase.prototype.connectedCallback.call(lifecycle);
+    await lifecycle.updateComplete;
+    pane.remove();
+    ChatPaneBase.prototype.disconnectedCallback.call(lifecycle);
+
+    expect(presentations).toEqual([
+      { paneCount: 1, conversationPresented: false },
+      { paneCount: 1, conversationPresented: true },
+      { paneCount: 0, conversationPresented: false },
+    ]);
+  });
+
   it("renders once while initially hidden, then reconciles hidden invalidations", async () => {
     let visibilityState: DocumentVisibilityState = "hidden";
     vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
@@ -1006,7 +1033,7 @@ describe("chat pane connection lifecycle", () => {
 
     expect(request).toHaveBeenCalledWith(
       "chat.startup",
-      expect.objectContaining({ limit: 800, sessionKey: state.sessionKey }),
+      expect.objectContaining({ limit: 80, maxBytes: 256 * 1024, sessionKey: state.sessionKey }),
     );
     expect(deferHydration).toHaveBeenCalledWith(state.sessionKey, expect.any(Promise));
   });

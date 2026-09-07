@@ -326,6 +326,14 @@ function resolveActiveVault(config: ResolvedMemoryWikiConfig): ActiveVault | nul
   return active;
 }
 
+export function isMemoryWikiCompiledCacheOwnerActive(
+  config: ResolvedMemoryWikiConfig,
+  vaultGeneration: string,
+): boolean {
+  const active = resolveActiveVault(config);
+  return active?.reconciled === true && active.vaultGeneration === vaultGeneration;
+}
+
 function parseSnapshot(
   bytes: Uint8Array,
   generation: string,

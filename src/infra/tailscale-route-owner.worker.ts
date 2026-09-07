@@ -137,8 +137,8 @@ export function runTailscaleRouteOwner(
 if (process.argv[2] === TAILSCALE_ROUTE_OWNER_ARG) {
   try {
     const owner = runTailscaleRouteOwner(parseStart(process.argv[3]));
-    // Terminal signals reach this worker with the Gateway process group. Drain the
-    // detached route child first or the HTTPS port remains claimed after Gateway exit.
+    // The owner survives a Gateway process-group kill. IPC closure releases the
+    // detached claim even when the Gateway cannot run its shutdown hooks.
     for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
       process.once(signal, owner.stop);
     }
@@ -148,6 +148,9 @@ if (process.argv[2] === TAILSCALE_ROUTE_OWNER_ARG) {
         owner.stop();
       }
     });
+    if (!process.connected) {
+      owner.stop();
+    }
     void owner.exited.then((exit) => process.exit(exit.stopping ? 0 : 1));
   } catch (error) {
     send({

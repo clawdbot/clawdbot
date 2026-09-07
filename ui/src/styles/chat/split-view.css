@@ -28,7 +28,7 @@ openclaw-chat-pane {
 .chat-split-view__column {
   display: flex;
   flex-direction: column;
-  min-width: 320px;
+  min-width: min(320px, 100%);
   min-height: 0;
 }
 
@@ -708,6 +708,27 @@ openclaw-chat-pane {
   flex: 0 0 auto;
 }
 
+.chat-pane__public-share-indicator {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-height: 22px;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--warn) 12%, var(--panel));
+  color: var(--warn);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.chat-pane__public-share-indicator svg {
+  width: 13px;
+  height: 13px;
+}
+
 .chat-pane__header-center .chat-pane__sharing-menu,
 .chat-pane__header-center .chat-pane__draft-indicator {
   position: absolute;
@@ -966,13 +987,25 @@ html.openclaw-native-web-chrome .shell--nav-collapsed:not(.shell--mobile-nav) {
   );
 }
 
-/* The task header stays above both content regions; only the top-left task
-   needs window-control clearance. Mobile has a separate topbar row. */
+/* Only the physical top-left header needs window-control clearance. A left
+   dock puts the side tabs there; mobile has a separate topbar row. */
 .shell:not(.shell--mobile-nav)
   .chat-split-view__column:first-child
   > .chat-split-view__cell:first-child
-  .chat-pane-layout
-  > .chat-pane__header {
+  .sidebar-region:not(
+    .sidebar-region--left.sidebar-region--open:not(.sidebar-region--expanded):not(
+        .sidebar-region--narrow
+      )
+  )
+  > .sidebar-region__header
+  > .chat-pane__header,
+.shell:not(.shell--mobile-nav)
+  .chat-split-view__column:first-child
+  > .chat-split-view__cell:first-child
+  .sidebar-region--left.sidebar-region--open:not(.sidebar-region--expanded):not(
+    .sidebar-region--narrow
+  )
+  [data-region-header="side"] {
   padding-left: var(--shell-titlebar-inset);
 }
 

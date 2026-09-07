@@ -11,10 +11,7 @@ import { resolveDiscordChannelId } from "../target-parsing.js";
 import { resolveChannelIdForBinding } from "./thread-bindings.discord-api.js";
 import {
   resolveBindingRecordKey,
-  resolveThreadBindingIdleTimeoutMs,
-  resolveThreadBindingInactivityExpiresAt,
-  resolveThreadBindingMaxAgeExpiresAt,
-  resolveThreadBindingMaxAgeMs,
+  resolvePreparedThreadBindingLifecycle,
 } from "./thread-bindings.state.js";
 import type { ThreadBindingManager, ThreadBindingRecord } from "./thread-bindings.types.js";
 
@@ -43,25 +40,6 @@ function toThreadBindingTargetKind(raw: BindingTargetKind): "subagent" | "acp" {
   return raw === "subagent" ? "subagent" : "acp";
 }
 
-function resolveEffectiveBindingExpiresAt(params: {
-  record: ThreadBindingRecord;
-  defaultIdleTimeoutMs: number;
-  defaultMaxAgeMs: number;
-}): number | undefined {
-  const inactivityExpiresAt = resolveThreadBindingInactivityExpiresAt({
-    record: params.record,
-    defaultIdleTimeoutMs: params.defaultIdleTimeoutMs,
-  });
-  const maxAgeExpiresAt = resolveThreadBindingMaxAgeExpiresAt({
-    record: params.record,
-    defaultMaxAgeMs: params.defaultMaxAgeMs,
-  });
-  if (inactivityExpiresAt != null && maxAgeExpiresAt != null) {
-    return Math.min(inactivityExpiresAt, maxAgeExpiresAt);
-  }
-  return inactivityExpiresAt ?? maxAgeExpiresAt;
-}
-
 function toSessionBindingRecord(
   record: ThreadBindingRecord,
   defaults: ThreadBindingDefaults,
@@ -71,6 +49,7 @@ function toSessionBindingRecord(
       accountId: record.accountId,
       threadId: record.threadId,
     }) ?? `${record.accountId}:${record.threadId}`;
+  const lifecycle = resolvePreparedThreadBindingLifecycle({ record, ...defaults });
   return {
     bindingId,
     targetSessionKey: record.targetSessionKey,
@@ -83,11 +62,7 @@ function toSessionBindingRecord(
     },
     status: "active",
     boundAt: record.boundAt,
-    expiresAt: resolveEffectiveBindingExpiresAt({
-      record,
-      defaultIdleTimeoutMs: defaults.idleTimeoutMs,
-      defaultMaxAgeMs: defaults.maxAgeMs,
-    }),
+    expiresAt: lifecycle.expiresAt,
     metadata: {
       agentId: record.agentId,
       label: record.label,
@@ -95,14 +70,8 @@ function toSessionBindingRecord(
       webhookToken: record.webhookToken,
       boundBy: record.boundBy,
       lastActivityAt: record.lastActivityAt,
-      idleTimeoutMs: resolveThreadBindingIdleTimeoutMs({
-        record,
-        defaultIdleTimeoutMs: defaults.idleTimeoutMs,
-      }),
-      maxAgeMs: resolveThreadBindingMaxAgeMs({
-        record,
-        defaultMaxAgeMs: defaults.maxAgeMs,
-      }),
+      idleTimeoutMs: lifecycle.idleTimeoutMs,
+      maxAgeMs: lifecycle.maxAgeMs,
       ...record.metadata,
     },
   };

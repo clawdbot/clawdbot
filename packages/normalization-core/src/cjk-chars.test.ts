@@ -85,4 +85,20 @@ describe("normalization-core/cjk-chars", () => {
   it("does not collapse non-CJK surrogate pairs", () => {
     expect(estimateStringChars("\uD83D\uDE00")).toBe(2);
   });
+
+  it.each([
+    ["\ud800", 1],
+    ["\udfff", 1],
+    ["\ud800a\udfff", 3],
+    ["\u{1D360}\u{20000}", 28],
+    ["\u{20000}\u{20000}", 32],
+  ])("keeps repeated estimates stable for %j", (text, expected) => {
+    expect([text, "ascii", text, "", text].map(estimateStringChars)).toEqual([
+      expected,
+      5,
+      expected,
+      0,
+      expected,
+    ]);
+  });
 });

@@ -2,6 +2,7 @@ import { settleProgressVisibilityCallbackResult } from "../../channels/progress-
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isFastModeAutoProgressPayload } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
@@ -79,6 +80,9 @@ export async function executeFollowupTurn(params: {
   const roomEvent = turn.queued.currentInboundEventKind === "room_event";
   const progressAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
   const currentVerboseLevel = (): VerboseLevel => {
+    if (turn.queued.run.verboseLevelOverride !== undefined) {
+      return turn.queued.run.verboseLevelOverride;
+    }
     const session = turn.session;
     if (session.kind === "session" && session.storePath) {
       try {
@@ -115,9 +119,13 @@ export async function executeFollowupTurn(params: {
   const shouldEmitToolResult = () =>
     progressAllowed() && (forceToolResultProgress || shouldEmitVerboseToolResult());
   const shouldEmitToolOutput = () => progressAllowed() && currentVerboseLevel() === "full";
+  // Quiet channel drafts consume typed activity without enabling formatted result text.
+  const shouldEmitStructuredProgress = () =>
+    progressAllowed() &&
+    (sourceOpts?.suppressDefaultToolProgressMessages === true || shouldEmitToolResult());
   const shouldEmitToolLifecycle = () =>
     progressAllowed() &&
-    (shouldEmitToolResult() || defaults.opts?.allowToolLifecycleWhenProgressHidden === true);
+    (shouldEmitStructuredProgress() || sourceOpts?.allowToolLifecycleWhenProgressHidden === true);
   const { commentaryPayloadsEnabled, draftOwnsCommentaryProgress } =
     resolveTurnCommentaryProgressOwner({
       commentaryPayloadsEnabled: sourceOpts?.commentaryPayloadsEnabled === true,
@@ -201,18 +209,7 @@ export async function executeFollowupTurn(params: {
     onPartialReply: undefined,
     onAssistantMessageStart: undefined,
     onToolStart: wrapVisibility(sourceOpts?.onToolStart, shouldEmitToolLifecycle),
-    onCommandOutput: sourceOpts?.onCommandOutput
-      ? (output) =>
-          enqueueProgressResult(async () => {
-            if (!shouldEmitToolResult()) {
-              return false;
-            }
-            const visible = (
-              await settleProgressVisibilityCallbackResult(sourceOpts.onCommandOutput!(output))
-            ).visible;
-            return visible;
-          })
-      : undefined,
+    onCommandOutput: wrapVisibility(sourceOpts?.onCommandOutput, shouldEmitStructuredProgress),
     onItemEvent: sourceOpts?.onItemEvent
       ? (item) =>
           enqueueProgressResult(async () => {
@@ -220,7 +217,7 @@ export async function executeFollowupTurn(params: {
             // tool-progress filtering for queued preambles.
             const draftOwnsPreamble =
               progressAllowed() && item.kind === "preamble" && draftOwnsCommentaryProgress;
-            if (!draftOwnsPreamble && !shouldEmitToolResult()) {
+            if (!draftOwnsPreamble && !shouldEmitStructuredProgress()) {
               return false;
             }
             const visible = (
@@ -231,8 +228,8 @@ export async function executeFollowupTurn(params: {
       : undefined,
     onNarrationUpdate: wrap(sourceOpts?.onNarrationUpdate),
     onPlanUpdate: wrapVisibility(sourceOpts?.onPlanUpdate),
-    onApprovalEvent: wrapVisibility(sourceOpts?.onApprovalEvent, shouldEmitToolResult),
-    onPatchSummary: wrapVisibility(sourceOpts?.onPatchSummary, shouldEmitToolResult),
+    onApprovalEvent: wrapVisibility(sourceOpts?.onApprovalEvent, shouldEmitStructuredProgress),
+    onPatchSummary: wrapVisibility(sourceOpts?.onPatchSummary, shouldEmitStructuredProgress),
     onCompactionStart: sourceOpts?.onCompactionStart
       ? () =>
           enqueueProgressResult(async () =>
@@ -267,6 +264,38 @@ export async function executeFollowupTurn(params: {
           return false;
         }
         const requiresDurableToolResult = requiresDurableToolResultDelivery(payload);
+        if (sourceOpts?.suppressToolProgressMessages && !requiresDurableToolResult) {
+          return false;
+        }
+        const fastModeAutoProgress = isFastModeAutoProgressPayload(payload);
+        if (fastModeAutoProgress && !requiresDurableToolResult) {
+          const verboseToolResult = shouldEmitVerboseToolResult();
+          const lifecycleToolResult = sourceOpts?.allowToolLifecycleWhenProgressHidden === true;
+          const sourceDeliverySuppressed =
+            turn.queued.run.sourceReplyDeliveryMode === "message_tool_only";
+          const callbackAllowedBySource =
+            !sourceDeliverySuppressed ||
+            sourceOpts?.allowProgressCallbacksWhenSourceDeliverySuppressed === true;
+          const callbackAllowed =
+            callbackAllowedBySource &&
+            (forceToolResultProgress || verboseToolResult || lifecycleToolResult);
+          const callback = callbackAllowed ? sourceOpts?.onToolResult : undefined;
+          if (callback) {
+            const visible = (await settleProgressVisibilityCallbackResult(callback(payload)))
+              .visible;
+            if (visible) {
+              return true;
+            }
+            if (!forceToolResultProgress && !verboseToolResult) {
+              return false;
+            }
+          }
+          if (!forceToolResultProgress && !verboseToolResult) {
+            return false;
+          }
+          await params.onToolResult(payload, { runId: turn.runId });
+          return true;
+        }
         const verboseToolResult = !requiresDurableToolResult && shouldEmitVerboseToolResult();
         const transientToolResultProgress = requiresDurableToolResult
           ? undefined

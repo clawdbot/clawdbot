@@ -20,7 +20,8 @@ import type { DatabaseSync } from "node:sqlite";
 import type { PersistentDedupeEntry } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeMatrixStorageMetadata } from "../client/storage.js";
+import { resolveMatrixStateLayoutChildDepth } from "../../storage-paths.js";
+import { normalizeMatrixStorageMetadata } from "../client/storage-metadata.js";
 
 const LEGACY_SQLITE_NAMESPACE = "inbound-dedupe";
 const LEGACY_MARKERS_NAMESPACE = "inbound-dedupe-migrations";
@@ -126,7 +127,7 @@ export async function collectMatrixInboundDedupeSources(
   const sqliteRoots = new Set<string>();
   const jsonRoots = new Set<string>();
   const warnings: string[] = [];
-  async function visit(dir: string, allowMissing = false): Promise<void> {
+  async function visit(dir: string, depth: number, allowMissing = false): Promise<void> {
     let entries: Dirent[];
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
@@ -137,23 +138,33 @@ export async function collectMatrixInboundDedupeSources(
       warnings.push(`Failed scanning Matrix inbound dedupe sources under ${dir}: ${String(err)}`);
       return;
     }
+    const isStorageRoot = depth === 0 || depth === 2 || depth === 4;
     for (const entry of entries) {
       const entryPath = path.join(dir, entry.name);
       if (entry.isFile()) {
-        // Legacy per-root dedupe rows live in `<storageRoot>/state/openclaw.sqlite`.
-        if (entry.name === "openclaw.sqlite" && path.basename(dir) === "state") {
-          sqliteRoots.add(path.dirname(dir));
-        } else if (entry.name === MATRIX_LEGACY_INBOUND_DEDUPE_FILENAME) {
+        if (isStorageRoot && entry.name === MATRIX_LEGACY_INBOUND_DEDUPE_FILENAME) {
           jsonRoots.add(dir);
+        } else if (depth === 5 && entry.name === "openclaw.sqlite") {
+          sqliteRoots.add(path.dirname(dir));
         }
         continue;
       }
-      if (entry.isDirectory()) {
-        await visit(entryPath);
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      if (isStorageRoot && entry.name === "state") {
+        await visit(entryPath, 5);
+        continue;
+      }
+      // The source census is deliberately bounded to current canonical roots
+      // and the two flat legacy levels that shipped migrations still consume.
+      const childDepth = resolveMatrixStateLayoutChildDepth(depth, entry.name);
+      if (childDepth !== null) {
+        await visit(entryPath, childDepth);
       }
     }
   }
-  await visit(matrixRoot, true);
+  await visit(matrixRoot, 0, true);
   const matrixRootResolved = path.resolve(matrixRoot);
   const isAccountRoot = (root: string) => path.resolve(root) !== matrixRootResolved;
   const roots = {

@@ -7,8 +7,8 @@ import {
   validateUsersGitHubAuthorizeCancelParams,
   validateUsersGitHubDisconnectParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { resolveGitHubToolIdentityStatus } from "../../agents/github-tool-identity.js";
+import { resolveSystemGitHubIdentityStatus } from "../../agents/github-tool-identity.js";
+import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import type { PersonalGitHubAction } from "../github-personal-oauth.js";
 import { preparePersonalGitHubAction } from "./github-personal-authorization.js";
 import type {
@@ -60,13 +60,12 @@ export const usersGitHubHandlers: GatewayRequestHandlers = {
     (options) =>
       runPersonalGitHub(options, "My GitHub is unavailable.", async (action, service) => {
         const config = options.context.getRuntimeConfig();
-        const system = await resolveGitHubToolIdentityStatus({
+        const system = await resolveSystemGitHubIdentityStatus({
           config,
-          agentId: resolveDefaultAgentId(config),
-          selectedScope: "system",
+          sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? config,
         });
         const personal = await service.status(action);
-        return { personal, system: system.selected.identity };
+        return { personal, system };
       }),
   ),
   "users.github.authorize.start": defineValidatedGatewayMethod(

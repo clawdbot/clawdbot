@@ -3,14 +3,15 @@ import crypto from "node:crypto";
 import http, { type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   rawDataToString,
   readRequestBodyWithLimit,
   resolveRequestClientIp,
   WEBHOOK_BODY_READ_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-ingress";
+import { rejectWebSocketUpgrade } from "openclaw/plugin-sdk/websocket-runtime";
 import { WebSocketServer, type WebSocket } from "ws";
-import { isLoopbackHost } from "../../gateway/net.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { randomRelayId } from "./auth-v2-crypto.js";
 import { authenticateExtensionWebSocket } from "./auth-v2-websocket.js";
@@ -131,14 +132,6 @@ function hasLoopbackHostHeader(req: IncomingMessage): boolean {
     return isLoopbackHost(new URL(`http://${host}`).hostname);
   } catch {
     return false;
-  }
-}
-
-function destroySocket(socket: Duplex, response: string): void {
-  try {
-    socket.write(response);
-  } finally {
-    socket.destroy();
   }
 }
 
@@ -478,14 +471,16 @@ export async function startExtensionRelayServer(params: {
   });
 
   server.on("upgrade", (req, socket, head) => {
+    // HTTP no longer owns socket errors after handing off an upgrade.
+    socket.once("error", () => socket.destroy());
     const path = (req.url ?? "/").split("?")[0];
     const source = resolveRequestClientIp(req) ?? "unknown";
     if (retired) {
-      destroySocket(socket, "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+      rejectWebSocketUpgrade(socket, { status: 503 });
       return;
     }
     if (!hasLoopbackHostHeader(req)) {
-      destroySocket(socket, "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+      rejectWebSocketUpgrade(socket, { status: 403 });
       return;
     }
     if (path === RELAY_OWNER_PATH) {
@@ -503,7 +498,7 @@ export async function startExtensionRelayServer(params: {
         protocols.length !== 1 ||
         protocols[0] !== BROWSER_RELAY_EXTENSION_SUBPROTOCOL
       ) {
-        destroySocket(socket, "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+        rejectWebSocketUpgrade(socket, { status: 403 });
         return;
       }
       handlePreAuthWebSocketUpgrade({
@@ -543,7 +538,7 @@ export async function startExtensionRelayServer(params: {
     }
     if (path === "/extension") {
       if (!isAllowedExtensionOrigin(req)) {
-        destroySocket(socket, "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+        rejectWebSocketUpgrade(socket, { status: 403 });
         return;
       }
       const protocols = requestProtocols(req);
@@ -555,7 +550,7 @@ export async function startExtensionRelayServer(params: {
       ) {
         const authority = currentAuthority();
         if (!authority) {
-          destroySocket(socket, "HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+          rejectWebSocketUpgrade(socket, { status: 401 });
           return;
         }
         if (
@@ -579,17 +574,17 @@ export async function startExtensionRelayServer(params: {
             },
           })
         ) {
-          destroySocket(socket, "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+          rejectWebSocketUpgrade(socket, { status: 400 });
         }
         return;
       }
       if (protocols.includes(BROWSER_RELAY_EXTENSION_SUBPROTOCOL)) {
-        destroySocket(socket, "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+        rejectWebSocketUpgrade(socket, { status: 400 });
         return;
       }
       const liveToken = readExtensionRelayToken();
       if (!liveToken || !isAuthorizedLegacy(req, liveToken, allowLegacyAuth)) {
-        destroySocket(socket, "HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+        rejectWebSocketUpgrade(socket, { status: 401 });
         return;
       }
       const authority = getBrowserRelayAuthV2Authority(liveToken);
@@ -616,12 +611,12 @@ export async function startExtensionRelayServer(params: {
         !isAuthorizedInternal(req, internalToken) &&
         !isAuthorizedLegacy(req, readExtensionRelayToken() ?? "", allowLegacyAuth)
       ) {
-        destroySocket(socket, "HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+        rejectWebSocketUpgrade(socket, { status: 401 });
         return;
       }
       const authority = currentAuthority();
       if (!authority) {
-        destroySocket(socket, "HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+        rejectWebSocketUpgrade(socket, { status: 401 });
         return;
       }
       wss.handleUpgrade(req, socket, head, (ws) =>
@@ -631,7 +626,7 @@ export async function startExtensionRelayServer(params: {
       );
       return;
     }
-    destroySocket(socket, "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+    rejectWebSocketUpgrade(socket, { status: 404 });
   });
 
   await new Promise<void>((resolve, reject) => {

@@ -1,5 +1,4 @@
-import { readMissingScopeError } from "@openclaw/gateway-client/browser";
-import { html, nothing, render } from "lit";
+import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type {
   FsListDirResult,
@@ -8,11 +7,12 @@ import type {
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { renderSessionMenuItem } from "../pages/new-session/cloud-target.ts";
-import { folderDisplayName, isAbsolutePath } from "../pages/new-session/path.ts";
+import { folderDisplayName } from "../pages/new-session/path.ts";
+import { PlaceBrowserState } from "../pages/new-session/place-browser-state.ts";
 import { renderPlaceBrowser } from "../pages/new-session/place-browser.ts";
 import "../styles/new-session.css";
 import { icons } from "./icons.ts";
-import "./modal-dialog.ts";
+import { withPromiseModalHost } from "./promise-modal-host.ts";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
 import "./web-awesome-popover.ts";
 
@@ -33,9 +33,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
     return Promise.resolve();
   }
   active = true;
-  const host = document.createElement("div");
-  document.body.append(host);
-  return new Promise<void>((resolve) => {
+  return withPromiseModalHost<void>(undefined, ({ host, render, finish: settle }) => {
     let cwd = options.defaults.cwd;
     let worktree = false;
     let repositoryStatus: WorktreeRepositoryStatus | "checking" = "checking";
@@ -43,19 +41,13 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
     let submitting = false;
     let failure: string | null = null;
     let browserVisible = false;
-    let browserLoading = false;
-    let browserError: string | null = null;
-    let browserListing: FsListDirResult | null = null;
-    let browserPathDraft = "";
-    let browserRequestToken = 0;
+    const browser = new PlaceBrowserState(options.listDirectory, paint);
 
     const finish = () => {
-      browserRequestToken += 1;
+      browser.reset();
       repositoryRequestToken += 1;
-      render(nothing, host);
-      host.remove();
+      settle();
       active = false;
-      resolve();
     };
 
     const handleSubmit = async (event: Event) => {
@@ -92,12 +84,8 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
     };
 
     const showPickerRoot = () => {
-      browserRequestToken += 1;
+      browser.reset();
       browserVisible = false;
-      browserLoading = false;
-      browserError = null;
-      browserListing = null;
-      browserPathDraft = "";
       paint();
     };
 
@@ -180,41 +168,9 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
         ?.focus({ preventScroll: true });
     };
 
-    const loadDirectory = async (path?: string) => {
-      const requestToken = ++browserRequestToken;
-      const requestedPath = path?.trim() || undefined;
-      browserLoading = true;
-      browserError = null;
-      browserListing = null;
-      browserPathDraft = requestedPath ?? "";
-      paint();
-      try {
-        const listing = await options.listDirectory(requestedPath);
-        if (requestToken !== browserRequestToken) {
-          return;
-        }
-        browserListing = listing;
-        if (listing.path && browserPathDraft === (requestedPath ?? "")) {
-          browserPathDraft = listing.path;
-        }
-      } catch (error) {
-        if (requestToken !== browserRequestToken) {
-          return;
-        }
-        browserError = readMissingScopeError(error)?.missingScope
-          ? t("newSession.browseRequiresAdmin")
-          : formatUiError(error, t("newSession.browserLoadFailed"));
-      } finally {
-        if (requestToken === browserRequestToken) {
-          browserLoading = false;
-          paint();
-        }
-      }
-    };
-
     const showBrowser = () => {
       browserVisible = true;
-      void loadDirectory(cwd || undefined);
+      void browser.navigate(cwd || undefined);
     };
 
     function paint() {
@@ -222,9 +178,6 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
       const folderLabel = trimmedCwd
         ? folderDisplayName(trimmedCwd)
         : t("sessionsView.groupDefaultsCwdPlaceholder");
-      const usableBrowserPath = isAbsolutePath(browserPathDraft.trim())
-        ? browserPathDraft.trim()
-        : null;
       const environmentState =
         repositoryStatus === "checking" ? "checking" : repositoryStatus === "git" ? "git" : "local";
       const environmentOptions = [
@@ -242,8 +195,8 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
         },
       ] as const;
       const selectedEnvironment = environmentOptions[worktree ? 1 : 0];
-      render(
-        html`
+      render(() => {
+        return html`
           <openclaw-modal-dialog
             label=${t("sessionsView.groupDefaultsTitle", { group: options.group })}
             @modal-cancel=${(event: Event) => {
@@ -297,19 +250,11 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                     ${
                       browserVisible
                         ? renderPlaceBrowser({
-                            listing: browserListing,
+                            browser,
+                            id: "session-group-defaults-browser",
                             label: t("newSession.gateway"),
-                            loading: browserLoading,
-                            error: browserError,
-                            pathDraft: browserPathDraft,
-                            usablePath: usableBrowserPath,
                             registerProjectPath: null,
                             registeringProject: false,
-                            onPathDraftChange: (value) => {
-                              browserPathDraft = value;
-                              paint();
-                            },
-                            onNavigate: (path) => void loadDirectory(path),
                             onBack: showPickerRoot,
                             onRegisterProject: () => undefined,
                             onClose: showPickerRoot,
@@ -487,9 +432,8 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
               </div>
             </form>
           </openclaw-modal-dialog>
-        `,
-        host,
-      );
+        `;
+      });
     }
 
     void inspectRepository(true);

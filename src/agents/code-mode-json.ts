@@ -139,14 +139,6 @@ function createTruncationMarker(source: CodeModeJsonSource, maxBytes: number) {
   };
 }
 
-/** Nested bridge markers are ordinary guest data when later emitted or returned. */
-export function boundCodeModeValue(value: unknown, maxBytes: number): unknown {
-  const source = captureCodeModeValue(value, maxBytes);
-  return source.kind === "complete" && sourceBytes(source) <= maxBytes
-    ? (JSON.parse(source.json) as unknown)
-    : createTruncationMarker(source, maxBytes)(maxBytes);
-}
-
 function createErrorFitter(error: string, maxBytes: number) {
   const suffix = " [error truncated]";
   const fit = createJsonPrefixFitter(error, maxBytes, () => suffix.length);
@@ -268,6 +260,9 @@ export class CodeModeOutputState {
     const outputBytes = count === 0 ? 0 : sourceBytes(source);
     const valueBytes = value === undefined ? 0 : sourceBytes(value);
     const errorBytes = fullError === undefined ? 0 : jsonUtf8Bytes(fullError);
+    // Reuse decoded channels only within this fit; later deliveries need fresh objects.
+    let completeOutput: unknown[] | undefined;
+    let completeValue: { value: unknown } | undefined;
     let outputMarker: ReturnType<typeof createTruncationMarker> | undefined;
     let valueMarker: ReturnType<typeof createTruncationMarker> | undefined;
     let errorFitter: ReturnType<typeof createErrorFitter> | undefined;
@@ -287,8 +282,7 @@ export class CodeModeOutputState {
       if (outputBytes <= outputAllowance) {
         // A retained prefix has originalBytes > maxBytes and cannot fit this allowance.
         // SAFETY: Complete output sources encode normalized arrays, never guest metadata.
-        const entries = JSON.parse(source.json) as unknown[];
-        output = entries;
+        output = completeOutput ??= JSON.parse(source.json) as unknown[];
         chargedOutputBytes = outputBytes;
         receipt = { kind: "entries", count };
       } else {
@@ -306,14 +300,13 @@ export class CodeModeOutputState {
           output,
           ...(value === undefined
             ? {}
-            : {
-                value:
-                  value.kind === "complete" && valueBytes <= remaining - chargedOutputBytes
-                    ? (JSON.parse(value.json) as unknown)
-                    : (valueMarker ??= createTruncationMarker(value, this.maxBytes))(
-                        remaining - chargedOutputBytes,
-                      ),
-              }),
+            : value.kind === "complete" && valueBytes <= remaining - chargedOutputBytes
+              ? (completeValue ??= { value: JSON.parse(value.json) as unknown })
+              : {
+                  value: (valueMarker ??= createTruncationMarker(value, this.maxBytes))(
+                    remaining - chargedOutputBytes,
+                  ),
+                }),
           ...(error === undefined ? {} : { error }),
         },
       };

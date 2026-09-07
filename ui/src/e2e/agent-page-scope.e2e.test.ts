@@ -1,8 +1,10 @@
 // Control UI E2E tests cover chip-selected page scope and the all-agents escape.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   installMockGateway,
   waitForControlUiRoute,
@@ -310,7 +312,15 @@ suite.define(() => {
         await agentMenu.getByText("Research", { exact: true }).waitFor();
         await agentMenu.getByText("Writer", { exact: true }).waitFor();
         expect(await agentMenu.getByText("Stale Main", { exact: true }).count()).toBe(0);
-        await screenshot(page, "00-refreshed-roster-wins.png");
+        if (captureUiProof) {
+          await writeFile(
+            path.join(proofDir, "00-refreshed-roster-wins.png"),
+            await takeControlUiViewportScreenshot(page, agentMenu.locator('[part="menu"]'), [
+              agentMenu.getByText("Research", { exact: true }),
+              agentMenu.getByText("Writer", { exact: true }),
+            ]),
+          );
+        }
       },
     );
   });

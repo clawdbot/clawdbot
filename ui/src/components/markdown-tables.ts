@@ -12,6 +12,7 @@ const tableViewportSelector = ".markdown-table__viewport";
 const enhancedTableShells = new WeakSet<HTMLElement>();
 const tableOwnerStates = new WeakMap<HTMLElement, TableOwnerState>();
 const tableCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
+const tableCopyAttempts = new WeakMap<HTMLElement, number>();
 
 type TableOwnerState = {
   release: () => void;
@@ -235,7 +236,13 @@ export function handleMarkdownTableInteraction(event: Event): void {
   }
   const copy = target.closest<HTMLElement>(".markdown-table__copy");
   if (copy) {
-    void copyToClipboard(tableText(table)).then((copied) => {
+    const attempt = (tableCopyAttempts.get(copy) ?? 0) + 1;
+    tableCopyAttempts.set(copy, attempt);
+    const isCurrent = () => copy.isConnected && tableCopyAttempts.get(copy) === attempt;
+    void copyToClipboard(tableText(table), isCurrent).then((copied) => {
+      if (!isCurrent()) {
+        return;
+      }
       copy.setAttribute("aria-label", t(copied ? "common.copied" : "common.copyFailed"));
       if (copied) {
         render(icons.check, copy);

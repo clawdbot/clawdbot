@@ -61,6 +61,59 @@ describe("git install target ownership", () => {
     await state.cleanup();
   });
 
+  it.each(["branch", "tag", "annotated-tag", "commit", "short-commit", "default"] as const)(
+    "installs the requested %s revision from a real Git repository",
+    async (kind) => {
+      const defaultCommit = await git(sourceDir, "rev-parse", "HEAD");
+      await git(sourceDir, "switch", "-c", "feature/demo");
+      const featureCommit = await commitPlugin("demo", "2.0.0");
+      await git(sourceDir, "tag", "v2.0.0");
+      await git(sourceDir, "-c", "tag.gpgsign=false", "tag", "-a", "release", "-m", "release");
+      await git(sourceDir, "switch", "main");
+      const refs = {
+        branch: "feature/demo",
+        tag: "v2.0.0",
+        "annotated-tag": "release",
+        commit: featureCommit,
+        "short-commit": featureCommit.slice(0, 12),
+        default: undefined,
+      };
+      const ref = refs[kind];
+      const result = await installPluginFromGitSpec({
+        spec: `${spec}${ref ? `#${ref}` : ""}`,
+        expectedPluginId: "demo",
+      });
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+      const expectedCommit = kind === "default" ? defaultCommit : featureCommit;
+      const expectedVersion = kind === "default" ? "1.0.0" : "2.0.0";
+      expect(result.version).toBe(expectedVersion);
+      expect(result.git).toMatchObject({ ref, commit: expectedCommit });
+      expect(await git(result.targetDir, "rev-parse", "HEAD")).toBe(expectedCommit);
+      await expect(fs.readFile(path.join(result.targetDir, "index.js"), "utf8")).resolves.toBe(
+        `export default ${JSON.stringify(expectedVersion)};\n`,
+      );
+      if (kind === "branch") {
+        await git(sourceDir, "switch", "feature/demo");
+        const nextCommit = await commitPlugin("demo", "3.0.0");
+        await git(sourceDir, "switch", "main");
+        const updated = await installPluginFromGitSpec({
+          spec: `${spec}#${ref}`,
+          mode: "update",
+          expectedPluginId: "demo",
+        });
+        expect(updated).toMatchObject({
+          ok: true,
+          version: "3.0.0",
+          targetDir: result.targetDir,
+          git: { ref, commit: nextCommit },
+        });
+        expect(await git(result.targetDir, "rev-parse", "HEAD")).toBe(nextCommit);
+      }
+    },
+  );
+
   it.each([
     { pluginId: "demo", deferred: false },
     { pluginId: "renamed-demo", deferred: false },

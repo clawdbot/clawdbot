@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   actionOpacity,
   captureUiProof,
@@ -86,11 +87,7 @@ suite.define(() => {
   });
 
   it("keeps action-only text stable and active state visible with actions", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
       methodResponses: {
@@ -104,6 +101,12 @@ suite.define(() => {
           sessionRow("agent:main:hover-active", "Hover active", Date.now() - 1, {
             hasActiveRun: true,
             status: "running",
+            unread: true,
+          }),
+          sessionRow("agent:main:hover-queued", "Hover queued", Date.now() - 2, {
+            hasActiveRun: true,
+            status: "queued",
+            unread: true,
           }),
         ]),
       },
@@ -147,24 +150,40 @@ suite.define(() => {
 
       const row = page.locator('[data-session-key="agent:main:hover-active"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
-      const state = row.locator(".session-row-state");
+      const accessibility = await context.newCDPSession(page);
+      const { nodes } = await accessibility.send("Accessibility.getFullAXTree");
+      for (const [title, activity] of [
+        ["Hover active", "Active run"],
+        ["Hover queued", "Queued"],
+      ] as const) {
+        const linkNode = nodes.find(
+          (node) => node.role?.value === "link" && node.name?.value.includes(title),
+        );
+        expect(linkNode).toBeDefined();
+        const announced = `${linkNode?.name?.value} ${linkNode?.description?.value ?? ""}`;
+        expect.soft(announced.match(new RegExp(activity, "g"))).toHaveLength(1);
+        expect.soft(announced.match(/Unread/g)).toHaveLength(1);
+      }
+      await accessibility.detach();
+      const state = row.locator(".sidebar-session-indicator .session-glyph__ring");
       const pin = row.getByRole("button", { name: "Pin session" });
       const menu = row.getByRole("button", { name: "Open session menu" });
-      await expect.poll(() => state.locator(".session-run-spinner").isVisible()).toBe(true);
+      await expect.poll(() => state.isVisible()).toBe(true);
       await expect.poll(() => actionOpacity(state)).toBe("1");
       await page.mouse.move(500, 500);
       await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
       await captureUiProof(suite, page, "sidebar-session-title-icon-gap.png");
 
+      await page.addStyleTag({ content: ".session-glyph__ring { animation: none !important; }" });
       const [restingNameBounds, restingStateBounds] = await Promise.all([
         row.locator(".sidebar-recent-session__name").boundingBox(),
         state.boundingBox(),
       ]);
       if (!restingNameBounds || !restingStateBounds) {
-        throw new Error("Expected visible title and trailing state geometry");
+        throw new Error("Expected visible title and leading activity geometry");
       }
-      expect(restingStateBounds.x - (restingNameBounds.x + restingNameBounds.width)).toBeCloseTo(
-        16,
+      expect(restingNameBounds.x - (restingStateBounds.x + restingStateBounds.width)).toBeCloseTo(
+        6,
         1,
       );
 
@@ -274,11 +293,7 @@ suite.define(() => {
   it("aligns trailing unread dots and trades unread/PR icons for hover actions", async () => {
     const plainKey = "agent:main:unread-plain";
     const pullRequestKey = "agent:main:unread-pr";
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await page.addInitScript(() => {
       localStorage.setItem("openclaw:sidebar:sessions:show-preview", "false");
@@ -411,10 +426,10 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const row = page.locator('[data-session-key="agent:main:touch-active"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
-      const state = row.locator(".session-row-state");
+      const state = row.locator(".sidebar-session-indicator .session-glyph__ring");
       const pin = row.getByRole("button", { name: "Pin session" });
       const menu = row.getByRole("button", { name: "Open session menu" });
-      await expect.poll(() => state.locator(".session-run-spinner").isVisible()).toBe(true);
+      await expect.poll(() => state.isVisible()).toBe(true);
       await expect.poll(() => actionOpacity(state)).toBe("1");
       await expect.poll(() => pin.isVisible()).toBe(true);
       await expect.poll(() => menu.isVisible()).toBe(true);
@@ -430,11 +445,7 @@ suite.define(() => {
   });
 
   it("does not widen desktop session text when hover actions appear beside trailing state", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await page.addInitScript(() => {
       localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
@@ -456,8 +467,8 @@ suite.define(() => {
             Date.now() - 1,
             {
               forkSource: { sessionKey: "agent:main:main", sessionId: "source-session" },
-              hasActiveRun: true,
-              status: "running",
+              hasActiveRun: false,
+              status: "done",
               unread: true,
               worktree: {
                 id: "combined-state-worktree",
@@ -519,8 +530,8 @@ suite.define(() => {
       await expect
         .poll(() => row.locator("[data-pull-request-state='open']").isVisible())
         .toBe(true);
-      await expect.poll(() => state.locator(".session-run-spinner").isVisible()).toBe(true);
-      await expect.poll(() => state.locator(".session-unread-dot").count()).toBe(0);
+      await expect.poll(() => state.locator(".session-unread-dot").isVisible()).toBe(true);
+      await expect.poll(() => row.locator(".session-glyph__ring").count()).toBe(0);
       const prIcon = row.locator("[data-pull-request-state='open'] svg");
       expect(
         await prIcon.evaluate((icon) => {
@@ -534,7 +545,7 @@ suite.define(() => {
         );
         const atoms = Array.from(
           element.querySelectorAll<HTMLElement>(
-            ".sidebar-recent-session__details-endcap :is([data-pull-request-state='open'], .session-run-spinner)",
+            ".sidebar-recent-session__details-endcap :is([data-pull-request-state='open'], .session-unread-dot)",
           ),
         );
         if (!endcap || atoms.length !== 2) {

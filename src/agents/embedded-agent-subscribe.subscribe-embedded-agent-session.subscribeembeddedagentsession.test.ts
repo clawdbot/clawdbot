@@ -17,6 +17,7 @@ import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import * as agentEvents from "../infra/agent-events.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
+import { runAgentLoop, type AgentEvent } from "../plugin-sdk/agent-core.js";
 import {
   THINKING_TAG_CASES,
   createSubscribedSessionHarness,
@@ -31,7 +32,6 @@ import {
   createOpenAiResponsesTextBlock,
   createOpenAiResponsesTextEvent,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
-import { runAgentLoop, type AgentEvent } from "./runtime/index.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { recordSessionModelUsage } from "./sessions/session-model-usage.js";
 import { markCoreTtsToolResult } from "./tools/tts-tool-result-provenance.js";
@@ -414,6 +414,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       const secondCompleted = createDeferred();
       const admittedUsage: StreamUsage[] = [];
       const onAgentEvent = vi.fn();
+      const onModelUsage = vi.fn();
       const onBlockReplyFlush = vi.fn();
       const onBlockReply = vi.fn().mockImplementationOnce(() => {
         deliveryStarted.resolve();
@@ -427,6 +428,7 @@ describe("subscribeEmbeddedAgentSession", () => {
         onBlockReply,
         onBlockReplyFlush,
         onAgentEvent,
+        onModelUsage,
       });
       const { emit, subscription } = harness;
       const running = runUsageCalls(
@@ -464,6 +466,10 @@ describe("subscribeEmbeddedAgentSession", () => {
         expect(admittedUsage).toMatchObject([
           { input: 100, output: 12, totalTokens: 112, cost: { total: 0.125 } },
           { input: 200, output: 8, totalTokens: 208, cost: { total: 0.5 } },
+        ]);
+        expect(onModelUsage.mock.calls).toMatchObject([
+          [{ input: 100, output: 12, cacheRead: 0, cacheWrite: 0 }],
+          [{ input: 200, output: 8, cacheRead: 0, cacheWrite: 0 }],
         ]);
         expect(subscription.getUsageTotals()).toMatchObject({
           input: 300,

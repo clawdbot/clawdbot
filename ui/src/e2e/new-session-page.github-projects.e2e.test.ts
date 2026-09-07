@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   WORKSPACE,
   ONE_PIXEL_PNG_B64,
@@ -90,7 +91,10 @@ suite.define(() => {
         expect(await baseRef.getAttribute("placeholder")).toBe("From");
         expect(await baseRef.inputValue()).toBe("");
         expect(await checkoutPopover.locator("datalist option").count()).toBe(0);
-        await captureProjectUiProof(suite, page, "github-worktree-selected.png");
+        await captureProjectUiProof(suite, page, "github-worktree-selected.png", {
+          surface: checkoutPopover.locator('wa-popup [part="popup"]'),
+          content: [baseRef],
+        });
         await page.locator(".new-session-page__message").fill("inspect the worktree");
         await page.getByRole("button", { name: "Start session" }).click();
 
@@ -381,7 +385,10 @@ suite.define(() => {
       const working = page.locator('.chat-working-indicator[role="status"]');
       await pollLocatorText(working).toContain("Preparing workspace…");
       if (artifactDir) {
-        await page.screenshot({ path: path.join(artifactDir, "preparing.png"), fullPage: true });
+        await writeFile(
+          path.join(artifactDir, "preparing.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [working, userImage]),
+        );
       }
       await expect.poll(() => page.locator(".chat-group.user").count()).toBe(1);
       await expect
@@ -467,7 +474,10 @@ suite.define(() => {
         await canonicalBubble.waitFor();
         await expect.poll(() => page.locator(".chat-group.user").count()).toBe(1);
         if (artifactDir) {
-          await page.screenshot({ path: path.join(artifactDir, "promoted.png"), fullPage: true });
+          await writeFile(
+            path.join(artifactDir, "promoted.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [canonicalBubble]),
+          );
         }
         await gateway.emitChatFinal({ runId, sessionKey, text: "Project workspace is ready." });
         await page

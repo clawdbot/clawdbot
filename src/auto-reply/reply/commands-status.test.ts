@@ -5,7 +5,7 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
-import { saveAuthProfileStore } from "../../agents/auth-profiles/store.js";
+import { saveAuthProfileStore } from "../../agents/auth-profiles/store-runtime.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
@@ -19,7 +19,9 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import * as logger from "../../logger.js";
 import type { ProviderThinkingProfile } from "../../plugins/provider-thinking.types.js";
+import * as statusText from "../../status/status-text.js";
 import {
   completeTaskRunByRunIdCore,
   createQueuedTaskRunCore,
@@ -2545,15 +2547,12 @@ describe("buildStatusReply subagent summary", () => {
 
 describe("buildStatusReply error handling", () => {
   afterEach(() => {
-    vi.doUnmock("../../logger.js");
-    vi.doUnmock("../../status/status-text.js");
-    vi.resetModules();
     vi.restoreAllMocks();
   });
 
-  async function runStatusReply(fn: typeof buildStatusReply) {
+  async function runStatusReply() {
     const commandParams = buildCommandTestParams("/status", baseCfg);
-    return await fn({
+    return await buildStatusReply({
       cfg: baseCfg,
       command: commandParams.command,
       sessionEntry: commandParams.sessionEntry,
@@ -2578,22 +2577,11 @@ describe("buildStatusReply error handling", () => {
   }
 
   it("delivers a fixed generic reply and logs details when status rendering throws", async () => {
-    // commands-status re-exports buildStatusText, so the mock must keep that
-    // binding while prod calls buildStatusReplyParts. logError stays mocked so
-    // containment diagnostics never leak into test stderr.
-    vi.doMock("../../logger.js", async (importOriginal) => ({
-      ...(await importOriginal<object>()),
-      logError: vi.fn(),
-    }));
-    vi.doMock("../../status/status-text.js", () => ({
-      buildStatusReplyParts: vi.fn(() => Promise.reject(new Error("Unexpected rendering error"))),
-      buildStatusText: vi.fn(() => Promise.reject(new Error("Unexpected rendering error"))),
-    }));
-
-    vi.resetModules();
-    const { buildStatusReply: freshBuildStatusReply } = await import("./commands-status.js");
-    const { logError } = await import("../../logger.js");
-    const reply = await runStatusReply(freshBuildStatusReply);
+    const logError = vi.spyOn(logger, "logError").mockImplementation(() => {});
+    vi.spyOn(statusText, "buildStatusReplyParts").mockRejectedValue(
+      new Error("Unexpected rendering error"),
+    );
+    const reply = await runStatusReply();
 
     // Exact object equality also pins that no stale presentation or internal
     // error text reaches the channel; diagnostics belong to the log sink only.
@@ -2607,14 +2595,11 @@ describe("buildStatusReply error handling", () => {
       tone: "info" as const,
       blocks: [{ type: "text" as const, text: "plain status" }, { type: "divider" as const }],
     };
-    vi.doMock("../../status/status-text.js", () => ({
-      buildStatusReplyParts: vi.fn(() => Promise.resolve({ text: "plain status", presentation })),
-      buildStatusText: vi.fn(() => Promise.resolve("plain status")),
-    }));
-
-    vi.resetModules();
-    const { buildStatusReply: freshBuildStatusReply } = await import("./commands-status.js");
-    const reply = await runStatusReply(freshBuildStatusReply);
+    vi.spyOn(statusText, "buildStatusReplyParts").mockResolvedValue({
+      text: "plain status",
+      presentation,
+    });
+    const reply = await runStatusReply();
 
     expect(reply).toMatchObject({
       text: "plain status",
@@ -2624,15 +2609,7 @@ describe("buildStatusReply error handling", () => {
   });
 
   it("returns a generic reply and logs details when plugin health collection fails", async () => {
-    vi.doMock("../../logger.js", async (importOriginal) => ({
-      ...(await importOriginal<object>()),
-      logError: vi.fn(),
-    }));
-
-    vi.resetModules();
-    const { buildStatusPluginsReply: freshBuildStatusPluginsReply } =
-      await import("./commands-status.js");
-    const { logError } = await import("../../logger.js");
+    const logError = vi.spyOn(logger, "logError").mockImplementation(() => {});
     pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot.mockRejectedValueOnce(
       new Error("Cannot find module 'internal/path'"),
     );
@@ -2641,7 +2618,7 @@ describe("buildStatusReply error handling", () => {
       ...baseCfg,
       commands: { text: true, plugins: true },
     });
-    const reply = await freshBuildStatusPluginsReply({
+    const reply = await buildStatusPluginsReply({
       cfg: commandParams.cfg,
       command: commandParams.command,
       workspaceDir: commandParams.workspaceDir,

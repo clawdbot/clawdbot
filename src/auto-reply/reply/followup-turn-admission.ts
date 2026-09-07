@@ -9,6 +9,7 @@ import type { GatewayContextResolver } from "../../gateway/server-methods/types.
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -144,6 +145,7 @@ export async function admitFollowupTurn(params: {
     }) ?? source.sessionFile;
   const admission = await admitReplyTurn({
     resolveGatewayContext: params.defaults.resolveGatewayContext,
+    agentId: run.agentId,
     sessionId: params.queued.admissionSessionId ?? run.sessionId,
     sessionKey: replySessionKey ?? "",
     expectedSessionId: initialEntry?.sessionId,
@@ -382,6 +384,9 @@ export async function admitFollowupTurn(params: {
       activeEntry = await runSessionCompactionIfNeeded({
         cfg: config,
         followupRun: turn.queued,
+        pendingUserEntryId: readPendingUserTurnTranscriptAdmission(
+          turn.queued.userTurnTranscriptRecorder,
+        )?.entryId,
         promptForEstimate: turn.queued.prompt,
         defaultModel: params.defaults.defaultModel,
         sessionEntry: activeEntry,
@@ -448,7 +453,10 @@ export async function admitFollowupTurn(params: {
         throw error;
       }
       operation.fail("run_failed", error);
-      const admittedVerboseLevel = session.current()?.verboseLevel ?? turn.queued.run.verboseLevel;
+      const admittedVerboseLevel =
+        turn.queued.run.verboseLevelOverride ??
+        session.current()?.verboseLevel ??
+        turn.queued.run.verboseLevel;
       const text = buildPreflightCompactionFailureText(formatErrorMessage(error), {
         includeDetails: admittedVerboseLevel === "on" || admittedVerboseLevel === "full",
       });

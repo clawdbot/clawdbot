@@ -14,7 +14,6 @@ import {
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import { joinPresentSections } from "./run-attempt-state.js";
 import { CodexThreadPolicyHandoffError } from "./thread-policy.js";
-import { recordCodexTrajectoryContext } from "./trajectory.js";
 
 export async function startCodexAttemptRuntime(resources: CodexAttemptResources) {
   const {
@@ -32,7 +31,6 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
   const {
     context,
     turnState,
-    buildRenderedCodexDeveloperInstructions,
     rebuildCodexTurnPromptTextFromCurrentProjection,
     applyNoContextEngineContinuityProjection,
   } = prompt;
@@ -76,7 +74,6 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     resolveRuntimeOptionsForCurrentBinding,
     startupAuthProfileId,
     startupAuthRequirement,
-    abortFromUpstream,
   } = connection;
   let pluginAppServer = withCodexAppServerFastModeServiceTier(appServer, runtimeParams);
   const loopDetectionEnabled =
@@ -91,6 +88,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       data: { phase: "startup" },
     });
     const startupResult = await startCodexAttemptThread({
+      assertCurrent: connection.assertCurrent,
       attemptClientFactory,
       bindingStore,
       runtime: connection.options.runtime,
@@ -221,7 +219,9 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
         clientId: state.client.getInstanceId(),
       },
     });
-    if (applyNoContextEngineContinuityProjection(state.thread.lifecycle.action, state.thread)) {
+    if (
+      await applyNoContextEngineContinuityProjection(state.thread.lifecycle.action, state.thread)
+    ) {
       await rebuildCodexTurnPromptTextFromCurrentProjection();
     }
     trajectoryRecorder?.recordEvent("session.started", {
@@ -230,16 +230,6 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       authProfileId: startupAuthProfileId,
       workspaceDir: effectiveWorkspace,
       toolCount: flattenCodexDynamicToolFunctions(toolBridge.specs).length,
-    });
-    recordCodexTrajectoryContext(trajectoryRecorder, {
-      attempt: params,
-      cwd: effectiveCwd,
-      developerInstructions: joinPresentSections(
-        buildRenderedCodexDeveloperInstructions(),
-        attemptTools.configuredMcp?.diagnosticNotice,
-      ),
-      prompt: turnState.codexTurnPromptText,
-      tools: toolBridge.availableSpecs,
     });
     connection.mutable.pluginAppServer = pluginAppServer;
   } catch (error) {
@@ -257,9 +247,6 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     await runCleanupStep(
       "codex-start-failure-shared-client-release",
       releaseSharedClientLeaseAndRetireOneShotClient,
-    );
-    await runCleanupStep("codex-start-failure-abort-listener", () =>
-      params.abortSignal?.removeEventListener("abort", abortFromUpstream),
     );
     throw error instanceof CodexThreadPolicyHandoffError
       ? error

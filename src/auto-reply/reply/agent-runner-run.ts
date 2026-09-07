@@ -231,6 +231,7 @@ export async function runReplyAgent(
     sessionKey,
     storePath,
     resolvedVerboseLevel,
+    verboseLevelOverride: followupRun.run.verboseLevelOverride,
   });
   const channelProgressCanConsumeToolResults =
     Boolean(opts?.forceToolResultProgress) && Boolean(opts?.onToolResult);
@@ -240,6 +241,7 @@ export async function runReplyAgent(
     sessionKey,
     storePath,
     resolvedVerboseLevel,
+    verboseLevelOverride: followupRun.run.verboseLevelOverride,
   });
 
   const pendingToolTasks = new Set<Promise<void>>();
@@ -484,6 +486,7 @@ export async function runReplyAgent(
     const replyTurnKind = resolveReplyTurnKind(opts);
     const admission = await admitReplyTurn({
       resolveGatewayContext,
+      agentId: followupRun.run.agentId,
       sessionId: followupRun.run.sessionId,
       sessionKey: replySessionKey ?? "",
       expectedSessionId: activeSessionEntry?.sessionId,

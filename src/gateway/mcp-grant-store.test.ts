@@ -128,6 +128,7 @@ describe("mcp-grant-store", () => {
       sessionId: "session-1",
       messageProvider: "telegram",
       clientCaps: ["tool-events"],
+      pinnedWidgetAuthoring: true,
       currentChannelId: "telegram:-1001",
       currentThreadTs: "42",
       currentMessageId: "message-1",
@@ -155,9 +156,11 @@ describe("mcp-grant-store", () => {
     ).toBeTruthy();
 
     context.clientCaps.push("caller-mutation");
+    context.pinnedWidgetAuthoring = false;
     context.sourceReplyOnly = false;
     context.toolsAllow.push("exec");
     grant.context.clientCaps?.push("return-value-mutation");
+    grant.context.pinnedWidgetAuthoring = false;
     grant.context.sourceReplyOnly = false;
     grant.context.toolsAllow?.push("write");
 
@@ -171,6 +174,7 @@ describe("mcp-grant-store", () => {
       ...context,
       sessionKey: "agent:main:telegram:group:1",
       clientCaps: ["tool-events"],
+      pinnedWidgetAuthoring: true,
       sourceReplyOnly: true,
       toolsAllow: ["message"],
     });
@@ -242,10 +246,18 @@ describe("mcp-grant-store", () => {
 
   it("retains the exact admitted host context outside child-visible grant data", async () => {
     const admittedRunContext = await admitted("run-retained-context");
+    const rootedExecution = {
+      root: "/tmp/workshop",
+      workspaceDir: "/tmp/workshop",
+      cwd: "/tmp/workshop",
+      requireWorkspaceOnly: true as const,
+      sandbox: null,
+    };
     const grant = mintMcpLoopbackClientGrant({
       context: { sessionKey: "agent:main:first", senderIsOwner: false },
       runtimeOwnerToken: "runtime-one",
       admittedRunContext,
+      rootedExecution,
     });
     activateMcpLoopbackClientGrantCapture({
       token: grant.token,
@@ -259,7 +271,12 @@ describe("mcp-grant-store", () => {
       captureKey: "capture-a",
     });
     expect(resolved?.admittedRunContext).toBe(admittedRunContext);
+    expect(resolved?.rootedExecution).toBe(rootedExecution);
     expect(grant.context).not.toHaveProperty("admittedRunContext");
+    expect(grant.context).not.toHaveProperty("rootedExecution");
+    expect(grant).not.toHaveProperty("rootedExecution");
+    revokeMcpLoopbackClientGrant(grant.token);
+    expect(resolved?.isCurrent()).toBe(false);
   });
 
   it("replaces native authority only from the current observed capture", async () => {

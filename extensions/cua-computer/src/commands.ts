@@ -19,7 +19,7 @@ import {
   type CuaDriverSession,
   type CuaToolResult,
 } from "./driver-client.js";
-import { platformActions } from "./driver-result.js";
+import { platformActions, projectedToolDetails } from "./driver-result.js";
 import { createLazyCuaExecutionResources } from "./execution-resources.js";
 import {
   adoptGeneration,
@@ -151,17 +151,7 @@ function assertToolSuccess(result: CuaToolResult, tool: string): CuaToolResult {
 }
 
 function structuredContent(result: CuaToolResult, tool: string): Record<string, unknown> {
-  assertToolSuccess(result, tool);
-  if (!result.structuredJson) {
-    throw new Error(`COMPUTER_DRIVER_ERROR: ${tool} returned no structuredContent`);
-  }
-  try {
-    const value: unknown = JSON.parse(result.structuredJson);
-    if (value && typeof value === "object" && !Array.isArray(value)) {
-      return value as Record<string, unknown>;
-    }
-  } catch {}
-  throw new Error(`COMPUTER_DRIVER_ERROR: ${tool} returned invalid structuredContent`);
+  return projectedToolDetails(assertToolSuccess(result, tool), tool);
 }
 
 function desktopGeometry(result: CuaToolResult): CuaDesktopGeometry {
@@ -497,18 +487,18 @@ export function createCuaComputerProvider(
         if (closing) {
           throw new Error("COMPUTER_DRIVER_UNAVAILABLE: provider execution is closing");
         }
+        if (!isSupportedPlatform) {
+          throw new Error(
+            platform === "darwin"
+              ? `COMPUTER_DRIVER_UNAVAILABLE: cua-computer requires app-provided ${CUA_DRIVER_ENDPOINT_ENV}`
+              : "COMPUTER_DRIVER_UNAVAILABLE: cua-computer supports macOS, Windows, and Linux",
+          );
+        }
       };
       return {
         snapshot: async (paramsJSON, signal) =>
           await queue.run(async () => {
             assertOpen();
-            if (!isSupportedPlatform) {
-              throw new Error(
-                platform === "darwin"
-                  ? `COMPUTER_DRIVER_UNAVAILABLE: cua-computer requires app-provided ${CUA_DRIVER_ENDPOINT_ENV}`
-                  : "COMPUTER_DRIVER_UNAVAILABLE: cua-computer supports macOS, Windows, and Linux",
-              );
-            }
             const params = parseScreenSnapshotParamsJSON(paramsJSON);
             assertPrimaryDisplay(params.screenIndex);
             const format = params.format ?? "jpeg";
@@ -561,13 +551,6 @@ export function createCuaComputerProvider(
         act: async (paramsJSON, signal) =>
           await queue.run(async () => {
             assertOpen();
-            if (!isSupportedPlatform) {
-              throw new Error(
-                platform === "darwin"
-                  ? `COMPUTER_DRIVER_UNAVAILABLE: cua-computer requires app-provided ${CUA_DRIVER_ENDPOINT_ENV}`
-                  : "COMPUTER_DRIVER_UNAVAILABLE: cua-computer supports macOS, Windows, and Linux",
-              );
-            }
             return await handleWindowAct(
               platform,
               executionDriver,

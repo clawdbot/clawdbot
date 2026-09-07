@@ -48,6 +48,8 @@ CMD ["bash"]
 
 FROM ${OPENCLAW_NODE_ALPINE_IMAGE} AS musl
 
+RUN apk add --no-cache bash
+COPY --from=e2e-runner /opt/openclaw-e2e /opt/openclaw-e2e
 COPY scripts/docker/verify-fs-safe-native.mjs /tmp/verify-fs-safe-native.mjs
 
 CMD ["sh"]
@@ -110,25 +112,24 @@ INSTALL_DEPS
 
 FROM bare AS functional
 
+ARG OPENCLAW_FS_SAFE_NATIVE_CONTRACT=required
+
 # The app under test enters through the named BuildKit context, not by copying
 # checkout sources into the image.
 COPY --from=openclaw_package --chown=appuser:appuser openclaw-current.tgz /tmp/openclaw-current.tgz
 COPY --from=functional-deps --chown=appuser:appuser /tmp/openclaw-deps/node_modules /app/node_modules
 COPY --chown=appuser:appuser scripts/docker/verify-fs-safe-native.mjs /tmp/verify-fs-safe-native.mjs
-# Extract the package over the prebuilt dependency tree (bundled deps ship in
-# the tarball), then run its packaged postinstall. Functional E2E lanes exercise
-# private bundled plugins too, so skip the production migration's intentionally
-# curated persisted registry in this test image. The /app/node_modules/openclaw
-# self-link preserves package self-reference imports such as
-# openclaw/plugin-sdk/*; create it after postinstall so its prune walks cannot
-# cycle through the link.
+# Complete postinstall while the image is writable; read-only runs cannot finish
+# a pending package lifecycle. Create the package self-link afterward so
+# postinstall's prune walks cannot cycle through it.
 RUN tar -xzf /tmp/openclaw-current.tgz -C /app --strip-components=1 \
  && chmod +x /app/openclaw.mjs \
- && node --input-type=module -e "import { runBundledPluginPostinstall } from '/app/scripts/postinstall-bundled-plugins.mjs'; runBundledPluginPostinstall();" \
+ && node /app/scripts/postinstall-bundled-plugins.mjs \
  && ln -sfn /app /app/node_modules/openclaw \
  && mkdir -p "$HOME/.local/bin" \
  && ln -sf /app/openclaw.mjs "$HOME/.local/bin/openclaw" \
- && node /tmp/verify-fs-safe-native.mjs --package-root /app --mode require \
+ && OPENCLAW_FS_SAFE_NATIVE_CONTRACT="$OPENCLAW_FS_SAFE_NATIVE_CONTRACT" \
+      node /tmp/verify-fs-safe-native.mjs --package-root /app --mode require \
  && rm -f /tmp/openclaw-current.tgz
 
 CMD ["bash"]

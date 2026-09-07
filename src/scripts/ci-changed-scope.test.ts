@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const {
   detectChangedScope,
@@ -18,7 +19,7 @@ const {
 } = await import("../../scripts/ci-changed-scope.mjs");
 
 const markerPaths: string[] = [];
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
   for (const markerPath of markerPaths) {
@@ -27,10 +28,6 @@ afterEach(() => {
     } catch {}
   }
   markerPaths.length = 0;
-  for (const tempDir of tempDirs) {
-    fs.rmSync(tempDir, { force: true, recursive: true });
-  }
-  tempDirs.length = 0;
 });
 
 function parseGitHubOutput(output: string): Record<string, string> {
@@ -56,8 +53,7 @@ function writeRepoFile(repoDir: string, filePath: string, contents: string): voi
 }
 
 function createSyntheticMergeRepo(prefix: string): { repoDir: string; staleBase: string } {
-  const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  tempDirs.push(repoDir);
+  const repoDir = tempDirs.make(prefix);
 
   git(repoDir, ["init", "-b", "main"]);
   git(repoDir, ["config", "user.email", "ci@example.invalid"]);
@@ -914,8 +910,7 @@ describe("detectChangedScope", () => {
   });
 
   it("reports both sides of a rename so deleted paths force safe planning", () => {
-    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ci-scope-rename-"));
-    tempDirs.push(repoDir);
+    const repoDir = tempDirs.make("openclaw-ci-scope-rename-");
     git(repoDir, ["init", "-b", "main"]);
     git(repoDir, ["config", "user.email", "ci@example.invalid"]);
     git(repoDir, ["config", "user.name", "CI"]);
@@ -928,6 +923,28 @@ describe("detectChangedScope", () => {
     git(repoDir, ["commit", "-m", "rename"]);
 
     expect(listChangedPaths(base, "HEAD", repoDir)).toEqual(["src/new.ts", "src/old.ts"]);
+  });
+
+  it("preserves leading spaces and newlines in Git filename tokens", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const repoDir = tempDirs.make("openclaw-ci-scope-raw-paths-");
+    git(repoDir, ["init", "-b", "main"]);
+    git(repoDir, ["config", "user.email", "ci@example.invalid"]);
+    git(repoDir, ["config", "user.name", "CI"]);
+    writeRepoFile(repoDir, "README.md", "base\n");
+    git(repoDir, ["add", "."]);
+    git(repoDir, ["commit", "-m", "base"]);
+    const base = git(repoDir, ["rev-parse", "HEAD"]);
+    const changedPaths = [" scripts/changed-lanes.mts", "scripts/changed\nlanes.mts"];
+    for (const changedPath of changedPaths) {
+      writeRepoFile(repoDir, changedPath, "export {};\n");
+    }
+    git(repoDir, ["add", "--", ...changedPaths]);
+    git(repoDir, ["commit", "-m", "raw paths"]);
+
+    expect(listChangedPaths(base, "HEAD", repoDir).toSorted()).toEqual(changedPaths.toSorted());
   });
 
   it("drops oversized changed-path payloads before workflow environment interpolation", () => {
@@ -962,10 +979,7 @@ describe("detectChangedScope", () => {
   ])(
     "runs zero-install scope detection for %s",
     (_label, changedPath, manifest, failSafe, cliArgs) => {
-      const repoDir = fs.realpathSync(
-        fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ci-scope-empty-")),
-      );
-      tempDirs.push(repoDir);
+      const repoDir = fs.realpathSync(tempDirs.make("openclaw-ci-scope-empty-"));
       const outputPath = path.join(repoDir, "github-output.txt");
       const scriptPath = path.join(repoDir, "scripts/ci-changed-scope.mjs");
 

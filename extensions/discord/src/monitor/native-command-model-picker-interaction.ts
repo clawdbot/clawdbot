@@ -617,6 +617,7 @@ async function handleDiscordModelPickerInteraction(params: {
       dispatchCommandInteraction: params.dispatchCommandInteraction,
       cfg,
       discordConfig: ctx.discordConfig,
+      readPolicy: ctx.readPolicy,
       accountId: ctx.accountId,
       sessionPrefix: ctx.sessionPrefix,
       threadBindings: ctx.threadBindings,

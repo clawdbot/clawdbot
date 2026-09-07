@@ -5,9 +5,26 @@ import {
   GatewaySuspendPrepareResultSchema,
   GatewaySuspendStatusResultSchema,
   validateGatewaySuspendPrepareParams,
+  validateGatewaySuspendHandoffParams,
 } from "./index.js";
 
 describe("gateway suspension protocol", () => {
+  it("requires an exact handoff target and rejects unrelated interruption policy", () => {
+    const target = { pid: 1, processInstanceId: "gateway-process" };
+    const params = { suspensionId: "held-lease", target };
+    expect(validateGatewaySuspendHandoffParams(params)).toBe(true);
+    for (const rejected of [
+      { ...params, target: undefined },
+      { ...params, force: true },
+      { ...params, waitMs: 0 },
+      { ...params, target: { ...target, processInstanceId: " " } },
+      { ...params, target: { ...target, pid: 0 } },
+      { ...params, target: { ...target, port: 18789 } },
+      { ...params, target: { ...target, successor: "other" } },
+    ]) {
+      expect(validateGatewaySuspendHandoffParams(rejected)).toBe(false);
+    }
+  });
   it("keeps prepare params closed and bounded", () => {
     expect(validateGatewaySuspendPrepareParams({ requestId: "host-request" })).toBe(true);
     expect(

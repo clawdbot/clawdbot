@@ -6,6 +6,7 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as translate from "../lib/translate.ts";
 import { ar } from "../locales/ar.ts";
 import { de } from "../locales/de.ts";
+import { registerLoginEnglish } from "../locales/en-login.ts";
 import { en } from "../locales/en.ts";
 import { es } from "../locales/es.ts";
 import { fa } from "../locales/fa.ts";
@@ -246,10 +247,7 @@ describe("i18n", () => {
   });
 
   it("keeps login failure guidance localized in shipped locale bundles", () => {
-    const checkedKeys = flatten(
-      (en.login as { failure: Record<string, string | Record<string, unknown>> }).failure,
-      "login.failure",
-    );
+    const checkedKeys = flatten(registerLoginEnglish.catalog.login.failure, "login.failure");
     expect(checkedKeys.length).toBeGreaterThan(0);
     for (const [locale, value] of Object.entries({
       ar,
@@ -275,7 +273,7 @@ describe("i18n", () => {
     })) {
       for (const key of checkedKeys) {
         expect(readTranslationString(value, key), `${locale}:${key}`).not.toBe(
-          readTranslationString(en, key),
+          readTranslationString(registerLoginEnglish.catalog, key),
         );
       }
     }
