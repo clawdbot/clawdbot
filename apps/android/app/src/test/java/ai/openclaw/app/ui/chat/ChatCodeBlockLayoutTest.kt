@@ -25,6 +25,7 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontFamily
@@ -78,7 +79,7 @@ class ChatCodeBlockLayoutTest {
   }
 
   @Test
-  fun standaloneEndRevealsTheLastLineInsideAShortScrollingParent() {
+  fun standaloneEndAndStartRevealEndpointsInsideAShortScrollingParent() {
     val code = (0 until 700).joinToString("\n") { "R$it" }
     show {
       Box(
@@ -95,6 +96,9 @@ class ChatCodeBlockLayoutTest {
     click("End of code")
     composeRule.waitForIdle()
     visibleGlyph("R699")
+    composeRule.onNode(hasText("Start of code") and hasClickAction()).performScrollTo()
+    click("Start of code")
+    visibleGlyph("R0")
   }
 
   @Test
