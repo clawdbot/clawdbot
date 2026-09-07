@@ -170,7 +170,6 @@
     <string name="native_177f3d4c06a17721" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ไม่สามารถอัปเดตสิทธิ์ได้"</string>
     <string name="native_17ac6760df79656a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"แทนที่การตั้งค่า"</string>
     <string name="native_1810407f5ab7093c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"การดำเนินการด่วน"</string>
-    <string name="native_181553f2bfe78521" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ส่งไม่สำเร็จ: แชตล้มเหลวก่อนเริ่มทำงาน โปรดลองอีกครั้ง"</string>
     <string name="native_186352a881d0550e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ไมโครโฟน"</string>
     <string name="native_187cb2576a1f78c4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"แชตยังคงตรวจสอบสถานะของ Gateway"</string>
     <string name="native_18b4885826c1440a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ตำแหน่งที่แม่นยำ"</string>
@@ -1631,7 +1630,6 @@
     <string name="native_f6b21a4dbcd8e593" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"กำลังคัดกรอง"</string>
     <string name="native_f6d2b1ae590eb212" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">" · สนทนา: เปิด"</string>
     <string name="native_f6e82c3f136a6c5b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ยังไม่มีข้อมูลการใช้งาน"</string>
-    <string name="native_f6e94ebc86517b65" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"แชตล้มเหลวก่อนเริ่มทำงาน โปรดลองอีกครั้ง"</string>
     <string name="native_f6f4688ff23d50c6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ส่ง"</string>
     <string name="native_f701a65268ba6ea2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"รูปภาพที่แชร์บางรูปถูกละเว้นหรือไม่สามารถเพิ่มได้"</string>
     <string name="native_f706757ef3473dbd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"เขียนปฏิทิน"</string>
