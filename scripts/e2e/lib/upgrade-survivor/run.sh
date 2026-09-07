@@ -1844,6 +1844,12 @@ phase validate-update-restart-mode validate_update_restart_mode
 phase reset-run-state reset_run_state
 phase install-baseline install_baseline
 phase initialize-state initialize_state
+if [ "$SCENARIO" = "abandoned-update" ]; then
+  source scripts/e2e/lib/upgrade-survivor/abandoned-update.sh
+  run_abandoned_update_survivor
+  run_completed="1"
+  exit 0
+fi
 phase apply-baseline-config-recipe apply_baseline_config_recipe
 if [ "$SCENARIO" = "watchos-direct-node" ]; then
   phase configure-watchos-tls configure_watchos_tls_fixture

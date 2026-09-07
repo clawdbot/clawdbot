@@ -53,6 +53,7 @@ import {
   refuseStartupMigrationsForLiveGatewayOwner,
   throwStartupMigrationGuardRejected,
 } from "./doctor-startup-migration-refusal.js";
+import { noteStaleUpdateRuns } from "./doctor-update-run.js";
 import type { CronCodexRuntimePolicyTarget } from "./doctor/cron/store-migration.js";
 import {
   commitAutomaticConfigRepair,
@@ -119,6 +120,7 @@ export async function runDoctorConfigPreflight(
 ): Promise<DoctorConfigPreflightResult> {
   const stateMigrationsRequested = options.migrateState !== false;
   const gatewayStartupCheckpointRequired = options.requireStartupMigrationCheckpoint === true;
+  noteStaleUpdateRuns({ gatewayStartup: gatewayStartupCheckpointRequired });
   // Startup publishes one aggregate report; ordinary Doctor calls keep their per-stage output.
   const migrationLog = gatewayStartupCheckpointRequired ? { info() {}, warn() {} } : undefined;
   if (gatewayStartupCheckpointRequired) {
@@ -756,9 +758,7 @@ export async function runDoctorConfigPreflight(
       ...(postSessionPluginMigrationPlanBound ? { postSessionPluginMigrationPlanBound: true } : {}),
     };
   } finally {
-    if (startupMigrationHeartbeat) {
-      clearInterval(startupMigrationHeartbeat);
-    }
+    clearInterval(startupMigrationHeartbeat);
     startupMigrationLease?.release();
   }
 }

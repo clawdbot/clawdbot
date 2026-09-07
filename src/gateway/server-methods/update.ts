@@ -51,9 +51,11 @@ import {
   type UpdateRestartSentinelMeta,
 } from "../../infra/update-restart-sentinel-payload.js";
 import {
+  adoptUpdateRun,
   createUpdateRun,
   finishUpdateRun,
   getUpdateRun,
+  heartbeatUpdateRun,
   recordUpdateRunPhase,
   recordUpdateRunStep,
   recordUpdateRunVerification,
@@ -502,10 +504,12 @@ export const updateHandlers: GatewayRequestHandlers = {
           }
           return;
         }
+        const driver = adoptUpdateRun(runId).origin.driver;
         recordUpdateRunPhase(runId, "staging");
         result = await runGatewayUpdate({
           runId,
           progress: {
+            onHeartbeat: () => heartbeatUpdateRun(runId, driver),
             onStepStart: (step) =>
               recordUpdateRunStep(runId, {
                 step: step.name,

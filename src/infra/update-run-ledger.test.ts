@@ -434,7 +434,7 @@ describe("update run ledger", () => {
     { name: "diagnostic bytes", count: 30, detail: "diagnostic ".repeat(80) },
     { name: "retained phase bytes", count: 0, detail: "🦞".repeat(512) },
   ])(
-    "retains notice custody, restoration proof, and phases across the $name bound and database reopen",
+    "retains notice custody, restoration proof, and finalization history across the $name bound and database reopen",
     ({ count, detail }) => {
       const options = isolatedOptions();
       const run = createUpdateRun({ trigger: "chat" }, options);
@@ -443,6 +443,9 @@ describe("update run ledger", () => {
         "notice:activating",
         "notice:verifying",
         "previous generation restoration",
+        "finalize:doctor",
+        "finalize:future-phase",
+        "post-update verification",
       ];
       for (const step of [...UPDATE_RUN_PHASES, ...notices]) {
         recordUpdateRunStep(run.runId, { step, status: "completed", detail }, options);
@@ -462,6 +465,27 @@ describe("update run ledger", () => {
       expect(persisted.steps.every((step) => step.status === "completed")).toBe(true);
       expect(persisted.steps.length).toBeLessThanOrEqual(128);
       expect(Buffer.byteLength(JSON.stringify(persisted.steps))).toBeLessThanOrEqual(16 * 1024);
+    },
+  );
+
+  it.each(["bytes", "count"] as const)(
+    "rejects oversized retained step %s without changing the row",
+    (bound) => {
+      const options = isolatedOptions();
+      let saved = createUpdateRun({ trigger: "cli" }, options);
+      expect(() => {
+        for (let index = 0; index < 130; index++) {
+          saved = recordUpdateRunStep(
+            saved.runId,
+            {
+              step: `finalize:${index}${bound === "bytes" ? "界".repeat(330) : ""}`,
+              status: "completed",
+            },
+            options,
+          );
+        }
+      }).toThrow(/retained step.*limit/);
+      expect(getUpdateRun(saved.runId, options)).toEqual(saved);
     },
   );
 

@@ -1,6 +1,10 @@
 import { formatErrorMessage } from "../infra/errors.js";
-import { findActiveUpdateRun, getUpdateRun } from "../infra/update-run-ledger.js";
-import type { UpdateRunPhase } from "../infra/update-run-record.js";
+import {
+  findActiveUpdateRun,
+  getUpdateRun,
+  reconcileAbandonedUpdateRuns,
+} from "../infra/update-run-ledger.js";
+import type { UpdateRunPhase, UpdateRunRecord } from "../infra/update-run-record.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { reconcileOpenClawStateSchemaPublication } from "../state/openclaw-state-db.js";
 import { GATEWAY_EVENT_UPDATE_RUN_CHANGED } from "./events.js";
@@ -24,6 +28,7 @@ export function startUpdateRunWatcher(params: {
   let publicationTimer: ReturnType<typeof setTimeout> | undefined;
   let watched: { runId: string; revision?: number; phase?: UpdateRunPhase } | undefined;
   let notices = Promise.resolve();
+  const reconciled: UpdateRunRecord[] = [];
 
   const schedulePublication = () => {
     if (publicationTimer) {
@@ -54,8 +59,13 @@ export function startUpdateRunWatcher(params: {
     }
     timer = undefined;
     try {
+      reconciled.push(
+        ...reconcileAbandonedUpdateRuns().filter((run) => run.runId !== watched?.runId),
+      );
       schedulePublication();
-      const run = watched ? getUpdateRun(watched.runId) : findActiveUpdateRun();
+      const run = watched
+        ? getUpdateRun(watched.runId)
+        : (reconciled.shift() ?? findActiveUpdateRun());
       if (!run) {
         watched = undefined;
         return;

@@ -125,7 +125,8 @@ is deferred. The new Gateway runs on the migrated content during this interval.
 
 Publication waits until every affected update run has been terminal for at least
 five minutes. A running row that has not changed for more than 30 minutes counts
-as abandoned for this purpose. The Gateway watcher publishes after the deadline;
+as abandoned for publication purposes only; this does not terminalize an
+identityless update-history row. The Gateway watcher publishes after the deadline;
 a later database open can also publish it. See the precise timing and residual
 old-CLI limitation in [Database schemas](/reference/database-schemas#schema-bumps-and-older-updaters).
 
@@ -194,6 +195,30 @@ The sender must be in [`commands.ownerAllowFrom`](/tools/slash-commands#configur
 `/update` also requires `commands.restart` (enabled by default).
 Agents must never run `npm install -g openclaw` or stop the Gateway service
 from a chat shell; use the update action so restart and notification stay coordinated.
+
+## Stale update history
+
+If update status stays in progress while the Gateway is healthy, check that no
+update is still running. On the updated installation, run:
+
+```bash
+openclaw update repair
+openclaw update status
+```
+
+For an inactive legacy row older than 30 minutes, repair verifies that the
+running Gateway matches the installed version and build, then clears the stale
+run without maintenance or a service restart. A new explicit `openclaw update`
+can also supersede a single stale identityless row. Recent rows and recorded
+live drivers are protected. Identityless rows are never cleared automatically;
+the Control UI's configuration-write suspension clears after reconciliation.
+
+OpenClaw 2026.9.2 does not reject a new CLI update because an older running row
+exists: its [admission path](https://github.com/openclaw/openclaw/blob/v2026.9.2/src/cli/update-cli/update-command-run.ts#L77)
+creates a new run, and its [ledger](https://github.com/openclaw/openclaw/blob/v2026.9.2/src/infra/update-run-ledger.ts#L250)
+checks only for a duplicate run ID. Upgrade normally, then use the updated
+`openclaw update repair` if the old history remains. A package-manager escape
+is not required for this ledger defect. See [Update run history](/cli/update#run-history-and-reports).
 
 ## Retire update recovery data
 

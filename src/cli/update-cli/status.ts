@@ -13,6 +13,10 @@ import {
   resolveUpdateChannelDisplay,
 } from "../../infra/update-channels.js";
 import { checkUpdateStatus, formatGitInstallLabel } from "../../infra/update-check.js";
+import {
+  inspectUpdateRunAbandonment,
+  staleUpdateRunGuidance,
+} from "../../infra/update-run-activity.js";
 import { findActiveUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -56,6 +60,8 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
 
   const activeRun = findActiveUpdateRun();
   const lastRun = listUpdateRuns({ limit: 1 })[0];
+  const abandonment = activeRun ? inspectUpdateRunAbandonment(activeRun) : undefined;
+  const staleGuidance = activeRun ? staleUpdateRunGuidance(activeRun) : undefined;
 
   if (opts.json) {
     defaultRuntime.writeJson({
@@ -69,6 +75,12 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
       availability: updateAvailability,
       ...(activeRun ? { activeRun } : {}),
       ...(lastRun ? { lastRun } : {}),
+      ...(staleGuidance && activeRun
+        ? { staleRun: { runId: activeRun.runId, guidance: staleGuidance } }
+        : {}),
+      ...(abandonment && activeRun
+        ? { abandonedRun: { runId: activeRun.runId, rule: abandonment } }
+        : {}),
     });
     return;
   }
@@ -109,8 +121,18 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
 
   const run = activeRun ?? lastRun;
   if (run) {
+    if (staleGuidance) {
+      defaultRuntime.log(`Update ${run.runId}: ${staleGuidance}`);
+    }
+    if (abandonment) {
+      defaultRuntime.log(
+        "Abandoned update detected; the Gateway will reconcile its recorded outcome. Run openclaw update repair to reconcile it now.",
+      );
+    }
     const report = renderUpdateRunReport(run);
-    defaultRuntime.log(report.headline);
+    if (!abandonment && !staleGuidance) {
+      defaultRuntime.log(report.headline);
+    }
     for (const line of report.lines) {
       defaultRuntime.log(line);
     }

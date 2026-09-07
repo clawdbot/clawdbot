@@ -1,6 +1,7 @@
 import { runCommandWithTimeout } from "../process/exec.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { createGlobalInstallEnv } from "./update-global.js";
+import { UPDATE_RUN_HEARTBEAT_MS } from "./update-run-timeouts.js";
 import type {
   CommandRunner,
   RunStepOptions,
@@ -32,7 +33,29 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
   progress?.onStepStart?.(stepInfo);
 
   const started = Date.now();
-  const result = await runCommand(argv, { cwd, timeoutMs, env });
+  const controller = new AbortController();
+  const heartbeat = progress?.onHeartbeat
+    ? setInterval(() => {
+        try {
+          progress.onHeartbeat?.();
+        } catch (error) {
+          controller.abort(error);
+        }
+      }, UPDATE_RUN_HEARTBEAT_MS)
+    : undefined;
+  heartbeat?.unref();
+  let result: Awaited<ReturnType<CommandRunner>>;
+  try {
+    result = await runCommand(argv, {
+      cwd,
+      timeoutMs,
+      env,
+      ...(heartbeat ? { signal: controller.signal } : {}),
+    });
+    controller.signal.throwIfAborted();
+  } finally {
+    clearInterval(heartbeat);
+  }
   const durationMs = Date.now() - started;
   const stdoutTail = trimLogTail(result.stdout, MAX_LOG_CHARS);
   const stderrTail = trimLogTail(result.stderr, MAX_LOG_CHARS);

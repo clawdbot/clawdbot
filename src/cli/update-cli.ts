@@ -88,7 +88,7 @@ function createUpdateLeafAction(
 function registerUpdateFinalizationCommand(update: Command, name: string, hidden: boolean) {
   const command = update.command(name, { hidden });
   command
-    .description("Repair post-update doctor and plugin convergence")
+    .description("Reconcile abandoned updates or repair post-update doctor and plugin convergence")
     .option("--json", "Output result as JSON", false)
     .option("--channel <stable|extended-stable|beta|dev>", "Persist update channel before repair")
     .option("--timeout <seconds>", "Override per-phase repair deadlines in seconds")
@@ -99,7 +99,7 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
       "after",
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
-          ["openclaw update repair", "Rerun post-update doctor and plugin convergence."],
+          ["openclaw update repair", "Reconcile abandoned runs or repair post-update state."],
           [
             "openclaw update repair --accept-capabilities",
             "Accept reviewed plugin capability changes during repair.",
@@ -107,15 +107,17 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
           ["openclaw update repair --channel beta", "Repair against the beta update channel."],
           ["openclaw update repair --json", "JSON output for automation."],
         ])}\n\n${theme.heading("Notes:")}\n${theme.muted(
-          "- Repairs post-update plugin state after the core package already changed",
+          "- Reconciles abandoned runs when the Gateway is healthy; otherwise repairs post-update state",
         )}\n${theme.muted("- Runs doctor repair and plugin convergence, but never restarts the Gateway")}\n\n${theme.muted(
           "Docs:",
         )} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}`,
     )
     .action(
       createUpdateLeafAction(async (opts, actionCommand) => {
-        const { updateFinalizeCommand } = await import("./update-cli/update-command-finalize.js");
-        await updateFinalizeCommand({
+        const repair = hidden
+          ? (await import("./update-cli/update-command-finalize.js")).updateFinalizeCommand
+          : (await import("./update-cli/update-repair-command.js")).updateRepairCommand;
+        await repair({
           json: Boolean(opts.json) || inheritedUpdateJson(actionCommand),
           channel:
             (opts.channel as string | undefined) ??

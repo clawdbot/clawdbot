@@ -1520,9 +1520,12 @@ let automaticRequested = false;
       // Admission and stop recording use the serving runtime. Terminal writes after
       // the updater starts must load the installed runtime in a fresh process.
       runLedger = await import(pathToFileURL(params.recoveryModulePath).href);
-      for (const name of ["finishUpdateRun", "getUpdateRun", "recordUpdateRunStep", "recordUpdateRunVerification"]) {
+      for (const name of ["adoptUpdateRun", "finishUpdateRun", "getUpdateRun", "recordUpdateRunStep", "recordUpdateRunVerification"]) {
         if (typeof runLedger[name] !== "function") throw new Error("managed update ledger writer is unavailable");
       }
+      if (!ownsManagedUpdateLease()) throw new Error("managed update lease no longer owns the helper");
+      // Retain prior drivers while recording this helper's independent lifetime.
+      runLedger.adoptUpdateRun(params.runId);
     }
     if (params.action === "triage") {
       await admitTriageScope();

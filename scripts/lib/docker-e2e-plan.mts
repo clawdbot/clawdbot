@@ -595,7 +595,7 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLan
       requiredPackages.add(packageName);
     }
     const scenario = upgradeSurvivorScenarioForLane(poolLane);
-    if (!scenario) {
+    if (!scenario || scenario === "abandoned-update") {
       continue;
     }
     if (scenario === "legacy-operator-state") {

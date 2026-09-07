@@ -1086,6 +1086,7 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
   it.each([
     { baseline: "2026.7.1", scenario: "mobile-pairing-reconnect" },
     { baseline: "2026.8.1", scenario: "watchos-direct-node" },
+    { baseline: "2026.9.2", scenario: "abandoned-update" },
     { baseline: "2026.7.1-2", scenario: "prerelease-plugin-registry" },
     { baseline: "2026.7.1-2", scenario: "auth-profile-v2026-7-2-beta-5" },
     { baseline: "2026.7.1-2", scenario: "recovery-cleanup" },
@@ -1100,6 +1101,9 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     expect(explicitPlan.lanes.map(summarizeLane)).toEqual([
       publishedUpgradeSurvivorLane(laneName, `openclaw@${baseline}`, scenario),
     ]);
+    if (scenario === "abandoned-update") {
+      expect(explicitPlan.requiredPrepublishPluginPackages).toEqual([]);
+    }
     if (scenario === "recovery-cleanup") {
       expect(explicitPlan.requiredPrepublishPluginPackages).toEqual([
         "@openclaw/codex",

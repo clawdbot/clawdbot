@@ -227,13 +227,24 @@ describe("managed service update handoff", () => {
   );
 
   itUnix.each(["failed", "skipped"] as const)(
-    "leaves the serving generation untouched when validation finishes %s",
+    "finishes the update run without touching the serving generation when validation finishes %s",
     async (validationResult) => {
-      const { commands, parentSignal, log } = await runManagedServiceManagerBoundary("systemd", {
-        controlDisconnect: "transferred",
-        validationResult,
-        validationClockAdvanceMs: 10 * 60_000,
-        helperExitCode: validationResult === "failed" ? 1 : 0,
+      const { commands, parentSignal, log, run } = await runManagedServiceManagerBoundary(
+        "systemd",
+        {
+          controlDisconnect: "transferred",
+          ledger: true,
+          validationResult,
+          validationClockAdvanceMs: 10 * 60_000,
+          helperExitCode: validationResult === "failed" ? 1 : 0,
+        },
+      );
+      expect(run).toMatchObject({
+        status: validationResult,
+        phase: "finished",
+        reason:
+          validationResult === "failed" ? "managed-service-handoff-failed" : "already-current",
+        finishedAtMs: expect.any(Number),
       });
       expect(commands).toEqual([]);
       expect(parentSignal).toBeNull();

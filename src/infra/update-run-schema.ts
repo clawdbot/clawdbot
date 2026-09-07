@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  UPDATE_RUN_DRIVER_LIMIT,
   UPDATE_RUN_PHASES,
   UPDATE_RUN_STATUSES,
   UPDATE_RUN_STEP_STATUSES,
@@ -22,6 +23,12 @@ const UpdateRunStepSchema = z.object({
   detail: text.optional(),
 });
 
+const driver = z.object({
+  host: z.string().min(1).max(255),
+  pid: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  startIdentity: z.string().max(128).regex(/^\d+$/),
+});
+
 export const UpdateRunRecordSchema = z.object({
   runId: z.uuid(),
   createdAtMs: timestamp,
@@ -31,6 +38,11 @@ export const UpdateRunRecordSchema = z.object({
   status: z.enum(UPDATE_RUN_STATUSES),
   reason: text.nullable(),
   origin: z.object({
+    driver: driver.optional(),
+    previousDrivers: z
+      .array(driver)
+      .max(UPDATE_RUN_DRIVER_LIMIT - 1)
+      .optional(),
     requester: z
       .object({ channel: text.optional(), accountId: text.optional(), senderId: text.optional() })
       .optional(),

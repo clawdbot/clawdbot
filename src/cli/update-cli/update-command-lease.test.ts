@@ -8,6 +8,15 @@ import { resolveFutureConfigActionBlock } from "../../config/future-version-guar
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import {
+  createUpdateRun,
+  getUpdateRun,
+  listUpdateRuns,
+  recordUpdateRunPhase,
+  recordUpdateRunStep,
+} from "../../infra/update-run-ledger.js";
+import type { UpdateRunRecord } from "../../infra/update-run-record.js";
+import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
+import {
   loadInstalledPluginIndexInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords,
 } from "../../plugins/installed-plugin-index-records.js";
@@ -79,6 +88,7 @@ beforeEach(async () => {
       OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: undefined,
       OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: undefined,
       OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART: undefined,
+      OPENCLAW_UPDATE_RUN_ID: undefined,
     },
   });
   await state.writeConfig({ plugins: { enabled: false }, update: { channel: "stable" } });
@@ -114,7 +124,7 @@ async function writeScenario(
   await state.writeJson("scenario.json", { pluginUpdate: pluginResult, ...scenario, lane });
 }
 
-async function invoke(lane: Lane): Promise<void> {
+async function invoke(lane: Lane, recoveryRunIds: readonly string[] = []): Promise<void> {
   if (lane === "resume") {
     return resumePostCoreUpdate({
       root: state.root,
@@ -124,13 +134,16 @@ async function invoke(lane: Lane): Promise<void> {
     });
   }
   if (lane === "repair") {
-    return updateFinalizeCommand({
-      json: true,
-      yes: true,
-      restart: false,
-      timeout: "15",
-      deferCompletionCache: true,
-    });
+    return updateFinalizeCommand(
+      {
+        json: true,
+        yes: true,
+        restart: false,
+        timeout: "15",
+        deferCompletionCache: true,
+      },
+      recoveryRunIds,
+    );
   }
   await finishUpdate({
     mutationStarted: true,
@@ -160,8 +173,11 @@ async function invoke(lane: Lane): Promise<void> {
   });
 }
 
-async function invokeReportedFailure(lane: Lane): Promise<void> {
-  await expect(invoke(lane)).rejects.toMatchObject(
+async function invokeReportedFailure(
+  lane: Lane,
+  recoveryRunIds: readonly string[] = [],
+): Promise<void> {
+  await expect(invoke(lane, recoveryRunIds)).rejects.toMatchObject(
     lane === "repair"
       ? { name: "ExitError", code: 1 }
       : { name: "UpdateCommandFailure", exitCode: 1 },
@@ -206,10 +222,39 @@ function reportedResult(lane: Lane): unknown {
     : mocks.print.mock.lastCall?.[0];
 }
 
+function seedInterruptedPostCoreRun(): UpdateRunRecord {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() - 2 * ABANDONED_UPDATE_RUN_MS);
+  try {
+    const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
+    return recordUpdateRunPhase(run.runId, "verifying", {
+      step: { step: "post-update verification", status: "in_progress" },
+    });
+  } finally {
+    clock.mockRestore();
+  }
+}
+
+function expectRecoveredRun(run: UpdateRunRecord | undefined): void {
+  expect(run).toMatchObject({
+    status: "failed",
+    reason: "abandoned",
+    steps: expect.arrayContaining([
+      expect.objectContaining({ step: "reconcile:acknowledged", status: "completed" }),
+    ]),
+  });
+}
+
 describe("update orchestration lifecycle ownership", () => {
   it.each(["fresh-process", "current-process", "repair"] as const)(
     "%s releases plugin ownership for fresh doctor without delegating Gateway activation",
     async (lane) => {
+      const recovery = lane === "repair" ? seedInterruptedPostCoreRun() : undefined;
+      let recoveredAtOutput: UpdateRunRecord | undefined;
+      if (recovery) {
+        vi.mocked(defaultRuntime.writeJson).mockImplementation(() => {
+          recoveredAtOutput = getUpdateRun(recovery.runId);
+        });
+      }
       await writeScenario(lane, {
         hostVersion: lane === "repair" ? undefined : "1.0.0",
       });
@@ -224,8 +269,15 @@ describe("update orchestration lifecycle ownership", () => {
         expect(result.stdout).toBe("excluded");
         return pluginResult;
       });
-      await invoke(lane);
+      await invoke(lane, recovery ? [recovery.runId] : []);
       expectSuccess(lane);
+      if (recovery) {
+        expectRecoveredRun(recoveredAtOutput);
+        expect(reportedResult(lane)).toMatchObject({ reconciledRuns: [recovery.runId] });
+        expectRecoveredRun(getUpdateRun(recovery.runId));
+        expect(listUpdateRuns({ active: true })).toEqual([]);
+        expect(listUpdateRuns({ limit: 1 })[0]?.origin.driver?.pid).toBe(process.pid);
+      }
       expect(process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION).toBe(
         lane === "current-process" ? "1" : undefined,
       );
@@ -372,8 +424,12 @@ describe("update orchestration lifecycle ownership", () => {
   it.each(["fresh-process", "current-process", "repair"] as const)(
     "%s retains strict fresh validation after releasing the lease",
     async (lane) => {
+      const recovery = lane === "repair" ? seedInterruptedPostCoreRun() : undefined;
       await writeScenario(lane, { invalidConfig: true });
-      await invokeReportedFailure(lane);
+      await invokeReportedFailure(lane, recovery ? [recovery.runId] : []);
+      if (recovery) {
+        expect(getUpdateRun(recovery.runId)).toEqual(recovery);
+      }
       expect(reportedResult(lane)).toMatchObject({
         status: "error",
         postUpdate: { plugins: { reason: "post-plugin-doctor-invalid-config" } },
@@ -416,12 +472,56 @@ describe("update orchestration lifecycle ownership", () => {
   });
 
   it("repair propagates its pre-plugin doctor failure before mutation", async () => {
+    const recovery = seedInterruptedPostCoreRun();
     await writeScenario("repair", { failDoctor: "pre" });
-    await expect(invoke("repair")).rejects.toThrow("doctor fixture failure");
+    await expect(invoke("repair", [recovery.runId])).rejects.toThrow("doctor fixture failure");
+    expect(getUpdateRun(recovery.runId)).toEqual(recovery);
     expect(mocks.plugins).not.toHaveBeenCalled();
     expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
     expectDoctorDiagnostics();
     expect(await events()).toEqual(["pre-attempt", "pre-acquired"]);
+  });
+
+  it("repair reconciles captured runs before publishing successful convergence with warnings", async () => {
+    const recovery = seedInterruptedPostCoreRun();
+    const warning: PostCorePluginUpdateResult = {
+      ...pluginResult,
+      status: "warning",
+      changed: false,
+    };
+    await writeScenario("repair", { pluginUpdate: warning });
+    mocks.plugins.mockResolvedValueOnce(warning);
+    let recoveredAtOutput: UpdateRunRecord | undefined;
+    vi.mocked(defaultRuntime.writeJson).mockImplementation(() => {
+      recoveredAtOutput = getUpdateRun(recovery.runId);
+    });
+
+    await invoke("repair", [recovery.runId]);
+
+    expect(reportedResult("repair")).toMatchObject({
+      status: "warning",
+      reconciledRuns: [recovery.runId],
+    });
+    expectRecoveredRun(recoveredAtOutput);
+    expect(listUpdateRuns({ active: true })).toEqual([]);
+  });
+
+  it("repair withholds success when a captured updater advances during convergence", async () => {
+    const recovery = seedInterruptedPostCoreRun();
+    await writeScenario("repair", { pluginUpdate: { ...pluginResult, changed: false } });
+    mocks.plugins.mockImplementationOnce(async () => {
+      recordUpdateRunStep(recovery.runId, {
+        step: "build",
+        status: "in_progress",
+        startedAtMs: Date.now(),
+      });
+      return { ...pluginResult, changed: false };
+    });
+
+    await expect(invoke("repair", [recovery.runId])).rejects.toThrow("An update resumed");
+
+    expect(getUpdateRun(recovery.runId)).toMatchObject({ status: "running", reason: null });
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 
   it("resume reports a plugin exception after releasing its lease", async () => {

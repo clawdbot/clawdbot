@@ -35,6 +35,10 @@ vi.mock("./update-cli/update-command-finalize.js", () => ({
   updateFinalizeCommand: (opts: unknown) => mocks.updateFinalizeCommand(opts),
 }));
 
+vi.mock("./update-cli/update-repair-command.js", () => ({
+  updateRepairCommand: (opts: unknown) => mocks.updateFinalizeCommand(opts),
+}));
+
 vi.mock("./update-cli/cleanup.js", () => ({ updateCleanupCommand: mocks.updateCleanupCommand }));
 
 vi.mock("./update-cli/status.js", () => ({
