@@ -28,7 +28,6 @@ import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/
 import type { SessionGoal } from "../../../src/config/sessions/types.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 import type { FastModeSource } from "../../../src/shared/fast-mode.js";
-import type { RequirementConfigCheck, Requirements } from "../../../src/shared/requirements.js";
 import type {
   GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
@@ -452,78 +451,11 @@ export type CronRunsResult = {
   hasMore?: boolean;
 };
 
-type SkillInstallOption = {
-  id: string;
-  kind: "brew" | "node" | "go" | "uv" | "download";
-  label: string;
-  bins: string[];
-};
-
-export type SkillClawHubLink =
-  | {
-      status: "linked";
-      valid: true;
-      registry: string;
-      slug: string;
-      ownerHandle?: string;
-      requestedReference?: string;
-      installedVersion: string;
-      installedAt: number;
-      originPath?: string;
-      lockPath?: string;
-    }
-  | {
-      status: "invalid";
-      valid: false;
-      reason: string;
-      registry?: string;
-      slug?: string;
-      installedVersion?: string;
-      installedAt?: number;
-      originPath?: string;
-      lockPath?: string;
-    };
-
-type SkillCardStatus = {
-  present: true;
-  path: string;
-  sizeBytes: number;
-};
-
-export type SkillStatusEntry = {
-  name: string;
-  description: string;
-  source: string;
-  filePath: string;
-  baseDir: string;
-  skillKey: string;
-  bundled?: boolean;
-  primaryEnv?: string;
-  emoji?: string;
-  homepage?: string;
-  always: boolean;
-  disabled: boolean;
-  blockedByAllowlist: boolean;
-  blockedByAgentFilter?: boolean;
-  eligible: boolean;
-  modelVisible?: boolean;
-  userInvocable?: boolean;
-  commandVisible?: boolean;
-  requirements: Requirements;
-  missing: Requirements;
-  configChecks: RequirementConfigCheck[];
-  install: SkillInstallOption[];
-  clawhub?: SkillClawHubLink;
-  skillCard?: SkillCardStatus;
-};
-
-export type SkillStatusReport = {
-  workspaceDir: string;
-  managedSkillsDir: string;
-  agentId?: string;
-  agentSkillFilter?: string[];
-  skills: SkillStatusEntry[];
-};
+export type {
+  SkillStatusEntry,
+  SkillStatusReport,
+} from "../../../src/skills/discovery/status.types.js";
+export type { ClawHubSkillStatusLink as SkillClawHubLink } from "../../../src/skills/lifecycle/clawhub-status.js";
 
 export type StatusSummary = Record<string, unknown>;
 

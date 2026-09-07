@@ -142,13 +142,12 @@ export function createDesktopSessionRegistry(
     })()
       .then(() => {
         owners.delete(entry);
-        // Concurrent Stop and replacement acquisition must join the full teardown.
         if (entries.get(entry.sourceKey) === entry) {
           entries.delete(entry.sourceKey);
         }
       })
       .then(stopped.resolve, (error: unknown) => {
-        // Retain cleanup custody even after a replacement leaves the active index.
+        // Keep the failed owner available for a cleanup retry.
         entry.stopPromise = undefined;
         stopped.reject(error);
       });
@@ -190,10 +189,8 @@ export function createDesktopSessionRegistry(
   ): Promise<DesktopSessionStartResult> {
     claimOwnerEpoch(request.sourceKey, request.ownerEpoch);
     const current = entries.get(request.sourceKey);
-    if (current) {
-      if (request.ownerEpoch === current.ownerEpoch && !current.stopped) {
-        return await waitForReady(current);
-      }
+    if (current && request.ownerEpoch === current.ownerEpoch && !current.stopped) {
+      return await waitForReady(current);
     }
 
     const previous = [...owners].filter((entry) => entry.sourceKey === request.sourceKey);

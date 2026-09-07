@@ -347,6 +347,7 @@
     "native.android.3881e845a4e699c7": "スマートフォンからGatewayに接続できます",
     "native.android.38b7fdfac0cbc42d": "Gateway に接続して、マシンの画面を表示します。",
     "native.android.38d6822dd682b6d0": "名前を変更",
+    "native.android.38f8652367c9ef99": "モデルを更新できませんでした。以前の選択は変更されていません。「更新」をタップして再試行してください。",
     "native.android.394e03a10a4c572d": "Gatewayに接続してプロバイダーを表示",
     "native.android.39785345ba2c3bff": "不明",
     "native.android.3981fcbf350402fd": "スキルワークショップの提案操作にはoperator.adminスコープが必要です。",

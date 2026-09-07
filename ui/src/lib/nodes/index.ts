@@ -4,6 +4,10 @@
 import { getPublicKeyAsync, hashes, signAsync, utils } from "@noble/ed25519";
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type {
+  ExecApprovalsNodeSnapshot as GatewayExecApprovalsNodeSnapshot,
+  ExecApprovalsSnapshot as GatewayExecApprovalsSnapshot,
+} from "../../../../packages/gateway-protocol/src/schema/exec-approvals.js";
 import type { DevicePairingList } from "../../../../src/gateway/device-pairing-list.types.js";
 import {
   type DeviceAuthEntry,
@@ -45,61 +49,40 @@ type NodesGatewaySnapshot = {
   connected: boolean;
 };
 
-export type ExecSecurity = "deny" | "allowlist" | "full";
-export type ExecAsk = "off" | "on-miss" | "always";
-type ExecApprovalsDefaults = {
-  security?: ExecSecurity;
-  ask?: ExecAsk;
-  askFallback?: ExecSecurity;
-  autoAllowSkills?: boolean;
-};
+type WireExecApprovalsFile = GatewayExecApprovalsSnapshot["file"];
+type WireExecApprovalsAgent = NonNullable<WireExecApprovalsFile["agents"]>[string];
 
-export type ExecApprovalsResolvedDefaults = Required<ExecApprovalsDefaults>;
+export type ExecApprovalsResolvedDefaults = NonNullable<
+  GatewayExecApprovalsSnapshot["resolvedDefaults"]
+>;
+export type ExecSecurity = ExecApprovalsResolvedDefaults["security"];
+export type ExecAsk = ExecApprovalsResolvedDefaults["ask"];
+// Editor choices stay closed even though the wire accepts policy strings for host normalization.
+type ExecApprovalsDefaults = Partial<ExecApprovalsResolvedDefaults>;
 
-export type ExecApprovalsAllowlistEntry = {
-  id?: string;
-  pattern: string;
-  source?: "allow-always";
-  commandText?: string;
-  argPattern?: string;
-  lastUsedAt?: number;
-  lastUsedCommand?: string;
-  lastResolvedPath?: string;
-};
+export type ExecApprovalsAllowlistEntry = NonNullable<WireExecApprovalsAgent["allowlist"]>[number];
 
-type ExecApprovalsAgent = ExecApprovalsDefaults & {
-  allowlist?: ExecApprovalsAllowlistEntry[];
-};
+type ExecApprovalsAgent = ExecApprovalsDefaults & Pick<WireExecApprovalsAgent, "allowlist">;
 
 export type ExecApprovalsFile = {
   version?: number;
-  socket?: { path?: string };
+  socket?: Pick<NonNullable<WireExecApprovalsFile["socket"]>, "path">;
   defaults?: ExecApprovalsDefaults;
   agents?: Record<string, ExecApprovalsAgent>;
 };
 
-type FileExecApprovalsSnapshot = {
-  path: string;
-  exists: boolean;
-  hash: string;
+type FileExecApprovalsSnapshot = Omit<GatewayExecApprovalsSnapshot, "file"> & {
   file: ExecApprovalsFile;
-  resolvedDefaults?: ExecApprovalsResolvedDefaults;
 };
 
-type NativeExecApprovalRule = {
-  pattern: string;
-  action: "allow" | "deny" | "prompt";
-  shells?: string[];
-  description?: string;
-  enabled?: boolean;
-};
+type NativeExecApprovalRule = NonNullable<GatewayExecApprovalsNodeSnapshot["rules"]>[number];
 
 export type NativeExecApprovalsSnapshot =
   | {
       enabled: true;
       hash: string;
       baseHash?: string;
-      defaultAction: "allow" | "deny" | "prompt";
+      defaultAction: NativeExecApprovalRule["action"];
       rules: NativeExecApprovalRule[];
       constraints?: Record<string, boolean>;
     }

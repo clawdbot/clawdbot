@@ -1,6 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { replaceSessionWithBranchedTranscript } from "../../config/sessions/session-accessor.js";
-import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import { parseOpaqueLeafEntry, parseParentLinkedOpaqueEntry } from "./session-manager-codec.js";
 import type { SessionManagerPersistenceTarget } from "./session-manager-core.js";
 import { SessionManagerEntries } from "./session-manager-entries.js";
@@ -106,7 +105,7 @@ export class SessionManagerBranching extends SessionManagerEntries {
 
     const header: SessionHeader = {
       type: "session",
-      version: CURRENT_SESSION_VERSION,
+      version: this.getHeader()?.version,
       id: newSessionId,
       timestamp,
       cwd: this.cwd,

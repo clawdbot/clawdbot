@@ -9,11 +9,12 @@ import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import type { CodeModeOutputSource } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
-import type {
-  CodeModeConfig as CodeModeWorkerConfig,
-  CodeModeFailurePhase,
-  CodeModeLanguage,
-  CodeModeWorkerThreadResult,
+import {
+  MAX_CODE_MODE_PENDING_TOOL_CALLS,
+  type CodeModeConfig as CodeModeWorkerConfig,
+  type CodeModeFailurePhase,
+  type CodeModeLanguage,
+  type CodeModeWorkerThreadResult,
 } from "./code-mode-worker-types.js";
 import type { ToolSearchConfig, ToolSearchToolContext } from "./tool-search.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
@@ -183,7 +184,7 @@ export function resolveCodeModeConfig(
     maxPendingToolCalls: clampNumber(
       readPositiveInteger(raw.maxPendingToolCalls, DEFAULT_MAX_PENDING_TOOL_CALLS),
       1,
-      128,
+      MAX_CODE_MODE_PENDING_TOOL_CALLS,
     ),
     snapshotTtlSeconds: clampNumber(
       readPositiveInteger(raw.snapshotTtlSeconds, DEFAULT_SNAPSHOT_TTL_SECONDS),

@@ -17,6 +17,7 @@ import {
   isPrivateOrLoopbackIpAddress,
   isRfc8215LocalUseNat64Ipv6Address,
   isRfc1918Ipv4Address,
+  isUnspecifiedIpAddress,
   normalizeIpAddress,
   parseCanonicalIpAddress,
   parseLooseIpAddress,
@@ -135,6 +136,21 @@ describe("shared ip helpers", () => {
     expect(isLinkLocalIpAddress("10.0.0.5")).toBe(false);
     expect(isLinkLocalIpAddress("127.0.0.1")).toBe(false);
     expect(isLinkLocalIpAddress("fd00::1")).toBe(false);
+  });
+
+  it.each([
+    ["[::ffff:0.0.0.0]", "[::ffff:0:0]"],
+    ["[64:ff9b::0.0.0.0]", "[64:ff9b::]"],
+  ])("detects unspecified addresses before and after URL canonicalization", (raw, canonical) => {
+    expect(new URL(`http://${raw}`).hostname).toBe(canonical);
+    expect(isUnspecifiedIpAddress(raw)).toBe(true);
+    expect(isUnspecifiedIpAddress(canonical)).toBe(true);
+  });
+
+  it("does not classify private or loopback addresses as unspecified", () => {
+    expect(isUnspecifiedIpAddress("10.0.0.8")).toBe(false);
+    expect(isUnspecifiedIpAddress("[fd00::8]")).toBe(false);
+    expect(isUnspecifiedIpAddress("[::1]")).toBe(false);
   });
 
   it("detects known non-link-local cloud metadata IPs", () => {

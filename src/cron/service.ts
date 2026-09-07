@@ -236,7 +236,9 @@ export class CronService implements CronServiceContract {
   }
 
   getDefaultAgentId(): string | undefined {
-    return this.state.deps.defaultAgentId;
+    return this.state.deps.resolveDefaultAgentId
+      ? this.state.deps.resolveDefaultAgentId()
+      : this.state.deps.defaultAgentId;
   }
 
   wake(opts: { mode: CronWakeMode; text: string; sessionKey?: string; agentId?: string }) {

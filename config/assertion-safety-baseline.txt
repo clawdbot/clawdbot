@@ -499,7 +499,7 @@ extensions/github-copilot/models.ts	3
 extensions/github-copilot/oauth.ts	1
 extensions/github-copilot/replay-policy.ts	2
 extensions/github-copilot/runtime-auth.ts	2
-extensions/github-copilot/stream.ts	4
+extensions/github-copilot/stream.ts	3
 extensions/github-copilot/usage.ts	1
 extensions/google-meet/index.ts	1
 extensions/google-meet/src/calendar.ts	1
@@ -1131,7 +1131,7 @@ extensions/slack/src/monitor/ingress.ts	8
 extensions/slack/src/monitor/media.ts	1
 extensions/slack/src/monitor/message-handler.ts	2
 extensions/slack/src/monitor/message-handler/dispatch-helpers.ts	2
-extensions/slack/src/monitor/message-handler/dispatch-streaming.ts	6
+extensions/slack/src/monitor/message-handler/dispatch-streaming.ts	5
 extensions/slack/src/monitor/message-handler/dispatch.ts	1
 extensions/slack/src/monitor/message-handler/prepare-dm-history.ts	1
 extensions/slack/src/monitor/message-handler/prepare-thread-context.ts	1
@@ -1171,7 +1171,7 @@ extensions/synology-chat/src/channel.ts	1
 extensions/synology-chat/src/client.ts	1
 extensions/synology-chat/src/inbound-event.ts	1
 extensions/synology-chat/src/outbound-media.ts	1
-extensions/synology-chat/src/setup-surface.ts	5
+extensions/synology-chat/src/setup-surface.ts	3
 extensions/synology-chat/src/test-http-utils.ts	6
 extensions/synology-chat/src/webhook-handler.ts	2
 extensions/talk-voice/index.ts	1
@@ -1428,7 +1428,7 @@ packages/acp-core/src/types.ts	2
 packages/agent-core/src/agent-loop.ts	3
 packages/agent-core/src/harness/compaction/branch-summarization.ts	1
 packages/agent-core/src/harness/compaction/compaction.ts	2
-packages/agent-core/src/harness/messages.ts	3
+packages/agent-core/src/harness/messages.ts	2
 packages/agent-core/src/harness/session/tool-result-pairing.ts	17
 packages/agent-core/src/harness/session/uuid.ts	1
 packages/agent-core/src/harness/utils/truncate.ts	1
@@ -1455,7 +1455,7 @@ packages/ai/src/providers/mistral.ts	6
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
 packages/ai/src/providers/openai-chatgpt-responses.ts	26
 packages/ai/src/providers/openai-completions-tool-calls.ts	5
-packages/ai/src/providers/openai-completions.ts	9
+packages/ai/src/providers/openai-completions.ts	6
 packages/ai/src/providers/openai-reasoning-effort.ts	6
 packages/ai/src/providers/openai-responses-shared.ts	6
 packages/ai/src/providers/openai-responses-tools.ts	2
@@ -1472,7 +1472,7 @@ packages/ai/src/transports/anthropic-payload-policy.ts	7
 packages/ai/src/transports/anthropic-transport-stream.ts	5
 packages/ai/src/transports/openai-compatible-conversation-turn.ts	2
 packages/ai/src/transports/openai-completions-compat.ts	2
-packages/ai/src/transports/openai-completions-params.ts	9
+packages/ai/src/transports/openai-completions-params.ts	7
 packages/ai/src/transports/openai-completions-replay.ts	9
 packages/ai/src/transports/openai-completions-stream.ts	8
 packages/ai/src/transports/openai-completions-string-content.ts	5
@@ -1699,7 +1699,6 @@ src/agents/context-resolution.ts	1
 src/agents/context-runtime-state.ts	4
 src/agents/context-window-guard.ts	1
 src/agents/context.ts	2
-src/agents/copilot-dynamic-headers.ts	1
 src/agents/cron-creator-authority-context.ts	1
 src/agents/custom-api-registry.ts	2
 src/agents/delegation-capability.ts	1
@@ -1852,7 +1851,6 @@ src/agents/main-session-recovery/main-session-restart-recovery-resume-policy.ts	
 src/agents/mcp-app-model-context.ts	1
 src/agents/mcp-auth-profile.ts	2
 src/agents/mcp-codex-tool-approval.ts	4
-src/agents/mcp-connection-resolver.ts	2
 src/agents/mcp-http-fetch.ts	3
 src/agents/mcp-json-schema-validator.ts	6
 src/agents/mcp-oauth-store.ts	2
@@ -3379,7 +3377,7 @@ src/plugins/manifest-install-owner.ts	1
 src/plugins/manifest-registry.ts	2
 src/plugins/manifest-setup-normalizers.ts	5
 src/plugins/manifest.ts	2
-src/plugins/marketplace.ts	7
+src/plugins/marketplace.ts	6
 src/plugins/memory-runtime.ts	1
 src/plugins/module-export.ts	2
 src/plugins/native-module-require.ts	3
@@ -3576,7 +3574,7 @@ src/state/openclaw-agent-db-readonly.ts	1
 src/state/openclaw-agent-db-registry-listing.ts	3
 src/state/openclaw-agent-db-registry.ts	7
 src/state/openclaw-agent-db-schema-helpers.ts	1
-src/state/openclaw-agent-db-schema.ts	3
+src/state/openclaw-agent-db-schema.ts	2
 src/state/openclaw-agent-db-session-migrations.ts	4
 src/state/openclaw-agent-db-session-provenance.ts	2
 src/state/openclaw-agent-standing-intents-schema.ts	1
@@ -3807,7 +3805,7 @@ ui/src/components/session-data-scroll-controller.ts	1
 ui/src/components/session-group-defaults-dialog.ts	1
 ui/src/components/session-organizer-controller.ts	5
 ui/src/components/settings-sidebar.ts	3
-ui/src/components/settings-ui.ts	7
+ui/src/components/settings-ui.ts	6
 ui/src/components/terminal/terminal-connection.ts	2
 ui/src/components/terminal/terminal-controller-lifecycle.ts	1
 ui/src/components/terminal/terminal-panel-upload.ts	2
@@ -3879,7 +3877,7 @@ ui/src/pages/chat/chat-send-ack.ts	2
 ui/src/pages/chat/chat-send-composer.ts	1
 ui/src/pages/chat/chat-send-request.ts	1
 ui/src/pages/chat/chat-send-timing.ts	6
-ui/src/pages/chat/chat-session-companion.ts	5
+ui/src/pages/chat/chat-session-companion.ts	3
 ui/src/pages/chat/chat-state-events.ts	6
 ui/src/pages/chat/chat-state-page.ts	5
 ui/src/pages/chat/chat-state-route.ts	1

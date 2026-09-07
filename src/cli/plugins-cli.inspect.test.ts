@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from "node:util";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -11,6 +12,7 @@ import {
   buildAllPluginInspectReportsMock,
   buildPluginDiagnosticsReportMock,
   buildPluginInspectReportMock,
+  buildPluginRegistrySnapshotReportMock,
   buildPluginSnapshotReportMock,
   pluginCliConfigMock,
   pluginsCliRuntimeLogs,
@@ -76,12 +78,111 @@ function createInspectReport(
   };
 }
 
+type PluginHumanFormat = "detail" | "table" | "verbose";
+
+function readRenderedStatus(output: string, format: PluginHumanFormat): string | undefined {
+  const text = stripVTControlCharacters(output);
+  if (format === "detail") {
+    return /^Status: (.+)$/m.exec(text)?.[1];
+  }
+  if (format === "verbose") {
+    return /^Display \(display-probe\) (.+)$/m.exec(text)?.[1];
+  }
+  const lines = text.split("\n");
+  const cells = (line: string) =>
+    line
+      .split(/[│|]/u)
+      .slice(1, -1)
+      .map((cell) => cell.trim());
+  const header = lines.find((line) => line.includes("Name") && line.includes("Status"));
+  const row = lines.find((line) => line.includes("Display"));
+  return header && row ? cells(row)[cells(header).indexOf("Status")] : undefined;
+}
+
 describe("plugins cli inspect", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
     workshopMocks.detectToolPolicyDiagnostic.mockReset();
     workshopMocks.loadMetadata.mockReset();
     workshopMocks.loadMetadata.mockReturnValue({ index: createInstalledPluginIndexSnapshot([]) });
+  });
+
+  it.each([
+    { enabled: true, status: "loaded", expected: "enabled" },
+    { enabled: false, status: "disabled", expected: "disabled" },
+    { enabled: true, status: "error", expected: "error" },
+  ] as const)(
+    "renders cold $status records consistently across human commands",
+    async (testCase) => {
+      const plugin = createPluginRecord({
+        id: "display-probe",
+        name: "Display",
+        enabled: testCase.enabled,
+        status: testCase.status,
+        imported: false,
+      });
+      const report = { plugins: [plugin], diagnostics: [] };
+      const inspect = createInspectReport({ plugin });
+      buildPluginSnapshotReportMock.mockReturnValue(report);
+      buildPluginInspectReportMock.mockReturnValue(inspect);
+      buildAllPluginInspectReportsMock.mockReturnValue([inspect]);
+      buildPluginRegistrySnapshotReportMock.mockReturnValue({
+        ...report,
+        workspaceDir: "/workspace",
+        registrySource: "persisted",
+        registryDiagnostics: [],
+      });
+
+      const commands: Array<{ args: string[]; format: PluginHumanFormat }> = [
+        { args: ["list"], format: "table" },
+        { args: ["list", "--verbose"], format: "verbose" },
+        { args: ["inspect", plugin.id], format: "detail" },
+        { args: ["info", plugin.id], format: "detail" },
+        { args: ["inspect", "--all"], format: "table" },
+      ];
+      const renderedStatuses: Array<[string, string | undefined]> = [];
+      for (const { args, format } of commands) {
+        pluginsCliRuntimeLogs.length = 0;
+        await runPluginsCommand(["plugins", ...args]);
+        renderedStatuses.push([
+          args.join(" "),
+          readRenderedStatus(pluginsCliRuntimeLogs.join("\n"), format),
+        ]);
+      }
+      expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
+
+      for (const selection of [[plugin.id], ["--all"]]) {
+        pluginsCliRuntimeLogs.length = 0;
+        await runPluginsCommand(["plugins", "inspect", ...selection, "--json"]);
+        const json = JSON.parse(pluginsCliRuntimeLogs.at(-1) ?? "null");
+        const entry = Array.isArray(json) ? json[0] : json;
+        expect(entry.plugin).toMatchObject({
+          enabled: testCase.enabled,
+          status: testCase.status,
+          imported: false,
+        });
+      }
+      expect(renderedStatuses).toEqual(
+        commands.map(({ args }) => [args.join(" "), testCase.expected]),
+      );
+    },
+  );
+
+  it.each([
+    { args: ["inspect", "display-probe", "--runtime"], format: "detail" },
+    { args: ["inspect", "--all", "--runtime"], format: "table" },
+  ] as const)("retains actual runtime status for $format output", async ({ args, format }) => {
+    const plugin = createPluginRecord({ id: "display-probe", name: "Display", imported: true });
+    const report = { plugins: [plugin], diagnostics: [] };
+    const inspect = createInspectReport({ plugin });
+    buildPluginSnapshotReportMock.mockReturnValue(report);
+    buildPluginDiagnosticsReportMock.mockReturnValue(report);
+    buildPluginInspectReportMock.mockReturnValue(inspect);
+    buildAllPluginInspectReportsMock.mockReturnValue([inspect]);
+
+    await runPluginsCommand(["plugins", ...args]);
+
+    expect(readRenderedStatus(pluginsCliRuntimeLogs.join("\n"), format)).toBe("loaded");
   });
 
   it.each(

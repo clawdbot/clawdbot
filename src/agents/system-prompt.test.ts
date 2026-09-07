@@ -1,9 +1,13 @@
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 // System prompt tests cover the main prompt facade, prompt-surface routing, and
 // user-visible sections for owners, tools, safety, skills, and subagents.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { CHANNEL_IDS } from "../channels/ids.js";
+import {
+  clearMemoryPluginState,
+  registerTestMemoryPromptBuilder,
+} from "../plugins/memory-state.test-fixtures.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -2463,3 +2467,127 @@ describe("watched sessions prompt surfaces", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+type PromptParams = Parameters<typeof buildAgentSystemPrompt>[0];
+
+function buildPromptParts(params: Partial<PromptParams>) {
+  const prompt = buildAgentSystemPrompt({
+    workspaceDir: "/tmp/openclaw",
+    contextFiles: [{ path: "AGENTS.md", content: "Stable project instructions." }],
+    ...params,
+  });
+  expect(prompt).toContain(SYSTEM_PROMPT_CACHE_BOUNDARY);
+  const [prefix, suffix] = prompt.split(SYSTEM_PROMPT_CACHE_BOUNDARY);
+  return { prefix, suffix };
+}
+
+describe("system prompt runtime cache boundary", () => {
+  afterEach(() => {
+    clearMemoryPluginState();
+  });
+
+  it.each([
+    { toolNames: ["process"], guidance: "Before input: process log" },
+    { toolNames: ["sessions_spawn"], guidance: "wait for runtime completion events" },
+    { toolNames: ["sessions_spawn", "sessions_yield"], guidance: "call `sessions_yield`" },
+    ...["image_generate", "music_generate", "video_generate"].map((tool) => ({
+      toolNames: [tool],
+      guidance: `Do not call \`${tool}\` again`,
+    })),
+  ])("keeps $toolNames guidance stable even without active work", ({ toolNames, guidance }) => {
+    const available = buildPromptParts({ toolNames });
+    const unavailable = buildPromptParts({ toolNames: [] });
+    expect(available.prefix).toContain(guidance);
+    expect(unavailable.prefix).not.toContain(guidance);
+    expect(available.suffix).not.toContain(guidance);
+  });
+
+  it("keeps changed project-memory facts after the stable recall and workspace instructions", () => {
+    registerTestMemoryPromptBuilder(() => ["## Memory Recall", "Search before recalling."]);
+    const build = (fact: string) =>
+      buildPromptParts({
+        toolNames: ["memory_search"],
+        projectMemoryBootstrap: ["## Project Memory", fact],
+      });
+    const first = build("- Build uses pnpm. (Source: MEMORY.md#L3)");
+    const next = build("- Build uses pnpm workspaces. (Source: MEMORY.md#L7)");
+
+    expect(next.prefix).toBe(first.prefix);
+    expect(first.prefix).toContain("## Memory Recall");
+    expect(first.prefix).toContain("Stable project instructions.");
+    expect(first.prefix).not.toContain("## Project Memory");
+    expect(first.suffix).toContain("- Build uses pnpm. (Source: MEMORY.md#L3)");
+    expect(next.suffix).toContain("- Build uses pnpm workspaces. (Source: MEMORY.md#L7)");
+  });
+
+  it("keeps channel-dependent ACP routing after the stable ACP authority guidance", () => {
+    const build = (channel: string, capabilities: string[]) =>
+      buildPromptParts({
+        toolNames: ["sessions_spawn"],
+        acpEnabled: true,
+        runtimeInfo: { channel, capabilities },
+      });
+    const first = build("discord", ["threadbound-acp-spawn"]);
+    const next = build("telegram", []);
+
+    expect(next.prefix).toBe(first.prefix);
+    expect(first.prefix).toContain(
+      "never route ACP through local subagent controls or a local PTY",
+    );
+    expect(first.prefix).not.toContain("Discord ACP default:");
+    expect(first.suffix).toContain(
+      'Discord ACP default: persistent thread (`thread:true`, `mode:"session"`)',
+    );
+    expect(first.suffix).toContain('ACP thread: only `sessions_spawn(runtime:"acp", thread:true)`');
+    expect(next.suffix).not.toContain("Discord ACP default:");
+    expect(next.suffix).not.toContain("ACP thread:");
+  });
+
+  it.each(["suggest", "prefer"] as const)(
+    "keeps ultra toggles after stable safety and delegation guidance in %s mode",
+    (subagentDelegationMode) => {
+      const build = (proactiveSubagentOrchestration: boolean) =>
+        buildPromptParts({
+          toolNames: ["sessions_spawn", "sessions_send", "sessions_yield"],
+          subagentDelegationMode,
+          proactiveSubagentOrchestration,
+        });
+      const first = build(false);
+      const next = build(true);
+
+      expect(next.prefix).toBe(first.prefix);
+      expect(first.prefix).toContain("## Safety");
+      expect(first.prefix).toContain(
+        "Large work: `sessions_spawn`; follow the accepted completion mode.",
+      );
+      expect(first.prefix).not.toContain("## Proactive Sub-Agent Orchestration");
+      expect(first.suffix).not.toContain("Ultra active");
+      expect(next.suffix).toContain("## Proactive Sub-Agent Orchestration");
+      expect(next.suffix).toContain("Ultra active");
+      if (subagentDelegationMode === "prefer") {
+        expect(first.suffix).toContain("## Delegation");
+        expect(next.suffix).not.toContain("## Delegation");
+      }
+    },
+  );
+
+  it("keeps elevated-level changes after stable sandbox permissions", () => {
+    const build = (defaultLevel: "ask" | "full") =>
+      buildPromptParts({
+        toolNames: ["exec"],
+        sandboxInfo: {
+          enabled: true,
+          elevated: { allowed: true, fullAccessAvailable: true, defaultLevel },
+        },
+      });
+    const first = build("ask");
+    const next = build("full");
+
+    expect(next.prefix).toBe(first.prefix);
+    expect(first.prefix).toContain("Subagents remain sandboxed; no elevated/host access.");
+    expect(first.prefix).toContain("User can toggle with /elevated on|off|ask|full.");
+    expect(first.prefix).not.toContain("Current elevated level:");
+    expect(first.suffix).toContain("Current elevated level: ask");
+    expect(next.suffix).toContain("Current elevated level: full");
+  });
+});

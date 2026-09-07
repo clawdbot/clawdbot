@@ -5,6 +5,7 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import {
   loadTranscriptEvents,
@@ -626,6 +627,13 @@ function mockRestartContinuation(
 let testState: OpenClawTestState;
 
 describe("scheduleRestartSentinelWake", () => {
+  const expectedGeneratedMediaContext: RuntimeContextFragment[] = [
+    {
+      kind: "runtime-instruction",
+      text: "Deliver the generated media listed below to the user.",
+    },
+    { kind: "conversation-data", text: "Generated media:\nMEDIA:/tmp/proof.png" },
+  ];
   afterEach(async () => {
     resetGatewayWorkAdmission();
     vi.useRealTimers();
@@ -1608,6 +1616,7 @@ describe("scheduleRestartSentinelWake", () => {
         expectFinal: true,
         forceSyntheticClient: true,
         internalDeliveryMediaUrls: ["/tmp/proof.png"],
+        runtimeContextFragments: expectedGeneratedMediaContext,
         resolveGatewayContext,
         onAccepted: expect.any(Function),
       },
@@ -1702,6 +1711,7 @@ describe("scheduleRestartSentinelWake", () => {
         expectFinal: true,
         forceSyntheticClient: true,
         internalDeliveryMediaUrls: ["/tmp/proof.png"],
+        runtimeContextFragments: expectedGeneratedMediaContext,
         internalDeliverySuppressText: true,
         onAccepted: expect.any(Function),
       },
@@ -1953,6 +1963,7 @@ describe("scheduleRestartSentinelWake", () => {
         expectFinal: true,
         forceSyntheticClient: true,
         internalDeliveryMediaUrls: ["/tmp/proof.png"],
+        runtimeContextFragments: expectedGeneratedMediaContext,
         internalDeliverySuppressText: true,
         onAccepted: expect.any(Function),
       },

@@ -11998,7 +11998,15 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
   it("pins every documented raw Full Release Validation caller to one exact SHA", () => {
     const nightly = readFileSync(".agents/skills/release-openclaw-nightly/SKILL.md", "utf8");
     const releaseCi = readFileSync(".agents/skills/release-openclaw-ci/SKILL.md", "utf8");
-    const ciDocs = readFileSync("docs/ci.md", "utf8");
+    // The CI page is an index over docs/ci/*. Read the whole set so this
+    // assertion follows the content instead of a single file path.
+    const ciDocs = [
+      readFileSync("docs/ci.md", "utf8"),
+      ...readdirSync("docs/ci")
+        .filter((name) => name.endsWith(".md"))
+        .sort()
+        .map((name) => readFileSync(`docs/ci/${name}`, "utf8")),
+    ].join("\n");
     const fullReleaseDocs = readFileSync("docs/reference/full-release-validation.md", "utf8");
     const releasingDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
 

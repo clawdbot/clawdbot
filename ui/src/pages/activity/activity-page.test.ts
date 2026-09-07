@@ -307,7 +307,7 @@ describe("ActivityPage gateway lifecycle", () => {
     expect(page.entries.map((entry) => entry.outputPreview)).toEqual(["original output"]);
     page.subscriptions.hostDisconnected();
 
-    current().opts.onEvent?.(toolEvent("while-away"));
+    current().opts.onEvent?.(toolEvent("while-away", "agent:other:work"));
     fillDiagnosticLog();
     expect(source.eventLog).toHaveLength(250);
     expect(source.eventLog.every((event) => event.event === "diagnostic")).toBe(true);
@@ -319,24 +319,94 @@ describe("ActivityPage gateway lifecycle", () => {
     ]);
   });
 
-  it.each(["gateway", "account", "session"] as const)(
+  it.each(["tool", "answer_candidate"] as const)(
+    "collects delivered %s activity across sessions before the page opens",
+    (kind) => {
+      const { gateway: source, current } = activityGateway();
+      const origins = [
+        { runId: "selected", sessionKey: "main", agentId: "main" },
+        { runId: "other", sessionKey: "agent:research:work", agentId: "research" },
+        { runId: "global", sessionKey: "global", agentId: "research" },
+        { runId: "unscoped" },
+      ];
+      for (const origin of origins) {
+        current().opts.onEvent?.(
+          createGatewayEvent(kind === "tool" ? "session.tool" : "agent", {
+            ...origin,
+            stream: kind === "tool" ? "tool" : "item",
+            data:
+              kind === "tool"
+                ? {
+                    phase: "result",
+                    name: "read",
+                    toolCallId: "shared-call",
+                    result: { text: `${origin.runId} output` },
+                  }
+                : {
+                    kind: "answer_candidate",
+                    itemId: "shared-item",
+                    status: "selected",
+                    progressText: `${origin.runId} output`,
+                  },
+          }),
+        );
+      }
+
+      const page = bindActivity(source);
+      expect(page.entries.map((entry) => entry.runId)).toEqual(
+        origins.map((origin) => origin.runId),
+      );
+      expect(page.entries.map((entry) => entry.sessionKey)).toEqual([
+        "main",
+        "agent:research:work",
+        "global",
+        undefined,
+      ]);
+      expect(new Set(page.entries.map((entry) => entry.id)).size).toBe(origins.length);
+    },
+  );
+
+  it("preserves activity and Clear when the selected chat changes", () => {
+    const { gateway: source, current } = activityGateway();
+    const page = bindActivity(source);
+    current().opts.onEvent?.(toolEvent("original"));
+    const originalId = page.entries[0]!.id;
+    page.expandedIds.add(originalId);
+    for (let index = 0; index < 300; index += 1) {
+      current().opts.onEvent?.(createGatewayEvent("diagnostic", { index }));
+    }
+
+    source.setSessionKey("agent:other:work");
+
+    expect(page.entries.map((entry) => entry.outputPreview)).toEqual(["original output"]);
+    expect([...page.expandedIds]).toEqual([originalId]);
+    current().opts.onEvent?.(toolEvent("other", "agent:other:work"));
+    expect(page.entries.map((entry) => entry.outputPreview)).toEqual([
+      "original output",
+      "other output",
+    ]);
+
+    page.clearEntries();
+    source.setSessionKey("main");
+    expect(page.entries).toEqual([]);
+    current().opts.onEvent?.(toolEvent("after-clear", "agent:other:work"));
+    expect(page.entries.map((entry) => entry.outputPreview)).toEqual(["after-clear output"]);
+  });
+
+  it.each(["gateway", "account"] as const)(
     "retires activity after a %s change while the page is closed",
     (change) => {
       const { gateway: source, current } = activityGateway();
       const page = bindActivity(source);
       current().opts.onEvent?.(toolEvent("old"));
       page.subscriptions.hostDisconnected();
-      let sessionKey = "main";
       if (change === "gateway") {
         source.connect({ gatewayUrl: "wss://other-activity.example.test" });
-      } else if (change === "account") {
+      } else {
         current().opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
         current().opts.onHello?.(activityHello("activity-owner-b"));
-      } else {
-        sessionKey = "agent:main:other";
-        source.setSessionKey(sessionKey);
       }
-      current().opts.onEvent?.(toolEvent("new", sessionKey));
+      current().opts.onEvent?.(toolEvent("new"));
 
       const revisitedPage = bindActivity(source);
       expect(revisitedPage.entries.map((entry) => entry.outputPreview)).toEqual(["new output"]);
