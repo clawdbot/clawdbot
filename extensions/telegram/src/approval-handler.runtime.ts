@@ -20,7 +20,6 @@ import type {
 } from "openclaw/plugin-sdk/approval-runtime";
 import { resolveGatewayPublicOrigin } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
@@ -28,12 +27,15 @@ import {
   buildTelegramNativeExpiredApprovalText,
   buildTelegramNativeResolvedApprovalText,
 } from "./approval-terminal.js";
+import { buildTelegramRoutingTarget } from "./bot/helpers.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import {
   isTelegramExecApprovalHandlerConfigured,
   shouldHandleTelegramExecApprovalRequest,
 } from "./exec-approvals.js";
 import { escapeTelegramHtml } from "./format.js";
+import { parseTelegramThreadId } from "./outbound-params.js";
+import { resolveTelegramSendThreadSpec } from "./reply-parameters.js";
 import {
   editMessageReplyMarkupTelegram,
   editMessageTelegram,
@@ -48,10 +50,12 @@ const log = createSubsystemLogger("telegram/approvals");
 const terminalizedSystemAgentApprovals = new Set<string>();
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
-type PendingMessage = {
+type ApprovalTarget = {
   chatId: string;
-  messageId: string;
+  messageThreadId?: number;
+  directMessagesTopicId?: number;
 };
+type PendingMessage = ApprovalTarget & { messageId: string };
 type TelegramPendingDelivery = {
   text: string;
   buttons: ReturnType<typeof resolveTelegramInlineButtons>;
@@ -72,6 +76,17 @@ type TelegramApprovalHandlerContext = {
   token: string;
   deps?: TelegramExecApprovalHandlerDeps;
 };
+
+function approvalTargetKey(target: ApprovalTarget): string {
+  return buildTelegramRoutingTarget(
+    target.chatId,
+    resolveTelegramSendThreadSpec({
+      messageThreadId: target.messageThreadId,
+      targetDirectMessagesTopicId: target.directMessagesTopicId,
+      chatType: parseTelegramTarget(target.chatId).chatType,
+    }),
+  );
+}
 
 function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext): {
   accountId: string;
@@ -171,7 +186,7 @@ function buildPendingPayload(params: {
 
 export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
   TelegramPendingDelivery,
-  { chatId: string; messageThreadId?: number; directMessagesTopicId?: number },
+  ApprovalTarget,
   PendingMessage,
   never,
   TelegramFinalDelivery
@@ -236,23 +251,18 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         cfg,
         token: resolved.context.token,
         accountId: resolved.accountId,
-        ...(preparedTarget.messageThreadId != null
-          ? { messageThreadId: preparedTarget.messageThreadId }
-          : {}),
+        messageThreadId: preparedTarget.messageThreadId,
       }).catch(() => {});
       const result = await sendMessage(preparedTarget.chatId, pendingPayload.text, {
         cfg,
         token: resolved.context.token,
         accountId: resolved.accountId,
         buttons: pendingPayload.buttons,
-        ...(preparedTarget.messageThreadId != null
-          ? { messageThreadId: preparedTarget.messageThreadId }
-          : {}),
-        ...(preparedTarget.directMessagesTopicId != null
-          ? { directMessagesTopicId: preparedTarget.directMessagesTopicId }
-          : {}),
+        messageThreadId: preparedTarget.messageThreadId,
+        directMessagesTopicId: preparedTarget.directMessagesTopicId,
       });
       return {
+        ...preparedTarget,
         chatId: result.chatId,
         messageId: result.messageId,
       };
@@ -285,29 +295,28 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
           ? normalizeTelegramChatId(parsedOrigin.chatId)
           : undefined;
         const originThreadId =
-          parseStrictPositiveInteger(request.request.turnSourceThreadId) ??
+          parseTelegramThreadId(request.request.turnSourceThreadId) ??
           parsedOrigin?.messageThreadId;
         const sourceAccountId = request.request.turnSourceAccountId?.trim();
         const isSourceAccount = !sourceAccountId || sourceAccountId === resolved.accountId;
-        if (
-          originChatId &&
-          isSourceAccount &&
-          (entry.chatId !== originChatId || editError !== undefined)
-        ) {
-          if (!terminalizedSystemAgentApprovals.has(request.id)) {
+        if (originChatId && isSourceAccount && !terminalizedSystemAgentApprovals.has(request.id)) {
+          const origin = {
+            chatId: originChatId,
+            messageThreadId: originThreadId,
+            directMessagesTopicId: parsedOrigin?.directMessagesTopicId,
+          };
+          // An edit notifies only its delivered topic; normalize General exactly as the sender does.
+          if (editError !== undefined || approvalTargetKey(entry) !== approvalTargetKey(origin)) {
             const sendMessage = resolved.context.deps?.sendMessage ?? sendMessageTelegram;
-            const originTo =
-              parsedOrigin?.directMessagesTopicId != null ? originTarget! : originChatId;
-            await sendMessage(originTo, escapeTelegramHtml(payload.text), {
+            await sendMessage(originChatId, escapeTelegramHtml(payload.text), {
               cfg,
               token: resolved.context.token,
               accountId: resolved.accountId,
               textMode: "html",
-              ...(originThreadId != null ? { messageThreadId: originThreadId } : {}),
+              messageThreadId: origin.messageThreadId,
+              directMessagesTopicId: origin.directMessagesTopicId,
             });
-            terminalizedSystemAgentApprovals.add(request.id);
           }
-        } else if (originChatId && isSourceAccount) {
           terminalizedSystemAgentApprovals.add(request.id);
         }
       }

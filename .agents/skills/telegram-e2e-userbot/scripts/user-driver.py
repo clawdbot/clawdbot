@@ -785,6 +785,7 @@ def normalize_message(message, users=None):
     sender_id = sender.get("user_id") or sender.get("chat_id")
     sender_user = users.get(int(sender_id or 0), {}) if sender_id else {}
     content = message.get("content") or {}
+    topic = message.get("topic_id") or {}
     reply_to_message_id = message.get("reply_to_message_id") or (message.get("reply_to") or {}).get("message_id")
     return {
         "messageId": message.get("id"),
@@ -793,7 +794,8 @@ def normalize_message(message, users=None):
         "senderUsername": sender_user.get("username") or "",
         "date": message.get("date"),
         "replyToMessageId": reply_to_message_id,
-        "threadId": message.get("message_thread_id"),
+        "threadId": topic.get("message_thread_id"),
+        "forumTopicId": topic.get("forum_topic_id"),
         **message_content(content),
         "raw": message,
     }
@@ -1091,6 +1093,7 @@ def serve_message(message, users):
         "senderId": normalized.get("senderId"),
         "senderUsername": normalized.get("senderUsername"),
         "replyToMessageId": normalized.get("replyToMessageId"),
+        "forumTopicId": normalized.get("forumTopicId"),
         "timestamp": int(message.get("date") or 0) * 1000,
         "contentType": normalized["contentType"],
         "text": normalized["text"],

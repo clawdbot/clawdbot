@@ -921,6 +921,8 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
 
     Channel delivery shows the command text in the chat; only enable `channel` or `both` in trusted groups/topics. When the prompt lands in a forum topic, OpenClaw preserves the topic for the approval prompt and follow-up. Exec approvals expire after 30 minutes by default.
 
+    For delegated OpenClaw changes, the terminal result also returns to the originating topic when the approval card was delivered elsewhere, including another topic in the same chat. An updated card in the originating topic does not produce a duplicate notice.
+
     Inline approval buttons also require `channels.telegram.capabilities.inlineButtons` to allow the target surface (`dm`, `group`, or `all`). Approval IDs prefixed with `plugin:` resolve through plugin approvals; others resolve through exec approvals first.
 
     See [Exec approvals](/tools/exec-approvals).

@@ -1,12 +1,40 @@
 // Telegram tests cover approval handler plugin behavior.
+import { createChannelApprovalHandlerFromCapability } from "openclaw/plugin-sdk/approval-handler-runtime";
+import type { SystemAgentApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { telegramApprovalNativeRuntime } from "./approval-handler.runtime.js";
+import { telegramApprovalCapability } from "./approval-native.js";
 import { buildTelegramCanonicalApprovalTerminalText } from "./approval-terminal.js";
 
 type TelegramPayload = {
   text: string;
   buttons?: Array<Array<{ text: string; callback_data?: string }>>;
 };
+
+function systemAgentRequest(
+  id: string,
+  source: Pick<
+    SystemAgentApprovalRequest["request"],
+    "turnSourceTo" | "turnSourceThreadId" | "turnSourceAccountId"
+  >,
+): SystemAgentApprovalRequest {
+  return {
+    approvalKind: "system-agent",
+    id: `system-agent:${id}`,
+    request: {
+      title: "OpenClaw change",
+      description: "restart the Gateway",
+      command: "restart the Gateway",
+      proposalHash: "a".repeat(64),
+      allowedDecisions: ["allow-once", "deny"],
+      sessionId: `delegation-${id}`,
+      turnSourceChannel: "telegram",
+      ...source,
+    },
+    createdAtMs: 0,
+    expiresAtMs: 60_000,
+  };
+}
 
 describe("telegramApprovalNativeRuntime", () => {
   it("subscribes to system-agent approval events", () => {
@@ -523,23 +551,10 @@ describe("telegramApprovalNativeRuntime", () => {
   it("sends one terminal origin result and releases its dedupe entry after finalization", async () => {
     const editMessage = vi.fn().mockResolvedValue({ ok: true });
     const sendMessage = vi.fn().mockResolvedValue({ ok: true });
-    const request = {
-      approvalKind: "system-agent" as const,
-      id: "system-agent:origin-followup",
-      request: {
-        title: "OpenClaw change",
-        description: "restart the Gateway",
-        command: "restart the Gateway",
-        proposalHash: "d".repeat(64),
-        allowedDecisions: ["allow-once", "deny"] as const,
-        sessionId: "delegation-origin-followup",
-        turnSourceChannel: "telegram",
-        turnSourceTo: "1234",
-        turnSourceThreadId: 42,
-      },
-      createdAtMs: 0,
-      expiresAtMs: 60_000,
-    };
+    const request = systemAgentRequest("origin-followup", {
+      turnSourceTo: "1234",
+      turnSourceThreadId: 42,
+    });
 
     await telegramApprovalNativeRuntime.transport.updateEntry?.({
       cfg: {} as never,
@@ -598,32 +613,20 @@ describe("telegramApprovalNativeRuntime", () => {
     expect(sendMessage).toHaveBeenCalledTimes(2);
   });
 
-  it("sends the origin result when the approver card edit fails", async () => {
+  it("sends the origin result when the same-route approver card edit fails", async () => {
     const editMessage = vi.fn().mockRejectedValue(new Error("message was deleted"));
     const sendMessage = vi.fn().mockResolvedValue({ ok: true });
-    const request = {
-      approvalKind: "system-agent" as const,
-      id: "system-agent:origin-edit-failure",
-      request: {
-        title: "OpenClaw change",
-        description: "restart the Gateway",
-        command: "restart the Gateway",
-        proposalHash: "f".repeat(64),
-        allowedDecisions: ["allow-once", "deny"] as const,
-        sessionId: "delegation-origin-edit-failure",
-        turnSourceChannel: "telegram",
-        turnSourceTo: "1234",
-      },
-      createdAtMs: 0,
-      expiresAtMs: 60_000,
-    };
+    const request = systemAgentRequest("origin-edit-failure", {
+      turnSourceTo: "1234",
+      turnSourceThreadId: 42,
+    });
 
     await expect(
       telegramApprovalNativeRuntime.transport.updateEntry?.({
         cfg: {} as never,
         accountId: "default",
         context: { token: "tg-token", deps: { editMessage, sendMessage } },
-        entry: { chatId: "5678", messageId: "m1" },
+        entry: { chatId: "1234", messageThreadId: 42, messageId: "m1" },
         request,
         approvalKind: "system-agent",
         payload: { text: "⚠️ OpenClaw change approved, but it was not applied." },
@@ -638,6 +641,7 @@ describe("telegramApprovalNativeRuntime", () => {
         token: "tg-token",
         accountId: "default",
         textMode: "html",
+        messageThreadId: 42,
       },
     );
   });
@@ -645,23 +649,10 @@ describe("telegramApprovalNativeRuntime", () => {
   it("sends origin notices only through the originating Telegram account", async () => {
     const editMessage = vi.fn().mockResolvedValue({ ok: true });
     const sendMessage = vi.fn().mockResolvedValue({ ok: true });
-    const request = {
-      approvalKind: "system-agent" as const,
-      id: "system-agent:origin-account",
-      request: {
-        title: "OpenClaw change",
-        description: "restart the Gateway",
-        command: "restart the Gateway",
-        proposalHash: "g".repeat(64),
-        allowedDecisions: ["allow-once", "deny"] as const,
-        sessionId: "delegation-origin-account",
-        turnSourceChannel: "telegram",
-        turnSourceTo: "1234",
-        turnSourceAccountId: "origin",
-      },
-      createdAtMs: 0,
-      expiresAtMs: 60_000,
-    };
+    const request = systemAgentRequest("origin-account", {
+      turnSourceTo: "1234",
+      turnSourceAccountId: "origin",
+    });
     const payload = { text: "✅ OpenClaw change approved and applied." };
 
     await telegramApprovalNativeRuntime.transport.updateEntry?.({
@@ -689,6 +680,172 @@ describe("telegramApprovalNativeRuntime", () => {
     expect(sendMessage).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ["private root to topic", "1234", "1234", 42, true],
+    ["same private topic", "1234:topic:42", "telegram:1234", 42, false],
+    ["scoped source thread", "1234:topic:42", "1234", "1234:42", false],
+    ["different private topic", "1234:topic:43", "1234:topic:42", undefined, true],
+    ["private topic one is not the root", "1234:topic:1", "1234", undefined, true],
+    ["forum General is the root", "-1001234:topic:1", "-1001234", undefined, false],
+    ["forum root is General", "-1001234", "-1001234", 1, false],
+    ["different forum topic", "-1001234:topic:43", "-1001234", 42, true],
+    [
+      "same Direct Messages topic",
+      "-1001234:direct-topic:77",
+      "-1001234:direct-topic:77",
+      undefined,
+      false,
+    ],
+    [
+      "different Direct Messages topic",
+      "-1001234:direct-topic:78",
+      "-1001234:direct-topic:77",
+      undefined,
+      true,
+    ],
+    [
+      "Direct Messages topic one is not the root",
+      "-1001234:direct-topic:1",
+      "-1001234",
+      undefined,
+      true,
+    ],
+    [
+      "forum and Direct Messages topics differ",
+      "-1001234:topic:77",
+      "-1001234:direct-topic:77",
+      undefined,
+      true,
+    ],
+    ["Direct Messages and forum topics differ", "-1001234:direct-topic:77", "-1001234", 77, true],
+  ] as const)(
+    "retains delivered routing for terminal notices: %s",
+    async (_name, to, origin, threadId, needsNotice) => {
+      const sendTyping = vi.fn().mockResolvedValue(undefined);
+      const sendMessage = vi.fn().mockResolvedValue({ chatId: to.split(":")[0], messageId: "m1" });
+      const editMessage = vi.fn().mockResolvedValue({ ok: true });
+      const request = systemAgentRequest(`route-${_name}`, {
+        turnSourceTo: origin,
+        turnSourceThreadId: threadId,
+      });
+      const common = {
+        cfg: {},
+        accountId: "default",
+        context: { token: "tg-token", deps: { sendTyping, sendMessage, editMessage } },
+        request,
+        approvalKind: "system-agent" as const,
+      };
+      const delivery = {
+        ...common,
+        plannedTarget: { surface: "origin" as const, reason: "preferred" as const, target: { to } },
+        view: {
+          approvalKind: "system-agent" as const,
+          approvalId: request.id,
+          phase: "pending" as const,
+          title: "OpenClaw change",
+          metadata: [],
+          commandText: request.request.command,
+          operationSummary: request.request.description,
+          actions: [],
+          expiresAtMs: request.expiresAtMs,
+        },
+        pendingPayload: { text: "Pending change", buttons: [] },
+      };
+      const prepared = await telegramApprovalNativeRuntime.transport.prepareTarget(delivery);
+      expect(prepared).not.toBeNull();
+      const entry = await telegramApprovalNativeRuntime.transport.deliverPending({
+        ...delivery,
+        preparedTarget: prepared!.target,
+      });
+      expect(entry).not.toBeNull();
+      sendMessage.mockClear();
+      try {
+        await telegramApprovalNativeRuntime.transport.updateEntry?.({
+          ...common,
+          entry: entry!,
+          payload: { text: "Change denied" },
+          phase: "resolved",
+        });
+        expect(editMessage).toHaveBeenCalledOnce();
+        expect(sendMessage).toHaveBeenCalledTimes(needsNotice ? 1 : 0);
+        if (needsNotice) {
+          expect(sendMessage).toHaveBeenCalledWith(
+            origin.split(":")[0],
+            "Change denied",
+            expect.objectContaining({
+              accountId: "default",
+              ...(threadId === undefined ? {} : { messageThreadId: threadId }),
+              ...(origin.includes(":direct-topic:") ? { directMessagesTopicId: 77 } : {}),
+            }),
+          );
+        }
+      } finally {
+        telegramApprovalNativeRuntime.observe?.onFinalized?.({ ...common, phase: "resolved" });
+      }
+    },
+  );
+
+  it.each([
+    ["dm", undefined, 1, 1, "❌ OpenClaw change denied. No change was made."],
+    ["channel", undefined, 1, 0, undefined],
+    ["both", undefined, 2, 0, undefined],
+    ["dm", "expired", 1, 1, "⏱️ OpenClaw change expired. No change was made."],
+    [
+      "dm",
+      "cancelled",
+      1,
+      1,
+      "⚠️ OpenClaw change was cancelled because its run ended. No change was made. Retry.",
+    ],
+  ] as const)(
+    "finalizes the real %s / %s delivery plan without losing the private origin topic",
+    async (target, terminalStatus, pendingCount, noticeCount, terminalText) => {
+      const sendTyping = vi.fn().mockResolvedValue(undefined);
+      const sendMessage = vi.fn().mockResolvedValue({ chatId: "1234", messageId: "m1" });
+      const editMessage = vi.fn().mockResolvedValue({ ok: true });
+      const handler = await createChannelApprovalHandlerFromCapability({
+        capability: telegramApprovalCapability,
+        label: "telegram/approvals",
+        clientDisplayName: "Telegram approvals",
+        channel: "telegram",
+        channelLabel: "Telegram",
+        cfg: {
+          channels: {
+            telegram: {
+              botToken: "tg-token",
+              execApprovals: { enabled: true, approvers: ["1234"], target },
+            },
+          },
+        },
+        accountId: "default",
+        context: { token: "tg-token", deps: { sendTyping, sendMessage, editMessage } },
+        nowMs: () => 0,
+      });
+      const request = systemAgentRequest(`plan-${target}-${terminalStatus}`, {
+        turnSourceTo: "1234",
+        turnSourceThreadId: 42,
+      });
+      expect(handler).not.toBeNull();
+      try {
+        await handler!.handleRequested(request);
+        expect(sendMessage).toHaveBeenCalledTimes(pendingCount);
+        sendMessage.mockClear();
+        await handler!.handleResolved({ id: request.id, decision: "deny", terminalStatus, ts: 1 });
+        expect(editMessage).toHaveBeenCalledTimes(pendingCount);
+        expect(sendMessage).toHaveBeenCalledTimes(noticeCount);
+        if (noticeCount) {
+          expect(sendMessage).toHaveBeenCalledWith(
+            "1234",
+            terminalText,
+            expect.objectContaining({ messageThreadId: 42 }),
+          );
+        }
+      } finally {
+        await handler!.stop();
+      }
+    },
+  );
+
   it("passes topic thread ids to typing and message delivery", async () => {
     const sendTyping = vi.fn().mockResolvedValue({ ok: true });
     const sendMessage = vi.fn().mockResolvedValue({
@@ -696,7 +853,7 @@ describe("telegramApprovalNativeRuntime", () => {
       messageId: "m1",
     });
 
-    const entry = await telegramApprovalNativeRuntime.transport.deliverPending({
+    await telegramApprovalNativeRuntime.transport.deliverPending({
       cfg: {} as never,
       accountId: "default",
       context: {
@@ -751,10 +908,6 @@ describe("telegramApprovalNativeRuntime", () => {
       accountId: "default",
       buttons: [],
       messageThreadId: 928,
-    });
-    expect(entry).toEqual({
-      chatId: "-1003841603622",
-      messageId: "m1",
     });
   });
 

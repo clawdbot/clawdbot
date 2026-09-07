@@ -110,6 +110,7 @@ class PhotoContentTest(unittest.TestCase):
             "sender_id": {"user_id": 101},
             "date": 123,
             "reply_to": {"message_id": 7},
+            "topic_id": {"@type": "messageTopicForum", "forum_topic_id": 18},
             "content": {
                 "@type": "messageText",
                 "text": {"@type": "formattedText", "text": text, "entities": entities},
@@ -123,6 +124,7 @@ class PhotoContentTest(unittest.TestCase):
         self.assertEqual(created["botApiMessageId"], 42)
         self.assertEqual(created["senderUsername"], "sut_bot")
         self.assertEqual(created["replyToMessageId"], 7)
+        self.assertEqual(created["forumTopicId"], 18)
         self.assertEqual(created["timestamp"], 123000)
         self.assertEqual(created["contentType"], "messageText")
         self.assertEqual(created["text"], text)
@@ -156,6 +158,7 @@ class PhotoContentTest(unittest.TestCase):
                 self.assertEqual(edited["text"], edited_text)
                 self.assertEqual(edited["entities"], edited_entities)
                 self.assertEqual(edited["senderId"], 101)
+                self.assertEqual(edited["forumTopicId"], 18)
                 self.assertEqual(known[message_id]["entities"], edited_entities)
 
     def test_preserves_native_content_type_and_caption_entities_in_messages_and_edits(self):

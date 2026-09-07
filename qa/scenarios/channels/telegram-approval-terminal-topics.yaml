@@ -1,0 +1,51 @@
+title: Telegram approval terminal topic delivery
+
+scenario:
+  id: telegram-approval-terminal-topics
+  surface: channels
+  coverage:
+    primary:
+      - telegram.conversation-routing-and-delivery
+  objective: Return delegated-change approval results to the originating private topic without duplicate same-route notices.
+  successCriteria:
+    - The installed package's native planner delivers real approval cards to the configured DM or origin topic.
+    - TDLib observes the pending card and a successful terminal edit of that same message.
+    - DM-only approval returns one result to the origin topic; an origin-topic card produces no extra notice.
+  docsRefs:
+    - docs/channels/telegram.md
+  codeRefs:
+    - extensions/telegram/src/approval-handler.runtime.ts
+    - extensions/telegram/src/approval-native.ts
+  execution:
+    kind: flow
+    channel: telegram
+    retryCount: 0
+    timeoutMs: 180000
+    suiteIsolation: isolated
+    isolationReason: Native approval events and private-topic receive observations belong to one leased bot.
+    transportPolicy:
+      directMessageOnly: true
+    summary: Feed deterministic approval events to the installed native handler and observe actual Telegram Test Server messages and edits.
+    config:
+      requiredProviderMode: mock-openai
+      requiredChannelDriver: live
+
+flow:
+  steps:
+    - name: same-route edit and cross-topic terminal notice
+      actions:
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - set: fixture
+          value:
+            expr: "await qaImport('./live-transports/telegram/approval-topics.fixture.js')"
+        - call: fixture.proveTelegramApprovalTopics
+          args:
+            - env: { ref: env }
+              readTelegramMessages: { ref: readTelegramMessages }
+              signal: { ref: signal }
+          saveAs: result
+      detailsExpr: result.details
