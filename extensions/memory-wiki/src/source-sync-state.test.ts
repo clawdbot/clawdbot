@@ -1,6 +1,5 @@
 // Memory Wiki tests cover source sync state plugin behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type {
   OpenKeyedStoreOptions,
@@ -23,14 +22,9 @@ import {
   setImportedSourceEntry,
   writeMemoryWikiSourceSyncState,
 } from "./source-sync-state.js";
+import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
-const tempDirs: string[] = [];
-
-async function makeTempDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-source-sync-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const tempDirs = createMemoryWikiTestHarness();
 
 function openStore(env: NodeJS.ProcessEnv) {
   return createMemoryWikiSourceSyncStateStore(<T>(options: OpenKeyedStoreOptions) =>
@@ -123,16 +117,13 @@ describe("memory wiki source sync state", () => {
     configureMemoryWikiSourceSyncStateStore(undefined);
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     configureMemoryWikiSourceSyncStateStore(undefined);
     resetPluginStateStoreForTests();
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
   });
 
   it("persists source sync entries in plugin state", async () => {
-    const stateDir = await makeTempDir();
+    const stateDir = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const vaultRoot = path.join(stateDir, "vault");
     const store = openStore({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
 
@@ -173,7 +164,7 @@ describe("memory wiki source sync state", () => {
   });
 
   it("persists only changed rows in a 1,914-entry state snapshot", async () => {
-    const vaultRoot = path.join(await makeTempDir(), "vault");
+    const vaultRoot = path.join(await tempDirs.createTempDir("memory-wiki-source-sync-"), "vault");
     const counting = createCountingStore();
     const entries = Object.fromEntries(
       Array.from({ length: 1_914 }, (_, index) => [
@@ -223,7 +214,7 @@ describe("memory wiki source sync state", () => {
   });
 
   it("deletes replaced rows before upserts at the store capacity", async () => {
-    const vaultRoot = path.join(await makeTempDir(), "vault");
+    const vaultRoot = path.join(await tempDirs.createTempDir("memory-wiki-source-sync-"), "vault");
     const counting = createCountingStore({ maxEntries: 2 });
     const makeEntry = (index: number) => ({
       group: "bridge" as const,
@@ -273,7 +264,7 @@ describe("memory wiki source sync state", () => {
   });
 
   it("keeps legacy file reads separate for doctor migration", async () => {
-    const vaultRoot = await makeTempDir();
+    const vaultRoot = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const legacyPath = resolveMemoryWikiSourceSyncStatePath(vaultRoot);
     await fs.mkdir(path.dirname(legacyPath), { recursive: true });
     await fs.writeFile(
@@ -313,7 +304,7 @@ describe("memory wiki source sync state", () => {
   });
 
   it("rejects writes beyond the source-sync state row cap", async () => {
-    const stateDir = await makeTempDir();
+    const stateDir = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const vaultRoot = path.join(stateDir, "vault");
     const store = openStore({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
     const entries = Object.fromEntries(
@@ -336,7 +327,7 @@ describe("memory wiki source sync state", () => {
   });
 
   it("salvages human Notes before pruning an imported page", async () => {
-    const vaultRoot = await makeTempDir();
+    const vaultRoot = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const pagePath = "sources/salvage-test.md";
     const pageAbsPath = path.join(vaultRoot, pagePath);
     await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
@@ -392,7 +383,7 @@ describe("memory wiki source sync state", () => {
   });
 
   it("preserves previous Notes when a long source page is pruned again", async () => {
-    const vaultRoot = await makeTempDir();
+    const vaultRoot = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const pagePath = `sources/repeated-${"a".repeat(180)}.md`;
     const pageAbsPath = path.join(vaultRoot, pagePath);
     await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
@@ -451,8 +442,8 @@ describe("memory wiki source sync state", () => {
   });
 
   it("keeps a replaced source page without following its symlink", async () => {
-    const vaultRoot = await makeTempDir();
-    const externalRoot = await makeTempDir();
+    const vaultRoot = await tempDirs.createTempDir("memory-wiki-source-sync-");
+    const externalRoot = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const pagePath = "sources/replaced-with-symlink.md";
     const pageAbsPath = path.join(vaultRoot, pagePath);
     const externalPath = path.join(externalRoot, "private-notes.md");
@@ -480,7 +471,7 @@ describe("memory wiki source sync state", () => {
   });
 
   it("salvages Notes and prunes oversized source pages with bounded reads", async () => {
-    const vaultRoot = await makeTempDir();
+    const vaultRoot = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const pagePath = "sources/oversized-recovery.md";
     const pageAbsPath = path.join(vaultRoot, pagePath);
     await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
@@ -527,7 +518,7 @@ describe("memory wiki source sync state", () => {
   });
 
   it("prunes oversized generated pages without creating empty Notes recoveries", async () => {
-    const vaultRoot = await makeTempDir();
+    const vaultRoot = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const pagePath = "sources/oversized-empty-notes.md";
     const pageAbsPath = path.join(vaultRoot, pagePath);
     await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
@@ -564,7 +555,7 @@ describe("memory wiki source sync state", () => {
   });
 
   it("keeps oversized human Notes rather than recovering a truncated annotation", async () => {
-    const vaultRoot = await makeTempDir();
+    const vaultRoot = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const pagePath = "sources/oversized-human-notes.md";
     const pageAbsPath = path.join(vaultRoot, pagePath);
     await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
@@ -602,7 +593,7 @@ describe("memory wiki source sync state", () => {
   });
 
   it("does not mistake a fence inside oversized human Notes for the source boundary", async () => {
-    const vaultRoot = await makeTempDir();
+    const vaultRoot = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const pagePath = "sources/oversized-human-notes-fence.md";
     const pageAbsPath = path.join(vaultRoot, pagePath);
     await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
@@ -645,7 +636,7 @@ describe("memory wiki source sync state", () => {
   });
 
   it("restores malformed oversized pages after a bounded recovery scan", async () => {
-    const vaultRoot = await makeTempDir();
+    const vaultRoot = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const pagePath = "sources/bounded-malformed-recovery.md";
     const pageAbsPath = path.join(vaultRoot, pagePath);
     await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
@@ -673,7 +664,7 @@ describe("memory wiki source sync state", () => {
   });
 
   it("does not duplicate unchanged recovered Notes on repeated prunes", async () => {
-    const vaultRoot = await makeTempDir();
+    const vaultRoot = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const pagePath = "sources/retry-salvage.md";
     const pageAbsPath = path.join(vaultRoot, pagePath);
     await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
@@ -721,7 +712,7 @@ describe("memory wiki source sync state", () => {
   });
 
   it("does not create salvage files for pages without human Notes", async () => {
-    const vaultRoot = await makeTempDir();
+    const vaultRoot = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const pagePath = "sources/no-notes.md";
     const pageAbsPath = path.join(vaultRoot, pagePath);
     await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
@@ -754,7 +745,7 @@ describe("memory wiki source sync state", () => {
     { label: "empty", notes: "" },
     { label: "whitespace-only", notes: " \t " },
   ])("does not salvage generated pages with $label Notes", async ({ notes }) => {
-    const vaultRoot = await makeTempDir();
+    const vaultRoot = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const pagePath = "sources/generated-no-notes.md";
     const pageAbsPath = path.join(vaultRoot, pagePath);
     await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
@@ -803,7 +794,7 @@ describe("memory wiki source sync state", () => {
   });
 
   it("prunes pages even when the page file is already missing", async () => {
-    const vaultRoot = await makeTempDir();
+    const vaultRoot = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const pagePath = "sources/missing.md";
     const pageAbsPath = path.join(vaultRoot, pagePath);
 
@@ -831,7 +822,7 @@ describe("memory wiki source sync state", () => {
   });
 
   it("prunes inactive state when the entire vault is already missing", async () => {
-    const stateDir = await makeTempDir();
+    const stateDir = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const vaultRoot = path.join(stateDir, "removed-vault");
     const store = openStore({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
     await writeMemoryWikiSourceSyncState(
@@ -869,7 +860,7 @@ describe("memory wiki source sync state", () => {
   });
 
   it("does not salvage marker comments inside source content as Notes", async () => {
-    const vaultRoot = await makeTempDir();
+    const vaultRoot = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const pagePath = "sources/marker-in-content.md";
     const pageAbsPath = path.join(vaultRoot, pagePath);
     await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
@@ -924,7 +915,7 @@ describe("memory wiki source sync state", () => {
   });
 
   it("keeps the page when salvage write fails", async () => {
-    const vaultRoot = await makeTempDir();
+    const vaultRoot = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const pagePath = "sources/keep-on-write-fail.md";
     const pageAbsPath = path.join(vaultRoot, pagePath);
     await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
@@ -974,7 +965,7 @@ describe("memory wiki source sync state", () => {
   });
 
   it("keeps the page when read fails with a non-ENOENT error", async () => {
-    const vaultRoot = await makeTempDir();
+    const vaultRoot = await tempDirs.createTempDir("memory-wiki-source-sync-");
     const pagePath = "sources/keep-on-read-fail.md";
     const pageAbsPath = path.join(vaultRoot, pagePath);
     await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });

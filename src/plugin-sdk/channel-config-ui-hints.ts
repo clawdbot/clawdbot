@@ -135,16 +135,14 @@ function createChannelProgressUiHints(params: {
     },
     "streaming.progress.toolProgress": {
       label: `${channelLabel} Progress Tool Lines`,
-      help: params.titleWording
-        ? "Show compact tool/progress lines in progress mode (default: true). Set false to keep only the title until final delivery."
-        : "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
+      help: "Show individual tool activity in progress drafts (default: false). Quiet drafts retain plans, approval requests, failures, and authored progress text.",
     },
     ...(params.includeCommentary && params.commentaryOrder !== "after-command"
       ? commentaryHint
       : {}),
     "streaming.progress.commandText": {
       label: `${channelLabel} Progress Command Text`,
-      help: `Command/exec detail in progress${params.titleWording ? "" : " draft"} lines: "raw" preserves released behavior; "status" shows only the tool label.`,
+      help: `Command/exec detail in progress${params.titleWording ? "" : " draft"} lines: "status" is the safe default; "raw" opts into command text.`,
     },
     ...(params.includeCommentary && params.commentaryOrder === "after-command"
       ? commentaryHint
@@ -164,7 +162,7 @@ const STREAMING_HINT_LABELS = {
   "preview.chunk.breakPreference": "Draft Chunk Break Preference",
   "preview.toolProgress": "Draft Tool Progress",
   "preview.commandText": "Draft Command Text",
-  "progress.render": "Progress Renderer",
+  "progress.style": "Progress Style",
   "progress.nativeTaskCards": "Native Progress Task Cards",
 } as const;
 

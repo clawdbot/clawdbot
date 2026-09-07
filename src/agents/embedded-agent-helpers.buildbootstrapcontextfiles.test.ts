@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   buildBootstrapContextFiles,
   resolveBootstrapMaxChars,
-  resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
 } from "./embedded-agent-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
@@ -12,7 +11,6 @@ import { DEFAULT_AGENTS_FILENAME } from "./workspace.js";
 
 const EXPECTED_DEFAULT_BOOTSTRAP_MAX_CHARS = 20_000;
 const EXPECTED_DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 60_000;
-const EXPECTED_DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE = "always";
 
 const makeFile = (overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstrapFile => ({
   name: DEFAULT_AGENTS_FILENAME,
@@ -367,38 +365,5 @@ describe("bootstrap limit resolvers", () => {
       } as OpenClawConfig;
       expect(resolver.resolve(cfg)).toBe(resolver.defaultValue);
     }
-  });
-});
-
-describe("resolveBootstrapPromptTruncationWarningMode", () => {
-  it("defaults to always", () => {
-    expect(resolveBootstrapPromptTruncationWarningMode()).toBe("always");
-    expect(EXPECTED_DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE).toBe("always");
-  });
-
-  it("ignores retired explicit modes", () => {
-    expect(
-      resolveBootstrapPromptTruncationWarningMode({
-        agents: { defaults: { bootstrapPromptTruncationWarning: "off" } },
-      } as OpenClawConfig),
-    ).toBe("always");
-    expect(
-      resolveBootstrapPromptTruncationWarningMode({
-        agents: { defaults: { bootstrapPromptTruncationWarning: "once" } },
-      } as OpenClawConfig),
-    ).toBe("always");
-    expect(
-      resolveBootstrapPromptTruncationWarningMode({
-        agents: { defaults: { bootstrapPromptTruncationWarning: "always" } },
-      } as OpenClawConfig),
-    ).toBe("always");
-  });
-
-  it("falls back to default for invalid values", () => {
-    expect(
-      resolveBootstrapPromptTruncationWarningMode({
-        agents: { defaults: { bootstrapPromptTruncationWarning: "invalid" } },
-      } as unknown as OpenClawConfig),
-    ).toBe(EXPECTED_DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE);
   });
 });

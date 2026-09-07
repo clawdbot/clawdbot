@@ -1,5 +1,6 @@
 // Shared JSON state helpers for pairing namespaces.
 import path from "node:path";
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../config/paths.js";
 
 export { createAsyncLock, readJsonIfExists } from "./json-files.js";
@@ -17,10 +18,7 @@ export function resolvePairingPaths(baseDir: string | undefined, subdir: string)
 
 /** Coerce persisted pairing maps, treating malformed arrays/scalars as empty state. */
 export function coercePairingStateRecord<T>(value: unknown): Record<string, T> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  return value as Record<string, T>;
+  return asNonArrayRecord(value) as Record<string, T>;
 }
 
 /** Remove pending requests older than the caller's pairing TTL. */

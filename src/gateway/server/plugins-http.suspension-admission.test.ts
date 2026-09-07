@@ -14,9 +14,10 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
-import { createTestRegistry } from "./__tests__/test-utils.js";
+import { createGatewayTestRegistry } from "./__tests__/test-utils.js";
 import {
   createGatewayPluginRequestHandler,
   createGatewayPluginUpgradeHandler,
@@ -87,6 +88,11 @@ function createMockUpgradeSocket() {
     write(chunk: string) {
       socket.chunks.push(chunk);
     },
+    end(chunk: string, callback?: () => void) {
+      socket.write(chunk);
+      callback?.();
+      return socket;
+    },
     destroy() {
       socket.destroyed = true;
     },
@@ -99,7 +105,7 @@ function createRequestHandler(
   getGatewayRequestContext?: () => GatewayRequestContext,
 ) {
   return createGatewayPluginRequestHandler({
-    registry: createTestRegistry({ httpRoutes: routes }),
+    registry: createGatewayTestRegistry({ httpRoutes: routes }),
     log: createLog(),
     ...(getGatewayRequestContext ? { getGatewayRequestContext } : {}),
   });
@@ -107,7 +113,7 @@ function createRequestHandler(
 
 function createUpgradeHandler(routes: PluginHttpRouteRegistration[]) {
   return createGatewayPluginUpgradeHandler({
-    registry: createTestRegistry({ httpRoutes: routes }),
+    registry: createGatewayTestRegistry({ httpRoutes: routes }),
     log: createLog(),
   });
 }
@@ -246,6 +252,7 @@ describe("plugin HTTP suspension admission", () => {
       getSuspensionBlockerCount: vi.fn(() => 0),
     };
     const context = {
+      trackExecution: trackAsyncWork,
       cron,
       logGateway: { warn: vi.fn() },
       chatAbortControllers: new Map(),

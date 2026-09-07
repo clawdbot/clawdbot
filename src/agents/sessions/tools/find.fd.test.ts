@@ -43,6 +43,13 @@ function createChild(): MockChild {
   return child;
 }
 
+function textContent(
+  result: Awaited<ReturnType<ReturnType<typeof createFindToolDefinition>["execute"]>>,
+): string {
+  const first = result.content[0];
+  return first?.type === "text" ? (first.text ?? "") : "";
+}
+
 it("rejects partial fd output when fd exits with an error", async () => {
   const child = createChild();
   vi.mocked(spawnCommand).mockReturnValue(child as never);
@@ -56,6 +63,43 @@ it("rejects partial fd output when fd exits with an error", async () => {
   child.emit("close", 2, null);
 
   await expect(result).rejects.toThrow("fd failed while reading subtree");
+});
+
+it.each([false, true])("preserves fd paths with trailing search separator=%s", async (trailing) => {
+  const searchRoot = path.resolve(path.sep, "find-fixture");
+  const paths = [
+    path.join(searchRoot, "alpha.txt"),
+    path.join(searchRoot, "report.txt "),
+    path.join(searchRoot, "🦞.txt"),
+    `${path.join(searchRoot, "folder space ")}${path.sep}`,
+    path.join(searchRoot, "literal\\"),
+  ];
+  const child = createChild();
+  vi.mocked(spawnCommand).mockReturnValue(child as never);
+  vi.mocked(ensureTool).mockResolvedValue("fd");
+  const tool = createFindToolDefinition(searchRoot);
+  const pending = tool.execute(
+    "paths",
+    { pattern: "*", path: trailing ? `${searchRoot}${path.sep}` : searchRoot },
+    undefined,
+    undefined,
+    {} as never,
+  );
+  await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+  child.stdout.end(`${paths.join("\n")}\n`);
+  child.stderr.end();
+  child.emit("close", 0, null);
+  const result = await pending;
+  expect(textContent(result)).toBe(
+    [
+      "alpha.txt",
+      "report.txt ",
+      "🦞.txt",
+      "folder space /",
+      process.platform === "win32" ? "literal/" : "literal\\",
+    ].join("\n"),
+  );
+  expect(result.details).toEqual({ content: textContent(result) });
 });
 
 it("keeps multibyte stderr intact when pipe chunks split a character", async () => {
@@ -75,6 +119,44 @@ it("keeps multibyte stderr intact when pipe chunks split a character", async () 
 
   await expect(result).rejects.toThrow("fd 失败：权限被拒绝");
 });
+
+it.each([
+  {
+    chunks: ["x".repeat(65536), "y".repeat(65536), "终"],
+    dropped: 65539,
+    tail: "y".repeat(65533) + "终",
+  },
+  {
+    chunks: ["aaaa😀" + "c".repeat(65527), "dddddd"],
+    dropped: 8,
+    tail: "c".repeat(65527) + "dddddd",
+  },
+  { chunks: [" ".repeat(65540)], dropped: 4, tail: "fd exited with code 2" },
+])(
+  "discloses $dropped discarded stderr bytes before the fd diagnostic",
+  async ({ chunks, dropped, tail }) => {
+    const child = createChild();
+    vi.mocked(spawnCommand).mockReturnValue(child as never);
+    vi.mocked(ensureTool).mockResolvedValue("fd");
+    const result = createFindToolDefinition("/workspace").execute(
+      "stderr",
+      { pattern: "*" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+    for (const chunk of chunks) {
+      child.stderr.write(chunk);
+    }
+    child.stdout.end();
+    child.stderr.end();
+    child.emit("close", 2, null);
+    await expect(result).rejects.toThrow(
+      `[${dropped} UTF-8 bytes of earlier stderr discarded at the 65536-byte retention cap]\n${tail}`,
+    );
+  },
+);
 
 it.each(["stdout", "stderr"] as const)(
   "rejects and stops fd when %s emits an error",
@@ -123,4 +205,43 @@ it.each([
 
   const args = vi.mocked(spawnCommand).mock.calls[0]?.[0] as string[];
   expect(args.includes("--no-require-git")).toBe(expected);
+});
+
+it.each([
+  {
+    name: "keeps an exact-size fd result complete",
+    paths: ["/workspace/a.ts", "/workspace/b.ts"],
+    expectedText: "a.ts\nb.ts",
+    expectedLimitReached: undefined,
+  },
+  {
+    name: "uses one extra fd result as the truncation sentinel",
+    paths: ["/workspace/a.ts", "/workspace/b.ts", "/workspace/c.ts"],
+    expectedText:
+      "a.ts\nb.ts\n\n[2 results limit reached. Use limit=4 for more, or refine pattern]",
+    expectedLimitReached: 2,
+  },
+])("$name", async ({ paths, expectedText, expectedLimitReached }) => {
+  const child = createChild();
+  vi.mocked(spawnCommand).mockReturnValue(child as never);
+  vi.mocked(ensureTool).mockResolvedValue("fd");
+
+  const tool = createFindToolDefinition("/workspace");
+  const resultPromise = tool.execute(
+    "call-limit",
+    { pattern: "*.ts", limit: 2 },
+    undefined,
+    undefined,
+    {} as never,
+  );
+  await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+  child.stdout.end(`${paths.join("\n")}\n`);
+  child.stderr.end();
+  child.emit("close", 0, null);
+
+  const result = await resultPromise;
+  const args = vi.mocked(spawnCommand).mock.calls[0]?.[0] as string[];
+  expect(args).toEqual(expect.arrayContaining(["--max-results", "3"]));
+  expect(textContent(result)).toBe(expectedText);
+  expect(result.details?.resultLimitReached).toBe(expectedLimitReached);
 });

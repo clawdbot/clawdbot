@@ -5,16 +5,18 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { readPendingUserTurnTranscriptAdmission } from "../../sessions/user-turn-transcript-admission.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
 import { resolveAdmittedRunSessionFile } from "./agent-runner-core.js";
 import { buildPreflightCompactionFailureText } from "./agent-runner-failure-reply.js";
-import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
+import { runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
 import {
   resolveQueuedReplyExecutionConfig,
   resolveQueuedReplyRuntimeConfig,
@@ -41,6 +43,7 @@ import {
 import type { TypingController } from "./typing.js";
 
 export type FollowupRunnerParams = {
+  resolveGatewayContext?: GatewayContextResolver;
   opts?: InternalGetReplyOptions;
   typing: TypingController;
   typingMode: TypingMode;
@@ -49,7 +52,6 @@ export type FollowupRunnerParams = {
   sessionKey?: string;
   storePath?: string;
   defaultModel: string;
-  agentCfgContextTokens?: number;
   toolProgressDetail?: "explain" | "raw";
 };
 
@@ -142,6 +144,7 @@ export async function admitFollowupTurn(params: {
       storePath: params.defaults.storePath,
     }) ?? source.sessionFile;
   const admission = await admitReplyTurn({
+    resolveGatewayContext: params.defaults.resolveGatewayContext,
     sessionId: params.queued.admissionSessionId ?? run.sessionId,
     sessionKey: replySessionKey ?? "",
     expectedSessionId: initialEntry?.sessionId,
@@ -149,13 +152,15 @@ export async function admitFollowupTurn(params: {
     kind: "queued_followup",
     resetTriggered: false,
     routeThreadId: params.queued.originatingThreadId,
+    originatingLeafEntryId: params.queued.turnAdoptionLifecycle?.originatingLeafEntryId,
     upstreamAbortSignal: resolveFollowupAbortSignal(params.queued),
-    onReplyAdmissionWaitChange: params.queued.onReplyAdmissionWaitChange,
   });
   if (admission.status === "skipped") {
-    return admission.reason === "active-run"
-      ? { kind: "deferred", reason: "active-run" }
-      : { kind: "skipped", reason: admission.reason };
+    if (admission.reason !== "active-run") {
+      return { kind: "skipped", reason: admission.reason };
+    }
+    params.queued.turnAdoptionLifecycle?.onDeferredHeartbeat?.();
+    return { kind: "deferred", reason: "active-run" };
   }
   const operation = admission.operation;
   operation.retainFailureUntilComplete();
@@ -337,15 +342,17 @@ export async function admitFollowupTurn(params: {
       return generationRotated;
     };
     const previousCompactionCount = activeEntry?.compactionCount ?? 0;
-    let pendingTerminalCompactionNotice: Exclude<CompactionNoticePhase, "start"> | undefined;
+    let pendingTerminalCompactionNotice:
+      | { phase: Exclude<CompactionNoticePhase, "start">; text?: string }
+      | undefined;
     let compactionNoticeGenerationInvalidated = false;
     const notifyPreflightCompaction =
       turn.sendPolicy === "allow" &&
       queued.currentInboundEventKind !== "room_event" &&
       shouldNotifyUserAboutCompaction(config)
-        ? async (phase: CompactionNoticePhase) => {
+        ? async (phase: CompactionNoticePhase, text?: string) => {
             if (phase !== "start") {
-              pendingTerminalCompactionNotice = phase;
+              pendingTerminalCompactionNotice = { phase, text };
               return;
             }
             const noticeEntry = readTurnSessionEntry();
@@ -373,18 +380,22 @@ export async function admitFollowupTurn(params: {
         : undefined;
     const preflightEntry = session.current();
     try {
-      activeEntry = await runPreflightCompactionIfNeeded({
+      activeEntry = await runSessionCompactionIfNeeded({
         cfg: config,
         followupRun: turn.queued,
+        pendingUserEntryId: readPendingUserTurnTranscriptAdmission(
+          turn.queued.userTurnTranscriptRecorder,
+        )?.entryId,
         promptForEstimate: turn.queued.prompt,
         defaultModel: params.defaults.defaultModel,
-        agentCfgContextTokens: params.defaults.agentCfgContextTokens,
         sessionEntry: activeEntry,
         sessionStore,
         sessionKey: replySessionKey,
         storePath: params.defaults.storePath,
         isHeartbeat: params.defaults.opts?.isHeartbeat === true,
-        replyOperation: operation,
+        abortSignal: operation.abortSignal,
+        onCompactionStart: () => operation.setPhase("preflight_compacting"),
+        onSessionIdChanged: (sessionId) => operation.updateSessionId(sessionId),
         onCompactionNotice: notifyPreflightCompaction,
       });
       if (compactionNoticeGenerationInvalidated) {
@@ -441,7 +452,10 @@ export async function admitFollowupTurn(params: {
         throw error;
       }
       operation.fail("run_failed", error);
-      const admittedVerboseLevel = session.current()?.verboseLevel ?? turn.queued.run.verboseLevel;
+      const admittedVerboseLevel =
+        turn.queued.run.verboseLevelOverride ??
+        session.current()?.verboseLevel ??
+        turn.queued.run.verboseLevel;
       const text = buildPreflightCompactionFailureText(formatErrorMessage(error), {
         includeDetails: admittedVerboseLevel === "on" || admittedVerboseLevel === "full",
       });
@@ -458,7 +472,8 @@ export async function admitFollowupTurn(params: {
     ) {
       await params.onCompactionNoticePayload?.(
         createCompactionNoticePayload({
-          phase: pendingTerminalCompactionNotice,
+          phase: pendingTerminalCompactionNotice.phase,
+          text: pendingTerminalCompactionNotice.text,
           currentMessageId: resolveFollowupCurrentMessageId(turn.queued),
         }),
         turn,

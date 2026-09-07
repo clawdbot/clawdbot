@@ -1,35 +1,9 @@
 // Voice Call setup helper migrates legacy config to the canonical schema.
-import { asOptionalRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-const asObject = asOptionalRecord;
-const getString = readStringField;
-
-/** Read finite numeric config values. */
-function getNumber(obj: Record<string, unknown> | undefined, key: string): number | undefined {
-  const value = obj?.[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-/** Merge legacy provider-specific values into the canonical providers map. */
-function mergeProviderConfig(
-  providersValue: unknown,
-  providerId: string,
-  compatValues: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-  if (Object.keys(compatValues).length === 0) {
-    return asObject(providersValue);
-  }
-
-  const providers = asObject(providersValue) ?? {};
-  const existing = asObject(providers[providerId]) ?? {};
-  return {
-    ...providers,
-    [providerId]: {
-      ...existing,
-      ...compatValues,
-    },
-  };
-}
+import {
+  asFiniteNumber,
+  asOptionalRecord,
+  readStringField,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /** Migrate legacy voice-call config input to the current canonical shape. */
 export function migrateVoiceCallLegacyConfigInput(params: {
@@ -39,62 +13,84 @@ export function migrateVoiceCallLegacyConfigInput(params: {
   config: Record<string, unknown>;
   changes: string[];
 } {
-  const raw = asObject(params.value) ?? {};
-  const realtime = asObject(raw.realtime);
-  const realtimeAgentContext = asObject(realtime?.agentContext);
-  const twilio = asObject(raw.twilio);
-  const streaming = asObject(raw.streaming);
+  const raw = asOptionalRecord(params.value) ?? {};
+  const realtime = asOptionalRecord(raw.realtime);
+  const realtimeAgentContext = asOptionalRecord(realtime?.agentContext);
+  const twilio = asOptionalRecord(raw.twilio);
+  const streaming = asOptionalRecord(raw.streaming);
   const configPathPrefix = params.configPathPrefix ?? "plugins.entries.voice-call.config";
+  const changes: string[] = [];
 
-  const legacyStreamingOpenAICompat: Record<string, unknown> = {};
-  const streamingOpenAIApiKey = getString(streaming, "openaiApiKey");
-  if (streamingOpenAIApiKey) {
-    legacyStreamingOpenAICompat.apiKey = streamingOpenAIApiKey;
+  if (raw.provider === "log") {
+    changes.push(`Moved ${configPathPrefix}.provider "log" → "mock".`);
   }
-  const streamingSttModel = getString(streaming, "sttModel");
-  if (streamingSttModel) {
-    legacyStreamingOpenAICompat.model = streamingSttModel;
+  if (typeof twilio?.from === "string") {
+    const source = `${configPathPrefix}.twilio.from`;
+    const target = `${configPathPrefix}.fromNumber`;
+    changes.push(
+      raw.fromNumber != null
+        ? `Removed ${source} (kept ${target}).`
+        : `Moved ${source} → ${target}.`,
+    );
   }
-  const streamingSilenceDurationMs = getNumber(streaming, "silenceDurationMs");
-  if (streamingSilenceDurationMs !== undefined) {
-    legacyStreamingOpenAICompat.silenceDurationMs = streamingSilenceDurationMs;
-  }
-  const streamingVadThreshold = getNumber(streaming, "vadThreshold");
-  if (streamingVadThreshold !== undefined) {
-    legacyStreamingOpenAICompat.vadThreshold = streamingVadThreshold;
-  }
-  const streamingProvider = getString(streaming, "provider");
-  const legacyStreamingProvider = getString(streaming, "sttProvider");
 
+  const streamingProvider = readStringField(streaming, "provider");
+  const legacyStreamingProvider = readStringField(streaming, "sttProvider");
   const normalizedStreaming: Record<string, unknown> | undefined = streaming
-    ? {
-        ...streaming,
-        provider: streamingProvider ?? legacyStreamingProvider,
-        providers: mergeProviderConfig(streaming.providers, "openai", legacyStreamingOpenAICompat),
-      }
+    ? { ...streaming, provider: streamingProvider ?? legacyStreamingProvider }
     : undefined;
 
   if (normalizedStreaming) {
     delete normalizedStreaming.sttProvider;
-    delete normalizedStreaming.openaiApiKey;
-    delete normalizedStreaming.sttModel;
-    delete normalizedStreaming.silenceDurationMs;
-    delete normalizedStreaming.vadThreshold;
+    if (legacyStreamingProvider !== undefined) {
+      const source = `${configPathPrefix}.streaming.sttProvider`;
+      const target = `${configPathPrefix}.streaming.provider`;
+      changes.push(
+        streamingProvider !== undefined
+          ? `Removed ${source} (kept ${target}).`
+          : `Moved ${source} → ${target}.`,
+      );
+    }
+
+    for (const [legacyKey, canonicalKey, value] of [
+      ["openaiApiKey", "apiKey", readStringField(streaming, "openaiApiKey")],
+      ["sttModel", "model", readStringField(streaming, "sttModel")],
+      ["silenceDurationMs", "silenceDurationMs", asFiniteNumber(streaming?.silenceDurationMs)],
+      ["vadThreshold", "vadThreshold", asFiniteNumber(streaming?.vadThreshold)],
+    ] as const) {
+      if (!Object.hasOwn(normalizedStreaming, legacyKey)) {
+        continue;
+      }
+      delete normalizedStreaming[legacyKey];
+      const source = `${configPathPrefix}.streaming.${legacyKey}`;
+      if (value === undefined || value === "") {
+        changes.push(`Removed invalid ${source}.`);
+        continue;
+      }
+      const providers = asOptionalRecord(normalizedStreaming.providers);
+      const existing = asOptionalRecord(providers?.openai);
+      const target = `${configPathPrefix}.streaming.providers.openai.${canonicalKey}`;
+      // Transitional configs can retain stale credentials and tuning. Canonical
+      // fields are authoritative, including SecretRefs, empty strings, and zero.
+      if (existing?.[canonicalKey] !== undefined) {
+        changes.push(`Removed ${source} (kept ${target}).`);
+        continue;
+      }
+      normalizedStreaming.providers = {
+        ...providers,
+        openai: { ...existing, [canonicalKey]: value },
+      };
+      changes.push(`Moved ${source} → ${target}.`);
+    }
   }
 
-  const normalizedTwilio = twilio
-    ? {
-        ...twilio,
-      }
-    : undefined;
+  const normalizedTwilio = twilio ? { ...twilio } : undefined;
   if (normalizedTwilio) {
     delete normalizedTwilio.from;
   }
 
   const normalizedRealtimeAgentContext = realtimeAgentContext
-    ? {
-        ...realtimeAgentContext,
-      }
+    ? { ...realtimeAgentContext }
     : undefined;
   if (normalizedRealtimeAgentContext) {
     delete normalizedRealtimeAgentContext.includeSystemPrompt;
@@ -116,42 +112,6 @@ export function migrateVoiceCallLegacyConfigInput(params: {
     realtime: normalizedRealtime,
   };
 
-  const changes: string[] = [];
-  if (raw.provider === "log") {
-    changes.push(`Moved ${configPathPrefix}.provider "log" → "mock".`);
-  }
-  if (typeof twilio?.from === "string" && typeof raw.fromNumber !== "string") {
-    changes.push(`Moved ${configPathPrefix}.twilio.from → ${configPathPrefix}.fromNumber.`);
-  }
-  if (typeof streaming?.sttProvider === "string") {
-    changes.push(
-      `Moved ${configPathPrefix}.streaming.sttProvider → ${configPathPrefix}.streaming.provider.`,
-    );
-  }
-  if (typeof streaming?.openaiApiKey === "string") {
-    changes.push(
-      `Moved ${configPathPrefix}.streaming.openaiApiKey → ${configPathPrefix}.streaming.providers.openai.apiKey.`,
-    );
-  }
-  if (typeof streaming?.sttModel === "string") {
-    changes.push(
-      `Moved ${configPathPrefix}.streaming.sttModel → ${configPathPrefix}.streaming.providers.openai.model.`,
-    );
-  }
-  if (getNumber(streaming, "silenceDurationMs") !== undefined) {
-    changes.push(
-      `Moved ${configPathPrefix}.streaming.silenceDurationMs → ${configPathPrefix}.streaming.providers.openai.silenceDurationMs.`,
-    );
-  } else if (typeof streaming?.silenceDurationMs === "number") {
-    changes.push(`Removed invalid ${configPathPrefix}.streaming.silenceDurationMs.`);
-  }
-  if (getNumber(streaming, "vadThreshold") !== undefined) {
-    changes.push(
-      `Moved ${configPathPrefix}.streaming.vadThreshold → ${configPathPrefix}.streaming.providers.openai.vadThreshold.`,
-    );
-  } else if (typeof streaming?.vadThreshold === "number") {
-    changes.push(`Removed invalid ${configPathPrefix}.streaming.vadThreshold.`);
-  }
   if (realtimeAgentContext && Object.hasOwn(realtimeAgentContext, "includeSystemPrompt")) {
     changes.push(`Removed ${configPathPrefix}.realtime.agentContext.includeSystemPrompt.`);
   }

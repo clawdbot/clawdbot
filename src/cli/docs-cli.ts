@@ -11,14 +11,15 @@ export function registerDocsCli(program: Command) {
     .command("docs")
     .description("Search the live OpenClaw docs")
     .argument("[query...]", "Search query")
+    .option("--json", "Output JSON", false)
     .addHelpText(
       "after",
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/docs", "docs.openclaw.ai/cli/docs")}\n`,
     )
-    .action(async (queryParts: string[]) => {
+    .action(async (queryParts: string[], opts: { json?: boolean }) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        await docsSearchCommand(queryParts, defaultRuntime);
+        await docsSearchCommand(queryParts, defaultRuntime, { json: Boolean(opts.json) });
       });
     });
 }

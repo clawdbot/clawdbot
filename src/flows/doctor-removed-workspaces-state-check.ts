@@ -4,6 +4,7 @@ import path from "node:path";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { resolveUserPath } from "../utils.js";
 import type { HealthCheck, HealthRepairEffect } from "./health-checks.js";
 
@@ -55,14 +56,6 @@ async function canonicalPath(target: string): Promise<string> {
   }
 }
 
-function isSameOrDescendant(parent: string, candidate: string): boolean {
-  const relative = path.relative(parent, candidate);
-  return (
-    relative === "" ||
-    (!path.isAbsolute(relative) && !relative.startsWith(`..${path.sep}`) && relative !== "..")
-  );
-}
-
 async function configuredAgentWorkspaceCollisions(
   cfg: OpenClawConfig,
   target: string,
@@ -89,8 +82,8 @@ async function configuredAgentWorkspaceCollisions(
   return resolvedEntries
     .filter(
       (entry) =>
-        isSameOrDescendant(resolvedTarget, entry.resolvedWorkspace) ||
-        isSameOrDescendant(entry.resolvedWorkspace, resolvedTarget),
+        isPathInside(resolvedTarget, entry.resolvedWorkspace) ||
+        isPathInside(entry.resolvedWorkspace, resolvedTarget),
     )
     .map((entry) => entry.label);
 }

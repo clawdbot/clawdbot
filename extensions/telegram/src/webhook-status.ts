@@ -1,6 +1,6 @@
 // Telegram plugin module implements webhook status behavior.
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
-import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 
 type TelegramWebhookStatusSink = (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 
@@ -16,23 +16,32 @@ export function createTelegramWebhookStatusPublisher(setStatus?: TelegramWebhook
       });
     },
     noteWebhookAdvertised(at = Date.now()) {
-      setStatus?.({
-        ...createConnectedChannelStatusPatch(at),
-        mode: "webhook",
-        lastError: null,
-      });
+      setStatus?.(
+        channelReadyPatch({
+          lastConnectedAt: at,
+          lastEventAt: at,
+          mode: "webhook",
+        }),
+      );
     },
     noteWebhookUpdateReceived(at = Date.now()) {
-      setStatus?.({
-        ...createConnectedChannelStatusPatch(at),
-        mode: "webhook",
-        lastError: null,
-      });
+      setStatus?.(
+        channelReadyPatch({
+          lastConnectedAt: at,
+          lastEventAt: at,
+          mode: "webhook",
+        }),
+      );
     },
-    noteWebhookRegistrationFailure(error: string) {
+    noteWebhookRecovery() {
+      setStatus?.({ lifecycle: "recovering" });
+    },
+    noteWebhookRegistrationFailure(error: string, lifecycle?: "recovering" | "blocked") {
       setStatus?.({
         mode: "webhook",
         connected: false,
+        ...(lifecycle ? { lifecycle } : {}),
+        ...(lifecycle === "blocked" ? { terminalDisconnect: true } : {}),
         lastError: error,
       });
     },

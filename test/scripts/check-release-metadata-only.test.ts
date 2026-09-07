@@ -1,14 +1,16 @@
-import { spawnSync } from "node:child_process";
-import { chmodSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { parseArgs } from "../../scripts/check-release-metadata-only.mjs";
+import { parseArgs } from "../../scripts/check-release-metadata-only.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const scriptPath = path.resolve(
   import.meta.dirname,
-  "../../scripts/check-release-metadata-only.mjs",
+  "../../scripts/check-release-metadata-only.mts",
 );
+const tsxLoaderPath = path.resolve(import.meta.dirname, "../../scripts/tsx.mjs");
+const tsconfigPath = path.resolve(import.meta.dirname, "../../tsconfig.json");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const itUnix = process.platform === "win32" ? it.skip : it;
 
@@ -52,6 +54,76 @@ describe("check-release-metadata-only", () => {
     });
   });
 
+  it("accepts only version-literal changes in the mobile manifest", () => {
+    const root = tempDirs.make("openclaw-release-metadata-mobile-");
+    const manifestPath = path.join(root, "apps/mobile/version.json");
+    mkdirSync(path.dirname(manifestPath), { recursive: true });
+    writeFileSync(manifestPath, '{\n  "version": "2026.8.1"\n}\n');
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    execFileSync("git", ["add", "."], { cwd: root });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=OpenClaw Test",
+        "-c",
+        "user.email=test@openclaw.invalid",
+        "commit",
+        "-qm",
+        "baseline",
+      ],
+      { cwd: root },
+    );
+
+    writeFileSync(manifestPath, '{\n  "version": "2026.8.2"\n}\n');
+    const accepted = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        tsxLoaderPath,
+        scriptPath,
+        "--base",
+        "HEAD",
+        "--head",
+        "HEAD",
+        "--",
+        "apps/mobile/version.json",
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: { ...process.env, TSX_TSCONFIG_PATH: tsconfigPath },
+      },
+    );
+    expect(accepted.status).toBe(0);
+    expect(accepted.stderr).toContain("[release-metadata] ok (1 files)");
+
+    writeFileSync(manifestPath, '{\n  "version": "2026.8.2",\n  "channel": "stable"\n}\n');
+    const rejected = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        tsxLoaderPath,
+        scriptPath,
+        "--base",
+        "HEAD",
+        "--head",
+        "HEAD",
+        "--",
+        "apps/mobile/version.json",
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: { ...process.env, TSX_TSCONFIG_PATH: tsconfigPath },
+      },
+    );
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain(
+      "apps/mobile/version.json: changed outside recognized version/build literals",
+    );
+  });
+
   itUnix("fails with an actionable timeout when git diff hangs", () => {
     const tempDir = tempDirs.make("openclaw-release-metadata-git-");
     const gitPath = path.join(tempDir, "git");
@@ -68,7 +140,7 @@ if (process.argv.includes("diff")) {
     );
     chmodSync(gitPath, 0o755);
 
-    const result = spawnSync(process.execPath, [scriptPath], {
+    const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath], {
       cwd: path.resolve(import.meta.dirname, "../.."),
       env: {
         ...process.env,
@@ -84,7 +156,7 @@ if (process.argv.includes("diff")) {
       "release metadata guard: git diff --name-only --diff-filter=ACMR origin/main...HEAD timed out after 500ms.",
     );
 
-    const fractionalResult = spawnSync(process.execPath, [scriptPath], {
+    const fractionalResult = spawnSync(process.execPath, ["--import", "tsx", scriptPath], {
       cwd: path.resolve(import.meta.dirname, "../.."),
       env: {
         ...process.env,

@@ -1,9 +1,9 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 // Fire-and-forget hook helpers schedule hook work without blocking hot paths.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
 const DEFAULT_MAX_CONCURRENT_FIRE_AND_FORGET_HOOKS = 16;
 const DEFAULT_MAX_QUEUED_FIRE_AND_FORGET_HOOKS = 256;
@@ -89,9 +89,10 @@ export function fireAndForgetHook(
 
 function runFireAndForgetHookJob(
   state: FireAndForgetHookState,
-  job: FireAndForgetHookJob,
+  { task, ...job }: FireAndForgetHookJob,
   limits: { maxConcurrency: number },
 ): void {
+  // Pending observers need logging metadata, not the invoked factory's captured inputs.
   state.active += 1;
   let didLogTimeout = false;
   const timeout =
@@ -105,7 +106,7 @@ function runFireAndForgetHookJob(
       : undefined;
 
   void Promise.resolve()
-    .then(job.task)
+    .then(task)
     .catch((err: unknown) => {
       if (!didLogTimeout) {
         job.logger(`${job.label}: ${formatHookErrorForLog(err)}`);

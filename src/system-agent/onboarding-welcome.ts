@@ -60,7 +60,7 @@ type OnboardingWelcome = {
  * auth), not just a model: a model-only config would otherwise get the
  * ready-guide welcome while the gate stays locked, stranding the page.
  */
-export async function loadAuthoredSetupConfig(params: {
+async function loadAuthoredSetupConfig(params: {
   configExists: boolean;
   configValid: boolean;
 }): Promise<{
@@ -95,12 +95,27 @@ export async function loadAuthoredSetupConfig(params: {
 export async function buildOnboardingWelcome(params: {
   engine: SystemAgentChatEngine;
   workspace?: string;
+  agentName?: string;
+  /** Only the local terminal can finish the machine-owned Gateway installation. */
+  localRecovery?: true;
 }): Promise<OnboardingWelcome> {
   const overview = await params.engine.loadOverview();
   const { authoredConfig, hasAuthoredSetup } = await loadAuthoredSetupConfig({
     configExists: overview.config.exists,
     configValid: overview.config.valid,
   });
+  const localSetup =
+    params.localRecovery === true &&
+    overview.config.exists &&
+    overview.config.valid &&
+    authoredConfig !== undefined &&
+    authoredConfig?.gateway?.mode !== "remote"
+      ? (await import("../state/local-onboarding-state.js")).readLocalOnboardingStateForConfig(
+          overview.config.path,
+          authoredConfig,
+        )
+      : undefined;
+  const pendingSetup = localSetup?.status === "pending" ? localSetup : undefined;
   const defaultModel = overview.defaultModel?.trim();
   const requestedWorkspace = params.workspace?.trim()
     ? resolveUserPath(params.workspace.trim())
@@ -110,6 +125,7 @@ export async function buildOnboardingWelcome(params: {
     : undefined;
   if (
     hasAuthoredSetup &&
+    !pendingSetup &&
     defaultModel &&
     (!requestedWorkspace || requestedWorkspace === authoredWorkspace)
   ) {
@@ -124,9 +140,17 @@ export async function buildOnboardingWelcome(params: {
   }
 
   const { DEFAULT_WORKSPACE } = await import("../commands/onboard-helpers.js");
-  const workspace = resolveUserPath(requestedWorkspace || authoredWorkspace || DEFAULT_WORKSPACE);
+  // A durable receipt owns recovery even after partial config writes; using its
+  // workspace prevents the fallback chat from resuming a different installation.
+  const workspace = resolveUserPath(
+    pendingSetup?.workspace || requestedWorkspace || authoredWorkspace || DEFAULT_WORKSPACE,
+  );
 
-  params.engine.propose({ kind: "setup", workspace });
+  params.engine.propose({
+    kind: "setup",
+    workspace,
+    ...(params.agentName ? { agentName: params.agentName } : {}),
+  });
   const welcome = [
     "## Hi, I'm OpenClaw — let's hatch your agent.",
     "",
@@ -139,7 +163,7 @@ export async function buildOnboardingWelcome(params: {
     "Say **yes** and I'll set all of that up now.",
     "",
     "Heads up: your agent gets real access to this machine — https://docs.openclaw.ai/security",
-    "Afterwards: `connect discord`, `connect slack`, `connect telegram`, `connect whatsapp` (or `channels` for the full list), then `talk to agent` to meet your agent.",
+    "Afterwards: `talk to agent` to meet your agent right here. Channels are optional: use `connect discord`, `connect slack`, `connect telegram`, `connect whatsapp` (or `channels` for the full list) if you want to chat from another service.",
   ].join("\n");
   params.engine.noteAssistantMessage(welcome);
   return { text: welcome, question: SETUP_WELCOME_QUESTION };

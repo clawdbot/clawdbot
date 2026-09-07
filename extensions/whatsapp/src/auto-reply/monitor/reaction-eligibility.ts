@@ -1,4 +1,4 @@
-import { shouldAckReactionForWhatsApp } from "openclaw/plugin-sdk/channel-feedback";
+import { shouldAckReaction } from "openclaw/plugin-sdk/channel-feedback";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
@@ -38,9 +38,6 @@ export async function resolveWhatsAppReactionEligibility(params: {
     agentId: params.agentId,
     ackConfig: params.cfg.messages?.ackReaction,
   });
-  const directEnabled = scope === "all" || scope === "direct";
-  const groupMode =
-    scope === "all" || scope === "group-all" ? "always" : scope === "direct" ? "never" : "mentions";
   const isGroup = admission.conversation.kind === "group";
   const activation = isGroup
     ? await resolveGroupActivationFor({
@@ -52,14 +49,16 @@ export async function resolveWhatsAppReactionEligibility(params: {
       })
     : null;
   if (
-    !shouldAckReactionForWhatsApp({
-      emoji,
+    !emoji ||
+    !shouldAckReaction({
+      scope,
       isDirect: admission.conversation.kind === "direct",
       isGroup,
-      directEnabled,
-      groupMode,
-      wasMentioned: (params.msg.groupMention?.wasMentioned ?? params.msg.wasMentioned) === true,
-      groupActivated: activation === "always",
+      isMentionableGroup: isGroup,
+      canDetectMention: isGroup,
+      effectiveWasMentioned:
+        (params.msg.groupMention?.wasMentioned ?? params.msg.wasMentioned) === true,
+      shouldBypassMention: activation === "always",
     })
   ) {
     return DISABLED_REACTION;
@@ -73,7 +72,7 @@ export async function resolveWhatsAppReactionEligibility(params: {
     emoji,
     reactionOptions: {
       verbose: params.verbose,
-      fromMe: false,
+      fromMe: params.msg.platform.fromMe === true,
       ...(participant ? { participant } : {}),
       accountId,
       cfg: params.cfg,

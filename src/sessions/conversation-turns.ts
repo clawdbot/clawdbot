@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type ConversationTurnReply = {
@@ -23,7 +24,6 @@ type PendingConversationTurn = {
   outboundMessageId?: string;
   correlationReady: Promise<void>;
   markCorrelationReady: () => void;
-  stopTimeout: () => void;
   claimed: boolean;
   settle: (reply: ConversationTurnReply | undefined) => void;
 };
@@ -48,14 +48,35 @@ type ConversationTurnReplyClaim = {
 const pendingTurns = resolveGlobalSingleton(
   Symbol.for("openclaw.pendingConversationTurns"),
   () => new Map<string, PendingConversationTurn>(),
+  (turns) => {
+    for (const pending of turns.values()) {
+      pending.settle(undefined);
+    }
+  },
 );
-function normalize(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized || undefined;
-}
-
+const pendingTurnsByOutboundId = resolveGlobalSingleton(
+  Symbol.for("openclaw.pendingConversationTurnsByOutboundId"),
+  () => new Map<string, Set<PendingConversationTurn>>(),
+  (turns) => turns.clear(),
+);
 function pendingTurnKey(agentId: string, id: string): string {
   return JSON.stringify([agentId, id]);
+}
+
+function outboundMessageKey(agentId: string, outboundMessageId: string): string {
+  return JSON.stringify([agentId, outboundMessageId]);
+}
+
+function removePendingOutboundMembership(pending: PendingConversationTurn): void {
+  if (!pending.outboundMessageId) {
+    return;
+  }
+  const key = outboundMessageKey(pending.agentId, pending.outboundMessageId);
+  const bucket = pendingTurnsByOutboundId.get(key);
+  bucket?.delete(pending);
+  if (bucket?.size === 0) {
+    pendingTurnsByOutboundId.delete(key);
+  }
 }
 
 /** Registers one process-local waiter; transcript correlation remains durable after completion. */
@@ -68,11 +89,11 @@ export function registerPendingConversationTurn(params: {
   timeoutMs: number;
   signal?: AbortSignal;
 }): PendingConversationTurnHandle {
-  const agentId = normalize(params.agentId);
+  const agentId = normalizeOptionalString(params.agentId);
   if (!agentId) {
     throw new Error("conversation turn requires an agent id");
   }
-  const id = normalize(params.id) ?? crypto.randomUUID();
+  const id = normalizeOptionalString(params.id) ?? crypto.randomUUID();
   const key = pendingTurnKey(agentId, id);
   if (pendingTurns.has(key)) {
     throw new Error(`conversation turn already pending for ${agentId}: ${id}`);
@@ -109,6 +130,7 @@ export function registerPendingConversationTurn(params: {
     }
     settled = true;
     markCorrelationReady();
+    removePendingOutboundMembership(pending);
     if (pendingTurns.get(key) === pending) {
       pendingTurns.delete(key);
     }
@@ -123,11 +145,10 @@ export function registerPendingConversationTurn(params: {
     id,
     conversationRef: params.conversationRef,
     sessionId: params.sessionId,
-    threadId: normalize(params.threadId),
+    threadId: normalizeOptionalString(params.threadId),
     createdAt,
     correlationReady,
     markCorrelationReady,
-    stopTimeout,
     claimed: false,
     settle,
   };
@@ -144,10 +165,16 @@ export function registerPendingConversationTurn(params: {
       if (pendingTurns.get(key) !== pending) {
         return;
       }
-      pending.outboundMessageId = normalize(messageId);
+      removePendingOutboundMembership(pending);
+      pending.outboundMessageId = normalizeOptionalString(messageId);
       if (!pending.outboundMessageId) {
         pending.settle(undefined);
+        return;
       }
+      const outboundKey = outboundMessageKey(pending.agentId, pending.outboundMessageId);
+      const bucket = pendingTurnsByOutboundId.get(outboundKey) ?? new Set();
+      bucket.add(pending);
+      pendingTurnsByOutboundId.set(outboundKey, bucket);
     },
     markReady: () => {
       if (pendingTurns.get(key) !== pending) {
@@ -166,8 +193,8 @@ export function registerPendingConversationTurn(params: {
 
 /** Cancels one Gateway-owned turn so a late reply follows ordinary inbound dispatch. */
 export function cancelPendingConversationTurn(params: { agentId: string; id: string }): boolean {
-  const agentId = normalize(params.agentId);
-  const id = normalize(params.id);
+  const agentId = normalizeOptionalString(params.agentId);
+  const id = normalizeOptionalString(params.id);
   const pending = agentId && id ? pendingTurns.get(pendingTurnKey(agentId, id)) : undefined;
   if (!pending) {
     return false;
@@ -188,33 +215,39 @@ export async function claimPendingConversationTurnReply(params: {
   text: string;
   timestamp?: number;
 }): Promise<ConversationTurnReplyClaim | undefined> {
-  const replyToId = normalize(params.replyToId);
+  const replyToId = normalizeOptionalString(params.replyToId);
   if (!replyToId) {
     return undefined;
   }
-  const threadId = normalize(params.threadId);
-  const parentConversationRef = normalize(params.parentConversationRef);
-  const agentId = normalize(params.agentId);
+  const threadId = normalizeOptionalString(params.threadId);
+  const parentConversationRef = normalizeOptionalString(params.parentConversationRef);
+  const agentId = normalizeOptionalString(params.agentId);
   if (!agentId) {
     return undefined;
   }
-  const pending = [...pendingTurns.values()]
-    .filter(
-      (candidate) =>
-        !candidate.claimed &&
-        candidate.agentId === agentId &&
-        (candidate.conversationRef === params.conversationRef ||
-          // Some transports promote an unthreaded message into a thread whose
-          // id is that message id. Require the attested parent conversation too;
-          // shared-main sessions can contain unrelated peers.
-          (!candidate.threadId &&
-            threadId === replyToId &&
-            parentConversationRef === candidate.conversationRef)) &&
-        candidate.sessionId === params.sessionId &&
-        (!candidate.threadId || !threadId || candidate.threadId === threadId),
-    )
-    .toSorted((left, right) => left.createdAt - right.createdAt)
-    .find((candidate) => candidate.outboundMessageId === replyToId);
+  let pending: PendingConversationTurn | undefined;
+  const candidates = pendingTurnsByOutboundId.get(outboundMessageKey(agentId, replyToId));
+  for (const candidate of candidates ?? []) {
+    if (
+      candidate.claimed ||
+      candidate.agentId !== agentId ||
+      candidate.outboundMessageId !== replyToId ||
+      (candidate.conversationRef !== params.conversationRef &&
+        // Some transports promote an unthreaded message into a thread whose
+        // id is that message id. Require the attested parent conversation too;
+        // shared-main sessions can contain unrelated peers.
+        (candidate.threadId ||
+          threadId !== replyToId ||
+          parentConversationRef !== candidate.conversationRef)) ||
+      candidate.sessionId !== params.sessionId ||
+      (candidate.threadId && threadId && candidate.threadId !== threadId)
+    ) {
+      continue;
+    }
+    if (!pending || candidate.createdAt < pending.createdAt) {
+      pending = candidate;
+    }
+  }
   if (!pending) {
     return undefined;
   }

@@ -12,6 +12,7 @@ import {
 import {
   BROWSER_ACTION_TRANSPORT_SLACK_MS,
   resolveBrowserActRequestTimeoutMs,
+  resolveBrowserNavigationTimeoutMs,
 } from "./act-policy.js";
 import type {
   BrowserActionOk,
@@ -63,6 +64,7 @@ async function postDownloadRequest(
   body: Record<string, unknown>,
   profile?: string,
   timeoutMs?: number,
+  signal?: AbortSignal,
 ): Promise<BrowserDownloadActionResult> {
   const q = buildProfileQuery(profile);
   return await fetchBrowserJson<BrowserDownloadActionResult>(withBaseUrl(baseUrl, `${route}${q}`), {
@@ -70,6 +72,7 @@ async function postDownloadRequest(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
     timeoutMs: resolveBrowserOperationRequestTimeoutMs(timeoutMs),
+    signal,
   });
 }
 
@@ -79,15 +82,19 @@ export async function browserNavigate(
   opts: {
     url: string;
     targetId?: string;
+    timeoutMs?: number;
     profile?: string;
+    signal?: AbortSignal;
   },
 ): Promise<BrowserActionTabResult> {
   const q = buildProfileQuery(opts.profile);
+  const timeoutMs = resolveBrowserNavigationTimeoutMs(opts.timeoutMs);
   return await fetchBrowserJson<BrowserActionTabResult>(withBaseUrl(baseUrl, `/navigate${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url: opts.url, targetId: opts.targetId }),
-    timeoutMs: 20000,
+    body: JSON.stringify({ url: opts.url, targetId: opts.targetId, timeoutMs }),
+    timeoutMs: resolveBrowserOperationRequestTimeoutMs(timeoutMs),
+    signal: opts.signal,
   });
 }
 
@@ -101,6 +108,7 @@ export async function browserArmDialog(
     targetId?: string;
     timeoutMs?: number;
     profile?: string;
+    signal?: AbortSignal;
   },
 ): Promise<BrowserActionOk> {
   const q = buildProfileQuery(opts.profile);
@@ -115,6 +123,7 @@ export async function browserArmDialog(
       timeoutMs: opts.timeoutMs,
     }),
     timeoutMs: resolveBrowserOperationRequestTimeoutMs(opts.timeoutMs),
+    signal: opts.signal,
   });
 }
 
@@ -129,6 +138,7 @@ export async function browserArmFileChooser(
     targetId?: string;
     timeoutMs?: number;
     profile?: string;
+    signal?: AbortSignal;
   },
 ): Promise<BrowserActionOk> {
   const q = buildProfileQuery(opts.profile);
@@ -144,6 +154,7 @@ export async function browserArmFileChooser(
       timeoutMs: opts.timeoutMs,
     }),
     timeoutMs: resolveBrowserOperationRequestTimeoutMs(opts.timeoutMs),
+    signal: opts.signal,
   });
 }
 
@@ -155,6 +166,7 @@ export async function browserWaitForDownload(
     targetId?: string;
     timeoutMs?: number;
     profile?: string;
+    signal?: AbortSignal;
   },
 ): Promise<BrowserDownloadActionResult> {
   return await postDownloadRequest(
@@ -167,6 +179,7 @@ export async function browserWaitForDownload(
     },
     opts.profile,
     opts.timeoutMs,
+    opts.signal,
   );
 }
 
@@ -179,6 +192,7 @@ export async function browserDownload(
     targetId?: string;
     timeoutMs?: number;
     profile?: string;
+    signal?: AbortSignal;
   },
 ): Promise<BrowserDownloadActionResult> {
   return await postDownloadRequest(
@@ -192,6 +206,7 @@ export async function browserDownload(
     },
     opts.profile,
     opts.timeoutMs,
+    opts.signal,
   );
 }
 
@@ -199,7 +214,7 @@ export async function browserDownload(
 export async function browserAct(
   baseUrl: string | undefined,
   req: BrowserActRequest,
-  opts?: { profile?: string; timeoutMs?: number },
+  opts?: { profile?: string; timeoutMs?: number; signal?: AbortSignal },
 ): Promise<BrowserActResponse> {
   const q = buildProfileQuery(opts?.profile);
   return await fetchBrowserJson<BrowserActResponse>(withBaseUrl(baseUrl, `/act${q}`), {
@@ -207,6 +222,7 @@ export async function browserAct(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
     timeoutMs: resolveTimerTimeoutMs(opts?.timeoutMs, resolveBrowserActRequestTimeoutMs(req)),
+    signal: opts?.signal,
   });
 }
 
@@ -222,6 +238,7 @@ export async function browserScreenshotAction(
     labels?: boolean;
     timeoutMs?: number;
     profile?: string;
+    signal?: AbortSignal;
   },
 ): Promise<BrowserActionPathResult> {
   const q = buildProfileQuery(opts.profile);
@@ -240,5 +257,6 @@ export async function browserScreenshotAction(
       timeoutMs: effectiveTimeoutMs,
     }),
     timeoutMs: effectiveTimeoutMs,
+    signal: opts.signal,
   });
 }

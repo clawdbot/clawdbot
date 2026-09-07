@@ -2,11 +2,12 @@
 import { ChannelType } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
+import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveDiscordAccount } from "./accounts.js";
+import { hasNonEmptyString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { registerDiscordComponentEntries } from "./components-registry.js";
 import {
   buildDiscordComponentMessage,
@@ -25,7 +26,6 @@ import {
 } from "./internal/discord.js";
 import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
 import type { DiscordReplyReference } from "./reply-reference.js";
-import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import { sendMessageDiscord } from "./send.outbound.js";
 import { createDiscordSendResult } from "./send.receipt.js";
 import {
@@ -34,7 +34,6 @@ import {
   createDiscordMessageNonce,
   resolveChannelId,
   resolveDiscordChannel,
-  stripUndefinedFields,
   SUPPRESS_NOTIFICATIONS_FLAG,
   type DiscordAllowedMentions,
 } from "./send.shared.js";
@@ -129,25 +128,11 @@ function getClassicDiscordMessageDecision(
 }
 
 function collapseClassicComponentText(spec: DiscordComponentMessageSpec): string {
-  const parts: string[] = [];
-  const addPart = (value: string | undefined) => {
-    if (typeof value !== "string") {
-      return;
-    }
-    const trimmed = value.trim();
-    if (!trimmed || parts.includes(trimmed)) {
-      return;
-    }
-    parts.push(trimmed);
-  };
-
-  addPart(spec.text);
-  for (const block of spec.blocks ?? []) {
-    if (block.type === "text") {
-      addPart(block.text);
-    }
-  }
-  return parts.join("\n\n");
+  const parts = [
+    spec.text,
+    ...(spec.blocks ?? []).flatMap((block) => (block.type === "text" ? [block.text] : [])),
+  ];
+  return uniqueStrings(parts.filter(hasNonEmptyString)).join("\n\n");
 }
 
 type DiscordComponentSendOpts = {
@@ -172,6 +157,8 @@ type DiscordComponentSendOpts = {
   allowedMentions?: DiscordAllowedMentions;
   /** Persist the concrete platform send before component bookkeeping can fail. */
   onDeliveryResult?: (result: DiscordSendResult) => Promise<void> | void;
+  onPlatformSendDispatch?: () => Promise<void>;
+  assertPlatformSendAuthorized?: () => void;
 };
 
 export function registerBuiltDiscordComponentMessage(params: {
@@ -200,10 +187,7 @@ async function buildDiscordComponentPayload(params: {
   spec: DiscordComponentMessageSpec;
   opts: DiscordComponentSendOpts;
   accountId: string;
-}): Promise<{
-  body: ReturnType<typeof stripUndefinedFields>;
-  buildResult: ReturnType<typeof buildDiscordComponentMessage>;
-}> {
+}) {
   const messageReference = params.opts.reply
     ? { message_id: params.opts.reply.messageId, fail_if_not_exists: false }
     : undefined;
@@ -218,9 +202,14 @@ async function buildDiscordComponentPayload(params: {
       mediaReadFile: params.opts.mediaReadFile,
     });
     const filenameOverride = params.opts.filename?.trim();
-    resolvedFileName = filenameOverride || media.fileName || "upload";
+    const explicitAttachmentName = extractComponentAttachmentNames(spec)[0];
+    resolvedFileName =
+      filenameOverride ||
+      explicitAttachmentName ||
+      media.fileName ||
+      `upload${extensionForMime(media.contentType) ?? ""}`;
     spec = withImplicitComponentAttachmentBlock(spec, resolvedFileName);
-    files = [{ data: media.buffer, name: resolvedFileName }];
+    files = [{ data: media.buffer, name: resolvedFileName, contentType: media.contentType }];
   }
 
   const attachmentNames = extractComponentAttachmentNames(spec);
@@ -259,10 +248,10 @@ async function buildDiscordComponentPayload(params: {
     ...(finalFlags ? { flags: finalFlags } : {}),
     ...(files ? { files } : {}),
   };
-  const body = stripUndefinedFields({
+  const body = {
     ...serializePayload(payload),
     ...(messageReference ? { message_reference: messageReference } : {}),
-  });
+  };
 
   return { body, buildResult };
 }
@@ -280,7 +269,7 @@ export async function sendDiscordComponentMessage(
       token: opts.token,
       rest: opts.rest,
       mediaUrl: opts.mediaUrl,
-      filename: opts.filename,
+      filename: opts.filename?.trim() || extractComponentAttachmentNames(spec)[0],
       mediaLocalRoots: opts.mediaLocalRoots,
       mediaReadFile: opts.mediaReadFile,
       mediaAccess: opts.mediaAccess,
@@ -291,14 +280,15 @@ export async function sendDiscordComponentMessage(
       tableMode: opts.tableMode,
       chunkMode: opts.chunkMode,
       onDeliveryResult: opts.onDeliveryResult,
+      onPlatformSendDispatch: opts.onPlatformSendDispatch,
+      assertPlatformSendAuthorized: opts.assertPlatformSendAuthorized,
       ...(opts.suppressEmbeds === undefined ? {} : { suppressEmbeds: opts.suppressEmbeds }),
     });
   }
 
   const cfg = requireRuntimeConfig(opts.cfg, "Discord component send");
-  const accountInfo = resolveDiscordAccount({ cfg, accountId: opts.accountId });
-  const { token, rest, request } = createDiscordClient({ ...opts, cfg });
-  const recipient = await parseAndResolveChannelRecipient(to, cfg, opts.accountId);
+  const { token, rest, request, account: accountInfo } = createDiscordClient({ ...opts, cfg });
+  const recipient = await parseAndResolveChannelRecipient(to, cfg, accountInfo.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
 
   const channel = await resolveDiscordChannel(rest, channelId);
@@ -322,10 +312,13 @@ export async function sendDiscordComponentMessage(
   let result: { id: string; channel_id: string };
   try {
     result = (await request(
-      () =>
-        createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, {
+      async () => {
+        await opts.onPlatformSendDispatch?.();
+        opts.assertPlatformSendAuthorized?.();
+        return createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, {
           body,
-        }),
+        });
+      },
       "components",
       { safety: "nonce-protected-create" },
     )) as { id: string; channel_id: string };
@@ -369,9 +362,8 @@ export async function editDiscordComponentMessage(
   opts: DiscordComponentSendOpts,
 ): Promise<DiscordSendResult> {
   const cfg = requireRuntimeConfig(opts.cfg, "Discord component edit");
-  const accountInfo = resolveDiscordAccount({ cfg, accountId: opts.accountId });
-  const { token, rest, request } = createDiscordClient({ ...opts, cfg });
-  const recipient = await parseAndResolveChannelRecipient(to, cfg, opts.accountId);
+  const { token, rest, request, account: accountInfo } = createDiscordClient({ ...opts, cfg });
+  const recipient = await parseAndResolveChannelRecipient(to, cfg, accountInfo.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
   const { body, buildResult } = await buildDiscordComponentPayload({
     spec,

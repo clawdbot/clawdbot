@@ -30,8 +30,8 @@ vi.mock("../agents/model-auth.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../agents/model-auth.js")>();
   return {
     ...actual,
-    resolveApiKeyForProvider: async (
-      ...args: Parameters<typeof actual.resolveApiKeyForProvider>
+    resolveApiKeyForProviderCore: async (
+      ...args: Parameters<typeof actual.resolveApiKeyForProviderCore>
     ) => {
       if (modelAuthTestControl.forceMissingProvider) {
         throw new actual.ProviderAuthError(
@@ -41,7 +41,7 @@ vi.mock("../agents/model-auth.js", async (importOriginal) => {
         );
       }
       const [params] = args;
-      return await actual.resolveApiKeyForProvider({
+      return await actual.resolveApiKeyForProviderCore({
         ...params,
         store: modelAuthTestControl.store ?? params.store,
       });
@@ -53,6 +53,12 @@ vi.mock("../plugins/providers.js", async (importOriginal) => ({
   ...(await importOriginal()),
   resolveOwningPluginIdsForProvider: () => [],
   resolveOwningPluginIdsForProviderRef: () => [],
+}));
+
+vi.mock("../plugins/provider-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/provider-runtime.js")>()),
+  // This plugin-free suite must not load bundled plugins to find retired profiles.
+  resolveProviderDeprecatedAuthProfileIds: () => [],
 }));
 
 const AUTH_ENV = {
@@ -157,6 +163,50 @@ function createVideoCfg(params: { provider: string; model: string }): OpenClawCo
 }
 
 describe("runCapability local no-auth audio providers", () => {
+  it("runs provider-owned audio without resolving an unrelated API key", async () => {
+    modelAuthTestControl.forceMissingProvider = true;
+    await withIsolatedAgentDir(async (agentDir) => {
+      await withAudioFixture("openclaw-prepared-audio", async ({ ctx, media, cache }) => {
+        const provider = {
+          id: "prepared-audio",
+          capabilities: ["audio" as const],
+          transcribeAudioWithContext: async (context: {
+            agentDir?: string;
+            profile?: string;
+            model?: string;
+            buffer: Buffer;
+            language?: string;
+          }) => {
+            expect(context.agentDir).toBe(agentDir);
+            expect(context.profile).toBe("prepared-audio:account");
+            expect(context.model).toBe("prepared-model");
+            expect(context.buffer.byteLength).toBeGreaterThan(1024);
+            expect(context.language).toBe("de");
+            return { ok: true as const, value: { text: "prepared transcript" } };
+          },
+        };
+        const result = await runCapability({
+          capability: "audio",
+          cfg: createAudioCfg({
+            provider: provider.id,
+            model: "prepared-model",
+            entry: { profile: "prepared-audio:account", language: "de" },
+          }),
+          ctx,
+          attachments: cache,
+          media,
+          agentDir,
+          providerRegistry: buildProviderRegistry({ [provider.id]: provider }),
+        });
+
+        expect(result.decision.outcome).toBe("success");
+        expect(result.outputs[0]?.text).toBe("prepared transcript");
+        expect(result.outputs[0]?.model).toBe("prepared-model");
+        expect(result.decision.attachments[0]?.chosen?.model).toBe("prepared-model");
+      });
+    });
+  });
+
   it("allows a local no-auth audio provider when configured as a local models provider", async () => {
     await withIsolatedAgentDir(async (agentDir) => {
       await withEnvAsync(AUTH_ENV, async () => {
@@ -293,7 +343,8 @@ describe("runCapability local no-auth audio providers", () => {
           provider: "openai",
           access: "oauth-chat-token",
           refresh: "oauth-refresh-token",
-          expires: Date.now() + 60_000,
+          // Stay outside the five-minute refresh window to exercise API-key selection.
+          expires: Date.now() + 10 * 60_000,
         },
       },
     };

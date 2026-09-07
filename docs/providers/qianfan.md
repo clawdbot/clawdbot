@@ -64,6 +64,9 @@ openclaw gateway restart
 
 The catalog is static; there is no live model discovery.
 
+Setup saves connection settings and aliases without copying generated catalog rows into your config.
+Explicit `models.mode: "replace"` keeps catalog seeding enabled; custom model rows stay intact.
+
 <Tip>
 You only need to override `models.providers.qianfan` when you need a custom base URL or model metadata.
 </Tip>
@@ -74,7 +77,7 @@ This example explicitly selects the current DeepSeek flagship instead of the onb
 
 ```json5
 {
-  env: { QIANFAN_API_KEY: "bce-v3/ALTAK-..." },
+  env: { vars: { QIANFAN_API_KEY: "bce-v3/ALTAK-..." } },
   agents: {
     defaults: {
       model: { primary: "qianfan/deepseek-v4-pro" },

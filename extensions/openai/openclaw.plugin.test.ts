@@ -1,77 +1,70 @@
 // Openai tests cover openclaw.plugin plugin behavior.
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   OPENAI_GPT_55_MODEL_ID,
   OPENAI_GPT_55_PRO_MODEL_ID,
-  OPENAI_GPT_56_MODEL_ID,
   OPENAI_GPT_56_VARIANT_MODEL_IDS,
 } from "./model-route-contract.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { createOpenAIProvider } from "./provider-contract-api.js";
 import { buildOpenAISetupProvider } from "./setup-api.js";
 
-const packageJson = JSON.parse(
-  readFileSync(new URL("./package.json", import.meta.url), "utf8"),
-) as {
-  dependencies?: Record<string, string>;
-  devDependencies?: Record<string, string>;
-};
+const WIZARD_METADATA_KEYS = [
+  "choiceId",
+  "choiceLabel",
+  "choiceHint",
+  "assistantPriority",
+  "assistantVisibility",
+  "onboardingFeatured",
+  "groupId",
+  "groupLabel",
+  "groupHint",
+] as const;
 
-function manifestComparableWizardFields(choice: {
+function comparableWizardFields(choice: {
   choiceId?: string;
   choiceLabel?: string;
   choiceHint?: string;
+  assistantPriority?: number;
   assistantVisibility?: string;
+  onboardingFeatured?: boolean;
   groupId?: string;
   groupLabel?: string;
   groupHint?: string;
 }) {
   return Object.fromEntries(
-    Object.entries({
-      choiceId: choice.choiceId,
-      choiceLabel: choice.choiceLabel,
-      choiceHint: choice.choiceHint,
-      assistantVisibility: choice.assistantVisibility,
-      groupId: choice.groupId,
-      groupLabel: choice.groupLabel,
-      groupHint: choice.groupHint,
-    }).filter(([, value]) => value !== undefined),
+    WIZARD_METADATA_KEYS.flatMap((key) => (choice[key] === undefined ? [] : [[key, choice[key]]])),
   );
 }
 
-function providerWizardByKey() {
-  const providers = [buildOpenAIProvider(), buildOpenAISetupProvider()];
-  const wizards = new Map<string, Record<string, unknown>>();
-
-  for (const provider of providers) {
-    for (const authMethod of provider.auth ?? []) {
-      if (authMethod.wizard) {
-        wizards.set(`${provider.id}:${authMethod.id}`, authMethod.wizard);
-      }
-    }
-  }
-
-  return wizards;
-}
-
-function expectWizardFields(
-  wizard: Record<string, unknown> | undefined,
-  choice: ReturnType<typeof manifestComparableWizardFields>,
-  key: string,
-) {
-  if (!wizard) {
-    throw new Error(`Missing wizard for ${key}`);
-  }
-  for (const [field, value] of Object.entries(choice)) {
-    expect(wizard[field], `${key}.${field}`).toBe(value);
-  }
+function comparableProviderMetadata(provider: ReturnType<typeof createOpenAIProvider>) {
+  return {
+    id: provider.id,
+    label: provider.label,
+    hookAliases: provider.hookAliases,
+    docsPath: provider.docsPath,
+    envVars: provider.envVars,
+    auth: provider.auth.map((method) => ({
+      id: method.id,
+      kind: method.kind,
+      label: method.label,
+      hint: method.hint,
+      wizard: comparableWizardFields(method.wizard ?? {}),
+    })),
+  };
 }
 
 describe("OpenAI plugin manifest", () => {
-  it("keeps runtime dependencies in the package manifest", () => {
-    expect(packageJson.devDependencies?.["@openclaw/plugin-sdk"]).toBe("workspace:*");
-    expect(packageJson.dependencies?.ws).toBe("8.21.1");
+  it("owns canonical OpenAI session route state for Doctor cleanup", () => {
+    expect(manifest.sessionRouteStateOwners).toEqual([
+      {
+        id: "openai",
+        label: "OpenAI",
+        providerIds: ["openai"],
+        authProfilePrefixes: ["openai:"],
+      },
+    ]);
   });
 
   it("exposes only current OpenAI login choices", () => {
@@ -115,7 +108,6 @@ describe("OpenAI plugin manifest", () => {
   it("keeps million-token OpenAI models on the ordinary runtime budget by default", () => {
     const models = manifest.modelCatalog?.providers?.openai?.models ?? [];
     for (const id of [
-      OPENAI_GPT_56_MODEL_ID,
       ...OPENAI_GPT_56_VARIANT_MODEL_IDS,
       OPENAI_GPT_55_MODEL_ID,
       OPENAI_GPT_55_PRO_MODEL_ID,
@@ -130,6 +122,13 @@ describe("OpenAI plugin manifest", () => {
     }
   });
 
+  it("replaces deprecated GPT-5.5 models with canonical GPT-5.6 Sol", () => {
+    const models = manifest.modelCatalog?.providers?.openai?.models ?? [];
+    for (const id of [OPENAI_GPT_55_MODEL_ID, OPENAI_GPT_55_PRO_MODEL_ID]) {
+      expect(models.find((model) => model.id === id)?.replacedBy, id).toBe("gpt-5.6-sol");
+    }
+  });
+
   it("labels OpenAI API key and Codex auth choices without stale mixed OAuth wording", () => {
     const choices = manifest.providerAuthChoices ?? [];
     const openAiLogin = choices.find((choice) => choice.choiceId === "openai");
@@ -140,7 +139,7 @@ describe("OpenAI plugin manifest", () => {
 
     expect(openAiLogin?.choiceLabel).toBe("ChatGPT Login");
     expect(openAiLogin?.choiceHint).toBe("Sign in with your ChatGPT or Codex subscription");
-    expect(openAiLogin?.assistantVisibility).toBeUndefined();
+    expect(openAiLogin && "assistantVisibility" in openAiLogin).toBe(false);
     expect(openAiLogin?.groupId).toBe("openai");
     expect(openAiLogin?.groupLabel).toBe("OpenAI");
     expect(openAiLogin?.groupHint).toBe("ChatGPT/Codex sign-in or API key");
@@ -148,7 +147,8 @@ describe("OpenAI plugin manifest", () => {
     expect(openAiDeviceCode?.choiceHint).toBe(
       "Pair your ChatGPT account in browser with a device code",
     );
-    expect(openAiDeviceCode?.assistantVisibility).toBe("manual-only");
+    expect(openAiDeviceCode && "assistantVisibility" in openAiDeviceCode).toBe(false);
+    expect(openAiDeviceCode?.onboardingFeatured).not.toBe(true);
     expect(openAiDeviceCode?.groupId).toBe("openai");
     expect(openAiDeviceCode?.groupLabel).toBe("OpenAI");
     expect(openAiDeviceCode?.groupHint).toBe("ChatGPT/Codex sign-in or API key");
@@ -175,13 +175,43 @@ describe("OpenAI plugin manifest", () => {
     });
   });
 
-  it("keeps auth choice copy aligned with provider wizard metadata", () => {
-    const wizards = providerWizardByKey();
+  it("keeps the Azure transport alias and Spark suppression owned by the manifest", () => {
+    expect(manifest.modelCatalog?.aliases?.["azure-openai-responses"]).toEqual({
+      provider: "openai",
+      api: "azure-openai-responses",
+    });
+    const azureSparkSuppression = manifest.modelCatalog?.suppressions?.find(
+      (suppression) =>
+        suppression.provider === "azure-openai-responses" &&
+        suppression.model === "gpt-5.3-codex-spark",
+    );
 
+    expect(azureSparkSuppression).toMatchObject({
+      provider: "azure-openai-responses",
+      model: "gpt-5.3-codex-spark",
+    });
+    expect(azureSparkSuppression).not.toHaveProperty("when");
+  });
+
+  it("keeps manifest auth choices aligned with the lightweight provider descriptor", () => {
+    const provider = createOpenAIProvider();
     for (const choice of manifest.providerAuthChoices ?? []) {
       const key = `${choice.provider}:${choice.method}`;
+      const method = provider.auth.find((entry) => entry.id === choice.method);
 
-      expectWizardFields(wizards.get(key), manifestComparableWizardFields(choice), key);
+      expect(method, key).toBeDefined();
+      expect(comparableWizardFields(method?.wizard ?? {}), key).toEqual(
+        comparableWizardFields(choice),
+      );
     }
+  });
+
+  it.each([
+    ["setup", buildOpenAISetupProvider],
+    ["full runtime", buildOpenAIProvider],
+  ])("keeps %s provider metadata on the lightweight descriptor", (_surface, buildProvider) => {
+    expect(comparableProviderMetadata(buildProvider())).toEqual(
+      comparableProviderMetadata(createOpenAIProvider()),
+    );
   });
 });

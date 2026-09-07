@@ -19,6 +19,7 @@ import {
   normalizeCanonicalApnsRegistration,
   type ApnsRegistration,
 } from "./push-apns-store.js";
+import { assertAllowedJsonFields } from "./state-migrations.json-fields.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
   markLegacyMigrationSourceRemoved,
@@ -29,8 +30,8 @@ import {
   type LegacyMigrationReceipt,
 } from "./state-migrations.receipts.js";
 import {
+  LegacyMigrationSourceClaim,
   legacyMigrationSourceOrClaimMayExist,
-  legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
   resolveLegacyMigrationRelativePath,
   type LegacyMigrationSourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
@@ -113,13 +114,6 @@ async function readLegacySourceSnapshot(
   };
 }
 
-function assertOnlyKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>): void {
-  const unexpected = Object.keys(value).find((key) => !allowed.has(key));
-  if (unexpected) {
-    throw new Error("legacy APNs registration has an unexpected field");
-  }
-}
-
 function isValidLegacyApnsTimestamp(value: unknown): value is number {
   return (
     typeof value === "number" &&
@@ -141,9 +135,11 @@ function parseLegacyApnsRegistration(
   if (transport !== "direct" && transport !== "relay") {
     throw new Error("legacy APNs registration has invalid transport");
   }
-  assertOnlyKeys(
+  assertAllowedJsonFields(
     rawRegistration,
     transport === "relay" ? RELAY_REGISTRATION_KEYS : DIRECT_REGISTRATION_KEYS,
+    "legacy APNs registration",
+    { reportField: false },
   );
   const normalizedNodeId = normalizeApnsNodeId(rawNodeId);
   if (!isValidApnsNodeId(normalizedNodeId)) {
@@ -284,19 +280,6 @@ function importAndRecordReceipt(params: {
   );
 }
 
-async function removePath(params: {
-  stateRoot: Root;
-  stateDir: string;
-  sourcePath: string;
-  removeSource?: (sourcePath: string) => Promise<void> | void;
-}): Promise<void> {
-  if (params.removeSource) {
-    await params.removeSource(params.sourcePath);
-    return;
-  }
-  await params.stateRoot.remove(relativeLegacyPath(params.stateDir, params.sourcePath));
-}
-
 async function cleanupReceiptAuthoritativeSources(params: {
   stateRoot: Root;
   stateDir: string;
@@ -312,36 +295,17 @@ async function cleanupReceiptAuthoritativeSources(params: {
     }
     // Validate ownership and drain the pinned inode before deleting receipt-retired bytes.
     await readLegacySourceSnapshot(params.stateRoot, params.stateDir, candidate);
-    await removePath({ ...params, sourcePath: candidate });
+    if (params.removeSource) {
+      await params.removeSource(candidate);
+    } else {
+      await params.stateRoot.remove(relativeLegacyPath(params.stateDir, candidate));
+    }
     removed += 1;
   }
   if (!params.receipt.removedSource || removed > 0) {
     markLegacyMigrationSourceRemoved(params.receipt.sourceKey, params.env);
   }
   return removed;
-}
-
-async function restoreClaim(params: {
-  stateRoot: Root;
-  stateDir: string;
-  sourcePath: string;
-}): Promise<string | null> {
-  const claimPath = `${params.sourcePath}${APNS_DOCTOR_CLAIM_SUFFIX}`;
-  try {
-    if (!(await params.stateRoot.exists(relativeLegacyPath(params.stateDir, claimPath)))) {
-      return null;
-    }
-    if (await params.stateRoot.exists(relativeLegacyPath(params.stateDir, params.sourcePath))) {
-      return `source path already exists: ${params.sourcePath}`;
-    }
-    await params.stateRoot.move(
-      relativeLegacyPath(params.stateDir, claimPath),
-      relativeLegacyPath(params.stateDir, params.sourcePath),
-    );
-    return null;
-  } catch (error) {
-    return String(error);
-  }
 }
 
 async function migrateWithExclusiveStateOwnership(params: {
@@ -380,16 +344,25 @@ async function migrateWithExclusiveStateOwnership(params: {
   }
 
   const sourcePath = params.detected.sourcePath;
-  const claimPath = `${sourcePath}${APNS_DOCTOR_CLAIM_SUFFIX}`;
-  const hasSource = await params.stateRoot.exists(relativeLegacyPath(params.stateDir, sourcePath));
-  const hasClaim = await params.stateRoot.exists(relativeLegacyPath(params.stateDir, claimPath));
+  const source = new LegacyMigrationSourceClaim<LegacySourceSnapshot>({
+    stateRoot: params.stateRoot,
+    stateDir: params.stateDir,
+    sourcePath,
+    label: "APNs",
+    includeFilePath: false,
+    claimSuffix: APNS_DOCTOR_CLAIM_SUFFIX,
+    readSnapshot: (snapshotPath) =>
+      readLegacySourceSnapshot(params.stateRoot, params.stateDir, snapshotPath),
+  });
+  const hasSource = await source.exists();
+  const hasClaim = await source.exists(true);
   if (hasSource && hasClaim) {
     return {
       changes,
       warnings: ["Failed migrating legacy APNs state: source and interrupted claim both exist."],
     };
   }
-  const activePath = hasSource ? sourcePath : hasClaim ? claimPath : null;
+  const activePath = hasSource ? sourcePath : hasClaim ? source.claimPath : null;
   if (!activePath) {
     return { changes, warnings };
   }
@@ -420,22 +393,13 @@ async function migrateWithExclusiveStateOwnership(params: {
 
   if (activePath === sourcePath) {
     try {
-      params.beforeClaim?.();
-      await params.stateRoot.move(
-        relativeLegacyPath(params.stateDir, sourcePath),
-        relativeLegacyPath(params.stateDir, claimPath),
-      );
-      const claimed = await readLegacySourceSnapshot(params.stateRoot, params.stateDir, claimPath);
-      if (!snapshotsMatch(snapshot, claimed)) {
-        throw new Error("legacy APNs source changed before Doctor could claim it");
-      }
-      snapshot = claimed;
-    } catch (error) {
-      const restoreError = await restoreClaim({
-        stateRoot: params.stateRoot,
-        stateDir: params.stateDir,
-        sourcePath,
+      snapshot = await source.claim({
+        snapshot,
+        mismatchMessage: "legacy APNs source changed before Doctor could claim it",
+        beforeClaim: params.beforeClaim,
       });
+    } catch (error) {
+      const restoreError = await source.restore();
       warnings.push(
         `Failed migrating legacy APNs state: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
       );
@@ -452,11 +416,7 @@ async function migrateWithExclusiveStateOwnership(params: {
       registrations,
     });
   } catch (error) {
-    const restoreError = await restoreClaim({
-      stateRoot: params.stateRoot,
-      stateDir: params.stateDir,
-      sourcePath,
-    });
+    const restoreError = await source.restore();
     warnings.push(
       `Failed migrating legacy APNs state: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
     );
@@ -464,10 +424,10 @@ async function migrateWithExclusiveStateOwnership(params: {
   }
 
   try {
-    if (await params.stateRoot.exists(relativeLegacyPath(params.stateDir, sourcePath))) {
-      throw new Error("legacy APNs source reappeared during import");
-    }
-    await removePath({ ...params, sourcePath: claimPath });
+    await source.remove({
+      removeSource: params.removeSource,
+      sourceReappearedMessage: "legacy APNs source reappeared during import",
+    });
     markLegacyMigrationSourceRemoved(result.sourceKey, params.env);
   } catch (error) {
     warnings.push(`APNs state is in SQLite, but legacy cleanup failed: ${String(error)}`);

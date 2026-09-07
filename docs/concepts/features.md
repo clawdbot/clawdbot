@@ -46,7 +46,7 @@ title: "Features"
 
 - Embedded agent runtime with tool streaming
 - Multi-agent routing with isolated sessions per workspace or sender
-- Sessions: direct chats collapse into shared `main`; groups are isolated
+- Sessions: direct chats collapse into shared `main`; groups are isolated by default
 - Streaming and chunking for long responses
 
 **Auth and providers:**
@@ -68,8 +68,8 @@ title: "Features"
 
 - WebChat and browser Control UI
 - macOS menu bar companion app
-- iOS node with pairing, Canvas, camera, screen recording, location, and voice
-- Android node with pairing, chat, voice, Canvas, camera, and device commands
+- iOS node with pairing, camera, screen recording, location, and voice
+- Android node with pairing, chat, voice, camera, and device commands
 
 **Tools and automation:**
 

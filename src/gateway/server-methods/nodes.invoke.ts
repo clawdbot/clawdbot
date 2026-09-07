@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -6,14 +5,17 @@ import {
   missingScopeErrorShape,
   validateNodeInvokeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { captureNodePairingGeneration } from "../../infra/device-pairing-node-state.js";
 import {
   isAdminOnlyNodeInvokeCommand,
   isBrowserProxyNodeInvokeCommand,
+  isPrivateNodeInvokeCommand,
 } from "../../infra/node-commands.js";
-import { captureNodePairingGeneration } from "../../infra/node-pairing-state.js";
+import { awaitWithinDeadline, ABSOLUTE_DEADLINE_EXPIRED } from "../../utils/absolute-deadline.js";
 import { isForbiddenBrowserProxyMutation } from "../node-browser-proxy-policy.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
+import { invokeNodeWithReadinessRetry } from "../node-invoke-readiness.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import { enqueuePendingNodeAction, removePendingNodeAction } from "../node-runtime-state.js";
 import {
@@ -28,16 +30,16 @@ import { nodeInvokePolicy } from "./nodes-policy.js";
 import { handleNodeInvokeProgress } from "./nodes.handlers.invoke-progress.js";
 import { handleNodeInvokeResult } from "./nodes.handlers.invoke-result.js";
 import {
-  respondInvalidParams,
-  respondUnavailableOnNodeInvokeError,
+  respondUnavailableOnNodeInvokeErrorWithProvenance,
   respondUnavailableOnThrow,
-  safeParseJson,
+  parseGatewayPayload,
 } from "./nodes.helpers.js";
 import {
-  awaitNodeInvokeWithinDeadline,
-  NODE_INVOKE_DEADLINE_EXPIRED,
-} from "./nodes.invoke-deadline.js";
+  isForwardedNodeInvokeApprovalAuthorityActive,
+  resolveNodeInvokeRuntimeAuthorityError,
+} from "./nodes.invoke-authority.js";
 import { shouldQueueAsPendingForegroundAction } from "./nodes.invoke-foreground.js";
+import { emitTalkPttNodeEvent } from "./nodes.invoke-talk-events.js";
 import { toPendingParamsJSON } from "./nodes.pending.js";
 import {
   isNodePairingWorkCurrent,
@@ -49,110 +51,37 @@ import {
   maybeWakeNodeWithApns,
   waitForNodeReconnect,
 } from "./nodes.wake.js";
-import type { GatewayRequestContext } from "./shared-types.js";
 import type { GatewayRequestHandlers } from "./types.js";
-
-const TALK_PTT_COMMANDS = new Set([
-  "talk.ptt.start",
-  "talk.ptt.stop",
-  "talk.ptt.cancel",
-  "talk.ptt.once",
-]);
-const talkPttEventSeqBySessionId = new Map<string, number>();
-
-function emitTalkPttNodeEvent(params: {
-  context: Pick<GatewayRequestContext, "broadcast">;
-  nodeId: string;
-  command: string;
-  payload: unknown;
-}): void {
-  if (!TALK_PTT_COMMANDS.has(params.command)) {
-    return;
-  }
-  const payloadObj =
-    typeof params.payload === "object" && params.payload !== null
-      ? (params.payload as Record<string, unknown>)
-      : {};
-  const captureId = normalizeOptionalString(payloadObj.captureId) ?? randomUUID();
-  const sessionId = `node:${params.nodeId}:talk:${captureId}`;
-  const seq = (talkPttEventSeqBySessionId.get(sessionId) ?? 0) + 1;
-  talkPttEventSeqBySessionId.set(sessionId, seq);
-  while (talkPttEventSeqBySessionId.size > 2048) {
-    const oldest = talkPttEventSeqBySessionId.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    talkPttEventSeqBySessionId.delete(oldest);
-  }
-
-  const type =
-    params.command === "talk.ptt.start"
-      ? "capture.started"
-      : params.command === "talk.ptt.cancel"
-        ? "capture.cancelled"
-        : params.command === "talk.ptt.once"
-          ? "capture.once"
-          : "capture.stopped";
-  const final = params.command !== "talk.ptt.start";
-  const talkEvent = {
-    id: `${sessionId}:${seq}`,
-    type,
-    sessionId,
-    captureId,
-    seq,
-    timestamp: new Date().toISOString(),
-    mode: "stt-tts",
-    transport: "managed-room",
-    brain: "agent-consult",
-    final,
-    payload: {
-      nodeId: params.nodeId,
-      command: params.command,
-      status: normalizeOptionalString(payloadObj.status) ?? undefined,
-      transcript: normalizeOptionalString(payloadObj.transcript) ?? undefined,
-    },
-  };
-  params.context.broadcast(
-    "talk.event",
-    {
-      nodeId: params.nodeId,
-      command: params.command,
-      talkEvent,
-    },
-    { dropIfSlow: true },
-  );
-}
+import { assertValidParams } from "./validation.js";
 
 export const nodeInvokeHandlers: GatewayRequestHandlers = {
   "node.invoke": async ({ params, respond, context, client, req, signal }) => {
-    if (!validateNodeInvokeParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.invoke",
-        validator: validateNodeInvokeParams,
-      });
+    if (!assertValidParams(params, validateNodeInvokeParams, "node.invoke", respond)) {
       return;
     }
-    const p = params as {
-      nodeId: string;
-      command: string;
-      params?: unknown;
-      timeoutMs?: number;
-      idempotencyKey: string;
-      sessionKey?: string;
-      turnSourceChannel?: string;
-      turnSourceTo?: string;
-      turnSourceAccountId?: string;
-      turnSourceThreadId?: string | number;
-    };
+    const p = params;
     const nodeId = normalizeOptionalString(p.nodeId) ?? "";
     const command = normalizeOptionalString(p.command) ?? "";
     const sessionKey = normalizeOptionalString(p.sessionKey);
+    const nodeInvokeStream =
+      client?.internal?.syntheticClient === true && client.internal.pluginRuntimeOwnerId
+        ? client.internal.nodeInvokeStream
+        : undefined;
     if (!nodeId || !command) {
       respond(
         false,
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, "nodeId and command required"),
+      );
+      return;
+    }
+    if (isPrivateNodeInvokeCommand(command)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "node.invoke does not allow private node controls", {
+          details: { command },
+        }),
       );
       return;
     }
@@ -196,38 +125,29 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
     }
     const invokeDeadlineAtMs =
       typeof p.timeoutMs === "number" && p.timeoutMs > 0 ? Date.now() + p.timeoutMs : undefined;
-    let pluginNodeCommandDispatched = false;
+    let nodeCommandDispatched = false;
     const resolveRemainingInvokeTimeoutMs = () =>
       invokeDeadlineAtMs === undefined ? p.timeoutMs : Math.max(0, invokeDeadlineAtMs - Date.now());
-    const respondIfInvokeExpired = (includeDispatchState = false) => {
+    const respondIfInvokeExpired = () => {
       if (invokeDeadlineAtMs === undefined || resolveRemainingInvokeTimeoutMs() !== 0) {
         return false;
       }
-      if (pluginNodeCommandDispatched || includeDispatchState) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "TIMEOUT: node invoke timed out", {
-            details: {
-              nodeError: { code: "TIMEOUT", message: "node invoke timed out" },
-              nodeCommandDispatched: pluginNodeCommandDispatched,
-            },
-          }),
-        );
-        return true;
-      }
-      respondUnavailableOnNodeInvokeError(respond, {
-        ok: false,
-        error: { code: "TIMEOUT", message: "node invoke timed out" },
-      });
+      respondUnavailableOnNodeInvokeErrorWithProvenance(
+        respond,
+        {
+          ok: false,
+          error: { code: "TIMEOUT", message: "node invoke timed out" },
+        },
+        { nodeCommandDispatched },
+      );
       return true;
     };
     await respondUnavailableOnThrow(respond, async () => {
-      const generation = await awaitNodeInvokeWithinDeadline(
+      const generation = await awaitWithinDeadline(
         () => captureNodePairingGeneration(nodeId),
         invokeDeadlineAtMs,
       );
-      if (generation === NODE_INVOKE_DEADLINE_EXPIRED) {
+      if (generation === ABSOLUTE_DEADLINE_EXPIRED) {
         respondIfInvokeExpired();
         return;
       }
@@ -239,13 +159,14 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
       // Wake helpers identify their owner by the original signal. Compose the
       // caller only for dispatched node work; never replace that owner signal.
       const invocationLifecycle = signal ? AbortSignal.any([wakeLifecycle, signal]) : wakeLifecycle;
+      let releaseApprovalHandoff: (() => void) | undefined;
       try {
         const continuePairingWork = async (): Promise<boolean> => {
-          const pairingCurrent = await awaitNodeInvokeWithinDeadline(
+          const pairingCurrent = await awaitWithinDeadline(
             () => isNodePairingWorkCurrent({ nodeId, generation, lifecycle: wakeLifecycle }),
             invokeDeadlineAtMs,
           );
-          if (pairingCurrent === NODE_INVOKE_DEADLINE_EXPIRED) {
+          if (pairingCurrent === ABSOLUTE_DEADLINE_EXPIRED) {
             respondIfInvokeExpired();
             return false;
           }
@@ -273,7 +194,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
 
           // Wake attempts can be shared; expire this caller without aborting a
           // push that another live invocation still owns.
-          const wake = await awaitNodeInvokeWithinDeadline(
+          const wake = await awaitWithinDeadline(
             () =>
               maybeWakeNodeWithApns(nodeId, {
                 cfg,
@@ -282,7 +203,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               }),
             invokeDeadlineAtMs,
           );
-          if (wake === NODE_INVOKE_DEADLINE_EXPIRED) {
+          if (wake === ABSOLUTE_DEADLINE_EXPIRED) {
             respondIfInvokeExpired();
             return;
           }
@@ -322,7 +243,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             context.nodeRegistry.getForPairingGeneration(nodeId, generation.key),
           );
           if (!nodeSession && wake.available) {
-            const retryWake = await awaitNodeInvokeWithinDeadline(
+            const retryWake = await awaitWithinDeadline(
               () =>
                 maybeWakeNodeWithApns(nodeId, {
                   force: true,
@@ -332,7 +253,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
                 }),
               invokeDeadlineAtMs,
             );
-            if (retryWake === NODE_INVOKE_DEADLINE_EXPIRED) {
+            if (retryWake === ABSOLUTE_DEADLINE_EXPIRED) {
               respondIfInvokeExpired();
               return;
             }
@@ -377,7 +298,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               return;
             }
             const totalDurationMs = Math.max(0, Date.now() - wakeFlowStartedAtMs);
-            const nudge = await awaitNodeInvokeWithinDeadline(
+            const nudge = await awaitWithinDeadline(
               () =>
                 maybeSendNodeWakeNudge(nodeId, {
                   cfg,
@@ -386,7 +307,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
                 }),
               invokeDeadlineAtMs,
             );
-            if (nudge === NODE_INVOKE_DEADLINE_EXPIRED) {
+            if (nudge === ABSOLUTE_DEADLINE_EXPIRED) {
               respondIfInvokeExpired();
               return;
             }
@@ -406,7 +327,11 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               false,
               undefined,
               errorShape(ErrorCodes.UNAVAILABLE, "node not connected", {
-                details: { code: "NOT_CONNECTED" },
+                details: {
+                  code: "NOT_CONNECTED",
+                  nodeError: { code: "NOT_CONNECTED", message: "node not connected" },
+                  nodeCommandDispatched: false,
+                },
               }),
             );
             return;
@@ -467,7 +392,29 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
         if (respondIfInvokeExpired()) {
           return;
         }
-        const policyResult = await awaitNodeInvokeWithinDeadline(
+        if (forwardedParams.approvalAuthority) {
+          const authority = forwardedParams.approvalAuthority;
+          releaseApprovalHandoff =
+            context.execApprovalManager?.retainForHandoff(authority.recordId) ?? undefined;
+          if (!releaseApprovalHandoff) {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                "approved runtime authority closed before node dispatch",
+                { details: { code: "APPROVAL_AUTHORITY_CLOSED" } },
+              ),
+            );
+            return;
+          }
+        }
+        const isForwardedApprovalAuthorityActive = () =>
+          isForwardedNodeInvokeApprovalAuthorityActive({
+            manager: context.execApprovalManager,
+            authority: forwardedParams.approvalAuthority,
+          });
+        const policyResult = await awaitWithinDeadline(
           () =>
             applyPluginNodeInvokePolicy({
               context,
@@ -475,6 +422,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               nodeSession,
               command,
               params: forwardedParams.params,
+              ...(sessionKey ? { sessionKey } : {}),
               turnSource: {
                 channel: p.turnSourceChannel,
                 to: p.turnSourceTo,
@@ -487,16 +435,18 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               onNodeCommandDispatched: () => {
                 // Deadline races must retain transport ownership so a command
                 // already handed to the node is never advertised as retry-safe.
-                pluginNodeCommandDispatched = true;
+                nodeCommandDispatched = true;
               },
               idempotencyKey: p.idempotencyKey,
               isInvocationCurrent: () =>
                 isNodePairingWorkCurrent({ nodeId, generation, lifecycle: wakeLifecycle }),
+              isApprovalAuthorityActive: isForwardedApprovalAuthorityActive,
+              ...(nodeInvokeStream ? { nodeInvokeStream } : {}),
             }),
           invokeDeadlineAtMs,
         );
-        if (policyResult === NODE_INVOKE_DEADLINE_EXPIRED) {
-          respondIfInvokeExpired(true);
+        if (policyResult === ABSOLUTE_DEADLINE_EXPIRED) {
+          respondIfInvokeExpired();
           return;
         }
         if (!(await continuePairingWork())) {
@@ -522,7 +472,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             return;
           }
           const payload = policyResult.payloadJSON
-            ? safeParseJson(policyResult.payloadJSON)
+            ? parseGatewayPayload(policyResult.payloadJSON)
             : policyResult.payload;
           emitTalkPttNodeEvent({
             context,
@@ -557,16 +507,17 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        const resolveDispatchAuthorization = (dispatchCfg: typeof cfg) =>
+          isNodeCommandAllowed({
+            command,
+            declaredCommands: dispatchSession.commands,
+            allowlist: resolveNodeCommandAllowlist(dispatchCfg, {
+              ...dispatchSession,
+              approvedCommands: dispatchSession.commands,
+            }),
+          });
         const dispatchCfg = context.getRuntimeConfig();
-        const dispatchAllowlist = resolveNodeCommandAllowlist(dispatchCfg, {
-          ...dispatchSession,
-          approvedCommands: dispatchSession.commands,
-        });
-        const dispatchAllowed = isNodeCommandAllowed({
-          command,
-          declaredCommands: dispatchSession.commands,
-          allowlist: dispatchAllowlist,
-        });
+        const dispatchAllowed = resolveDispatchAuthorization(dispatchCfg);
         if (!dispatchAllowed.ok) {
           respond(
             false,
@@ -589,7 +540,24 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           respondIfInvokeExpired();
           return;
         }
-        const res = await context.nodeRegistry.invoke({
+        // Policy, pairing, and approval checks above may await. Revalidate the
+        // exact runtime capability at the final raw transport handoff.
+        const authorityError = resolveNodeInvokeRuntimeAuthorityError({
+          context,
+          client,
+          approvalAuthority: forwardedParams.approvalAuthority,
+        });
+        if (authorityError) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, authorityError, {
+              details: { code: "APPROVAL_AUTHORITY_CLOSED" },
+            }),
+          );
+          return;
+        }
+        const res = await invokeNodeWithReadinessRetry(context.nodeRegistry, {
           nodeId,
           expectedConnId: nodeSession.connId,
           expectedPairingGeneration: generation.key,
@@ -599,6 +567,21 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           signal: invocationLifecycle,
           idempotencyKey: p.idempotencyKey,
           ...(sessionKey ? { sessionKey } : {}),
+          ...(nodeInvokeStream && {
+            onProgress: nodeInvokeStream.onProgress,
+            idleTimeoutMs: nodeInvokeStream.idleTimeoutMs,
+          }),
+          isDispatchAuthorized: () =>
+            (nodeInvokeStream?.isRuntimeCurrent() ?? true) &&
+            resolveNodeInvokeRuntimeAuthorityError({
+              context,
+              client,
+              approvalAuthority: forwardedParams.approvalAuthority,
+            }) === undefined,
+          onDispatchReady: (invokeId) => {
+            nodeCommandDispatched = true;
+            nodeInvokeStream?.onDispatchReady(invokeId);
+          },
         });
         if (!(await continuePairingWork())) {
           return;
@@ -609,7 +592,11 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               platform: nodeSession.platform,
               command,
               error: res.error,
-            })
+            }) &&
+            // Pending actions outlive this RPC. Closure-bound agent or approval
+            // authority cannot be transferred to a later device pull.
+            !client?.internal?.agentRuntimeIdentity &&
+            !forwardedParams.approvalAuthority
           ) {
             // Foreground-only iOS commands become pullable pending actions instead
             // of failing permanently while the device is locked/backgrounded.
@@ -670,12 +657,16 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             );
             return;
           }
-          if (!respondUnavailableOnNodeInvokeError(respond, res)) {
+          if (
+            !respondUnavailableOnNodeInvokeErrorWithProvenance(respond, res, {
+              nodeCommandDispatched,
+            })
+          ) {
             return;
           }
           return;
         }
-        const payload = res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload;
+        const payload = res.payloadJSON ? parseGatewayPayload(res.payloadJSON) : res.payload;
         emitTalkPttNodeEvent({
           context,
           nodeId,
@@ -694,6 +685,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           undefined,
         );
       } finally {
+        releaseApprovalHandoff?.();
         releaseNodeWakeLifecycle(nodeId, wakeLifecycle);
       }
     });

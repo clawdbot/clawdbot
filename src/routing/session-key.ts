@@ -1,4 +1,8 @@
-import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import {
+  isValidAgentId,
+  normalizeAgentId,
+  normalizeAgentIdStrict,
+} from "@openclaw/normalization-core/agent-id";
 // Routing session key helpers build stable session keys from route targets.
 import {
   normalizeLowercaseStringOrEmpty,
@@ -11,6 +15,7 @@ import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseAgentSessionKey,
 } from "../sessions/session-key-utils.js";
+import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { normalizeAccountId } from "./account-id.js";
 
 export {
@@ -22,19 +27,19 @@ export {
   parseThreadSessionSuffix,
   type ParsedAgentSessionKey,
 } from "../sessions/session-key-utils.js";
+export { isIncognitoSessionKey };
 export {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "./account-id.js";
-export { isValidAgentId, normalizeAgentId };
+export { isValidAgentId, normalizeAgentId, normalizeAgentIdStrict };
 
 /** Legacy on-disk identity used only by doctor/migration and their fixtures. */
 export const LEGACY_IMPLICIT_AGENT_ID = "main";
 /** @deprecated legacy implicit agent id; use roster default resolution. Removal: next major SDK cut. */
 export const DEFAULT_AGENT_ID = LEGACY_IMPLICIT_AGENT_ID;
 export const DEFAULT_MAIN_KEY = "main";
-const INCOGNITO_SESSION_RE = /^(?:dashboard|subagent|internal-session-effects):incognito-[^:]+$/u;
 type SessionKeyShape = "missing" | "agent" | "legacy_or_alias" | "malformed_agent";
 
 function normalizeToken(value: string | undefined | null): string {
@@ -169,12 +174,6 @@ export function isUnscopedSessionKeySentinel(sessionKey: string | undefined | nu
   return lowered === "global" || lowered === "unknown";
 }
 
-/** Classifies process-only session keys without consulting runtime registry state. */
-export function isIncognitoSessionKey(sessionKey: string | undefined | null): boolean {
-  const rest = parseAgentSessionKey(sessionKey)?.rest;
-  return typeof rest === "string" && INCOGNITO_SESSION_RE.test(rest);
-}
-
 export function scopeLegacySessionKeyToAgent(params: {
   agentId?: string | undefined;
   sessionKey?: string | undefined;
@@ -223,6 +222,7 @@ export function buildAgentPeerSessionKey(params: {
   identityLinks?: Record<string, string[]>;
   /** DM session scope. */
   dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  groupScope?: "main" | "per-group";
 }): string {
   const peerKind = params.peerKind ?? "direct";
   if (peerKind === "direct") {
@@ -231,7 +231,7 @@ export function buildAgentPeerSessionKey(params: {
     const linkedPeerId =
       dmScope === "main"
         ? null
-        : resolveLinkedPeerId({
+        : resolveLinkedDirectPeerId({
             identityLinks: params.identityLinks,
             channel: params.channel,
             peerId,
@@ -257,6 +257,9 @@ export function buildAgentPeerSessionKey(params: {
       mainKey: params.mainKey,
     });
   }
+  if (params.groupScope === "main") {
+    return buildAgentMainSessionKey({ agentId: params.agentId, mainKey: params.mainKey });
+  }
   const channel = normalizeLowercaseStringOrEmpty(params.channel) || "unknown";
   const peerId =
     normalizeSessionPeerId({
@@ -267,7 +270,8 @@ export function buildAgentPeerSessionKey(params: {
   return `agent:${normalizeAgentId(params.agentId)}:${channel}:${peerKind}:${peerId}`;
 }
 
-function resolveLinkedPeerId(params: {
+/** @internal Resolves a declared cross-channel identity for one direct peer. */
+export function resolveLinkedDirectPeerId(params: {
   identityLinks?: Record<string, string[]>;
   channel: string;
   peerId: string;

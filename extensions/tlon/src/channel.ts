@@ -3,15 +3,20 @@ import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createHybridChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
-import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
-import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createChannelMessageAdapterFromOutbound,
+  createRuntimeOutboundDelegates,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import {
+  chunkTextForOutbound,
+  sanitizeAssistantVisibleText,
+} from "openclaw/plugin-sdk/text-chunking";
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import { tlonDoctor } from "./doctor.js";
 import { resolveTlonOutboundSessionRoute } from "./session-route.js";
@@ -64,6 +69,8 @@ const tlonConfigAdapter = createHybridChannelConfigAdapter({
 
 const tlonChannelOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
+  chunker: chunkTextForOutbound,
+  chunkerMode: "markdown",
   textChunkLimit: 10000,
   sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
   resolveTarget: ({ to }) => resolveTlonOutboundTarget(to),
@@ -136,6 +143,10 @@ export const tlonPlugin = createChatChannelPlugin({
           return parsed.ship;
         }
         return parsed.nest;
+      },
+      inferTargetChatType: ({ to }) => {
+        const target = parseTlonTarget(to);
+        return target ? (target.kind === "dm" ? "direct" : "group") : undefined;
       },
       targetResolver: {
         looksLikeId: (target) => Boolean(parseTlonTarget(target)),

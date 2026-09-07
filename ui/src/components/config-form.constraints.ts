@@ -3,6 +3,8 @@ import {
   isJsonSchemaValueValid,
   jsonSchemaValuesEqual,
 } from "@openclaw/normalization-core/json-schema";
+import { asFiniteNumber as finiteNumber } from "@openclaw/normalization-core/number-coercion";
+import { arrayItemSchema, collectAllOfSchemas, combinedSchema } from "./config-form.array-items.ts";
 import { decimalRational } from "./config-form.numeric.ts";
 import { schemaType, type JsonSchema } from "./config-form.shared.ts";
 
@@ -15,10 +17,6 @@ export function isSupportedConfigValueValid(schema: JsonSchema, value: unknown):
 function ownPropertySchema(schema: JsonSchema, key: string): JsonSchema | undefined {
   const properties = schema.properties;
   return properties && Object.hasOwn(properties, key) ? properties[key] : undefined;
-}
-
-function finiteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function decimalPlaces(value: number): number {
@@ -112,27 +110,6 @@ type EffectiveNumericBound = {
   value?: number;
   exclusive: boolean;
 };
-
-function collectAllOfSchemas(schema: JsonSchema): JsonSchema[] {
-  const result: JsonSchema[] = [];
-  const pending = [schema];
-  const seen = new Set<JsonSchema>();
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (!current || seen.has(current)) {
-      continue;
-    }
-    seen.add(current);
-    result.push(current);
-    for (let index = (current.allOf?.length ?? 0) - 1; index >= 0; index -= 1) {
-      const entry = current.allOf?.[index];
-      if (entry) {
-        pending.push(entry);
-      }
-    }
-  }
-  return result;
-}
 
 function effectiveNumericBound(
   schemas: JsonSchema[],
@@ -242,16 +219,6 @@ export function objectPropertyKeys(schema: JsonSchema): string[] {
   );
 }
 
-function combinedSchema(candidates: JsonSchema[]): JsonSchema | undefined {
-  const base = candidates.find((candidate) => schemaType(candidate) !== undefined) ?? candidates[0];
-  return !base || candidates.length === 1
-    ? base
-    : {
-        ...base,
-        allOf: [...(base.allOf ?? []), ...candidates.filter((candidate) => candidate !== base)],
-      };
-}
-
 export function objectAdditionalPropertiesSchema(
   schema: JsonSchema,
 ): JsonSchema | false | undefined {
@@ -299,11 +266,29 @@ function objectRepairIssueCount(schema: JsonSchema, value: Record<string, unknow
   return issues;
 }
 
+export function isObjectPropertyNameValid(schema: JsonSchema, key: string): boolean {
+  return collectAllOfSchemas(schema).every(
+    ({ propertyNames }) =>
+      propertyNames === undefined ||
+      propertyNames === true ||
+      (propertyNames !== false && isSupportedConfigValueValid(propertyNames, key)),
+  );
+}
+
 export function canApplyObjectCandidate(
   schema: JsonSchema,
   current: Record<string, unknown>,
   candidate: Record<string, unknown>,
 ): boolean {
+  // Repairing an unrelated invalid value must not authorize a newly invalid
+  // key. Existing keys remain editable so operators can repair their values.
+  if (
+    Object.keys(candidate).some(
+      (key) => !Object.hasOwn(current, key) && !isObjectPropertyNameValid(schema, key),
+    )
+  ) {
+    return false;
+  }
   if (isSupportedConfigValueValid(schema, candidate)) {
     return true;
   }
@@ -322,25 +307,6 @@ export function objectPropertySchema(schema: JsonSchema, key: string): JsonSchem
       .map((entry) => ownPropertySchema(entry, key))
       .filter((property): property is JsonSchema => property !== undefined),
   );
-}
-
-export function arrayItemSchema(schema: JsonSchema, index: number): JsonSchema | undefined {
-  const candidates: JsonSchema[] = [];
-  for (const entry of collectAllOfSchemas(schema)) {
-    if (Array.isArray(entry.items)) {
-      const item =
-        entry.items[index] ??
-        (entry.additionalItems && typeof entry.additionalItems === "object"
-          ? entry.additionalItems
-          : undefined);
-      if (item) {
-        candidates.push(item);
-      }
-    } else if (entry.items) {
-      candidates.push(entry.items);
-    }
-  }
-  return combinedSchema(candidates);
 }
 
 export function arrayConstraintCandidates(
@@ -540,16 +506,10 @@ export function normalizeNumericValue(value: number, schema: JsonSchema): number
     normalized = Math.min(constraints.max, normalized);
   }
   if (constraints.exclusiveMin !== undefined && normalized <= constraints.exclusiveMin) {
-    normalized =
-      typeof constraints.step === "number"
-        ? nextRepresentable(constraints.exclusiveMin, 1)
-        : nextRepresentable(constraints.exclusiveMin, 1);
+    normalized = nextRepresentable(constraints.exclusiveMin, 1);
   }
   if (constraints.exclusiveMax !== undefined && normalized >= constraints.exclusiveMax) {
-    normalized =
-      typeof constraints.step === "number"
-        ? nextRepresentable(constraints.exclusiveMax, -1)
-        : nextRepresentable(constraints.exclusiveMax, -1);
+    normalized = nextRepresentable(constraints.exclusiveMax, -1);
   }
   return normalizePrecision(
     normalized,
@@ -666,32 +626,19 @@ export function defaultValue(schema?: JsonSchema, depth = 0): unknown {
       if (itemCount === 0) {
         return validatedDefaultCandidate(schema, []);
       }
-      if (Array.isArray(schema.items)) {
-        const value: unknown[] = [];
-        for (let index = 0; index < itemCount; index += 1) {
-          const itemSchema =
-            schema.items[index] ??
-            (schema.additionalItems && typeof schema.additionalItems === "object"
-              ? schema.additionalItems
-              : undefined);
-          if (!itemSchema) {
-            return NO_SAFE_DEFAULT;
-          }
-          const itemDefault = defaultValue(itemSchema, depth + 1);
-          if (itemDefault === NO_SAFE_DEFAULT) {
-            return NO_SAFE_DEFAULT;
-          }
-          value.push(itemDefault);
-        }
-        return validatedDefaultCandidate(schema, value);
-      }
       const itemsSchema = schema.items;
-      if (!itemsSchema) {
-        return NO_SAFE_DEFAULT;
-      }
       const value: unknown[] = [];
       for (let index = 0; index < itemCount; index += 1) {
-        const itemDefault = defaultValue(itemsSchema, depth + 1);
+        const itemSchema = Array.isArray(itemsSchema)
+          ? (itemsSchema[index] ??
+            (schema.additionalItems && typeof schema.additionalItems === "object"
+              ? schema.additionalItems
+              : undefined))
+          : itemsSchema;
+        if (!itemSchema) {
+          return NO_SAFE_DEFAULT;
+        }
+        const itemDefault = defaultValue(itemSchema, depth + 1);
         if (itemDefault === NO_SAFE_DEFAULT) {
           return NO_SAFE_DEFAULT;
         }

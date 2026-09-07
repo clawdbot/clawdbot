@@ -1,13 +1,15 @@
-// Web search runtime tests cover provider resolution and search execution.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+// Web search runtime tests cover provider resolution and search execution.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
+  getRuntimeAuthProfileStoreCredentialsRevision,
+  getRuntimeAuthProfileStoreSnapshotsRevision,
   replaceRuntimeAuthProfileStoreSnapshots,
-} from "../agents/auth-profiles/store.js";
+} from "../agents/auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/web-provider-types.js";
@@ -140,12 +142,7 @@ function createOAuthAuthProfileStore(params: {
   };
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function mockCallParam(mock: ReturnType<typeof vi.fn>, index = 0): Record<string, unknown> {
   return requireRecord(mock.mock.calls[index]?.[0]);
@@ -589,6 +586,7 @@ describe("web search runtime", () => {
       config: resolvedConfig,
       authStores: [],
       authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+      authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
       warnings: [],
       webTools: {
         search: {
@@ -766,6 +764,7 @@ describe("web search runtime", () => {
       config: {},
       authStores: [],
       authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+      authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
       warnings: [],
       webTools: {
         search: {
@@ -808,6 +807,7 @@ describe("web search runtime", () => {
       config: {},
       authStores: [],
       authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+      authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
       warnings: [],
       webTools: {
         search: {
@@ -853,6 +853,7 @@ describe("web search runtime", () => {
       config: structuredClone(config),
       authStores: [],
       authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+      authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
       warnings: [],
       webTools: {
         search: {

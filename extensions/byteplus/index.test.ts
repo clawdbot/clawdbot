@@ -5,8 +5,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
-import { BYTEPLUS_CODING_MODEL_CATALOG, BYTEPLUS_MODEL_CATALOG } from "./models.js";
-import { BYTEPLUS_PROVIDER_CATALOG_ENTRIES } from "./provider-catalog.js";
+import {
+  BYTEPLUS_CODING_MODEL_CATALOG,
+  BYTEPLUS_MODEL_CATALOG,
+  BYTEPLUS_PROVIDER_CATALOG,
+} from "./models.js";
 
 describe("byteplus plugin", () => {
   it("preserves both provider-owned static catalogs and paired ordering", async () => {
@@ -16,7 +19,7 @@ describe("byteplus plugin", () => {
     expect(provider.staticCatalog?.order).toBe("paired");
     expect(await provider.staticCatalog?.run({} as never)).toEqual({
       providers: Object.fromEntries(
-        BYTEPLUS_PROVIDER_CATALOG_ENTRIES.map(({ id, buildProvider }) => [id, buildProvider()]),
+        BYTEPLUS_PROVIDER_CATALOG.entries.map(({ id, buildProvider }) => [id, buildProvider()]),
       ),
     });
   });

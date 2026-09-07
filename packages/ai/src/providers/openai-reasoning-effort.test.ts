@@ -28,10 +28,8 @@ describe("OpenAI reasoning effort support", () => {
     expect(resolveOpenAIReasoningEffortForModel({ model: luna, effort: "off" })).toBe("none");
   });
 
-  it.each([
-    { provider: "openai", id: "gpt-5.5" },
-    { provider: "openai", id: "gpt-5.5" },
-  ])("preserves xhigh for $provider/$id", (model) => {
+  it("preserves xhigh for openai/gpt-5.5", () => {
+    const model = { provider: "openai", id: "gpt-5.5" };
     expect(resolveOpenAISupportedReasoningEfforts(model)).toContain("xhigh");
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "xhigh" })).toBe("xhigh");
   });
@@ -238,10 +236,14 @@ describe("OpenAI temperature support", () => {
     expect(supportsOpenAITemperature({ id: "gpt-5.5" })).toBe(true);
     expect(supportsOpenAITemperature({ id: "gpt-5.4-mini" })).toBe(true);
     expect(supportsOpenAITemperature({ id: "gpt-5.60" })).toBe(true);
+    expect(supportsOpenAITemperature({ id: "gpt-6-astra-custom" })).toBe(true);
     expect(supportsOpenAITemperature({ id: "llama-4-70b" })).toBe(true);
   });
 
   it("honors catalog compat overrides in both directions", () => {
+    expect(
+      supportsOpenAITemperature({ id: "gpt-6-astra", compat: { supportsTemperature: true } }),
+    ).toBe(true);
     expect(
       supportsOpenAITemperature({ id: "gpt-5.6-luna", compat: { supportsTemperature: true } }),
     ).toBe(true);

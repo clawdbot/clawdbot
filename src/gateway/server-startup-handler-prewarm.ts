@@ -1,10 +1,11 @@
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../shared/session-list-limits.js";
+import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 
-const SIDEBAR_SESSION_LIST_LIMIT = 60;
-const SIDEBAR_CATALOG_LIMIT_PER_HOST = 40;
 const SIDEBAR_PREWARM_MAX_SESSION_ENTRIES = 2_000;
+const GATEWAY_HANDLER_PREWARM_RETRY_DELAY_MS = 250;
 
 type StartupTrace = {
   measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
@@ -15,32 +16,26 @@ type GatewayHandlerPrewarmItem = {
   load: () => Promise<unknown>;
 };
 
-type GatewayHandlerPrewarmHandle = {
-  stop: () => void;
-};
-
 async function prewarmGatewaySessionListData(cfg: OpenClawConfig, agentId: string): Promise<void> {
-  const [{ loadCombinedSessionStoreForGateway }, { listSessionsFromStoreAsync }] =
+  const [{ loadCombinedSessionStoreForGatewayCore }, { listSessionsFromStoreAsync }] =
     await Promise.all([
       import("../config/sessions/combined-store-gateway.js"),
       import("./session-utils-list.js"),
     ]);
-  const { durableStorePath, storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
+  const loaded = loadCombinedSessionStoreForGatewayCore(cfg, {
     agentId,
     projection: "list",
   });
   await listSessionsFromStoreAsync({
     cfg,
-    durableStorePath,
-    storePath,
-    store,
+    ...loaded,
     opts: {
       agentId,
       configuredAgentsOnly: true,
       includeDerivedTitles: true,
       includeGlobal: true,
       includeUnknown: true,
-      limit: SIDEBAR_SESSION_LIST_LIMIT,
+      limit: SIDEBAR_SESSION_ROSTER_LIMIT,
     },
   });
 }
@@ -75,7 +70,7 @@ function dashboardDataPrewarmItems(
       name: `sessions.${agentId}`,
       load: async () => {
         // A count-only query keeps unusually large stores off the synchronous JSON projection
-        // path. Request-time session and catalog handlers remain authoritative when skipped.
+        // path. The request-time session handler remains authoritative when skipped.
         if (!(await shouldPrewarmSessionData())) {
           return;
         }
@@ -89,20 +84,6 @@ function dashboardDataPrewarmItems(
         await listManagedPlugins({ config: cfg });
       },
     },
-    ...agentIds.map((agentId) => ({
-      name: `session-catalog.${agentId}`,
-      load: async () => {
-        if (!(await shouldPrewarmSessionData())) {
-          return;
-        }
-        const { prewarmSessionCatalogList } = await import("./server-methods/session-catalog.js");
-        await prewarmSessionCatalogList({
-          config: cfg,
-          agentId,
-          limitPerHost: SIDEBAR_CATALOG_LIMIT_PER_HOST,
-        });
-      },
-    })),
   ];
 }
 
@@ -112,47 +93,56 @@ export function scheduleGatewayHandlerPrewarm(params: {
   log: { info?: (msg: string) => void; warn: (msg: string) => void };
   items?: readonly GatewayHandlerPrewarmItem[];
   waitForPostReadyWork?: () => Promise<void>;
-}): GatewayHandlerPrewarmHandle {
+}): GatewayIdleTaskHandle {
   // Frequent updater restarts make cold dashboard data the remaining slow tier.
-  // Keep cheap session reads first, process-stable plugin data second, and provider catalogs last.
+  // Keep bounded session reads first and process-stable plugin data second.
+  // Provider catalogs stay request-driven because their adapters may do unbounded external work.
   const items = params.items ?? dashboardDataPrewarmItems(params.cfgAtStart, params.log);
   let stopped = false;
   let nextIndex = 0;
   let currentItemName = "unknown";
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let idleTask: GatewayIdleTaskHandle | undefined;
 
   const scheduleNext = () => {
     if (stopped || nextIndex >= items.length) {
       return;
     }
-    timer = setTimeout(() => {
-      timer = undefined;
-      void (async () => {
-        await params.waitForPostReadyWork?.();
-        if (stopped) {
-          return;
-        }
-        const item = items[nextIndex++];
-        if (!item) {
-          return;
-        }
-        currentItemName = item.name;
-        const load = () => item.load();
-        await runWithGatewayIndependentRootWorkAdmission(() =>
-          params.startupTrace
-            ? params.startupTrace.measure(`post-ready.gateway-data.${item.name}`, load)
-            : load(),
-        );
-      })()
-        .catch((err: unknown) => {
-          // Prewarm only improves latency; readiness and request-time loaders remain authoritative.
-          params.log.warn(
-            `post-ready gateway data prewarm failed for ${currentItemName}: ${String(err)}`,
-          );
-        })
-        .finally(scheduleNext);
-    }, 0);
-    timer.unref?.();
+    void (async () => {
+      await params.waitForPostReadyWork?.();
+      if (stopped) {
+        return;
+      }
+      const item = items[nextIndex++];
+      if (!item) {
+        return;
+      }
+      currentItemName = item.name;
+      const load = () => item.load();
+      idleTask = scheduleGatewayIdleTask({
+        delayMs: 0,
+        retryDelayMs: GATEWAY_HANDLER_PREWARM_RETRY_DELAY_MS,
+        isClosing: () => stopped,
+        isBusy: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,
+        run: async () => {
+          try {
+            await (params.startupTrace
+              ? params.startupTrace.measure(`post-ready.gateway-data.${item.name}`, load)
+              : load());
+          } finally {
+            // Keep the outgoing join published until its lease and warning handler settle.
+            void Promise.resolve(idleTask?.stop()).then(scheduleNext, scheduleNext);
+          }
+        },
+        log: params.log,
+        // Prewarm only improves latency; readiness and request-time loaders remain authoritative.
+        errorMessage: `post-ready gateway data prewarm failed for ${item.name}`,
+      });
+    })().catch((err: unknown) => {
+      params.log.warn(
+        `post-ready gateway data prewarm failed for ${currentItemName}: ${String(err)}`,
+      );
+      scheduleNext();
+    });
   };
 
   // One cache fill per event-loop turn lets immediate client work run between steps.
@@ -161,10 +151,7 @@ export function scheduleGatewayHandlerPrewarm(params: {
   return {
     stop: () => {
       stopped = true;
-      if (timer) {
-        clearTimeout(timer);
-        timer = undefined;
-      }
+      return idleTask?.stop();
     },
   };
 }

@@ -2,8 +2,8 @@
 import { describe, expect, it } from "vitest";
 import {
   isGatewayArgv,
+  isOpenClawArgv,
   isOpenClawCommandArgv,
-  isOpenClawProcessArgv,
   parseProcCmdline,
 } from "./gateway-process-argv.js";
 
@@ -78,15 +78,17 @@ describe("isOpenClawCommandArgv", () => {
   });
 });
 
-describe("isOpenClawProcessArgv", () => {
-  it("recognizes installed, source, agent, and gateway process forms", () => {
-    expect(isOpenClawProcessArgv(["node", "/usr/local/bin/openclaw", "doctor"])).toBe(true);
-    expect(isOpenClawProcessArgv(["node", "/srv/openclaw/openclaw.mjs", "status"])).toBe(true);
-    expect(isOpenClawProcessArgv(["node", "/srv/openclaw/dist/index.js", "agent"])).toBe(true);
-    expect(isOpenClawProcessArgv(["openclaw-gateway"])).toBe(true);
+describe("isOpenClawArgv", () => {
+  it.each([
+    ["agent exec", ["openclaw", "agent", "exec", "task"]],
+    ["local TUI", ["node", "/srv/openclaw/openclaw.mjs", "tui", "--local"]],
+    ["models probe", ["openclaw", "models", "status", "--probe"]],
+    ["bare local TUI", ["openclaw"]],
+  ])("recognizes the %s embedded owner", (_label, argv) => {
+    expect(isOpenClawArgv(argv)).toBe(true);
   });
 
-  it("rejects unrelated live processes", () => {
-    expect(isOpenClawProcessArgv(["python", "worker.py"])).toBe(false);
+  it("rejects an unrelated process", () => {
+    expect(isOpenClawArgv(["python", "worker.py"])).toBe(false);
   });
 });

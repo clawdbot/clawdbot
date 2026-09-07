@@ -1,26 +1,15 @@
 // Discord plugin module implements thread title behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { generateConversationLabel } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import {
-  completeWithPreparedSimpleCompletionModel,
-  extractAssistantText,
-  prepareSimpleCompletionModelForAgent,
-} from "openclaw/plugin-sdk/simple-completion-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { withAbortTimeout } from "./timeouts.js";
 
 const DEFAULT_THREAD_TITLE_TIMEOUT_MS = 60_000;
 const MAX_THREAD_TITLE_SOURCE_CHARS = 600;
 const MAX_THREAD_TITLE_CHANNEL_NAME_CHARS = 120;
 const MAX_THREAD_TITLE_CHANNEL_DESCRIPTION_CHARS = 320;
-// Budget generous enough to cover reasoning-model thinking tokens plus the
-// short text output. Lower values (e.g. 24) starve reasoning models of output
-// capacity: the entire budget is consumed by the thinking block before any
-// text is emitted, so extractAssistantText returns empty and the rename is
-// silently skipped.
-const DISCORD_THREAD_TITLE_MAX_TOKENS = 4_096;
 const DISCORD_THREAD_TITLE_SYSTEM_PROMPT =
-  "Generate a concise Discord thread title (3-6 words). Return only the title. Use channel context when provided and avoid redundant channel-name words unless needed for clarity.";
+  "Generate a concise Discord thread title (3-6 words) in sentence case: capitalize only the first word and words that are always capitalized. Return only the title. Use channel context when provided and avoid redundant channel-name words unless needed for clarity.";
 
 export async function generateThreadTitle(params: {
   cfg: OpenClawConfig;
@@ -36,21 +25,6 @@ export async function generateThreadTitle(params: {
     return null;
   }
 
-  const prepared = await prepareSimpleCompletionModelForAgent({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    ...(params.modelRef ? { modelRef: params.modelRef } : {}),
-    useUtilityModel: true,
-    allowMissingApiKeyModes: ["aws-sdk"],
-  });
-  if ("error" in prepared) {
-    const modelLabel = prepared.selection
-      ? `${prepared.selection.provider}/${prepared.selection.modelId}`
-      : "unknown";
-    logVerbose(`thread-title: ${prepared.error} (agent=${params.agentId}, model=${modelLabel})`);
-    return null;
-  }
-
   try {
     const userMessage = buildThreadTitleCompletionUserMessage({
       sourceText,
@@ -58,50 +32,20 @@ export async function generateThreadTitle(params: {
       channelDescription: params.channelDescription,
     });
     const timeoutMs = resolveThreadTitleTimeoutMs(params.timeoutMs);
-    const response = await completeThreadTitle({
-      model: prepared.model,
-      auth: prepared.auth,
+    const generated = await generateConversationLabel({
+      cfg: params.cfg,
+      agentId: params.agentId,
       userMessage,
+      prompt: DISCORD_THREAD_TITLE_SYSTEM_PROMPT,
+      ...(params.modelRef ? { modelRef: params.modelRef } : {}),
       timeoutMs,
+      maxLength: MAX_THREAD_TITLE_SOURCE_CHARS,
     });
-    const generated = normalizeGeneratedThreadTitle(extractAssistantText(response));
-    return generated || null;
+    return generated ? normalizeGeneratedThreadTitle(generated) : null;
   } catch (err) {
     logVerbose(`thread-title: title generation failed for agent ${params.agentId}: ${String(err)}`);
     return null;
   }
-}
-
-async function completeThreadTitle(params: {
-  model: Parameters<typeof completeWithPreparedSimpleCompletionModel>[0]["model"];
-  auth: Parameters<typeof completeWithPreparedSimpleCompletionModel>[0]["auth"];
-  userMessage: string;
-  timeoutMs: number;
-}) {
-  const maxTokens = Math.min(DISCORD_THREAD_TITLE_MAX_TOKENS, Math.floor(params.model.maxTokens));
-  return await withAbortTimeout({
-    timeoutMs: params.timeoutMs,
-    createTimeoutError: () => new Error(`thread-title timed out after ${params.timeoutMs}ms`),
-    run: async (signal) =>
-      await completeWithPreparedSimpleCompletionModel({
-        model: params.model,
-        auth: params.auth,
-        context: {
-          systemPrompt: DISCORD_THREAD_TITLE_SYSTEM_PROMPT,
-          messages: [
-            {
-              role: "user",
-              content: params.userMessage,
-              timestamp: Date.now(),
-            },
-          ],
-        },
-        options: {
-          maxTokens,
-          signal,
-        },
-      }),
-  });
 }
 
 function buildThreadTitleCompletionUserMessage(params: {

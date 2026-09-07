@@ -14,6 +14,10 @@ import { OpenClawSchema } from "./zod-schema.js";
 
 const nonBooleanConfigCases = [
   {
+    name: "gateway.controlUi.communityInvite",
+    config: { gateway: { controlUi: { communityInvite: "yes" } } },
+  },
+  {
     name: "gateway.controlUi.sessionObserver",
     config: {
       gateway: {
@@ -483,6 +487,24 @@ describe("diagnostics.otel.captureContent", () => {
   });
 });
 
+describe("diagnostics.otel.metricNamePrefix", () => {
+  it("accepts valid metric name fragments and rejects invalid values", () => {
+    for (const metricNamePrefix of ["", "acme.", "Acme/team-1_"]) {
+      const result = OpenClawSchema.safeParse({
+        diagnostics: { otel: { metricNamePrefix } },
+      });
+      expect(result.success).toBe(true);
+    }
+
+    for (const metricNamePrefix of [42, " ", ".acme", "acme metrics.", "é.", "a".repeat(129)]) {
+      const result = OpenClawSchema.safeParse({
+        diagnostics: { otel: { metricNamePrefix } },
+      });
+      expect(result.success).toBe(false);
+    }
+  });
+});
+
 describe("ui.seamColor", () => {
   it("accepts hex colors", () => {
     const res = validateConfigObject({ ui: { seamColor: "#FF4500" } });
@@ -497,6 +519,18 @@ describe("ui.seamColor", () => {
   it("rejects invalid hex length", () => {
     const res = validateConfigObject({ ui: { seamColor: "#FF4500FF" } });
     expect(res.ok).toBe(false);
+  });
+});
+
+describe("ui.prefs.accent", () => {
+  it.each([
+    ["lowercase hex", "#ff5c5c", true],
+    ["uppercase hex", "#AbCdEf", true],
+    ["missing hash", "ff5c5c", false],
+    ["invalid hex", "#gggggg", false],
+    ["invalid length", "#ff5c5c00", false],
+  ])("validates %s", (_label, accent, valid) => {
+    expect(validateConfigObject({ ui: { prefs: { accent } } }).ok).toBe(valid);
   });
 });
 
@@ -552,6 +586,42 @@ describe("gateway.controlUi.embedSandbox", () => {
   });
 });
 
+describe("gateway.controlUi.environment", () => {
+  it("accepts named environment colors and trims the label", () => {
+    for (const color of [
+      "teal",
+      "amber",
+      "purple",
+      "coral",
+      "pink",
+      "blue",
+      "green",
+      "red",
+      "gray",
+    ]) {
+      const result = OpenClawSchema.safeParse({
+        gateway: { controlUi: { environment: { label: " edge ", color } } },
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.gateway?.controlUi?.environment?.label).toBe("edge");
+      }
+    }
+  });
+
+  it.each([
+    { label: "edge", color: "orange" },
+    { label: " ", color: "amber" },
+    { label: "a".repeat(25), color: "amber" },
+    { label: "edge" },
+    { color: "amber" },
+  ])("rejects invalid environment configuration %#", (environment) => {
+    expect(OpenClawSchema.safeParse({ gateway: { controlUi: { environment } } }).success).toBe(
+      false,
+    );
+  });
+});
+
 describe("gateway.controlUi.allowExternalEmbedUrls", () => {
   it("accepts boolean values", () => {
     for (const value of [true, false]) {
@@ -567,11 +637,11 @@ describe("gateway.controlUi.allowExternalEmbedUrls", () => {
   });
 });
 
-describe("gateway.controlUi.sessionObserver", () => {
+describe.each(["sessionObserver", "communityInvite"])("gateway.controlUi.%s", (key) => {
   it("accepts boolean values", () => {
     for (const value of [true, false]) {
       const result = OpenClawSchema.safeParse({
-        gateway: { controlUi: { sessionObserver: value } },
+        gateway: { controlUi: { [key]: value } },
       });
       expect(result.success).toBe(true);
     }
@@ -862,6 +932,53 @@ describe("gateway.remote.transport", () => {
   });
 });
 
+describe("gateway.remote.edgeAuth", () => {
+  it("accepts valid header names with literal and SecretRef values", () => {
+    const res = validateConfigObjectRaw({
+      gateway: {
+        remote: {
+          edgeAuth: {
+            "X-Edge-Literal": "test-secret",
+            "X-Edge-Ref": { source: "env", provider: "default", id: "EDGE_AUTH_TOKEN" },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "empty map",
+      edgeAuth: {},
+      expected: "header map must not be empty",
+    },
+    {
+      name: "transport-owned header",
+      edgeAuth: { Host: "test-secret" },
+      expected: 'transport-owned header "Host"',
+    },
+    {
+      name: "invalid header name",
+      edgeAuth: { "Bad Header": "test-secret" },
+      expected: 'invalid gateway.remote.edgeAuth header name: "Bad Header"',
+    },
+    {
+      name: "case-duplicate headers",
+      edgeAuth: { "X-Edge-Auth": "one", "x-edge-auth": "two" },
+      expected: 'header names "X-Edge-Auth" and "x-edge-auth" differ only by case',
+    },
+  ])("rejects $name", ({ edgeAuth, expected }) => {
+    const res = validateConfigObjectRaw({ gateway: { remote: { edgeAuth } } });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.map((issue) => issue.message).join("\n")).toContain(expected);
+    }
+  });
+});
+
 describe("gateway.tools config", () => {
   it("accepts gateway.tools allow and deny lists", () => {
     const res = validateConfigObject({
@@ -995,12 +1112,44 @@ describe("cron webhook schema", () => {
 
     expect(res.success).toBe(true);
   });
+
+  it("accepts the shared cron webhook SSRF policy", () => {
+    const res = OpenClawSchema.safeParse({
+      cron: {
+        webhookSsrfPolicy: {
+          dangerouslyAllowPrivateNetwork: true,
+          allowedHostnames: ["127.0.0.1", "internal.example"],
+          allowRfc2544BenchmarkRange: true,
+          allowIpv6UniqueLocalRange: true,
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.cron?.webhookSsrfPolicy).toEqual({
+        dangerouslyAllowPrivateNetwork: true,
+        allowedHostnames: ["127.0.0.1", "internal.example"],
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
+      });
+    }
+  });
+
+  it("rejects unknown cron webhook SSRF policy fields", () => {
+    const res = OpenClawSchema.safeParse({
+      cron: { webhookSsrfPolicy: { allowEverything: true } },
+    });
+
+    expect(res.success).toBe(false);
+  });
 });
 
 describe("broadcast", () => {
   it("accepts a broadcast peer map with strategy", () => {
     const res = validateConfigObject({
       agents: {
+        ownership: "explicit",
         entries: { alfred: {}, baerbel: {} },
       },
       broadcast: {

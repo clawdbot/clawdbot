@@ -20,7 +20,7 @@ metadata:
             {
               "id": "go",
               "kind": "go",
-              "module": "github.com/steipete/wacli/cmd/wacli@latest",
+              "module": "github.com/openclaw/wacli/cmd/wacli@latest",
               "bins": ["wacli"],
               "label": "Install wacli (go)",
             },
@@ -53,6 +53,12 @@ Find chats + messages
 - `wacli messages search "query" --limit 20 --chat <jid>`
 - `wacli messages search "invoice" --after 2025-01-01 --before 2025-12-31`
 
+Inspect / verify messages
+
+- `wacli messages show --chat <jid> --id <message_id> --json --full`
+- `messages show` requires both `--chat` and `--id`; do not pass the message ID as a positional argument.
+- After sending, verify the stored message when exact formatting matters, especially multiline text.
+
 History backfill
 
 - `wacli history backfill --chat <jid> --requests 2 --count 50`
@@ -62,6 +68,7 @@ Send
 - Text: `wacli send text --to "+14155551212" --message "Hello! Are you free at 3pm?"`
 - Group: `wacli send text --to "1234567890-123456789@g.us" --message "Running 5 min late."`
 - File: `wacli send file --to "+14155551212" --file /path/agenda.pdf --caption "Agenda"`
+- Multiline: `--message` is literal by default; pass `--message-escapes` to interpret `\n`, `\r`, `\t`.
 
 Notes
 

@@ -1,45 +1,30 @@
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { flattenTranslations } from "../../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { i18n } from "../../../i18n/index.ts";
-import { renderCompactionIndicator, renderFallbackIndicator } from "./chat-composer-status.ts";
+import { captureI18nStateForTesting } from "../../../i18n/lib/translate.test-support.ts";
+import { de } from "../../../i18n/locales/de.ts";
+import { renderFallbackIndicator } from "./chat-composer-status.ts";
 
 describe("chat composer status localization", () => {
+  let container: HTMLDivElement;
+  let restoreI18nState: () => Promise<void>;
+
   beforeEach(async () => {
-    i18n.registerTranslation("de", {
-      chat: {
-        composer: {
-          compactingContext: "Kontext wird komprimiert...",
-          fallbackActive: "Ausweichmodell aktiv: {model}",
-          fallbackSelected: "Ausgewählt: {model}",
-          fallbackCurrent: "Aktiv: {model}",
-          fallbackAttempts: "Versuche: {attempts}",
-        },
-      },
-    });
+    restoreI18nState = captureI18nStateForTesting();
     await i18n.setLocale("de");
     vi.spyOn(Date, "now").mockReturnValue(1_000);
+    container = document.createElement("div");
+    document.body.append(container);
   });
 
   afterEach(async () => {
-    await i18n.setLocale("en");
+    await restoreI18nState();
     vi.restoreAllMocks();
-    document.body.innerHTML = "";
+    container.remove();
   });
 
-  it("renders translated compaction and fallback status", () => {
-    render(
-      renderCompactionIndicator({
-        phase: "active",
-        runId: "run-1",
-        startedAt: 1_000,
-        completedAt: null,
-      }),
-      document.body,
-    );
-    expect(document.querySelector(".compaction-indicator")?.textContent?.trim()).toBe(
-      "Kontext wird komprimiert...",
-    );
-
+  it("renders translated fallback status", () => {
     render(
       renderFallbackIndicator({
         selected: "provider/selected",
@@ -47,12 +32,21 @@ describe("chat composer status localization", () => {
         attempts: ["provider/selected: rate limit"],
         occurredAt: 900,
       }),
-      document.body,
+      container,
     );
-    const fallback = document.querySelector(".compaction-indicator--fallback");
-    expect(fallback?.textContent?.trim()).toBe("Ausweichmodell aktiv: provider/active");
+    const fallback = container.querySelector(".compaction-indicator--fallback");
+    const german = flattenTranslations(de);
+    expect(fallback?.textContent?.trim()).toBe(
+      german.get("chat.composer.fallbackActive")?.replace("{model}", "provider/active"),
+    );
     expect(fallback?.getAttribute("aria-label")).toBe(
-      "Ausgewählt: provider/selected • Aktiv: provider/active • Versuche: provider/selected: rate limit",
+      [
+        german.get("chat.composer.fallbackSelected")?.replace("{model}", "provider/selected"),
+        german.get("chat.composer.fallbackCurrent")?.replace("{model}", "provider/active"),
+        german
+          .get("chat.composer.fallbackAttempts")
+          ?.replace("{attempts}", "provider/selected: rate limit"),
+      ].join(" • "),
     );
   });
 });

@@ -6,8 +6,6 @@ import {
   type TranscriptEvent,
 } from "../config/sessions/session-accessor.js";
 
-export type SqliteSessionTranscriptEventForTest = TranscriptEvent;
-
 /** Appends a raw SQLite transcript event for first-party tests only. */
 export async function appendSqliteSessionTranscriptEventForTest(
   params: SessionTranscriptAccessScope & { event: TranscriptEvent },
@@ -21,6 +19,8 @@ export {
   loadSqliteTrajectoryRuntimeEvents,
   type SqliteTrajectoryRuntimeScope,
 } from "../trajectory/runtime-store.sqlite.js";
+export { createTrajectoryRuntimeRecorder as createTrajectoryRuntimeRecorderForTest } from "../trajectory/runtime.js";
+export { exportTrajectoryBundle as exportTrajectoryBundleForTest } from "../trajectory/export.js";
 export { type TrajectoryEvent as SqliteTrajectoryRuntimeEventForTest } from "../trajectory/types.js";
 export {
   closeOpenClawAgentDatabasesForTest,

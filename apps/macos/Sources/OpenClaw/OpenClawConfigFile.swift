@@ -1,5 +1,6 @@
 import CoreFoundation
 import CryptoKit
+import Darwin
 import Foundation
 import OpenClawProtocol
 
@@ -86,7 +87,28 @@ enum OpenClawConfigFile {
                 return false
             }
             let url = self.url()
-            let previousData = try? Data(contentsOf: url)
+            var pathInfo = stat()
+            let configMissing: Bool
+            if lstat(url.path, &pathInfo) == 0 {
+                configMissing = false
+            } else {
+                guard errno == ENOENT else {
+                    self.logger.error("Cannot inspect configuration before saving")
+                    return false
+                }
+                configMissing = true
+            }
+            let previousData: Data?
+            if configMissing {
+                previousData = nil
+            } else {
+                do {
+                    previousData = try Data(contentsOf: url)
+                } catch {
+                    self.logger.error("Cannot read existing configuration before saving")
+                    return false
+                }
+            }
             let previousRoot = previousData.flatMap { self.parseConfigData($0) }
             let previousBytes = previousData?.count
             let previousAttributes = try? FileManager().attributesOfItem(atPath: url.path)
@@ -102,6 +124,10 @@ enum OpenClawConfigFile {
                 previousRoot: previousRoot,
                 output: &output,
                 allowGatewayAuthMutation: allowGatewayAuthMutation)
+            // Existing files retain their authored or legacy catalog preferences.
+            if configMissing {
+                guard self.initializeNativeSessionCatalogPreferences(&output) else { return false }
+            }
             self.stampMeta(&output)
 
             do {
@@ -207,18 +233,6 @@ enum OpenClawConfigFile {
         }
     }
 
-    static func updateGatewayDict(_ mutate: (inout [String: Any]) -> Void) {
-        var root = self.loadDict()
-        var gateway = root["gateway"] as? [String: Any] ?? [:]
-        mutate(&gateway)
-        if gateway.isEmpty {
-            root.removeValue(forKey: "gateway")
-        } else {
-            root["gateway"] = gateway
-        }
-        self.saveDict(root)
-    }
-
     static func gatewayUpdateChannel() -> String? {
         let root = self.loadDict()
         let update = root["update"] as? [String: Any]
@@ -234,6 +248,21 @@ enum OpenClawConfigFile {
         let root = self.loadDict()
         let browser = root["browser"] as? [String: Any]
         return browser?["enabled"] as? Bool ?? defaultValue
+    }
+
+    /// Beta macOS builds wrote this retired key after core moved it to SQLite.
+    /// Repair only that app-owned shape before local Gateway validation can reject it.
+    static func migrateRetiredAppMetadataForGatewayStart() -> Bool {
+        self.withFileLock {
+            let root = self.loadDict()
+            guard let meta = root["meta"] as? [String: Any],
+                  meta.keys.contains("lastTouchedAt")
+            else {
+                return true
+            }
+            self.logger.notice("removing retired app-written config metadata before Gateway start")
+            return self.saveDict(root)
+        }
     }
 }
 
@@ -381,8 +410,7 @@ extension OpenClawConfigFile {
         self.logger.debug("browser control updated enabled=\(enabled)")
     }
 
-    static func gatewayPort() -> Int? {
-        let root = self.loadDict()
+    static func gatewayPort(root: [String: Any] = OpenClawConfigFile.loadDict()) -> Int? {
         guard let gateway = root["gateway"] as? [String: Any] else { return nil }
         if let port = gateway["port"] as? Int, port > 0 {
             return port
@@ -420,53 +448,6 @@ extension OpenClawConfigFile {
 
         guard normalizedSshHost == normalizedUrlHost else { return nil }
         return port
-    }
-
-    static func setRemoteGatewayUrl(host: String, port: Int?) {
-        guard let port, port > 0 else { return }
-        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedHost.isEmpty else { return }
-        self.updateGatewayDict { gateway in
-            var remote = gateway["remote"] as? [String: Any] ?? [:]
-            let existingUrl = (remote["url"] as? String)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let scheme = URL(string: existingUrl)?.scheme ?? "ws"
-            remote["url"] = "\(scheme)://\(trimmedHost):\(port)"
-            gateway["remote"] = remote
-        }
-    }
-
-    static func setRemoteGatewayUrlString(_ value: String) {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        self.updateGatewayDict { gateway in
-            var remote = gateway["remote"] as? [String: Any] ?? [:]
-            remote["url"] = trimmed
-            gateway["remote"] = remote
-        }
-    }
-
-    static func setRemoteGatewayTransport(_ value: String) {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        self.updateGatewayDict { gateway in
-            var remote = gateway["remote"] as? [String: Any] ?? [:]
-            remote["transport"] = trimmed
-            gateway["remote"] = remote
-        }
-    }
-
-    static func clearRemoteGatewayUrl() {
-        self.updateGatewayDict { gateway in
-            guard var remote = gateway["remote"] as? [String: Any] else { return }
-            guard remote["url"] != nil else { return }
-            remote.removeValue(forKey: "url")
-            if remote.isEmpty {
-                gateway.removeValue(forKey: "remote")
-            } else {
-                gateway["remote"] = remote
-            }
-        }
     }
 
     private static func remoteGatewayUrl() -> URL? {
@@ -510,11 +491,51 @@ extension OpenClawConfigFile {
         return nil
     }
 
+    private struct NativeSessionCatalog: Decodable {
+        let pluginId: String
+    }
+
+    private static func initializeNativeSessionCatalogPreferences(_ root: inout [String: Any]) -> Bool {
+        let bundle: Bundle? = if Bundle.main.bundleURL.pathExtension == "app" {
+            Bundle.main.resourceURL
+                .map { $0.appendingPathComponent("OpenClaw_OpenClaw.bundle") }
+                .flatMap(Bundle.init(url:))
+        } else {
+            Bundle.module
+        }
+        guard let url = bundle?.url(forResource: "NativeSessionCatalogs", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let catalogs = try? JSONDecoder().decode([NativeSessionCatalog].self, from: data),
+              catalogs.allSatisfy({ !$0.pluginId.isEmpty })
+        else {
+            self.logger.error("Cannot create configuration: native conversation privacy defaults are missing")
+            return false
+        }
+        var plugins = root["plugins"] as? [String: Any] ?? [:]
+        var entries = plugins["entries"] as? [String: Any] ?? [:]
+        for catalog in catalogs {
+            var entry = entries[catalog.pluginId] as? [String: Any] ?? [:]
+            var config = entry["config"] as? [String: Any] ?? [:]
+            var sessionCatalog = config["sessionCatalog"] as? [String: Any] ?? [:]
+            if sessionCatalog["enabled"] == nil {
+                sessionCatalog["enabled"] = false
+                config["sessionCatalog"] = sessionCatalog
+                entry["config"] = config
+                entries[catalog.pluginId] = entry
+            }
+        }
+        plugins["entries"] = entries
+        root["plugins"] = plugins
+        return true
+    }
+
     private static func stampMeta(_ root: inout [String: Any]) {
         var meta = root["meta"] as? [String: Any] ?? [:]
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "macos-app"
         meta["lastTouchedVersion"] = version
-        meta["lastTouchedAt"] = ISO8601DateFormatter().string(from: Date())
+        // Machine-state timestamps moved to SQLite. Keeping this retired config key makes the
+        // matching CLI reject the app's config before the Gateway can start.
+        meta.removeValue(forKey: "lastTouchedAt")
         root["meta"] = meta
     }
 

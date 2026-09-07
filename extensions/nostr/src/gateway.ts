@@ -10,13 +10,15 @@ import {
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   chunkTextForOutbound,
   sanitizeAssistantVisibleText,
   stripMarkdown,
 } from "openclaw/plugin-sdk/text-chunking";
+import type { PluginRuntime } from "../runtime-api.js";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "./channel-api.js";
-import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
+import type { MetricEvent } from "./metrics.js";
 import { startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
 import { normalizePubkey } from "./nostr-key-utils.js";
 import { getNostrRuntime } from "./runtime.js";
@@ -32,10 +34,12 @@ type NostrOutboundAdapter = Pick<
   sendText: NonNullable<ChannelOutboundAdapter["sendText"]>;
   sanitizeText: NonNullable<ChannelOutboundAdapter["sanitizeText"]>;
 };
-
 const activeBuses = new Map<string, NostrBusHandle>();
-const metricsSnapshots = new Map<string, MetricsSnapshot>();
 const ACCESS_GROUP_PREFIX = "accessGroup:";
+
+function normalizeRelayLifecycleKey(relay: string): string {
+  return new URL(relay).toString();
+}
 
 function parseNostrAccessGroupAllowFromEntry(entry: string): string | null {
   const trimmed = entry.trim();
@@ -86,11 +90,16 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
   ctx.setStatus({
     accountId: account.accountId,
     publicKey: account.publicKey,
+    lifecycle: "starting",
   });
   ctx.log?.info?.(`[${account.accountId}] starting Nostr provider (pubkey: ${account.publicKey})`);
 
   if (!account.configured) {
     throw new Error("Nostr private key not configured");
+  }
+  const channelRuntime = ctx.channelRuntime as PluginRuntime["channel"] | undefined;
+  if (!channelRuntime?.inbound?.buildContext) {
+    throw new Error("Nostr requires its registered channel runtime context builder");
   }
 
   const runtime = getNostrRuntime();
@@ -99,7 +108,11 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
     channel: "nostr",
     accountId: account.accountId,
   });
-  const resolveInboundAccess = async (senderPubkey: string, rawBody: string) =>
+  const resolveInboundAccess = async (
+    senderPubkey: string,
+    rawBody: string,
+    contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding,
+  ) =>
     await resolveStableChannelMessageIngress({
       channelId: "nostr",
       accountId: account.accountId,
@@ -111,6 +124,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
         kind: "direct",
         id: senderPubkey,
       },
+      contextBinding,
       dmPolicy: account.config.dmPolicy ?? "pairing",
       allowFrom: account.config.allowFrom,
       command: runtime.channel.commands.shouldComputeCommandAuthorized(rawBody, ctx.cfg)
@@ -120,7 +134,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
         : undefined,
     });
 
-  let busHandle: NostrBusHandle | null = null;
+  const connectedRelays = new Set<string>();
 
   const authorizeSender = async (input: {
     senderId: string;
@@ -174,6 +188,16 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
 
           const { dispatchInboundDirectDm } = await import("./inbound-direct-dm-runtime.js");
           await dispatchInboundDirectDm({
+            channelRuntime,
+            resolveChannelIngress: async (contextBinding) => {
+              const exactAccess = await resolveInboundAccess(senderPubkey, text, contextBinding);
+              if (!exactAccess.senderAccess.allowed) {
+                throw new Error(
+                  `Nostr sender authorization changed before dispatch (${senderPubkey})`,
+                );
+              }
+              return exactAccess;
+            },
             cfg: ctx.cfg,
             channel: "nostr",
             channelLabel: "Nostr",
@@ -233,9 +257,21 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
           ctx.log?.error?.(`[${account.accountId}] Nostr error (${context}): ${error.message}`);
         },
         onConnect: (relay) => {
+          connectedRelays.add(normalizeRelayLifecycleKey(relay));
+          // Treat >=1 connected relay as ready. This favors partial availability over quorum
+          // fidelity; circuit-breaker health stays private to nostr-bus, so ready is not all-relays.
+          ctx.setStatus(channelReadyPatch({ accountId: account.accountId }));
           ctx.log?.debug?.(`[${account.accountId}] Connected to relay: ${relay}`);
         },
         onDisconnect: (relay) => {
+          connectedRelays.delete(normalizeRelayLifecycleKey(relay));
+          if (connectedRelays.size === 0) {
+            ctx.setStatus({
+              accountId: account.accountId,
+              connected: false,
+              lifecycle: "recovering",
+            });
+          }
           ctx.log?.debug?.(`[${account.accountId}] Disconnected from relay: ${relay}`);
         },
         onEose: (relays) => {
@@ -257,12 +293,8 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
           } else if (event.name === "relay.error") {
             ctx.log?.debug?.(`[${account.accountId}] Relay error: ${event.labels?.relay}`);
           }
-          if (busHandle) {
-            metricsSnapshots.set(account.accountId, busHandle.getMetrics());
-          }
         },
       });
-      busHandle = bus;
       activeBuses.set(account.accountId, bus);
 
       ctx.log?.info?.(
@@ -271,14 +303,11 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
 
       return {
         stop: async () => {
-          await bus.close();
-          if (busHandle === bus) {
-            busHandle = null;
-          }
+          // Retire before fallible async shutdown so new work cannot reacquire this bus.
           if (activeBuses.get(account.accountId) === bus) {
             activeBuses.delete(account.accountId);
           }
-          metricsSnapshots.delete(account.accountId);
+          await bus.close();
           ctx.log?.info?.(`[${account.accountId}] Nostr provider stopped`);
         },
       };

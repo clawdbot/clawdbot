@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-core";
 import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import { parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -33,6 +34,7 @@ import {
   parseBuzzTarget,
 } from "./target.js";
 import {
+  assertBuzzAccountAvailable,
   listBuzzAccountIds,
   resolveBuzzAccount,
   resolveDefaultBuzzAccountId,
@@ -68,7 +70,24 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
       chatTypes: ["group"],
       threads: true,
     },
-    reload: { configPrefixes: ["channels.buzz"] },
+    threading: {
+      resolveReplyTransport: ({ replyDelivery, threadId, replyToId, replyToIsExplicit }) => {
+        if (replyDelivery?.replyToMode === "off") {
+          return { threadId: null, replyToId: null };
+        }
+        // Implicit replies belong to the root; explicit child targets keep their nesting.
+        return threadId && replyToId && !replyToIsExplicit
+          ? { threadId, replyToId: String(threadId) }
+          : null;
+      },
+    },
+    agentPrompt: {
+      messageToolHints: () => [
+        "- Buzz targets: use a configured room UUID, `buzz:<ROOM_UUID>`, or a unique current room name. Use the UUID when room names are ambiguous.",
+        "- Buzz mentions: write a unique current room member as `@Display Name`. For an explicit identity, include `nostr:npub...`; the public key must belong to the target room. Any unresolved or ambiguous label needs an explicit identity for every intended member.",
+      ],
+    },
+    reload: { configPrefixes: ["channels.buzz"], accountScopedRestart: true },
     configSchema: BuzzConfigSchema,
     setupContract: buzzSetupContract,
     setupWizard: buzzSetupWizard,
@@ -84,6 +103,7 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
           extra: {
             baseUrl: account.relayUrl,
             publicKey: account.publicKey,
+            tokenStatus: account.tokenStatus,
           },
         }),
       resolveAllowFrom: ({ cfg, accountId }) =>
@@ -101,7 +121,7 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
       inferTargetChatType: () => "group",
       targetResolver: {
         looksLikeId: looksLikeBuzzTarget,
-        hint: "<buzz:channel-uuid>",
+        hint: "<room UUID|configured room name>",
       },
       resolveOutboundSessionRoute: ({
         cfg,
@@ -133,9 +153,11 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
         });
       },
       resolveSessionConversation: ({ rawId }) => {
-        const channelId = parseBuzzTarget(rawId);
+        const { baseSessionKey, threadId } = parseThreadSessionSuffix(rawId);
+        const channelId = parseBuzzTarget(baseSessionKey ?? rawId);
         return {
           id: channelId,
+          threadId,
           baseConversationId: channelId,
           parentConversationCandidates: [channelId],
         };
@@ -154,11 +176,15 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
           name: account.name,
           enabled: account.enabled,
           configured: account.configured,
-          baseUrl: account.relayUrl,
-          publicKey: account.publicKey,
+          extra: {
+            baseUrl: account.relayUrl,
+            publicKey: account.publicKey,
+            tokenStatus: account.tokenStatus,
+          },
         }),
       }),
       probeAccount: async ({ account, timeoutMs }) => {
+        assertBuzzAccountAvailable(account);
         const rooms = await discoverBuzzRooms({
           relayUrl: account.relayUrl,
           privateKey: account.privateKey,

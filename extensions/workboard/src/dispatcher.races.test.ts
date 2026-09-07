@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
@@ -123,6 +126,53 @@ describe("Workboard dispatcher lifecycle races", () => {
       const archived = await store.get(cardId);
       expect(archived?.metadata?.archivedAt).toBeGreaterThan(0);
       expect(archived?.metadata?.claim).toBeUndefined();
+    }
+  });
+
+  it("retains a managed worktree when pre-start lossless cleanup declines", async () => {
+    const managedPath = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-retained-"));
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Retain failed worker checkout",
+      status: "ready",
+      workspace: { kind: "worktree", path: "/repo", branch: "main" },
+      workspaceAccess: { unrestricted: true },
+    });
+    const removeIfLossless = vi.fn().mockResolvedValue(false);
+    try {
+      const result = await dispatchAndStartWorkboardCards({
+        store,
+        subagent: { run: vi.fn().mockRejectedValue(new Error("model unavailable")) },
+        worktrees: {
+          resolveCheckoutRoot: vi.fn().mockResolvedValue(undefined),
+          create: vi.fn().mockResolvedValue({
+            id: "managed-id",
+            path: managedPath,
+            branch: `openclaw/wb-${card.id}`,
+          }),
+          release: vi.fn(),
+          removeIfLossless,
+        },
+        options: { now: 10, maxStarts: 1, materializeWorktree: true },
+      });
+
+      expect(result.startFailures).toEqual([
+        expect.objectContaining({ cardId: card.id, error: "model unavailable" }),
+      ]);
+      expect(removeIfLossless).toHaveBeenCalledOnce();
+      const blocked = await store.get(card.id);
+      expect(blocked).toMatchObject({
+        status: "blocked",
+        metadata: {
+          automation: {
+            workspace: { kind: "worktree", path: managedPath, sourcePath: "/repo" },
+          },
+        },
+      });
+      expect(blocked?.execution).toBeUndefined();
+      expect(blocked?.runId).toBeUndefined();
+    } finally {
+      fs.rmSync(managedPath, { recursive: true, force: true });
     }
   });
 });

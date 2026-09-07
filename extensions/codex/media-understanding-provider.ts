@@ -2,10 +2,7 @@
  * Codex-backed media understanding provider for bounded image description and
  * structured extraction turns.
  */
-import {
-  type JsonSchemaObject,
-  validateJsonSchemaValue,
-} from "openclaw/plugin-sdk/json-schema-runtime";
+import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import type {
   ImagesDescriptionRequest,
   ImagesDescriptionResult,
@@ -13,10 +10,8 @@ import type {
   StructuredExtractionRequest,
   StructuredExtractionResult,
 } from "openclaw/plugin-sdk/media-understanding";
-import {
-  runBoundedCodexAppServerTurn,
-  type CodexBoundedTurnOptions,
-} from "./src/app-server/bounded-turn.js";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { CodexBoundedTurnOptions } from "./src/app-server/bounded-turn.js";
 import type { CodexUserInput } from "./src/app-server/protocol.js";
 
 const CODEX_MEDIA_PROVIDER_ID = "codex";
@@ -74,10 +69,12 @@ async function describeCodexImages(
     throw new Error("Codex image understanding requires model id.");
   }
   req.signal?.throwIfAborted();
-
+  const { runBoundedCodexAppServerTurn } = await import("./src/app-server/bounded-turn.js");
+  req.signal?.throwIfAborted();
   const { text } = await runBoundedCodexAppServerTurn({
     config: req.cfg,
     model: { mode: "required", id: model },
+    modelProvider: "openai",
     profile: req.profile,
     timeoutMs: req.timeoutMs,
     signal: req.signal,
@@ -119,10 +116,12 @@ async function extractCodexStructured(
     throw new Error("Codex structured extraction requires at least one image input.");
   }
   req.signal?.throwIfAborted();
-
+  const { runBoundedCodexAppServerTurn } = await import("./src/app-server/bounded-turn.js");
+  req.signal?.throwIfAborted();
   const { text } = await runBoundedCodexAppServerTurn({
     config: req.cfg,
     model: { mode: "required", id: model },
+    modelProvider: "openai",
     profile: req.profile,
     timeoutMs: req.timeoutMs,
     signal: req.signal,
@@ -179,10 +178,6 @@ function buildStructuredExtractionPrompt(req: StructuredExtractionRequest): stri
     .join("\n\n");
 }
 
-function isJsonSchemaObject(value: unknown): value is JsonSchemaObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function normalizeStructuredExtractionResult(params: {
   text: string;
   model: string;
@@ -201,7 +196,7 @@ function normalizeStructuredExtractionResult(params: {
     } catch {
       throw new Error("Codex structured extraction returned invalid JSON.");
     }
-    if (isJsonSchemaObject(params.req.jsonSchema)) {
+    if (isRecord(params.req.jsonSchema)) {
       const validation = validateJsonSchemaValue({
         schema: params.req.jsonSchema,
         cacheKey: "codex.media-understanding.extractStructured",

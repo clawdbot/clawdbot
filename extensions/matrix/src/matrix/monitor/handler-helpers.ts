@@ -1,12 +1,11 @@
 import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CoreConfig } from "../../types.js";
 import {
   formatMatrixMediaTooLargeText,
   formatMatrixMediaUnavailableText,
   formatMatrixMessageText,
-  resolveMatrixMessageAttachment,
-  resolveMatrixMessageBody,
 } from "../media-text.js";
 import { formatPollAsText, isPollStartType, parsePollStartContent } from "../poll-types.js";
 import { resolveMatrixStoredSessionMeta } from "../session-store-metadata.js";
@@ -130,8 +129,7 @@ export function resolveMatrixSharedDmContextNotice(params: {
 
     return [
       "This Matrix DM is sharing a session with another Matrix DM room.",
-      "Use /focus here for a one-off isolated thread session when thread bindings are enabled, or set",
-      "channels.matrix.dm.sessionScope to per-room to isolate each Matrix DM room.",
+      "Set channels.matrix.dm.sessionScope to per-room to isolate each Matrix DM room.",
     ].join(" ");
   } catch (err) {
     params.logVerboseMessage(
@@ -146,22 +144,32 @@ export function resolveMatrixPendingHistoryText(params: {
   content: RoomMessageEventContent;
   mediaUrl?: string;
 }): string {
-  if (params.mentionPrecheckText) {
+  if (!params.mediaUrl) {
     return params.mentionPrecheckText;
   }
-  if (!params.mediaUrl) {
-    return "";
-  }
-  const body = typeof params.content.body === "string" ? params.content.body.trim() : undefined;
+  const body = typeof params.content.body === "string" ? params.content.body : undefined;
   const filename =
-    typeof params.content.filename === "string" ? params.content.filename.trim() : undefined;
+    typeof params.content.filename === "string" ? params.content.filename : undefined;
   const msgtype = typeof params.content.msgtype === "string" ? params.content.msgtype : undefined;
-  return (
-    formatMatrixMessageText({
-      body: resolveMatrixMessageBody({ body, filename, msgtype }),
-      attachment: resolveMatrixMessageAttachment({ body, filename, msgtype }),
-    }) ?? ""
-  );
+  return formatMatrixMessageText({ body, filename, msgtype }) ?? params.mentionPrecheckText;
+}
+
+export function resolveMatrixInboundMediaContent(content: RoomMessageEventContent) {
+  const file = content.file && typeof content.file === "object" ? content.file : undefined;
+  const info =
+    content.info && typeof content.info === "object"
+      ? (content.info as { mimetype?: string; size?: number })
+      : undefined;
+  const body = normalizeOptionalString(content.body);
+
+  return {
+    url: normalizeOptionalString(content.url) ?? normalizeOptionalString(file?.url),
+    file,
+    body: body ?? "",
+    contentType: info?.mimetype,
+    sizeBytes: typeof info?.size === "number" ? info.size : undefined,
+    originalFilename: normalizeOptionalString(content.filename) ?? body,
+  };
 }
 
 export function isMatrixAudioMediaEnabled(cfg: CoreConfig): boolean {
@@ -184,22 +192,12 @@ export function shouldDeferMatrixAudioPreflightForRoomIngress(params: {
   if (!isMatrixAudioMediaEnabled(params.cfg)) {
     return false;
   }
-  const content = params.content;
-  const contentUrl = "url" in content && typeof content.url === "string" ? content.url : undefined;
-  const contentFile =
-    "file" in content && content.file && typeof content.file === "object"
-      ? content.file
-      : undefined;
-  const mediaUrl = contentUrl ?? contentFile?.url;
-  const contentInfo =
-    "info" in content && content.info && typeof content.info === "object"
-      ? (content.info as { mimetype?: string })
-      : undefined;
+  const mediaContent = resolveMatrixInboundMediaContent(params.content);
   return (
-    mediaUrl?.startsWith("mxc://") === true &&
+    mediaContent.url?.startsWith("mxc://") === true &&
     isMatrixAudioContent({
-      msgtype: typeof content.msgtype === "string" ? content.msgtype : undefined,
-      mimetype: contentInfo?.mimetype,
+      msgtype: typeof params.content.msgtype === "string" ? params.content.msgtype : undefined,
+      mimetype: mediaContent.contentType,
     })
   );
 }

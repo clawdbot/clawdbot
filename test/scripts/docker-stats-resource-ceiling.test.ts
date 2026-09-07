@@ -1,4 +1,3 @@
-// Docker Stats Resource Ceiling tests cover docker stats resource ceiling script behavior.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -93,17 +92,30 @@ describe("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs", () => {
     expect(looseCpu.stderr).toContain("had invalid CPUPerc");
   });
 
-  it("reports and enforces parsed Docker resource peaks", () => {
+  it("parses mixed stats lines, enforces peaks, and ignores terminal samples", () => {
+    const cappedLine = validStatsLineWithBytes(MAX_STATS_SAMPLE_LINE_BYTES);
+    const paddedLine = validStatsLineWithBytes(1024);
     const result = runAssert(
-      writeStats('{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%"}\n'),
+      writeStats(
+        [
+          '{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%"}\n',
+          `${paddedLine}\n`,
+          `${cappedLine}\r\n`,
+          '{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%"}\r',
+          '{"MemUsage":"64MiB / 2GiB","CPUPerc":"15.0%"}\r',
+          '{"MemUsage":"512B / 2GiB","CPUPerc":"0.5%"}\n',
+          '{"MemUsage":"0B / 0B","CPUPerc":"0.0%"}\n',
+        ].join(""),
+      ),
       "256.5",
       "50.5",
     );
 
-    expect(result.status).toBe(0);
+    expect(Buffer.byteLength(cappedLine, "utf8")).toBe(MAX_STATS_SAMPLE_LINE_BYTES);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("memory=128.0MiB");
     expect(result.stdout).toContain("cpu=25.0%");
-    expect(result.stdout).toContain("samples=1");
+    expect(result.stdout).toContain("samples=6");
   });
 
   it("streams stats logs instead of slurping them into memory", () => {
@@ -122,56 +134,6 @@ describe("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("exceeded 1048576 bytes");
     expect(result.stderr).not.toContain("was not valid JSON");
-  });
-
-  it("accepts large stats sample lines within the line cap", () => {
-    const padding = "x".repeat(1024);
-    const result = runAssert(
-      writeStats(`{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%","padding":"${padding}"}\n`),
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("samples=1");
-  });
-
-  it("accepts CRLF stats sample lines whose content exactly matches the line cap", () => {
-    const line = validStatsLineWithBytes(MAX_STATS_SAMPLE_LINE_BYTES);
-    const result = runAssert(writeStats(`${line}\r\n`));
-
-    expect(Buffer.byteLength(line, "utf8")).toBe(MAX_STATS_SAMPLE_LINE_BYTES);
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("samples=1");
-  });
-
-  it("accepts stats sample lines separated by standalone carriage returns", () => {
-    const result = runAssert(
-      writeStats(
-        '{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%"}\r{"MemUsage":"64MiB / 2GiB","CPUPerc":"15.0%"}\r',
-      ),
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("memory=128.0MiB");
-    expect(result.stdout).toContain("samples=2");
-  });
-
-  it("accepts byte-unit Docker memory samples", () => {
-    const result = runAssert(writeStats('{"MemUsage":"512B / 2GiB","CPUPerc":"0.5%"}\n'));
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("samples=1");
-  });
-
-  it("ignores terminal zero-capacity Docker stats samples", () => {
-    const result = runAssert(
-      writeStats(
-        '{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%"}\n{"MemUsage":"0B / 0B","CPUPerc":"0.0%"}\n',
-      ),
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("memory=128.0MiB");
-    expect(result.stdout).toContain("samples=1");
   });
 
   it("still fails when only terminal zero-capacity samples were captured", () => {

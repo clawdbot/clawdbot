@@ -3,15 +3,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  createBoundedResponseTooLargeError,
+  readBoundedResponseText as readBoundedResponseTextWithLimit,
+} from "../../../lib/bounded-response.mjs";
+import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
-import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "../bounded-response-text.mjs";
 import {
   applyMockOpenAiModelConfig,
   parseMockOpenAiPort,
 } from "../fixtures/mock-openai-config.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
+import { isExplicitPluginDisableMarker } from "../plugin-uninstall-assertions.mjs";
 import {
   ERROR_DETAIL_TAIL_BYTES,
   fileContainsText,
@@ -83,7 +87,10 @@ async function readBoundedResponseText(
   byteLimit = clickClackHttpBodyMaxBytes(),
   options = {},
 ) {
-  return await readBoundedResponseTextWithLimit(response, label, byteLimit, options.timeoutPromise);
+  return await readBoundedResponseTextWithLimit(response, label, byteLimit, {
+    createTooLargeError: createBoundedResponseTooLargeError,
+    timeoutPromise: options.timeoutPromise,
+  });
 }
 
 async function readBoundedResponseJson(response, label, options = {}) {
@@ -210,7 +217,10 @@ function assertPluginUninstalled() {
   const cfg = readJson(configPath());
   const records = installRecords();
   assert(!records[pluginId], `install record still present for ${pluginId}`);
-  assert(!cfg.plugins?.entries?.[pluginId], `plugin config entry still present for ${pluginId}`);
+  assert(
+    isExplicitPluginDisableMarker(cfg, pluginId),
+    `exact disabled uninstall marker missing for ${pluginId}`,
+  );
   assert(!(cfg.plugins?.allow ?? []).includes(pluginId), `allowlist still contains ${pluginId}`);
   assert(!(cfg.plugins?.deny ?? []).includes(pluginId), `denylist still contains ${pluginId}`);
   if (!installPathFile) {
@@ -271,16 +281,29 @@ function configureClickClack() {
   writeConfig(cfg);
 }
 
-function assertChannelStatus() {
+function readChannelStatus() {
   const channel = process.argv[3];
   const statusPath = process.argv[4];
   const status = readJson(statusPath);
+  return { channel, status };
+}
+
+function assertChannelConfigured() {
+  const { channel, status } = readChannelStatus();
   const configured = Array.isArray(status.configuredChannels) ? status.configuredChannels : [];
-  const liveStatus = status.channels?.[channel];
   assert(
-    configured.includes(channel) || liveStatus?.ok === true,
-    `${channel} missing from channels status: ${JSON.stringify(status)}`,
+    configured.includes(channel),
+    `${channel} missing from configured channels: ${JSON.stringify(status)}`,
   );
+}
+
+function assertChannelRunning() {
+  const { channel, status } = readChannelStatus();
+  const accounts = status.channelAccounts?.[channel];
+  const defaultAccount = Array.isArray(accounts)
+    ? accounts.find((account) => account?.accountId === "default")
+    : undefined;
+  assert(defaultAccount?.running === true, `${channel} is not running: ${JSON.stringify(status)}`);
 }
 
 async function postClickClackInbound() {
@@ -309,10 +332,24 @@ async function waitClickClackSocket() {
     30,
     "ClickClack websocket timeout seconds",
   );
-  await waitForClickClackSocket({ baseUrl, timeoutMs: timeoutSeconds * 1000 });
+  const minimumSocketGeneration = readPositiveInt(
+    process.argv[5],
+    1,
+    "ClickClack minimum websocket generation",
+  );
+  await waitForClickClackSocket({
+    baseUrl,
+    timeoutMs: timeoutSeconds * 1000,
+    minimumSocketGeneration,
+  });
 }
 
-export async function waitForClickClackSocket({ baseUrl, timeoutMs, pollIntervalMs = 250 }) {
+export async function waitForClickClackSocket({
+  baseUrl,
+  timeoutMs,
+  minimumSocketGeneration = 1,
+  pollIntervalMs = 250,
+}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const remainingMs = Math.max(1, deadline - Date.now());
@@ -328,7 +365,7 @@ export async function waitForClickClackSocket({ baseUrl, timeoutMs, pollInterval
       },
     ).catch(() => undefined);
     if (state) {
-      if (Number(state.socketCount ?? 0) > 0) {
+      if (Number(state.socketGeneration ?? 0) >= minimumSocketGeneration) {
         return;
       }
     }
@@ -336,7 +373,9 @@ export async function waitForClickClackSocket({ baseUrl, timeoutMs, pollInterval
       setTimeout(resolve, Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())));
     });
   }
-  throw new Error(`Timed out waiting for ClickClack websocket connection at ${baseUrl}`);
+  throw new Error(
+    `Timed out waiting for ClickClack websocket generation ${minimumSocketGeneration} at ${baseUrl}`,
+  );
 }
 
 function assertClickClackState() {
@@ -376,7 +415,8 @@ const commands = {
   "assert-file-contains": assertFileContains,
   "assert-plugin-uninstalled": assertPluginUninstalled,
   "configure-clickclack": configureClickClack,
-  "assert-channel-status": assertChannelStatus,
+  "assert-channel-configured": assertChannelConfigured,
+  "assert-channel-running": assertChannelRunning,
   "post-clickclack-inbound": postClickClackInbound,
   "wait-clickclack-socket": waitClickClackSocket,
   "assert-clickclack-state": assertClickClackState,

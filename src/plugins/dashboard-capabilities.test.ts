@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { resolveBoardWidgetContentKindResourceUrls } from "./board-widget-content-kinds.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   loadOpenClawPlugins,
@@ -35,6 +36,174 @@ function loadFixture(plugin: TempPlugin) {
 }
 
 describe("plugin dashboard declarations", () => {
+  it.each([
+    ["/__openclaw__/diagram/app.js", "/__openclaw__/diagram/app.js"],
+    ["/mcp-app-sandbox", "/mcp-app-sandbox"],
+    ["/renderer/app.js?v=1#asset", "/renderer/app.js%3Fv=1%23asset"],
+  ])("publishes private renderer path %s through its capability", (resourcePath, resolvedPath) => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "diagram",
+      body: `module.exports = {
+        id: "diagram",
+        register(api) {
+          api.registerBoardWidgetContentKind({
+            kind: "diagram",
+            label: "Diagram",
+            resources: { surface: "diagram", paths: [${JSON.stringify(resourcePath)}] },
+            validateSource(source) { if (!source.trim()) throw new Error("source required"); },
+            composeDocument({ source }) { return "<main>" + source + "</main>"; },
+          });
+        },
+      };`,
+    });
+
+    const registry = loadFixture(plugin);
+
+    expect(registry.plugins.find((entry) => entry.id === plugin.id)?.status).toBe("loaded");
+    expect(registry.boardWidgetContentKinds.get("diagram")).toMatchObject({
+      pluginId: "diagram",
+      pluginKind: "diagram:diagram",
+      definition: { kind: "diagram", label: "Diagram" },
+    });
+    const registration = registry.boardWidgetContentKinds.get("diagram");
+    expect(
+      registration &&
+        resolveBoardWidgetContentKindResourceUrls(
+          registration,
+          "https://gateway.test/__openclaw__/cap/token",
+        ),
+    ).toEqual({ [resourcePath]: `https://gateway.test/__openclaw__/cap/token${resolvedPath}` });
+  });
+
+  it("fails plugin load atomically for invalid board widget content kinds", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "invalid-widget-kind",
+      body: `module.exports = {
+        id: "invalid-widget-kind",
+        register(api) {
+          api.registerBoardWidgetContentKind({
+            kind: "html",
+            label: "Invalid",
+            resources: { surface: "canvas", paths: ["/__openclaw__/invalid/app.js"] },
+            validateSource() {},
+            composeDocument() { return ""; },
+          });
+        },
+      };`,
+    });
+
+    const registry = loadFixture(plugin);
+    const record = registry.plugins.find((entry) => entry.id === plugin.id);
+
+    expect(record).toMatchObject({ status: "error", failurePhase: "register" });
+    expect(record?.error).toContain('kind "html" is invalid or reserved');
+    expect(registry.boardWidgetContentKinds.size).toBe(0);
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        pluginId: plugin.id,
+        code: "dashboard-declaration-invalid",
+      }),
+    );
+  });
+
+  it.each([
+    "/mcp-app-sandbox",
+    "/renderer/../app.js",
+    "/renderer/%2e%2e/app.js",
+    "/renderer/./app.js",
+    "/renderer/app.js?v=1",
+    "/renderer/app.js#v1",
+    "/renderer\\app.js",
+  ])("rejects an unservable public resource path %s", (resourcePath) => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "invalid-renderer-path",
+      body: `module.exports = {
+        id: "invalid-renderer-path",
+        register(api) {
+          api.registerBoardWidgetContentKind({
+            kind: "diagram",
+            label: "Diagram",
+            resources: {
+              surface: "renderer",
+              paths: [${JSON.stringify(resourcePath)}],
+              async readPublicResource() { return undefined; },
+            },
+            validateSource() {},
+            composeDocument() { return ""; },
+          });
+        },
+      };`,
+    });
+
+    const registry = loadFixture(plugin);
+    const record = registry.plugins.find((entry) => entry.id === plugin.id);
+    expect(record).toMatchObject({ status: "error", failurePhase: "register" });
+    expect(record?.error).toContain("resource path");
+    expect(registry.boardWidgetContentKinds.size).toBe(0);
+  });
+
+  it.each([
+    { firstPublic: false, secondPublic: true, sharedPath: true },
+    { firstPublic: true, secondPublic: false, sharedPath: true },
+    { firstPublic: true, secondPublic: true, sharedPath: true },
+    { firstPublic: false, secondPublic: false, sharedPath: true },
+    { firstPublic: true, secondPublic: true, sharedPath: false },
+  ])(
+    "enforces resource path ownership (firstPublic=$firstPublic, secondPublic=$secondPublic, sharedPath=$sharedPath)",
+    ({ firstPublic, secondPublic, sharedPath }) => {
+      useNoBundledPlugins();
+      const createRenderer = (isPublic: boolean, kind: "first" | "second") => {
+        const resourceName = kind === "first" || sharedPath ? "shared" : "other";
+        return writePlugin({
+          id: `renderer-${kind}`,
+          body: `module.exports = {
+            id: "renderer-${kind}",
+            register(api) {
+              api.registerBoardWidgetContentKind({
+                kind: "${kind}",
+                label: "Renderer",
+                resources: {
+                  surface: "${kind}",
+                  paths: ["/__openclaw__/renderer/${resourceName}.js"],
+                  ${isPublic ? "async readPublicResource() { return undefined; }," : ""}
+                },
+                validateSource() {},
+                composeDocument() { return ""; },
+              });
+            },
+          };`,
+        });
+      };
+      const firstPlugin = createRenderer(firstPublic, "first");
+      const secondPlugin = createRenderer(secondPublic, "second");
+      const plugins = [firstPlugin, secondPlugin];
+      const registry = loadOpenClawPlugins({
+        cache: false,
+        workspaceDir: firstPlugin.dir,
+        config: {
+          plugins: {
+            load: { paths: plugins.map((plugin) => plugin.file) },
+            allow: plugins.map((plugin) => plugin.id),
+          },
+        },
+        onlyPluginIds: plugins.map((plugin) => plugin.id),
+      });
+      expect(registry.plugins.find((entry) => entry.id === firstPlugin.id)?.status).toBe("loaded");
+      const second = registry.plugins.find((entry) => entry.id === secondPlugin.id);
+      if (sharedPath && (firstPublic || secondPublic)) {
+        expect(second).toMatchObject({ status: "error", failurePhase: "register" });
+        expect(second?.error).toContain("public resource paths must be unique");
+        expect([...registry.boardWidgetContentKinds.keys()]).toEqual(["first"]);
+      } else {
+        expect(second?.status).toBe("loaded");
+        expect([...registry.boardWidgetContentKinds.keys()]).toEqual(["first", "second"]);
+      }
+    },
+  );
+
   it("loads the Workboard bindings and dispatch action from its manifest", () => {
     const result = loadPluginManifest(path.join(process.cwd(), "extensions", "workboard"));
 

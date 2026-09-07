@@ -5,12 +5,16 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { normalizeMediaFacts, resolveMediaFacts } from "../../../media/media-facts.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
+import type { AgentMessage } from "../../runtime/index.js";
 import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
-import { detectAndLoadPromptImages, hasHydratableMediaImages } from "./images.js";
+import {
+  detectAndLoadPromptImages,
+  hasHydratableMediaImages,
+  hydratePromptMediaMessages,
+} from "./images.js";
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
-
 describe("fact-carried image references", () => {
   it("counts only facts that will hydrate an image attachment", () => {
     expect(hasHydratableMediaImages([{ path: "/tmp/photo.png", kind: "image" }])).toBe(true);
@@ -30,6 +34,98 @@ describe("fact-carried image references", () => {
     expect(hasHydratableMediaImages(undefined)).toBe(false);
     for (const contentType of ["audio", "video", "document"]) {
       expect(hasHydratableMediaImages([{ path: "/tmp/photo.png", contentType }])).toBe(false);
+    }
+  });
+
+  it("shares canonical SVG, TIFF, and document classification with embedded image refs", () => {
+    expect(hasHydratableMediaImages([{ path: "/tmp/diagram.svg" }])).toBe(false);
+    expect(hasHydratableMediaImages([{ path: "/tmp/diagram.svg", kind: "unknown" }])).toBe(false);
+    expect(hasHydratableMediaImages([{ path: "/tmp/diagram.svg", kind: "image" }])).toBe(true);
+    expect(hasHydratableMediaImages([{ path: "/tmp/scan.tiff" }])).toBe(true);
+    expect(
+      hasHydratableMediaImages([
+        { path: "/tmp/scan.tif", contentType: "application/octet-stream" },
+      ]),
+    ).toBe(true);
+    expect(
+      hasHydratableMediaImages([
+        { path: "/tmp/report.png", kind: "unknown", contentType: "application/pdf" },
+      ]),
+    ).toBe(false);
+  });
+
+  it.each([
+    {
+      name: "filename-only SVG",
+      fileName: "diagram.svg",
+      contentType: undefined,
+      kind: undefined,
+      bytes: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'),
+      expectedImages: 0,
+    },
+    {
+      name: "unknown-kind PDF metadata over valid PNG bytes",
+      fileName: "report.png",
+      contentType: "application/pdf",
+      kind: "unknown" as const,
+      bytes: Buffer.from(TINY_PNG_BASE64, "base64"),
+      expectedImages: 0,
+    },
+    {
+      name: "filename-only authentic PNG",
+      fileName: "scan.png",
+      contentType: undefined,
+      kind: undefined,
+      bytes: Buffer.from(TINY_PNG_BASE64, "base64"),
+      expectedImages: 1,
+    },
+    {
+      name: "generic-binary authentic PNG",
+      fileName: "scan.png",
+      contentType: "application/octet-stream",
+      kind: undefined,
+      bytes: Buffer.from(TINY_PNG_BASE64, "base64"),
+      expectedImages: 1,
+    },
+  ])("applies canonical $name rules to actual persisted embedded replay", async (testCase) => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canonical-media-ref-"));
+    const imagePath = path.join(workspaceDir, testCase.fileName);
+    await fs.writeFile(imagePath, testCase.bytes);
+    const media = [{ path: imagePath, contentType: testCase.contentType, kind: testCase.kind }];
+
+    try {
+      const loaded = await detectAndLoadPromptImages({
+        prompt: "",
+        media,
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        workspaceOnly: true,
+      });
+      expect(loaded.images).toHaveLength(testCase.expectedImages);
+      expect(loaded.failedMediaCount).toBe(0);
+      if (testCase.expectedImages > 0) {
+        expect(loaded.images[0]?.mimeType).toBe("image/png");
+      }
+
+      const persisted = {
+        role: "user",
+        content: "inspect",
+        __openclaw: { media },
+      } as unknown as AgentMessage;
+      const replayed = await hydratePromptMediaMessages([persisted], {
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        workspaceOnly: true,
+      });
+      const replayedMessage = replayed[0];
+      const content = replayedMessage?.role === "user" ? replayedMessage.content : undefined;
+      const images = Array.isArray(content) ? content.filter((item) => item.type === "image") : [];
+      expect(images).toHaveLength(testCase.expectedImages);
+      if (testCase.expectedImages > 0) {
+        expect(images[0]?.mimeType).toBe("image/png");
+      }
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
 
@@ -138,28 +234,38 @@ describe("fact-carried image references", () => {
     }
   });
 
-  it("fails an exact inline slot whose image block is missing", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-missing-inline-"));
-    const imagePath = path.join(workspaceDir, "stale.png");
-    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+  it.each(["readable", "unavailable"] as const)(
+    "handles a missing inline block with its %s exact source",
+    async (source) => {
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-missing-inline-"));
+      const imagePath = path.join(workspaceDir, "photo.png");
+      const sourceAvailable = source === "readable";
 
-    try {
-      const result = await detectAndLoadPromptImages({
-        prompt: "inspect",
-        media: [{ path: imagePath, contentType: "image/png" }],
-        workspaceDir,
-        model: { input: ["text", "image"] },
-        imageOrder: ["inline"],
-        workspaceOnly: true,
-      });
+      try {
+        if (sourceAvailable) {
+          await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+        }
+        const result = await detectAndLoadPromptImages({
+          prompt: "inspect",
+          media: [{ path: imagePath, contentType: "image/png" }],
+          workspaceDir,
+          model: { input: ["text", "image"] },
+          imageOrder: ["inline"],
+          workspaceOnly: true,
+        });
 
-      expect(result.loadedCount).toBe(0);
-      expect(result.failedMediaCount).toBe(1);
-      expect(result.images).toEqual([]);
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
-  });
+        expect(result.loadedCount).toBe(sourceAvailable ? 1 : 0);
+        expect(result.skippedCount).toBe(sourceAvailable ? 0 : 1);
+        expect(result.failedMediaCount).toBe(sourceAvailable ? 0 : 1);
+        expect(result.images).toEqual(
+          sourceAvailable ? [{ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" }] : [],
+        );
+        expect(result.imageFactIndexes).toEqual(sourceAvailable ? [0] : []);
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("hydrates a fact whose only local identity is a file URL", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-file-url-"));

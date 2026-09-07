@@ -108,6 +108,10 @@ For automatic refresh, create your own app at the [Twitch Developer Console](htt
 {
   channels: {
     twitch: {
+      username: "openclaw",
+      accessToken: "oauth:abc123...",
+      clientId: "xyz789...",
+      channel: "yourchannel",
       clientSecret: "your_client_secret",
       refreshToken: "your_refresh_token",
     },
@@ -164,6 +168,9 @@ Every account entry needs its own `accessToken` (the env var covers only the def
         twitch: {
           accounts: {
             default: {
+              username: "openclaw",
+              accessToken: "oauth:abc123...",
+              channel: "yourchannel",
               allowFrom: ["123456789", "987654321"],
             },
           },
@@ -179,6 +186,9 @@ Every account entry needs its own `accessToken` (the env var covers only the def
         twitch: {
           accounts: {
             default: {
+              username: "openclaw",
+              accessToken: "oauth:abc123...",
+              channel: "yourchannel",
               allowedRoles: ["moderator", "vip"],
             },
           },
@@ -196,6 +206,9 @@ Every account entry needs its own `accessToken` (the env var covers only the def
         twitch: {
           accounts: {
             default: {
+              username: "openclaw",
+              accessToken: "oauth:abc123...",
+              channel: "yourchannel",
               requireMention: false,
             },
           },
@@ -214,6 +227,19 @@ Find yours with the [username to ID converter](https://www.streamweasels.com/too
 </Note>
 
 ## Troubleshooting
+
+### Execution identity audit
+
+With [execution identity collection](/gateway/audit#run-identity-inspection) enabled,
+a trusted native Twitch plugin attributes the run to the native Twitch sender,
+scoped to the configured account. The audit stores an opaque identity, not the raw
+Twitch user ID. Roles such as moderator authorize access; they do not replace
+the sender's identity. Missing native user IDs remain unknown even when a role or
+open policy allows a reply. External plugin installations do not gain trusted
+participant evidence through this path. Audit collection never changes these
+access decisions.
+
+### Connection and replies
 
 First, run diagnostic commands:
 
@@ -300,8 +326,8 @@ openclaw channels status --probe
 ### Provider options
 
 - `channels.twitch.enabled` - Enable/disable channel startup
-- `channels.twitch.username` / `accessToken` / `clientId` / `channel` - Simplified single-account config (implicit `default` account; takes precedence over `accounts.default`)
-- `channels.twitch.accounts.<accountName>` - Multi-account config (all account fields above)
+- `channels.twitch.username` / `accessToken` / `clientId` / `channel` - Simplified single-account config with an implicit `default` account
+- `channels.twitch.accounts.<accountName>` - Multi-account config (all account fields above); do not combine it with top-level account credentials
 - `channels.twitch.defaultAccount` - Which account name is the default
 - `channels.twitch.markdown.tables` - Markdown table rendering mode (`off` | `bullets` | `code` | `block`)
 
@@ -312,14 +338,17 @@ Full example:
   channels: {
     twitch: {
       enabled: true,
-      username: "openclaw",
-      accessToken: "oauth:abc123...",
-      clientId: "xyz789...",
-      channel: "yourchannel",
-      clientSecret: "secret123...",
-      refreshToken: "refresh456...",
-      allowFrom: ["123456789"],
+      defaultAccount: "default",
       accounts: {
+        default: {
+          username: "openclaw",
+          accessToken: "oauth:abc123...",
+          clientId: "xyz789...",
+          channel: "yourchannel",
+          clientSecret: "secret123...",
+          refreshToken: "refresh456...",
+          allowFrom: ["123456789"],
+        },
         second: {
           username: "mybot",
           accessToken: "oauth:def456...",
@@ -349,7 +378,7 @@ The agent can send Twitch messages through the message tool `send` action:
 }
 ```
 
-`to` is optional and defaults to the account's configured `channel`.
+When replying in a Twitch conversation, omit `to` to use the current conversation. Message-tool calls without a current conversation and CLI sends require an explicit target. Direct Gateway `message.action` sends can omit `to` to use the selected account's configured `channel`.
 
 ## Safety and ops
 
@@ -364,6 +393,7 @@ The agent can send Twitch messages through the message tool `send` action:
 
 - **500 characters** per message; longer replies are chunked at word boundaries.
 - Markdown is stripped before sending (Twitch chat is plain text; newlines become spaces).
+- Text that becomes empty after Markdown stripping, such as `---`, is recorded as intentionally not sent and does not count as a delivered message.
 - OpenClaw adds no rate limiting of its own; the Twurple chat client handles Twitch rate limits.
 
 ## Related

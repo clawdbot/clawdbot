@@ -1,0 +1,114 @@
+.tasks-page-list {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.tasks-page-list .settings-section__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.task-heading-facts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.task-heading-facts strong {
+  color: var(--text-strong);
+  font-family: var(--mono);
+  font-weight: 700;
+}
+
+.settings-row.task-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.task-row__facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.task-row__facts > span + span::before {
+  content: "·";
+  margin-right: var(--space-1);
+  color: var(--border-strong);
+}
+
+.task-row__warning {
+  display: grid;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  color: var(--warn);
+  font-size: var(--control-ui-text-sm);
+}
+
+.settings-row__control.task-row__control {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: none;
+}
+
+.task-row__links {
+  display: grid;
+  justify-items: end;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  white-space: nowrap;
+}
+
+.task-row__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+@media (max-width: 640px) {
+  .tasks-page-list {
+    gap: var(--space-4);
+  }
+
+  .settings-row.task-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-2);
+  }
+
+  .settings-row__control.task-row__control {
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+    gap: var(--space-2);
+  }
+
+  .task-row__links {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: var(--space-2);
+  }
+
+  .task-row__actions .btn {
+    min-width: 72px;
+    min-height: 44px;
+  }
+
+  .task-row__actions {
+    flex-wrap: wrap;
+  }
+}

@@ -63,7 +63,9 @@ openclaw fleet create acme \
   --env OPENCLAW_DISABLE_BONJOUR=1
 ```
 
-Environment keys use letters, digits, and underscores and cannot start with a digit. Values must be single-line because Fleet passes them through a protected runtime environment file. Fleet rejects attempts to override the managed container-path and Gateway-token variables listed under [Storage and container layout](#storage-and-container-layout).
+Environment keys use letters, digits, and underscores and cannot start with a digit. Values must be single-line because Fleet passes them through a protected runtime environment file. Fleet rejects attempts to override the managed container-path and Gateway-token variables listed under [Storage and container layout](/cli/fleet#storage-and-container-layout).
+
+Fleet defaults `XDG_CACHE_HOME` to `/home/node/.openclaw/cache` on the tenant state mount. An explicit `--env XDG_CACHE_HOME=...` value survives upgrade and restore, including a value equal to the current default.
 
 ### Create options
 
@@ -262,14 +264,16 @@ Purge is retryable when an exact expected tenant directory is already absent. Th
 
 ## Storage and container layout
 
-Cell state and auth-profile encryption keys use separate per-tenant host paths under the active OpenClaw state directory:
+Cell state and the legacy auth-profile encryption key use separate per-tenant host paths under the active OpenClaw state directory:
 
 ```text
 <state-dir>/fleet/cells/<tenant>/
 <state-dir>/fleet/auth-profile-secrets/<tenant>/
 ```
 
-The first directory is mounted at `/home/node/.openclaw`. The second is mounted at `/home/node/.config/openclaw`, matching the official Docker setup's encryption-key mount. The encryption key is therefore not exposed beneath the ordinary state mount or included when only the cell-state directory is backed up or shared. Both directories survive normal removal and upgrade; `fleet rm --purge-data --force` deletes both after separate containment checks.
+The first directory is mounted at `/home/node/.openclaw`. The second is mounted at `/home/node/.config/openclaw`, matching the official Docker setup's legacy OAuth migration-key mount. Both directories survive normal removal and upgrade; `fleet rm --purge-data --force` deletes both after separate containment checks.
+
+Current OAuth token material is stored as plaintext in SQLite beneath the ordinary state mount, including access, refresh, and ID-token values. The separate key can recover legacy encrypted sidecar credentials; it does not encrypt current SQLite rows or protect them from a state-only backup or copy. Treat cell-state backups and shared copies as credentials because they can contain usable OAuth material.
 
 Before first start, Fleet initializes the cell config with `gateway.mode=local`, token auth, the LAN container bind, and Control UI origins for the allocated host port. The token value is not written to that config; it remains in the container environment.
 
@@ -282,7 +286,10 @@ Fleet pins the official image's container paths with these environment values:
 | `OPENCLAW_STATE_DIR`     | `/home/node/.openclaw`               |
 | `OPENCLAW_CONFIG_PATH`   | `/home/node/.openclaw/openclaw.json` |
 | `OPENCLAW_WORKSPACE_DIR` | `/home/node/.openclaw/workspace`     |
+| `XDG_CACHE_HOME`         | `/home/node/.openclaw/cache`         |
 | `OPENCLAW_GATEWAY_TOKEN` | Generated or supplied cell token     |
+
+`XDG_CACHE_HOME` is the one overrideable generated default in this table. The other listed container-path variables and `OPENCLAW_GATEWAY_TOKEN` remain Fleet-managed.
 
 The official image defaults to the non-root `node` user with UID 1000. Fleet keeps the private `0700` bind mounts writable without making them world-accessible. Rootful Docker runs the cell with the invoking non-root UID and GID; rootless Docker uses container UID 0, which maps to the invoking unprivileged host user inside the daemon's user namespace. Podman uses `keep-id` with the invoking UID and GID. When Fleet itself runs as root against a rootful runtime, it retains the image user and assigns the initial mount files to UID/GID 1000.
 

@@ -28,19 +28,14 @@ export function jsonUtf8BytesOrInfinity(value: unknown): number {
 }
 
 function jsonStringByteLengthUpToLimit(value: string, remainingBytes: number): number {
-  if (value.length + 2 > remainingBytes) {
+  // Pre-scan raw UTF-8 only when the code-unit bounds are inconclusive.
+  if (
+    value.length + 2 > remainingBytes ||
+    (value.length * 3 + 2 > remainingBytes && Buffer.byteLength(value, "utf8") + 2 > remainingBytes)
+  ) {
     return remainingBytes + 1;
   }
   return jsonUtf8BytesOrInfinity(value);
-}
-
-function* enumerableOwnEntries(value: object): Generator<[string, unknown]> {
-  const record = value as Record<string, unknown>;
-  for (const key in record) {
-    if (Object.prototype.propertyIsEnumerable.call(record, key)) {
-      yield [key, record[key]];
-    }
-  }
 }
 
 /** Returns the first enumerable own keys in JavaScript enumeration order. */
@@ -130,7 +125,12 @@ export function boundedJsonUtf8Bytes(value: unknown, maxBytes: number): BoundedJ
 
       add(1);
       let wroteField = false;
-      for (const [key, field] of enumerableOwnEntries(objectEntry)) {
+      const record = objectEntry as Record<string, unknown>;
+      for (const key in record) {
+        if (!Object.prototype.propertyIsEnumerable.call(record, key)) {
+          continue;
+        }
+        const field = record[key];
         if (field === undefined || typeof field === "function" || typeof field === "symbol") {
           continue;
         }

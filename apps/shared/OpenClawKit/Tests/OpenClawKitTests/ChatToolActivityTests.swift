@@ -16,7 +16,8 @@ struct ChatToolActivityTests {
             details: nil,
             resultText: "done",
             isError: false,
-            isPending: false)])
+            isPending: false,
+            liveDiffStat: nil)])
     }
 
     @Test func `appends orphan result`() {
@@ -31,7 +32,8 @@ struct ChatToolActivityTests {
             details: nil,
             resultText: "orphaned",
             isError: false,
-            isPending: false)])
+            isPending: false,
+            liveDiffStat: nil)])
     }
 
     @Test func `preserves call order`() {
@@ -61,7 +63,8 @@ struct ChatToolActivityTests {
             details: nil,
             resultText: nil,
             isError: false,
-            isPending: false)])
+            isPending: false,
+            liveDiffStat: nil)])
     }
 
     @Test func `threads paired result details`() {

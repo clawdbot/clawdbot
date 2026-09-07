@@ -44,7 +44,7 @@ Your `package.json` needs an `openclaw` field that tells the plugin system what 
       "version": "1.0.0",
       "type": "module",
       "dependencies": {
-        "typebox": "1.1.39"
+        "typebox": "1.3.18"
       },
       "peerDependencies": {
         "openclaw": ">=2026.3.24-beta.2"
@@ -162,6 +162,8 @@ export const setupContract = defineChannelSetupContract({
 
 Supported field kinds are `string`, `boolean`, `integer`, `string-list`, and `choice`. Use `sensitive: true` for credentials. Each field key must equal the camelCased attribute name of its long CLI flag, including any negated form, such as `apiToken` for `--api-token`. Boolean fields may add `cli.negatedFlags` when both positive and `--no-*` forms are needed. `channel`, `account`, and the account display `name` remain the shared control envelope.
 
+For a boolean `useEnv` field, set `envVars` to the static environment variable names required by the plugin runtime. Non-interactive channel setup then rejects `--use-env` before writing config when any declared variable is empty. Set `envVarMode: "any"` when one variable from the list is sufficient, such as an inline credential or file-path alternative. Omitting `envVars` preserves the plugin's existing validation behavior.
+
 The released `setup`/`ChannelSetupInput` adapter stays available for existing external plugins. New plugins should expose `setupContract`; OpenClaw always prefers it when both are present.
 
 | Field                                  | Type       | What it means                                                                 |
@@ -177,7 +179,7 @@ The released `setup`/`ChannelSetupInput` adapter stays available for existing ex
 | `aliases`                              | `string[]` | Extra lookup aliases for channel selection.                                   |
 | `preferOver`                           | `string[]` | Lower-priority plugin/channel ids this channel should outrank.                |
 | `systemImage`                          | `string`   | Optional icon/system-image name for channel UI catalogs.                      |
-| `selectionDocsPrefix`                  | `string`   | Prefix text before docs links in selection surfaces.                          |
+| `selectionDocsPrefix`                  | `string`   | Prefix before docs links; omit for default or use `""` to suppress it.        |
 | `selectionDocsOmitLabel`               | `boolean`  | Show the docs path directly instead of a labeled docs link in selection copy. |
 | `selectionExtras`                      | `string[]` | Extra short strings appended in selection copy.                               |
 | `markdownCapable`                      | `boolean`  | Marks the channel as markdown-capable for outbound formatting decisions.      |
@@ -266,27 +268,7 @@ Example:
   </Accordion>
 </AccordionGroup>
 
-### Deferred full load
-
-Channel plugins can opt into deferred loading with:
-
-```json
-{
-  "openclaw": {
-    "extensions": ["./index.ts"],
-    "setupEntry": "./setup-entry.ts",
-    "startup": {
-      "deferConfiguredChannelFullLoadUntilAfterListen": true
-    }
-  }
-}
-```
-
-When enabled, OpenClaw loads only `setupEntry` during the pre-listen startup phase, even for already-configured channels. The full entry loads after the gateway starts listening.
-
-<Warning>
-Only enable deferred loading when your `setupEntry` registers everything the gateway needs before it starts listening (channel registration, HTTP routes, gateway methods). If the full entry owns required startup capabilities, keep the default behavior.
-</Warning>
+### Setup-time gateway methods
 
 If your setup/full entry registers gateway RPC methods, keep them on a plugin-specific prefix. Reserved core admin namespaces (`config.*`, `exec.approvals.*`, `wizard.*`, `update.*`) stay core-owned and always normalize to `operator.admin`.
 
@@ -373,15 +355,13 @@ Bundled workspace channels that keep setup-safe exports in sidecar modules can u
   <Accordion title="When OpenClaw uses setupEntry instead of the full entry">
     - The channel is disabled but needs setup/onboarding surfaces.
     - The channel is enabled but unconfigured.
-    - Deferred loading is enabled (`deferConfiguredChannelFullLoadUntilAfterListen`).
 
   </Accordion>
   <Accordion title="What setupEntry must register">
     - The channel plugin object (via `defineSetupPluginEntry`).
-    - Any HTTP routes required before gateway listen.
-    - Any gateway methods needed during startup.
+    - Setup-time runtime surfaces declared through `registerSetupRuntime`, when needed.
 
-    Those startup gateway methods should still avoid reserved core admin namespaces such as `config.*` or `update.*`.
+    Setup-time gateway methods should still avoid reserved core admin namespaces such as `config.*` or `update.*`.
 
   </Accordion>
   <Accordion title="What setupEntry should NOT include">
@@ -397,10 +377,10 @@ Bundled workspace channels that keep setup-safe exports in sidecar modules can u
 
 For hot setup-only paths, prefer the narrow setup helper seams over the broader `plugin-sdk/setup` umbrella when you only need part of the setup surface:
 
-| Import path                | Use it for                                                                                | Key exports                                                                                                                                                                                                                                                                                                           |
-| -------------------------- | ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `plugin-sdk/setup-runtime` | setup-time runtime helpers that stay available in `setupEntry` / deferred channel startup | `createSetupTranslator`, `createPatchedAccountSetupAdapter`, `createEnvPatchedAccountSetupAdapter`, `createSetupInputPresenceValidator`, `noteChannelLookupFailure`, `noteChannelLookupSummary`, `promptResolvedAllowFrom`, `splitSetupEntries`, `createAllowlistSetupWizardProxy`, `createDelegatedSetupWizardProxy` |
-| `plugin-sdk/setup-tools`   | setup/install CLI/archive/docs helpers                                                    | `formatCliCommand`, `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`, `CONFIG_DIR`                                                                                                                                                                                                         |
+| Import path                | Use it for                                                     | Key exports                                                                                                                                                                                                                                                                                                           |
+| -------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `plugin-sdk/setup-runtime` | setup-time runtime helpers that stay available in `setupEntry` | `createSetupTranslator`, `createPatchedAccountSetupAdapter`, `createEnvPatchedAccountSetupAdapter`, `createSetupInputPresenceValidator`, `noteChannelLookupFailure`, `noteChannelLookupSummary`, `promptResolvedAllowFrom`, `splitSetupEntries`, `createAllowlistSetupWizardProxy`, `createDelegatedSetupWizardProxy` |
+| `plugin-sdk/setup-tools`   | setup/install CLI/archive/docs helpers                         | `formatCliCommand`, `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`, `CONFIG_DIR`                                                                                                                                                                                                         |
 
 Use the broader `plugin-sdk/setup` seam when you want the full shared setup toolbox, including config-patch helpers such as `moveSingleAccountChannelSectionToDefaultAccount(...)`.
 
@@ -457,13 +437,16 @@ When a channel upgrades from a single-account top-level config to `channels.<id>
 
 Every channel plugin can extend or narrow that promotion through its setup adapter:
 
+- `configPromotion: "preserve-root"`: keep all root values in place, including common name, policy, and delivery fields; the plugin owns its account layout
 - `singleAccountKeysToMove`: extra top-level keys that should move into the promoted account
 - `namedAccountPromotionKeys`: when named accounts already exist, only these keys move into the promoted account; shared policy/delivery keys stay at the channel root
 - `resolveSingleAccountPromotionTarget(...)`: choose which existing account receives promoted values
 
-The presence of `singleAccountKeysToMove` marks the promotion contract complete. Declare the field even when it is an empty array to opt out of legacy key promotion. Adapters that omit the field retain a reader-backed pre-declaration promotion tier for already-published plugins. The 2026-07-22 registry sweep removed 23 keys with no published dependents and retained six common keys plus the setup-only `rooms` key. Each retained key is deleted as soon as its published readers migrate to declarations; no version boundary is required.
+The presence of `singleAccountKeysToMove` marks the promotion contract complete. Declare the field even when it is an empty array to opt out of legacy key promotion; an empty array does not suppress common fields. Adapters that omit the field retain a reader-backed pre-declaration promotion tier for already-published plugins. The 2026-07-22 registry sweep removed 23 keys with no published dependents and retained six common keys plus the setup-only `rooms` key. Each retained key is deleted as soon as its published readers migrate to declarations; no version boundary is required.
 
-Declare `openclaw.setupFeatures.configPromotion: true` in the plugin package manifest when doctor must load these declarations from the lightweight bundled setup artifact. The setup-only plugin surface and the full channel plugin must expose the same declarations.
+Declare `openclaw.setupFeatures.configPromotion: true` in the plugin package manifest when doctor must load these declarations from the lightweight setup entry. Doctor discovers that entry through the plugin manifest for both bundled and installed plugins, including disabled plugins. The setup-only plugin surface and the full channel plugin must expose the same declarations.
+
+For a plugin-owned root layout, also declare `openclaw.setupFeatures.configPromotion: "preserve-root"` in `package.json`. Doctor reads this static declaration for installed and bundled plugins, including disabled plugins, without executing their runtime. Omitting the declaration or using `false` does not opt out of promotion. The runtime declaration belongs on the adapter passed to `defineChannelSetupContract`, and covers shared CLI, declarative wizard, and policy-writer promotion. It does not change helpers that explicitly migrate a base name; use a selected-account writer when the root remains an implicit identity. Buzz is an example of this layout.
 
 When calling `moveSingleAccountChannelSectionToDefaultAccount(...)` with an already resolved plugin, pass its setup adapter as `setupSurface`. Caller-supplied setup surfaces take precedence over loaded and bundled lookup, which keeps scoped or setup-only plugins independent of global registration.
 

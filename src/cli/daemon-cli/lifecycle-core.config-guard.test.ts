@@ -2,7 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { VERSION } from "../../version.js";
 import {
-  defaultRuntime,
+  lifecycleTestRuntime,
   resetLifecycleRuntimeLogs,
   resetLifecycleServiceMocks,
   service,
@@ -30,7 +30,7 @@ const pluginPackagingHintItems = pluginPackagingRecoveryHints.map((text) => ({
 }));
 
 function expectLatestRuntimeJson(payload: unknown) {
-  const calls = defaultRuntime.writeJson.mock.calls;
+  const calls = lifecycleTestRuntime.writeJson.mock.calls;
   expect(calls[calls.length - 1]?.[0]).toEqual(payload);
 }
 
@@ -49,7 +49,7 @@ vi.mock("../../config/issue-format.js", () => ({
 }));
 
 vi.mock("../../runtime.js", () => ({
-  defaultRuntime,
+  defaultRuntime: lifecycleTestRuntime,
 }));
 
 function setConfigSnapshot(params: {

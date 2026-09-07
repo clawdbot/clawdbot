@@ -64,6 +64,10 @@
     "target": "ClawHub"
   },
   {
+    "source": "ClawHub CLI",
+    "target": "ClawHub CLI"
+  },
+  {
     "source": "Claws",
     "target": "Claws"
   },
@@ -178,6 +182,10 @@
   {
     "source": "Sessions",
     "target": "会话"
+  },
+  {
+    "source": "Session permission modes",
+    "target": "会话权限模式"
   },
   {
     "source": "Pi",
@@ -388,6 +396,10 @@
     "target": "微信"
   },
   {
+    "source": "WeCom",
+    "target": "企业微信"
+  },
+  {
     "source": "Weixin",
     "target": "微信"
   },
@@ -478,6 +490,10 @@
   {
     "source": "Adding capabilities (redirect)",
     "target": "添加能力（重定向）"
+  },
+  {
+    "source": "Adding capabilities",
+    "target": "添加能力"
   },
   {
     "source": "Adding capabilities (contributor guide)",
@@ -660,6 +676,10 @@
     "target": "Doctor"
   },
   {
+    "source": "Triage",
+    "target": "Triage"
+  },
+  {
     "source": "Config",
     "target": "配置"
   },
@@ -670,6 +690,10 @@
   {
     "source": "Memory overview",
     "target": "记忆概览"
+  },
+  {
+    "source": "QMD memory backend removal",
+    "target": "QMD 记忆后端移除"
   },
   {
     "source": "Active memory",
@@ -698,6 +722,54 @@
   {
     "source": "Configuration reference",
     "target": "配置参考"
+  },
+  {
+    "source": "Configuration — agents",
+    "target": "配置 — 智能体"
+  },
+  {
+    "source": "Configuration — audit, logging, diagnostics, and telemetry",
+    "target": "配置 — 审计、日志、诊断和遥测"
+  },
+  {
+    "source": "Configuration — automations and media template variables",
+    "target": "配置 — 自动化和媒体模板变量"
+  },
+  {
+    "source": "Configuration — browser, UI, and desktop",
+    "target": "配置 — 浏览器、UI 和桌面"
+  },
+  {
+    "source": "Configuration — channels",
+    "target": "配置 — 渠道"
+  },
+  {
+    "source": "Configuration — cloud worker environments",
+    "target": "配置 — Cloud Worker 环境"
+  },
+  {
+    "source": "Configuration — environment, secrets, and includes",
+    "target": "配置 — 环境变量、密钥和包含文件"
+  },
+  {
+    "source": "Configuration — gateway",
+    "target": "配置 — Gateway 网关"
+  },
+  {
+    "source": "Configuration — hooks",
+    "target": "配置 — Hooks"
+  },
+  {
+    "source": "Configuration — MCP, skills, and plugins",
+    "target": "配置 — MCP、Skills 和插件"
+  },
+  {
+    "source": "Configuration — runtime basics",
+    "target": "配置 — 运行时基础"
+  },
+  {
+    "source": "Configuration — tools",
+    "target": "配置 — 工具"
   },
   {
     "source": "wiki",
@@ -870,6 +942,10 @@
   {
     "source": "Tool plugins",
     "target": "工具插件"
+  },
+  {
+    "source": "Feature plugins",
+    "target": "功能插件"
   },
   {
     "source": "Plugin SDK subpaths",
@@ -1309,11 +1385,11 @@
   },
   {
     "source": "Building Plugins",
-    "target": "Building Plugins"
+    "target": "构建插件"
   },
   {
     "source": "Plugin Manifest",
-    "target": "Plugin Manifest"
+    "target": "插件清单"
   },
   {
     "source": "Workboard plugin",
@@ -1382,6 +1458,10 @@
   {
     "source": "Background process",
     "target": "后台进程"
+  },
+  {
+    "source": "Channel inbound API",
+    "target": "渠道入站 API"
   },
   {
     "source": "Channel outbound API",
@@ -1556,6 +1636,10 @@
     "target": "故障排查"
   },
   {
+    "source": "Update troubleshooting",
+    "target": "更新故障排查"
+  },
+  {
     "source": "Webhooks",
     "target": "Webhooks"
   },
@@ -1636,6 +1720,18 @@
     "target": "Gateway 配置参考"
   },
   {
+    "source": "v2026.8.1 (AKA OpenClaw 2.0)",
+    "target": "v2026.8.1 (AKA OpenClaw 2.0)"
+  },
+  {
+    "source": "v2026.8.2",
+    "target": "v2026.8.2"
+  },
+  {
+    "source": "v2026.8.1",
+    "target": "v2026.8.1"
+  },
+  {
     "source": "v2026.7.1",
     "target": "v2026.7.1"
   },
@@ -1664,6 +1760,26 @@
     "target": "Baseten（Inkling + Model APIs）"
   },
   {
+    "source": "ChromeOS",
+    "target": "ChromeOS"
+  },
+  {
+    "source": "ChromeOS (Crostini)",
+    "target": "ChromeOS (Crostini)"
+  },
+  {
+    "source": "Linux guide",
+    "target": "Linux 指南"
+  },
+  {
+    "source": "Node install guidance",
+    "target": "Node 安装指南"
+  },
+  {
+    "source": "Gateway runbook",
+    "target": "Gateway 运行手册"
+  },
+  {
     "source": "Multi-user mode",
     "target": "多用户模式"
   },
@@ -1674,6 +1790,10 @@
   {
     "source": "Session management",
     "target": "会话管理"
+  },
+  {
+    "source": "Session tools",
+    "target": "会话工具"
   },
   {
     "source": "Presence",
@@ -1702,5 +1822,349 @@
   {
     "source": "Automations (cron)",
     "target": "自动化 (cron)"
+  },
+  {
+    "source": "Daytona",
+    "target": "Daytona"
+  },
+  {
+    "source": "Gateway remote access",
+    "target": "Gateway 远程访问"
+  },
+  {
+    "source": "Updating OpenClaw",
+    "target": "更新 OpenClaw"
+  },
+  {
+    "source": "Connect a machine",
+    "target": "连接机器"
+  },
+  {
+    "source": "Portals",
+    "target": "门户"
+  },
+  {
+    "source": "Channels",
+    "target": "渠道"
+  },
+  {
+    "source": "Docker VM Runtime",
+    "target": "Docker VM 运行时"
+  },
+  {
+    "source": "Updating",
+    "target": "更新"
+  },
+  {
+    "source": "Onboarding (CLI)",
+    "target": "引导设置（CLI）"
+  },
+  {
+    "source": "CLI Automation",
+    "target": "CLI 自动化"
+  },
+  {
+    "source": "llama-server",
+    "target": "llama-server"
+  },
+  {
+    "source": "llmman",
+    "target": "llmman"
+  },
+  {
+    "source": "llmman (local models)",
+    "target": "llmman（本地模型）"
+  },
+  {
+    "source": "llama.cpp (managed or existing server)",
+    "target": "llama.cpp（托管或现有服务器）"
+  },
+  {
+    "source": "Local model services",
+    "target": "本地模型服务"
+  },
+  {
+    "source": "LM Studio",
+    "target": "LM Studio"
+  },
+  {
+    "source": "Widget panel",
+    "target": "小组件面板"
+  },
+  {
+    "source": "Show widget",
+    "target": "显示小组件"
+  },
+  {
+    "source": "Session dashboards",
+    "target": "会话仪表板"
+  },
+  {
+    "source": "macOS widget panel",
+    "target": "macOS 小组件面板"
+  },
+  {
+    "source": "Geolocation plugin",
+    "target": "地理位置插件"
+  },
+  {
+    "source": "Trusted proxy auth",
+    "target": "受信任代理认证"
+  },
+  {
+    "source": "geolocation",
+    "target": "geolocation"
+  },
+  {
+    "source": "Memory provenance and deletion",
+    "target": "记忆溯源与删除"
+  },
+  {
+    "source": "Provenance & deletion",
+    "target": "溯源与删除"
+  },
+  {
+    "source": "Memory admission policy configuration",
+    "target": "记忆准入策略配置"
+  },
+  {
+    "source": "Memory architecture",
+    "target": "记忆架构"
+  },
+  {
+    "source": "Built-in memory",
+    "target": "内置记忆"
+  },
+  {
+    "source": "macOS SSH tunnel",
+    "target": "macOS SSH 隧道"
+  },
+  {
+    "source": "Node and tsx startup errors",
+    "target": "Node 和 tsx 启动错误"
+  },
+  {
+    "source": "Installation and Onboarding",
+    "target": "安装与新手引导"
+  },
+  {
+    "source": "v2026.8.1: Installation and Onboarding",
+    "target": "v2026.8.1：安装与新手引导"
+  },
+  {
+    "source": "The New Web UI",
+    "target": "全新 Web UI"
+  },
+  {
+    "source": "v2026.8.1: The New Web UI",
+    "target": "v2026.8.1：全新 Web UI"
+  },
+  {
+    "source": "Updates and Maintenance",
+    "target": "更新与维护"
+  },
+  {
+    "source": "v2026.8.1: Updates and Maintenance",
+    "target": "v2026.8.1：更新与维护"
+  },
+  {
+    "source": "Messaging",
+    "target": "消息"
+  },
+  {
+    "source": "v2026.8.1: Messaging",
+    "target": "v2026.8.1：消息"
+  },
+  {
+    "source": "Memory",
+    "target": "记忆"
+  },
+  {
+    "source": "v2026.8.1: Memory",
+    "target": "v2026.8.1：记忆"
+  },
+  {
+    "source": "v2026.8.1: Skills",
+    "target": "v2026.8.1：Skills"
+  },
+  {
+    "source": "Native Apps",
+    "target": "原生应用"
+  },
+  {
+    "source": "v2026.8.1: Native Apps",
+    "target": "v2026.8.1：原生应用"
+  },
+  {
+    "source": "Models and Providers",
+    "target": "Models 与提供商"
+  },
+  {
+    "source": "v2026.8.1: Models and Providers",
+    "target": "v2026.8.1：Models 与提供商"
+  },
+  {
+    "source": "Automations and Scheduling",
+    "target": "自动化与定时任务"
+  },
+  {
+    "source": "v2026.8.1: Automations and Scheduling",
+    "target": "v2026.8.1：自动化与定时任务"
+  },
+  {
+    "source": "Browser and Computer Use",
+    "target": "浏览器与计算机使用"
+  },
+  {
+    "source": "v2026.8.1: Browser and Computer Use",
+    "target": "v2026.8.1：浏览器与计算机使用"
+  },
+  {
+    "source": "Plugins and Integrations",
+    "target": "插件与集成"
+  },
+  {
+    "source": "v2026.8.1: Plugins and Integrations",
+    "target": "v2026.8.1：插件与集成"
+  },
+  {
+    "source": "Security and Privacy",
+    "target": "安全与隐私"
+  },
+  {
+    "source": "v2026.8.1: Security and Privacy",
+    "target": "v2026.8.1：安全与隐私"
+  },
+  {
+    "source": "Quality-of-Life Improvements",
+    "target": "体验改进"
+  },
+  {
+    "source": "v2026.8.1: Quality-of-Life Improvements",
+    "target": "v2026.8.1：体验改进"
+  },
+  {
+    "source": "Other Bug Fixes",
+    "target": "其他缺陷修复"
+  },
+  {
+    "source": "v2026.8.1: Other Bug Fixes",
+    "target": "v2026.8.1：其他缺陷修复"
+  },
+  {
+    "source": "Maintainer and Internal Changes",
+    "target": "维护者与内部变更"
+  },
+  {
+    "source": "v2026.8.1: Maintainer and Internal Changes",
+    "target": "v2026.8.1：维护者与内部变更"
+  },
+  {
+    "source": "v2026.8.1: Maintenance changes (part 1 of 8)",
+    "target": "v2026.8.1：维护变更（第 1 部分，共 8 部分）"
+  },
+  {
+    "source": "Part 1 of 8",
+    "target": "第 1 部分，共 8 部分"
+  },
+  {
+    "source": "v2026.8.1: Maintenance changes (part 2 of 8)",
+    "target": "v2026.8.1：维护变更（第 2 部分，共 8 部分）"
+  },
+  {
+    "source": "Part 2 of 8",
+    "target": "第 2 部分，共 8 部分"
+  },
+  {
+    "source": "v2026.8.1: Maintenance changes (part 3 of 8)",
+    "target": "v2026.8.1：维护变更（第 3 部分，共 8 部分）"
+  },
+  {
+    "source": "Part 3 of 8",
+    "target": "第 3 部分，共 8 部分"
+  },
+  {
+    "source": "v2026.8.1: Maintenance changes (part 4 of 8)",
+    "target": "v2026.8.1：维护变更（第 4 部分，共 8 部分）"
+  },
+  {
+    "source": "Part 4 of 8",
+    "target": "第 4 部分，共 8 部分"
+  },
+  {
+    "source": "v2026.8.1: Maintenance changes (part 5 of 8)",
+    "target": "v2026.8.1：维护变更（第 5 部分，共 8 部分）"
+  },
+  {
+    "source": "Part 5 of 8",
+    "target": "第 5 部分，共 8 部分"
+  },
+  {
+    "source": "v2026.8.1: Maintenance changes (part 6 of 8)",
+    "target": "v2026.8.1：维护变更（第 6 部分，共 8 部分）"
+  },
+  {
+    "source": "Part 6 of 8",
+    "target": "第 6 部分，共 8 部分"
+  },
+  {
+    "source": "v2026.8.1: Maintenance changes (part 7 of 8)",
+    "target": "v2026.8.1：维护变更（第 7 部分，共 8 部分）"
+  },
+  {
+    "source": "Part 7 of 8",
+    "target": "第 7 部分，共 8 部分"
+  },
+  {
+    "source": "v2026.8.1: Maintenance changes (part 8 of 8)",
+    "target": "v2026.8.1：维护变更（第 8 部分，共 8 部分）"
+  },
+  {
+    "source": "Part 8 of 8",
+    "target": "第 8 部分，共 8 部分"
+  },
+  {
+    "source": "Chat channels",
+    "target": "聊天渠道"
+  },
+  {
+    "source": "Installer internals",
+    "target": "安装程序内部机制"
+  },
+  {
+    "source": "Connect and pair",
+    "target": "连接与配对"
+  },
+  {
+    "source": "Sessions and sidebar",
+    "target": "会话与侧边栏"
+  },
+  {
+    "source": "Chat",
+    "target": "聊天"
+  },
+  {
+    "source": "Panels and docks",
+    "target": "面板与停靠区"
+  },
+  {
+    "source": "Settings",
+    "target": "设置"
+  },
+  {
+    "source": "Feature and RPC reference",
+    "target": "功能与 RPC 参考"
+  },
+  {
+    "source": "Offline and reconnect",
+    "target": "离线与重新连接"
+  },
+  {
+    "source": "Security model",
+    "target": "安全模型"
+  },
+  {
+    "source": "Build and develop",
+    "target": "构建与开发"
   }
 ]

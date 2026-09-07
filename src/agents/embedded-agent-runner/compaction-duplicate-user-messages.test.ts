@@ -73,6 +73,85 @@ describe("compaction duplicate user message pruning", () => {
     ]);
   });
 
+  it.each([
+    {
+      name: "a completed assistant reply",
+      completedTurn: [
+        { role: "assistant", content: [{ type: "text", text: "first reply" }], timestamp: 1_500 },
+      ],
+    },
+    {
+      name: "an assistant tool call and its result",
+      completedTurn: [
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+          timestamp: 1_500,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-1",
+          content: [{ type: "text", text: "read complete" }],
+          timestamp: 1_750,
+        },
+      ],
+    },
+  ])("preserves the same user request after $name", ({ completedTurn }) => {
+    const first = userMessage({ timestamp: 1_000 });
+    const next = userMessage({ timestamp: 2_000 });
+    const messages = [first, ...completedTurn, next];
+
+    expect(dedupeDuplicateUserMessagesForCompaction(messages)).toEqual(messages);
+  });
+
+  it.each([
+    { name: "images", kind: "image", extension: "png" },
+    { name: "videos", kind: "video", extension: "mp4" },
+    { name: "documents", kind: "document", extension: "pdf" },
+  ])("preserves separately attached $name with the same caption", ({ kind, extension }) => {
+    const first = {
+      ...userMessage({ timestamp: 1_000 }),
+      __openclaw: { media: [{ kind, url: `media://inbound/first.${extension}` }] },
+    };
+    const second = {
+      ...userMessage({ timestamp: 2_000 }),
+      __openclaw: { media: [{ kind, url: `media://inbound/second.${extension}` }] },
+    };
+
+    expect(dedupeDuplicateUserMessagesForCompaction([first, second])).toEqual([first, second]);
+  });
+
+  it("preserves an attachment added to a previously text-only request", () => {
+    const first = userMessage({ timestamp: 1_000 });
+    const second = {
+      ...userMessage({ timestamp: 2_000 }),
+      __openclaw: { media: [{ kind: "image", url: "media://inbound/diagram.png" }] },
+    };
+
+    expect(dedupeDuplicateUserMessagesForCompaction([first, second])).toEqual([first, second]);
+  });
+
+  it("preserves prompts with distinct case-sensitive paths", () => {
+    const first = userMessage({
+      timestamp: 1_000,
+      content: "please inspect /srv/Production/ReleaseNotes.md",
+    });
+    const second = userMessage({
+      timestamp: 2_000,
+      content: "please inspect /srv/production/releasenotes.md",
+    });
+
+    expect(dedupeDuplicateUserMessagesForCompaction([first, second])).toEqual([first, second]);
+  });
+
+  it("preserves older requests without losing the newest retry timestamp", () => {
+    const newer = userMessage({ timestamp: 120_000 });
+    const older = userMessage({ timestamp: 1_000 });
+    const retry = userMessage({ timestamp: 121_000 });
+
+    expect(dedupeDuplicateUserMessagesForCompaction([newer, older, retry])).toEqual([newer, older]);
+  });
+
   it("does not collide when sender ids and text contain the old delimiter", () => {
     const first = userMessage({
       content: "b|please run deployment status now",

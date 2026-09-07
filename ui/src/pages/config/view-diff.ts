@@ -1,9 +1,9 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { isSensitiveConfigPath } from "../../../../src/config/sensitive-paths.js";
 import type { ConfigUiHints } from "../../api/types.ts";
 import {
   countSensitiveConfigValues,
   hintForPath,
-  isSensitiveConfigPath,
   redactedPlaceholder,
 } from "../../components/config-form.shared.ts";
 import { t } from "../../i18n/index.ts";

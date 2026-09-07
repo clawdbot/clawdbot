@@ -291,6 +291,25 @@ describe("downloadToFile", () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 
+  it("cancels the response body when the declared length exceeds the download cap", async () => {
+    const response = new Response("archive", {
+      status: 200,
+      headers: { "content-length": "12" },
+    });
+    const cancel = vi.spyOn(response.body!, "cancel").mockRejectedValueOnce(new Error("closed"));
+    fetchWithSsrFGuardMock.mockResolvedValue({ response, release: vi.fn() });
+
+    await withTempFile(async (filePath) => {
+      await expect(
+        downloadToFile("https://example.com/signal-cli.tgz", filePath, 5, 8),
+      ).rejects.toThrow("declared 12");
+
+      await expectPathMissing(filePath);
+    });
+
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it("downloads through the SSRF guard with an explicit timeout", async () => {
     const fetchResult = okDownloadResponse("archive");
     fetchWithSsrFGuardMock.mockResolvedValue(fetchResult);

@@ -3,24 +3,7 @@ import Testing
 
 @MainActor
 struct DashboardGatewayMenuTests {
-    @Test func `connection label names primary only for multiple gateways`() {
-        let primary = Self.entry(id: "primary", name: "Mac Studio", isPrimary: true, health: .ok)
-        let profile = Self.entry(id: "profile:travel", name: "Travel", canPromote: true)
-        let cases: [(AppState.ConnectionMode, [DashboardGatewayEntry], String)] = [
-            (.unconfigured, [primary], "OpenClaw Not Configured"),
-            (.unconfigured, [primary, profile], "OpenClaw Not Configured — Mac Studio"),
-            (.local, [primary], "OpenClaw Active"),
-            (.local, [primary, profile], "OpenClaw Active — Mac Studio"),
-            (.remote, [primary], "Remote OpenClaw Active"),
-            (.remote, [primary, profile], "Remote OpenClaw Active — Mac Studio"),
-        ]
-
-        for (mode, entries, expected) in cases {
-            #expect(DashboardGatewayMenuModel.connectionLabel(mode: mode, entries: entries) == expected)
-        }
-    }
-
-    @Test func `menu model is gated and preserves catalog facts`() {
+    @Test func `menu model includes single gateways and preserves catalog facts`() {
         let primary = Self.entry(id: "primary", name: "Mac Studio", isPrimary: true, health: .ok)
         let profile = Self.entry(
             id: "profile:travel",
@@ -28,7 +11,25 @@ struct DashboardGatewayMenuTests {
             canPromote: true,
             health: .unknown)
         let cases: [([DashboardGatewayEntry], [DashboardGatewayMenuItem])] = [
-            ([primary], []),
+            ([], []),
+            ([primary], [
+                DashboardGatewayMenuItem(
+                    target: .primary,
+                    name: "Mac Studio",
+                    health: .ok,
+                    isPrimary: true,
+                    canPromote: false,
+                    shortcutNumber: 1),
+            ]),
+            ([profile], [
+                DashboardGatewayMenuItem(
+                    target: .profile("travel"),
+                    name: "Travel",
+                    health: .unknown,
+                    isPrimary: false,
+                    canPromote: true,
+                    shortcutNumber: 1),
+            ]),
             ([primary, profile], [
                 DashboardGatewayMenuItem(
                     target: .primary,

@@ -1,5 +1,8 @@
 {
   "id": "device-pair",
+  "doctorContract": {
+    "stateMigrations": [{ "id": "device-pair-notify-json-to-plugin-state" }]
+  },
   "activation": {
     "onStartup": true
   },

@@ -176,6 +176,7 @@ export const ircSetupContract = defineChannelSetupContract({
     useEnv: {
       kind: "boolean",
       cli: { flags: "--use-env", description: "Use IRC environment configuration" },
+      envVars: ["IRC_HOST", "IRC_NICK"],
     },
   },
   legacyAdapter: ircSetupAdapter,

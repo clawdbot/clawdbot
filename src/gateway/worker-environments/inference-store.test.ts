@@ -2,12 +2,12 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   WorkerInferenceStartParams,
   WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
-import { stableStringify } from "../../agents/stable-stringify.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -24,6 +24,7 @@ import {
   type WorkerInferenceExecutor,
   type WorkerInferenceSink,
 } from "./inference.js";
+import { serializeWorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 
 const ENVIRONMENT_ID = "environment-inference-store";
@@ -42,6 +43,13 @@ const IDENTITY: WorkerConnectionIdentity = {
   bundleHash: ["fixture", "bundle", "digest"].join("-"),
   sessionId: REQUEST.sessionId,
   runId: REQUEST.runId,
+  turnClaim: {
+    sessionId: REQUEST.sessionId,
+    claimId: "claim-store",
+    runId: REQUEST.runId,
+    placementGeneration: 4,
+    owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: REQUEST.runEpoch },
+  },
   ownerEpoch: REQUEST.runEpoch,
   rpcSetVersion: 1,
   protocolFeatures: ["worker-inference-v1"],
@@ -53,8 +61,16 @@ const PROVIDER_ERROR: WorkerInferenceTerminalOutcome = {
   message: "Provider request failed",
 };
 
-function hashRequest(request: WorkerInferenceStartParams): string {
-  return createHash("sha256").update(stableStringify(request)).digest("hex");
+function hashRequest(
+  identity: WorkerConnectionIdentity,
+  request: WorkerInferenceStartParams,
+): string {
+  if (!identity.turnClaim) {
+    throw new Error("inference fixture requires a turn claim");
+  }
+  return createHash("sha256")
+    .update(`${serializeWorkerSessionTurnClaim(identity.turnClaim)}\0${stableStringify(request)}`)
+    .digest("hex");
 }
 
 const BASE_INPUT: WorkerInferenceTurnInput = {
@@ -63,7 +79,7 @@ const BASE_INPUT: WorkerInferenceTurnInput = {
   runEpoch: REQUEST.runEpoch,
   runId: REQUEST.runId,
   turnId: REQUEST.turnId,
-  requestHash: hashRequest(REQUEST),
+  requestHash: hashRequest(IDENTITY, REQUEST),
 };
 
 function createSink() {
@@ -129,7 +145,6 @@ describe("worker inference SQLite store", () => {
     const manager = createWorkerInferenceManager({
       execute,
       store: managerStore,
-      now: () => nowMs,
     });
     const { frames, sink } = createSink();
     const result = manager.start({ identity: IDENTITY, request: REQUEST, sink });

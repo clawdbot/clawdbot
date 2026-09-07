@@ -76,7 +76,7 @@ public final class GatewayDiscoveryModel {
     private var gatewaysByDomain: [String: [DiscoveredGateway]] = [:]
     private var statesByDomain: [String: NWBrowser.State] = [:]
     private var localIdentity: LocalIdentity
-    private let localDisplayName: String?
+    @ObservationIgnored private var localIdentityTask: Task<Void, Never>?
     private let filterLocalGateways: Bool
     private var resolvedServiceByID: [String: ResolvedGatewayService] = [:]
     private var pendingServiceResolvers: [String: GatewayServiceResolver] = [:]
@@ -90,14 +90,19 @@ public final class GatewayDiscoveryModel {
         localDisplayName: String? = nil,
         filterLocalGateways: Bool = true)
     {
-        self.localDisplayName = localDisplayName
         self.filterLocalGateways = filterLocalGateways
         self.localIdentity = Self.buildLocalIdentityFast(displayName: localDisplayName)
-        self.refreshLocalIdentity()
+    }
+
+    deinit {
+        // Cancellation is thread-safe; isolated deinit can crash when SwiftUI discards a model outside a task.
+        self.localIdentityTask?.cancel()
     }
 
     public func start() {
         if !self.browsers.isEmpty { return }
+        // Host resolution belongs to active discovery, not discarded SwiftUI models.
+        self.refreshLocalIdentity()
 
         for domain in OpenClawBonjour.gatewayServiceDomains {
             let browser = GatewayDiscoveryBrowserSupport.makeBrowser(
@@ -153,6 +158,8 @@ public final class GatewayDiscoveryModel {
     }
 
     public func stop() {
+        self.localIdentityTask?.cancel()
+        self.localIdentityTask = nil
         for browser in self.browsers.values {
             browser.cancel()
         }
@@ -463,55 +470,29 @@ public final class GatewayDiscoveryModel {
     }
 
     public static func parseGatewayTXT(_ txt: [String: String]) -> GatewayTXT {
-        var lanHost: String?
-        var tailnetDns: String?
-        var sshPort = 22
-        var gatewayPort: Int?
-        var gatewayTls = false
-        var gatewayDirectReachable = false
-        var cliPath: String?
+        func nonEmptyString(_ key: String) -> String? {
+            guard let value = txt[key]?.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
+            return value.isEmpty ? nil : value
+        }
 
-        if let value = txt["lanHost"] {
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            lanHost = trimmed.isEmpty ? nil : trimmed
+        func positiveInteger(_ key: String) -> Int? {
+            guard let value = nonEmptyString(key), let parsed = Int(value), parsed > 0 else { return nil }
+            return parsed
         }
-        if let value = txt["tailnetDns"] {
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            tailnetDns = trimmed.isEmpty ? nil : trimmed
-        }
-        if let value = txt["sshPort"],
-           let parsed = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)),
-           parsed > 0
-        {
-            sshPort = parsed
-        }
-        if let value = txt["gatewayPort"],
-           let parsed = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)),
-           parsed > 0
-        {
-            gatewayPort = parsed
-        }
-        if let value = txt["gatewayTls"] {
-            let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            gatewayTls = normalized == "1" || normalized == "true" || normalized == "yes"
-        }
-        if let value = txt["gatewayDirectReachable"] {
-            let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            gatewayDirectReachable = normalized == "1" || normalized == "true" || normalized == "yes"
-        }
-        if let value = txt["cliPath"] {
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            cliPath = trimmed.isEmpty ? nil : trimmed
+
+        func booleanValue(_ key: String) -> Bool {
+            guard let normalized = nonEmptyString(key)?.lowercased() else { return false }
+            return normalized == "1" || normalized == "true" || normalized == "yes"
         }
 
         return GatewayTXT(
-            lanHost: lanHost,
-            tailnetDns: tailnetDns,
-            sshPort: sshPort,
-            gatewayPort: gatewayPort,
-            gatewayTls: gatewayTls,
-            gatewayDirectReachable: gatewayDirectReachable,
-            cliPath: cliPath)
+            lanHost: nonEmptyString("lanHost"),
+            tailnetDns: nonEmptyString("tailnetDns"),
+            sshPort: positiveInteger("sshPort") ?? 22,
+            gatewayPort: positiveInteger("gatewayPort"),
+            gatewayTls: booleanValue("gatewayTls"),
+            gatewayDirectReachable: booleanValue("gatewayDirectReachable"),
+            cliPath: nonEmptyString("cliPath"))
     }
 
     public static func buildSSHTarget(user: String, host: String, port: Int) -> String {
@@ -614,26 +595,19 @@ public final class GatewayDiscoveryModel {
 
     private func refreshLocalIdentity() {
         let fastIdentity = self.localIdentity
-        let displayName = self.localDisplayName
-        Task.detached(priority: .utility) {
-            let slowIdentity = Self.buildLocalIdentitySlow(displayName: displayName)
-            let merged = Self.mergeLocalIdentity(fast: fastIdentity, slow: slowIdentity)
+        self.localIdentityTask = Task.detached(priority: .utility) { [weak self] in
+            guard !Task.isCancelled else { return }
+            let slowIdentity = Self.buildLocalIdentitySlow()
+            let merged = LocalIdentity(
+                hostTokens: fastIdentity.hostTokens.union(slowIdentity.hostTokens),
+                displayTokens: fastIdentity.displayTokens.union(slowIdentity.displayTokens))
             await MainActor.run { [weak self] in
-                guard let self else { return }
+                guard !Task.isCancelled, let self else { return }
                 guard self.localIdentity != merged else { return }
                 self.localIdentity = merged
                 self.recomputeGateways()
             }
         }
-    }
-
-    private nonisolated static func mergeLocalIdentity(
-        fast: LocalIdentity,
-        slow: LocalIdentity) -> LocalIdentity
-    {
-        LocalIdentity(
-            hostTokens: fast.hostTokens.union(slow.hostTokens),
-            displayTokens: fast.displayTokens.union(slow.displayTokens))
     }
 
     private nonisolated static func buildLocalIdentityFast(displayName: String?) -> LocalIdentity {
@@ -652,7 +626,7 @@ public final class GatewayDiscoveryModel {
         return LocalIdentity(hostTokens: hostTokens, displayTokens: displayTokens)
     }
 
-    private nonisolated static func buildLocalIdentitySlow(displayName: String?) -> LocalIdentity {
+    private nonisolated static func buildLocalIdentitySlow() -> LocalIdentity {
         var hostTokens: Set<String> = []
         var displayTokens: Set<String> = []
 
@@ -660,10 +634,6 @@ public final class GatewayDiscoveryModel {
            let token = normalizeHostToken(host)
         {
             hostTokens.insert(token)
-        }
-
-        if let token = normalizeDisplayToken(displayName) {
-            displayTokens.insert(token)
         }
 
         if let token = normalizeDisplayToken(Host.current().localizedName) {

@@ -1,16 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { registerPluginDashboardCapabilities } from "../../plugins/dashboard-capabilities.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   getActivePluginRegistry,
-  pinActivePluginSessionExtensionRegistry,
-  releasePinnedPluginSessionExtensionRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
-import { createPluginGatewayMethodDescriptor } from "../methods/registry.js";
+import { createPluginGatewayMethodDescriptor } from "../methods/descriptor.js";
 import { createBoardHarness } from "./board.test-support.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -70,6 +69,68 @@ function createWorkboardCapabilityRegistry(params: {
 }
 
 describe("board plugin capabilities", () => {
+  it.each(["read", "action"] as const)(
+    "rejects an awaited plugin %s after its widget is removed or replaced",
+    async (operation) => {
+      const previousRegistry = getActivePluginRegistry();
+      const started = createDeferred();
+      const release = createDeferred();
+      const handler: GatewayRequestHandlers[string] = async ({ respond }) => {
+        started.resolve();
+        await release.promise;
+        respond(true, { ok: true });
+      };
+      setActivePluginRegistry(
+        createWorkboardCapabilityRegistry({ readHandler: handler, actionHandler: handler }),
+      );
+      try {
+        const { invoke } = createBoardHarness(undefined, {}, undefined, {
+          getRuntimeConfig: () => ({
+            agents: { list: [{ id: "main" }] },
+            tools: { exec: { mode: "full" } },
+          }),
+        });
+        const widget = {
+          sessionKey: "session",
+          name: "plugin-widget",
+          content: { kind: "html", html: "original" },
+          declared: { tools: ["workboard.cards.list", "workboard.dispatch"] },
+        };
+        await invoke("board.widget.put", widget);
+        const board = await invoke("board.get", { sessionKey: "session" });
+        const ticket = (board.mock.calls[0]![1] as BoardSnapshot).widgets[0]!.viewTicket;
+        const pending =
+          operation === "read"
+            ? invoke("board.data.read", { ticket, bindingId: "workboard.cards.list" })
+            : invoke("board.action", {
+                ticket,
+                action: "workboard.dispatch",
+                params: { force: true },
+              });
+        await started.promise;
+        if (operation === "read") {
+          await invoke("board.widget.put", {
+            ...widget,
+            content: { kind: "html", html: "replacement" },
+          });
+        } else {
+          await invoke("board.update", {
+            sessionKey: "session",
+            ops: [{ kind: "widget_remove", name: "plugin-widget" }],
+          });
+        }
+        release.resolve();
+        expect((await pending).mock.calls[0]?.[0]).toBe(false);
+      } finally {
+        release.resolve();
+        if (previousRegistry) {
+          setActivePluginRegistry(previousRegistry);
+        } else {
+          resetPluginRuntimeStateForTest();
+        }
+      }
+    },
+  );
   it("routes granted bindings and actions only while their plugin registry is active", async () => {
     const previousRegistry = getActivePluginRegistry();
     const readHandler = vi.fn<GatewayRequestHandlers[string]>(async ({ params, respond }) => {
@@ -104,7 +165,8 @@ describe("board plugin capabilities", () => {
         name: "plugin-widget",
         decision: "granted",
         revision: 1,
-        instanceId: store.getSnapshot("session").widgets[0]?.instanceId,
+        instanceId: store.getSnapshot({ sessionKey: "session", agentId: "main" }).widgets[0]
+          ?.instanceId,
       });
       const board = await invoke("board.get", { sessionKey: "session" });
       const snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
@@ -134,90 +196,34 @@ describe("board plugin capabilities", () => {
       expect(action.mock.calls[0]?.[1]).toEqual({ refreshed: true });
       expect(actionHandler).toHaveBeenCalledOnce();
 
+      setActivePluginRegistry(registry);
+      const staleAction = await invoke("board.action", {
+        ticket,
+        action: "workboard.dispatch",
+        params: { force: true },
+      });
+      expect(staleAction.mock.calls[0]?.[0]).toBe(false);
+      expect(staleAction.mock.calls[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
+      expect(actionHandler).toHaveBeenCalledOnce();
+
+      const refreshedBoard = await invoke("board.get", { sessionKey: "session" });
+      const refreshedSnapshot = refreshedBoard.mock.calls[0]?.[1] as BoardSnapshot;
+      const refreshedAction = await invoke("board.action", {
+        ticket: refreshedSnapshot.widgets[0]?.viewTicket,
+        action: "workboard.dispatch",
+        params: { force: true },
+      });
+      expect(refreshedAction.mock.calls[0]?.[1]).toEqual({ refreshed: true });
+      expect(actionHandler).toHaveBeenCalledTimes(2);
+
       setActivePluginRegistry(createEmptyPluginRegistry());
       const unavailable = await invoke("board.data.read", {
         ticket,
         bindingId: "workboard.cards.list",
       });
       expect(unavailable.mock.calls[0]?.[0]).toBe(false);
-      expect(unavailable.mock.calls[0]?.[2]?.message).toContain("not allowed");
+      expect(unavailable.mock.calls[0]?.[2]?.message).toContain("dashboard unavailable");
     } finally {
-      if (previousRegistry) {
-        setActivePluginRegistry(previousRegistry);
-      } else {
-        resetPluginRuntimeStateForTest();
-      }
-    }
-  });
-
-  it("keeps granted plugin capabilities pinned when an agent replaces the active registry", async () => {
-    const previousRegistry = getActivePluginRegistry();
-    const gatewayReadHandler = vi.fn<GatewayRequestHandlers[string]>(
-      async ({ params, respond }) => {
-        respond(true, { owner: "gateway", items: [params.filter ?? "all"] });
-      },
-    );
-    const gatewayActionHandler = vi.fn<GatewayRequestHandlers[string]>(
-      async ({ params, respond }) => {
-        respond(true, { owner: "gateway", refreshed: params.force });
-      },
-    );
-    const scopedReadHandler = vi.fn<GatewayRequestHandlers[string]>(async ({ respond }) => {
-      respond(true, { owner: "agent" });
-    });
-    const scopedActionHandler = vi.fn<GatewayRequestHandlers[string]>(async ({ respond }) => {
-      respond(true, { owner: "agent" });
-    });
-    const gatewayRegistry = createWorkboardCapabilityRegistry({
-      readHandler: gatewayReadHandler,
-      actionHandler: gatewayActionHandler,
-    });
-    const scopedRegistry = createWorkboardCapabilityRegistry({
-      readHandler: scopedReadHandler,
-      actionHandler: scopedActionHandler,
-    });
-    setActivePluginRegistry(gatewayRegistry);
-    pinActivePluginSessionExtensionRegistry(gatewayRegistry);
-    setActivePluginRegistry(scopedRegistry);
-
-    try {
-      const { invoke, store } = createBoardHarness();
-      await invoke("board.widget.put", {
-        sessionKey: "session",
-        name: "plugin-widget",
-        content: { kind: "html", html: "plugin" },
-        declared: { tools: ["workboard.cards.list", "workboard.dispatch"] },
-      });
-      await invoke("board.widget.grant", {
-        sessionKey: "session",
-        name: "plugin-widget",
-        decision: "granted",
-        revision: 1,
-        instanceId: store.getSnapshot("session").widgets[0]?.instanceId,
-      });
-      const board = await invoke("board.get", { sessionKey: "session" });
-      const snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
-      const ticket = snapshot.widgets[0]?.viewTicket;
-
-      const read = await invoke("board.data.read", {
-        ticket,
-        bindingId: "workboard.cards.list",
-        params: { filter: "ready" },
-      });
-      expect(read.mock.calls[0]?.[1]).toEqual({ owner: "gateway", items: ["ready"] });
-
-      const action = await invoke("board.action", {
-        ticket,
-        action: "workboard.dispatch",
-        params: { force: true },
-      });
-      expect(action.mock.calls[0]?.[1]).toEqual({ owner: "gateway", refreshed: true });
-      expect(gatewayReadHandler).toHaveBeenCalledOnce();
-      expect(gatewayActionHandler).toHaveBeenCalledOnce();
-      expect(scopedReadHandler).not.toHaveBeenCalled();
-      expect(scopedActionHandler).not.toHaveBeenCalled();
-    } finally {
-      releasePinnedPluginSessionExtensionRegistry(gatewayRegistry);
       if (previousRegistry) {
         setActivePluginRegistry(previousRegistry);
       } else {

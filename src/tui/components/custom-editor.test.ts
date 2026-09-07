@@ -1,5 +1,5 @@
 // Custom editor tests cover TUI editor key handling and cursor behavior.
-import { CombinedAutocompleteProvider, TUI } from "@earendil-works/pi-tui";
+import { CombinedAutocompleteProvider, type TUI } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getSlashCommands, shouldSubmitExactArgumentCompletion } from "../commands.js";
 import { editorTheme } from "../theme/theme.js";
@@ -202,14 +202,39 @@ describe("CustomEditor", () => {
     expect(editor.getText()).toBe("/fast on");
   });
 
-  it("keeps commands without argument completions on one-Enter submit", async () => {
+  it.each(["/help", "/hel"])("completes and submits %s with one Enter", async (input) => {
     const editor = createAutocompleteEditor();
     const onSubmit = vi.fn();
     editor.onSubmit = onSubmit;
-    await typeText(editor, "/help");
+    await typeText(editor, input);
 
     editor.handleInput("\r");
 
     expect(onSubmit).toHaveBeenCalledWith("/help");
+  });
+
+  it("preserves multiline boundaries around an accepted command completion", async () => {
+    const editor = createAutocompleteEditor();
+    const onSubmit = vi.fn();
+    editor.onSubmit = onSubmit;
+    editor.setText("\n");
+    editor.handleInput("\u001b[A");
+    await typeText(editor, "/hel");
+
+    editor.handleInput("\r");
+
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith("/help\n");
+  });
+
+  it("does not expand stored paste text for ordinary input", () => {
+    const tui = { requestRender: vi.fn() } as unknown as TUI;
+    const editor = new CustomEditor(tui, editorTheme);
+    editor.setText("draft");
+    const getExpandedText = vi.spyOn(editor, "getExpandedText");
+
+    editor.handleInput("x");
+
+    expect(getExpandedText).not.toHaveBeenCalled();
+    expect(editor.getText()).toBe("draftx");
   });
 });

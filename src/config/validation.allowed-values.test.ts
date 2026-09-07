@@ -1,6 +1,6 @@
 // Verifies config validation rejects unsupported enumerated values.
 import { describe, expect, it } from "vitest";
-import { validateConfigObjectRaw } from "./validation.js";
+import { validateConfigObjectRaw } from "./validation-core.js";
 
 function requireIssue<T extends { path: string }>(issues: T[], path: string): T {
   const issue = issues.find((entry) => entry.path === path);
@@ -31,6 +31,23 @@ describe("config validation allowed-values metadata", () => {
       expect(JSON.stringify(issue)).not.toContain("pathSegments");
       expect(issue.message).toContain('(allowed: "stable", "extended-stable", "beta", "dev")');
       expect(issue.allowedValues).toEqual(["stable", "extended-stable", "beta", "dev"]);
+      expect(issue.allowedValuesHiddenCount).toBe(0);
+    }
+  });
+
+  it("reports the supported diagnostics OTel protocol when grpc is configured", () => {
+    const result = validateConfigObjectRaw({
+      diagnostics: {
+        otel: {
+          protocol: "grpc",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = requireIssue(result.issues, "diagnostics.otel.protocol");
+      expect(issue.allowedValues).toEqual(["http/protobuf"]);
       expect(issue.allowedValuesHiddenCount).toBe(0);
     }
   });

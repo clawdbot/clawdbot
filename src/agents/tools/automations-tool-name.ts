@@ -11,7 +11,7 @@ export const AUTOMATIONS_TOOL_NAME = "automations";
  * RFC 0026; same contract as bash -> exec). Not migration debt: no doctor
  * rewrite, no removal window.
  */
-export const LEGACY_AUTOMATIONS_TOOL_NAMES = ["cron"] as const;
+const LEGACY_AUTOMATIONS_TOOL_NAMES = ["cron"] as const;
 
 /** True when a tool name refers to the scheduler tool, including legacy names. */
 export function isAutomationsToolName(name: string): boolean {

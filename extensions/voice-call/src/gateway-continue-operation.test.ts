@@ -15,13 +15,10 @@ describe("voice-call gateway continue operation store", () => {
 
     const started = store.start({
       callId: "call-1",
-      message: "hello",
       rt: {
         config: {},
-        manager: {
-          continueCall: async () => new Promise(() => {}),
-        },
       } as never,
+      run: async () => await new Promise(() => {}),
     });
 
     expect(started.pollTimeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);

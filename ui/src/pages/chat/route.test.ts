@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { SessionsResolveResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadChatRoute } from "./route-loader.ts";
 
@@ -18,38 +19,32 @@ function row(overrides: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
   };
 }
 
-function result(
-  sessions: GatewaySessionRow[],
-  options: Pick<SessionsListResult, "hasMore" | "nextOffset" | "offset"> = {},
-): SessionsListResult {
-  return {
-    ts: 1,
-    path: "sessions.json",
-    count: sessions.length,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions,
-    ...options,
-  };
-}
-
-function contextFor(listResult: SessionsListResult | null, mainKey = "main") {
-  const client = {};
-  const list = vi.fn(async (_options?: { offset?: number; search?: string }) => listResult);
+function contextFor(resolution: SessionsResolveResult = { ok: false }, mainKey = "main") {
+  const request = vi.fn(async (method: string, _params: Record<string, unknown>) => {
+    if (method === "sessions.resolve" || method === "chat.startup") {
+      return method === "chat.startup" ? { resolution, messages: [] } : resolution;
+    }
+    throw new Error(`Unexpected gateway request: ${method}`);
+  });
+  const client = { request };
+  const list = vi.fn();
   const context = {
     basePath: "",
+    router: { getState: () => ({ matches: [], pendingMatches: [] }), subscribe: () => () => {} },
     gateway: {
       snapshot: { phase: "connected", client, hello: null },
       subscribe: vi.fn(() => () => undefined),
+      subscribeEvents: vi.fn(() => () => undefined),
     },
     agents: { state: { agentsList: { mainKey } } },
-    sessions: { list },
+    sessions: { list, state: { result: null } },
   } as unknown as ApplicationContext;
-  return { context, list };
+  return { context, list, request };
 }
 
 describe("loadChatRoute", () => {
   it("leaves a bare namespace unresolved instead of inventing a main session", async () => {
-    const { context, list } = contextFor(result([]), "workspace");
+    const { context, list } = contextFor({ ok: false }, "workspace");
     const loaded = await loadChatRoute(
       context,
       { pathname: "/chat", search: "", hash: "" },
@@ -57,25 +52,23 @@ describe("loadChatRoute", () => {
       new AbortController().signal,
     );
 
-    expect(loaded).not.toHaveProperty("kind", "session");
+    expect(loaded).toEqual({ type: "notFound", data: { routeId: "chat" } });
     expect(list).not.toHaveBeenCalled();
   });
 
   it("survives sessionId rotation and canonicalizes decorative short-form segments", async () => {
-    const { context, list } = contextFor(result([row()]));
-    list
-      .mockResolvedValueOnce(result([row({ sessionId: "before-compaction" })]))
-      .mockResolvedValueOnce(result([row({ sessionId: "after-compaction" })]));
+    const { context, list, request } = contextFor({ ok: true, ...row(), agentId: "main" });
     const signal = new AbortController().signal;
     const redirected = await loadChatRoute(
       context,
-      { pathname: "/chat/wrong/not-the-name-12345678", search: "?draft=ship", hash: "" },
+      { pathname: "/chat/main/not-the-name-12345678", search: "?draft=ship", hash: "" },
       "chat",
       signal,
     );
     expect(redirected).toEqual({
       kind: "session",
       sessionKey,
+      agentId: "main",
       draft: "ship",
       face: "chat",
       canonicalLocation: {
@@ -84,7 +77,7 @@ describe("loadChatRoute", () => {
         hash: "",
       },
       canonicalLocationSource: {
-        pathname: "/chat/wrong/not-the-name-12345678",
+        pathname: "/chat/main/not-the-name-12345678",
         search: "?draft=ship",
         hash: "",
       },
@@ -97,15 +90,19 @@ describe("loadChatRoute", () => {
         "chat",
         signal,
       ),
-    ).resolves.toEqual({ kind: "session", sessionKey, draft: "ship", face: "chat" });
-    expect(list).toHaveBeenCalledTimes(2);
-    expect(list).toHaveBeenCalledWith(
-      expect.objectContaining({ search: "12345678", limit: 20, archivedFilter: "all" }),
-    );
+    ).resolves.toEqual({
+      kind: "session",
+      sessionKey,
+      agentId: "main",
+      draft: "ship",
+      face: "chat",
+    });
+    expect(list).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it("round-trips literal channel, peer, and cron keys without searching", async () => {
-    const { context, list } = contextFor(result([]));
+    const { context, list } = contextFor();
     for (const [pathname, expectedKey] of [
       ["/chat/main/telegram/12345", "agent:main:telegram:12345"],
       ["/chat/ops/signal/direct/%2B15551212", "agent:ops:signal:direct:+15551212"],
@@ -128,9 +125,9 @@ describe("loadChatRoute", () => {
     expect(list).not.toHaveBeenCalled();
   });
 
-  it("queries the first uuid block so longer disambiguation links can resolve", async () => {
+  it("passes longer disambiguation prefixes directly to the gateway resolver", async () => {
     const target = row({ key: "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001" });
-    const { context, list } = contextFor(result([target]));
+    const { context, list, request } = contextFor({ ok: true, ...target, agentId: "main" });
     await expect(
       loadChatRoute(
         context,
@@ -141,145 +138,19 @@ describe("loadChatRoute", () => {
     ).resolves.toEqual({
       kind: "session",
       sessionKey: target.key,
+      agentId: "main",
       draft: undefined,
       face: "chat",
       shortId: "123456780a",
     });
-    // Stored keys hold a hyphenated uuid, so "123456780a" is not a substring of anything
-    // the gateway searches. Only the first block survives as a needle; the full prefix is
-    // still applied per row, so the longer link resolves instead of 404ing.
-    expect(list).toHaveBeenCalledWith(expect.objectContaining({ search: "12345678" }));
-    expect(list).not.toHaveBeenCalledWith(expect.objectContaining({ search: "123456780a" }));
-  });
-
-  it("stops prefix pagination at the fixed bound and reports an incomplete result", async () => {
-    const target = row({ key: "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001" });
-    const { context, list } = contextFor(result([]));
-    for (let page = 0; page < 5; page += 1) {
-      list.mockResolvedValueOnce(
-        result(page === 0 ? [target] : [], {
-          hasMore: true,
-          nextOffset: (page + 1) * 20,
-          offset: page * 20,
-        }),
-      );
-    }
-    await expect(
-      loadChatRoute(
-        context,
-        { pathname: "/dashboard/main/deploy-12345678", search: "", hash: "" },
-        "dashboard",
-        new AbortController().signal,
-      ),
-    ).resolves.toMatchObject({
-      kind: "ambiguous",
-      shortId: "12345678",
-      truncated: true,
-      candidates: [{ href: expect.stringContaining("123456780aaa40008000000000000001") }],
+    expect(list).not.toHaveBeenCalled();
+    expect(request).toHaveBeenNthCalledWith(1, "chat.startup", {
+      shortId: "123456780a",
+      slugHint: "deploy-monitor",
+      agentId: "main",
+      limit: 80,
+      maxBytes: 256 * 1024,
     });
-    expect(list).toHaveBeenCalledTimes(5);
-    expect(list.mock.calls.map(([options]) => options?.offset)).toEqual([
-      undefined,
-      20,
-      40,
-      60,
-      80,
-    ]);
-  });
-
-  it("does not reinterpret a bounded incomplete search with zero matches as literal", async () => {
-    const { context, list } = contextFor(result([]));
-    for (let page = 0; page < 5; page += 1) {
-      list.mockResolvedValueOnce(
-        result([], {
-          hasMore: true,
-          nextOffset: (page + 1) * 20,
-          offset: page * 20,
-        }),
-      );
-    }
-    await expect(
-      loadChatRoute(
-        context,
-        { pathname: "/chat/main/deadbeef", search: "", hash: "" },
-        "chat",
-        new AbortController().signal,
-      ),
-    ).resolves.toEqual({
-      kind: "ambiguous",
-      shortId: "deadbeef",
-      candidates: [],
-      truncated: true,
-      face: "chat",
-    });
-    expect(list).toHaveBeenCalledTimes(5);
-  });
-
-  it("stops paginating once the route navigation is aborted", async () => {
-    const { context, list } = contextFor(result([]));
-    const navigation = new AbortController();
-    list.mockImplementation(async (options) => {
-      navigation.abort();
-      return result([], {
-        hasMore: true,
-        nextOffset: (options?.offset ?? 0) + 20,
-      });
-    });
-
-    await expect(
-      loadChatRoute(
-        context,
-        { pathname: "/chat/main/deadbeef", search: "", hash: "" },
-        "chat",
-        navigation.signal,
-      ),
-    ).rejects.toMatchObject({ name: "AbortError" });
-    expect(list).toHaveBeenCalledOnce();
-  });
-
-  it("keeps a shared session lookup alive while another navigation still owns it", async () => {
-    const matching = row({
-      key: "agent:main:dashboard:deadbeef-0000-4000-8000-000000000001",
-      displayName: "Shared lookup",
-    });
-    const { context, list } = contextFor(result([]));
-    let releaseLookup: ((value: SessionsListResult) => void) | undefined;
-    list.mockImplementation(
-      () =>
-        new Promise<SessionsListResult>((resolve) => {
-          releaseLookup = resolve;
-        }),
-    );
-    const staleNavigation = new AbortController();
-    const activeNavigation = new AbortController();
-    const location = { pathname: "/chat/main/deadbeef", search: "", hash: "" };
-    const stale = loadChatRoute(context, location, "chat", staleNavigation.signal);
-    const active = loadChatRoute(context, location, "chat", activeNavigation.signal);
-    await vi.waitFor(() => expect(list).toHaveBeenCalledOnce());
-
-    staleNavigation.abort();
-    releaseLookup?.(result([matching]));
-
-    await expect(stale).rejects.toMatchObject({ name: "AbortError" });
-    await expect(active).resolves.toMatchObject({
-      kind: "session",
-      sessionKey: matching.key,
-      face: "chat",
-    });
-    expect(list).toHaveBeenCalledOnce();
-  });
-
-  it("stops after one unavailable session-list result", async () => {
-    const { context, list } = contextFor(null);
-    await expect(
-      loadChatRoute(
-        context,
-        { pathname: "/chat/main/deadbeef", search: "", hash: "" },
-        "chat",
-        new AbortController().signal,
-      ),
-    ).rejects.toThrow("Session list unavailable while resolving URL");
-    expect(list).toHaveBeenCalledTimes(1);
   });
 
   it("builds distinct working links for ambiguous prefixes", async () => {
@@ -290,10 +161,22 @@ describe("loadChatRoute", () => {
         displayName: "Deploy Monitor Two",
       }),
     ];
-    const { context } = contextFor(result(rows));
+    const { context, request } = contextFor({
+      ok: false,
+      candidates: rows.map((session) => ({
+        key: session.key,
+        agentId: session.key.split(":")[1]!,
+        displayName: session.displayName ?? undefined,
+        boardFace: session.boardFace ?? undefined,
+      })),
+    });
     const ambiguous = await loadChatRoute(
       context,
-      { pathname: "/dashboard/ignored/deploy-12345678", search: "?draft=ship", hash: "" },
+      {
+        pathname: "/dashboard/ignored/deploy-12345678",
+        search: "?draft=ship&__openclawComposerFocus=1",
+        hash: "",
+      },
       "dashboard",
       new AbortController().signal,
     );
@@ -302,13 +185,14 @@ describe("loadChatRoute", () => {
       throw new Error("expected an ambiguous route");
     }
     expect(ambiguous.candidates.map((candidate) => candidate.href)).toEqual([
-      "/dashboard/main/deploy-monitor-123456780a?draft=ship",
-      "/dashboard/work/deploy-monitor-two-123456780b?draft=ship",
+      "/dashboard/main/deploy-monitor-123456780a?draft=ship&__openclawComposerFocus=1",
+      "/dashboard/work/deploy-monitor-two-123456780b?draft=ship&__openclawComposerFocus=1",
     ]);
 
     for (const [candidate, expectedRow] of ambiguous.candidates.map(
       (entry, index) => [entry, rows[index]] as const,
     )) {
+      request.mockResolvedValueOnce({ ok: true, ...expectedRow!, agentId: candidate.agentId });
       await expect(
         loadChatRoute(
           context,
@@ -323,7 +207,9 @@ describe("loadChatRoute", () => {
       ).resolves.toEqual({
         kind: "session",
         sessionKey: expectedRow?.key,
+        agentId: candidate.agentId,
         draft: "ship",
+        focusComposer: true,
         face: "dashboard",
         shortId: candidate.idPrefix,
       });
@@ -331,7 +217,7 @@ describe("loadChatRoute", () => {
   });
 
   it("loads an agent main session without a search request", async () => {
-    const { context, list } = contextFor(result([]));
+    const { context, list } = contextFor();
     await expect(
       loadChatRoute(
         context,
@@ -346,6 +232,36 @@ describe("loadChatRoute", () => {
       face: "dashboard",
     });
     expect(list).not.toHaveBeenCalled();
+  });
+
+  it("carries expanded dashboard presentation into route data", async () => {
+    const { context } = contextFor();
+    await expect(
+      loadChatRoute(
+        context,
+        { pathname: "/dashboard/work", search: "?dashboard=expanded", hash: "" },
+        "dashboard",
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({
+      kind: "session",
+      sessionKey: "agent:work:main",
+      face: "dashboard",
+      dashboardExpanded: true,
+    });
+    await expect(
+      loadChatRoute(
+        context,
+        { pathname: "/chat/work", search: "?dashboard=expanded", hash: "" },
+        "chat",
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({
+      kind: "session",
+      sessionKey: "agent:work:main",
+      face: "chat",
+      dashboardExpanded: true,
+    });
   });
 
   it("waits for configured session defaults before resolving an agent main route", async () => {
@@ -402,7 +318,7 @@ describe("loadChatRoute", () => {
   });
 
   it("treats a configured main key as a reserved literal", async () => {
-    const { context, list } = contextFor(result([]), "workspace");
+    const { context, list } = contextFor({ ok: false }, "workspace");
     await expect(
       loadChatRoute(
         context,
@@ -422,7 +338,7 @@ describe("loadChatRoute", () => {
   });
 
   it("canonicalizes a literal configured-main route when defaults are warm", async () => {
-    const { context, list } = contextFor(result([]), "workspace");
+    const { context, list } = contextFor({ ok: false }, "workspace");
     await expect(
       loadChatRoute(
         context,
@@ -569,7 +485,7 @@ describe("loadChatRoute", () => {
   });
 
   it("loads a specific synthetic catalog thread from its URL target", async () => {
-    const { context, list } = contextFor(result([]));
+    const { context, list } = contextFor();
     await expect(
       loadChatRoute(
         context,
@@ -583,7 +499,7 @@ describe("loadChatRoute", () => {
       ),
     ).resolves.toEqual({
       kind: "session",
-      sessionKey: "catalog:claude:gateway%3Alocal:thread-2",
+      sessionKey: "agent:main:catalog:claude:gateway%3Alocal:thread-2",
       agentId: "main",
       draft: undefined,
       face: "chat",
@@ -592,7 +508,7 @@ describe("loadChatRoute", () => {
   });
 
   it("preserves the path agent for synthetic catalog sessions", async () => {
-    const { context } = contextFor(result([]));
+    const { context } = contextFor();
     await expect(
       loadChatRoute(
         context,
@@ -606,13 +522,13 @@ describe("loadChatRoute", () => {
       ),
     ).resolves.toMatchObject({
       kind: "session",
-      sessionKey: "catalog:claude:gateway%3Alocal:thread-2",
+      sessionKey: "agent:research:catalog:claude:gateway%3Alocal:thread-2",
       agentId: "research",
     });
   });
 
   it("loads synthetic catalog sessions in the dashboard namespace", async () => {
-    const { context } = contextFor(result([]));
+    const { context } = contextFor();
     await expect(
       loadChatRoute(
         context,
@@ -626,7 +542,7 @@ describe("loadChatRoute", () => {
       ),
     ).resolves.toEqual({
       kind: "session",
-      sessionKey: "catalog:claude:gateway%3Alocal:thread-2",
+      sessionKey: "agent:research:catalog:claude:gateway%3Alocal:thread-2",
       agentId: "research",
       draft: undefined,
       face: "dashboard",

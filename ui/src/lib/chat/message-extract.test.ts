@@ -1,22 +1,9 @@
 // @vitest-environment node
 // Control UI tests cover message extract behavior.
 import { describe, expect, it } from "vitest";
-import {
-  extractRawText,
-  extractText,
-  extractTextCached,
-  extractThinkingCached,
-} from "./message-extract.ts";
+import { extractText, extractTextCached, extractThinkingCached } from "./message-extract.ts";
 
 describe("extractTextCached", () => {
-  it("matches extractText output", () => {
-    const message = {
-      role: "assistant",
-      content: [{ type: "text", text: "Hello there" }],
-    };
-    expect(extractTextCached(message)).toBe(extractText(message));
-  });
-
   it("returns consistent text output for repeated calls", () => {
     const message = {
       role: "user",
@@ -150,8 +137,28 @@ describe("nullish messages", () => {
     for (const message of [undefined, null]) {
       expect(extractText(message)).toBeNull();
       expect(extractTextCached(message)).toBeNull();
-      expect(extractRawText(message)).toBeNull();
       expect(extractThinkingCached(message)).toBeNull();
     }
   });
+
+  it.each(["user", "assistant", "toolResult"])(
+    "preserves %s text and thinking around malformed content blocks",
+    (role) => {
+      const message = {
+        role,
+        content: [
+          null,
+          { type: "text", text: "Visible reply" },
+          undefined,
+          { type: "thinking", thinking: "Plan A" },
+          [],
+        ],
+      };
+      expect(extractText(message)).toBe("Visible reply");
+      expect(extractTextCached(message)).toBe("Visible reply");
+      expect(extractThinkingCached(message)).toBe("Plan A");
+      expect(extractText({ role, content: [null], text: "Fallback text" })).toBe("Fallback text");
+      expect(extractText({ role, content: [null] })).toBeNull();
+    },
+  );
 });

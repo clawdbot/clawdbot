@@ -1,11 +1,11 @@
 // Mirrors successful outbound payloads into the configured session transcript.
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
+import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { formatErrorMessage } from "../errors.js";
 import type { DeliverOutboundPayloadsCoreParams } from "./deliver-contracts.js";
-import type { NormalizedOutboundPayload } from "./payloads.js";
-import type { OutboundChannel } from "./targets.js";
+import { resolveOutboundPayloadMirrorText, type NormalizedOutboundPayload } from "./payloads.js";
 
 const log = createSubsystemLogger("outbound/deliver");
 const loadTranscriptRuntime = createLazyRuntimeModule(
@@ -15,7 +15,7 @@ const loadTranscriptRuntime = createLazyRuntimeModule(
 export async function mirrorDeliveredPayloads(params: {
   delivery: DeliverOutboundPayloadsCoreParams;
   payloads: readonly NormalizedOutboundPayload[];
-  channel: Exclude<OutboundChannel, "none">;
+  channel: string;
   to: string;
 }): Promise<void> {
   const mirror = params.delivery.mirror;
@@ -24,7 +24,7 @@ export async function mirrorDeliveredPayloads(params: {
   }
   const deliveredMirror = {
     text: params.payloads
-      .map((payload) => payload.hookContent ?? payload.text)
+      .map((payload) => payload.hookContent ?? resolveOutboundPayloadMirrorText(payload))
       .filter((text) => text.trim())
       .join("\n"),
     mediaUrls: params.payloads.flatMap((payload) => payload.mediaUrls),
@@ -40,10 +40,17 @@ export async function mirrorDeliveredPayloads(params: {
   // Keep mirror failures non-fatal so callers do not retry an already-sent payload.
   try {
     const { appendAssistantMessageToSessionTranscript } = await loadTranscriptRuntime();
+    // Fence against the session this mirror lands in, not whichever run is delivering:
+    // a cross-session delivery would otherwise carry the sending run's writer claim.
+    const writerFence = getOwnedSessionTranscriptWriterFence({ sessionKey: mirror.sessionKey });
     const mirrorResult = await appendAssistantMessageToSessionTranscript({
       agentId: mirror.agentId,
       sessionKey: mirror.sessionKey,
       expectedSessionId: mirror.expectedSessionId,
+      ...(writerFence?.expectedLifecycleRevision !== undefined
+        ? { expectedLifecycleRevision: writerFence.expectedLifecycleRevision }
+        : {}),
+      ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
       text: mirrorText,
       idempotencyKey: mirror.idempotencyKey,
       deliveryMirror: mirror.deliveryMirror,

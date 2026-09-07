@@ -2,8 +2,10 @@
  * Resolves provider stream functions and API keys for embedded agents.
  */
 import type { LlmRuntime } from "@openclaw/ai";
+import { notifyLlmRequestActivity, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { createBoundaryAwareStreamFnForModel } from "@openclaw/ai/transports";
+import { hasNonEmptyString as hasResolvedRuntimeApiKey } from "@openclaw/normalization-core/string-coerce";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import "../ai-transport-runtime-host.js";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
@@ -69,10 +71,6 @@ function isDefaultOpenClawStreamFnForModel(
   return streamFn === provider?.streamSimple || streamFn === provider?.stream;
 }
 
-function hasResolvedRuntimeApiKey(apiKey: string | undefined): boolean {
-  return typeof apiKey === "string" && apiKey.trim().length > 0;
-}
-
 function isOpenAICodexResponsesModel(model: EmbeddedRunAttemptParams["model"]): boolean {
   return model.provider === "openai" && model.api === "openai-chatgpt-responses";
 }
@@ -85,47 +83,15 @@ function resolveOpenClawNativeCodexResponsesStreamFn(params: {
   if (!isOpenAICodexResponsesModel(params.model)) {
     return undefined;
   }
-  if (!isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn, params.llmRuntime)) {
+  // Lifecycle-owned session streams wrap auth/retry policy, so their runtime
+  // binding preserves native Codex transport even when function identity differs.
+  if (
+    !isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn, params.llmRuntime) &&
+    getStreamLlmRuntime(params.currentStreamFn) !== params.llmRuntime
+  ) {
     return undefined;
   }
   return params.currentStreamFn ?? params.llmRuntime.streamSimple;
-}
-
-export function describeEmbeddedAgentStreamStrategy(
-  params: EmbeddedStreamRuntimeOwner & {
-    providerStreamFn?: StreamFn;
-    model: EmbeddedRunAttemptParams["model"];
-    resolvedApiKey?: string;
-  },
-): string {
-  const llmRuntime = resolveEmbeddedStreamRuntime(params);
-  if (params.providerStreamFn) {
-    return "provider";
-  }
-  if (params.model.provider === "anthropic-vertex") {
-    return "anthropic-vertex";
-  }
-  if (
-    resolveOpenClawNativeCodexResponsesStreamFn({
-      model: params.model,
-      currentStreamFn: params.currentStreamFn,
-      llmRuntime,
-    })
-  ) {
-    return "openclaw-native-codex-responses";
-  }
-  if (isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn, llmRuntime)) {
-    return createBoundaryAwareStreamFnForModel(params.model)
-      ? `boundary-aware:${params.model.api}`
-      : "stream-simple";
-  }
-  if (
-    hasResolvedRuntimeApiKey(params.resolvedApiKey) &&
-    createBoundaryAwareStreamFnForModel(params.model)
-  ) {
-    return `boundary-aware:${params.model.api}`;
-  }
-  return "session-custom";
 }
 
 export async function resolveEmbeddedAgentApiKey(params: {
@@ -140,7 +106,7 @@ export async function resolveEmbeddedAgentApiKey(params: {
   return params.authStorage ? await params.authStorage.getApiKey(params.provider) : undefined;
 }
 
-export function resolveEmbeddedAgentStreamFn(
+export function resolveEmbeddedAgentStream(
   params: EmbeddedStreamRuntimeOwner & {
     providerStreamFn?: StreamFn;
     sessionId: string;
@@ -152,113 +118,119 @@ export function resolveEmbeddedAgentStreamFn(
     authProfileId?: string;
     authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
   },
-): StreamFn {
+): { streamFn: StreamFn; strategy: string } {
   const llmRuntime = resolveEmbeddedStreamRuntime(params);
+  const wrapOptions = {
+    runSignal: params.signal,
+    resolvedApiKey: params.resolvedApiKey,
+    authProfileId: params.authProfileId,
+    authStorage: params.authStorage,
+    providerId: params.model.provider,
+    promptCacheKey: params.promptCacheKey,
+  };
+  const stripCacheBoundary = (context: Parameters<StreamFn>[1]) =>
+    context.systemPrompt
+      ? { ...context, systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt) }
+      : context;
   if (params.providerStreamFn) {
-    return wrapEmbeddedAgentStreamFn(params.providerStreamFn, {
-      runSignal: params.signal,
-      resolvedApiKey: params.resolvedApiKey,
-      authProfileId: params.authProfileId,
-      authStorage: params.authStorage,
-      providerId: params.model.provider,
-      promptCacheKey: params.promptCacheKey,
-      transformContext: (context) =>
-        context.systemPrompt
-          ? {
-              ...context,
-              systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
-            }
-          : context,
-    });
+    return {
+      streamFn: wrapEmbeddedAgentStreamFn(params.providerStreamFn, {
+        ...wrapOptions,
+        transformContext: stripCacheBoundary,
+      }),
+      strategy: "provider",
+    };
   }
 
   const currentStreamFn = params.currentStreamFn ?? llmRuntime.streamSimple;
   if (params.model.provider === "anthropic-vertex") {
-    return createAnthropicVertexStreamFnForModel(params.model);
+    const vertexStreamFn = createAnthropicVertexStreamFnForModel(params.model);
+    return {
+      streamFn: params.signal
+        ? wrapEmbeddedAgentStreamFn(vertexStreamFn, {
+            runSignal: params.signal,
+            providerId: params.model.provider,
+          })
+        : vertexStreamFn,
+      strategy: "anthropic-vertex",
+    };
   }
 
-  const openClawNativeCodexResponsesStreamFn = resolveOpenClawNativeCodexResponsesStreamFn({
+  const nativeStreamFn = resolveOpenClawNativeCodexResponsesStreamFn({
     model: params.model,
     currentStreamFn: params.currentStreamFn,
     llmRuntime,
   });
-  if (openClawNativeCodexResponsesStreamFn) {
-    return wrapEmbeddedAgentStreamFn(openClawNativeCodexResponsesStreamFn, {
-      runSignal: params.signal,
-      resolvedApiKey: params.resolvedApiKey,
-      authProfileId: params.authProfileId,
-      authStorage: params.authStorage,
-      providerId: params.model.provider,
-      sessionId: params.sessionId,
-      promptCacheKey: params.promptCacheKey,
-      transformContext: (context) =>
-        context.systemPrompt
-          ? {
-              ...context,
-              systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
-            }
-          : context,
-    });
+  if (nativeStreamFn) {
+    return {
+      streamFn: wrapEmbeddedAgentStreamFn(nativeStreamFn, {
+        ...wrapOptions,
+        sessionId: params.sessionId,
+        transformContext: stripCacheBoundary,
+      }),
+      strategy: "openclaw-native-codex-responses",
+    };
   }
 
+  const isDefault = isDefaultOpenClawStreamFnForModel(
+    params.model,
+    params.currentStreamFn,
+    llmRuntime,
+  );
   if (
-    isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn, llmRuntime) ||
+    isDefault ||
     hasResolvedRuntimeApiKey(params.resolvedApiKey) ||
     params.transportAuthAvailable ||
-    // Proxied anthropic-messages providers (provider !== "anthropic", e.g. pioneer)
-    // must use the boundary-aware managed transport even without a resolved runtime
-    // key — it is the only place a tool-using turn's narration gets tagged
-    // phase:commentary; the base SDK stream never tags it, so proxied anthropic
-    // providers silently lost their narration lane. Scoped to non-"anthropic"
-    // providers so direct-anthropic edge cases (thinking-replay repair without a
-    // resolved key) are unchanged; the wrap below injects the resolved key
-    // (fallback options.apiKey), preserving x-api-key auth.
+    // Proxied Anthropic streams need the managed transport's commentary tagging
+    // even without a resolved key; direct Anthropic keeps its existing replay path.
     (params.model.api === "anthropic-messages" && params.model.provider !== "anthropic")
   ) {
     const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model);
     if (boundaryAwareStreamFn) {
-      // Some OpenClaw session factories return a provider-specific stream wrapper
-      // once runtime auth is resolved. Keep transport-supported APIs on
-      // OpenClaw's HTTP transport so provider-specific auth/header semantics
-      // are not lost behind that wrapper.
-      // Boundary-aware transports read credentials from options.apiKey just
-      // like provider-owned streams, but the embedded run layer never gets to
-      // inject the resolved runtime key for them. Without this wrap, OAuth
-      // providers (e.g. openai/gpt-5.5 over ChatGPT OAuth) hit the Responses API with an
-      // empty bearer and fail with 401 Missing bearer auth header.
-      return wrapEmbeddedAgentStreamFn(boundaryAwareStreamFn, {
-        runSignal: params.signal,
-        resolvedApiKey: params.resolvedApiKey,
-        authProfileId: params.authProfileId,
-        authStorage: params.authStorage,
-        providerId: params.model.provider,
-        sessionId: params.sessionId,
-        promptCacheKey: params.promptCacheKey,
-      });
+      return {
+        streamFn: wrapEmbeddedAgentStreamFn(boundaryAwareStreamFn, {
+          ...wrapOptions,
+          sessionId: params.sessionId,
+        }),
+        strategy: `boundary-aware:${params.model.api}`,
+      };
     }
   }
 
   const promptCacheKey = params.promptCacheKey?.trim();
-  if (!promptCacheKey) {
-    return currentStreamFn;
-  }
-  return wrapEmbeddedAgentStreamFn(currentStreamFn, {
-    runSignal: params.signal,
-    resolvedApiKey: undefined,
-    authProfileId: undefined,
-    authStorage: undefined,
-    providerId: params.model.provider,
-    promptCacheKey,
+  return {
+    streamFn:
+      !promptCacheKey && !params.signal
+        ? currentStreamFn
+        : wrapEmbeddedAgentStreamFn(currentStreamFn, {
+            runSignal: params.signal,
+            providerId: params.model.provider,
+            promptCacheKey,
+          }),
+    strategy: isDefault ? "stream-simple" : "session-custom",
+  };
+}
+
+/** Preserve request activity across cancellation composition without retaining completed turns. */
+function composeRunSignal(callerSignal: AbortSignal, runSignal: AbortSignal): AbortSignal {
+  const composedSignal = AbortSignal.any([callerSignal, runSignal]);
+  // The activity registry owns this bridge weakly; an abort listener on either
+  // reusable source would retain its composite after a successful request.
+  onLlmRequestActivity(composedSignal, () => {
+    if (!composedSignal.aborted) {
+      notifyLlmRequestActivity(callerSignal);
+    }
   });
+  return composedSignal;
 }
 
 function wrapEmbeddedAgentStreamFn(
   inner: StreamFn,
   params: {
     runSignal: AbortSignal | undefined;
-    resolvedApiKey: string | undefined;
-    authProfileId: string | undefined;
-    authStorage: { getApiKey(provider: string): Promise<string | undefined> } | undefined;
+    resolvedApiKey?: string;
+    authProfileId?: string;
+    authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
     providerId: string;
     sessionId?: string;
     promptCacheKey?: string;
@@ -269,7 +241,11 @@ function wrapEmbeddedAgentStreamFn(
     params.transformContext ?? ((context: Parameters<StreamFn>[1]) => context);
   const mergeRunSignal = (options: Parameters<StreamFn>[2]) => {
     const embeddedOptions = options as EmbeddedStreamOptions | undefined;
-    const signal = embeddedOptions?.signal ?? params.runSignal;
+    const callerSignal = embeddedOptions?.signal;
+    const signal =
+      callerSignal && params.runSignal && callerSignal !== params.runSignal
+        ? composeRunSignal(callerSignal, params.runSignal)
+        : (callerSignal ?? params.runSignal);
     let merged =
       params.sessionId && !embeddedOptions?.sessionId
         ? { ...embeddedOptions, sessionId: params.sessionId }

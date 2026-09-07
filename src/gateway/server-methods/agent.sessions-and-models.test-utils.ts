@@ -1,29 +1,43 @@
 // Imported by agent.test.ts to keep its mocked suite in one Vitest module graph.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
+import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import {
+  addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
+  listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
-} from "../../agents/subagent-registry.test-helpers.js";
+} from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
+import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
+import { cancelDetachedTaskRunById } from "../../tasks/task-executor.js";
 import {
   findTaskByRunId,
+  createTaskRecord,
   listTaskRecords,
   markTaskTerminalById,
+  reloadTaskRegistryFromStore,
 } from "../../tasks/task-registry.js";
-import {
-  resetTaskRegistryForTests,
-  setDetachedTaskLifecycleRuntime,
-} from "../../tasks/task-runtime.test-helpers.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
-import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
+import { setDetachedTaskLifecycleRuntime } from "../../tasks/task-runtime.test-helpers.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { waitForAgentJob } from "../agent-turn/agent-job.js";
+import { dispatchAgentRunFromGateway } from "../agent-turn/agent-run-dispatch.js";
+import { createAgentTurnIo } from "../agent-turn/io.js";
+import { removeChatAbortControllerEntry } from "../chat-abort.js";
 import { registerPluginSubagentRunFromGateway } from "./agent-task-tracking.js";
 import {
   applyGatewaySubagentRegistryTestDeps,
   getAgentTestMocks,
+  operatorWriteCliClient,
   makeContext,
   type AgentHandlerArgs,
   type AgentCommandCall,
@@ -38,12 +52,44 @@ import {
   primeMainAgentRun,
   backendGatewayClient,
   operatorWriteGatewayClient,
+  resetAgentTaskRegistryForTests,
   waitForAgentCommandCall,
+  waitForAgentCommandCallAfter,
   invokeAgent,
   describe0AfterEach0,
 } from "./agent.test-harness.js";
+import { runTaskHandler } from "./tasks.test-helpers.js";
 
 const mocks = getAgentTestMocks();
+
+// Shared by every spawn control plane whose child turn reaches the gateway as a
+// plain `agent` run: ACP manual spawns, plugin subagents, and native subagents.
+function mockSpawnedChildSessionEntry(childSessionKey: string) {
+  mocks.loadSessionEntry.mockReturnValue({
+    cfg: {},
+    storePath: "/tmp/sessions.json",
+    entry: { sessionId: "spawned-child-session", updatedAt: Date.now() },
+    canonicalKey: childSessionKey,
+  });
+  mocks.updateSessionStore.mockResolvedValue(undefined);
+  mocks.agentCommand.mockResolvedValue({
+    payloads: [{ text: "ok" }],
+    meta: { durationMs: 100 },
+  });
+}
+
+function spyDetachedCreateRunningTaskRun() {
+  const defaultRuntime = getDetachedTaskLifecycleRuntime();
+  const createRunningTaskRunSpy = vi.fn(
+    (...args: Parameters<typeof defaultRuntime.createRunningTaskRun>) =>
+      defaultRuntime.createRunningTaskRun(...args),
+  );
+  setDetachedTaskLifecycleRuntime({
+    ...defaultRuntime,
+    createRunningTaskRun: createRunningTaskRunSpy,
+  });
+  return createRunningTaskRunSpy;
+}
 
 describe("gateway agent handler", () => {
   afterEach(describe0AfterEach0);
@@ -78,8 +124,8 @@ describe("gateway agent handler", () => {
     );
 
     expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
-    const error = expectRespondError(respond, { code: ErrorCodes.UNAVAILABLE });
-    expectStringFieldContains(error, "message", "quarantined after restart recovery exhaustion");
+    const error = expectRespondError(respond, { code: ErrorCodes.INVALID_REQUEST });
+    expectStringFieldContains(error, "message", "ended during restart recovery");
   });
 
   it("rejects ordinary work while restart recovery exhaustion is being tombstoned", async () => {
@@ -155,10 +201,11 @@ describe("gateway agent handler", () => {
   });
 
   it("terminalizes successful async gateway agent runs in the shared task registry", async () => {
-    await withTempDir({ prefix: "openclaw-gateway-agent-task-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-gateway-agent-task-" }, async (root) => {
       useTestStateDir(root);
-      resetTaskRegistryForTests();
+      resetAgentTaskRegistryForTests();
       primeMainAgentRun();
+      const commandCallCount = mocks.agentCommand.mock.calls.length;
 
       await invokeAgent(
         {
@@ -168,6 +215,7 @@ describe("gateway agent handler", () => {
         },
         { reqId: "task-registry-agent-run" },
       );
+      await waitForAgentCommandCallAfter(commandCallCount);
 
       await waitForAssertion(() => {
         expectRecordFields(findTaskByRunId("task-registry-agent-run"), {
@@ -186,9 +234,9 @@ describe("gateway agent handler", () => {
     { identity: "astral suffix", runId: "x".repeat(10) + "😀abc" },
     { identity: "astral prefix and suffix", runId: "abc😀" + "x".repeat(10) + "😀xyz" },
   ])("tracks plugin subagent $identity runs through the registry", async ({ runId }) => {
-    await withTempDir({ prefix: "openclaw-gateway-plugin-subagent-task-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-gateway-plugin-subagent-task-" }, async (root) => {
       useTestStateDir(root);
-      resetTaskRegistryForTests();
+      resetAgentTaskRegistryForTests();
       resetSubagentRegistryForTests({ persist: false });
       const childSessionKey = "agent:work:subagent:plugin-helper";
       const cfg = {
@@ -202,7 +250,7 @@ describe("gateway agent handler", () => {
           },
           list: [{ id: "main", default: true }, { id: "work" }],
         },
-      };
+      } satisfies typeof mocks.loadConfigReturn;
       mocks.listAgentIds.mockReturnValue(["main", "work"]);
       mocks.loadConfigReturn = cfg;
       mocks.loadSessionEntry.mockReturnValue({
@@ -237,6 +285,7 @@ describe("gateway agent handler", () => {
           pluginRuntimeOwnerId: "memory-core",
         },
       };
+      const initialCommandCallCount = mocks.agentCommand.mock.calls.length;
 
       const respond = await invokeAgent(
         {
@@ -250,6 +299,7 @@ describe("gateway agent handler", () => {
           client: pluginClient,
         },
       );
+      await waitForAgentCommandCallAfter(initialCommandCallCount);
 
       const acceptedPayload = respond.mock.calls.find(
         ([ok, payload]) =>
@@ -327,7 +377,7 @@ describe("gateway agent handler", () => {
   });
 
   it("registers host-owned requester lineage for plugin subagent completion", async () => {
-    await withTempDir({ prefix: "openclaw-gateway-plugin-subagent-requester-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-gateway-plugin-subagent-requester-" }, async (root) => {
       useTestStateDir(root);
       resetSubagentRegistryForTests({ persist: false });
       const childSessionKey = "agent:work:subagent:plugin-completion";
@@ -362,6 +412,7 @@ describe("gateway agent handler", () => {
       expectRecordFields(run, {
         controllerSessionKey: "agent:work:main",
         requesterSessionKey: requester.sessionKey,
+        requesterAgentId: "main",
         requesterDisplayKey: requester.sessionKey,
         requesterOrigin: requester.origin,
         label: "plugin:memory-core",
@@ -370,17 +421,128 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("keeps plugin SDK subagent runs best-effort when registry persistence fails", async () => {
-    await withTempDir(
+  it("registers normally when a follow-up to a paused session names its own requester", async () => {
+    await withTestDir(
+      { prefix: "openclaw-gateway-plugin-subagent-own-requester-" },
+      async (root) => {
+        useTestStateDir(root);
+        resetSubagentRegistryForTests({ persist: false });
+        const childSessionKey = "agent:work:subagent:plugin-yield-own-requester";
+        const followUpRequester = {
+          sessionKey: "agent:main:telegram:direct:555",
+          origin: { channel: "telegram", to: "telegram:555", accountId: "work" },
+        } as const;
+        addSubagentRunForTests({
+          runId: "plugin-subagent-paused",
+          childSessionKey,
+          requesterSessionKey: "agent:main:telegram:direct:777",
+          requesterDisplayKey: "agent:main:telegram:direct:777",
+          task: "wait for the remote job",
+          endedAt: 2_000,
+          pauseReason: "sessions_yield",
+          expectsCompletionMessage: true,
+        });
+
+        await registerPluginSubagentRunFromGateway({
+          cfg: {
+            session: { mainKey: "main", scope: "per-sender" },
+            agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+          },
+          runId: "plugin-subagent-own-requester",
+          childSessionKey,
+          task: "deliver to me instead",
+          requester: followUpRequester,
+          pluginId: "memory-core",
+        });
+
+        // An explicit requester is a delivery opt-in. Adopting the paused row here
+        // would drop that audience with nothing recording why, so the follow-up
+        // gets its own row and the paused run keeps its original requester.
+        const run = requireValue(
+          getSubagentRunByChildSessionKey(childSessionKey),
+          "expected separately registered plugin subagent run",
+        );
+        expectRecordFields(run, {
+          runId: "plugin-subagent-own-requester",
+          requesterSessionKey: followUpRequester.sessionKey,
+        });
+      },
+    );
+  });
+
+  it("still adopts the paused owner for a default follow-up after a requester-bound sibling", async () => {
+    await withTestDir(
+      { prefix: "openclaw-gateway-plugin-subagent-mixed-delivery-" },
+      async (root) => {
+        useTestStateDir(root);
+        resetSubagentRegistryForTests({ persist: false });
+        const childSessionKey = "agent:work:subagent:plugin-yield-mixed-delivery";
+        const originalRequester = "agent:main:telegram:direct:777";
+        const cfg = {
+          session: { mainKey: "main", scope: "per-sender" as const },
+          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        };
+        addSubagentRunForTests({
+          runId: "plugin-subagent-paused",
+          childSessionKey,
+          requesterSessionKey: originalRequester,
+          requesterDisplayKey: originalRequester,
+          task: "wait for the remote job",
+          endedAt: 2_000,
+          pauseReason: "sessions_yield",
+          expectsCompletionMessage: true,
+        });
+
+        // A requester-bound follow-up lands at a higher generation than the paused
+        // owner, so it becomes the newest row for this session.
+        await registerPluginSubagentRunFromGateway({
+          cfg,
+          runId: "plugin-subagent-sibling",
+          childSessionKey,
+          task: "deliver to me instead",
+          requester: {
+            sessionKey: "agent:main:telegram:direct:555",
+            origin: { channel: "telegram", to: "telegram:555", accountId: "work" },
+          },
+          pluginId: "memory-core",
+        });
+
+        await registerPluginSubagentRunFromGateway({
+          cfg,
+          runId: "plugin-subagent-default-followup",
+          childSessionKey,
+          task: "the remote job finished",
+          pluginId: "memory-core",
+        });
+
+        // Adoption selects the newest *paused* row, not the newest row overall.
+        // Matching on generation alone would pick the sibling, decline adoption,
+        // and leave the original requester parked behind a row that can never
+        // announce. The sibling's own liveness is irrelevant to that choice.
+        const requesterRuns = listSubagentRunsForRequester(originalRequester);
+        expect(requesterRuns.map((entry) => entry.runId)).toEqual([
+          "plugin-subagent-default-followup",
+        ]);
+        expectRecordFields(requireValue(requesterRuns[0], "expected adopted run"), {
+          childSessionKey,
+          task: "the remote job finished",
+          pauseReason: undefined,
+        });
+      },
+    );
+  });
+
+  it("rejects plugin SDK subagent registration and adoption when persistence fails", async () => {
+    await withTestDir(
       { prefix: "openclaw-gateway-plugin-subagent-registry-fail-" },
       async (root) => {
         useTestStateDir(root);
-        resetTaskRegistryForTests();
+        resetAgentTaskRegistryForTests();
         resetSubagentRegistryForTests({ persist: false });
-        // Route through the harness helper so the ensureRuntimePluginsLoaded
-        // pin survives this wholesale deps override.
-        const persistSubagentRunsToDiskOrThrow = vi.fn(() => {
-          throw new Error("disk full");
+        const persistSubagentRunsToDiskOrThrow = vi.fn();
+        const persistenceError = Object.assign(new Error("disk full"), { code: "SQLITE_FULL" });
+        persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
+          throw persistenceError;
         });
         applyGatewaySubagentRegistryTestDeps({
           persistSubagentRunsToDiskOrThrow,
@@ -389,7 +551,7 @@ describe("gateway agent handler", () => {
         const childSessionKey = "agent:main:subagent:registry-fail";
         const cfg = {
           session: { mainKey: "main", scope: "per-sender" },
-        };
+        } satisfies typeof mocks.loadConfigReturn;
         mocks.loadConfigReturn = cfg;
         mocks.loadSessionEntry.mockReturnValue({
           cfg,
@@ -416,6 +578,7 @@ describe("gateway agent handler", () => {
         const context = makeContext();
         const baseClient = requireValue(backendGatewayClient(), "expected backend client");
         const commandCallCount = mocks.agentCommand.mock.calls.length;
+        const respond = vi.fn();
 
         await invokeAgent(
           {
@@ -426,6 +589,7 @@ describe("gateway agent handler", () => {
           {
             context,
             reqId: runId,
+            respond,
             client: {
               connect: baseClient.connect,
               internal: {
@@ -438,29 +602,109 @@ describe("gateway agent handler", () => {
         );
 
         expect(persistSubagentRunsToDiskOrThrow).toHaveBeenCalledTimes(1);
-        expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount + 1);
-        await waitForAssertion(() => {
-          const task = requireValue(findTaskByRunId(runId), "expected fallback cli task");
-          expectRecordFields(task, {
-            runtime: "cli",
-            childSessionKey,
-            status: "succeeded",
-            terminalSummary: "completed",
-          });
+        expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
+        expect(findTaskByRunId(runId)).toBeUndefined();
+        expectRespondError(respond, {
+          code: ErrorCodes.UNAVAILABLE,
+          message:
+            "plugin subagent registry persistence failed; run was not started | disk full | SQLITE_FULL",
         });
         expect(context.logGateway.warn).toHaveBeenCalledWith(
-          expect.stringContaining("falling back to cli task tracking"),
+          expect.stringContaining("rejecting untracked dispatch"),
         );
+
+        resetSubagentRegistryForTests({ persist: false });
+        const pausedRunId = "plugin-subagent-paused-before-persistence-failure";
+        addSubagentRunForTests({
+          runId: pausedRunId,
+          childSessionKey,
+          requesterSessionKey: "agent:main:telegram:direct:777",
+          requesterDisplayKey: "agent:main:telegram:direct:777",
+          task: "wait for the remote job",
+          endedAt: 2_000,
+          pauseReason: "sessions_yield",
+          expectsCompletionMessage: true,
+        });
+        persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
+          throw new Error("disk full during paused-run adoption");
+        });
+        const adoptionRunId = "plugin-subagent-adoption-registry-fail";
+        const adoptionRespond = vi.fn();
+        await invokeAgent(
+          {
+            message: "the remote job finished",
+            sessionKey: childSessionKey,
+            idempotencyKey: adoptionRunId,
+          },
+          {
+            context,
+            reqId: adoptionRunId,
+            respond: adoptionRespond,
+            client: {
+              connect: baseClient.connect,
+              internal: {
+                ...baseClient.internal,
+                agentRunTracking: "plugin_subagent",
+                pluginRuntimeOwnerId: "memory-core",
+              },
+            },
+          },
+        );
+
+        expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
+        expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+          runId: pausedRunId,
+          pauseReason: "sessions_yield",
+        });
+        expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).not.toBe(adoptionRunId);
+        expectRespondError(adoptionRespond, {
+          code: ErrorCodes.UNAVAILABLE,
+          message:
+            "plugin subagent registry persistence failed; run was not started | disk full during paused-run adoption",
+        });
+
+        resetSubagentRegistryForTests({ persist: false });
+        const retryRunId = "plugin-subagent-registry-retry";
+        await invokeAgent(
+          {
+            message: "retry background plugin subagent task",
+            sessionKey: childSessionKey,
+            idempotencyKey: retryRunId,
+          },
+          {
+            context,
+            reqId: retryRunId,
+            client: {
+              connect: baseClient.connect,
+              internal: {
+                ...baseClient.internal,
+                agentRunTracking: "plugin_subagent",
+                pluginRuntimeOwnerId: "memory-core",
+              },
+            },
+          },
+        );
+
+        expect(persistSubagentRunsToDiskOrThrow.mock.calls.length).toBeGreaterThan(1);
+        await waitForAssertion(() => {
+          expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount + 1);
+          const retryRun = requireValue(
+            getSubagentRunByChildSessionKey(childSessionKey),
+            "expected retry plugin subagent run",
+          );
+          expect(retryRun.runId).toBe(retryRunId);
+        });
       },
     );
   });
 
   it("terminalizes failed async gateway agent runs in the shared task registry", async () => {
-    await withTempDir({ prefix: "openclaw-gateway-agent-task-error-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-gateway-agent-task-error-" }, async (root) => {
       useTestStateDir(root);
-      resetTaskRegistryForTests();
+      resetAgentTaskRegistryForTests();
       primeMainAgentRun();
       mocks.agentCommand.mockRejectedValueOnce(new Error("agent unavailable"));
+      const commandCallCount = mocks.agentCommand.mock.calls.length;
 
       await invokeAgent(
         {
@@ -470,28 +714,30 @@ describe("gateway agent handler", () => {
         },
         { reqId: "task-registry-agent-run-error" },
       );
+      await waitForAgentCommandCallAfter(commandCallCount);
 
       await waitForAssertion(() => {
         expectRecordFields(findTaskByRunId("task-registry-agent-run-error"), {
           runtime: "cli",
           childSessionKey: "agent:main:main",
           status: "failed",
-          error: "Error: agent unavailable",
+          error: "agent unavailable",
         });
       });
     });
   });
 
   it("preserves aborted async gateway agent runs as cancelled", async () => {
-    await withTempDir({ prefix: "openclaw-gateway-agent-task-aborted-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-gateway-agent-task-aborted-" }, async (root) => {
       useTestStateDir(root);
-      resetTaskRegistryForTests();
+      resetAgentTaskRegistryForTests();
       primeMainAgentRun();
       mocks.agentCommand.mockResolvedValueOnce({
         payloads: [],
         meta: { durationMs: 100, aborted: true },
       });
       const context = makeContext();
+      const commandCallCount = mocks.agentCommand.mock.calls.length;
 
       await invokeAgent(
         {
@@ -501,6 +747,7 @@ describe("gateway agent handler", () => {
         },
         { context, reqId: "task-registry-agent-run-aborted" },
       );
+      await waitForAgentCommandCallAfter(commandCallCount);
 
       await waitForAssertion(() => {
         expectRecordFields(findTaskByRunId("task-registry-agent-run-aborted"), {
@@ -540,7 +787,7 @@ describe("gateway agent handler", () => {
     const respond = vi.fn();
     const onSettled = vi.fn(() => true);
 
-    dispatchAgentRunFromGateway({
+    await dispatchAgentRunFromGateway({
       ingressOpts: {
         message: "review the repository",
         sessionKey: "agent:main:main",
@@ -551,32 +798,30 @@ describe("gateway agent handler", () => {
       dedupeKeys: ["agent:agent-run-tool-use-deadline"],
       abortController,
       cleanupAbortController: vi.fn(),
-      respond,
+      io: createAgentTurnIo(respond),
       context,
       taskTrackingMode: "none",
       onSettled,
     });
 
-    await waitForAssertion(() => {
-      expect(onSettled).toHaveBeenCalledWith({
-        terminalOutcome: expect.objectContaining({
-          status: "timeout",
-          stopReason: "timeout",
-        }),
-        onRecovered: expect.any(Function),
-      });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          runId: "agent-run-tool-use-deadline",
-          status: "timeout",
-          summary: "aborted",
-          stopReason: "timeout",
-        }),
-        undefined,
-        { runId: "agent-run-tool-use-deadline" },
-      );
+    expect(onSettled).toHaveBeenCalledWith({
+      terminalOutcome: expect.objectContaining({
+        status: "timeout",
+        stopReason: "timeout",
+      }),
+      onRecovered: expect.any(Function),
     });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "agent-run-tool-use-deadline",
+        status: "timeout",
+        summary: "aborted",
+        stopReason: "timeout",
+      }),
+      undefined,
+      { runId: "agent-run-tool-use-deadline" },
+    );
   });
 
   it("projects a provider timeout result without an abort flag or stop reason as timed out", async () => {
@@ -599,7 +844,7 @@ describe("gateway agent handler", () => {
     const respond = vi.fn();
     const onSettled = vi.fn(() => true);
 
-    dispatchAgentRunFromGateway({
+    await dispatchAgentRunFromGateway({
       ingressOpts: {
         message: "run a command that exceeds the provider deadline",
         sessionKey: "agent:main:main",
@@ -610,42 +855,40 @@ describe("gateway agent handler", () => {
       dedupeKeys: ["agent:agent-run-provider-timeout-result"],
       abortController: new AbortController(),
       cleanupAbortController: vi.fn(),
-      respond,
+      io: createAgentTurnIo(respond),
       context,
       taskTrackingMode: "none",
       onSettled,
     });
 
-    await waitForAssertion(() => {
-      expect(onSettled).toHaveBeenCalledWith({
-        terminalOutcome: expect.objectContaining({
-          status: "timeout",
-          reason: "hard_timeout",
-          timeoutPhase: "provider",
-          providerStarted: true,
-        }),
-        onRecovered: expect.any(Function),
-      });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          runId: "agent-run-provider-timeout-result",
-          status: "timeout",
-          summary: "aborted",
-          timeoutPhase: "provider",
-          providerStarted: true,
-        }),
-        undefined,
-        { runId: "agent-run-provider-timeout-result" },
-      );
+    expect(onSettled).toHaveBeenCalledWith({
+      terminalOutcome: expect.objectContaining({
+        status: "timeout",
+        reason: "hard_timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      }),
+      onRecovered: expect.any(Function),
     });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "agent-run-provider-timeout-result",
+        status: "timeout",
+        summary: "aborted",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      }),
+      undefined,
+      { runId: "agent-run-provider-timeout-result" },
+    );
   });
 
   it("projects a resolved agent error as a failed gateway response", async () => {
     mocks.agentCommand.mockResolvedValueOnce({
       payloads: [{ text: "Provider rejected the request.", isError: true }],
       meta: {
-        error: "provider rejected the request",
+        error: { kind: "incomplete_turn", message: "provider rejected the request" },
         stopReason: "error",
       },
     });
@@ -653,7 +896,7 @@ describe("gateway agent handler", () => {
     const respond = vi.fn();
     const onSettled = vi.fn(() => true);
 
-    dispatchAgentRunFromGateway({
+    await dispatchAgentRunFromGateway({
       ingressOpts: {
         message: "run the agent",
         sessionKey: "agent:main:main",
@@ -664,31 +907,137 @@ describe("gateway agent handler", () => {
       dedupeKeys: ["agent:agent-run-resolved-error"],
       abortController: new AbortController(),
       cleanupAbortController: vi.fn(),
-      respond,
+      io: createAgentTurnIo(respond),
       context,
       taskTrackingMode: "none",
       onSettled,
     });
 
-    await waitForAssertion(() => {
-      expect(onSettled).toHaveBeenCalledWith({
-        terminalOutcome: expect.objectContaining({
-          status: "error",
-          reason: "failed",
-          stopReason: "error",
+    expect(onSettled).toHaveBeenCalledWith({
+      terminalOutcome: expect.objectContaining({
+        status: "error",
+        reason: "failed",
+        stopReason: "error",
+      }),
+      onRecovered: expect.any(Function),
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "agent-run-resolved-error",
+        status: "error",
+        summary: "failed",
+        stopReason: "error",
+      }),
+      undefined,
+      { runId: "agent-run-resolved-error" },
+    );
+  });
+
+  it("projects a recorded failed dispatch outcome through agent.wait", async () => {
+    mocks.agentCommand.mockResolvedValueOnce(
+      recordAgentRunTerminalOutcome(
+        {
+          payloads: [{ text: "Device worker unavailable.", isError: true }],
+          meta: {},
+        },
+        "failed",
+      ),
+    );
+    const context = makeContext();
+    const respond = vi.fn();
+    const onSettled = vi.fn(() => true);
+    const runId = "agent-run-recorded-dispatch-failure";
+
+    await dispatchAgentRunFromGateway({
+      ingressOpts: {
+        message: "run on the unavailable device",
+        sessionKey: "agent:main:main",
+        timeout: "600",
+        allowModelOverride: false,
+      },
+      runId,
+      dedupeKeys: [`agent:${runId}`],
+      abortController: new AbortController(),
+      cleanupAbortController: vi.fn(),
+      io: createAgentTurnIo(respond),
+      context,
+      taskTrackingMode: "none",
+      onSettled,
+    });
+
+    expect(onSettled).toHaveBeenCalledWith({
+      terminalOutcome: expect.objectContaining({ status: "error", reason: "failed" }),
+      onRecovered: expect.any(Function),
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ runId, status: "error", summary: "failed" }),
+      undefined,
+      { runId },
+    );
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+      status: "error",
+    });
+  });
+
+  it.each([
+    {
+      name: "resolved failure",
+      timeout: false,
+      recordedError: undefined,
+      expectedError: "Provider rejected this request.",
+    },
+    {
+      name: "resolved timeout",
+      timeout: true,
+      recordedError: undefined,
+      expectedError: "Request timed out before a response was generated.",
+    },
+    {
+      name: "producer lifecycle guidance",
+      timeout: false,
+      recordedError: "Reconnect the selected provider, then try again.",
+      expectedError: "Reconnect the selected provider, then try again.",
+    },
+  ])("retains the $name diagnostic on the tracked task", async (scenario) => {
+    await withTestDir({ prefix: "openclaw-agent-task-diagnostic-" }, async (root) => {
+      useTestStateDir(root);
+      resetAgentTaskRegistryForTests();
+      primeMainAgentRun();
+      const runId = `task-diagnostic-${scenario.name}`;
+      mocks.agentCommand.mockResolvedValueOnce(
+        recordAgentRunTerminalOutcome(
+          {
+            payloads: [],
+            meta: {
+              durationMs: 1,
+              error: {
+                kind: "incomplete_turn",
+                message: scenario.recordedError ? "Agent run failed" : scenario.expectedError,
+              },
+              ...(scenario.timeout
+                ? { timeoutPhase: "provider", providerStarted: true }
+                : { stopReason: "error" }),
+            },
+          },
+          "failed",
+          scenario.recordedError,
+        ),
+      );
+      await invokeAgent(
+        {
+          message: "Run this tracked request.",
+          sessionKey: "agent:main:main",
+          idempotencyKey: runId,
+        },
+        { context: makeContext(), reqId: runId },
+      );
+      await waitForAssertion(() =>
+        expect(findTaskByRunId(runId)).toMatchObject({
+          status: scenario.timeout ? "timed_out" : "failed",
+          error: scenario.expectedError,
         }),
-        onRecovered: expect.any(Function),
-      });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          runId: "agent-run-resolved-error",
-          status: "error",
-          summary: "failed",
-          stopReason: "error",
-        }),
-        undefined,
-        { runId: "agent-run-resolved-error" },
       );
     });
   });
@@ -756,7 +1105,7 @@ describe("gateway agent handler", () => {
     const context = makeContext();
     const respond = vi.fn();
 
-    dispatchAgentRunFromGateway({
+    await dispatchAgentRunFromGateway({
       ingressOpts: {
         message: "review the repository",
         sessionKey: "agent:main:main",
@@ -767,25 +1116,23 @@ describe("gateway agent handler", () => {
       dedupeKeys: [`agent:deadline-control-${stopReason}-${durationMs}`],
       abortController,
       cleanupAbortController: vi.fn(),
-      respond,
+      io: createAgentTurnIo(respond),
       context,
       taskTrackingMode: "none",
     });
 
-    await waitForAssertion(() => {
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ status: "ok", summary: "completed" }),
-        undefined,
-        expect.any(Object),
-      );
-    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "ok", summary: "completed" }),
+      undefined,
+      expect.any(Object),
+    );
   });
 
   it("classifies RPC-aborted async gateway agent rejections as cancelled", async () => {
-    await withTempDir({ prefix: "openclaw-gateway-agent-task-abort-error-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-gateway-agent-task-abort-error-" }, async (root) => {
       useTestStateDir(root);
-      resetTaskRegistryForTests();
+      resetAgentTaskRegistryForTests();
       primeMainAgentRun();
       const abortError = new Error("This operation was aborted");
       abortError.name = "AbortError";
@@ -810,7 +1157,7 @@ describe("gateway agent handler", () => {
           runtime: "cli",
           childSessionKey: "agent:main:main",
           status: "cancelled",
-          error: "AbortError: This operation was aborted",
+          error: "This operation was aborted",
         });
         expectRecordFields(
           context.dedupe.get("agent:task-registry-agent-run-abort-error")?.payload,
@@ -828,10 +1175,47 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("preserves restart ownership for aborted async gateway agent rejections", async () => {
-    await withTempDir({ prefix: "openclaw-gateway-agent-task-restart-abort-" }, async (root) => {
+  it("classifies an unsignaled AbortError task as cancelled without changing failure status", async () => {
+    await withTestDir({ prefix: "openclaw-gateway-agent-task-plain-abort-" }, async (root) => {
       useTestStateDir(root);
-      resetTaskRegistryForTests();
+      resetAgentTaskRegistryForTests();
+      primeMainAgentRun();
+      const abortError = new Error("This operation was aborted");
+      abortError.name = "AbortError";
+      const context = makeContext();
+      const runId = "task-registry-agent-run-plain-abort";
+      mocks.agentCommand.mockRejectedValueOnce(abortError);
+
+      await invokeAgent(
+        {
+          message: "background cli task",
+          sessionKey: "agent:main:main",
+          idempotencyKey: runId,
+        },
+        { context, reqId: runId },
+      );
+
+      await waitForAssertion(() => {
+        expectRecordFields(findTaskByRunId(runId), {
+          runtime: "cli",
+          childSessionKey: "agent:main:main",
+          status: "cancelled",
+          error: "This operation was aborted",
+        });
+        expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+          runId,
+          status: "error",
+          summary: "This operation was aborted",
+        });
+        expect(context.dedupe.get(`agent:${runId}`)?.ok).toBe(false);
+      });
+    });
+  });
+
+  it("preserves restart ownership for aborted async gateway agent rejections", async () => {
+    await withTestDir({ prefix: "openclaw-gateway-agent-task-restart-abort-" }, async (root) => {
+      useTestStateDir(root);
+      resetAgentTaskRegistryForTests();
       primeMainAgentRun();
       const abortError = createAgentRunRestartAbortError();
       const wrappedError = new Error("ACP turn failed before completion", {
@@ -870,9 +1254,9 @@ describe("gateway agent handler", () => {
   });
 
   it("classifies timeout async gateway agent rejections as timed out", async () => {
-    await withTempDir({ prefix: "openclaw-gateway-agent-task-timeout-error-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-gateway-agent-task-timeout-error-" }, async (root) => {
       useTestStateDir(root);
-      resetTaskRegistryForTests();
+      resetAgentTaskRegistryForTests();
       primeMainAgentRun();
       const timeoutError = new Error("chat run timed out");
       timeoutError.name = "TimeoutError";
@@ -897,7 +1281,7 @@ describe("gateway agent handler", () => {
           runtime: "cli",
           childSessionKey: "agent:main:main",
           status: "timed_out",
-          error: "TimeoutError: chat run timed out",
+          error: "chat run timed out",
         });
         expectRecordFields(
           context.dedupe.get("agent:task-registry-agent-run-timeout-error")?.payload,
@@ -916,11 +1300,11 @@ describe("gateway agent handler", () => {
   });
 
   it("classifies wrapped rejections after gateway timeout as timed out", async () => {
-    await withTempDir(
+    await withTestDir(
       { prefix: "openclaw-gateway-agent-task-wrapped-timeout-error-" },
       async (root) => {
         useTestStateDir(root);
-        resetTaskRegistryForTests();
+        resetAgentTaskRegistryForTests();
         primeMainAgentRun();
         const timeoutReason = new Error("chat run timed out");
         timeoutReason.name = "TimeoutError";
@@ -947,7 +1331,7 @@ describe("gateway agent handler", () => {
             runtime: "cli",
             childSessionKey: "agent:main:main",
             status: "timed_out",
-            error: "FailoverError: fallback result classified terminal abort",
+            error: "fallback result classified terminal abort",
           });
           expectRecordFields(
             context.dedupe.get("agent:task-registry-agent-run-wrapped-timeout-error")?.payload,
@@ -967,9 +1351,9 @@ describe("gateway agent handler", () => {
   });
 
   it("does not hide provider timeout async gateway agent rejections", async () => {
-    await withTempDir({ prefix: "openclaw-gateway-agent-task-provider-timeout-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-gateway-agent-task-provider-timeout-" }, async (root) => {
       useTestStateDir(root);
-      resetTaskRegistryForTests();
+      resetAgentTaskRegistryForTests();
       primeMainAgentRun();
       const providerError = new Error("provider request timed out");
       providerError.name = "TimeoutError";
@@ -990,14 +1374,14 @@ describe("gateway agent handler", () => {
           runtime: "cli",
           childSessionKey: "agent:main:main",
           status: "timed_out",
-          error: "TimeoutError: provider request timed out",
+          error: "provider request timed out",
         });
         expectRecordFields(
           context.dedupe.get("agent:task-registry-agent-run-provider-timeout")?.payload,
           {
             runId: "task-registry-agent-run-provider-timeout",
             status: "error",
-            summary: "TimeoutError: provider request timed out",
+            summary: "provider request timed out",
           },
         );
         expect(context.dedupe.get("agent:task-registry-agent-run-provider-timeout")?.ok).toBe(
@@ -1080,7 +1464,7 @@ describe("gateway agent handler", () => {
     const respond = vi.fn();
     const runId = `agent-run-terminal-${test.label.replaceAll(" ", "-")}`;
 
-    dispatchAgentRunFromGateway({
+    await dispatchAgentRunFromGateway({
       ingressOpts: {
         message: "characterize terminal ownership",
         sessionKey: "agent:main:main",
@@ -1090,24 +1474,22 @@ describe("gateway agent handler", () => {
       dedupeKeys: [`agent:${runId}`],
       abortController: new AbortController(),
       cleanupAbortController: vi.fn(),
-      respond,
+      io: createAgentTurnIo(respond),
       context,
       taskTrackingMode: "none",
       onSettled,
     });
 
-    await waitForAssertion(() => {
-      expect(onSettled).toHaveBeenCalledWith({
-        terminalOutcome: test.outcome,
-        onRecovered: expect.any(Function),
-      });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ runId, ...test.payload }),
-        undefined,
-        { runId },
-      );
+    expect(onSettled).toHaveBeenCalledWith({
+      terminalOutcome: test.outcome,
+      onRecovered: expect.any(Function),
     });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ runId, ...test.payload }),
+      undefined,
+      { runId },
+    );
   });
 
   it("settles ordinary async gateway agent rejections as failed", async () => {
@@ -1117,7 +1499,7 @@ describe("gateway agent handler", () => {
     const onSettled = vi.fn(() => true);
     const respond = vi.fn();
 
-    dispatchAgentRunFromGateway({
+    await dispatchAgentRunFromGateway({
       ingressOpts: {
         message: "background cli task",
         sessionKey: "agent:main:main",
@@ -1127,29 +1509,277 @@ describe("gateway agent handler", () => {
       dedupeKeys: ["agent:agent-run-provider-error-settlement"],
       abortController: new AbortController(),
       cleanupAbortController: vi.fn(),
-      respond,
+      io: createAgentTurnIo(respond),
       context,
       taskTrackingMode: "none",
       onSettled,
     });
 
-    await waitForAssertion(() => {
-      expect(onSettled).toHaveBeenCalledWith({
-        terminalOutcome: {
-          reason: "failed",
-          status: "error",
-          error: "Error: provider request failed",
-        },
-        onRecovered: expect.any(Function),
+    expect(onSettled).toHaveBeenCalledWith({
+      terminalOutcome: {
+        reason: "failed",
+        status: "error",
+        error: "provider request failed",
+      },
+      onRecovered: expect.any(Function),
+    });
+    expect(respond).toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "emits provider failures and optional diagnostics without class names: %s",
+    async (withDiagnostic) => {
+      const message =
+        "The selected model was not found by the provider. Check the model id or choose a different model.";
+      const failure = new FailoverError(message, {
+        reason: "model_not_found",
+        provider: "ollama",
+        model: "definitely-not-a-real-model:latest",
       });
-      expect(respond).toHaveBeenCalled();
+      const diagnostic = "stderr: earlier request timed out; Rate limit exceeded";
+      if (withDiagnostic) {
+        attachErrorDiagnostic(failure, diagnostic);
+      }
+      const displayed = withDiagnostic ? `${message}\n${diagnostic}` : message;
+      mocks.agentCommand.mockRejectedValueOnce(failure);
+      const context = makeContext();
+      const respond = vi.fn();
+      const runId = "agent-run-model-not-found";
+
+      await dispatchAgentRunFromGateway({
+        ingressOpts: {
+          message: "hi",
+          sessionKey: "agent:badmodel:main",
+          allowModelOverride: false,
+        },
+        runId,
+        dedupeKeys: [`agent:${runId}`],
+        abortController: new AbortController(),
+        cleanupAbortController: vi.fn(),
+        io: createAgentTurnIo(respond),
+        context,
+        taskTrackingMode: "none",
+      });
+
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        { runId, status: "error", summary: message },
+        expect.objectContaining({ code: ErrorCodes.UNAVAILABLE, message }),
+        { runId, error: message },
+      );
+      expect(context.dedupe.get(`agent:${runId}`)?.error?.message).toBe(message);
+      expect(failure.message).toBe(message);
+      expect(failure.reason).toBe("model_not_found");
+      await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+        status: "error",
+        error: displayed,
+      });
+    },
+  );
+
+  it.each([
+    { route: "gateway", aborted: true, status: "cancelled" },
+    { route: "shared owner", aborted: true, status: "cancelled" },
+    { route: "gateway", aborted: false, status: "succeeded" },
+    { route: "shared owner", aborted: false, status: "succeeded" },
+  ] as const)(
+    "waits for the ordinary task producer through $route after a store reload before reporting $status",
+    async ({ route, aborted, status }) => {
+      await withTestDir({ prefix: "openclaw-agent-task-cancellation-" }, async (root) => {
+        useTestStateDir(root);
+        resetAgentTaskRegistryForTests();
+        primeMainAgentRun();
+        const run = createDeferred<{
+          payloads: [];
+          meta: { durationMs: number; aborted: boolean; stopReason: string };
+        }>();
+        mocks.agentCommand.mockReturnValueOnce(run.promise);
+        const context = makeContext();
+        context.cancelRunBoundApprovals = vi.fn();
+        const runId = `task-cancellation-${route}`;
+        await invokeAgent(
+          {
+            message: "Keep working until cancelled.",
+            sessionKey: "agent:main:main",
+            idempotencyKey: runId,
+          },
+          { context, reqId: runId },
+        );
+        const task = requireValue(findTaskByRunId(runId), "tracked task missing");
+        reloadTaskRegistryFromStore();
+        const entry = requireValue(context.chatAbortControllers.get(runId), "run owner missing");
+        const reason = "Stop this selected work.";
+        const cancellation =
+          route === "gateway"
+            ? runTaskHandler(
+                "tasks.cancel",
+                { taskId: task.taskId, reason },
+                {},
+                null,
+                context,
+              ).then(({ payload }) => payload)
+            : cancelDetachedTaskRunById({ cfg: {}, taskId: task.taskId, reason });
+        let responded = false;
+        void cancellation.then(() => {
+          responded = true;
+        });
+        try {
+          await waitForAssertion(() => expect(entry.controller.signal.aborted).toBe(true));
+          expect(context.cancelRunBoundApprovals).toHaveBeenCalledWith(runId);
+          expect(findTaskByRunId(runId)?.status).toBe("running");
+          expect(responded).toBe(false);
+          run.resolve({
+            payloads: [],
+            meta: { durationMs: 1, aborted, stopReason: aborted ? "rpc" : "stop" },
+          });
+          expect(await cancellation).toMatchObject({ found: true, cancelled: aborted });
+          expect(findTaskByRunId(runId)).toMatchObject({
+            status,
+            ...(aborted ? { error: reason } : {}),
+          });
+        } finally {
+          run.resolve({
+            payloads: [],
+            meta: { durationMs: 1, aborted, stopReason: aborted ? "rpc" : "stop" },
+          });
+          await cancellation;
+          await waitForAssertion(() =>
+            expect(context.dedupe.get(`agent:${runId}`)?.payload).toMatchObject({
+              summary: aborted ? "aborted" : "completed",
+            }),
+          );
+        }
+      });
+    },
+  );
+
+  it("does not confirm cancellation when its producer exceeds the settlement deadline", async () => {
+    await withTestDir({ prefix: "openclaw-agent-task-cancellation-timeout-" }, async (root) => {
+      useTestStateDir(root);
+      resetAgentTaskRegistryForTests();
+      primeMainAgentRun();
+      const run = createDeferred<{
+        payloads: [];
+        meta: { durationMs: number; aborted: true; stopReason: "rpc" };
+      }>();
+      mocks.agentCommand.mockReturnValueOnce(run.promise);
+      const context = makeContext();
+      const runId = "task-cancellation-settlement-timeout";
+      vi.useFakeTimers();
+      try {
+        await invokeAgent(
+          {
+            message: "Keep this execution pending.",
+            sessionKey: "agent:main:main",
+            idempotencyKey: runId,
+          },
+          { context, reqId: runId },
+        );
+        const task = requireValue(findTaskByRunId(runId), "tracked task missing");
+        const entry = requireValue(context.chatAbortControllers.get(runId), "run owner missing");
+        const cancellation = runTaskHandler(
+          "tasks.cancel",
+          { taskId: task.taskId },
+          {},
+          null,
+          context,
+        );
+        await waitForAssertion(() => expect(entry.controller.signal.aborted).toBe(true));
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect((await cancellation).payload).toMatchObject({
+          found: true,
+          cancelled: false,
+          reason: "Task cancellation settlement timed out after 10000ms",
+        });
+        expect(findTaskByRunId(runId)?.status).toBe("running");
+      } finally {
+        run.resolve({
+          payloads: [],
+          meta: { durationMs: 1, aborted: true, stopReason: "rpc" },
+        });
+        try {
+          await waitForAssertion(() => expect(findTaskByRunId(runId)?.status).toBe("cancelled"));
+        } finally {
+          vi.useRealTimers();
+        }
+      }
     });
   });
 
+  it.each(["task scope", "session", "entry", "controller", "lifecycle", "authority"] as const)(
+    "refuses ordinary task cancellation after its %s changes",
+    async (changedOwner) => {
+      await withTestDir({ prefix: "openclaw-agent-task-owner-" }, async (root) => {
+        useTestStateDir(root);
+        resetAgentTaskRegistryForTests();
+        primeMainAgentRun();
+        const run = createDeferred<{ payloads: []; meta: { durationMs: number } }>();
+        mocks.agentCommand.mockReturnValueOnce(run.promise);
+        const context = makeContext();
+        const runId = `task-owner-${changedOwner}`;
+        await invokeAgent(
+          {
+            message: "Keep this run alive.",
+            sessionKey: "agent:main:main",
+            idempotencyKey: runId,
+          },
+          { context, reqId: runId },
+        );
+        const task = requireValue(findTaskByRunId(runId), "tracked task missing");
+        const entry = requireValue(context.chatAbortControllers.get(runId), "run owner missing");
+        const originalController = entry.controller;
+        let taskId = task.taskId;
+        if (changedOwner === "task scope") {
+          taskId = requireValue(
+            createTaskRecord({
+              runtime: "cli",
+              ownerKey: "agent:other:main",
+              scopeKind: "session",
+              childSessionKey: "agent:other:main",
+              runId,
+              task: "Another task with copied run correlation.",
+              status: "running",
+              deliveryStatus: "not_applicable",
+            }),
+            "conflicting task missing",
+          ).taskId;
+        } else if (changedOwner === "session") {
+          entry.sessionKey = "agent:other:main";
+        } else if (changedOwner === "entry") {
+          context.chatAbortControllers.set(runId, { ...entry, controller: new AbortController() });
+        } else if (changedOwner === "controller") {
+          entry.controller = new AbortController();
+        } else if (changedOwner === "lifecycle") {
+          mocks.lifecycleGeneration = "replacement-generation";
+        } else {
+          const authority = claimAgentRunDelegatedAuthority(
+            requireValue(entry.operationalRunInstance, "operational instance missing"),
+          );
+          entry.agentRunDelegatedAuthority = authority;
+          releaseAgentRunDelegatedAuthority(authority);
+        }
+        try {
+          const result = await runTaskHandler("tasks.cancel", { taskId }, {}, null, context);
+          expect(result.payload).toMatchObject({ found: true, cancelled: false });
+          expect(originalController.signal.aborted).toBe(false);
+          expect(context.chatAbortControllers.get(runId)?.controller.signal.aborted).toBe(false);
+        } finally {
+          run.resolve({ payloads: [], meta: { durationMs: 1 } });
+          await waitForAssertion(() =>
+            expect(context.dedupe.get(`agent:${runId}`)?.payload).toMatchObject({
+              summary: "completed",
+            }),
+          );
+          removeChatAbortControllerEntry(context.chatAbortControllers, runId);
+        }
+      });
+    },
+  );
+
   it("does not overwrite operator-cancelled async gateway agent tasks after late completion", async () => {
-    await withTempDir({ prefix: "openclaw-gateway-agent-task-cancelled-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-gateway-agent-task-cancelled-" }, async (root) => {
       useTestStateDir(root);
-      resetTaskRegistryForTests();
+      resetAgentTaskRegistryForTests();
       primeMainAgentRun();
       let resolveRun: (value: {
         payloads: Array<{ text: string }>;
@@ -1382,9 +2012,10 @@ describe("gateway agent handler", () => {
           storePath: "/tmp/sessions.json",
         },
       );
+      vi.advanceTimersByTime(100);
       expect(broadcastToConnIds.mock.calls.map((callValue) => callValue[1]?.reason)).toEqual([
         "create",
-        "send",
+        "agent.input.settled",
       ]);
     } finally {
       vi.useRealTimers();
@@ -1732,9 +2363,10 @@ describe("gateway agent handler", () => {
           storePath: "/tmp/sessions.json",
         },
       );
+      vi.advanceTimersByTime(100);
       expect(broadcastToConnIds.mock.calls.map((callLocal) => callLocal[1]?.reason)).toEqual([
         "create",
-        "send",
+        "agent.input.settled",
       ]);
     } finally {
       vi.useRealTimers();
@@ -1933,6 +2565,7 @@ describe("gateway agent handler", () => {
       meta: { durationMs: 100 },
     });
     const respond = vi.fn();
+    mocks.loadSessionEntry.mockClear();
 
     await invokeAgent(
       {
@@ -1955,10 +2588,13 @@ describe("gateway agent handler", () => {
     }>();
     expect(call.agentId).toBe("work");
     expect(call.sessionKey).toBe("global");
-    expect(mocks.loadSessionEntry).toHaveBeenCalledWith("global", {
-      agentId: "work",
-      clone: false,
-    });
+    const globalLoadCalls = mocks.loadSessionEntry.mock.calls.filter(
+      ([sessionKey]) => sessionKey === "global",
+    );
+    expect(globalLoadCalls.length).toBeGreaterThan(0);
+    for (const [, options] of globalLoadCalls) {
+      expect(options).toMatchObject({ agentId: "work", clone: false });
+    }
   });
 
   it("routes bare global session keys to the configured default agent", async () => {
@@ -1986,6 +2622,7 @@ describe("gateway agent handler", () => {
       payloads: [{ text: "ok" }],
       meta: { durationMs: 100 },
     });
+    mocks.loadSessionEntry.mockClear();
 
     await invokeAgent(
       {
@@ -2002,9 +2639,13 @@ describe("gateway agent handler", () => {
     }>();
     expect(call.agentId).toBe("ops");
     expect(call.sessionKey).toBe("global");
-    expect(mocks.loadSessionEntry).toHaveBeenCalledWith("global", {
-      clone: false,
-    });
+    const globalLoadCalls = mocks.loadSessionEntry.mock.calls.filter(
+      ([sessionKey]) => sessionKey === "global",
+    );
+    expect(globalLoadCalls.length).toBeGreaterThan(0);
+    for (const [, options] of globalLoadCalls) {
+      expect(options).toMatchObject({ agentId: "ops", clone: false });
+    }
   });
 
   it("infers selected-global agent id from agent-prefixed session aliases", async () => {
@@ -2100,7 +2741,7 @@ describe("gateway agent handler", () => {
         context,
         client: {
           connId: "conn-1",
-          connect: { caps: ["tool-events"] },
+          connect: { ...operatorWriteCliClient().connect, caps: ["tool-events"] },
         } as never,
       },
     );
@@ -2190,8 +2831,13 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("preserves selected-global agent id on cached accepted responses", async () => {
+  it("preserves accepted session and runtime metadata on cached responses", async () => {
     const context = makeContext();
+    mocks.listAgentIds.mockReturnValue(["main", "work"]);
+    mocks.loadConfigReturn = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      session: { scope: "global" },
+    };
     mocks.agentCommand.mockClear();
     context.dedupe.set("agent:cached-global-work", {
       ts: Date.now(),
@@ -2201,6 +2847,11 @@ describe("gateway agent handler", () => {
         sessionKey: "global",
         agentId: "work",
         status: "accepted",
+        runtime: {
+          harness: "claude-cli",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+        },
       },
     });
     const respond = vi.fn();
@@ -2220,14 +2871,19 @@ describe("gateway agent handler", () => {
       sessionKey: "global",
       agentId: "work",
       status: "in_flight",
+      runtime: {
+        harness: "claude-cli",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      },
     });
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
 
   it("dispatches async gateway agent task creation through the detached task runtime seam", async () => {
-    await withTempDir({ prefix: "openclaw-gateway-agent-seam-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-gateway-agent-seam-" }, async (root) => {
       useTestStateDir(root);
-      resetTaskRegistryForTests();
+      resetAgentTaskRegistryForTests();
       primeMainAgentRun();
 
       const defaultRuntime = getDetachedTaskLifecycleRuntime();
@@ -2286,33 +2942,6 @@ describe("gateway agent handler", () => {
   });
 
   describe("ACP manual-spawn child turn task tracking", () => {
-    function mockAcpChildSessionEntry(childSessionKey: string) {
-      mocks.loadSessionEntry.mockReturnValue({
-        cfg: {},
-        storePath: "/tmp/sessions.json",
-        entry: { sessionId: "acp-child-session", updatedAt: Date.now() },
-        canonicalKey: childSessionKey,
-      });
-      mocks.updateSessionStore.mockResolvedValue(undefined);
-      mocks.agentCommand.mockResolvedValue({
-        payloads: [{ text: "ok" }],
-        meta: { durationMs: 100 },
-      });
-    }
-
-    function spyDetachedCreateRunningTaskRun() {
-      const defaultRuntime = getDetachedTaskLifecycleRuntime();
-      const createRunningTaskRunSpy = vi.fn(
-        (...args: Parameters<typeof defaultRuntime.createRunningTaskRun>) =>
-          defaultRuntime.createRunningTaskRun(...args),
-      );
-      setDetachedTaskLifecycleRuntime({
-        ...defaultRuntime,
-        createRunningTaskRun: createRunningTaskRunSpy,
-      });
-      return createRunningTaskRunSpy;
-    }
-
     const confirmedAcpMeta: NonNullable<ReturnType<typeof readAcpSessionMeta>> = {
       backend: "acpx",
       agent: "codex",
@@ -2323,11 +2952,11 @@ describe("gateway agent handler", () => {
     };
 
     it("suppresses the gateway CLI task row for confirmed ACP manual-spawn child turns", async () => {
-      await withTempDir({ prefix: "openclaw-gateway-acp-suppress-" }, async (root) => {
+      await withTestDir({ prefix: "openclaw-gateway-acp-suppress-" }, async (root) => {
         useTestStateDir(root);
-        resetTaskRegistryForTests();
+        resetAgentTaskRegistryForTests();
         const childSessionKey = "agent:main:acp:child-confirmed";
-        mockAcpChildSessionEntry(childSessionKey);
+        mockSpawnedChildSessionEntry(childSessionKey);
         mocks.readAcpSessionMeta.mockReturnValue(confirmedAcpMeta);
         const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
 
@@ -2347,12 +2976,44 @@ describe("gateway agent handler", () => {
       });
     });
 
-    it("keeps CLI tracking when a non-backend operator-write caller sets acpTurnSource", async () => {
-      await withTempDir({ prefix: "openclaw-gateway-acp-operator-write-" }, async (root) => {
+    it("keeps a host-owned subagent run to its pre-registered task row", async () => {
+      await withTestDir({ prefix: "openclaw-gateway-subagent-owner-" }, async (root) => {
         useTestStateDir(root);
-        resetTaskRegistryForTests();
+        resetAgentTaskRegistryForTests();
+        const childSessionKey = "agent:main:subagent:owned";
+        const runId = "host-owned-subagent-run";
+        mockSpawnedChildSessionEntry(childSessionKey);
+        getDetachedTaskLifecycleRuntime().createRunningTaskRun({
+          runtime: "subagent",
+          requesterSessionKey: "agent:main:main",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          childSessionKey,
+          runId,
+          task: "Run one owned subagent",
+          deliveryStatus: "pending",
+        });
+        const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
+
+        await invokeAgent(
+          { message: "host-owned child turn", sessionKey: childSessionKey, idempotencyKey: runId },
+          { reqId: runId, client: backendGatewayClient() },
+        );
+        await waitForAgentCommandCall();
+
+        expect(createRunningTaskRunSpy).not.toHaveBeenCalled();
+        expect(listTaskRecords().filter((task) => task.runId === runId)).toEqual([
+          expect.objectContaining({ runtime: "subagent", childSessionKey }),
+        ]);
+      });
+    });
+
+    it("keeps CLI tracking when a non-backend operator-write caller sets acpTurnSource", async () => {
+      await withTestDir({ prefix: "openclaw-gateway-acp-operator-write-" }, async (root) => {
+        useTestStateDir(root);
+        resetAgentTaskRegistryForTests();
         const childSessionKey = "agent:main:acp:child-operator-write";
-        mockAcpChildSessionEntry(childSessionKey);
+        mockSpawnedChildSessionEntry(childSessionKey);
         // Persisted ACP metadata is present and the turn looks like a manual
         // spawn, but the caller is an operator-write control-UI client, not the
         // in-process backend ACP spawn path. That caller never creates a
@@ -2388,11 +3049,11 @@ describe("gateway agent handler", () => {
     });
 
     it("keeps CLI tracking for ACP-shaped manual-spawn turns without persisted ACP metadata", async () => {
-      await withTempDir({ prefix: "openclaw-gateway-acp-no-meta-" }, async (root) => {
+      await withTestDir({ prefix: "openclaw-gateway-acp-no-meta-" }, async (root) => {
         useTestStateDir(root);
-        resetTaskRegistryForTests();
+        resetAgentTaskRegistryForTests();
         const childSessionKey = "agent:main:acp:child-missing-meta";
-        mockAcpChildSessionEntry(childSessionKey);
+        mockSpawnedChildSessionEntry(childSessionKey);
         mocks.readAcpSessionMeta.mockReturnValue(undefined);
         const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
 
@@ -2423,11 +3084,11 @@ describe("gateway agent handler", () => {
     });
 
     it("keeps dispatch and CLI tracking when ACP metadata read fails", async () => {
-      await withTempDir({ prefix: "openclaw-gateway-acp-meta-throw-" }, async (root) => {
+      await withTestDir({ prefix: "openclaw-gateway-acp-meta-throw-" }, async (root) => {
         useTestStateDir(root);
-        resetTaskRegistryForTests();
+        resetAgentTaskRegistryForTests();
         const childSessionKey = "agent:main:acp:child-meta-throw";
-        mockAcpChildSessionEntry(childSessionKey);
+        mockSpawnedChildSessionEntry(childSessionKey);
         const metadataError = new Error("state db unavailable");
         mocks.readAcpSessionMeta.mockImplementation(() => {
           throw metadataError;
@@ -2474,11 +3135,11 @@ describe("gateway agent handler", () => {
     });
 
     it("keeps CLI tracking for ACP-shaped turns that are not manual spawns", async () => {
-      await withTempDir({ prefix: "openclaw-gateway-acp-not-manual-spawn-" }, async (root) => {
+      await withTestDir({ prefix: "openclaw-gateway-acp-not-manual-spawn-" }, async (root) => {
         useTestStateDir(root);
-        resetTaskRegistryForTests();
+        resetAgentTaskRegistryForTests();
         const childSessionKey = "agent:main:acp:child-not-spawn";
-        mockAcpChildSessionEntry(childSessionKey);
+        mockSpawnedChildSessionEntry(childSessionKey);
         // Metadata is present but the turn lacks acpTurnSource, so the spawn
         // control plane does not own this row; CLI tracking must stay on.
         mocks.readAcpSessionMeta.mockReturnValue(confirmedAcpMeta);
@@ -2504,13 +3165,13 @@ describe("gateway agent handler", () => {
     });
 
     it("does not affect plugin-subagent tracking for confirmed ACP conditions", async () => {
-      await withTempDir({ prefix: "openclaw-gateway-acp-plugin-subagent-" }, async (root) => {
+      await withTestDir({ prefix: "openclaw-gateway-acp-plugin-subagent-" }, async (root) => {
         useTestStateDir(root);
-        resetTaskRegistryForTests();
+        resetAgentTaskRegistryForTests();
         resetSubagentRegistryForTests({ persist: false });
         const childSessionKey = "agent:main:acp:plugin-child";
         const runId = "acp-plugin-subagent-run";
-        mockAcpChildSessionEntry(childSessionKey);
+        mockSpawnedChildSessionEntry(childSessionKey);
         mocks.readAcpSessionMeta.mockReturnValue(confirmedAcpMeta);
         const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
 
@@ -2556,10 +3217,71 @@ describe("gateway agent handler", () => {
     });
   });
 
+  describe("native subagent child run task tracking", () => {
+    function nativeSubagentClient(): AgentHandlerArgs["client"] {
+      const baseClient = requireValue(backendGatewayClient(), "expected backend client");
+      return {
+        connect: baseClient.connect,
+        internal: { ...baseClient.internal, agentRunTracking: "native_subagent" },
+      };
+    }
+
+    it("suppresses the gateway CLI task row for native subagent child runs", async () => {
+      await withTestDir({ prefix: "openclaw-gateway-native-subagent-" }, async (root) => {
+        useTestStateDir(root);
+        resetAgentTaskRegistryForTests();
+        const childSessionKey = "agent:main:subagent:native-child";
+        const runId = "native-subagent-run";
+        mockSpawnedChildSessionEntry(childSessionKey);
+        const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
+
+        await invokeAgent(
+          {
+            message: "native subagent child run",
+            sessionKey: childSessionKey,
+            idempotencyKey: runId,
+          },
+          { reqId: runId, client: nativeSubagentClient() },
+        );
+        await waitForAgentCommandCall();
+
+        // src/agents/subagent-spawn.ts owns the `subagent` row for this runId.
+        expect(createRunningTaskRunSpy).not.toHaveBeenCalled();
+        expect(findTaskByRunId(runId)).toBeUndefined();
+      });
+    });
+
+    it("keeps CLI tracking for an unmarked backend turn on a subagent session", async () => {
+      await withTestDir({ prefix: "openclaw-gateway-native-subagent-unmarked-" }, async (root) => {
+        useTestStateDir(root);
+        resetAgentTaskRegistryForTests();
+        const childSessionKey = "agent:main:subagent:unmarked-child";
+        const runId = "native-subagent-unmarked";
+        mockSpawnedChildSessionEntry(childSessionKey);
+        const createRunningTaskRunSpy = spyDetachedCreateRunningTaskRun();
+
+        // An operator follow-up to a subagent session owns no registry row, so
+        // suppressing here would lose the run from the tasks rail entirely.
+        await invokeAgent(
+          { message: "operator follow-up", sessionKey: childSessionKey, idempotencyKey: runId },
+          { reqId: runId, client: backendGatewayClient() },
+        );
+        await waitForAgentCommandCall();
+
+        expect(createRunningTaskRunSpy).toHaveBeenCalledTimes(1);
+        expectRecordFields(mockCallArg(createRunningTaskRunSpy), {
+          runtime: "cli",
+          runId,
+          childSessionKey,
+        });
+      });
+    });
+  });
+
   it("logs a swallowed finalize error without blocking the background run", async () => {
-    await withTempDir({ prefix: "openclaw-gateway-agent-finalize-throw-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-gateway-agent-finalize-throw-" }, async (root) => {
       useTestStateDir(root);
-      resetTaskRegistryForTests();
+      resetAgentTaskRegistryForTests();
       primeMainAgentRun();
 
       const defaultRuntime = getDetachedTaskLifecycleRuntime();

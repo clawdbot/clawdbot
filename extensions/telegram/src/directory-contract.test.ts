@@ -1,22 +1,13 @@
 // Telegram tests cover directory contract plugin behavior.
-import type { BaseProbeResult, BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
 import { expectDirectoryIds } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   listTelegramDirectoryGroupsFromConfig,
   listTelegramDirectoryPeersFromConfig,
 } from "../directory-contract-api.js";
-import type { TelegramProbe } from "./probe.js";
-import type { TelegramTokenResolution } from "./token.js";
-
 describe("Telegram directory contract", () => {
-  it("keeps public probe and token resolution aligned with base contracts", () => {
-    expectTypeOf<TelegramProbe>().toMatchTypeOf<BaseProbeResult>();
-    expectTypeOf<TelegramTokenResolution>().toMatchTypeOf<BaseTokenResolution>();
-  });
-
   it("lists peers/groups from config", async () => {
     const cfg = {
       channels: {

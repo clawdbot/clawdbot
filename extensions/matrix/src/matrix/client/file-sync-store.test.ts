@@ -4,18 +4,22 @@ import os from "node:os";
 import path from "node:path";
 import type { ISyncResponse } from "matrix-js-sdk/lib/matrix.js";
 import {
+  createPluginStateKeyedStoreForTests,
+  openOpenClawStateDatabase,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getMatrixRuntime } from "../../runtime.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
+import { SqliteBackedMatrixSyncStore } from "./file-sync-store.js";
+import { openMatrixStorageMetaStoreOptions } from "./storage-metadata.js";
 import {
+  hasMatrixSyncCacheStateInStore,
+  readPersistedStoreFromSyncStore,
   openMatrixSyncCacheStoreOptions,
-  SqliteBackedMatrixSyncStore,
   type MatrixSyncCacheRecord,
-} from "./file-sync-store.js";
-import { openMatrixStorageMetaStoreOptions } from "./storage.js";
+} from "./sync-cache-state.js";
 
 function createSyncResponse(nextBatch: string): ISyncResponse {
   return {
@@ -139,6 +143,85 @@ describe("SqliteBackedMatrixSyncStore", () => {
     expect(secondStore.hasSavedSyncFromCleanShutdown()).toBe(false);
   });
 
+  it.each(["bulk", "legacy"])(
+    "restores multi-chunk sync data and rejects a bad digest with %s stores",
+    async (mode) => {
+      const storageRoot = createStorageRoot();
+      const response = createSyncResponse("large-cursor");
+      response.account_data.events.push({
+        type: "com.openclaw.large",
+        content: { value: "🦞".repeat(100_000) },
+      });
+      const writer = new SqliteBackedMatrixSyncStore(storageRoot);
+      await writer.setSyncData(response);
+      await writer.flush();
+      const expected = await writer.getSavedSync();
+      const options = openMatrixSyncCacheStoreOptions(storageRoot);
+      const sync = createPluginStateSyncKeyedStoreForTests<MatrixSyncCacheRecord>(
+        "matrix",
+        options,
+      );
+      const asyncStore = createPluginStateKeyedStoreForTests<MatrixSyncCacheRecord>(
+        "matrix",
+        options,
+      );
+      const { lookupMany: _lookupMany, ...legacySync } = sync;
+      const syncReader = mode === "bulk" ? sync : legacySync;
+      const asyncReader =
+        mode === "bulk" ? asyncStore : { lookup: (key: string) => asyncStore.lookup(key) };
+      expect(readPersistedStoreFromSyncStore(syncReader)?.savedSync).toEqual(expected);
+      await expect(
+        hasMatrixSyncCacheStateInStore({ storageRootDir: storageRoot, store: asyncReader }),
+      ).resolves.toBe(true);
+      const chunk = sync
+        .entries()
+        .find((row) => row.value.kind === "sync-chunk" && row.value.index === 10);
+      if (!chunk || chunk.value.kind !== "sync-chunk") {
+        throw new Error("expected sync chunk 10");
+      }
+      sync.register(chunk.key, { ...chunk.value, data: "modified" });
+      expect(readPersistedStoreFromSyncStore(syncReader)).toMatchObject({
+        savedSync: null,
+        cleanShutdown: false,
+      });
+      await expect(
+        hasMatrixSyncCacheStateInStore({ storageRootDir: storageRoot, store: asyncReader }),
+      ).resolves.toBe(false);
+      const laterChunk = sync
+        .entries()
+        .find((row) => row.value.kind === "sync-chunk" && row.value.index === 11);
+      if (!laterChunk) {
+        throw new Error("expected sync chunk 11");
+      }
+      const { db } = openOpenClawStateDatabase({ env: options.env });
+      db.prepare("UPDATE plugin_state_entries SET value_json = ? WHERE entry_key = ?").run(
+        "invalid JSON",
+        laterChunk.key,
+      );
+      for (const early of ["invalid", "missing"]) {
+        if (early === "invalid") {
+          sync.register(chunk.key, { ...chunk.value, index: -1 });
+        } else {
+          sync.delete(chunk.key);
+        }
+        expect(readPersistedStoreFromSyncStore(syncReader)).toMatchObject({
+          savedSync: null,
+          cleanShutdown: false,
+        });
+        await expect(
+          hasMatrixSyncCacheStateInStore({ storageRootDir: storageRoot, store: asyncReader }),
+        ).resolves.toBe(false);
+      }
+      sync.register(chunk.key, chunk.value);
+      expect(() => readPersistedStoreFromSyncStore(syncReader)).toThrowError(
+        expect.objectContaining({ code: "PLUGIN_STATE_CORRUPT" }),
+      );
+      await expect(
+        hasMatrixSyncCacheStateInStore({ storageRootDir: storageRoot, store: asyncReader }),
+      ).rejects.toMatchObject({ code: "PLUGIN_STATE_CORRUPT" });
+    },
+  );
+
   it("restores the sync cache after the storage root moves", async () => {
     const storageRoot = createStorageRoot();
     const movedStorageRoot = `${storageRoot}-moved`;
@@ -248,6 +331,51 @@ describe("SqliteBackedMatrixSyncStore", () => {
     expect(afterNewSync.hasSavedSync()).toBe(true);
     expect(afterNewSync.hasSavedSyncFromCleanShutdown()).toBe(false);
     await expect(afterNewSync.getSavedSyncToken()).resolves.toBe("s456");
+  });
+
+  it("freezes the last admitted cursor and marks only that cursor clean", async () => {
+    const storageRoot = createStorageRoot();
+    const store = new SqliteBackedMatrixSyncStore(storageRoot);
+
+    await store.setSyncData(createSyncResponse("before-freeze"));
+    await store.freezeSyncCursorPersistence();
+    await store.setSyncData(createSyncResponse("after-freeze"));
+    store.markCleanShutdown();
+    await store.flush();
+
+    const persisted = new SqliteBackedMatrixSyncStore(storageRoot);
+    await expect(persisted.getSavedSyncToken()).resolves.toBe("before-freeze");
+    expect(persisted.hasSavedSyncFromCleanShutdown()).toBe(true);
+  });
+
+  it("waits for an in-flight pre-freeze persist before freezing the cursor", async () => {
+    const storageRoot = createStorageRoot();
+    const store = new SqliteBackedMatrixSyncStore(storageRoot);
+
+    await store.setSyncData(createSyncResponse("in-flight"));
+    const flush = store.flush();
+    const freeze = store.freezeSyncCursorPersistence();
+    await Promise.all([flush, freeze]);
+    store.markCleanShutdown();
+    await store.flush();
+
+    const persisted = new SqliteBackedMatrixSyncStore(storageRoot);
+    await expect(persisted.getSavedSyncToken()).resolves.toBe("in-flight");
+    expect(persisted.hasSavedSyncFromCleanShutdown()).toBe(true);
+  });
+
+  it("discards pending cursor writes without marking a poisoned shutdown clean", async () => {
+    const storageRoot = createStorageRoot();
+    const store = new SqliteBackedMatrixSyncStore(storageRoot);
+
+    await store.setSyncData(createSyncResponse("suspect"));
+    await store.freezeSyncCursorPersistence();
+    store.discardPendingSyncCursorPersistence();
+    await store.flush();
+
+    const persisted = new SqliteBackedMatrixSyncStore(storageRoot);
+    expect(persisted.hasSavedSync()).toBe(false);
+    expect(persisted.hasSavedSyncFromCleanShutdown()).toBe(false);
   });
 
   it("coalesces background persistence until the debounce window elapses", async () => {

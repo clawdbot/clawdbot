@@ -1,5 +1,6 @@
 import { t } from "../../i18n/index.ts";
-import type { RuntimeConfigCapability } from "../../lib/config/index.ts";
+import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type { ModelProviderRowMessage } from "./view.ts";
 
 export type ModelProviderConfigMutation = {
@@ -25,10 +26,7 @@ type ModelProviderConfigMutationOwner = {
 };
 
 export function modelProviderErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message.trim()) {
-    return error.message;
-  }
-  return typeof error === "string" && error.trim() ? error : t("modelProviders.requestFailed");
+  return formatUiError(error, t("modelProviders.requestFailed"));
 }
 
 /**

@@ -1,7 +1,11 @@
 // @vitest-environment node
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import type { ModelAuthStatusResult, ModelCatalogEntry } from "../../api/types.ts";
+import type {
+  ModelAuthStatusResult,
+  ModelCatalogEntry,
+  ModelCatalogProviderOutcome,
+} from "../../api/types.ts";
 import {
   buildModelProviderCards,
   buildSelectableDefaultModels,
@@ -19,8 +23,11 @@ function catalogEntry(overrides: Partial<ModelCatalogEntry> & { provider: string
   } satisfies ModelCatalogEntry;
 }
 
-function authStatus(providers: ModelAuthStatusResult["providers"]): ModelAuthStatusResult {
-  return { ts: 1, providers };
+function authStatus(
+  providers: ModelAuthStatusResult["providers"],
+  providerCapabilities?: ModelAuthStatusResult["providerCapabilities"],
+): ModelAuthStatusResult {
+  return { ts: 1, providers, ...(providerCapabilities ? { providerCapabilities } : {}) };
 }
 
 function firstCard(cards: ReturnType<typeof buildModelProviderCards>) {
@@ -40,6 +47,101 @@ const EMPTY_INPUT = {
 const redactedConfigValue = "[redacted]";
 
 describe("buildModelProviderCards", () => {
+  it("omits API-key-only auth rows without model-provider evidence", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      authStatus: authStatus([
+        {
+          provider: "web-search",
+          displayName: "Web Search",
+          status: "static",
+          profiles: [],
+          apiKey: { source: "env", envVar: "WEB_SEARCH_API_KEY" },
+        },
+        {
+          provider: "web-extract",
+          displayName: "Web Extract",
+          status: "static",
+          profiles: [{ profileId: "extract", type: "api_key", status: "static" }],
+        },
+      ]),
+    });
+    expect(cards).toEqual([]);
+  });
+
+  it.each([true, false])(
+    "keeps environment-only model auth independently of API-key setup support (%s)",
+    (apiKeySupported) => {
+      const cards = buildModelProviderCards({
+        ...EMPTY_INPUT,
+        authStatus: authStatus(
+          [
+            {
+              provider: "model-service",
+              displayName: "Model Service",
+              status: "static",
+              profiles: [],
+              apiKey: { source: "env", envVar: "MODEL_SERVICE_API_KEY" },
+            },
+            {
+              provider: "web-search",
+              displayName: "Web Search",
+              status: "static",
+              profiles: [],
+              apiKey: { source: "env", envVar: "WEB_SEARCH_API_KEY" },
+            },
+          ],
+          [
+            { provider: "model-service", apiKeySupported, quickApiKeySetup: false },
+            { provider: "unconfigured-model", apiKeySupported: true, quickApiKeySetup: true },
+          ],
+        ),
+      });
+      expect(cards).toHaveLength(1);
+      expect(firstCard(cards)).toMatchObject({
+        id: "model-service",
+        modelCount: 0,
+        apiKeySupported,
+        apiKey: { source: "env", envVar: "MODEL_SERVICE_API_KEY" },
+        credentialProviderIds: ["model-service"],
+      });
+    },
+  );
+
+  it.each(["oauth", "token"] as const)(
+    "keeps auth-only %s profiles, including non-expiring tokens",
+    (type) => {
+      const status = type === "token" ? "static" : "ok";
+      const cards = buildModelProviderCards({
+        ...EMPTY_INPUT,
+        authStatus: authStatus([
+          {
+            provider: "anthropic",
+            displayName: "Anthropic",
+            status,
+            profiles: [{ profileId: "primary", type, status, logoutSupported: true }],
+          },
+          {
+            provider: "claude-cli",
+            displayName: "Claude",
+            status: "static",
+            profiles: [{ profileId: "secondary", type: "api_key", status: "static" }],
+          },
+        ]),
+      });
+      expect(cards).toHaveLength(1);
+      expect(firstCard(cards)).toMatchObject({
+        id: "anthropic",
+        modelCount: 0,
+        profiles: [
+          { profileId: "primary", type, status, logoutSupported: true },
+          { profileId: "secondary", type: "api_key", status: "static" },
+        ],
+        logoutTargets: [{ provider: "anthropic", profileIds: ["primary"] }],
+      });
+    },
+  );
+
   it("keeps catalog providers, including ones whose models are all unavailable", () => {
     const cards = buildModelProviderCards({
       ...EMPTY_INPUT,
@@ -56,11 +158,106 @@ describe("buildModelProviderCards", () => {
     expect(cards[1]).toMatchObject({ modelCount: 1, availableModelCount: 0 });
   });
 
+  it("keeps provider-owned catalog failures when no model rows are usable", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      providerOutcomes: [{ provider: "openai", status: "auth-rejected" }],
+    });
+
+    expect(cards).toHaveLength(1);
+    expect(firstCard(cards)).toMatchObject({
+      id: "openai",
+      catalogStatus: "auth-rejected",
+      modelCount: 0,
+      availableModelCount: 0,
+    });
+  });
+
+  it.each<{
+    name: string;
+    outcomes: ModelCatalogProviderOutcome[];
+    expected: ModelCatalogProviderOutcome["status"];
+  }>([
+    {
+      name: "keeps a ready profile above a rejected sibling",
+      outcomes: [
+        { provider: "openai", profileId: "rejected", status: "auth-rejected" },
+        { provider: "openai", profileId: "ready", status: "ready" },
+      ],
+      expected: "ready",
+    },
+    {
+      name: "keeps a ready profile above an unavailable sibling",
+      outcomes: [
+        { provider: "openai", profileId: "unavailable", status: "unavailable" },
+        { provider: "openai", profileId: "ready", status: "ready" },
+      ],
+      expected: "ready",
+    },
+    {
+      name: "reports rejection when no profile is ready",
+      outcomes: [
+        { provider: "openai", profileId: "rejected", status: "auth-rejected" },
+        { provider: "openai", profileId: "unavailable", status: "unavailable" },
+      ],
+      expected: "auth-rejected",
+    },
+    {
+      name: "keeps an unscoped rejection above a ready profile",
+      outcomes: [
+        { provider: "openai", status: "auth-rejected" },
+        { provider: "openai", profileId: "ready", status: "ready" },
+      ],
+      expected: "auth-rejected",
+    },
+    {
+      name: "keeps an unscoped unavailable result above a ready profile",
+      outcomes: [
+        { provider: "openai", status: "unavailable" },
+        { provider: "openai", profileId: "ready", status: "ready" },
+      ],
+      expected: "unavailable",
+    },
+    {
+      name: "keeps unscoped readiness above a rejected profile",
+      outcomes: [
+        { provider: "openai", status: "ready" },
+        { provider: "openai", profileId: "rejected", status: "auth-rejected" },
+      ],
+      expected: "ready",
+    },
+    {
+      name: "reports the worst unscoped diagnostic",
+      outcomes: [
+        { provider: "openai", status: "ready" },
+        { provider: "openai", status: "unavailable" },
+      ],
+      expected: "unavailable",
+    },
+    {
+      name: "combines profile outcomes across canonical provider aliases",
+      outcomes: [
+        { provider: "anthropic", profileId: "ready", status: "ready" },
+        { provider: "claude-cli", profileId: "rejected", status: "auth-rejected" },
+      ],
+      expected: "ready",
+    },
+  ])("$name in either input order", ({ outcomes, expected }) => {
+    for (const ordered of [outcomes, outcomes.toReversed()]) {
+      const cards = buildModelProviderCards({ ...EMPTY_INPUT, providerOutcomes: ordered });
+      expect(cards).toHaveLength(1);
+      expect(firstCard(cards).catalogStatus).toBe(expected);
+    }
+  });
+
   it("propagates explicit API-key capability onto provider cards", () => {
     const cards = buildModelProviderCards({
       ...EMPTY_INPUT,
       models: [catalogEntry({ provider: "github-copilot", available: true })],
-      catalogModels: [catalogEntry({ provider: "github-copilot", apiKeySupported: false })],
+      authStatus: authStatus(
+        [],
+        [{ provider: "github-copilot", apiKeySupported: false, quickApiKeySetup: false }],
+      ),
     });
     expect(firstCard(cards).apiKeySupported).toBe(false);
   });
@@ -151,6 +348,51 @@ describe("buildModelProviderCards", () => {
       { provider: "anthropic", profileIds: ["p1"] },
       { provider: "claude-cli", profileIds: ["p2"] },
     ]);
+  });
+
+  it("keeps a credential-less missing route visible beside CLI OAuth", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      authStatus: authStatus([
+        {
+          provider: "anthropic",
+          displayName: "Claude",
+          status: "missing",
+          profiles: [],
+        },
+        {
+          provider: "claude-cli",
+          displayName: "Claude",
+          status: "expiring",
+          profiles: [{ profileId: "anthropic:claude-cli", type: "oauth", status: "expiring" }],
+        },
+      ]),
+    });
+
+    expect(firstCard(cards).auth).toMatchObject({ kind: "missing", profileCount: 1 });
+  });
+
+  it("preserves missing MiniMax OAuth beside a separate API key", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      authStatus: authStatus([
+        {
+          provider: "minimax",
+          displayName: "MiniMax",
+          status: "static",
+          profiles: [],
+          apiKey: { source: "env", envVar: "MINIMAX_API_KEY" },
+        },
+        {
+          provider: "minimax-portal",
+          displayName: "MiniMax",
+          status: "missing",
+          profiles: [],
+        },
+      ]),
+    });
+
+    expect(firstCard(cards).auth).toMatchObject({ kind: "missing", profileCount: 0 });
   });
 
   it("prefers usage.status snapshots over the auth-status embed", () => {
@@ -293,6 +535,16 @@ describe("model provider configuration data", () => {
     ]);
   });
 
+  it.each(["openai/gpt-saved", "saved-model"])(
+    "keeps saved %s available when the catalog is unknown, but not when it is empty",
+    (primary) => {
+      const selection = { primary, fallbacks: [], utilityModel: null };
+
+      expect(buildSelectableDefaultModels(null, selection)[0]).not.toHaveProperty("available");
+      expect(buildSelectableDefaultModels([], selection)[0]).toMatchObject({ available: false });
+    },
+  );
+
   it("preserves alias-valued and bare model defaults as picker options", () => {
     const selectable = buildSelectableDefaultModels(
       [catalogEntry({ provider: "anthropic", id: "claude-opus", alias: "Opus", available: true })],
@@ -350,10 +602,9 @@ describe("model provider configuration data", () => {
   it("lists known providers that are not configured", () => {
     const options = buildUnconfiguredProviderOptions(
       [
-        catalogEntry({ provider: "openai", apiKeySupported: true }),
-        catalogEntry({ provider: "anthropic", apiKeySupported: true }),
-        catalogEntry({ provider: "anthropic", id: "anthropic/other", apiKeySupported: true }),
-        catalogEntry({ provider: "github-copilot", apiKeySupported: false }),
+        { provider: "openai", apiKeySupported: true, quickApiKeySetup: true },
+        { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
+        { provider: "github-copilot", apiKeySupported: true, quickApiKeySetup: false },
       ],
       ["openai"],
     );

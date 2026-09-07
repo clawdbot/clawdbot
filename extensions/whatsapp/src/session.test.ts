@@ -4,27 +4,40 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type MockInstance,
+  vi,
+} from "vitest";
 import { logWebSelfId } from "./auth-store.js";
 import { enqueueCredsSave } from "./creds-persistence.js";
 import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "./test-helpers.js";
 
-const { envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
-  envHttpProxyAgentCtor: vi.fn(function MockEnvHttpProxyAgent(
-    this: { options: unknown; dispatch: () => void },
-    options: unknown,
-  ) {
-    this.options = options;
-    this.dispatch = () => {};
-  }),
-  proxyAgentCtor: vi.fn(function MockProxyAgent(
-    this: { options: unknown; dispatch: () => void },
-    options: unknown,
-  ) {
-    this.options = options;
-    this.dispatch = () => {};
-  }),
-}));
+const { envHttpProxyAgentCtor, proxyAgentCtor, dispatchSpy } = vi.hoisted(() => {
+  const dispatchSpyLocal = vi.fn(() => true);
+  return {
+    dispatchSpy: dispatchSpyLocal,
+    envHttpProxyAgentCtor: vi.fn(function MockEnvHttpProxyAgent(
+      this: { options: unknown; dispatch: () => boolean },
+      options: unknown,
+    ) {
+      this.options = options;
+      this.dispatch = dispatchSpyLocal;
+    }),
+    proxyAgentCtor: vi.fn(function MockProxyAgent(
+      this: { options: unknown; dispatch: () => boolean },
+      options: unknown,
+    ) {
+      this.options = options;
+      this.dispatch = dispatchSpyLocal;
+    }),
+  };
+});
 
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
@@ -80,56 +93,55 @@ function createTempCaFile(contents: string): string {
 function mockFsOpenForCredsWrites(params?: {
   onTempWrite?: (filePath: string) => Promise<void> | void;
 }) {
+  const open = fs.open.bind(fs);
   const writeFile = fs.writeFile.bind(fs);
-  const tempHandles: Array<{
+  type FileHandle = Awaited<ReturnType<typeof fs.open>>;
+  const handles: Array<{
     filePath: string;
-    sync: ReturnType<typeof vi.fn>;
-    close: ReturnType<typeof vi.fn>;
+    flags: string | number | undefined;
+    mode: number | undefined;
+    handle: FileHandle;
+    chmod: MockInstance<FileHandle["chmod"]>;
+    sync: MockInstance<FileHandle["sync"]>;
+    close: MockInstance<FileHandle["close"]>;
   }> = [];
-  const dirHandles: Array<{
-    filePath: string;
-    sync: ReturnType<typeof vi.fn>;
-    close: ReturnType<typeof vi.fn>;
-  }> = [];
-  const tempWrites: string[] = [];
+  const writes: Array<{ filePath: string; data: unknown }> = [];
   const writeFileSpy = vi
     .spyOn(fs, "writeFile")
-    .mockImplementation(async (filePath, data, opts) => {
-      if (typeof filePath === "string" && filePath.includes(".creds.")) {
-        tempWrites.push(filePath);
-        await params?.onTempWrite?.(filePath);
+    .mockImplementation(async (target, data, options) => {
+      const observed = handles.find(({ handle }) => handle === target);
+      if (observed && path.basename(observed.filePath).startsWith(".creds.")) {
+        writes.push({ filePath: observed.filePath, data });
+        await params?.onTempWrite?.(observed.filePath);
       }
-      return await writeFile(filePath as never, data as never, opts as never);
+      return await writeFile(target, data, options);
     });
   const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
-    if (typeof filePath === "string" && flags === "r+" && filePath.includes(".creds.")) {
-      const handle = {
+    const handle = await open(filePath, flags, mode);
+    if (typeof filePath === "string") {
+      handles.push({
         filePath,
-        sync: vi.fn(async () => {}),
-        close: vi.fn(async () => {}),
-      };
-      tempHandles.push(handle);
-      return handle as never;
+        flags,
+        mode: typeof mode === "number" ? mode : undefined,
+        handle,
+        chmod: vi.spyOn(handle, "chmod"),
+        sync: vi.spyOn(handle, "sync"),
+        close: vi.spyOn(handle, "close"),
+      });
     }
-    if (typeof filePath === "string" && flags === "r") {
-      const handle = {
-        filePath,
-        sync: vi.fn(async () => {}),
-        close: vi.fn(async () => {}),
-      };
-      dirHandles.push(handle);
-      return handle as never;
-    }
-    throw new Error(
-      `unexpected fs.open call: ${String(filePath)} ${String(flags)} ${String(mode)}`,
-    );
+    return handle;
   });
   return {
-    openSpy,
-    writeFileSpy,
-    tempWrites,
-    tempHandles,
-    dirHandles,
+    handles,
+    writes,
+    get tempHandles() {
+      return handles.filter(
+        ({ filePath, flags }) => flags === "wx" && path.basename(filePath).startsWith(".creds."),
+      );
+    },
+    get dirHandles() {
+      return handles.filter(({ flags }) => flags === "r");
+    },
     restore() {
       writeFileSpy.mockRestore();
       openSpy.mockRestore();
@@ -184,27 +196,6 @@ function requireValue<T>(value: T | undefined, label: string): T {
     throw new Error(`expected ${label}`);
   }
   return value;
-}
-
-function requireString(value: unknown, label: string): string {
-  if (typeof value !== "string") {
-    throw new Error(`expected ${label}`);
-  }
-  return value;
-}
-
-function firstWriteFileCall(writeFileSpy: ReturnType<typeof vi.fn>): {
-  data: unknown;
-  options: { flag?: string; mode?: number };
-  path: string;
-} {
-  const [filePath, data, options] = firstMockCall(writeFileSpy, "fs.writeFile");
-  expect(typeof filePath).toBe("string");
-  return {
-    data,
-    options: (options ?? {}) as { flag?: string; mode?: number },
-    path: filePath as string,
-  };
 }
 
 function expectRuntimeLogContaining(
@@ -275,11 +266,12 @@ describe("web session", () => {
     passedLogger.trace("ignored");
     await emitCredsUpdate(authDir);
 
-    const write = firstWriteFileCall(openMock.writeFileSpy);
-    expect(write.path).toContain(path.join(authDir, ".creds."));
+    const write = requireValue(openMock.writes[0], "WhatsApp credential write");
+    const tempHandle = requireValue(openMock.tempHandles[0], "WhatsApp credential handle");
+    expect(write.filePath).toContain(path.join(authDir, ".creds."));
     expect(typeof write.data).toBe("string");
-    expect(write.options.mode).toBe(0o600);
-    expect(write.options.flag).toBe("wx");
+    expect(tempHandle.mode).toBe(0o600);
+    expect(tempHandle.flags).toBe("wx");
     openMock.restore();
   });
 
@@ -560,11 +552,33 @@ describe("web session", () => {
 
     const passed = readLastSocketOptions();
     expect(passed.agent).toBeUndefined();
-    expect(envHttpProxyAgentCtor).toHaveBeenCalledWith(
-      expect.objectContaining({
-        proxyTls: expect.objectContaining({ ca: "whatsapp-managed-env-proxy-ca" }),
-      }),
-    );
+    const fetchAgent = requireValue(passed.fetchAgent, "fetch dispatcher");
+    if (
+      typeof fetchAgent !== "object" ||
+      fetchAgent === null ||
+      !("dispatch" in fetchAgent) ||
+      typeof fetchAgent.dispatch !== "function"
+    ) {
+      throw new Error("expected attached fetch dispatcher.dispatch");
+    }
+    fetchAgent.dispatch({ origin: "https://media.whatsapp.net", path: "/", method: "POST" }, {});
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    const proxy = requireValue(proxyAgentCtor.mock.instances[0], "selected proxy");
+    expect(dispatchSpy.mock.contexts[0]).toBe(proxy);
+    expect(proxy.options).toMatchObject({
+      uri: "https://proxy.test:8443",
+      allowH2: false,
+      proxyTls: { ca: "whatsapp-managed-env-proxy-ca" },
+    });
+    expect(proxy.options).not.toHaveProperty("requestTls.ca");
+
+    fetchAgent.dispatch({ origin: "https://mmg.whatsapp.net", path: "/", method: "POST" }, {});
+    expect(dispatchSpy).toHaveBeenCalledTimes(2);
+    const direct = requireValue(envHttpProxyAgentCtor.mock.instances[0], "direct dispatcher");
+    expect(dispatchSpy.mock.contexts[1]).toBe(direct);
+    expect(direct.options).not.toHaveProperty("proxyTls");
+    expect(direct.options).not.toHaveProperty("connect.ca");
+    expect(direct.options).not.toHaveProperty("requestTls.ca");
   });
 
   it("uses lowercase HTTPS proxy before uppercase for WA WebSocket connection", async () => {
@@ -976,46 +990,57 @@ describe("web session", () => {
   );
 
   it("writes creds.json atomically via temp file and rename", async () => {
+    const authDir = createTempAuthDir("openclaw-wa-creds-atomic-write");
+    const credsPath = path.join(authDir, "creds.json");
     const openMock = mockFsOpenForCredsWrites();
-    const renameSpy = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
-    const rmSpy = vi.spyOn(fs, "rm").mockResolvedValue(undefined);
-    const chmodSpy = vi.spyOn(fs, "chmod").mockResolvedValue(undefined);
+    const renameSpy = vi.spyOn(fs, "rename");
+    const rmSpy = vi.spyOn(fs, "rm");
 
     try {
-      await writeCredsJsonAtomically("/tmp/openclaw-oauth/whatsapp/default", {
-        me: { id: "123@s.whatsapp.net" },
-      });
+      await writeCredsJsonAtomically(authDir, { me: { id: "123@s.whatsapp.net" } });
 
-      const write = firstWriteFileCall(openMock.writeFileSpy);
-      expect(write.path).toContain(
-        path.join("/tmp", "openclaw-oauth", "whatsapp", "default", ".creds."),
-      );
+      const write = requireValue(openMock.writes[0], "WhatsApp credential write");
+      const tempHandle = requireValue(openMock.tempHandles[0], "WhatsApp credential handle");
+      expect(write.filePath).toContain(path.join(authDir, ".creds."));
       expect(typeof write.data).toBe("string");
-      expect(write.options.mode).toBe(0o600);
-      expect(write.options.flag).toBe("wx");
+      expect(tempHandle.mode).toBe(0o600);
+      expect(tempHandle.flags).toBe("wx");
       expect(openMock.tempHandles).toHaveLength(1);
-      expect(openMock.tempHandles[0]?.sync).toHaveBeenCalledTimes(1);
-      expect(openMock.tempHandles[0]?.close).toHaveBeenCalledTimes(1);
-      expect(renameSpy).toHaveBeenCalledTimes(1);
+      expect(tempHandle.chmod).toHaveBeenCalledWith(0o600);
+      expect(tempHandle.sync).toHaveBeenCalledTimes(1);
+      expect(tempHandle.close).toHaveBeenCalledTimes(1);
+      expect(renameSpy).toHaveBeenCalledExactlyOnceWith(tempHandle.filePath, credsPath);
       expect(rmSpy).not.toHaveBeenCalled();
-      expect(chmodSpy).toHaveBeenCalledWith(
-        path.join("/tmp", "openclaw-oauth", "whatsapp", "default", "creds.json"),
-        0o600,
-      );
       expect(openMock.dirHandles).toHaveLength(1);
       expect(openMock.dirHandles[0]?.sync).toHaveBeenCalledTimes(1);
-      const writePath = openMock.tempHandles[0]?.filePath;
-      const [, renameTarget] = firstMockCall(renameSpy, "creds atomic rename");
-      expect(typeof writePath).toBe("string");
-      expect(writePath).toContain(".creds.");
-      expect(requireString(renameTarget, "creds rename target path")).toContain(
-        path.join("/tmp", "openclaw-oauth", "whatsapp", "default", "creds.json"),
-      );
+      expect(openMock.dirHandles[0]?.close).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(fsSync.readFileSync(credsPath, "utf8"))).toEqual({
+        me: { id: "123@s.whatsapp.net" },
+      });
+      expect(fsSync.statSync(credsPath).mode & 0o777).toBe(0o600);
+      if (process.platform !== "win32") {
+        const parentHandle = requireValue(
+          openMock.handles.find(
+            ({ filePath, flags }) => filePath === authDir && typeof flags === "number",
+          ),
+          "pinned WhatsApp credential directory",
+        );
+        expect(parentHandle.flags).toBe(
+          fsSync.constants.O_RDONLY |
+            fsSync.constants.O_DIRECTORY |
+            fsSync.constants.O_NOFOLLOW |
+            fsSync.constants.O_NONBLOCK,
+        );
+        // fs-safe 0.8.0 skips the directory chmod when the dir already has the
+        // target mode; the fixture starts at 0o700, so no chmod is dispatched.
+        expect(parentHandle.chmod).not.toHaveBeenCalled();
+        expect(parentHandle.close).toHaveBeenCalledTimes(1);
+        expect(fsSync.statSync(authDir).mode & 0o777).toBe(0o700);
+      }
     } finally {
       openMock.restore();
       renameSpy.mockRestore();
       rmSpy.mockRestore();
-      chmodSpy.mockRestore();
     }
   });
 

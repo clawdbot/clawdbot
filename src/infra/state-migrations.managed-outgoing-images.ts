@@ -2,7 +2,9 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString as optionalNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   managedImageRecordFromRow,
   managedImageRecordsEqual,
@@ -21,6 +23,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { assertAllowedJsonFields } from "./state-migrations.json-fields.js";
 import {
   legacyMigrationSourceSnapshotsMatch as sourceSnapshotsMatch,
   readLegacyMigrationSourceSnapshotSync,
@@ -127,15 +130,11 @@ function readLegacySourceSnapshot(sourcePath: string): LegacySourceSnapshot {
   });
 }
 
-function optionalNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
 function nullableNonNegativeInteger(value: unknown): number | null | undefined {
   if (value === null) {
     return null;
   }
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  return asSafeIntegerInRange(value, { min: 0 });
 }
 
 function parseLegacyManagedImageRecord(params: {
@@ -146,13 +145,10 @@ function parseLegacyManagedImageRecord(params: {
   if (!isRecord(raw) || !isRecord(raw.original)) {
     throw new Error("legacy managed image record must be an object");
   }
-  const unexpectedRecordKey = Object.keys(raw).find((key) => !RECORD_KEYS.has(key));
-  const unexpectedOriginalKey = Object.keys(raw.original).find((key) => !ORIGINAL_KEYS.has(key));
-  if (unexpectedRecordKey || unexpectedOriginalKey) {
-    throw new Error(
-      `legacy managed image record has unexpected field ${unexpectedRecordKey ?? `original.${unexpectedOriginalKey}`}`,
-    );
-  }
+  assertAllowedJsonFields(raw, RECORD_KEYS, "legacy managed image record");
+  assertAllowedJsonFields(raw.original, ORIGINAL_KEYS, "legacy managed image record", {
+    fieldPrefix: "original.",
+  });
 
   const attachmentId = optionalNonEmptyString(raw.attachmentId);
   const sessionKey = optionalNonEmptyString(raw.sessionKey);

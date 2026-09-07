@@ -1,3 +1,4 @@
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 // Handles auth directives that choose provider auth profiles for a reply.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatRemainingShort } from "../../agents/auth-health.js";
@@ -18,7 +19,6 @@ import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/m
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { maskApiKey } from "../../security/secret-mask.js";
-import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { shortenHomePath } from "../../utils.js";
 
 /** Controls how much auth provenance is shown in directive status output. */

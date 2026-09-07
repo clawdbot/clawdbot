@@ -1,0 +1,31 @@
+title: Diagnostics OTEL managed plugin install
+
+scenario:
+  id: diagnostics-otel-plugin-install
+  surface: telemetry
+  coverage:
+    primary:
+      - observability.diagnostics-otel-plugin-install
+  objective: Verify the exact diagnostics-otel package works through the managed npm install, enable, restart, and export lifecycle.
+  successCriteria:
+    - The release package is packed and served by the fixture npm registry.
+    - The real plugins install command records npm provenance and a managed install path.
+    - Disable and enable persist through the CLI before a hard Gateway restart.
+    - Signal-specific config wins over the matching environment endpoint.
+    - Sampling at zero drops a completed turn, then sampling at one exports the next turn.
+    - The clamped flush interval exports a trace before shutdown.
+    - A preloaded OpenTelemetry SDK still receives spans from installed-plugin listeners.
+  plugins:
+    - diagnostics-otel
+  docsRefs:
+    - docs/gateway/opentelemetry.md
+    - docs/tools/plugin.md
+  codeRefs:
+    - extensions/diagnostics-otel/src/service.ts
+    - src/cli/plugins-cli.runtime.ts
+    - test/e2e/qa-lab/runtime/diagnostics-otel-install-runtime.e2e.test.ts
+    - test/e2e/qa-lab/runtime/otel-test-support.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/diagnostics-otel-install-runtime.e2e.test.ts
+    summary: Pack, registry-install, restart, and export through the managed diagnostics-otel package.

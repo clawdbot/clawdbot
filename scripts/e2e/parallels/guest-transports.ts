@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { sleep } from "../../lib/sleep.mjs";
 import { run } from "./host-command.ts";
+import { runMacosHostCommand } from "./macos-exec.ts";
 import type { PhaseRunner } from "./phase-runner.ts";
 import { encodePowerShell, psSingleQuote } from "./powershell.ts";
 import type { CommandResult } from "./types.ts";
@@ -12,10 +13,15 @@ interface GuestExecOptions {
   timeoutMs?: number;
 }
 
+interface PosixGuestOptions extends GuestExecOptions {
+  env?: Record<string, string>;
+}
+
 interface WindowsBackgroundPowerShellOptions {
   append?: (chunk: string | Uint8Array) => void;
   beforeLaunchAttempt?: () => void;
   completedLogDrainGraceMs?: number;
+  env?: Record<string, string>;
   label: string;
   onLaunchRetry?: (message: string) => void;
   pollIntervalMs?: number;
@@ -41,6 +47,15 @@ function guestScriptName(extension: string): string {
 
 function posixSingleQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+function windowsProcessEnvScript(env: Record<string, string> = {}): string {
+  return Object.entries(env)
+    .map(
+      ([key, value]) =>
+        `Set-Item -LiteralPath ${psSingleQuote(`Env:${key}`)} -Value ${psSingleQuote(value)}`,
+    )
+    .join("\n");
 }
 
 function appendOutput(
@@ -92,17 +107,23 @@ function throwIfParallelsVmStopped(label: string, result: CommandResult): void {
 const POSIX_GUEST_SCRIPT_CLEANUP_TIMEOUT_MS = 30_000;
 const POSIX_BACKGROUND_LOG_MAX_BYTES = 8 * 1024 * 1024;
 const WINDOWS_BACKGROUND_LOG_MAX_BYTES = 8 * 1024 * 1024;
+const WINDOWS_BACKGROUND_CLEANUP_RESERVE_MS = 120_000;
+const WINDOWS_BACKGROUND_POLL_FAILURE_LIMIT = 3;
 
 function appendCommandResult(phases: PhaseRunner, result: CommandResult): void {
   phases.append(result.stdout);
   phases.append(result.stderr);
 }
 
-function cleanupPosixGuestScript(phases: PhaseRunner, transportArgs: string[]): void {
+function cleanupPosixGuestScript(
+  phases: PhaseRunner,
+  transportArgs: string[],
+  runCommand: typeof run = run,
+): void {
   try {
     appendCommandResult(
       phases,
-      run("prlctl", transportArgs, {
+      runCommand("prlctl", transportArgs, {
         check: false,
         quiet: true,
         timeoutMs: POSIX_GUEST_SCRIPT_CLEANUP_TIMEOUT_MS,
@@ -324,7 +345,22 @@ export async function runWindowsBackgroundPowerShell(
   const windowsLogPath = `%WINDIR%\\Temp\\${guestRunDir}\\run.log`;
   const backgroundExitPrefix = `__OPENCLAW_BACKGROUND_EXIT__:${nonce}:`;
   const backgroundDoneMarker = `__OPENCLAW_BACKGROUND_DONE__:${nonce}`;
-  const deadline = Date.now() + options.timeoutMs;
+  // PhaseRunner cannot cancel an in-flight callback. Keep cleanup inside the
+  // helper budget so a timed-out lane cannot overlap the next snapshot restore.
+  const deadline =
+    Date.now() + Math.max(1, options.timeoutMs - WINDOWS_BACKGROUND_CLEANUP_RESERVE_MS);
+  let consecutivePollFailures = 0;
+  const recordPollFailure = (stage: string, result: CommandResult): void => {
+    consecutivePollFailures++;
+    options.onLaunchRetry?.(
+      `${options.label} ${stage} transport failure ${consecutivePollFailures}/${WINDOWS_BACKGROUND_POLL_FAILURE_LIMIT} (exit ${result.status})`,
+    );
+    if (consecutivePollFailures >= WINDOWS_BACKGROUND_POLL_FAILURE_LIMIT) {
+      throw new Error(
+        `${options.label} ${stage} failed after ${WINDOWS_BACKGROUND_POLL_FAILURE_LIMIT} consecutive guest transport errors`,
+      );
+    }
+  };
   const pathsScript = `$runDir = Join-Path (Join-Path $env:WINDIR 'Temp\\openclaw-parallels') ${psSingleQuote(nonce)}
 $scriptPath = Join-Path $runDir 'run.ps1'
 $logPath = Join-Path $runDir 'run.log'
@@ -370,6 +406,7 @@ function Add-OpenClawBackgroundLog {
 }
 try {
   & {
+${windowsProcessEnvScript(options.env)}
 ${options.script}
   } *>&1 | Add-OpenClawBackgroundLog
   Write-OpenClawUtf8File $exitPath '0'
@@ -426,7 +463,9 @@ if (!(Test-Path $scriptPath)) { throw "${safeLabel} background script was not wr
   try {
     let launched = false;
     let lastLaunchStatus = 0;
-    for (let attempt = 1; attempt <= 5 && Date.now() < deadline; attempt++) {
+    // Setup can consume the active budget before the first launch; still observe
+    // its real result before using the deadline to suppress later attempts.
+    for (let attempt = 1; attempt <= 5 && (attempt === 1 || Date.now() < deadline); attempt++) {
       options.beforeLaunchAttempt?.();
       const launch = runCommand(
         "prlctl",
@@ -488,8 +527,12 @@ cmd.exe /d /s /c start "" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -
 
     let completedLogDrainDeadline = 0;
     let doneFileSeen = false;
+    let completionProbeAttempted = false;
     const activeDeadline = () => (doneFileSeen ? completedLogDrainDeadline : deadline);
-    while (Date.now() < activeDeadline()) {
+    // A process can finish while setup exhausts the active budget; inspect its
+    // completion marker once before deciding whether cleanup must stop it.
+    while (!completionProbeAttempted || Date.now() < activeDeadline()) {
+      completionProbeAttempted = true;
       const doneProbe = runCommand(
         "prlctl",
         [
@@ -506,9 +549,18 @@ cmd.exe /d /s /c start "" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -
       appendOutput(append, doneProbe);
       throwIfParallelsVmStopped(options.label, doneProbe);
       if (doneProbe.stdout.split(/\r?\n/u).some((line) => line.trim() === "done")) {
+        consecutivePollFailures = 0;
         doneFileSeen = true;
         completedLogDrainDeadline ||= Date.now() + completedLogDrainGraceMs;
+      } else if (
+        doneProbe.status === 0 &&
+        doneProbe.stdout.split(/\r?\n/u).some((line) => line.trim() === "wait")
+      ) {
+        consecutivePollFailures = 0;
+        await sleep(pollIntervalMs);
+        continue;
       } else {
+        recordPollFailure("done poll", doneProbe);
         await sleep(pollIntervalMs);
         continue;
       }
@@ -529,6 +581,7 @@ cmd.exe /d /s /c start "" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -
       appendOutput(append, poll);
       throwIfParallelsVmStopped(options.label, poll);
       if (hasControlLine(poll.stdout, backgroundDoneMarker)) {
+        consecutivePollFailures = 0;
         doneSeen = true;
         const backgroundExit = findControlValue(poll.stdout, backgroundExitPrefix) ?? "0";
         if (backgroundExit !== "0" || (poll.status !== 0 && poll.status !== 124)) {
@@ -536,6 +589,7 @@ cmd.exe /d /s /c start "" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -
         }
         return;
       }
+      recordPollFailure("log poll", poll);
       await sleep(Math.min(pollIntervalMs, 100));
     }
     if (doneSeen) {
@@ -673,13 +727,22 @@ Remove-Item -Path $runDir -Recurse -Force -ErrorAction SilentlyContinue`),
 }
 
 export class LinuxGuest {
-  constructor(
-    private vmName: string,
-    private phases: PhaseRunner,
-  ) {}
+  private vmName: string;
+  private phases: PhaseRunner;
+  private getEnv: () => Record<string, string>;
 
-  exec(args: string[], options: GuestExecOptions = {}): string {
-    const result = run("prlctl", this.transportArgs(args), {
+  constructor(vmName: string, phases: PhaseRunner, getEnv = () => ({})) {
+    this.vmName = vmName;
+    this.phases = phases;
+    this.getEnv = getEnv;
+  }
+
+  exec(args: string[], options: PosixGuestOptions = {}): string {
+    return this.run(args, options).stdout.trim();
+  }
+
+  run(args: string[], options: PosixGuestOptions = {}): CommandResult {
+    const result = run("prlctl", this.transportArgs(args, options.env), {
       check: false,
       input: options.input,
       quiet: true,
@@ -688,11 +751,17 @@ export class LinuxGuest {
     this.phases.append(result.stdout);
     this.phases.append(result.stderr);
     throwIfFailed("Linux guest command", result, options.check);
-    return result.stdout.trim();
+    return result;
   }
 
-  private transportArgs(args: string[]): string[] {
-    return ["exec", this.vmName, "/usr/bin/env", "HOME=/root", "OPENCLAW_ALLOW_ROOT=1", ...args];
+  private transportArgs(args: string[], env: Record<string, string> = {}): string[] {
+    const envArgs = Object.entries({
+      HOME: "/root",
+      OPENCLAW_ALLOW_ROOT: "1",
+      ...this.getEnv(),
+      ...env,
+    }).map(([key, value]) => `${key}=${value}`);
+    return ["exec", this.vmName, "/usr/bin/env", ...envArgs, ...args];
   }
 
   bash(script: string): string {
@@ -713,28 +782,30 @@ export class LinuxGuest {
   }
 }
 
-interface MacosGuestOptions extends GuestExecOptions {
-  env?: Record<string, string>;
-}
+type MacosGuestInput = {
+  vmName: string;
+  getUser: () => string;
+  getTransport: () => "current-user" | "sudo";
+  resolveDesktopHome: (user: string) => string;
+  path: string;
+  getEnv?: () => Record<string, string>;
+};
 
 export class MacosGuest {
-  constructor(
-    private input: {
-      vmName: string;
-      getUser: () => string;
-      getTransport: () => "current-user" | "sudo";
-      resolveDesktopHome: (user: string) => string;
-      path: string;
-    },
-    private phases: PhaseRunner,
-  ) {}
+  private input: MacosGuestInput;
+  private phases: PhaseRunner;
 
-  exec(args: string[], options: MacosGuestOptions = {}): string {
+  constructor(input: MacosGuestInput, phases: PhaseRunner) {
+    this.input = input;
+    this.phases = phases;
+  }
+
+  exec(args: string[], options: PosixGuestOptions = {}): string {
     return this.run(args, options).stdout.trim();
   }
 
   private transportArgs(args: string[], env: Record<string, string> = {}): string[] {
-    const envArgs = Object.entries({ PATH: this.input.path, ...env }).map(
+    const envArgs = Object.entries({ PATH: this.input.path, ...this.input.getEnv?.(), ...env }).map(
       ([key, value]) => `${key}=${value}`,
     );
     const user = this.input.getUser();
@@ -756,8 +827,8 @@ export class MacosGuest {
       : ["exec", this.input.vmName, "--current-user", "/usr/bin/env", ...envArgs, ...args];
   }
 
-  run(args: string[], options: MacosGuestOptions = {}): CommandResult {
-    const result = run("prlctl", this.transportArgs(args, options.env), {
+  run(args: string[], options: PosixGuestOptions = {}): CommandResult {
+    const result = runMacosHostCommand("prlctl", this.transportArgs(args, options.env), {
       check: false,
       input: options.input,
       quiet: true,
@@ -778,7 +849,11 @@ export class MacosGuest {
       });
       return this.exec(["/bin/bash", scriptPath], { env });
     } finally {
-      cleanupPosixGuestScript(this.phases, this.transportArgs(["/bin/rm", "-f", scriptPath]));
+      cleanupPosixGuestScript(
+        this.phases,
+        this.transportArgs(["/bin/rm", "-f", scriptPath]),
+        runMacosHostCommand,
+      );
     }
   }
 
@@ -795,16 +870,22 @@ export class MacosGuest {
       label,
       script,
       timeoutMs: remainingTimeoutMs ?? timeoutMs ?? 30 * 60_000,
+      runCommand: runMacosHostCommand,
       transportArgs: (args) => this.transportArgs(args, env),
     });
   }
 }
 
 export class WindowsGuest {
-  constructor(
-    private vmName: string,
-    private phases: PhaseRunner,
-  ) {}
+  private vmName: string;
+  private phases: PhaseRunner;
+  private getEnv: () => Record<string, string>;
+
+  constructor(vmName: string, phases: PhaseRunner, getEnv = () => ({})) {
+    this.vmName = vmName;
+    this.phases = phases;
+    this.getEnv = getEnv;
+  }
 
   exec(args: string[], options: GuestExecOptions = {}): string {
     return this.run(args, options).stdout.trim();
@@ -841,7 +922,7 @@ export class WindowsGuest {
         encodePowerShell(writeScript),
       ],
       {
-        input: script,
+        input: `${windowsProcessEnvScript(this.getEnv())}\n${script}`,
         quiet: true,
         timeoutMs: this.phases.remainingTimeoutMs(120_000),
       },

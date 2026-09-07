@@ -23,6 +23,8 @@ const ThreadBindingsSchema = z
 const LineCommonConfigSchemaBase = z.object({
   enabled: z.boolean().optional(),
   configWrites: z.boolean().optional(),
+  joinIntro: z.boolean().optional(),
+  historyLimit: z.number().int().min(0).optional(),
   channelAccessToken: z.string().optional(),
   channelSecret: z.string().optional(),
   tokenFile: z.string().optional(),
@@ -60,6 +62,13 @@ export const LineConfigSchema = buildMultiAccountChannelSchema(LineAccountConfig
   },
 });
 
-export const LineChannelConfigSchema = buildChannelConfigSchema(LineConfigSchema);
+export const LineChannelConfigSchema = buildChannelConfigSchema(LineConfigSchema, {
+  uiHints: {
+    joinIntro: {
+      label: "LINE Group Join Introduction",
+      help: "Post one brief introduction when the bot joins an allowed LINE group or multi-person room (default: true). Account settings override the channel-wide setting.",
+    },
+  },
+});
 
 export type LineConfigSchemaType = z.infer<typeof LineConfigSchema>;

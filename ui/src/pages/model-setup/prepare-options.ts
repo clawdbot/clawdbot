@@ -11,6 +11,10 @@ export type ModelSetupPrepareOption = {
   website?: string;
 };
 
+export function providerAutoSetupKind(choiceId: string): `provider-auto:${string}` {
+  return `provider-auto:${encodeURIComponent(choiceId)}`;
+}
+
 export function listModelSetupPrepareOptions(
   result: SystemAgentSetupDetectResult,
 ): ModelSetupPrepareOption[] {
@@ -34,7 +38,7 @@ export function listModelSetupPrepareOptions(
       !result.candidates.some(
         (candidate) =>
           candidate.credentials !== false &&
-          (candidate.kind === `provider-auto:${choice.id}` ||
+          (candidate.kind === providerAutoSetupKind(choice.id) ||
             candidate.modelRef.startsWith(`${choice.brandId ?? choice.id}/`)),
       ),
   );
@@ -45,6 +49,6 @@ export function findPreparedModelCandidate(result: SystemAgentSetupDetectResult,
   // brandId owns the model-ref namespace and may differ.
   return result.candidates.find(
     (candidate) =>
-      candidate.kind === `provider-auto:${choiceId}` && candidate.credentials !== false,
+      candidate.kind === providerAutoSetupKind(choiceId) && candidate.credentials !== false,
   );
 }

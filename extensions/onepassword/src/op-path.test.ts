@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pluginSecretRefSetup } from "openclaw/plugin-sdk/secret-ref-runtime";
 import { describe, expect, it } from "vitest";
-import { resolveTrustedExecutablePath } from "../onepassword-op-path.js";
 import { createTrustedNodeFixture } from "./trusted-node.test-support.js";
+
+const { resolveTrustedExecutablePath } = pluginSecretRefSetup;
 
 describe("1Password CLI owner trust", () => {
   it("copies the Node fixture without mutating the installed runtime", async () => {

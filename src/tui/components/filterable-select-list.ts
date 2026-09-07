@@ -12,6 +12,7 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import chalk from "chalk";
+import { sanitizeRenderableLine } from "../tui-formatters.js";
 
 export interface FilterableSelectItem extends SelectItem {
   /** Additional searchable fields beyond label */
@@ -29,20 +30,38 @@ interface FilterableSelectListTheme extends SelectListTheme {
 export class FilterableSelectList implements Component, Focusable {
   private input: Input;
   private selectList: SelectList;
-  private allItems: FilterableSelectItem[];
+  private allItems: Array<{ item: FilterableSelectItem; searchText: string }>;
   private maxVisible: number;
   private theme: FilterableSelectListTheme;
-  private filterText = "";
 
   onSelect?: (item: SelectItem) => void;
   onCancel?: () => void;
 
   constructor(items: FilterableSelectItem[], maxVisible: number, theme: FilterableSelectListTheme) {
-    this.allItems = items;
+    // Each overlay owns fixed rows; search keeps raw fields while display copies stay sanitized.
+    this.allItems = items.map((item) => ({
+      searchText: [item.label, item.description, item.searchText].filter(Boolean).join(" "),
+      item: {
+        ...item,
+        label:
+          sanitizeRenderableLine(item.label || item.value) ||
+          sanitizeRenderableLine(item.value) ||
+          "(unnamed)",
+        description: sanitizeRenderableLine(item.description ?? ""),
+      },
+    }));
     this.maxVisible = maxVisible;
     this.theme = theme;
     this.input = new Input();
-    this.selectList = new SelectList(this.allItems, maxVisible, theme);
+    // Input owns terminal key decoding; clearing follows the normal filter refresh.
+    this.input.onEscape = () => {
+      if (this.input.getValue()) {
+        this.input.setValue("");
+      } else {
+        this.onCancel?.();
+      }
+    };
+    this.selectList = this.createSelectList(this.allItems);
   }
 
   get focused(): boolean {
@@ -54,14 +73,16 @@ export class FilterableSelectList implements Component, Focusable {
   }
 
   private applyFilter(): void {
-    if (!this.filterText.trim()) {
-      this.selectList = new SelectList(this.allItems, this.maxVisible, this.theme);
-      return;
-    }
-    const filtered = fuzzyFilter(this.allItems, this.filterText, (item) =>
-      [item.label, item.description, item.searchText].filter(Boolean).join(" "),
+    const filtered = fuzzyFilter(this.allItems, this.input.getValue(), (entry) => entry.searchText);
+    this.selectList = this.createSelectList(filtered);
+  }
+
+  private createSelectList(items: typeof this.allItems): SelectList {
+    return new SelectList(
+      items.map((entry) => entry.item),
+      this.maxVisible,
+      this.theme,
     );
-    this.selectList = new SelectList(filtered, this.maxVisible, this.theme);
   }
 
   invalidate(): void {
@@ -110,25 +131,12 @@ export class FilterableSelectList implements Component, Focusable {
       return;
     }
 
-    // Escape: clear filter or cancel
-    if (matchesKey(keyData, "escape") || keyData === "\u0003") {
-      if (this.filterText) {
-        this.filterText = "";
-        this.input.setValue("");
-        this.applyFilter();
-      } else {
-        this.onCancel?.();
-      }
-      return;
-    }
-
     // All other input goes to filter
     const prevValue = this.input.getValue();
     this.input.handleInput(keyData);
     const newValue = this.input.getValue();
 
     if (newValue !== prevValue) {
-      this.filterText = newValue;
       this.applyFilter();
     }
   }
@@ -138,6 +146,6 @@ export class FilterableSelectList implements Component, Focusable {
   }
 
   getFilterText(): string {
-    return this.filterText;
+    return this.input.getValue();
   }
 }

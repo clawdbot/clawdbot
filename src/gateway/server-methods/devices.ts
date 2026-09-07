@@ -11,25 +11,31 @@ import {
   validateDeviceTokenRotateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
-  approveControlUiDeviceAuthMigrationPairing,
   approveDevicePairing,
   formatDevicePairingForbiddenMessage,
+} from "../../infra/device-pairing-approval.js";
+import {
+  type RevokeDeviceTokenDenyReason,
+  type RotateDeviceTokenDenyReason,
+  revokeDeviceToken,
+  rotateDeviceToken,
+  summarizeDeviceTokens,
+} from "../../infra/device-pairing-tokens.js";
+import {
   getPairedDevice,
   getPendingDevicePairing,
   listDevicePairing,
   removePairedDevice,
   type DeviceAuthToken,
-  type RevokeDeviceTokenDenyReason,
-  type RotateDeviceTokenDenyReason,
   rejectDevicePairing,
-  revokeDeviceToken,
-  rotateDeviceToken,
-  summarizeDeviceTokens,
   updatePairedDeviceMetadata,
 } from "../../infra/device-pairing.js";
 import type { DiagnosticSecurityEventInput } from "../../infra/diagnostic-events.js";
+import { reconcileRevokedDeviceWorker } from "../device-worker-revocation.js";
+import { GATEWAY_EVENT_DEVICE_PAIR_CHANGED } from "../events.js";
 import { clearRemovedNodeRuntimeState } from "../node-runtime-state.js";
 import { invalidateNodeWakeState } from "../node-wake-state.js";
+import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import {
   deniesCrossDeviceManagement,
   deniesDeviceTokenRoleManagement,
@@ -40,6 +46,7 @@ import {
 } from "./device-management-authz.js";
 import type { DeviceManagementAuthz } from "./device-management-authz.js";
 import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
+import { scopeUpgradeHandlers } from "./device-scope-upgrade.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -213,6 +220,7 @@ function emitDeviceTokenLifecycleSecurityEvent(params: {
 
 /** Gateway request handlers for device pair approval, removal, token rotation, and revocation. */
 export const deviceHandlers: GatewayRequestHandlers = {
+  ...scopeUpgradeHandlers,
   "device.pair.list": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateDevicePairListParams, "device.pair.list", respond)) {
       return;
@@ -220,9 +228,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
     const list = await listDevicePairing();
     const authz = resolveDeviceSessionAuthz(client);
     let visibleList = list;
-    if (authz.isDeviceAuthMigrationSession && !authz.callerDeviceId) {
-      visibleList = { pending: [], paired: [] };
-    } else if (authz.callerDeviceId && !authz.isAdminCaller) {
+    if (authz.callerDeviceId && !authz.isAdminCaller) {
       visibleList = {
         pending: list.pending.filter((request) => request.deviceId.trim() === authz.callerDeviceId),
         paired: list.paired.filter((device) => device.deviceId.trim() === authz.callerDeviceId),
@@ -251,16 +257,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
     }
     const { requestId } = params as { requestId: string };
     const authz = resolveDeviceSessionAuthz(client);
-    let migrationApprovalScopes: string[] | undefined;
     if (!authz.isAdminCaller) {
-      if (authz.isDeviceAuthMigrationSession && !authz.isDeviceAuthMigrationCaller) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, DEVICE_PAIR_APPROVAL_DENIED_MESSAGE),
-        );
-        return;
-      }
       const pending = await getPendingDevicePairing(requestId);
       if (!pending) {
         respond(
@@ -304,45 +301,13 @@ export const deviceHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      if (authz.isDeviceAuthMigrationCaller) {
-        migrationApprovalScopes = pending.scopes ?? [];
-      }
     }
-    const migrationDeviceId = authz.isDeviceAuthMigrationCaller ? authz.callerDeviceId : null;
-    if (
-      authz.isDeviceAuthMigrationCaller &&
-      (!migrationDeviceId ||
-        context.claimControlUiDeviceAuthMigration?.(migrationDeviceId) !== true)
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, DEVICE_PAIR_APPROVAL_DENIED_MESSAGE),
-      );
-      return;
-    }
-    const releaseMigrationClaim = () => {
-      if (migrationDeviceId) {
-        context.releaseControlUiDeviceAuthMigrationClaim?.(migrationDeviceId);
-      }
-    };
-    let approved: Awaited<ReturnType<typeof approveDevicePairing>>;
-    try {
-      const callerScopes = migrationApprovalScopes ?? authz.callerScopes;
-      approved = authz.isDeviceAuthMigrationCaller
-        ? await approveControlUiDeviceAuthMigrationPairing(requestId, { callerScopes })
-        : await approveDevicePairing(requestId, { callerScopes });
-    } catch (error) {
-      releaseMigrationClaim();
-      throw error;
-    }
+    const approved = await approveDevicePairing(requestId, { callerScopes: authz.callerScopes });
     if (!approved) {
-      releaseMigrationClaim();
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
       return;
     }
     if (approved.status === "forbidden") {
-      releaseMigrationClaim();
       emitDevicePairingDeniedSecurityEvent({
         authz,
         controlId: "device.pair.approve",
@@ -356,6 +321,9 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     const normalizedDeviceId = approved.device.deviceId.trim();
+    // Operator reapproval leaves the narrow requester live. Wake its identity-bound waiter only
+    // after durable token rotation, before any node-generation teardown can run.
+    context.scopeUpgradeCoordinator?.notify(requestId, "approved");
     if (approved.nodePairingGenerationChanged) {
       invalidateNodeWakeState(normalizedDeviceId);
       // Mark the retired node generation before publishing success so buffered
@@ -389,8 +357,6 @@ export const deviceHandlers: GatewayRequestHandlers = {
       },
       { dropIfSlow: true },
     );
-    // The completion listener keeps this handshake migration-bound until the
-    // client reconnects with its newly approved device token.
     respond(true, { requestId, device: redactPairedDevice(approved.device) }, undefined);
     if (approved.nodePairingGenerationChanged) {
       queueMicrotask(() => {
@@ -404,14 +370,6 @@ export const deviceHandlers: GatewayRequestHandlers = {
     }
     const { requestId } = params as { requestId: string };
     const authz = resolveDeviceSessionAuthz(client);
-    if (authz.isDeviceAuthMigrationSession && !authz.isDeviceAuthMigrationCaller) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, DEVICE_PAIR_REJECTION_DENIED_MESSAGE),
-      );
-      return;
-    }
     if (authz.callerDeviceId && !authz.isAdminCaller) {
       const pending = await getPendingDevicePairing(requestId);
       if (!pending) {
@@ -445,6 +403,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
       return;
     }
+    context.scopeUpgradeCoordinator?.notify(requestId, "rejected");
     emitDevicePairingLifecycleSecurityEvent({
       action: "device.pairing.rejected",
       authz,
@@ -513,21 +472,31 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     clearRemovedNodeRuntimeState({ nodeId: removed.deviceId, context });
-    context.invalidateClientsForDevice?.(removed.deviceId, {
-      reason: "device-pair-removed",
-    });
-    context.logGateway.info(`device pairing removed device=${removed.deviceId}`);
-    emitDevicePairingLifecycleSecurityEvent({
-      action: "device.pairing.removed",
-      severity: "medium",
-      authz,
-      targetDeviceId: removed.deviceId,
-      controlId: "device.pair.remove",
-    });
-    respond(true, removed, undefined);
-    queueMicrotask(() => {
-      context.disconnectClientsForDevice?.(removed.deviceId);
-    });
+    // Removal can retire its requester. Keep only its final reply, without
+    // letting a failed claim or worker reconciliation skip client teardown.
+    try {
+      try {
+        holdGatewayPolicyResponse(respond);
+      } finally {
+        context.invalidateClientsForDevice?.(removed.deviceId, {
+          reason: "device-pair-removed",
+        });
+        await reconcileRevokedDeviceWorker(context, removed.deviceId);
+      }
+      context.logGateway.info(`device pairing removed device=${removed.deviceId}`);
+      emitDevicePairingLifecycleSecurityEvent({
+        action: "device.pairing.removed",
+        severity: "medium",
+        authz,
+        targetDeviceId: removed.deviceId,
+        controlId: "device.pair.remove",
+      });
+      respond(true, removed, undefined);
+    } finally {
+      queueMicrotask(() => {
+        context.disconnectClientsForDevice?.(removed.deviceId);
+      });
+    }
   },
   "device.pair.rename": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateDevicePairRenameParams, "device.pair.rename", respond)) {
@@ -593,6 +562,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       targetDeviceId: deviceId,
       controlId: "device.pair.rename",
     });
+    context.broadcast(GATEWAY_EVENT_DEVICE_PAIR_CHANGED, {}, { dropIfSlow: true });
     respond(true, { deviceId, label: trimmed }, undefined);
   },
   "device.token.rotate": async ({ params, respond, context, client }) => {
@@ -651,11 +621,13 @@ export const deviceHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    // Other roles passed the admin guard; only operator tokens inherit the caller's scope cap.
+    const callerScopes = role.trim() === "operator" ? authz.callerScopes : undefined;
     const rotated = await rotateDeviceToken({
       deviceId,
       role,
       scopes,
-      callerScopes: authz.callerScopes,
+      callerScopes,
     });
     if (!rotated.ok) {
       logDeviceTokenRotationDenied({
@@ -697,28 +669,35 @@ export const deviceHandlers: GatewayRequestHandlers = {
     if (entry.role === "node") {
       invalidateNodeWakeState(normalizedDeviceId);
     }
-    // Mark affected clients invalid *before* responding so any RPCs already
-    // pipelined into their WS socket buffer are rejected at the per-request
-    // dispatch check, closing the race between queueMicrotask-scheduled
-    // disconnect and inflight frames.
-    context.invalidateClientsForDevice?.(normalizedDeviceId, {
-      role: entry.role,
-      reason: "device-token-rotated",
-    });
+    // Claim after the awaited commit, while the caller is still current. Fence
+    // pipelined frames even if the claim fails; close after the synchronous reply.
+    try {
+      holdGatewayPolicyResponse(respond);
+    } finally {
+      context.invalidateClientsForDevice?.(normalizedDeviceId, {
+        role: entry.role,
+        reason: "device-token-rotated",
+      });
+      queueMicrotask(() => {
+        context.disconnectClientsForDevice?.(normalizedDeviceId, { role: entry.role });
+      });
+    }
+    // Record the delivery decision on the wire: an absent token alone cannot tell a
+    // client whether the rotation withheld the secret by policy or the response
+    // predates this field, and the two need different operator-facing outcomes.
+    const deliversTokenInBand = shouldReturnRotatedDeviceToken(authz);
     respond(
       true,
       {
         deviceId,
         role: entry.role,
-        ...(shouldReturnRotatedDeviceToken(authz) ? { token: entry.token } : {}),
+        ...(deliversTokenInBand ? { token: entry.token } : {}),
         scopes: entry.scopes,
         rotatedAtMs: entry.rotatedAtMs ?? entry.createdAtMs,
+        tokenDelivery: deliversTokenInBand ? "in-band" : "withheld-cross-device",
       },
       undefined,
     );
-    queueMicrotask(() => {
-      context.disconnectClientsForDevice?.(normalizedDeviceId, { role: entry.role });
-    });
   },
   "device.token.revoke": async ({ params, respond, context, client }) => {
     if (
@@ -769,7 +748,8 @@ export const deviceHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const revoked = await revokeDeviceToken({ deviceId, role, callerScopes: authz.callerScopes });
+    const callerScopes = role.trim() === "operator" ? authz.callerScopes : undefined;
+    const revoked = await revokeDeviceToken({ deviceId, role, callerScopes });
     if (!revoked.ok) {
       logDeviceTokenRevocationDenied({
         log: context.logGateway,
@@ -804,17 +784,26 @@ export const deviceHandlers: GatewayRequestHandlers = {
       controlId: "device.token.revoke",
       role: entry.role,
     });
-    if (entry.role === "node") {
-      invalidateNodeWakeState(normalizedDeviceId);
+    // Claim the reply and fence revoked clients before worker cleanup can yield.
+    // Cleanup and disconnect remain owned even when that claim fails.
+    try {
+      try {
+        holdGatewayPolicyResponse(respond);
+      } finally {
+        context.invalidateClientsForDevice?.(normalizedDeviceId, {
+          role: entry.role,
+          reason: "device-token-revoked",
+        });
+        if (entry.role === "node") {
+          clearRemovedNodeRuntimeState({ nodeId: normalizedDeviceId, context });
+          await reconcileRevokedDeviceWorker(context, normalizedDeviceId);
+        }
+      }
+    } finally {
+      queueMicrotask(() => {
+        context.disconnectClientsForDevice?.(normalizedDeviceId, { role: entry.role });
+      });
     }
-    // Mark affected clients invalid *before* responding so any RPCs already
-    // pipelined into their WS socket buffer are rejected at the per-request
-    // dispatch check, closing the race between queueMicrotask-scheduled
-    // disconnect and inflight frames.
-    context.invalidateClientsForDevice?.(normalizedDeviceId, {
-      role: entry.role,
-      reason: "device-token-revoked",
-    });
     respond(
       true,
       {
@@ -824,9 +813,6 @@ export const deviceHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
-    queueMicrotask(() => {
-      context.disconnectClientsForDevice?.(normalizedDeviceId, { role: entry.role });
-    });
   },
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

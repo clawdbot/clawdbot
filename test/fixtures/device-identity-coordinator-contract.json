@@ -1,0 +1,10 @@
+{
+  "databasePath": "/openclaw-device-identity-contract/state/openclaw.sqlite",
+  "stateDirectory": "/openclaw-device-identity-contract",
+  "runtimeDirectory": "/openclaw-state-runtime",
+  "uid": 501,
+  "stateCoordinatorPath": "/openclaw-state-runtime/openclaw-state-locks-501/state-lifecycle.e5c82e32.lock.sqlite",
+  "orderedExpectedPaths": [
+    "/openclaw-device-identity-contract/tmp/openclaw-501/device-identity.e5c82e32.lock.sqlite"
+  ]
+}

@@ -16,24 +16,15 @@ function orderAttachments(
 ): MediaAttachment[] {
   // Ordering is stable and non-mutating so downstream decisions can still cite
   // original attachment indexes.
-  const list = Array.isArray(attachments) ? attachments.filter(isAttachmentRecord) : [];
-  if (!prefer || prefer === "first") {
-    return list;
-  }
   if (prefer === "last") {
-    return [...list].toReversed();
+    return attachments.toReversed();
   }
-  if (prefer === "path") {
-    const withPath = list.filter((item) => item.path);
-    const withoutPath = list.filter((item) => !item.path);
-    return [...withPath, ...withoutPath];
+  if (prefer === "path" || prefer === "url") {
+    const preferred = attachments.filter((item) => item[prefer]);
+    const remaining = attachments.filter((item) => !item[prefer]);
+    return [...preferred, ...remaining];
   }
-  if (prefer === "url") {
-    const withUrl = list.filter((item) => item.url);
-    const withoutUrl = list.filter((item) => !item.url);
-    return [...withUrl, ...withoutUrl];
-  }
-  return list;
+  return attachments;
 }
 
 function isAttachmentRecord(value: unknown): value is MediaAttachment {
@@ -64,7 +55,7 @@ export function selectAttachments(params: {
   capability: MediaUnderstandingCapability;
   attachments: MediaAttachment[];
   policy?: MediaUnderstandingAttachmentsConfig;
-}): MediaAttachment[] {
+}): { selected: MediaAttachment[]; droppedAttachmentIndexes: number[] } {
   const { capability, attachments, policy } = params;
   const input = Array.isArray(attachments) ? attachments.filter(isAttachmentRecord) : [];
   const matches = input.filter((item) => {
@@ -81,14 +72,15 @@ export function selectAttachments(params: {
     return isVideoAttachment(item);
   });
   if (matches.length === 0) {
-    return [];
+    return { selected: [], droppedAttachmentIndexes: [] };
   }
 
   const ordered = orderAttachments(matches, policy?.prefer);
   const mode = policy?.mode ?? "first";
   const maxAttachments = policy?.maxAttachments ?? DEFAULT_MAX_ATTACHMENTS;
-  if (mode === "all") {
-    return ordered.slice(0, Math.max(1, maxAttachments));
-  }
-  return ordered.slice(0, 1);
+  const limit = mode === "all" ? Math.max(1, maxAttachments) : 1;
+  return {
+    selected: ordered.slice(0, limit),
+    droppedAttachmentIndexes: ordered.slice(limit).map((attachment) => attachment.index),
+  };
 }

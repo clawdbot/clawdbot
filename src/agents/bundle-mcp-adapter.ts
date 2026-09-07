@@ -3,7 +3,7 @@ import { isRecord } from "../../packages/normalization-core/src/record-coerce.js
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
 export { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 
-export function normalizeStringRecord(value: unknown): Record<string, string> | undefined {
+export function normalizeMcpStringRecord(value: unknown): Record<string, string> | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
@@ -47,7 +47,7 @@ export function normalizeBundleMcpServerConfig(
   if (args) {
     next.args = args;
   }
-  const env = normalizeStringRecord(server.env);
+  const env = normalizeMcpStringRecord(server.env);
   if (env) {
     next.env = env;
   }

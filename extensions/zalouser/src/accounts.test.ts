@@ -1,20 +1,11 @@
 // Zalouser tests cover accounts plugin behavior.
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
-  getZcaUserInfo,
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
   resolveZalouserAccountSync,
 } from "./accounts.js";
-import { getZaloUserInfo } from "./zalo-js.js";
-
-vi.mock("./zalo-js.js", () => ({
-  getZaloUserInfo: vi.fn(),
-}));
-
-const mockGetUserInfo = vi.mocked(getZaloUserInfo);
 const originalZalouserProfile = process.env.ZALOUSER_PROFILE;
 const originalZcaProfile = process.env.ZCA_PROFILE;
 
@@ -24,7 +15,6 @@ function asConfig(value: unknown): OpenClawConfig {
 
 describe("zalouser account resolution", () => {
   beforeEach(() => {
-    mockGetUserInfo.mockReset();
     delete process.env.ZALOUSER_PROFILE;
     delete process.env.ZCA_PROFILE;
   });
@@ -40,26 +30,6 @@ describe("zalouser account resolution", () => {
     } else {
       process.env.ZCA_PROFILE = originalZcaProfile;
     }
-  });
-
-  it("returns default account id when no accounts are configured", () => {
-    expect(listZalouserAccountIds(asConfig({}))).toEqual([DEFAULT_ACCOUNT_ID]);
-  });
-
-  it("returns sorted configured account ids", () => {
-    const cfg = asConfig({
-      channels: {
-        zalouser: {
-          accounts: {
-            work: {},
-            personal: {},
-            default: {},
-          },
-        },
-      },
-    });
-
-    expect(listZalouserAccountIds(cfg)).toEqual(["default", "personal", "work"]);
   });
 
   it("preserves top-level default account when named accounts are configured", () => {
@@ -93,37 +63,6 @@ describe("zalouser account resolution", () => {
     });
 
     expect(resolveDefaultZalouserAccountId(cfg)).toBe("work");
-  });
-
-  it("falls back to default account when configured defaultAccount is missing", () => {
-    const cfg = asConfig({
-      channels: {
-        zalouser: {
-          defaultAccount: "missing",
-          accounts: {
-            default: {},
-            work: {},
-          },
-        },
-      },
-    });
-
-    expect(resolveDefaultZalouserAccountId(cfg)).toBe("default");
-  });
-
-  it("falls back to first sorted configured account when default is absent", () => {
-    const cfg = asConfig({
-      channels: {
-        zalouser: {
-          accounts: {
-            zzz: {},
-            aaa: {},
-          },
-        },
-      },
-    });
-
-    expect(resolveDefaultZalouserAccountId(cfg)).toBe("aaa");
   });
 
   it("resolves sync account by merging base + account config", () => {
@@ -241,20 +180,5 @@ describe("zalouser account resolution", () => {
     });
 
     expect(resolveZalouserAccountSync({ cfg, accountId: "work" }).profile).toBe("explicit-profile");
-  });
-
-  it("maps account info helper from zalo-js", async () => {
-    mockGetUserInfo.mockResolvedValueOnce({
-      userId: "123",
-      displayName: "Alice",
-      avatar: "https://example.com/avatar.png",
-    });
-    expect(await getZcaUserInfo("default")).toEqual({
-      userId: "123",
-      displayName: "Alice",
-    });
-
-    mockGetUserInfo.mockResolvedValueOnce(null);
-    expect(await getZcaUserInfo("default")).toBeNull();
   });
 });

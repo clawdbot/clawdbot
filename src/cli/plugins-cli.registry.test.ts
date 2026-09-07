@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  refreshPluginRegistry,
+  refreshPluginRegistryMock,
   resetPluginsCliTestState,
   runPluginsCommand,
 } from "./plugins-cli-test-helpers.js";
@@ -22,7 +22,7 @@ describe("plugins registry refresh", () => {
     const firstEntered = deferred();
     const releaseFirst = deferred();
     const entries: number[] = [];
-    refreshPluginRegistry.mockImplementation(async () => {
+    refreshPluginRegistryMock.mockImplementation(async () => {
       const entry = entries.length + 1;
       entries.push(entry);
       if (entry === 1) {

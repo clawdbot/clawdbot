@@ -33,6 +33,12 @@ describe("auth profile portability", () => {
           expires: Date.now() + 60_000,
         },
       },
+      order: {
+        openai: ["openai:default", "openai:api-key"],
+        "github-copilot": ["github-copilot:default"],
+      },
+      lastGood: { openai: "openai:api-key" },
+      usageStats: { "openai:api-key": { lastUsed: 1_000 } },
     };
 
     const portable = buildPortableAuthProfileStoreForAgentCopy(store);
@@ -43,6 +49,12 @@ describe("auth profile portability", () => {
       "openai:api-key": store.profiles["openai:api-key"],
       "github-copilot:default": store.profiles["github-copilot:default"],
     });
+    expect(portable.store.order).toEqual({
+      openai: ["openai:api-key"],
+      "github-copilot": ["github-copilot:default"],
+    });
+    expect(portable.store.lastGood).toBeUndefined();
+    expect(portable.store.usageStats).toBeUndefined();
   });
 
   it("allows provider-owned OAuth profiles to opt in explicitly", () => {
@@ -67,7 +79,12 @@ describe("auth profile portability", () => {
       provider: "openai",
       expires: Date.now() + 60_000,
       copyToAgents: true,
-    } as AuthProfileCredential;
+      oauthRef: {
+        source: "openclaw-credentials",
+        provider: "openai",
+        id: "0123456789abcdef0123456789abcdef",
+      },
+    } as unknown as AuthProfileCredential;
 
     expect(resolveAuthProfilePortability(credential)).toEqual({
       portable: false,

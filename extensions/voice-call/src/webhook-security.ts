@@ -10,8 +10,8 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getHeader } from "./http-headers.js";
 import { normalizeProxyIp } from "./proxy-ip.js";
-import type { WebhookContext } from "./types.js";
-import { createWebhookReplayCache, markWebhookReplay } from "./webhook-replay.js";
+import type { WebhookContext, WebhookVerificationResult } from "./types.js";
+import { createWebhookReplayCache, reserveWebhookReplay } from "./webhook-replay.js";
 
 const twilioReplayCache = createWebhookReplayCache();
 const plivoReplayCache = createWebhookReplayCache();
@@ -382,27 +382,14 @@ function extractPortFromHostHeader(hostHeader?: string): string | undefined {
 /**
  * Result of Twilio webhook verification with detailed info.
  */
-interface TwilioVerificationResult {
-  ok: boolean;
-  reason?: string;
+interface TwilioVerificationResult extends WebhookVerificationResult {
   /** The original URL that passed signature verification; never set on failures. */
   verificationUrl?: string;
   /** Whether we're running behind ngrok free tier */
   isNgrokFreeTier?: boolean;
-  /** Request is cryptographically valid but was already processed recently. */
-  isReplay?: boolean;
-  /** Stable request identity derived from signed Twilio material. */
-  verifiedRequestKey?: string;
 }
 
-interface TelnyxVerificationResult {
-  ok: boolean;
-  reason?: string;
-  /** Request is cryptographically valid but was already processed recently. */
-  isReplay?: boolean;
-  /** Stable request identity derived from signed Telnyx material. */
-  verifiedRequestKey?: string;
-}
+type TelnyxVerificationResult = WebhookVerificationResult;
 
 function createTwilioReplayKey(params: {
   verificationUrl: string;
@@ -471,12 +458,10 @@ export function verifyTelnyxWebhook(
 ): TelnyxVerificationResult {
   if (options?.skipVerification) {
     const replayKey = createSkippedVerificationReplayKey("telnyx", ctx);
-    const isReplay = markWebhookReplay(telnyxReplayCache, replayKey);
     return {
       ok: true,
       reason: "verification skipped (dev mode)",
-      isReplay,
-      verifiedRequestKey: replayKey,
+      ...reserveWebhookReplay(telnyxReplayCache, replayKey),
     };
   }
 
@@ -516,8 +501,7 @@ export function verifyTelnyxWebhook(
     }
 
     const replayKey = `telnyx:${sha256Hex(`${timestamp}\n${canonicalSignature}\n${ctx.rawBody}`)}`;
-    const isReplay = markWebhookReplay(telnyxReplayCache, replayKey);
-    return { ok: true, isReplay, verifiedRequestKey: replayKey };
+    return { ok: true, ...reserveWebhookReplay(telnyxReplayCache, replayKey) };
   } catch (err) {
     return {
       ok: false,
@@ -570,12 +554,10 @@ export function verifyTwilioWebhook(
   // Allow skipping verification for development/testing
   if (options?.skipVerification) {
     const replayKey = createSkippedVerificationReplayKey("twilio", ctx);
-    const isReplay = markWebhookReplay(twilioReplayCache, replayKey);
     return {
       ok: true,
       reason: "verification skipped (dev mode)",
-      isReplay,
-      verifiedRequestKey: replayKey,
+      ...reserveWebhookReplay(twilioReplayCache, replayKey),
     };
   }
 
@@ -607,8 +589,7 @@ export function verifyTwilioWebhook(
       signature,
       requestParams: params,
     });
-    const isReplay = markWebhookReplay(twilioReplayCache, replayKey);
-    return { ok: true, verificationUrl, isReplay, verifiedRequestKey: replayKey };
+    return { ok: true, verificationUrl, ...reserveWebhookReplay(twilioReplayCache, replayKey) };
   }
 
   // Twilio webhook signatures can differ in whether port is included.
@@ -646,8 +627,11 @@ export function verifyTwilioWebhook(
       signature,
       requestParams: params,
     });
-    const isReplay = markWebhookReplay(twilioReplayCache, replayKey);
-    return { ok: true, verificationUrl: candidateUrl, isReplay, verifiedRequestKey: replayKey };
+    return {
+      ok: true,
+      verificationUrl: candidateUrl,
+      ...reserveWebhookReplay(twilioReplayCache, replayKey),
+    };
   }
 
   // Check if this is ngrok free tier - the URL might have different format
@@ -669,16 +653,10 @@ export function verifyTwilioWebhook(
 /**
  * Result of Plivo webhook verification with detailed info.
  */
-interface PlivoVerificationResult {
-  ok: boolean;
-  reason?: string;
+interface PlivoVerificationResult extends WebhookVerificationResult {
   verificationUrl?: string;
   /** Signature version used for verification */
   version?: "v3" | "v2";
-  /** Request is cryptographically valid but was already processed recently. */
-  isReplay?: boolean;
-  /** Stable request identity derived from signed Plivo material. */
-  verifiedRequestKey?: string;
 }
 
 function normalizeSignatureBase64(input: string): string {
@@ -865,12 +843,10 @@ export function verifyPlivoWebhook(
 ): PlivoVerificationResult {
   if (options?.skipVerification) {
     const replayKey = createSkippedVerificationReplayKey("plivo", ctx);
-    const isReplay = markWebhookReplay(plivoReplayCache, replayKey);
     return {
       ok: true,
       reason: "verification skipped (dev mode)",
-      isReplay,
-      verifiedRequestKey: replayKey,
+      ...reserveWebhookReplay(plivoReplayCache, replayKey),
     };
   }
 
@@ -932,8 +908,12 @@ export function verifyPlivoWebhook(
       postParams,
       nonce: nonceV3,
     });
-    const isReplay = markWebhookReplay(plivoReplayCache, replayKey);
-    return { ok: true, version: "v3", verificationUrl, isReplay, verifiedRequestKey: replayKey };
+    return {
+      ok: true,
+      version: "v3",
+      verificationUrl,
+      ...reserveWebhookReplay(plivoReplayCache, replayKey),
+    };
   }
 
   if (signatureV2 && nonceV2) {
@@ -952,8 +932,12 @@ export function verifyPlivoWebhook(
       };
     }
     const replayKey = createPlivoV2ReplayKey(verificationUrl, nonceV2);
-    const isReplay = markWebhookReplay(plivoReplayCache, replayKey);
-    return { ok: true, version: "v2", verificationUrl, isReplay, verifiedRequestKey: replayKey };
+    return {
+      ok: true,
+      version: "v2",
+      verificationUrl,
+      ...reserveWebhookReplay(plivoReplayCache, replayKey),
+    };
   }
 
   return {

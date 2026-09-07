@@ -1,24 +1,13 @@
 // Openai provider module implements model/runtime integration.
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { extensionForMime, type MediaKind } from "openclaw/plugin-sdk/media-mime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
-import {
-  assertOkOrThrowHttpError,
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type {
   createProviderOperationDeadline,
-  createProviderOperationTimeoutResolver,
-  executeProviderOperationWithRetry,
-  fetchProviderDownloadResponse,
-  fetchWithTimeoutGuarded,
   pollProviderOperationJson,
   postMultipartRequest,
-  readProviderJsonResponse,
-  resolveProviderOperationTimeoutMs,
-  resolveProviderHttpRequestConfig,
-  sanitizeConfiguredModelProviderRequest,
-  type ProviderOperationTimeoutMs,
+  ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GeneratedVideoAsset,
@@ -64,12 +53,6 @@ function readOpenAIVideoFailureMessage(payload: OpenAIVideoResponse): string | u
   return payload.status === "failed"
     ? (normalizeOptionalString(payload.error?.message) ?? "OpenAI video generation failed")
     : undefined;
-}
-
-function toBlobBytes(buffer: Buffer): ArrayBuffer {
-  const arrayBuffer = new ArrayBuffer(buffer.byteLength);
-  new Uint8Array(arrayBuffer).set(buffer);
-  return arrayBuffer;
 }
 
 function resolveDurationSeconds(durationSeconds: number | undefined): "4" | "8" | "12" | undefined {
@@ -137,7 +120,7 @@ function resolveReferenceAsset(req: VideoGenerationRequest): OpenAIReferenceAsse
     `${kind === "video" ? "reference-video" : "reference-image"}.${extension}`;
   return {
     kind,
-    file: new File([toBlobBytes(asset.buffer)], fileName, { type: mimeType }),
+    file: new File([bufferToBlobPart(asset.buffer)], fileName, { type: mimeType }),
   };
 }
 
@@ -149,7 +132,12 @@ async function pollOpenAIVideo(
     baseUrl: string;
     fetchFn: typeof fetch;
   } & OpenAIVideoRequestPolicy,
+  operations: {
+    createProviderOperationDeadline: typeof createProviderOperationDeadline;
+    pollProviderOperationJson: typeof pollProviderOperationJson;
+  },
 ): Promise<OpenAIVideoResponse> {
+  const { createProviderOperationDeadline, pollProviderOperationJson } = operations;
   const deadline = createProviderOperationDeadline({
     timeoutMs: params.timeoutMs,
     label: `OpenAI video generation task ${params.videoId}`,
@@ -180,6 +168,13 @@ async function fetchOpenAIVideoDownload(
     fetchFn: typeof fetch;
   } & OpenAIVideoRequestPolicy,
 ) {
+  const {
+    assertOkOrThrowHttpError,
+    createProviderOperationTimeoutResolver,
+    executeProviderOperationWithRetry,
+    fetchProviderDownloadResponse,
+    fetchWithTimeoutGuarded,
+  } = await import("openclaw/plugin-sdk/provider-http");
   const timeoutMs = createProviderOperationTimeoutResolver({
     deadline: params.deadline,
     defaultTimeoutMs: params.deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -235,61 +230,53 @@ async function downloadOpenAIVideo(
     maxBytes: number;
   } & OpenAIVideoRequestPolicy,
 ): Promise<GeneratedVideoAsset> {
+  const { downloadGeneratedVideoAsset } =
+    await import("openclaw/plugin-sdk/media-generation-runtime");
   const url = new URL(`${params.baseUrl}/videos/${params.videoId}/content`);
   url.searchParams.set("variant", "video");
-  const deadline = createProviderOperationDeadline({
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    label: "OpenAI generated video download",
-  });
-  const timeoutMs = createProviderOperationTimeoutResolver({
-    deadline,
-    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  });
-  const { response, release } = await fetchOpenAIVideoDownload({
+  return await downloadGeneratedVideoAsset({
     url: url.toString(),
-    init: {
-      method: "GET",
-      headers: new Headers({
-        ...Object.fromEntries(params.headers.entries()),
-        Accept: "application/binary",
-      }),
-    },
-    deadline,
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
     fetchFn: params.fetchFn,
-    allowPrivateNetwork: params.allowPrivateNetwork,
-    dispatcherPolicy: params.dispatcherPolicy,
+    provider: "openai",
+    label: "OpenAI generated video download",
+    requestFailedMessage: "OpenAI video download failed",
+    maxBytes: params.maxBytes,
+    validateBinaryResponse: true,
+    fetchResponse: async ({ deadline }) =>
+      await fetchOpenAIVideoDownload({
+        url: url.toString(),
+        init: {
+          method: "GET",
+          headers: new Headers({
+            ...Object.fromEntries(params.headers.entries()),
+            Accept: "application/binary",
+          }),
+        },
+        deadline,
+        fetchFn: params.fetchFn,
+        allowPrivateNetwork: params.allowPrivateNetwork,
+        dispatcherPolicy: params.dispatcherPolicy,
+      }),
   });
-  try {
-    const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-    const buffer = await readResponseWithLimit(response, params.maxBytes, {
-      timeoutMs,
-      onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
-        new Error(
-          `OpenAI generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
-        ),
-      onOverflow: ({ maxBytes }) =>
-        new Error(`OpenAI generated video download exceeds ${maxBytes} bytes`),
-    });
-    return {
-      buffer,
-      mimeType,
-      fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
-    };
-  } finally {
-    await release();
-  }
 }
 
-export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
+export function buildOpenAIVideoGenerationProvider({
+  isProviderApiKeyConfigured,
+}: Pick<
+  OpenClawPluginApi["runtime"]["modelAuth"],
+  "isProviderApiKeyConfigured"
+>): VideoGenerationProvider {
   return {
     id: "openai",
     label: "OpenAI",
     defaultModel: DEFAULT_OPENAI_VIDEO_MODEL,
     models: [DEFAULT_OPENAI_VIDEO_MODEL, "sora-2-pro"],
-    isConfigured: ({ agentDir }) =>
+    isConfigured: (ctx) =>
       isProviderApiKeyConfigured({
         provider: "openai",
-        agentDir,
+        ...ctx,
         profileTypes: ["api_key"],
       }),
     capabilities: {
@@ -316,6 +303,8 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
       },
     },
     async generateVideo(req) {
+      const { resolveApiKeyForProvider } =
+        await import("openclaw/plugin-sdk/provider-auth-runtime");
       const auth = await resolveApiKeyForProvider({
         provider: "openai",
         cfg: req.cfg,
@@ -327,6 +316,23 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
         throw new Error("OpenAI API key missing");
       }
 
+      const [
+        {
+          assertOkOrThrowHttpError,
+          createProviderOperationDeadline,
+          createProviderOperationTimeoutResolver,
+          pollProviderOperationJson,
+          postMultipartRequest,
+          readProviderJsonResponse,
+          resolveProviderOperationTimeoutMs,
+          resolveProviderHttpRequestConfig,
+          sanitizeConfiguredModelProviderRequest,
+        },
+        { resolveGeneratedMediaMaxBytes },
+      ] = await Promise.all([
+        import("openclaw/plugin-sdk/provider-http"),
+        import("openclaw/plugin-sdk/media-generation-runtime"),
+      ]);
       const fetchFn = fetch;
       const deadline = createProviderOperationDeadline({
         timeoutMs: req.timeoutMs,
@@ -403,18 +409,21 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
         const completed =
           submitted.status === "completed"
             ? submitted
-            : await pollOpenAIVideo({
-                videoId,
-                headers,
-                timeoutMs: resolveProviderOperationTimeoutMs({
-                  deadline,
-                  defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-                }),
-                baseUrl,
-                fetchFn,
-                allowPrivateNetwork,
-                dispatcherPolicy,
-              });
+            : await pollOpenAIVideo(
+                {
+                  videoId,
+                  headers,
+                  timeoutMs: resolveProviderOperationTimeoutMs({
+                    deadline,
+                    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+                  }),
+                  baseUrl,
+                  fetchFn,
+                  allowPrivateNetwork,
+                  dispatcherPolicy,
+                },
+                { createProviderOperationDeadline, pollProviderOperationJson },
+              );
         const video = await downloadOpenAIVideo({
           videoId,
           headers,

@@ -242,7 +242,7 @@ private fun AboutBuildIdentityCell(
           lineHeight = 17.sp,
           textDirection = if (cell.forceLeftToRight) TextDirection.Ltr else ClawTheme.type.caption.textDirection,
         ),
-      color = if (cell.onClick == null) ClawTheme.colors.text else ClawTheme.colors.primary,
+      color = ClawTheme.colors.text,
       modifier = Modifier.fillMaxWidth(),
       textAlign = TextAlign.Center,
     )

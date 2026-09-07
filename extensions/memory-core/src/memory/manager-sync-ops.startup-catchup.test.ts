@@ -1,20 +1,16 @@
-// Memory Core tests cover manager sync ops.startup catchup plugin behavior.
+// Memory Core tests cover manager sync ops.startup-catchup plugin behavior.
+import { AsyncLocalStorage } from "node:async_hooks";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
-  resolveSessionTranscriptsDirForAgent,
-  type OpenClawConfig,
-  type ResolvedMemorySearchConfig,
-} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { statSessionEntrySync } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
-import {
-  MEMORY_CHUNKING_VERSION,
-  type MemorySource,
-  type MemorySyncParams,
-  type MemorySyncProgressUpdate,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+  buildSessionEntry,
+  statSessionEntrySync,
+} from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+import type { MemorySyncParams } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -27,295 +23,14 @@ import {
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  MEMORY_INDEX_PROVENANCE_VERSION,
-  resolveConfiguredScopeHash,
-  type MemoryIndexMeta,
-} from "./manager-reindex-state.js";
-import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
-
-type MemoryIndexEntry = {
-  path: string;
-  absPath: string;
-  mtimeMs: number;
-  size: number;
-  hash: string;
-  content?: string;
-};
-
-type SyncParams = {
-  reason?: string;
-  force?: boolean;
-  sessions?: MemorySyncParams["sessions"];
-  archiveFiles?: string[];
-  progress?: (update: MemorySyncProgressUpdate) => void;
-};
-
-type MemorySessionTranscriptUpdate = {
-  agentId?: string;
-  sessionFile?: string;
-  sessionKey?: string;
-  target?: {
-    agentId: string;
-    sessionId: string;
-    sessionKey: string;
-  };
-};
-
-const originalStartupStateDir = process.env.OPENCLAW_STATE_DIR;
-const originalStartupConfigPath = process.env.OPENCLAW_CONFIG_PATH;
-let transcriptUpdateListener: ((update: MemorySessionTranscriptUpdate) => void) | undefined;
-
-type SourceStateRow = { path: string; hash: string; mtime: number; size: number };
-function setStartupStateDir(stateDir: string): void {
-  Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
-}
-
-function setStartupConfigPath(configPath: string): void {
-  Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", configPath);
-}
-
-function restoreStartupEnv(): void {
-  if (originalStartupStateDir === undefined) {
-    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
-  } else {
-    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalStartupStateDir);
-  }
-  if (originalStartupConfigPath === undefined) {
-    Reflect.deleteProperty(process.env, "OPENCLAW_CONFIG_PATH");
-  } else {
-    Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", originalStartupConfigPath);
-  }
-}
-
-function emitSessionTranscriptUpdate(update: MemorySessionTranscriptUpdate): void {
-  transcriptUpdateListener?.(update);
-}
-
-class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
-  protected readonly cfg = {} as OpenClawConfig;
-  protected readonly agentId = "main";
-  protected readonly workspaceDir = "/tmp/openclaw-test-workspace";
-  protected readonly settings = {
-    chunking: {
-      overlap: 0,
-      tokens: 256,
-    },
-    extraPaths: [],
-    multimodal: {
-      enabled: false,
-      modalities: [],
-      maxFileBytes: 0,
-    },
-    provider: "none",
-    store: {
-      fts: {
-        tokenizer: "unicode61",
-      },
-      vector: {
-        enabled: false,
-      },
-    },
-    sync: {
-      sessions: {
-        deltaBytes: 100_000,
-        deltaMessages: 50,
-        postCompactionForce: true,
-      },
-    },
-  } as unknown as ResolvedMemorySearchConfig;
-  protected readonly batch = {
-    enabled: false,
-    wait: false,
-    concurrency: 1,
-    pollIntervalMs: 0,
-    timeoutMs: 0,
-  };
-  protected readonly vector = { enabled: false, available: false };
-  protected readonly cache = { enabled: false };
-  protected providerUnavailableReason?: string;
-  protected providerLifecycle = { mode: "active" as const, providerId: "test" };
-  protected db: DatabaseSync;
-
-  readonly syncCalls: SyncParams[] = [];
-  readonly indexedPaths: string[] = [];
-  readonly indexedContents: string[] = [];
-  corpusListCalls = 0;
-  private afterNextCorpusList: (() => Promise<void>) | null = null;
-  private corpusListWork: Promise<void> = Promise.resolve();
-  private pendingSyncWork: Promise<void> = Promise.resolve();
-
-  constructor(
-    sourceRows: SourceStateRow[],
-    private readonly indexSessionUpdates = false,
-    private readonly subscribeToRealEvents = false,
-  ) {
-    super();
-    this.sources.add("sessions");
-    this.db = {
-      prepare: () => ({
-        all: () => sourceRows,
-        get: () => undefined,
-        run: () => undefined,
-      }),
-    } as unknown as DatabaseSync;
-  }
-
-  async catchUp(): Promise<string[]> {
-    return await this.runSessionStartupCatchup();
-  }
-
-  async markStartupDirtyFiles(): Promise<string[]> {
-    return await this.markSessionStartupCatchupDirtyFiles();
-  }
-
-  async runSyncForTest(params?: MemorySyncParams): Promise<void> {
-    await this.runSync(params);
-  }
-
-  getDirtyArchiveFiles(): string[] {
-    return Array.from(this.sessionsDirtyFiles);
-  }
-
-  getPendingSessionTargets(): MemorySyncParams["sessions"] {
-    return Array.from(this.sessionPendingTargets.values());
-  }
-
-  getPendingArchiveFiles(): string[] {
-    return Array.from(this.sessionPendingFiles);
-  }
-
-  addPendingSessionTarget(target: NonNullable<MemorySyncParams["sessions"]>[number]): void {
-    this.sessionPendingTargets.set(
-      [target.agentId ?? "", target.sessionId, target.sessionKey ?? ""].join("\0"),
-      target,
-    );
-  }
-
-  async processPendingSessionUpdates(): Promise<void> {
-    await (
-      this as unknown as {
-        processSessionUpdateBatch: () => Promise<void>;
-      }
-    ).processSessionUpdateBatch();
-  }
-
-  async waitForCorpusList(): Promise<void> {
-    await this.corpusListWork;
-    await Promise.resolve();
-  }
-
-  async waitForSessionSync(): Promise<void> {
-    await this.pendingSyncWork;
-  }
-
-  afterNextCorpusListForTest(callback: () => Promise<void>): void {
-    this.afterNextCorpusList = callback;
-  }
-
-  isSessionsDirty(): boolean {
-    return this.sessionsDirty;
-  }
-
-  markFullSessionRetry(): void {
-    this.sessionsDirty = true;
-    this.sessionsFullRetryDirty = true;
-  }
-
-  startTranscriptListener(): void {
-    this.ensureSessionListener();
-  }
-
-  stopTranscriptListener(): void {
-    this.sessionUnsubscribe?.();
-    this.sessionUnsubscribe = null;
-  }
-
-  protected override subscribeSessionTranscriptUpdates(
-    listener: (update: MemorySessionTranscriptUpdate) => void,
-  ): () => void {
-    if (this.subscribeToRealEvents) {
-      return super.subscribeSessionTranscriptUpdates(listener);
-    }
-    transcriptUpdateListener = listener;
-    return () => {
-      if (transcriptUpdateListener === listener) {
-        transcriptUpdateListener = undefined;
-      }
-    };
-  }
-
-  protected computeProviderKey(): string {
-    return "test";
-  }
-
-  protected resolveProviderIndexIdentities() {
-    return [];
-  }
-
-  protected override readMeta(): MemoryIndexMeta {
-    return {
-      model: "fts-only",
-      provider: "none",
-      sources: ["sessions"],
-      scopeHash: resolveConfiguredScopeHash({
-        workspaceDir: this.workspaceDir,
-        extraPaths: this.settings.extraPaths,
-        multimodal: this.settings.multimodal,
-      }),
-      chunkTokens: this.settings.chunking.tokens,
-      chunkOverlap: this.settings.chunking.overlap,
-      chunkingVersion: MEMORY_CHUNKING_VERSION,
-      ftsTokenizer: this.settings.store.fts.tokenizer,
-      provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION,
-    };
-  }
-
-  protected async sync(params?: MemorySyncParams): Promise<void> {
-    this.syncCalls.push(params ?? {});
-    this.pendingSyncWork = this.indexSessionUpdates
-      ? this.syncArchiveFiles({ needsFullReindex: false }).then(() => undefined)
-      : Promise.resolve();
-    await this.pendingSyncWork;
-  }
-
-  protected async withTimeout<T>(
-    promise: Promise<T>,
-    _timeoutMs: number,
-    _message: string,
-  ): Promise<T> {
-    return await promise;
-  }
-
-  protected getIndexConcurrency(): number {
-    return 1;
-  }
-
-  protected override listSessionCorpusEntries() {
-    const work = super.listSessionCorpusEntries().then(async (entries) => {
-      this.corpusListCalls += 1;
-      const callback = this.afterNextCorpusList;
-      this.afterNextCorpusList = null;
-      await callback?.();
-      return entries;
-    });
-    this.corpusListWork = work.then(() => undefined);
-    return work;
-  }
-
-  protected pruneEmbeddingCacheIfNeeded(): void {}
-
-  protected resetProviderInitializationForRetry(): void {}
-
-  protected assertRequiredProviderAvailable(): void {}
-
-  protected async indexFile(
-    entry: MemoryIndexEntry,
-    options: { source: MemorySource; content?: string },
-  ): Promise<void> {
-    this.indexedPaths.push(entry.path);
-    this.indexedContents.push(options.content ?? "");
-  }
-}
+  SessionStartupCatchupHarness,
+  emitSessionTranscriptUpdate,
+  restoreStartupEnv,
+  setStartupConfigPath,
+  setStartupStateDir,
+  startupHarnessDatabases,
+  resetTranscriptUpdateListener,
+} from "./manager-sync-ops.startup-catchup.test-support.js";
 
 describe("session startup catch-up", () => {
   let stateDir = "";
@@ -323,30 +38,43 @@ describe("session startup catch-up", () => {
   beforeEach(async () => {
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-startup-"));
     setStartupStateDir(stateDir);
-    transcriptUpdateListener = undefined;
+    resetTranscriptUpdateListener();
   });
 
   afterEach(async () => {
     vi.clearAllTimers();
     vi.useRealTimers();
-    transcriptUpdateListener = undefined;
+    resetTranscriptUpdateListener();
     restoreStartupEnv();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
+    for (const database of startupHarnessDatabases) {
+      database.close();
+    }
+    startupHarnessDatabases.clear();
     closeOpenClawAgentDatabasesForTest();
+    // Closing the agent databases releases their leases through shared state, which
+    // reopens it, so the shared handle has to be released after that and before the
+    // removal or Windows fails the unlink with EBUSY.
+    resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
   async function writeSessionFile(
     name: string,
+    content = "startup catchup",
+    timestamp?: string,
   ): Promise<{ filePath: string; size: number; mtimeMs: number }> {
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
     await fs.mkdir(sessionsDir, { recursive: true });
     const filePath = path.join(sessionsDir, name);
     await fs.writeFile(
       filePath,
-      JSON.stringify({ type: "message", message: { role: "user", content: "startup catchup" } }) +
-        "\n",
+      JSON.stringify({
+        type: "message",
+        ...(timestamp ? { timestamp } : {}),
+        message: { role: "user", content },
+      }) + "\n",
       "utf-8",
     );
     const stat = await fs.stat(filePath);
@@ -435,6 +163,50 @@ describe("session startup catch-up", () => {
     expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
   });
 
+  it("prunes indexed sessions that are absent from the live corpus", async () => {
+    const stalePath = "sessions/main/deleted.jsonl";
+    const harness = new SessionStartupCatchupHarness(
+      [{ path: stalePath, hash: "stale-hash", mtime: 10, size: 20 }],
+      true,
+    );
+
+    await expect(harness.catchUp()).resolves.toEqual([]);
+    await harness.waitForSessionSync();
+
+    expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
+    expect(harness.getIndexedSourceState(stalePath)).toBeUndefined();
+  });
+
+  it("preserves indexed sessions when corpus enumeration fails", async () => {
+    const stalePath = "sessions/main/preserved.jsonl";
+    const harness = new SessionStartupCatchupHarness(
+      [{ path: stalePath, hash: "preserved-hash", mtime: 10, size: 20 }],
+      true,
+    );
+    const scanError = Object.assign(new Error("transient session archive scan failure"), {
+      code: "EIO",
+    });
+    const readdirSpy = vi.spyOn(fsSync, "readdirSync").mockImplementation(() => {
+      throw scanError;
+    });
+
+    try {
+      const catchUp = harness.catchUp();
+      const corpusList = harness.waitForCorpusList();
+      await expect(catchUp).rejects.toBe(scanError);
+      await expect(corpusList).rejects.toBe(scanError);
+      expect(harness.syncCalls).toEqual([]);
+      expect(harness.getIndexedSourceState(stalePath)).toEqual({
+        path: stalePath,
+        hash: "preserved-hash",
+        mtime: 10,
+        size: 20,
+      });
+    } finally {
+      readdirSpy.mockRestore();
+    }
+  });
+
   it("retries transient session transcript reads during session indexing", async () => {
     const session = await writeSessionFile("thread.jsonl.deleted.2026-02-16T22-27-33.000Z");
     const harness = new SessionStartupCatchupHarness([]);
@@ -517,10 +289,15 @@ describe("session startup catch-up", () => {
   });
 
   it("leaves unchanged indexed session files clean", async () => {
-    const session = await writeSessionFile("thread.jsonl");
+    const session = await writeSessionFile("thread.jsonl.deleted.2026-08-09T00-00-00.000Z");
+    const discovery = new SessionStartupCatchupHarness([]);
+    const [corpusPath] = await discovery.getCorpusPathsForTest();
+    if (!corpusPath) {
+      throw new Error("expected session transcript corpus path");
+    }
     const harness = new SessionStartupCatchupHarness([
       {
-        path: "sessions/main/thread.jsonl",
+        path: corpusPath,
         hash: "current-hash",
         mtime: session.mtimeMs,
         size: session.size,
@@ -531,6 +308,186 @@ describe("session startup catch-up", () => {
     expect(harness.getDirtyArchiveFiles()).toEqual([]);
     expect(harness.isSessionsDirty()).toBe(false);
     expect(harness.syncCalls).toEqual([]);
+  });
+
+  it("indexes a same-size file transcript whose mtime rolled back", async () => {
+    const archiveName = "thread.jsonl.deleted.2026-08-01T10-00-00.000Z";
+    const original = await writeSessionFile(archiveName, "version before");
+    const originalEntry = await buildSessionEntry(original.filePath);
+    if (!originalEntry) {
+      throw new Error("expected original file transcript entry");
+    }
+    const replacement = await writeSessionFile(archiveName, "version after!");
+    expect(replacement.size).toBe(original.size);
+    const rolledBackMtime = new Date(Math.max(1, original.mtimeMs - 60_000));
+    await fs.utimes(replacement.filePath, rolledBackMtime, rolledBackMtime);
+    const rolledBack = await fs.stat(replacement.filePath);
+    expect(rolledBack.mtimeMs).toBeLessThan(original.mtimeMs);
+
+    const harness = new SessionStartupCatchupHarness(
+      [
+        {
+          path: originalEntry.path,
+          hash: originalEntry.hash,
+          mtime: original.mtimeMs,
+          size: original.size,
+        },
+      ],
+      true,
+    );
+
+    await expect(harness.catchUp()).resolves.toEqual([replacement.filePath]);
+    await harness.waitForSessionSync();
+
+    expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
+    expect(harness.indexedPaths).toEqual([`sessions/main/${archiveName}`]);
+    expect(harness.indexedContents).toEqual(["User: version after!"]);
+  });
+
+  it("converges an unchanged file mtime rollback after direct session sync", async () => {
+    const archiveName = "thread.jsonl.deleted.2026-08-01T11-00-00.000Z";
+    const messageTimestamp = "2026-08-01T10:30:00.000Z";
+    const original = await writeSessionFile(archiveName, "unchanged content", messageTimestamp);
+    const originalEntry = await buildSessionEntry(original.filePath);
+    if (!originalEntry) {
+      throw new Error("expected original file transcript entry");
+    }
+    const rolledBackMtime = new Date(Math.max(1, original.mtimeMs - 60_000));
+    await fs.utimes(original.filePath, rolledBackMtime, rolledBackMtime);
+    const restoredEntry = await buildSessionEntry(original.filePath);
+    if (!restoredEntry) {
+      throw new Error("expected restored file transcript entry");
+    }
+    expect(restoredEntry.hash).toBe(originalEntry.hash);
+
+    const harness = new SessionStartupCatchupHarness(
+      [
+        {
+          path: originalEntry.path,
+          hash: originalEntry.hash,
+          mtime: original.mtimeMs,
+          size: original.size,
+        },
+      ],
+      true,
+    );
+
+    await expect(harness.catchUp()).resolves.toEqual([original.filePath]);
+    await harness.waitForSessionSync();
+    expect(harness.indexedPaths).toEqual([]);
+    expect(harness.getIndexedSourceState(originalEntry.path)).toEqual({
+      path: originalEntry.path,
+      hash: originalEntry.hash,
+      mtime: restoredEntry.mtimeMs,
+      size: restoredEntry.size,
+    });
+    expect(harness.getSourceMetadataUpdateCount()).toBe(1);
+
+    const restarted = harness.restartForStartup();
+    await expect(restarted.catchUp()).resolves.toEqual([]);
+    expect(restarted.syncCalls).toEqual([]);
+    expect(restarted.indexedPaths).toEqual([]);
+  });
+
+  it("indexes a SQLite transcript whose updatedAt rolled back", async () => {
+    const session = await writeSqliteSession({
+      content: "SQLite rollback",
+      updatedAt: 10,
+    });
+    const state = statSessionEntrySync(session.sessionKey, {
+      agentId: "main",
+      sessionId: session.sessionId,
+      storePath: session.storePath,
+      sessionKey: session.sessionKey,
+      updatedAtMs: 10,
+    });
+    if (!state) {
+      throw new Error("expected SQLite transcript state");
+    }
+    const harness = new SessionStartupCatchupHarness(
+      [
+        {
+          path: state.path,
+          hash: "previous-hash",
+          mtime: 20,
+          size: state.size,
+        },
+      ],
+      true,
+    );
+
+    await expect(harness.catchUp()).resolves.toEqual([session.sessionKey]);
+    await harness.waitForSessionSync();
+
+    expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
+    expect(harness.indexedPaths).toEqual([session.corpusPath]);
+    expect(harness.indexedContents).toEqual(["User: SQLite rollback"]);
+  });
+
+  it("converges an unchanged SQLite updatedAt rollback after deferred session sync", async () => {
+    const session = await writeSqliteSession({ updatedAt: 10 });
+    const entry = await buildSessionEntry(session.sessionKey, {
+      agentId: "main",
+      sessionId: session.sessionId,
+      storePath: session.storePath,
+      sessionKey: session.sessionKey,
+      updatedAtMs: 10,
+      sessionKind: "interactive",
+    });
+    if (!entry) {
+      throw new Error("expected SQLite transcript entry");
+    }
+    const harness = new SessionStartupCatchupHarness(
+      [
+        {
+          path: entry.path,
+          hash: entry.hash,
+          mtime: 20,
+          size: entry.size,
+        },
+      ],
+      true,
+      false,
+      true,
+    );
+
+    await expect(harness.catchUp()).resolves.toEqual([session.sessionKey]);
+    await harness.waitForSessionSync();
+
+    expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
+    expect(harness.indexedPaths).toEqual([]);
+    expect(harness.indexedContents).toEqual([]);
+    expect(harness.getIndexedSourceState(entry.path)).toEqual({
+      path: entry.path,
+      hash: entry.hash,
+      mtime: entry.mtimeMs,
+      size: entry.size,
+    });
+    expect(harness.getSourceMetadataUpdateCount()).toBe(1);
+
+    const restarted = harness.restartForStartup();
+    await expect(restarted.catchUp()).resolves.toEqual([]);
+    expect(restarted.syncCalls).toEqual([]);
+    expect(restarted.indexedPaths).toEqual([]);
+    await restarted.runArchiveSyncForTest();
+    expect(restarted.getSourceMetadataUpdateCount()).toBe(1);
+  });
+
+  const cacheBoundSyncs: Array<[string, MemorySyncParams]> = [
+    ["incremental", { reason: "session-delta" }],
+    [
+      "targeted session",
+      { reason: "queued-sessions", sessions: [{ agentId: "main", sessionId: "thread" }] },
+    ],
+  ];
+
+  it.each(cacheBoundSyncs)("bounds the embedding cache on a %s sync", async (_label, params) => {
+    await writeSqliteSession();
+    const harness = new SessionStartupCatchupHarness([]);
+
+    await harness.runSyncForTest(params);
+
+    expect(harness.embeddingCachePrunes).toBeGreaterThan(0);
   });
 
   it("does not fall back to full session sync when identity targets normalize away", async () => {
@@ -584,7 +541,8 @@ describe("session startup catch-up", () => {
     await Promise.resolve();
 
     expect(harness.getDirtyArchiveFiles()).toEqual([session.sessionKey]);
-    expect(harness.syncCalls).toEqual([{ reason: "session-delta" }]);
+    expect(harness.syncCalls[0]?.archiveFiles).toEqual([session.sessionKey]);
+    expect(harness.syncCalls[0]?.sessions).toHaveLength(1);
   });
 
   it("keeps targeted indexing on the SQLite store resolved by its corpus snapshot", async () => {
@@ -623,7 +581,7 @@ describe("session startup catch-up", () => {
     expect(harness.indexedContents[0]).not.toContain("replacement store target");
   });
 
-  it("preserves generated-session classification during targeted custom-store indexing", async () => {
+  it("excludes generated cron transcripts from targeted custom-store indexing", async () => {
     const storePath = path.join(stateDir, "custom-sessions", "sessions.json");
     const session = await writeSqliteSession({
       storePath,
@@ -645,8 +603,8 @@ describe("session startup catch-up", () => {
       ],
     });
 
-    expect(harness.indexedPaths).toEqual([session.corpusPath]);
-    expect(harness.indexedContents).toEqual([""]);
+    expect(harness.indexedPaths).toEqual([]);
+    expect(harness.indexedContents).toEqual([]);
   });
 
   it("queues transcript update identity without requiring a session file", async () => {
@@ -675,18 +633,38 @@ describe("session startup catch-up", () => {
     vi.useFakeTimers();
     const session = await writeSqliteSession();
     const harness = new SessionStartupCatchupHarness([], true, true);
-    harness.startTranscriptListener();
+    const turnContext = new AsyncLocalStorage<string>();
+    const pendingInputContext = new AsyncLocalStorage<string>();
+    turnContext.run("opening turn", () => harness.startTranscriptListener());
+    const timerContexts: Array<{ turn?: string; pendingInput?: string }> = [];
+    const originalSetTimeout = globalThis.setTimeout;
+    const timerObserver = vi.spyOn(globalThis, "setTimeout").mockImplementation((...args) => {
+      if (args[1] === 5000) {
+        timerContexts.push({
+          turn: turnContext.getStore(),
+          pendingInput: pendingInputContext.getStore(),
+        });
+      }
+      return originalSetTimeout(...args);
+    });
 
     try {
-      await appendSessionTranscriptMessageByIdentity({
-        agentId: "main",
-        sessionId: session.sessionId,
-        sessionKey: session.sessionKey,
-        storePath: session.storePath,
-        cwd: stateDir,
-        message: { role: "assistant", content: "persisted listener update" },
-      });
-      await publishSessionTranscriptUpdateByIdentity(session);
+      await turnContext.run("later turn", () =>
+        pendingInputContext.run("later input", async () => {
+          await appendSessionTranscriptMessageByIdentity({
+            agentId: "main",
+            sessionId: session.sessionId,
+            sessionKey: session.sessionKey,
+            storePath: session.storePath,
+            cwd: stateDir,
+            message: { role: "assistant", content: "persisted listener update" },
+          });
+          await publishSessionTranscriptUpdateByIdentity(session);
+          expect(turnContext.getStore()).toBe("later turn");
+          expect(pendingInputContext.getStore()).toBe("later input");
+        }),
+      );
+      expect(timerContexts).toEqual([{ turn: undefined, pendingInput: undefined }]);
 
       await vi.advanceTimersByTimeAsync(6000);
       await harness.waitForSessionSync();
@@ -697,6 +675,7 @@ describe("session startup catch-up", () => {
       ]);
     } finally {
       harness.stopTranscriptListener();
+      timerObserver.mockRestore();
     }
   });
 
@@ -767,7 +746,7 @@ describe("session startup catch-up", () => {
         await harness.waitForSessionSync();
 
         expect(harness.getDirtyArchiveFiles()).toEqual([session.filePath]);
-        expect(harness.syncCalls).toEqual([{ reason: "session-delta" }]);
+        expect(harness.syncCalls[0]?.archiveFiles).toEqual([session.filePath]);
         expect(harness.indexedPaths).toEqual([
           `sessions/main/thread.jsonl.${reason}.2026-06-23T10-00-00.000Z`,
         ]);
@@ -781,6 +760,10 @@ describe("session startup catch-up", () => {
   it.each([
     "thread.jsonl.bak.2026-06-23T10-00-00.000Z",
     "thread.trajectory.jsonl",
+    "thread.trajectory.jsonl.deleted.2026-06-23T10-00-00.000Z",
+    "thread.trajectory.jsonl.reset.2026-06-23T10-00-00.000Z.zst",
+    "thread.checkpoint.11111111-1111-4111-8111-111111111111.jsonl.deleted.2026-06-23T10-00-00.000Z",
+    "thread.checkpoint.11111111-1111-4111-8111-111111111111.jsonl.reset.2026-06-23T10-00-00.000Z.zst",
     "sessions.json",
   ])("ignores non-corpus session artifact updates for %s", async (fileName) => {
     vi.useFakeTimers();
@@ -794,10 +777,8 @@ describe("session startup catch-up", () => {
       await vi.advanceTimersByTimeAsync(6000);
       await harness.waitForSessionSync();
 
-      expect(harness.getPendingArchiveFiles()).toEqual([]);
-      expect(harness.getDirtyArchiveFiles()).toEqual([]);
-      expect(harness.syncCalls).toEqual([]);
-      expect(harness.indexedPaths).toEqual([]);
+      expect([harness.getPendingArchiveFiles(), harness.getDirtyArchiveFiles()]).toEqual([[], []]);
+      expect([harness.syncCalls, harness.indexedPaths]).toEqual([[], []]);
     } finally {
       harness.stopTranscriptListener();
     }
@@ -817,8 +798,7 @@ describe("session startup catch-up", () => {
       await harness.waitForSessionSync();
 
       expect(harness.getDirtyArchiveFiles()).toEqual([]);
-      expect(harness.syncCalls).toEqual([]);
-      expect(harness.indexedPaths).toEqual([]);
+      expect([harness.syncCalls, harness.indexedPaths]).toEqual([[], []]);
     } finally {
       harness.stopTranscriptListener();
     }

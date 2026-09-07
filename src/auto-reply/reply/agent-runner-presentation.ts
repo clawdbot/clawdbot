@@ -1,5 +1,6 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { logVerbose } from "../../globals.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
@@ -14,15 +15,19 @@ import type { ReplyPayload } from "../types.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
+import { hasCommittedReplyOperationOutcome } from "./reply-run-registry.js";
 
 type AgentTurnPresentation = {
+  classifyStreamingPartial: (payload: ReplyPayload) => { text?: string; skip: boolean };
+  sanitizeStreamingText: (
+    text: string | undefined,
+    errorContext: boolean,
+  ) => { text?: string; skip: boolean };
   normalizeStreamingText: (payload: ReplyPayload) => { text?: string; skip: boolean };
-  preparePartialForTyping: (payload: ReplyPayload) => string | undefined;
-  handlePartialForTyping: (payload: ReplyPayload) => Promise<string | undefined>;
-  startPresentationWhileTyping: (
+  presentWithTyping: (
     typingPromise: Promise<void>,
-    startPresentation: () => void | Promise<void>,
-  ) => Promise<void>;
+    startPresentation: () => boolean | void | Promise<boolean | void>,
+  ) => Promise<boolean | void>;
   blockReplyHandler: ReturnType<typeof createBlockReplyDeliveryHandler> | undefined;
 };
 
@@ -34,9 +39,9 @@ export function createAgentTurnPresentation(params: {
   directlySentBlockPayloads: Array<ReplyPayload | undefined>;
   heartbeatState: { didLogStrip: boolean };
 }): AgentTurnPresentation {
-  const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
+  const classifyStreamingPartial = (payload: ReplyPayload): { text?: string; skip: boolean } => {
     let text = payload.text;
-    const reply = resolveSendableOutboundReplyParts(payload);
+    const reply = resolveSendableOutboundReplyParts(payload, { text: "" });
     if (params.turn.followupRun.run.silentExpected) {
       return { skip: true };
     }
@@ -66,34 +71,54 @@ export function createAgentTurnPresentation(params: {
     if (!text) {
       return reply.hasMedia ? { text: undefined, skip: false } : { skip: true };
     }
-    const sanitized = sanitizeUserFacingText(text, {
-      errorContext: Boolean(payload.isError),
-    });
+    return { text, skip: false };
+  };
+
+  const sanitizeStreamingText = (
+    text: string | undefined,
+    errorContext: boolean,
+  ): { text?: string; skip: boolean } => {
+    if (!text) {
+      return { skip: true };
+    }
+    const conversationContext =
+      params.turn.sessionCtx.agentText ?? params.turn.sessionCtx.BodyForAgent;
+    const sanitized = errorContext
+      ? renderUserFacingText(text, { errorContext: true, conversationContext, streaming: true })
+      : sanitizeUserFacingText(text, { conversationContext, streaming: true });
     return sanitized.trim() ? { text: sanitized, skip: false } : { skip: true };
   };
 
-  const preparePartialForTyping = (payload: ReplyPayload): string | undefined => {
-    if (isSilentReplyPrefixText(payload.text, SILENT_REPLY_TOKEN)) {
-      return undefined;
+  const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
+    const classified = classifyStreamingPartial(payload);
+    if (classified.skip || !classified.text) {
+      return classified;
     }
-    const { text, skip } = normalizeStreamingText(payload);
-    return skip || !text ? undefined : text;
+    return sanitizeStreamingText(classified.text, Boolean(payload.isError));
   };
 
-  const handlePartialForTyping = async (payload: ReplyPayload): Promise<string | undefined> => {
-    const text = preparePartialForTyping(payload);
-    if (text === undefined) {
-      return undefined;
-    }
-    await params.turn.typingSignals.signalTextDelta(text);
-    return text;
-  };
-
-  const startPresentationWhileTyping = async (
+  const preserveProgressCallbackStartOrder =
+    params.turn.opts?.preserveProgressCallbackStartOrder === true;
+  const presentWithTyping = async (
     typingPromise: Promise<void>,
-    startPresentation: () => void | Promise<void>,
+    startPresentation: () => boolean | void | Promise<boolean | void>,
   ) => {
-    let presentationPromise: void | Promise<void>;
+    if (!preserveProgressCallbackStartOrder) {
+      await typingPromise;
+      const operation = params.turn.replyOperation;
+      // Successful settlement keeps delivery alive; delayed typing must not
+      // reopen presentation after this operation has committed its final answer.
+      if (
+        operation &&
+        (operation.abortSignal.aborted ||
+          operation.result ||
+          hasCommittedReplyOperationOutcome(operation))
+      ) {
+        return false;
+      }
+      return await startPresentation();
+    }
+    let presentationPromise: boolean | void | Promise<boolean | void>;
     try {
       presentationPromise = startPresentation();
     } catch (err) {
@@ -101,7 +126,8 @@ export function createAgentTurnPresentation(params: {
       void typingPromise.catch(() => undefined);
       throw err;
     }
-    await Promise.all([typingPromise, presentationPromise]);
+    const [, result] = await Promise.all([typingPromise, presentationPromise]);
+    return result;
   };
 
   const blockReplyPipeline = params.turn.blockReplyPipeline;
@@ -126,10 +152,10 @@ export function createAgentTurnPresentation(params: {
     : undefined;
 
   return {
+    classifyStreamingPartial,
+    sanitizeStreamingText,
     normalizeStreamingText,
-    preparePartialForTyping,
-    handlePartialForTyping,
-    startPresentationWhileTyping,
+    presentWithTyping,
     blockReplyHandler,
   };
 }

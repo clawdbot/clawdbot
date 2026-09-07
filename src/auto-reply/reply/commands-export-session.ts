@@ -3,9 +3,9 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta.js";
+import { isSessionFileEntry } from "../../agents/sessions/session-file-parser.js";
 import {
   migrateSessionEntries,
   type FileEntry as SessionFileEntry,
@@ -202,17 +202,6 @@ async function generateHtml(sessionData: SessionData): Promise<string> {
   );
 }
 
-function isSessionFileEntry(value: unknown): value is SessionFileEntry {
-  if (!isRecord(value) || typeof value.type !== "string") {
-    return false;
-  }
-  if (value.type !== "message") {
-    return true;
-  }
-  const message = value.message;
-  return isRecord(message) && typeof message.role === "string";
-}
-
 function filterSessionEntriesWithWarnings(events: unknown[]): {
   entries: SessionFileEntry[];
   warnings: SessionExportEventWarning[];
@@ -256,7 +245,10 @@ function formatSkippedRows(count: number): string {
 }
 
 function formatSessionExportWarning(summary: SessionExportWarningSummary): string {
-  const rows = summary.rows.length > 0 ? ` rows ${summary.rows.join(", ")}` : "";
+  const rows =
+    summary.rows.length > 0
+      ? ` rows ${summary.rows.join(", ")}${summary.count > summary.rows.length ? ", …" : ""}`
+      : "";
   const verb = summary.count === 1 ? "was" : "were";
   switch (summary.code) {
     case "invalid-session-json":

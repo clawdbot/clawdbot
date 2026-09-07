@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { root } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { resolveMemoryHostEventLogPath } from "openclaw/plugin-sdk/memory-host-events";
+import { root } from "openclaw/plugin-sdk/memory-core-host-engine-fs";
+// Doctor enumeration cold-loads this closure; memory-host-events pulls the
+// event-store/kysely graph, so the path resolver loads lazily in async bodies.
 import { resolveConfiguredWorkspaces } from "./doctor-workspaces.js";
 
 export type LegacyMemoryHostEventSource =
@@ -45,9 +46,10 @@ export async function collectLegacyMemoryHostEventSources(
   config: unknown,
   env: NodeJS.ProcessEnv,
 ): Promise<LegacyMemoryHostEventSource[]> {
+  const { resolveMemoryHostEventLogPath } = await import("openclaw/plugin-sdk/memory-host-events");
   const sources: LegacyMemoryHostEventSource[] = [];
   const seenWorkspaces = new Set<string>();
-  for (const workspaceDir of resolveConfiguredWorkspaces(config, env)) {
+  for (const workspaceDir of await resolveConfiguredWorkspaces(config, env)) {
     let canonicalWorkspaceDir = path.resolve(workspaceDir);
     let filePath = resolveMemoryHostEventLogPath(canonicalWorkspaceDir);
     try {
@@ -111,6 +113,7 @@ export async function collectLegacyMemoryHostEventSources(
       });
       for (const candidate of candidates) {
         const candidateRelativePath = path.join(directoryRelativePath, candidate.entry);
+        filePath = path.join(canonicalWorkspaceDir, candidateRelativePath);
         const stat = await workspaceRoot.stat(candidateRelativePath);
         if (!stat.isFile) {
           continue;
@@ -120,7 +123,7 @@ export async function collectLegacyMemoryHostEventSources(
         sources.push({
           kind: "ready",
           workspaceDir: canonicalWorkspaceDir,
-          filePath: path.join(canonicalWorkspaceDir, candidateRelativePath),
+          filePath,
           relativePath: candidateRelativePath,
           root: workspaceRoot,
           storage: candidate.storage,
@@ -144,7 +147,7 @@ export async function collectLegacyMemoryHostEventSources(
         kind: "rejected",
         workspaceDir: canonicalWorkspaceDir,
         filePath,
-        reason: String(error),
+        reason: `Skipped unsafe Memory Core host event source ${filePath}: ${String(error)}. Check permissions and use regular files and directories inside the workspace, then rerun openclaw doctor --fix. For shared notes, use canonical paths in memory.search.extraPaths; this does not migrate legacy events.`,
       });
     }
   }
@@ -154,6 +157,7 @@ export async function collectLegacyMemoryHostEventSources(
 export async function resolveMemoryHostEventArchivePath(
   source: ReadyLegacyMemoryHostEventSource,
 ): Promise<{ archiveRelativePath: string; claimRelativePath: string; generationKey: string }> {
+  const { resolveMemoryHostEventLogPath } = await import("openclaw/plugin-sdk/memory-host-events");
   const activeRelativePath = path.relative(
     source.workspaceDir,
     resolveMemoryHostEventLogPath(source.workspaceDir),

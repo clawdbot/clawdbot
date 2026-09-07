@@ -1,3 +1,7 @@
+import {
+  AgentHarnessPreflightError,
+  type EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 /** Enforces one bounded startup budget across Codex plugin config discovery. */
 import {
   defaultCodexAppInventoryCache,
@@ -10,7 +14,10 @@ import {
   type ResolvedCodexPluginsPolicy,
 } from "./config.js";
 import { disableCodexPluginThreadConfig } from "./dynamic-tool-build.js";
-import { resolveRecoverableCodexPluginConfigKeys } from "./plugin-inventory.js";
+import {
+  resolveRecoverableCodexPluginConfigKeys,
+  type CodexPluginRuntimeRequest,
+} from "./plugin-inventory.js";
 import {
   defaultCodexPluginMetadataCache,
   type CodexPluginMetadataCache,
@@ -21,6 +28,12 @@ import {
   shouldBuildCodexPluginThreadConfig,
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
+import {
+  intersectCodexPluginThreadConfigWithScheduledAuthority,
+  readCurrentCodexScheduledAppPolicy as readCurrentCodexScheduledAppPolicyShared,
+} from "./scheduled-app-authority.js";
+import type { CurrentCodexScheduledAppPolicy } from "./scheduled-app-authority.js";
+import { withAbortableTimeout } from "./timeout.js";
 
 const CODEX_PLUGIN_THREAD_CONFIG_MAX_TIMEOUT_MS = 60_000;
 const CODEX_PLUGIN_THREAD_CONFIG_TIMEOUT_DIVISOR = 4;
@@ -39,6 +52,11 @@ type BuildCodexPluginThreadConfigWithinDeadlineParams = Omit<
   requestTimeoutMs: number;
   signal: AbortSignal;
   request: CodexPluginThreadConfigDeadlineRequest;
+  failClosedOnTimeout?: boolean;
+  transform?: (
+    config: CodexPluginThreadConfig,
+    request: CodexPluginRuntimeRequest,
+  ) => Promise<CodexPluginThreadConfig>;
 };
 
 class CodexPluginThreadConfigDeadlineError extends Error {
@@ -52,14 +70,17 @@ class CodexPluginThreadConfigDeadlineError extends Error {
 export function resolveCodexPluginThreadConfigStartupPolicy(params: {
   pluginConfig: CodexPluginConfig;
   nativeToolSurfaceEnabled: boolean;
+  scheduledRuntimeAuthority?: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"];
 }) {
   const pluginThreadConfigRequired =
-    !params.nativeToolSurfaceEnabled || shouldBuildCodexPluginThreadConfig(params.pluginConfig);
-  // Restricted runs still need a config so thread/start carries an explicit
-  // apps._default denial patch without app inventory discovery.
-  const pluginThreadConfigPluginConfig = params.nativeToolSurfaceEnabled
-    ? params.pluginConfig
-    : disableCodexPluginThreadConfig(params.pluginConfig);
+    Boolean(params.scheduledRuntimeAuthority) ||
+    !params.nativeToolSurfaceEnabled ||
+    shouldBuildCodexPluginThreadConfig(params.pluginConfig);
+  // Restricted runs disable the native apps feature without inventory discovery.
+  const pluginThreadConfigPluginConfig =
+    params.nativeToolSurfaceEnabled || params.scheduledRuntimeAuthority
+      ? params.pluginConfig
+      : disableCodexPluginThreadConfig(params.pluginConfig);
   const resolvedPluginPolicy = pluginThreadConfigRequired
     ? resolveCodexPluginsPolicy(pluginThreadConfigPluginConfig)
     : undefined;
@@ -80,33 +101,58 @@ export function resolveCodexPluginThreadConfigStartupPolicy(params: {
 async function buildCodexPluginThreadConfigWithinDeadline(
   params: BuildCodexPluginThreadConfigWithinDeadlineParams,
 ): Promise<CodexPluginThreadConfig> {
-  const { requestTimeoutMs, signal, request, ...buildParams } = params;
+  const { requestTimeoutMs, signal, request, failClosedOnTimeout, transform, ...buildParams } =
+    params;
+  signal.throwIfAborted();
   const timeoutMs = resolveCodexPluginThreadConfigTimeoutMs(requestTimeoutMs);
   // One deadline owns the whole config build; every RPC gets only the remaining
   // budget so discovery cannot consume one full request timeout per call.
   const deadlineMs = Date.now() + timeoutMs;
+  let requestTimedOut = false;
+  const boundedRequest: CodexPluginRuntimeRequest = async (method, requestParams) => {
+    const remainingTimeoutMs = deadlineMs - Date.now();
+    if (requestTimedOut || remainingTimeoutMs <= 0) {
+      throw new CodexPluginThreadConfigDeadlineError();
+    }
+    try {
+      return await request(method, requestParams, { timeoutMs: remainingTimeoutMs, signal });
+    } catch (error) {
+      // Inventory readers absorb failures. Preserve timeout evidence before they
+      // turn it into missing apps, even if the wall clock trails the request timer.
+      requestTimedOut ||= isCodexPluginThreadConfigTimeoutError(error);
+      throw error;
+    }
+  };
   try {
-    return await waitForCodexPluginThreadConfigBuild({
+    return await withAbortableTimeout({
       signal,
       timeoutMs,
-      build: () =>
-        buildCodexPluginThreadConfig({
+      promise: (async () => {
+        const config = await buildCodexPluginThreadConfig({
           ...buildParams,
-          request: (method, requestParams) => {
-            const remainingTimeoutMs = deadlineMs - Date.now();
-            if (remainingTimeoutMs <= 0) {
-              throw new CodexPluginThreadConfigDeadlineError();
-            }
-            return request(method, requestParams, {
-              timeoutMs: remainingTimeoutMs,
-              signal,
-            });
-          },
-        }),
+          request: boundedRequest,
+        });
+        const result = transform ? await transform(config, boundedRequest) : config;
+        // Inventory readers can absorb an RPC timeout into an unavailable result.
+        if (requestTimedOut || Date.now() >= deadlineMs) {
+          throw new CodexPluginThreadConfigDeadlineError();
+        }
+        return result;
+      })(),
+      timeoutMessage: "Codex plugin thread config deadline elapsed",
+      createTimeoutError: () => new CodexPluginThreadConfigDeadlineError(),
     });
   } catch (error) {
-    if (signal.aborted || !isCodexPluginThreadConfigTimeoutError(error)) {
+    if (
+      signal.aborted ||
+      (!requestTimedOut && !isCodexPluginThreadConfigTimeoutError(error) && Date.now() < deadlineMs)
+    ) {
       throw error;
+    }
+    if (failClosedOnTimeout) {
+      throw new AgentHarnessPreflightError(
+        `Codex app policy verification exceeded its ${timeoutMs} ms startup budget. No app tools were executed. Retry after Codex app inventory is responsive.`,
+      );
     }
     return buildCodexPluginThreadConfigTimeoutFallback({
       pluginConfig: buildParams.pluginConfig,
@@ -114,51 +160,6 @@ async function buildCodexPluginThreadConfigWithinDeadline(
       message: `Codex plugin discovery exceeded its ${timeoutMs} ms startup budget; plugin apps were disabled for this turn.`,
     });
   }
-}
-
-function waitForCodexPluginThreadConfigBuild(params: {
-  signal: AbortSignal;
-  timeoutMs: number;
-  build: () => Promise<CodexPluginThreadConfig>;
-}): Promise<CodexPluginThreadConfig> {
-  if (params.signal.aborted) {
-    return Promise.reject(resolveAbortReason(params.signal));
-  }
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const finish = () => {
-      if (settled) {
-        return false;
-      }
-      settled = true;
-      clearTimeout(timer);
-      params.signal.removeEventListener("abort", onAbort);
-      return true;
-    };
-    const resolveOnce = (config: CodexPluginThreadConfig) => {
-      if (finish()) {
-        resolve(config);
-      }
-    };
-    const rejectOnce = (error: unknown) => {
-      if (finish()) {
-        reject(error instanceof Error ? error : new Error(String(error)));
-      }
-    };
-    const onAbort = () => rejectOnce(resolveAbortReason(params.signal));
-    const timer = setTimeout(
-      () => rejectOnce(new CodexPluginThreadConfigDeadlineError()),
-      params.timeoutMs,
-    );
-    params.signal.addEventListener("abort", onAbort, { once: true });
-    params.build().then(resolveOnce, rejectOnce);
-  });
-}
-
-function resolveAbortReason(signal: AbortSignal): Error {
-  return signal.reason instanceof Error
-    ? signal.reason
-    : new Error("Codex plugin thread config aborted");
 }
 
 /** Creates the recovery metadata and bounded builder used by thread startup. */
@@ -174,6 +175,7 @@ export function createCodexPluginThreadConfigStartupProvider(params: {
   appCache?: CodexAppInventoryCache;
   appCacheKey: string;
   metadataCache?: CodexPluginMetadataCache;
+  scheduledRuntimeAuthority?: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"];
 }) {
   const {
     client,
@@ -187,6 +189,9 @@ export function createCodexPluginThreadConfigStartupProvider(params: {
   const metadataCache = configuredMetadataCache ?? defaultCodexPluginMetadataCache;
   return {
     enabled: true,
+    // The bound context stores admitted apps only; native config owns excluded
+    // app IDs and tool/link overrides that can change between turns.
+    requiresCurrentPolicyCheck: Boolean(policy?.enabled || params.scheduledRuntimeAuthority),
     inputFingerprint,
     enabledPluginConfigKeys,
     accountAppRecoveryEnabled: policy?.allowAllPlugins,
@@ -198,14 +203,44 @@ export function createCodexPluginThreadConfigStartupProvider(params: {
           configCwd: params.configCwd,
         })
       : undefined,
-    build: () =>
-      buildCodexPluginThreadConfigWithinDeadline({
+    build: async (buildOptions?: { threadId?: string }) => {
+      const config = await buildCodexPluginThreadConfigWithinDeadline({
         ...buildParams,
+        threadId: buildOptions?.threadId,
         appCache: appCache ?? defaultCodexAppInventoryCache,
         metadataCache,
+        failClosedOnTimeout: Boolean(params.scheduledRuntimeAuthority),
+        transform: params.scheduledRuntimeAuthority
+          ? async (builtConfig, request) =>
+              intersectCodexPluginThreadConfigWithScheduledAuthority(
+                builtConfig,
+                params.scheduledRuntimeAuthority,
+                await readCurrentCodexScheduledAppPolicy(
+                  request,
+                  params.configCwd,
+                  buildOptions?.threadId,
+                ),
+              )
+          : undefined,
         request: (method, requestParams, options) => client.request(method, requestParams, options),
-      }),
+      });
+      return params.scheduledRuntimeAuthority && params.inputFingerprint
+        ? { ...config, inputFingerprint: params.inputFingerprint }
+        : config;
+    },
   };
+}
+
+async function readCurrentCodexScheduledAppPolicy(
+  request: CodexPluginRuntimeRequest,
+  cwd: string | undefined,
+  threadId: string | undefined,
+): Promise<CurrentCodexScheduledAppPolicy> {
+  return await readCurrentCodexScheduledAppPolicyShared({
+    request,
+    configCwd: cwd,
+    threadId,
+  });
 }
 
 function resolveCodexPluginThreadConfigTimeoutMs(requestTimeoutMs: number): number {

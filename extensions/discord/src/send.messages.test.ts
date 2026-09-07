@@ -66,6 +66,38 @@ describe("searchMessagesDiscord", () => {
     expect(result).toEqual(results);
   });
 
+  it("preserves valid empty Discord search results", async () => {
+    const results = { messages: [], total_results: 0 };
+    restMock.get.mockResolvedValueOnce(results);
+
+    await expect(
+      searchMessagesDiscord({ guildId: "G1", content: "test" }, { cfg: {} as never }),
+    ).resolves.toEqual(results);
+  });
+
+  it("surfaces a pending Discord search index and its retry delay", async () => {
+    restMock.get.mockResolvedValueOnce({
+      message: "Index not yet available. Try again later",
+      code: 110000,
+      documents_indexed: 0,
+      retry_after: 2,
+    });
+
+    await expect(
+      searchMessagesDiscord({ guildId: "G1", content: "test" }, { cfg: {} as never }),
+    ).rejects.toThrow(
+      "Discord message search unavailable: Index not yet available. Try again later (retry after 2s)",
+    );
+  });
+
+  it("rejects object search responses without a messages array", async () => {
+    restMock.get.mockResolvedValueOnce({ total_results: 1 });
+
+    await expect(
+      searchMessagesDiscord({ guildId: "G1", content: "test" }, { cfg: {} as never }),
+    ).rejects.toThrow("Unexpected Discord response for message search: expected messages array.");
+  });
+
   it("throws a clear error when Discord returns a non-object search response", async () => {
     restMock.get.mockResolvedValueOnce("\u001f\ufffd\u0008raw gzip bytes");
 

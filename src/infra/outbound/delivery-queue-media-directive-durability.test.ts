@@ -8,16 +8,13 @@ import type {
 } from "../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import {
-  releasePinnedPluginChannelRegistry,
-  setActivePluginRegistry,
-} from "../../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { collectEntrySpoolPaths } from "./delivery-queue-media-spool.js";
-import { loadPendingDeliveries } from "./delivery-queue-storage.js";
-import { drainPendingDeliveries, type DeliverFn } from "./delivery-queue.js";
+import { drainPendingDeliveriesCore, type DeliverFn } from "./delivery-queue-recovery.js";
 import {
+  loadPendingDeliveries,
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
 } from "./delivery-queue.test-helpers.js";
@@ -101,7 +98,7 @@ describe("delivery-queue MEDIA-directive durability (end-to-end)", () => {
   });
 
   afterEach(() => {
-    releasePinnedPluginChannelRegistry();
+    resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
@@ -154,7 +151,7 @@ describe("delivery-queue MEDIA-directive durability (end-to-end)", () => {
     const recovered: RecoveredSend[] = [];
     installMatrixAdapter(recoveryPhaseAdapter(recovered, spoolRoot));
     const deliver = vi.fn<DeliverFn>(async (params) => deliverOutboundPayloads(params));
-    await drainPendingDeliveries({
+    await drainPendingDeliveriesCore({
       drainKey: "media-directive-test",
       logLabel: "media-directive drain",
       cfg,

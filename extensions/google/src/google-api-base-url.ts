@@ -17,6 +17,19 @@ function isGoogleGenerativeAiUrl(url: URL): boolean {
   );
 }
 
+/** Exact official AI Studio request root eligible for native provider behavior. */
+export function isOfficialGoogleAiStudioBaseUrl(baseUrl?: string | null): boolean {
+  const raw = normalizeOptionalString(baseUrl) ?? DEFAULT_GOOGLE_API_BASE_URL;
+  try {
+    const href = trimTrailingSlashes(new URL(raw).href);
+    return (
+      href === "https://generativelanguage.googleapis.com" || href === DEFAULT_GOOGLE_API_BASE_URL
+    );
+  } catch {
+    return false;
+  }
+}
+
 function stripUrlUserInfo(url: URL): void {
   url.username = "";
   url.password = "";
@@ -75,11 +88,12 @@ export function isGoogleGenerativeAiApi(api?: string | null): boolean {
 }
 
 export function normalizeGoogleGenerativeAiBaseUrl(baseUrl?: string): string | undefined {
-  if (!baseUrl) {
-    return baseUrl;
+  const raw = normalizeOptionalString(baseUrl);
+  if (!raw) {
+    return undefined;
   }
 
-  const normalized = normalizeGoogleApiBaseUrl(baseUrl);
+  const normalized = normalizeGoogleApiBaseUrl(raw);
   try {
     const url = new URL(normalized);
     stripUrlUserInfo(url);

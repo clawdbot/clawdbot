@@ -63,7 +63,11 @@ export function applyMattermostSetupConfigPatch(params: {
   });
 }
 
+const accountCredentialKeys = ["botToken", "baseUrl"];
+
 export const mattermostSetupAdapter: ChannelSetupAdapter = {
+  singleAccountKeysToMove: accountCredentialKeys,
+  namedAccountPromotionKeys: accountCredentialKeys,
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
   applyAccountName: ({ cfg, accountId, name }) =>
     applyAccountNameToChannelSection({
@@ -134,6 +138,7 @@ export const mattermostSetupContract = defineChannelSetupContract({
     useEnv: {
       kind: "boolean",
       cli: { flags: "--use-env", description: "Use Mattermost environment credentials" },
+      envVars: ["MATTERMOST_BOT_TOKEN", "MATTERMOST_URL"],
     },
   },
   legacyAdapter: mattermostSetupAdapter,

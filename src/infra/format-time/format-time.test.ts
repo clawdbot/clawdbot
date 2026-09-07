@@ -1,5 +1,6 @@
 // Covers duration, UTC/zoned timestamp, timezone, and relative time formatting.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnv } from "../../test-utils/env.js";
 import {
   createTimeZoneDayKeyFormatter,
   formatUtcTimestamp,
@@ -7,6 +8,7 @@ import {
   resolveTimeZoneDayStartMs,
   resolveTimezone,
 } from "./format-datetime.js";
+import { formatSingleUnitDuration } from "./format-duration-internal.js";
 import {
   formatDurationCompact,
   formatDurationHuman,
@@ -61,8 +63,25 @@ describe("format-duration", () => {
       { input: 65000, options: { spaced: true }, expected: "1m 5s" },
       { input: 3660000, options: { spaced: true }, expected: "1h 1m" },
       { input: 90000000, options: { spaced: true }, expected: "1d 1h" },
+      {
+        input: 366 * 86400000,
+        options: { showYears: true, spaced: true },
+        expected: "1y 1d",
+      },
       { input: 59500, expected: "1m" },
       { input: 59400, expected: "59s" },
+      { input: 18_014_398_509_513_598_976, expected: "208499982749d" },
+      {
+        input: 18_014_398_509_513_598_976,
+        options: { spaced: true },
+        expected: "208499982749d",
+      },
+      { input: 18_014_398_509_513_601_024, expected: "208499982749d" },
+      {
+        input: 18_014_398_509_513_601_024,
+        options: { spaced: true },
+        expected: "208499982749d",
+      },
     ])("formats compact duration for %j", ({ input, options, expected }) => {
       expect(formatDurationCompact(input, options)).toBe(expected);
     });
@@ -88,6 +107,27 @@ describe("format-duration", () => {
         { input: 25 * 3600000, expected: "1d" },
         { input: 172800000, expected: "2d" },
       ]);
+    });
+  });
+
+  describe("formatSingleUnitDuration", () => {
+    it.each([
+      [59_500, "60 seconds", "1 minute"],
+      [3_570_000, "60 minutes", "1 hour"],
+      [86_370_000, "24 hours", "1 day"],
+    ])("rolls over %dms to the next unit instead of %s", (input, _buggyOutput, expected) => {
+      expect(formatSingleUnitDuration(input, true)).toBe(expected);
+    });
+
+    it.each([
+      [30_000, "30 seconds"],
+      [89_500, "1 minute"],
+      [1_800_000, "30 minutes"],
+      [5_370_000, "1 hour"],
+      [43_200_000, "12 hours"],
+      [129_570_000, "1 day"],
+    ])("keeps %dms in its own unit as %s", (input, expected) => {
+      expect(formatSingleUnitDuration(input, true)).toBe(expected);
     });
   });
 
@@ -180,26 +220,37 @@ describe("format-datetime", () => {
         options: { timeZone: "UTC", displaySeconds: true },
         expected: /2024-01-15 14:30:45/,
       },
+      {
+        date: new Date("2024-01-15T14:30:45.000Z"),
+        options: { timeZone: "UTC", displayWeekday: true },
+        expected: /^Mon 2024-01-15 14:30 UTC$/,
+      },
     ] as const)("formats zoned timestamp", ({ date, options, expected }) => {
       const result = formatZonedTimestamp(date, options);
       expect(result).toMatch(expected);
     });
 
-    it("returns undefined when required Intl parts are missing", () => {
-      function MissingPartsDateTimeFormat() {
-        return {
-          formatToParts: () => [
-            { type: "month", value: "01" },
-            { type: "day", value: "15" },
-            { type: "hour", value: "14" },
-            { type: "minute", value: "30" },
-          ],
-        } as Intl.DateTimeFormat;
+    it("follows host timezone changes while keeping explicit zones fixed", () => {
+      const date = new Date("2024-01-15T14:30:00.000Z");
+      for (const [timezone, expected] of [
+        ["UTC", "2024-01-15 14:30 UTC"],
+        ["America/New_York", "2024-01-15 09:30 EST"],
+        ["UTC", "2024-01-15 14:30 UTC"],
+      ]) {
+        withEnv({ TZ: timezone }, () => {
+          expect(formatZonedTimestamp(date)).toBe(expected);
+          expect(formatZonedTimestamp(date, { timeZone: "UTC" })).toBe("2024-01-15 14:30 UTC");
+        });
       }
+    });
 
-      vi.spyOn(Intl, "DateTimeFormat").mockImplementation(
-        MissingPartsDateTimeFormat as unknown as typeof Intl.DateTimeFormat,
-      );
+    it("returns undefined when required Intl parts are missing", () => {
+      vi.spyOn(Intl.DateTimeFormat.prototype, "formatToParts").mockReturnValue([
+        { type: "month", value: "01" },
+        { type: "day", value: "15" },
+        { type: "hour", value: "14" },
+        { type: "minute", value: "30" },
+      ]);
 
       expect(formatZonedTimestamp(new Date("2024-01-15T14:30:00.000Z"), { timeZone: "UTC" })).toBe(
         undefined,
@@ -207,17 +258,9 @@ describe("format-datetime", () => {
     });
 
     it("returns undefined when Intl formatting throws", () => {
-      function ThrowingDateTimeFormat() {
-        return {
-          formatToParts: () => {
-            throw new Error("boom");
-          },
-        } as unknown as Intl.DateTimeFormat;
-      }
-
-      vi.spyOn(Intl, "DateTimeFormat").mockImplementation(
-        ThrowingDateTimeFormat as unknown as typeof Intl.DateTimeFormat,
-      );
+      vi.spyOn(Intl.DateTimeFormat.prototype, "formatToParts").mockImplementation(() => {
+        throw new Error("boom");
+      });
 
       expect(formatZonedTimestamp(new Date("2024-01-15T14:30:00.000Z"), { timeZone: "UTC" })).toBe(
         undefined,

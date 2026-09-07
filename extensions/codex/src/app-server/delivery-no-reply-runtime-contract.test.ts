@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import {
   DELIVERY_NO_REPLY_RUNTIME_CONTRACT,
   openFileBackedSessionManagerForTest,

@@ -20,6 +20,7 @@ import type {
 import type { OAuthProviderInterface } from "../../llm/utils/oauth/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentDir } from "../config.js";
+import { parseModelCatalogJson } from "../model-catalog-json.js";
 import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.js";
 import {
   filterGeneratedPluginModelCatalogProviders,
@@ -37,7 +38,6 @@ import {
 } from "./model-registry-runtime.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
 import {
-  clearConfigValueCache,
   resolveConfigValueOrThrow,
   resolveConfigValueUncached,
   resolveHeadersOrThrow,
@@ -136,6 +136,7 @@ const OpenAICompletionsCompatSchema = Type.Object({
 
 const OpenAIResponsesCompatSchema = Type.Object({
   supportsTemperature: Type.Optional(Type.Boolean()),
+  supportsInstructions: Type.Optional(Type.Boolean()),
   sendSessionIdHeader: Type.Optional(Type.Boolean()),
   supportsLongCacheRetention: Type.Optional(Type.Boolean()),
 });
@@ -229,13 +230,6 @@ function formatValidationPath(error: TLocalizedValidationError): string {
   return path || "root";
 }
 
-/** Strip `//` line comments and trailing commas from JSON, leaving string literals untouched. */
-function stripJsonComments(input: string): string {
-  return input
-    .replace(/"(?:\\.|[^"\\])*"|\/\/[^\n]*/g, (m) => (m[0] === '"' ? m : ""))
-    .replace(/"(?:\\.|[^"\\])*"|,(\s*[}\]])/g, (m, tail) => tail ?? (m[0] === '"' ? m : ""));
-}
-
 interface ProviderRequestConfig {
   apiKey?: string;
   auth?: ProviderAuthMode;
@@ -317,9 +311,6 @@ function mergeCompat(
 
   return merged as Model["compat"];
 }
-
-/** Clear the config value command cache. Exported for testing. */
-export const clearApiKeyCache = clearConfigValueCache;
 
 /**
  * Model registry - loads and manages models, resolves API keys via AuthStorage.
@@ -539,7 +530,7 @@ export class ModelRegistry {
 
     try {
       const content = options.contents ?? readFileSync(modelsJsonPath, "utf-8");
-      const parsed = JSON.parse(stripJsonComments(content)) as unknown;
+      const parsed = parseModelCatalogJson(content);
       if (options.requireGeneratedCatalog === true && !isGeneratedPluginModelCatalog(parsed)) {
         return emptyCustomModelsResult();
       }
@@ -589,13 +580,9 @@ export class ModelRegistry {
       if (options.includePluginCatalogs !== false) {
         let pluginCatalogs: readonly PersistedPluginModelCatalog[] = [];
         try {
-          if (this.pluginCatalogs) {
-            pluginCatalogs = this.pluginCatalogs;
-          } else {
-            const loaded = loadPersistedPluginModelCatalogs(dirname(modelsJsonPath));
-            pluginCatalogs = loaded.catalogs;
-            pluginCatalogErrors.push(...loaded.warnings);
-          }
+          const loaded = loadPersistedPluginModelCatalogs(dirname(modelsJsonPath));
+          pluginCatalogs = loaded.catalogs;
+          pluginCatalogErrors.push(...loaded.warnings);
         } catch (error) {
           pluginCatalogErrors.push(
             `Failed to load generated plugin model catalogs: ${
@@ -603,21 +590,10 @@ export class ModelRegistry {
             }`,
           );
         }
-        for (const pluginCatalog of pluginCatalogs) {
-          const pluginResult = this.loadCustomModels(
-            `sqlite:plugin-model-catalog/${pluginCatalog.pluginId}`,
-            {
-              catalogPluginId: pluginCatalog.pluginId,
-              contents: pluginCatalog.contents,
-              includePluginCatalogs: false,
-              requireGeneratedCatalog: true,
-            },
-          );
-          if (pluginResult.error) {
-            pluginCatalogErrors.push(pluginResult.error);
-            continue;
-          }
-          models.push(...pluginResult.models);
+        const pluginResult = this.loadCapturedPluginCatalogs(pluginCatalogs);
+        models.push(...pluginResult.models);
+        if (pluginResult.error) {
+          pluginCatalogErrors.push(pluginResult.error);
         }
       }
 

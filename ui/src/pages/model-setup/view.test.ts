@@ -2,164 +2,21 @@
 
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SystemAgentSetupDetectResult, WizardStep } from "../../api/types.ts";
+import type { WizardStep } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
-import { renderModelSetup } from "./view.ts";
+import {
+  detected,
+  mount,
+  props,
+  text,
+  type ModelSetupViewProps,
+} from "./test-helpers/view.test-support.ts";
 
-type ModelSetupViewProps = Parameters<typeof renderModelSetup>[0];
-
-const detected: SystemAgentSetupDetectResult = {
-  candidates: [
-    {
-      kind: "codex-cli",
-      brandId: "openai",
-      label: "Codex CLI",
-      detail: "Signed in locally",
-      modelRef: "openai/gpt-5",
-      recommended: true,
-      credentials: true,
-      icon: "https://cdn.example.com/codex.png",
-    },
-  ],
-  unavailableCandidates: [
-    {
-      id: "pi-cli",
-      label: "Pi",
-      detail: "installed; no setup route available",
-      reason: "This local runtime must be configured outside OpenClaw.",
-    },
-  ],
-  manualProviders: [
-    {
-      id: "gemini-api-key",
-      brandId: "google",
-      groupLabel: "Google",
-      label: "Google AI Studio API key",
-      hint: "Supported API-key access from aistudio.google.com/apikey",
-    },
-    {
-      id: "openai",
-      brandId: "openai",
-      groupLabel: "OpenAI",
-      label: "OpenAI",
-      hint: "Use a project API key.",
-      icon: "https://cdn.example.com/openai.png",
-    },
-  ],
-  authOptions: [
-    {
-      id: "openai-oauth",
-      brandId: "openai",
-      label: "OpenAI",
-      kind: "oauth",
-      featured: true,
-      hint: "Continue in your browser.",
-      icon: "https://cdn.example.com/openai.png",
-    },
-    {
-      id: "other-device",
-      label: "Other provider",
-      kind: "device-code",
-      featured: false,
-    },
-  ],
-  prepareOptions: [
-    {
-      id: "ollama",
-      brandId: "ollama",
-      label: "Ollama",
-      hint: "Connect to an Ollama server and select a cloud or local model",
-      actionLabel: "Choose connection",
-      icon: "https://cdn.simpleicons.org/ollama",
-      website: "https://ollama.com/download",
-    },
-    {
-      id: "lmstudio",
-      brandId: "lmstudio",
-      label: "LM Studio",
-      hint: "Connect to a running LM Studio server and use an already loaded model",
-      actionLabel: "Connect server",
-      icon: "https://cdn.simpleicons.org/lmstudio",
-      website: "https://lmstudio.ai/download",
-    },
-    {
-      id: "llama-cpp",
-      brandId: "llama-cpp",
-      label: "Local model (llama.cpp)",
-      hint: "Download and run a private GGUF model",
-      actionLabel: "Review download",
-    },
-  ],
-  recommendedInstalls: [
-    {
-      id: "ollama",
-      brandId: "ollama",
-      label: "Ollama",
-      hint: "Run open models locally",
-      website: "https://ollama.com/download",
-      icon: "https://cdn.simpleicons.org/ollama",
-    },
-  ],
-  workspace: "/tmp/workspace",
-  setupComplete: false,
-};
-
-function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupViewProps {
-  return {
-    page: { phase: "ready", result: detected },
-    activation: { phase: "idle" },
-    verify: { phase: "idle" },
-    wizard: { phase: "idle" },
-    wizardMode: "auth",
-    wizardValue: undefined,
-    canAdmin: true,
-    canVerify: true,
-    canPrepare: true,
-    gatewayTooOld: false,
-    actionsDisabled: false,
-    manualProviderId: "openai",
-    manualApiKey: "",
-    manualError: null,
-    moreSignInOpen: false,
-    firstRun: false,
-    iconUrls: {
-      "https://cdn.example.com/codex.png": "blob:codex",
-      "https://cdn.example.com/openai.png": "blob:openai",
-      "https://cdn.simpleicons.org/ollama": "blob:ollama",
-    },
-    onDetect: vi.fn(),
-    onVerify: vi.fn(),
-    onActivateCandidate: vi.fn(),
-    onStartAuth: vi.fn(),
-    onStartPrepare: vi.fn(),
-    onManualProviderChange: vi.fn(),
-    onUseManualProvider: vi.fn(),
-    onManualApiKeyChange: vi.fn(),
-    onManualConnect: vi.fn(),
-    onMoreSignInToggle: vi.fn(),
-    onIconError: vi.fn(),
-    onOpenChat: vi.fn(),
-    onSuccessClose: vi.fn(),
-    onWizardValueChange: vi.fn(),
-    onWizardAnswer: vi.fn(),
-    onWizardCancel: vi.fn(),
-    onWizardClose: vi.fn(),
-    ...overrides,
-  };
-}
-
-function mount(viewProps: ModelSetupViewProps): HTMLDivElement {
-  const container = document.createElement("div");
-  document.body.append(container);
-  render(renderModelSetup(viewProps), container);
-  return container;
-}
-
-function text(container: Element): string {
-  return container.textContent?.replace(/\s+/gu, " ").trim() ?? "";
-}
-
-function wizardStep(step: WizardStep, value: unknown = step.initialValue): HTMLDivElement {
+function wizardStep(
+  step: WizardStep,
+  value: unknown = step.initialValue,
+  wizardMode: ModelSetupViewProps["wizardMode"] = "auth",
+): HTMLDivElement {
   return mount(
     props({
       wizard: {
@@ -169,6 +26,7 @@ function wizardStep(step: WizardStep, value: unknown = step.initialValue): HTMLD
         busy: false,
         validationError: null,
       },
+      wizardMode,
       wizardValue: value,
     }),
   );
@@ -196,7 +54,7 @@ describe("renderModelSetup", () => {
     expect(text(container)).toContain("openai/gpt-5 · Signed in locally");
     expect(text(container)).toContain("Found, but needs attention");
     expect(text(container)).toContain("This local runtime must be configured outside OpenClaw");
-    expect(text(container)).toContain("Sign in with a provider");
+    expect(text(container)).toContain("Connect an AI provider");
     expect(text(container)).toContain("Run a model locally");
     expect(text(container)).toContain("LM Studio");
     expect(text(container)).toContain("Connect with an API key or token");
@@ -226,6 +84,28 @@ describe("renderModelSetup", () => {
     ).toContain("O");
     expect(container.querySelectorAll("img")).toHaveLength(0);
   });
+
+  it.each(["logged in · ChatGPT account · alex@example.com", "logged in · API key (usage-billed)"])(
+    "shows detected authentication without credential values: %s",
+    (detail) => {
+      const secret = "synthetic-private-token";
+      const container = mount(
+        props({
+          page: {
+            phase: "ready",
+            result: {
+              ...detected,
+              candidates: [{ ...detected.candidates[0]!, detail: `${detail} · token=${secret}` }],
+            },
+          },
+        }),
+      );
+      const row = container.querySelector('[data-candidate-kind="codex-cli"]')!;
+
+      expect(text(row)).toContain(detail);
+      expect(text(row)).not.toContain(secret);
+    },
+  );
 
   it("identifies provider families separately from their credential methods", () => {
     const container = mount(
@@ -502,7 +382,7 @@ describe("renderModelSetup", () => {
       '[data-prepare-choice="llama-cpp"] button',
     );
     expect(ollama?.textContent).toContain("Choose connection");
-    expect(llamaCpp?.textContent).toContain("Review download");
+    expect(llamaCpp?.textContent).toContain("Set up model");
     expect(
       container.querySelector<HTMLButtonElement>('[data-prepare-choice="lmstudio"] button')
         ?.textContent,
@@ -913,35 +793,6 @@ describe("renderModelSetup", () => {
     expect(unsupportedGateway.querySelector(".model-setup__current button")).toBeNull();
   });
 
-  it("renders manual activation progress and failure inline", () => {
-    const testing = mount(
-      props({
-        activation: {
-          phase: "testing",
-          targetId: "manual:openai",
-          modelRef: "openai",
-        },
-        actionsDisabled: true,
-      }),
-    );
-    expect(text(testing)).toContain("Testing — asking OpenAI for a quick reply…");
-    expect(testing.querySelector<HTMLButtonElement>(".model-setup__manual button")?.disabled).toBe(
-      true,
-    );
-
-    const failure = mount(
-      props({
-        activation: {
-          phase: "failure",
-          targetId: "manual:openai",
-          status: "billing",
-          error: "No credits",
-        },
-      }),
-    );
-    expect(text(failure)).toContain("Billing problem No credits");
-  });
-
   it("renders note links and device codes", () => {
     const container = wizardStep({
       id: "device",
@@ -958,12 +809,12 @@ describe("renderModelSetup", () => {
     expect(text(container)).toContain("Expires in 10 minutes");
   });
 
-  it("copies device codes through the plain-HTTP clipboard fallback", async () => {
-    vi.stubGlobal("navigator", {});
-    let copiedText: string | undefined;
+  it.each([true, false])("reports device-code fallback success: %s", async (copied) => {
+    const writeText = vi.fn().mockRejectedValue(new DOMException("Clipboard access denied"));
+    vi.stubGlobal("navigator", copied ? {} : { clipboard: { writeText } });
     const execCommand = vi.fn().mockImplementation(() => {
-      copiedText = document.querySelector<HTMLTextAreaElement>("textarea")?.value;
-      return true;
+      expect(document.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("ABCD-EFGH");
+      return copied;
     });
     (document as unknown as { execCommand: typeof execCommand }).execCommand = execCommand;
     const container = wizardStep({
@@ -972,14 +823,14 @@ describe("renderModelSetup", () => {
       deviceCode: { code: "ABCD-EFGH" },
     });
 
-    const copy = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.trim() === "Copy",
-    );
-    expect(copy).toBeDefined();
+    const copy = container.querySelector<HTMLButtonElement>(".wizard-step__device-code button");
     copy?.click();
 
-    await vi.waitFor(() => expect(execCommand).toHaveBeenCalledWith("copy"));
-    expect(copiedText).toBe("ABCD-EFGH");
+    const feedback = copied ? "Copied!" : "Copy failed";
+    await vi.waitFor(() => expect(copy?.textContent?.trim()).toBe(feedback));
+    expect(copy?.getAttribute("aria-label")).toBeNull();
+    expect(execCommand).toHaveBeenCalledWith("copy");
+    expect(writeText).toHaveBeenCalledTimes(copied ? 0 : 1);
     expect(document.querySelector("textarea")).toBeNull();
   });
 
@@ -1027,6 +878,14 @@ describe("renderModelSetup", () => {
     const confirm = wizardStep({ id: "confirm", type: "confirm", message: "Continue?" });
     expect(text(confirm)).toContain("Yes");
     expect(text(confirm)).toContain("No");
+
+    const prepareConfirm = wizardStep(
+      { id: "confirm", type: "confirm", message: "Set up this model?" },
+      undefined,
+      "prepare",
+    );
+    expect(text(prepareConfirm)).toContain("Continue");
+    expect(text(prepareConfirm)).not.toContain("Yes");
   });
 
   it.each(["multiselect", "action"] as const)("renders the %s wizard step", (type) => {

@@ -21,7 +21,7 @@ spend limits, and backend failover without changing OpenClaw config.
     For non-interactive setup against a remote proxy, pass the proxy URL explicitly:
 
     ```bash
-    openclaw onboard --non-interactive --accept-risk --auth-choice litellm-api-key \
+    openclaw onboard --non-interactive --accept-risk --skip-health --auth-choice litellm-api-key \
       --litellm-api-key "$LITELLM_API_KEY" --custom-base-url "https://litellm.example/v1"
     ```
 
@@ -104,9 +104,11 @@ LiteLLM can back the `image_generate` tool through OpenAI-compatible `/images/ge
   },
   agents: {
     defaults: {
-      imageGenerationModel: {
-        primary: "litellm/gpt-image-2",
-        timeoutMs: 180_000,
+      mediaModels: {
+        image: {
+          primary: "litellm/gpt-image-2",
+          timeoutMs: 180000,
+        },
       },
     },
   },

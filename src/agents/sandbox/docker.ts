@@ -1,9 +1,14 @@
+import { withContainerEnvFile } from "../../infra/container-env-file.js";
+import { markOpenClawExecEnv } from "../../infra/openclaw-exec-env.js";
 /**
  * Low-level Docker command helpers for sandbox runtimes.
  *
  * Wraps Docker spawn, environment sanitization, container inspection, creation, and exec behavior.
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import { computeSandboxConfigHash } from "./config-hash.js";
+import { DEFAULT_SANDBOX_IMAGE, SANDBOX_DOCKER_CREATE_ARGS_EPOCH } from "./constants.js";
 import {
   DOCKER_SANDBOX_ENGINE,
   execContainer,
@@ -13,6 +18,7 @@ import {
   type SandboxContainerEngine,
   type SandboxContainerEngineTarget,
 } from "./container-engine.js";
+import { handleHotSandboxConfigMismatch } from "./current-config.js";
 import {
   assertPodmanSandboxTarget,
   bindPodmanSandboxEngine,
@@ -22,10 +28,24 @@ import {
   resolvePodmanSandboxRuntimeInfo,
   type PodmanSandboxRuntimeInfo,
 } from "./podman-runtime.js";
+import { readRegistryEntry, removeRegistryEntry, updateRegistry } from "./registry.js";
 import {
   resolveDockerEnvPolicyEpoch,
   sanitizeExplicitSandboxEnvVars,
 } from "./sanitize-env-vars.js";
+import { buildSandboxContainerName, slugifySessionKey } from "./shared.js";
+import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
+import { validateSandboxSecurity } from "./validate-sandbox-security.js";
+import {
+  appendReadOnlyWorkspaceSkillMountArgs,
+  appendWorkspaceMountArgs,
+  filterBindsConflictingWithProtectedMounts,
+  formatReadOnlyWorkspaceSkillMountHashState,
+  resolveReadOnlyWorkspaceSkillMounts,
+  resolveProtectedSkillMountContainerPaths,
+  SANDBOX_MOUNT_FORMAT_VERSION,
+  type ReadOnlyWorkspaceSkillMount,
+} from "./workspace-mounts.js";
 
 export {
   DOCKER_SANDBOX_ENGINE,
@@ -54,26 +74,6 @@ export async function execDockerRaw(
 ): Promise<ExecDockerRawResult> {
   return await execContainerRaw(DOCKER_SANDBOX_ENGINE, args, opts);
 }
-
-import { markOpenClawExecEnv } from "../../infra/openclaw-exec-env.js";
-import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
-import { computeSandboxConfigHash } from "./config-hash.js";
-import { DEFAULT_SANDBOX_IMAGE, SANDBOX_DOCKER_CREATE_ARGS_EPOCH } from "./constants.js";
-import { handleHotSandboxConfigMismatch } from "./current-config.js";
-import { readRegistryEntry, removeRegistryEntry, updateRegistry } from "./registry.js";
-import { buildSandboxContainerName, slugifySessionKey } from "./shared.js";
-import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
-import { validateSandboxSecurity } from "./validate-sandbox-security.js";
-import {
-  appendReadOnlyWorkspaceSkillMountArgs,
-  appendWorkspaceMountArgs,
-  filterBindsConflictingWithProtectedMounts,
-  formatReadOnlyWorkspaceSkillMountHashState,
-  resolveReadOnlyWorkspaceSkillMounts,
-  resolveProtectedSkillMountContainerPaths,
-  SANDBOX_MOUNT_FORMAT_VERSION,
-  type ReadOnlyWorkspaceSkillMount,
-} from "./workspace-mounts.js";
 
 const log = createSubsystemLogger("docker");
 
@@ -387,9 +387,7 @@ export function buildSandboxCreateArgs(params: {
       `Suspicious configured sandbox environment variables: ${envSanitization.warnings.join(", ")}`,
     );
   }
-  for (const [key, value] of Object.entries(markOpenClawExecEnv(envSanitization.allowed))) {
-    args.push("--env", `${key}=${value}`);
-  }
+  const env = markOpenClawExecEnv(envSanitization.allowed);
   for (const cap of params.cfg.capDrop) {
     args.push("--cap-drop", cap);
   }
@@ -441,7 +439,7 @@ export function buildSandboxCreateArgs(params: {
       args.push("-v", bind);
     }
   }
-  return args;
+  return { argv: args, env };
 }
 
 function appendCustomBinds(args: string[], cfg: SandboxDockerConfig): void {
@@ -483,7 +481,7 @@ async function createSandboxContainer(params: {
   const createCfg = podmanPolicy?.cfg ?? cfg;
   await ensureContainerImage(engine, cfg.image);
 
-  const args = buildSandboxCreateArgs({
+  const { argv: args, env } = buildSandboxCreateArgs({
     name,
     cfg: createCfg,
     scopeKey,
@@ -525,9 +523,10 @@ async function createSandboxContainer(params: {
     args,
     readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts,
   });
-  args.push(cfg.image, "sleep", "infinity");
-
-  await execContainer(engine, args);
+  await withContainerEnvFile(env, async (envFile) => {
+    args.push("--env-file", envFile, cfg.image, "sleep", "infinity");
+    await execContainer(engine, args);
+  });
   await execContainer(engine, ["start", name]);
 
   if (cfg.setupCommand?.trim()) {

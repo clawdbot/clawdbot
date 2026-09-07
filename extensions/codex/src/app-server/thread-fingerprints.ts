@@ -7,9 +7,10 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import { hashCodexAppServerBindingFingerprint } from "./session-binding.js";
+import { resolveCodexGpt56MultiAgentVersion } from "./thread-binding-policy.js";
 
-export function codexDynamicToolsFingerprint(dynamicTools: CodexDynamicToolSpec[]): string {
-  return fingerprintDynamicTools(dynamicTools);
+export function codexDynamicToolsFingerprint(dynamicTools: readonly JsonValue[]): string {
+  return hashCodexAppServerBindingFingerprint(legacyFingerprintDynamicTools(dynamicTools));
 }
 
 export function codexLegacyDynamicToolsFingerprint(dynamicTools: CodexDynamicToolSpec[]): string {
@@ -24,14 +25,10 @@ export function areCodexDynamicToolFingerprintsCompatible(params: {
   return areDynamicToolFingerprintsCompatible(params.previous, params.next, params.nextLegacy);
 }
 
-function fingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): string {
-  return hashCodexAppServerBindingFingerprint(legacyFingerprintDynamicTools(dynamicTools));
-}
-
-function legacyFingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): string {
-  return JSON.stringify(
-    dynamicTools.map(fingerprintDynamicToolSpec).toSorted(compareJsonFingerprint),
-  );
+function legacyFingerprintDynamicTools(dynamicTools: readonly JsonValue[]): string {
+  // Codex persists the complete model-visible schema at thread/start; resume
+  // cannot refresh changed tool or nested input descriptions.
+  return JSON.stringify(dynamicTools.map(stabilizeJsonValue).toSorted(compareJsonFingerprint));
 }
 
 export function legacyFingerprintUserMcpServersConfigPatch(
@@ -57,22 +54,25 @@ function redactUserMcpServersFingerprintSecrets(value: JsonValue): JsonValue {
   if (!value || typeof value !== "object") {
     return value;
   }
-  const next: JsonObject = {};
-  for (const [key, entry] of Object.entries(value)) {
-    if (key === "http_headers" && entry && typeof entry === "object" && !Array.isArray(entry)) {
-      next[key] = Object.fromEntries(
-        Object.entries(entry).map(([header, headerValue]) => [
-          header,
-          header.toLowerCase() === "authorization"
-            ? fingerprintUserMcpServersAuthorizationHeader(headerValue)
-            : headerValue,
-        ]),
-      ) as JsonObject;
-      continue;
-    }
-    next[key] = redactUserMcpServersFingerprintSecrets(entry);
-  }
-  return next;
+  // Native server names are literal keys, including __proto__.
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => {
+      if (key === "http_headers" && entry && typeof entry === "object" && !Array.isArray(entry)) {
+        return [
+          key,
+          Object.fromEntries(
+            Object.entries(entry).map(([header, headerValue]) => [
+              header,
+              header.toLowerCase() === "authorization"
+                ? fingerprintUserMcpServersAuthorizationHeader(headerValue)
+                : headerValue,
+            ]),
+          ),
+        ];
+      }
+      return [key, redactUserMcpServersFingerprintSecrets(entry)];
+    }),
+  );
 }
 
 function fingerprintUserMcpServersAuthorizationHeader(value: unknown): string {
@@ -85,7 +85,7 @@ export function fingerprintJsonObject(value: JsonObject): string {
   return JSON.stringify(stabilizeJsonValue(value));
 }
 
-/** Hash every resume-visible setting without retaining config, credentials, or instructions. */
+/** Hash thread-creation identity; settings already applied by turn/start must not restart Codex. */
 export function fingerprintCodexThreadConfig(
   request: JsonObject,
   authProfileId?: string,
@@ -95,20 +95,24 @@ export function fingerprintCodexThreadConfig(
     fingerprintJsonObject({
       authProfileId: authProfileId ?? null,
       dynamicToolsFingerprint: dynamicToolsFingerprint ?? null,
-      model: request.model ?? null,
-      requestedModel:
-        request.requestedModel === undefined ? (request.model ?? null) : request.requestedModel,
+      // Codex fixes its model-selected native multi-agent generation for the
+      // whole session; only same-generation model changes are turn-mutable.
+      nativeMultiAgentVersion:
+        resolveCodexGpt56MultiAgentVersion(
+          typeof request.requestedModel === "string"
+            ? request.requestedModel
+            : typeof request.model === "string"
+              ? request.model
+              : undefined,
+        ) ?? null,
       modelProvider: request.modelProvider ?? null,
       requestedModelProvider:
         request.requestedModelProvider === undefined
           ? (request.modelProvider ?? null)
           : request.requestedModelProvider,
-      approvalPolicy: request.approvalPolicy ?? null,
-      approvalsReviewer: request.approvalsReviewer ?? null,
-      sandbox: request.sandbox ?? null,
+      // Named permission profiles are not currently forwarded by turn/start,
+      // so changing one still requires recreating the native thread.
       permissions: request.permissions ?? null,
-      personality: request.personality ?? null,
-      serviceTier: request.serviceTier === undefined ? "<omitted>" : request.serviceTier,
       baseInstructions: request.baseInstructions ?? null,
       developerInstructions: request.developerInstructions ?? null,
       config: request.config ?? {},
@@ -122,12 +126,6 @@ export function fingerprintEnvironmentSelection(
   return environments ? JSON.stringify(environments.map(stabilizeJsonValue)) : undefined;
 }
 
-function fingerprintDynamicToolSpec(tool: JsonValue): JsonValue {
-  // Codex persists the complete model-visible schema at thread/start; resume
-  // cannot refresh changed tool or nested input descriptions.
-  return stabilizeJsonValue(tool);
-}
-
 function stabilizeJsonValue(value: JsonValue): JsonValue {
   if (Array.isArray(value)) {
     return value.map(stabilizeJsonValue);
@@ -135,13 +133,12 @@ function stabilizeJsonValue(value: JsonValue): JsonValue {
   if (!isJsonObject(value)) {
     return value;
   }
-  const stable: JsonObject = {};
-  for (const [key, child] of Object.entries(value).toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  )) {
-    stable[key] = stabilizeJsonValue(child);
-  }
-  return stable;
+  // Indexed assignment would lose __proto__ schema and policy changes from the fingerprint.
+  return Object.fromEntries(
+    Object.entries(value)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => [key, stabilizeJsonValue(child)]),
+  );
 }
 
 function readActiveCodexTurnIds(thread: unknown): string[] {

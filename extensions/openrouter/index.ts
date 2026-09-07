@@ -1,10 +1,13 @@
 // Openrouter plugin entrypoint registers its OpenClaw integration.
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   ProviderReplayPolicy,
   ProviderReplayPolicyContext,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
   buildProviderReplayFamilyHooks,
@@ -32,7 +35,7 @@ import {
   buildOpenrouterProvider,
   isOpenRouterProxyReasoningUnsupportedModel,
   normalizeOpenRouterBaseUrl,
-  OPENROUTER_BASE_URL,
+  resolveOpenRouterApiBaseUrl,
 } from "./provider-catalog.js";
 import { resolveOpenRouterExtraParamsForTransport } from "./provider-routing.js";
 import { buildOpenRouterSpeechProvider } from "./speech-provider.js";
@@ -51,15 +54,7 @@ const OPENROUTER_CACHE_TTL_MODEL_FAMILY = /^(?:anthropic|deepseek|moonshot(?:ai)
 const MAX_PROMPT_MODEL_ID_DISPLAY_CHARS = 256;
 
 type OpenRouterFusionPromptContext = {
-  config?: {
-    agents?: {
-      defaults?: {
-        params?: Record<string, unknown>;
-        models?: Record<string, { params?: Record<string, unknown> }>;
-      };
-      list?: Array<{ id?: string; params?: Record<string, unknown> }>;
-    };
-  };
+  config?: OpenClawConfig;
   agentId?: string;
   modelId: string;
 };
@@ -163,7 +158,7 @@ function findConfiguredOpenRouterAgentParams(
   if (!ctx.agentId) {
     return undefined;
   }
-  return readRecord(ctx.config?.agents?.list?.find((agent) => agent.id === ctx.agentId)?.params);
+  return readRecord(resolveAgentConfig(ctx.config ?? {}, ctx.agentId)?.params);
 }
 
 function resolveMergedOpenRouterPromptParams(
@@ -237,7 +232,9 @@ export default defineSingleProviderPluginEntry({
         name: capabilities?.name ?? ctx.modelId,
         api: "openai-completions",
         provider: PROVIDER_ID,
-        baseUrl: OPENROUTER_BASE_URL,
+        baseUrl: resolveOpenRouterApiBaseUrl(
+          ctx.providerConfig?.baseUrl ?? ctx.config?.models?.providers?.openrouter?.baseUrl,
+        ),
         reasoning:
           (capabilities?.reasoning ?? false) &&
           !isOpenRouterProxyReasoningUnsupportedModel(ctx.modelId),
@@ -288,12 +285,19 @@ export default defineSingleProviderPluginEntry({
           if (!apiKey) {
             return null;
           }
-          return {
-            provider: await buildOpenrouterLiveProvider({
-              apiKey,
-              discoveryApiKey: auth.discoveryApiKey,
+          const providerConfig = ctx.config.models?.providers?.openrouter;
+          return await runLiveProviderCatalog({
+            providerId: PROVIDER_ID,
+            profileId: auth.profileId,
+            run: async () => ({
+              provider: await buildOpenrouterLiveProvider({
+                apiKey,
+                discoveryApiKey: auth.discoveryApiKey,
+                baseUrl: providerConfig?.baseUrl,
+                request: providerConfig?.request,
+              }),
             }),
-          };
+          });
         },
         staticRun: async () => ({
           provider: buildOpenrouterProvider(),
@@ -321,6 +325,17 @@ export default defineSingleProviderPluginEntry({
             }
           : undefined;
       },
+      classifyFailoverReason: ({ provider, errorMessage }) => {
+        if (provider?.trim().toLowerCase() !== PROVIDER_ID) {
+          return undefined;
+        }
+        if (
+          /\b(?:api\s+key\s+budget|key)\s+limit\s*(?:exceeded|reached|hit)\b/i.test(errorMessage)
+        ) {
+          return "billing";
+        }
+        return /provider returned error/i.test(errorMessage) ? "timeout" : undefined;
+      },
       ...passthroughGeminiReplayHooks,
       buildReplayPolicy: buildOpenRouterReplayPolicy,
       resolveReasoningOutputMode: () => "native",
@@ -340,6 +355,8 @@ export default defineSingleProviderPluginEntry({
       fetchUsageSnapshot: async (ctx) =>
         await fetchOpenRouterUsage({
           token: ctx.token,
+          baseUrl: ctx.config.models?.providers?.openrouter?.baseUrl,
+          request: ctx.config.models?.providers?.openrouter?.request,
           timeoutMs: ctx.timeoutMs,
           fetchFn: ctx.fetchFn,
         }),

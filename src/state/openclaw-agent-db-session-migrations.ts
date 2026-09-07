@@ -1,38 +1,21 @@
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import { parseSqliteSessionEntryRecord } from "../config/sessions/session-entry-json.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { buildConversationRef, normalizeConversationPeerId } from "../routing/conversation-ref.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
+import { migrateLegacySessionCreator } from "./creator-namespace-migration.js";
+import { ensurePendingInputConsumptionColumn } from "./openclaw-agent-pending-inputs-schema.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 type MigratedConversationEntry = Record<string, unknown>;
 
-function migratedObject(
-  entry: MigratedConversationEntry,
-  key: string,
-): MigratedConversationEntry | undefined {
-  const value = entry[key];
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as MigratedConversationEntry)
-    : undefined;
-}
-
-function migratedText(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function parseConversationEntry(value: unknown): MigratedConversationEntry | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as MigratedConversationEntry)
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  return typeof value === "string" ? safeParseJsonRecord(value) : undefined;
 }
 
 function inferMigratedChatType(params: {
@@ -42,8 +25,8 @@ function inferMigratedChatType(params: {
   deliveryTarget?: string;
 }): ChatType {
   const explicit =
-    normalizeChatType(migratedText(params.entry.chatType)) ??
-    normalizeChatType(migratedText(params.persistedChatType));
+    normalizeChatType(normalizeOptionalString(params.entry.chatType)) ??
+    normalizeChatType(normalizeOptionalString(params.persistedChatType));
   if (explicit) {
     return explicit;
   }
@@ -55,7 +38,10 @@ function inferMigratedChatType(params: {
   if (target?.startsWith("channel:") || /^[^:]+:channel:/u.test(target ?? "")) {
     return "channel";
   }
-  if (/^(?:[^:]+:)?(?:group|room):/u.test(target ?? "") || migratedText(params.entry.groupId)) {
+  if (
+    /^(?:[^:]+:)?(?:group|room):/u.test(target ?? "") ||
+    normalizeOptionalString(params.entry.groupId)
+  ) {
     return "group";
   }
   return "direct";
@@ -66,44 +52,43 @@ function migratedConversation(
   persistedChatType?: string,
   sessionKey?: string,
 ) {
-  const canonicalDelivery = migratedObject(entry, "delivery");
+  const canonicalDelivery = asOptionalRecord(entry.delivery);
   const delivery =
-    migratedObject(canonicalDelivery ?? {}, "context") ?? migratedObject(entry, "deliveryContext");
-  const origin =
-    migratedObject(canonicalDelivery ?? {}, "origin") ?? migratedObject(entry, "origin");
-  const deliveryRouteTarget = migratedText(delivery?.to);
+    asOptionalRecord(canonicalDelivery?.context) ?? asOptionalRecord(entry.deliveryContext);
+  const origin = asOptionalRecord(canonicalDelivery?.origin) ?? asOptionalRecord(entry.origin);
+  const deliveryRouteTarget = normalizeOptionalString(delivery?.to);
   const kind = inferMigratedChatType({
     entry,
     persistedChatType,
     sessionKey,
-    deliveryTarget: deliveryRouteTarget ?? migratedText(origin?.from),
+    deliveryTarget: deliveryRouteTarget ?? normalizeOptionalString(origin?.from),
   });
   const deliveryTarget =
-    deliveryRouteTarget ?? (kind === "direct" ? migratedText(origin?.from) : undefined);
+    deliveryRouteTarget ?? (kind === "direct" ? normalizeOptionalString(origin?.from) : undefined);
   if (!deliveryTarget) {
     return undefined;
   }
   const routeOwnsTarget = Boolean(deliveryRouteTarget);
   const channel = (
     routeOwnsTarget
-      ? (migratedText(delivery?.channel) ??
-        migratedText(entry.channel) ??
-        migratedText(entry.lastChannel) ??
-        migratedText(origin?.provider))
-      : migratedText(origin?.provider)
+      ? (normalizeOptionalString(delivery?.channel) ??
+        normalizeOptionalString(entry.channel) ??
+        normalizeOptionalString(entry.lastChannel) ??
+        normalizeOptionalString(origin?.provider))
+      : normalizeOptionalString(origin?.provider)
   )?.toLowerCase();
   const accountId = normalizeAccountId(
     routeOwnsTarget
-      ? (migratedText(delivery?.accountId) ??
-          migratedText(entry.lastAccountId) ??
-          migratedText(origin?.accountId))
-      : migratedText(origin?.accountId),
+      ? (normalizeOptionalString(delivery?.accountId) ??
+          normalizeOptionalString(entry.lastAccountId) ??
+          normalizeOptionalString(origin?.accountId))
+      : normalizeOptionalString(origin?.accountId),
   );
   const threadIdRaw = routeOwnsTarget ? delivery?.threadId : origin?.threadId;
   const threadId =
     typeof threadIdRaw === "number" && Number.isFinite(threadIdRaw)
       ? String(threadIdRaw)
-      : migratedText(threadIdRaw);
+      : normalizeOptionalString(threadIdRaw);
   // The routable target is authoritative for both identity and delivery. Stale
   // native metadata must never label one peer while sending to another.
   const peerId = channel ? normalizeConversationPeerId(channel, deliveryTarget) : undefined;
@@ -121,13 +106,13 @@ function migratedConversation(
     peerId,
     deliveryTarget,
     threadId,
-    nativeChannelId: migratedText(origin?.nativeChannelId),
-    nativeDirectUserId: migratedText(origin?.nativeDirectUserId),
+    nativeChannelId: normalizeOptionalString(origin?.nativeChannelId),
+    nativeDirectUserId: normalizeOptionalString(origin?.nativeDirectUserId),
     label:
-      migratedText(entry.displayName) ??
-      migratedText(entry.label) ??
-      migratedText(entry.subject) ??
-      migratedText(entry.groupId),
+      normalizeOptionalString(entry.displayName) ??
+      normalizeOptionalString(entry.label) ??
+      normalizeOptionalString(entry.subject) ??
+      normalizeOptionalString(entry.groupId),
   };
 }
 
@@ -146,6 +131,7 @@ export function backfillSessionConversations(db: DatabaseSync): void {
         session_id TEXT NOT NULL,
         conversation_id TEXT NOT NULL,
         role TEXT NOT NULL DEFAULT 'primary' CHECK (role IN ('primary', 'participant', 'related')),
+        route_context_json TEXT,
         first_seen_at INTEGER NOT NULL,
         last_seen_at INTEGER NOT NULL,
         PRIMARY KEY (session_id, conversation_id, role),
@@ -228,14 +214,14 @@ export function backfillSessionConversations(db: DatabaseSync): void {
     "UPDATE sessions SET primary_conversation_id = ? WHERE session_id = ?",
   );
   for (const row of rows) {
-    const sessionId = migratedText(row.session_id);
+    const sessionId = normalizeOptionalString(row.session_id);
     const entry = parseConversationEntry(row.entry_json);
     const updatedAt = typeof row.updated_at === "number" ? row.updated_at : Date.now();
     const conversation = entry
       ? migratedConversation(
           entry,
-          migratedText(row.persisted_chat_type),
-          migratedText(row.session_key),
+          normalizeOptionalString(row.persisted_chat_type),
+          normalizeOptionalString(row.session_key),
         )
       : undefined;
     if (!sessionId || !conversation) {
@@ -286,6 +272,50 @@ export function readSqliteTableColumns(db: DatabaseSync, tableName: string): Set
     name?: unknown;
   }>;
   return new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
+}
+
+/** Installs same-version session projections on first updated-binary open. */
+export function ensureSessionAdditiveColumns(db: DatabaseSync): void {
+  ensurePendingInputConsumptionColumn(db);
+  if (hasPendingSessionTranscriptContextEligibilityColumn(db)) {
+    // NULL records an older writer's unclassified projection; the transcript
+    // reconcile owner fills it without parsing payloads during schema open.
+    db.exec("ALTER TABLE session_transcript_active_events ADD COLUMN context_eligible INTEGER;");
+  }
+  const columns = readSqliteTableColumns(db, "session_nodes");
+  if (columns && !columns.has("project_id")) {
+    db.exec("ALTER TABLE session_nodes ADD COLUMN project_id TEXT;");
+  }
+  const conversationColumns = readSqliteTableColumns(db, "session_conversations");
+  if (conversationColumns && !conversationColumns.has("route_context_json")) {
+    db.exec("ALTER TABLE session_conversations ADD COLUMN route_context_json TEXT");
+  }
+  if (conversationColumns) {
+    // Same-version older writers leave the envelope byte-identical. Clear it on their update so
+    // stale owner facts cannot survive a downgrade/re-upgrade cycle with an unchanged timestamp.
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS session_conversations_route_context_invalidate_after_update
+      AFTER UPDATE OF role, last_seen_at ON session_conversations
+      WHEN NEW.route_context_json IS OLD.route_context_json
+      BEGIN
+        UPDATE session_conversations
+        SET route_context_json = NULL
+        WHERE session_id = NEW.session_id
+          AND conversation_id = NEW.conversation_id
+          AND role = NEW.role;
+      END;
+    `);
+  }
+}
+
+export function hasPendingSessionConversationRouteContextColumn(db: DatabaseSync): boolean {
+  const columns = readSqliteTableColumns(db, "session_conversations");
+  return Boolean(columns && !columns.has("route_context_json"));
+}
+
+export function hasPendingSessionTranscriptContextEligibilityColumn(db: DatabaseSync): boolean {
+  const columns = readSqliteTableColumns(db, "session_transcript_active_events");
+  return Boolean(columns && !columns.has("context_eligible"));
 }
 
 /** Adds the v11 exact delivery target before the conversation backfill writes canonical rows. */
@@ -372,5 +402,28 @@ export function migrateSessionEntryStatusProjection(
     if (typeof row.session_key === "string") {
       update.run(readStatus(row.entry_json), row.session_key);
     }
+  }
+}
+
+export function migrateSessionCreatorNamespaces(db: DatabaseSync, previousVersion: number): void {
+  if (previousVersion >= 19 || !tableExists(db, "session_nodes")) {
+    return;
+  }
+  const update = db.prepare(
+    "UPDATE session_nodes SET entry_json = ?, created_actor_type = ?, created_actor_id = ? WHERE session_key = ?",
+  );
+  const rows = db.prepare(`SELECT session_key, entry_json FROM session_nodes
+    WHERE json_valid(entry_json) AND (json_extract(entry_json, '$.createdActor.type') = 'human'
+      OR (json_type(entry_json, '$.createdActor') IS NULL AND json_type(entry_json, '$.createdBy') = 'object'))`);
+  // SAFETY: The query selects the two declared, non-null TEXT columns without projection casts.
+  for (const row of rows.all() as Array<{ session_key: string; entry_json: string }>) {
+    // SAFETY: SQL admits valid JSON with a human actor or legacy actor object; all other fields are retained verbatim.
+    const entry = migrateLegacySessionCreator(JSON.parse(row.entry_json) as SessionEntry);
+    update.run(
+      JSON.stringify(entry),
+      entry.createdActor?.type ?? null,
+      entry.createdActor?.id ?? null,
+      row.session_key,
+    );
   }
 }

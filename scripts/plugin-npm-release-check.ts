@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import {
   assertPluginReleaseDependencyFreshness,
   assertPluginReleaseVersionFloors,
-  collectChangedExtensionIdsFromGitRange,
+  collectPluginNpmGitRangeSelection,
   collectPublishablePluginPackages,
   parsePluginNpmReleaseArgs,
   resolveChangedPublishablePluginPackages,
@@ -15,17 +15,19 @@ import {
 function runPluginNpmReleaseCheck(argv: string[]) {
   const { selection, selectionMode, npmDistTag, baseRef, headRef } =
     parsePluginNpmReleaseArgs(argv);
-  const changedExtensionIds =
+  const gitRangeSelection =
     baseRef && headRef
-      ? collectChangedExtensionIdsFromGitRange({
+      ? collectPluginNpmGitRangeSelection({
           gitRange: { baseRef, headRef },
         })
-      : [];
+      : undefined;
   const publishable = collectPublishablePluginPackages(".", {
     extensionIds:
-      selectionMode === "all-publishable" || !(baseRef && headRef)
+      selectionMode === "all-publishable" ||
+      !gitRangeSelection ||
+      gitRangeSelection.authorityChanged
         ? undefined
-        : changedExtensionIds,
+        : gitRangeSelection.changedExtensionIds,
     packageNames: selection.length > 0 ? selection : undefined,
     npmDistTag,
   });
@@ -37,11 +39,13 @@ function runPluginNpmReleaseCheck(argv: string[]) {
             plugins: publishable,
             selection,
           })
-        : baseRef && headRef
-          ? resolveChangedPublishablePluginPackages({
-              plugins: publishable,
-              changedExtensionIds,
-            })
+        : gitRangeSelection
+          ? gitRangeSelection.authorityChanged
+            ? publishable
+            : resolveChangedPublishablePluginPackages({
+                plugins: publishable,
+                changedExtensionIds: gitRangeSelection.changedExtensionIds,
+              })
           : publishable;
 
   if (selectionMode !== undefined || selection.length > 0) {

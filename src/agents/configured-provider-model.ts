@@ -2,7 +2,6 @@
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizePluginsConfig } from "../plugins/config-state.js";
 
 type ConfiguredProviderModelParams = {
   cfg?: OpenClawConfig;
@@ -37,7 +36,7 @@ export function allowsPluginModelNormalization(params: ConfiguredProviderModelPa
   if (!provider) {
     return true;
   }
-  if (!normalizePluginsConfig(params.cfg?.plugins).enabled) {
+  if (params.cfg?.plugins?.enabled === false) {
     return false;
   }
   const model = params.model.trim();

@@ -182,9 +182,10 @@ Non-canonical query parameters are ignored except for the first non-empty
 
 Hard limits: a path caps at 4096 bytes, at most 4 slots (file/section/item/
 field), at most 64 dotted sub-segments per slot, and at most 256 nested
-traversal levels for deep JSON paths. Separately, any JSONC/JSON file input
-over 16 MiB is refused with a parse diagnostic instead of being parsed, for
-any verb that loads that file.
+traversal levels for deep JSON paths. Separately, every file input over 16 MiB
+is refused before parsing for any verb that loads the file. JSONC/JSON keeps
+the `OC_JSONC_INPUT_TOO_LARGE` diagnostic; other file kinds use
+`OC_PATH_INPUT_TOO_LARGE`.
 
 ## Addressing by file kind
 
@@ -205,9 +206,10 @@ depending on the per-kind AST shape.
 `set` writes one concrete target:
 
 - Markdown frontmatter values and `- key: value` item fields are string
-  leaves. Markdown insertions append sections, frontmatter keys, or section
-  items and render a canonical markdown shape for the changed file. Section
-  bodies are not writable as a whole through `set`.
+  leaves. Values are literal, including `$1`, `$&`, and `$$`. Markdown
+  insertions append sections, frontmatter keys, or section items and render a
+  canonical Markdown shape for the changed file. Section bodies are not
+  writable as a whole through `set`.
 - JSONC leaf writes coerce the string value to the existing leaf type
   (`string`, finite `number`, `true`/`false`, or `null`). Use `--value-json`
   when a JSONC/JSON/JSONL leaf replacement should parse `<value>` as JSON and
@@ -231,6 +233,8 @@ document API), so untouched bytes usually survive; markdown rebuilds the file
 from its parsed structure on any edit, which can normalize incidental
 formatting outside the changed leaf. Add `--diff` when you want the preview
 as a focused before/after patch instead of the full rendered file.
+The patch records line-ending changes and missing final newlines, so applying
+it produces the same bytes as the write.
 
 ## Examples
 
@@ -512,10 +516,10 @@ auto-detection.
 
 ## Notes
 
-- `set` writes bytes through the substrate's emit path, which applies the
-  redaction-sentinel guard automatically. A leaf carrying
-  `__OPENCLAW_REDACTED__` (verbatim or as a substring) is refused at write
-  time.
+- `set` refuses string leaf values containing `__OPENCLAW_REDACTED__`
+  (verbatim or as a substring) before a write or dry-run preview. This includes
+  Markdown insertion values for frontmatter, items, and headings. Ordinary
+  edits retain unrelated pre-existing marker text.
 - JSONC parsing and leaf edits use the plugin-local `jsonc-parser`
   dependency, so comments and formatting are preserved on ordinary leaf
   writes instead of going through a hand-rolled parser/re-render path.

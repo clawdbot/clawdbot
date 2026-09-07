@@ -1,13 +1,30 @@
 {
   "id": "google",
-  "icon": "https://cdn.simpleicons.org/google",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
+  "doctorContract": {},
+  "sessionRouteStateOwners": [
+    {
+      "id": "google",
+      "label": "Google",
+      "providerIds": ["google", "google-antigravity", "google-gemini-cli", "google-vertex"],
+      "runtimeIds": ["google-gemini-cli"],
+      "cliSessionKeys": ["google-gemini-cli", "gemini-cli"],
+      "authProfilePrefixes": [
+        "google:",
+        "google-antigravity:",
+        "google-gemini-cli:",
+        "google-vertex:",
+        "gemini-cli:"
+      ]
+    }
+  ],
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "providers": ["google", "google-gemini-cli", "google-vertex"],
   "providerCatalogEntry": "./provider-discovery.ts",
-  "autoEnableWhenConfiguredProviders": ["google-gemini-cli"],
+  "autoEnableWhenConfiguredProviders": ["google", "google-gemini-cli", "google-vertex"],
   "modelIdNormalization": {
     "providers": {
       "google": {
@@ -48,6 +65,208 @@
   "modelCatalog": {
     "discovery": {
       "google": "runtime"
+    },
+    "providers": {
+      "google": {
+        "api": "google-generative-ai",
+        "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+        "models": [
+          {
+            "id": "gemini-2.5-pro",
+            "name": "Gemini 2.5 Pro",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1048576,
+            "maxTokens": 65536
+          },
+          {
+            "id": "gemini-2.5-flash",
+            "name": "Gemini 2.5 Flash",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1048576,
+            "maxTokens": 65536
+          },
+          {
+            "id": "gemini-2.5-flash-lite",
+            "name": "Gemini 2.5 Flash-Lite",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1048576,
+            "maxTokens": 65536
+          },
+          {
+            "id": "gemini-3.5-flash",
+            "name": "Gemini 3.5 Flash",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "compat": {
+              "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "gemini-3.6-flash",
+            "name": "Gemini 3.6 Flash",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "compat": {
+              "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "gemini-3.7-flash",
+            "name": "Gemini 3.7 Flash",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "thinkingLevelMap": {
+              "minimal": null
+            },
+            "compat": {
+              "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "gemini-3.5-flash-lite",
+            "name": "Gemini 3.5 Flash-Lite",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "compat": {
+              "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "gemini-3.1-pro-preview",
+            "name": "Gemini 3.1 Pro Preview",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "compat": {
+              "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "gemini-3.1-flash-lite",
+            "name": "Gemini 3.1 Flash Lite",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "compat": {
+              "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "gemini-3-flash-preview",
+            "name": "Gemini 3 Flash Preview",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "compat": {
+              "codeMode": "preferred"
+            }
+          }
+        ]
+      }
     },
     "suppressions": [
       {
@@ -669,6 +888,7 @@
             "type": "local-file-with-env",
             "fileEnvVar": "GOOGLE_APPLICATION_CREDENTIALS",
             "fallbackPaths": [
+              "${CLOUDSDK_CONFIG}/application_default_credentials.json",
               "${HOME}/.config/gcloud/application_default_credentials.json",
               "${APPDATA}/gcloud/application_default_credentials.json"
             ],
@@ -732,14 +952,13 @@
   },
   "contracts": {
     "mediaUnderstandingProviders": ["google"],
-    "memoryEmbeddingProviders": ["gemini"],
+    "embeddingProviders": ["gemini"],
     "imageGenerationProviders": ["google"],
     "musicGenerationProviders": ["google"],
     "realtimeVoiceProviders": ["google"],
     "speechProviders": ["google"],
     "videoGenerationProviders": ["google"],
-    "webSearchProviders": ["gemini"],
-    "usageProviders": ["google-gemini-cli"]
+    "webSearchProviders": ["gemini"]
   },
   "mediaUnderstandingProviderMetadata": {
     "google": {

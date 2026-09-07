@@ -55,21 +55,22 @@ openclaw wiki obsidian daily
 ## Agent selection
 
 When `plugins.entries.memory-wiki.config.vault.scope` is `agent`, select the
-vault with the top-level `--agent <id>` option:
+vault with the command's `--agent <id>` option:
 
 ```bash
-openclaw wiki --agent support status
-openclaw wiki --agent support search "refund policy"
-openclaw wiki --agent marketing ingest ./campaign-notes.md
+openclaw wiki status --agent support
+openclaw wiki search "refund policy" --agent support
+openclaw wiki ingest ./campaign-notes.md --agent marketing
 ```
 
-In a setup with multiple configured agents, `--agent` is required for CLI
-operations so a command cannot read or write an arbitrary default vault. If
-only one agent is configured, that agent remains the default. Unknown agent ids
-fail before the vault operation starts. The option does not change the selected
-path when `vault.scope` is `global`.
+When `--agent` is omitted, CLI operations use the configured default agent,
+matching other agent-scoped CLI families. Pass the flag to select a different
+agent. Unknown agent ids fail before the vault operation starts. If no default
+can be resolved, the error tells you to pass `--agent <id>` or configure an
+agent. The option does not change the selected path when `vault.scope` is
+`global`.
 
-Gateway clients follow the same rule: pass `agentId` on vault-backed `wiki.*`
+Gateway clients remain explicit: pass `agentId` on vault-backed `wiki.*`
 requests in an agent-scoped multi-agent setup. A missing or unknown id is an
 error. Agent turns, wiki tools, memory corpus supplements, and compiled prompt
 digests already carry the active runtime agent context.
@@ -172,7 +173,15 @@ Text output includes `Claim:` and `Evidence:` lines when a result matches a stru
 
 ### `wiki get <lookup>`
 
-Read a wiki page by id or relative path.
+Read a wiki page by id or relative path. Compiled claim IDs are resolved first.
+After vault activation, an existing, visible canonical Markdown path reads only
+the requested page. A fresh CLI process still validates the compiled snapshot
+against the vault; missing indexes or snapshots can trigger automatic compilation.
+Missing or invalid candidates, extensionless paths, basenames, and page IDs
+retain their existing lookup fallbacks and may scan the vault.
+
+Wiki-page reads support large files and hard links. Reads refuse paths that
+escape the vault or pass through a symbolic link inside it.
 
 ```bash
 openclaw wiki get entity.alpha

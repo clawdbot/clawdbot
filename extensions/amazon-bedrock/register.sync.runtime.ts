@@ -10,6 +10,7 @@ import type {
   OpenClawPluginApi,
   ProviderNormalizeResolvedModelContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   buildProviderReplayFamilyHooks,
   normalizeProviderId,
@@ -19,11 +20,11 @@ import {
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
+import { createPayloadPatchStreamWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
 import { supportsBedrockPromptCaching } from "./bedrock-options.js";
 import { loadBedrockControlPlaneSdk, runBedrockControlPlaneRequest } from "./control-plane.js";
-import { mergeImplicitBedrockProvider, resolveBedrockConfigApiKey } from "./discovery-shared.js";
+import { resolveBedrockConfigApiKey } from "./discovery-shared.js";
 import { bedrockMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import { streamSimpleBedrock } from "./stream.runtime.js";
 import {
@@ -137,14 +138,13 @@ function createBedrockServiceTierWrapper(
   underlying: StreamFn,
   serviceTier: BedrockServiceTier,
 ): StreamFn {
-  return (model, context, options) => {
-    if (model.api !== "bedrock-converse-stream") {
-      return underlying(model, context, options);
-    }
-    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      payloadObj.serviceTier ??= { type: serviceTier };
-    });
-  };
+  return createPayloadPatchStreamWrapper(
+    underlying,
+    ({ payload }) => {
+      payload.serviceTier ??= { type: serviceTier };
+    },
+    { shouldPatch: ({ model }) => model.api === "bedrock-converse-stream" },
+  );
 }
 
 function createGuardrailWrapStreamFn(
@@ -164,21 +164,19 @@ function createGuardrailWrapStreamFn(
     if (!inner) {
       return inner;
     }
-    return (model, context, options) => {
-      return streamWithPayloadPatch(inner, model, context, options, (payload) => {
-        const gc: Record<string, unknown> = {
-          guardrailIdentifier: guardrailConfig.guardrailIdentifier,
-          guardrailVersion: guardrailConfig.guardrailVersion,
-        };
-        if (guardrailConfig.streamProcessingMode) {
-          gc.streamProcessingMode = guardrailConfig.streamProcessingMode;
-        }
-        if (guardrailConfig.trace) {
-          gc.trace = guardrailConfig.trace;
-        }
-        payload.guardrailConfig = gc;
-      });
-    };
+    return createPayloadPatchStreamWrapper(inner, ({ payload }) => {
+      const gc: Record<string, unknown> = {
+        guardrailIdentifier: guardrailConfig.guardrailIdentifier,
+        guardrailVersion: guardrailConfig.guardrailVersion,
+      };
+      if (guardrailConfig.streamProcessingMode) {
+        gc.streamProcessingMode = guardrailConfig.streamProcessingMode;
+      }
+      if (guardrailConfig.trace) {
+        gc.trace = guardrailConfig.trace;
+      }
+      payload.guardrailConfig = gc;
+    });
   };
 }
 
@@ -401,7 +399,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     );
   }
 
-  api.registerMemoryEmbeddingProvider(bedrockMemoryEmbeddingProviderAdapter);
+  api.registerEmbeddingProvider(bedrockMemoryEmbeddingProviderAdapter);
 
   const baseWrapStreamFn = ({
     modelId,
@@ -523,23 +521,20 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     auth: [],
     catalog: {
       order: "simple",
-      run: async (ctx) => {
-        const { resolveImplicitBedrockProvider } = await import("./discovery.js");
-        const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);
-        const implicit = await resolveImplicitBedrockProvider({
-          pluginConfig: currentPluginConfig,
-          env: ctx.env,
-        });
-        if (!implicit) {
-          return null;
-        }
-        return {
-          provider: mergeImplicitBedrockProvider({
-            existing: ctx.config.models?.providers?.[providerId],
-            implicit,
-          }),
-        };
-      },
+      run: (ctx) =>
+        runLiveProviderCatalog({
+          providerId,
+          run: async () => {
+            const { resolveImplicitBedrockProvider } = await import("./discovery.js");
+            const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);
+            const implicit = await resolveImplicitBedrockProvider({
+              discoveryMode: "strict",
+              pluginConfig: currentPluginConfig,
+              env: ctx.env,
+            });
+            return implicit ? { provider: implicit } : null;
+          },
+        }),
     },
     resolveConfigApiKey: ({ env }) => resolveBedrockConfigApiKey(env),
     normalizeResolvedModel: normalizeBedrockResolvedModel,

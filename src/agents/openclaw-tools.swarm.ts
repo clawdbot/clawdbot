@@ -1,10 +1,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getLatestSubagentRunByChildSessionKey } from "./subagents/registry/subagent-registry-read.js";
 import {
-  getLatestSubagentRunByChildSessionKey,
   getSubagentRunByRunId,
   recordSwarmStructuredOutput,
-} from "./subagent-registry.js";
-import { resolveSwarmConfig } from "./swarm-config.js";
+} from "./subagents/registry/subagent-registry.js";
+import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import { createAgentsWaitTool } from "./tools/agents-wait-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createStructuredOutputTool } from "./tools/structured-output-tool.js";

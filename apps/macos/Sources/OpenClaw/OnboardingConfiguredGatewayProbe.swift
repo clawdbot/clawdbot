@@ -16,6 +16,7 @@ final class OnboardingConfiguredGatewayProbe {
     enum Outcome: Equatable {
         case configured(modelRef: String, route: BoundRoute)
         case missing(route: BoundRoute)
+        case authIssue(RemoteGatewayAuthIssue)
         case unavailable
         case superseded
 
@@ -23,7 +24,7 @@ final class OnboardingConfiguredGatewayProbe {
             switch self {
             case let .configured(_, route), let .missing(route):
                 route
-            case .unavailable, .superseded:
+            case .authIssue, .unavailable, .superseded:
                 nil
             }
         }
@@ -83,7 +84,6 @@ final class OnboardingConfiguredGatewayProbe {
         onElapsed: @escaping @MainActor () -> Void)
     {
         self.pendingActivationDeadlineTask?.cancel()
-        let generation = self.generation
         let delay = max(0, deadline.timeIntervalSinceNow)
         self.pendingActivationDeadlineTask = Task { @MainActor [weak self] in
             do {
@@ -91,7 +91,7 @@ final class OnboardingConfiguredGatewayProbe {
             } catch {
                 return
             }
-            guard let self, self.generation == generation else { return }
+            guard let self, !Task.isCancelled else { return }
             self.pendingActivationDeadlineTask = nil
             onElapsed()
         }
@@ -111,8 +111,17 @@ final class OnboardingConfiguredGatewayProbe {
         self.activeProbeCount += 1
         defer { self.finishProbe() }
         guard connectionMode != .unconfigured else { return .unavailable }
-        guard let route = await gateway.captureRoute() else {
-            return self.isCurrent(attempt) ? .unavailable : .superseded
+        let route: GatewayConnection.Route
+        do {
+            route = try await self.gateway.captureRequiredRoute()
+        } catch {
+            guard self.isCurrent(attempt) else { return .superseded }
+            if connectionMode == .remote,
+               let authIssue = RemoteGatewayAuthIssue(error: error)
+            {
+                return .authIssue(authIssue)
+            }
+            return .unavailable
         }
         guard self.isCurrent(attempt) else { return .superseded }
         let boundRoute = BoundRoute(route: route, identity: routeIdentity)
@@ -134,6 +143,11 @@ final class OnboardingConfiguredGatewayProbe {
             guard await self.gateway.isCurrentRoute(route),
                   self.isCurrent(attempt)
             else { return .superseded }
+            if connectionMode == .remote,
+               let authIssue = RemoteGatewayAuthIssue(error: error)
+            {
+                return .authIssue(authIssue)
+            }
             return .unavailable
         }
     }
@@ -149,9 +163,9 @@ final class OnboardingConfiguredGatewayProbe {
             self.reconnectPending = false
         }
         let stream = await gateway.subscribe(bufferingNewest: 1)
-        for await push in stream {
+        for await delivery in stream {
             guard !Task.isCancelled else { return }
-            guard case .snapshot = push else { continue }
+            guard delivery.isCurrent, case .snapshot = delivery.push else { continue }
             // captureRoute can create the socket whose hello produced this
             // snapshot. Coalesce it until that route-bound check finishes so a
             // real reconnect is never lost behind the in-flight request.

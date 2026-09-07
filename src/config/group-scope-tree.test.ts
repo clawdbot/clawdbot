@@ -3,11 +3,30 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "./config.js";
 import { resolveChannelGroupRequireMention, resolveToolsBySender } from "./group-policy.js";
 import {
+  resolveScopeKeyCaseInsensitive,
   resolveScopeIntroHint,
   resolveScopeRequireMention,
   resolveScopeToolsPolicy,
   type ScopeTree,
 } from "./group-scope-tree.js";
+
+describe("resolveScopeKeyCaseInsensitive", () => {
+  it("preserves exact scope identity before case-insensitive fallback", () => {
+    const tree: ScopeTree = {
+      scopes: {
+        "Room:Mixed": { requireMention: true },
+        "room:mixed": { requireMention: false },
+      },
+    };
+
+    expect(resolveScopeKeyCaseInsensitive(tree, "Room:Mixed")).toBe("Room:Mixed");
+    expect(resolveScopeKeyCaseInsensitive(tree, "ROOM:MIXED")).toBe("Room:Mixed");
+    expect(resolveScopeKeyCaseInsensitive(tree, " room:mixed ")).toBe("Room:Mixed");
+    expect(resolveScopeKeyCaseInsensitive(tree, "unknown")).toBeUndefined();
+    expect(resolveScopeKeyCaseInsensitive(tree, undefined)).toBeUndefined();
+    expect(resolveScopeKeyCaseInsensitive(tree, null)).toBeUndefined();
+  });
+});
 
 describe("resolveScopeRequireMention", () => {
   const scalarCases: Array<{

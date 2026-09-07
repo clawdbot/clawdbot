@@ -1,4 +1,7 @@
-import type { SessionCatalogSession } from "../../../../packages/gateway-protocol/src/index.ts";
+import type {
+  SessionCatalogSession,
+  SessionCreatedActor,
+} from "../../../../packages/gateway-protocol/src/index.ts";
 
 export type CatalogProjectGrouping = "project" | "person" | "none";
 
@@ -6,8 +9,43 @@ export function normalizeCatalogProjectGrouping(raw: unknown): CatalogProjectGro
   return raw === "none" || raw === "person" ? raw : "project";
 }
 
+// Sidebar, table, and catalog groups share keys from projected identities;
+// raw actor ids can alias profiles or collide across identity namespaces.
+export function sessionActorGroupId(owner: SessionCreatedActor | undefined): string {
+  const identity = owner?.identity;
+  if (!identity) {
+    return "";
+  }
+  return identity.type === "profile" || identity.type === "agent"
+    ? `${identity.type}:${identity.id}`
+    : JSON.stringify(identity, Object.keys(identity).toSorted());
+}
+
+// Canonicalize a checkout path for grouping: strip trailing separators so
+// `/repo` and `/repo/` key one section, then mirror Claude Code desktop by
+// folding any cwd at or under `.claude/worktrees/<name>` into the origin repo
+// (the lazy prefix picks the outermost repo root). Returns null for separator-only
+// paths or worktrees with no origin repo.
+export function foldWorktreeCheckoutPath(path: string): string | null {
+  const trimmed = path.replace(/[\\/]+$/, "");
+  if (!trimmed) {
+    return null;
+  }
+  const match = trimmed.match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/);
+  return match ? match[1] || null : trimmed;
+}
+
+/** Basename shown for a checkout path in project sections. */
+export function checkoutDisplayName(path: string): string {
+  return path.split(/[\\/]/).findLast(Boolean) ?? path;
+}
+
 type CatalogProjectGroup = {
+  kind: "custom" | "project" | "person";
   key: string;
+  // Collapse ids predate the group-kind namespace. Read the old suffix until
+  // the next toggle migrates that section to its canonical id.
+  legacySectionKey?: string;
   label: string;
   title: string;
   sessions: SessionCatalogSession[];
@@ -22,51 +60,49 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
   // order depend on the roster's sort.
   const customGroups: CatalogProjectGroup[] = [];
   const projectGroups: CatalogProjectGroup[] = [];
-  const groupsByPath = new Map<string, CatalogProjectGroup>();
+  const customGroupsByName = new Map<string, CatalogProjectGroup>();
+  const projectGroupsByPath = new Map<string, CatalogProjectGroup>();
   const ungrouped: SessionCatalogSession[] = [];
 
   for (const session of sessions) {
     const customGroup = session.customGroup?.trim();
     if (customGroup) {
       const key = `custom:${customGroup}`;
-      let group = groupsByPath.get(key);
+      let group = customGroupsByName.get(customGroup);
       if (!group) {
         group = {
+          kind: "custom",
           key,
+          legacySectionKey: key,
           label: customGroup,
           title: `Custom group: ${customGroup}`,
           sessions: [],
         };
-        groupsByPath.set(key, group);
+        customGroupsByName.set(customGroup, group);
         customGroups.push(group);
       }
       group.sessions.push(session);
       continue;
     }
-    // Accepted tradeoff: filesystem-root cwds ("/", "C:\") are not real harness
-    // session roots; after trimming they fall to the ungrouped flat tail by design.
-    let projectPath = session.cwd?.trim().replace(/[\\/]+$/, "");
+    // Paths without a project identity fall to the ungrouped flat tail;
+    // do not invent a project name when canonicalization returns no origin.
+    const trimmedPath = session.cwd?.trim();
+    const projectPath = trimmedPath ? foldWorktreeCheckoutPath(trimmedPath) : null;
     if (!projectPath) {
       ungrouped.push(session);
       continue;
     }
-    // Mirror Claude Code desktop: any cwd at or under `.claude/worktrees/<name>`
-    // folds into the origin repo; the lazy prefix picks the outermost repo root.
-    const worktreeMatch = projectPath.match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/);
-    projectPath = worktreeMatch?.[1] ?? projectPath;
-    if (!projectPath) {
-      ungrouped.push(session);
-      continue;
-    }
-    let group = groupsByPath.get(projectPath);
+    let group = projectGroupsByPath.get(projectPath);
     if (!group) {
       group = {
-        key: projectPath,
-        label: projectPath.split(/[\\/]/).at(-1) || projectPath,
+        kind: "project",
+        key: `project:${projectPath}`,
+        legacySectionKey: projectPath,
+        label: checkoutDisplayName(projectPath),
         title: projectPath,
         sessions: [],
       };
-      groupsByPath.set(projectPath, group);
+      projectGroupsByPath.set(projectPath, group);
       projectGroups.push(group);
     }
     group.sessions.push(session);
@@ -87,15 +123,23 @@ export function groupCatalogSessionsByPerson(sessions: readonly SessionCatalogSe
 
   for (const session of sessions) {
     const actor = session.createdActor;
-    if (!actor?.id) {
+    const actorGroupId = sessionActorGroupId(actor);
+    if (!actor?.identity || !actorGroupId) {
       ungrouped.push(session);
       continue;
     }
-    const key = `person:${actor.id}`;
+    const key = `person:${actorGroupId}`;
     let group = groupsById.get(key);
     if (!group) {
-      const label = actor.label?.trim() || actor.id;
-      group = { key, label, title: `Created by ${label}`, sessions: [] };
+      const label = actor.label?.trim() || actor.identity.id;
+      group = {
+        kind: "person",
+        key,
+        legacySectionKey: `person:${actor.id}`,
+        label,
+        title: `Created by ${label}`,
+        sessions: [],
+      };
       groupsById.set(key, group);
     }
     group.sessions.push(session);

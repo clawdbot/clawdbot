@@ -13,13 +13,16 @@ export type AcpSessionStore = {
   }) => AcpSession;
   hasSession: (sessionId: string) => boolean;
   getSession: (sessionId: string) => AcpSession | undefined;
-  getSessionByRunId: (runId: string) => AcpSession | undefined;
   /** Binds an active runtime run to a session so cancel/close can abort it later. */
   setActiveRun: (sessionId: string, runId: string, abortController: AbortController) => void;
-  clearActiveRun: (sessionId: string) => void;
-  cancelActiveRun: (sessionId: string) => boolean;
+  clearActiveRun: (sessionId: string, expectedRunId?: string) => void;
+  cancelActiveRun: (sessionId: string, expectedRunId?: string) => boolean;
   deleteSession: (sessionId: string) => boolean;
-  clearAllSessionsForTest: () => void;
+};
+
+type InMemoryAcpSessionStore = AcpSessionStore & {
+  /** Releases every record when the registry's lifecycle owner shuts down. */
+  dispose: () => void;
 };
 
 type AcpSessionStoreOptions = {
@@ -32,12 +35,13 @@ const DEFAULT_MAX_SESSIONS = 5_000;
 const DEFAULT_IDLE_TTL_MS = 24 * 60 * 60 * 1_000;
 
 /** Creates the bounded in-memory ACP session registry used by local ACP runtime clients. */
-export function createInMemorySessionStore(options: AcpSessionStoreOptions = {}): AcpSessionStore {
+export function createInMemorySessionStore(
+  options: AcpSessionStoreOptions = {},
+): InMemoryAcpSessionStore {
   const maxSessions = resolveIntegerOption(options.maxSessions, DEFAULT_MAX_SESSIONS, { min: 1 });
   const idleTtlMs = resolveIntegerOption(options.idleTtlMs, DEFAULT_IDLE_TTL_MS, { min: 1_000 });
   const now = options.now ?? Date.now;
   const sessions = new Map<string, AcpSession>();
-  const runIdToSessionId = new Map<string, string>();
 
   const touchSession = (session: AcpSession, nowMs: number) => {
     session.lastTouchedAt = nowMs;
@@ -47,9 +51,6 @@ export function createInMemorySessionStore(options: AcpSessionStoreOptions = {})
     const session = sessions.get(sessionId);
     if (!session) {
       return false;
-    }
-    if (session.activeRunId) {
-      runIdToSessionId.delete(session.activeRunId);
     }
     session.abortController?.abort();
     sessions.delete(sessionId);
@@ -133,81 +134,59 @@ export function createInMemorySessionStore(options: AcpSessionStoreOptions = {})
     return session;
   };
 
-  const getSessionByRunId: AcpSessionStore["getSessionByRunId"] = (runId) => {
-    const sessionId = runIdToSessionId.get(runId);
-    if (!sessionId) {
-      return undefined;
-    }
-    const session = sessions.get(sessionId);
-    if (session) {
-      touchSession(session, now());
-    }
-    return session;
-  };
-
   const setActiveRun: AcpSessionStore["setActiveRun"] = (sessionId, runId, abortController) => {
     const session = sessions.get(sessionId);
     if (!session) {
       return;
     }
-    if (session.activeRunId && session.activeRunId !== runId) {
-      runIdToSessionId.delete(session.activeRunId);
-    }
     session.activeRunId = runId;
     session.abortController = abortController;
-    runIdToSessionId.set(runId, sessionId);
     touchSession(session, now());
   };
 
-  const clearActiveRun: AcpSessionStore["clearActiveRun"] = (sessionId) => {
-    const session = sessions.get(sessionId);
-    if (!session) {
-      return;
-    }
-    if (session.activeRunId) {
-      runIdToSessionId.delete(session.activeRunId);
-    }
+  const releaseActiveRun = (session: AcpSession) => {
     session.activeRunId = null;
     session.abortController = null;
     touchSession(session, now());
   };
 
-  const cancelActiveRun: AcpSessionStore["cancelActiveRun"] = (sessionId) => {
+  const clearActiveRun: AcpSessionStore["clearActiveRun"] = (sessionId, expectedRunId) => {
     const session = sessions.get(sessionId);
-    if (!session?.abortController) {
+    if (session && (expectedRunId === undefined || session.activeRunId === expectedRunId)) {
+      releaseActiveRun(session);
+    }
+  };
+
+  const cancelActiveRun: AcpSessionStore["cancelActiveRun"] = (sessionId, expectedRunId) => {
+    const session = sessions.get(sessionId);
+    if (
+      !session?.abortController ||
+      (expectedRunId !== undefined && session.activeRunId !== expectedRunId)
+    ) {
       return false;
     }
     session.abortController.abort();
-    if (session.activeRunId) {
-      runIdToSessionId.delete(session.activeRunId);
-    }
-    session.abortController = null;
-    session.activeRunId = null;
-    touchSession(session, now());
+    releaseActiveRun(session);
     return true;
   };
 
   const deleteSession: AcpSessionStore["deleteSession"] = (sessionId) => removeSession(sessionId);
 
-  const clearAllSessionsForTest: AcpSessionStore["clearAllSessionsForTest"] = () => {
+  const dispose: InMemoryAcpSessionStore["dispose"] = () => {
     for (const session of sessions.values()) {
       session.abortController?.abort();
     }
     sessions.clear();
-    runIdToSessionId.clear();
   };
 
   return {
     createSession,
     hasSession,
     getSession,
-    getSessionByRunId,
     setActiveRun,
     clearActiveRun,
     cancelActiveRun,
     deleteSession,
-    clearAllSessionsForTest,
+    dispose,
   };
 }
-
-export const defaultAcpSessionStore = createInMemorySessionStore();

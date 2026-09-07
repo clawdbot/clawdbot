@@ -3,34 +3,37 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  readAmbientTranscriptWatermark as readAmbientTranscriptWatermarkFromEntry,
+  readAmbientTranscriptWatermarkFromEntry,
   resolveAmbientTranscriptWatermarkKey,
   updateAmbientTranscriptWatermark,
   type AmbientTranscriptWatermarkScope,
 } from "../config/sessions/ambient-transcript-watermark.js";
+import { buildConversationIdentity } from "../config/sessions/conversation-identity.js";
+import { resolveCurrentConversationSession } from "../config/sessions/conversation-registry.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
 } from "../config/sessions/legacy-sqlite-marker.js";
-import { resolveStorePath as resolveSessionStorePath } from "../config/sessions/paths.js";
-import { resolveSessionFilePath as resolveLegacySessionFilePath } from "../config/sessions/paths.js";
-export { SessionStoreAgentIdRequiredError } from "../config/sessions/paths.js";
+import {
+  resolveSessionFilePathCore,
+  resolveSessionStorePathCore,
+} from "../config/sessions/paths.js";
 import {
   applySessionStoreProjection as applyAccessorSessionStoreProjection,
-  cleanupSessionLifecycleArtifacts as cleanupAccessorSessionLifecycleArtifacts,
+  cleanupSessionLifecycleArtifactsCore as cleanupAccessorSessionLifecycleArtifacts,
   deleteSessionEntryLifecycle as deleteAccessorSessionEntryLifecycle,
   loadTranscriptEventsSync as loadAccessorTranscriptEventsSync,
-  listSessionEntries as listAccessorSessionEntries,
+  listSessionEntriesCore as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
-  patchSessionEntry as patchAccessorSessionEntry,
-  readSessionUpdatedAt as readAccessorSessionUpdatedAt,
+  patchSessionEntryCore as patchAccessorSessionEntry,
+  readSessionUpdatedAtCore as readAccessorSessionUpdatedAt,
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
   resolveTranscriptSessionKeyBySessionId as resolveAccessorTranscriptSessionKeyBySessionId,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import { resolveSessionStoreEntry as resolveSessionStoreEntryFromStore } from "../config/sessions/store-entry.js";
+import { resolveSessionStoreEntryCore as resolveSessionStoreEntryFromStore } from "../config/sessions/store-entry.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type {
@@ -41,8 +44,8 @@ import type {
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
-  activeRecoveryFieldsForSameSession,
-  clearRecoveryStateForRotatedSessionPatch,
+  clearGenerationPrivateFieldsForRotatedSessionPatch,
+  generationValidPrivateFieldsForSameSession,
   projectPluginSessionEntry,
   projectPluginSessionEntryPatch,
   projectPluginSessionStore,
@@ -51,6 +54,7 @@ import {
   toSessionAccessScope,
 } from "./session-store-runtime-internal.js";
 import type { SessionTranscriptEvent } from "./session-transcript-runtime.js";
+export { SessionStoreAgentIdRequiredError } from "../config/sessions/paths.js";
 
 export {
   deliveryContextFromSession,
@@ -98,6 +102,8 @@ type SessionStoreEntryPatch = (
 ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
 
 type PatchSessionEntryParams = SessionStoreReadParams & {
+  /** Synchronous final ownership check executed inside the commit transaction. */
+  assertCommitAllowed?: () => void;
   fallbackEntry?: SessionEntry;
   maintenanceConfig?: ResolvedSessionMaintenanceConfigInput;
   preserveActivity?: boolean;
@@ -133,6 +139,7 @@ type SessionLifecycleArtifactsCleanupParams = {
   archiveRemovedEntryTranscripts?: boolean;
   env?: NodeJS.ProcessEnv;
   orphanTranscriptMinAgeMs: number;
+  pluginOwnerId?: string;
   sessionStore?: string;
   sessionKeySegmentPrefix: string;
   storePath?: string;
@@ -145,17 +152,31 @@ type SessionLifecycleArtifactsCleanupResult = {
   removedEntries: number;
 };
 
-function preserveCoreRecoveryState(
+function preserveGenerationPrivateFields(
   persistedEntry: InternalSessionEntry,
   publicPatch: Partial<SessionEntry>,
 ): Partial<InternalSessionEntry> {
   const nextSessionId = Object.hasOwn(publicPatch, "sessionId")
     ? publicPatch.sessionId
     : persistedEntry.sessionId;
-  const recoveryState = activeRecoveryFieldsForSameSession(persistedEntry, nextSessionId);
-  return recoveryState
-    ? { ...publicPatch, ...recoveryState }
-    : clearRecoveryStateForRotatedSessionPatch(persistedEntry, publicPatch);
+  const nextLifecycleRevision = Object.hasOwn(publicPatch, "lifecycleRevision")
+    ? publicPatch.lifecycleRevision
+    : persistedEntry.lifecycleRevision;
+  const privateFields = generationValidPrivateFieldsForSameSession(
+    persistedEntry,
+    nextSessionId,
+    nextLifecycleRevision,
+  );
+  return privateFields
+    ? {
+        ...publicPatch,
+        ...(!Object.hasOwn(publicPatch, "lifecycleRevision") &&
+        persistedEntry.lifecycleRevision !== undefined
+          ? { lifecycleRevision: persistedEntry.lifecycleRevision }
+          : {}),
+        ...privateFields,
+      }
+    : clearGenerationPrivateFieldsForRotatedSessionPatch(persistedEntry, publicPatch);
 }
 
 function resolveLegacySessionStoreTarget(storePath: string): {
@@ -187,7 +208,7 @@ function materializeLegacyTranscriptFile(
     sessionId: marker.sessionId,
     storePath: marker.storePath,
   } as const;
-  const transcriptPath = resolveLegacySessionFilePath(marker.sessionId, undefined, {
+  const transcriptPath = resolveSessionFilePathCore(marker.sessionId, undefined, {
     agentId: marker.agentId,
     ...(options?.sessionsDir ? { sessionsDir: options.sessionsDir } : {}),
   });
@@ -329,7 +350,7 @@ export function resolveSessionFilePath(
   entry?: { sessionFile?: string },
   options?: { agentId?: string; sessionsDir?: string },
 ): string {
-  const resolved = resolveLegacySessionFilePath(sessionId, entry, options);
+  const resolved = resolveSessionFilePathCore(sessionId, entry, options);
   return materializeLegacyTranscriptFile(resolved, options);
 }
 
@@ -345,7 +366,7 @@ export function resolveStorePath(
   store?: string,
   options?: { agentId?: string; env?: NodeJS.ProcessEnv },
 ): string {
-  const storePath = resolveSessionStorePath(store, options);
+  const storePath = resolveSessionStorePathCore(store, options);
   if (options?.agentId) {
     legacyStoreAgentIds.set(path.resolve(storePath), options.agentId);
   }
@@ -369,6 +390,21 @@ export function resolveSessionStoreEntry(params: {
 export function getSessionEntry(params: SessionStoreReadParams): SessionEntry | undefined {
   const entry = loadSessionEntryReadOnly(toSessionAccessScope(params));
   return entry ? projectPluginSessionEntry(entry) : undefined;
+}
+
+/** Reads the current session binding of one canonical transport address. */
+export function getConversationSession(params: {
+  agentId: string;
+  env?: NodeJS.ProcessEnv;
+  storePath?: string;
+  channel: string;
+  accountId: string;
+  kind: "channel" | "direct" | "group";
+  peerId: string;
+  threadId?: string;
+}): { sessionKey: string; sessionId: string } | undefined {
+  const identity = buildConversationIdentity({ ...params, deliveryTarget: params.peerId });
+  return identity ? resolveCurrentConversationSession(params, identity.conversationRef) : undefined;
 }
 
 /**
@@ -442,9 +478,10 @@ export async function patchSessionEntry(
       if (!patch) {
         return null;
       }
-      return preserveCoreRecoveryState(persistedEntry, projectPluginSessionEntryPatch(patch));
+      return preserveGenerationPrivateFields(persistedEntry, projectPluginSessionEntryPatch(patch));
     },
     {
+      assertCommitAllowed: params.assertCommitAllowed,
       fallbackEntry: params.fallbackEntry
         ? projectPluginSessionEntry(params.fallbackEntry)
         : undefined,
@@ -487,7 +524,7 @@ export async function updateSessionStoreEntry(
         return null;
       }
       const persistedEntry = internalEntry as InternalSessionEntry;
-      return preserveCoreRecoveryState(persistedEntry, projectPluginSessionEntryPatch(patch));
+      return preserveGenerationPrivateFields(persistedEntry, projectPluginSessionEntryPatch(patch));
     },
     {
       skipMaintenance: params.skipMaintenance,
@@ -505,7 +542,7 @@ export async function upsertSessionEntry(params: UpsertSessionEntryParams): Prom
     toSessionAccessScope(params),
     (internalEntry) => {
       const persistedEntry = internalEntry as InternalSessionEntry;
-      return preserveCoreRecoveryState(persistedEntry, publicEntry);
+      return preserveGenerationPrivateFields(persistedEntry, publicEntry);
     },
     { fallbackEntry: publicEntry, replaceEntry: true },
   );
@@ -516,7 +553,7 @@ export async function deleteSessionEntry(params: DeleteSessionEntryParams): Prom
   const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
   const storePath =
     params.storePath ??
-    resolveSessionStorePath(undefined, {
+    resolveSessionStorePathCore(undefined, {
       agentId,
       env: params.env,
     });
@@ -564,7 +601,7 @@ export async function cleanupSessionLifecycleArtifacts(
 ): Promise<SessionLifecycleArtifactsCleanupResult> {
   const storePath =
     params.storePath ??
-    resolveSessionStorePath(params.sessionStore, {
+    resolveSessionStorePathCore(params.sessionStore, {
       agentId: params.agentId,
       env: params.env,
     });
@@ -572,6 +609,7 @@ export async function cleanupSessionLifecycleArtifacts(
     storePath,
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
     archiveRemovedEntryTranscripts: params.archiveRemovedEntryTranscripts,
+    ...(params.pluginOwnerId !== undefined ? { pluginOwnerId: params.pluginOwnerId } : {}),
     sessionKeySegmentPrefix: params.sessionKeySegmentPrefix,
     transcriptContentMarker: params.transcriptContentMarker,
     orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,

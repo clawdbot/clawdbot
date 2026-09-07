@@ -6,9 +6,17 @@ import { resetLogger } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { runGuidedOnboarding, type GuidedOnboardingDeps } from "./onboard-guided.js";
+import {
+  runGuidedOnboarding as runGuidedOnboardingImpl,
+  type GuidedOnboardingDeps,
+} from "./onboard-guided.js";
+
+const runGuidedOnboarding = (...[opts, ...rest]: Parameters<typeof runGuidedOnboardingImpl>) =>
+  runGuidedOnboardingImpl({ agentName: "main", ...opts }, ...rest);
 
 const restoreTerminalState = vi.hoisted(() => vi.fn());
+const promptAuthChoiceGrouped = vi.hoisted(() => vi.fn(async () => "candidate:claude-cli"));
+vi.mock("./auth-choice-prompt.js", () => ({ promptAuthChoiceGrouped }));
 
 vi.mock("../../packages/terminal-core/src/restore.js", () => ({ restoreTerminalState }));
 
@@ -26,12 +34,25 @@ const readConfigFileSnapshot = vi.hoisted(() =>
     config: {},
   })),
 );
+const localOnboarding = vi.hoisted(() => ({
+  read: vi.fn(() => undefined),
+  readForConfig: vi.fn(() => undefined),
+  begin: vi.fn(),
+  complete: vi.fn(() => true),
+}));
 
 const logPathTracker = createSuiteLogPathTracker("openclaw-guided-onboard-memory-import-log-");
 
 vi.mock("../config/config.js", () => ({ readConfigFileSnapshot }));
+vi.mock("../state/local-onboarding-state.js", () => ({
+  readLocalOnboardingState: localOnboarding.read,
+  readLocalOnboardingStateForConfig: localOnboarding.readForConfig,
+  beginLocalOnboarding: localOnboarding.begin,
+  completeLocalOnboarding: localOnboarding.complete,
+}));
 vi.mock("./onboard-agent.js", () => ({
   ensureOnboardingAgent: async ({ config }: { config: OpenClawConfig }) => ({ config }),
+  validateFirstOnboardingAgentName: () => undefined,
 }));
 vi.mock("./onboard-helpers.js", () => ({
   DEFAULT_WORKSPACE: "/tmp/openclaw-workspace",
@@ -52,6 +73,8 @@ function setupApplyResult() {
     configHashBefore: null,
     configHashAfter: null,
     bootstrapPending: false,
+    workspaceReady: true,
+    gateway: { status: "ready" as const, action: "installed" as const },
     lines: [],
   };
 }
@@ -109,7 +132,6 @@ function setupDeps(params: {
       handedOff: false as const,
       reason: "timeout" as const,
     })),
-    probeBrowserHandoffGateway: vi.fn(async () => ({ ok: false as const })),
     runSystemAgentChat: vi.fn(async () => undefined),
     platform: "linux" as const,
   } satisfies GuidedOnboardingDeps;
@@ -121,7 +143,15 @@ describe("guided onboarding post-inference steps", () => {
   });
 
   beforeEach(() => {
+    localOnboarding.read.mockReset();
+    localOnboarding.read.mockReturnValue(undefined);
+    localOnboarding.readForConfig.mockReset();
+    localOnboarding.readForConfig.mockReturnValue(undefined);
+    localOnboarding.begin.mockReset();
+    localOnboarding.complete.mockReset();
+    localOnboarding.complete.mockReturnValue(true);
     restoreTerminalState.mockClear();
+    promptAuthChoiceGrouped.mockClear();
     readConfigFileSnapshot.mockReset();
     readConfigFileSnapshot.mockResolvedValue({
       exists: false,
@@ -141,7 +171,7 @@ describe("guided onboarding post-inference steps", () => {
     await logPathTracker.cleanup();
   });
 
-  it("auto-connects one credentialed candidate before any workspace prompt", async () => {
+  it("connects the selected candidate before any workspace prompt", async () => {
     const persistedConfig: OpenClawConfig = {
       agents: { defaults: { model: { primary: "claude-cli/opus" } } },
     };
@@ -195,10 +225,14 @@ describe("guided onboarding post-inference steps", () => {
         surface: "cli",
       }),
     );
+    expect(promptAuthChoiceGrouped.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.activate.mock.invocationCallOrder[0]!,
+    );
     expect(text).not.toHaveBeenCalled();
     expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
     expect(applySetup).toHaveBeenCalledWith(
       expect.objectContaining({ workspace: "/tmp/work", surface: "cli" }),
+      undefined,
     );
     expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
     expect(runAppRecommendations).toHaveBeenCalledWith({
@@ -219,9 +253,18 @@ describe("guided onboarding post-inference steps", () => {
     );
   });
 
-  it("offers memory import after successful inference using the persisted config", async () => {
-    const persistedConfig: OpenClawConfig = {
-      agents: { defaults: { workspace: "/tmp/persisted-workspace" } },
+  it("imports memories only after setup persists the selected agent workspace", async () => {
+    const inferenceConfig: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "claude-cli/opus" } } },
+    };
+    const appliedConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "claude-cli/opus" },
+          workspace: "/tmp/work",
+        },
+      },
+      gateway: { mode: "local" },
     };
     readConfigFileSnapshot
       .mockResolvedValueOnce({
@@ -236,7 +279,14 @@ describe("guided onboarding post-inference steps", () => {
         valid: true,
         path: "/tmp/openclaw.json",
         issues: [],
-        config: persistedConfig,
+        config: inferenceConfig,
+      })
+      .mockResolvedValueOnce({
+        exists: true,
+        valid: true,
+        path: "/tmp/openclaw.json",
+        issues: [],
+        config: appliedConfig,
       });
     const prompter = createWizardPrompter();
     const runSetupMemoryImportStep = vi.fn<
@@ -250,7 +300,10 @@ describe("guided onboarding post-inference steps", () => {
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
 
     expect(runSetupMemoryImportStep).toHaveBeenCalledWith(
-      expect.objectContaining({ config: persistedConfig, prompter }),
+      expect.objectContaining({ config: appliedConfig, prompter }),
+    );
+    expect(vi.mocked(deps.applySetup).mock.invocationCallOrder[0]).toBeLessThan(
+      runSetupMemoryImportStep.mock.invocationCallOrder[0]!,
     );
     const notes = (prompter.note as ReturnType<typeof vi.fn>).mock.calls;
     const appliedIndex = notes.findIndex((call) => call[1] === "Inference ready");

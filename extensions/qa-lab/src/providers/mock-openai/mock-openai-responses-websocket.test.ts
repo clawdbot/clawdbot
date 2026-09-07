@@ -4,6 +4,10 @@ import { WebSocket, type RawData } from "ws";
 import { startQaMockOpenAiServer } from "./server.js";
 
 const cleanups: Array<() => Promise<void>> = [];
+const QA_COMPACTION_RETRY_PROMPT =
+  "Compaction retry mutating tool check. Current durable context marker: QA-COMPACTION-DURABLE-MARKER. Create compaction-retry-summary.txt.";
+const QA_COMPACTION_SUMMARY_INSTRUCTIONS =
+  "You are a context summarization assistant. Produce a structured summary. Do not continue.";
 
 afterEach(async () => {
   while (cleanups.length > 0) {
@@ -155,6 +159,37 @@ describe("QA mock OpenAI Responses WebSocket", () => {
       toolOutput: "README: source and docs evidence captured",
       toolOutputCallId: toolCall?.call_id,
     });
+  });
+
+  it("preserves empty tool-result identity without replaying a native patch", async () => {
+    const server = await startServer();
+    const socket = await connectResponsesWebSocket(server.baseUrl);
+    const prompt =
+      "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.";
+    const initial = readCompletedResponse(
+      await collectResponseEvents(socket, {
+        type: "response.create",
+        tools: [{ type: "custom", name: "apply_patch" }],
+        input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
+      }),
+    );
+    const call = (initial.output as Array<Record<string, unknown>>)[0];
+    expect(call).toMatchObject({ type: "custom_tool_call", name: "apply_patch" });
+
+    const completed = readCompletedResponse(
+      await collectResponseEvents(socket, {
+        type: "response.create",
+        previous_response_id: initial.id,
+        input: [{ type: "custom_tool_call_output", call_id: call?.call_id, output: "" }],
+      }),
+    );
+
+    expect(completed.output).toEqual([expect.objectContaining({ type: "message" })]);
+    const debug = (await fetch(`${server.baseUrl}/debug/last-request`).then((response) =>
+      response.json(),
+    )) as Record<string, unknown>;
+    expect(debug).toMatchObject({ toolOutput: "", toolOutputCallId: call?.call_id });
+    expect(debug).not.toHaveProperty("plannedToolName");
   });
 
   it("rejects a response ID after a newer response replaces the connection cache", async () => {
@@ -329,6 +364,94 @@ describe("QA mock OpenAI Responses WebSocket", () => {
     )) as Array<Record<string, unknown>>;
     expect(requests).toHaveLength(2);
     expect(requests[1]).toMatchObject({ prompt, toolOutput: "QA mission loaded" });
+  });
+
+  it("preserves the coded compaction overflow on the WebSocket transport", async () => {
+    const server = await startServer();
+    const socket = await connectResponsesWebSocket(server.baseUrl);
+    const failure = await collectResponseEvents(socket, {
+      type: "response.create",
+      model: "gpt-5.6-sol",
+      stream: true,
+      instructions: "Runtime: codex | sessionId=compaction-websocket",
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: `${QA_COMPACTION_RETRY_PROMPT}\n${"x".repeat(300_000)}`,
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(failure).toEqual([
+      expect.objectContaining({
+        type: "error",
+        status: 400,
+        error: {
+          type: "invalid_request_error",
+          code: "context_length_exceeded",
+          message: "This model's maximum context length was exceeded.",
+        },
+      }),
+    ]);
+    const requests = (await fetch(`${server.baseUrl}/debug/requests`).then((response) =>
+      response.json(),
+    )) as Array<Record<string, unknown>>;
+    expect(requests).toEqual([
+      expect.objectContaining({
+        requestKind: "agent-initial",
+        outcome: "error",
+        errorCode: "context_length_exceeded",
+        rawByteLength: expect.any(Number),
+      }),
+    ]);
+  });
+
+  it.each([
+    {
+      faultMode: "empty-output-once",
+      marker: "QA-COMPACTION-EMPTY-OUTPUT-ONCE-websocket",
+      recoveredMarker: "QA-COMPACTION-EMPTY-RECOVERED-SUMMARY",
+    },
+    {
+      faultMode: "reasoning-only-output-once",
+      marker: "QA-COMPACTION-REASONING-ONLY-OUTPUT-ONCE-websocket",
+      recoveredMarker: "QA-COMPACTION-REASONING-RECOVERED-SUMMARY",
+    },
+  ] as const)("preserves $faultMode compaction recovery on WebSocket", async (testCase) => {
+    const server = await startServer();
+    const socket = await connectResponsesWebSocket(server.baseUrl);
+    const request = {
+      type: "response.create",
+      model: "gpt-5.6-sol",
+      stream: true,
+      instructions: QA_COMPACTION_SUMMARY_INSTRUCTIONS,
+      input: [
+        {
+          role: "user",
+          content: [
+            { type: "input_text", text: `<conversation>${testCase.marker}</conversation>` },
+          ],
+        },
+      ],
+    };
+
+    const first = readCompletedResponse(await collectResponseEvents(socket, request));
+    expect(JSON.stringify(first.output)).not.toContain(testCase.recoveredMarker);
+    const recovered = readCompletedResponse(await collectResponseEvents(socket, request));
+    expect(JSON.stringify(recovered.output)).toContain(testCase.recoveredMarker);
+
+    const requests = (await fetch(`${server.baseUrl}/debug/requests`).then((response) =>
+      response.json(),
+    )) as Array<Record<string, unknown>>;
+    expect(requests.map((entry) => entry.compactionSummaryFaultMode)).toEqual([
+      testCase.faultMode,
+      "none",
+    ]);
   });
 
   it("rejects a response delta whose previous response belongs to another connection", async () => {

@@ -19,6 +19,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readConfigFileSnapshot } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -30,7 +33,7 @@ import {
   UPDATE_EFFECTIVE_CHANNEL_ENV,
 } from "./update-channels.js";
 import {
-  POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
+  buildPostCoreHandoffEnv,
   type PreUpdateConfigRestoreInput,
 } from "./update-post-core-context.js";
 import type { UpdateRunResult } from "./update-runner.js";
@@ -45,6 +48,21 @@ import type { UpdateRunResult } from "./update-runner.js";
 const FINALIZE_PROCESS_TIMEOUT_FLOOR_MS = 30 * 60_000;
 const FINALIZE_PROCESS_STEP_BUDGET_MULTIPLIER = 6;
 
+export async function readPreUpdateConfigForPostCoreFinalize(): Promise<
+  PreUpdateConfigRestoreInput | undefined
+> {
+  const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
+  if (!snapshot.valid) {
+    return undefined;
+  }
+  return {
+    sourceConfig: snapshot.sourceConfig,
+    authoredConfig: isRecord(snapshot.parsed)
+      ? (snapshot.parsed as OpenClawConfig) // SAFETY: the valid snapshot supplies a parsed config object.
+      : snapshot.sourceConfig,
+  };
+}
+
 // Strip the running gateway's service identity from the finalizer child so it is
 // not mistaken for the managed service process (matches the CLI post-core spawn).
 // Also carry the effective update channel so convergence runs on the channel the
@@ -58,17 +76,15 @@ function buildFinalizeEnv(
   sourceConfigPath?: string,
   serviceRepairPolicy?: "external",
 ): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...baseEnv };
+  const env = buildPostCoreHandoffEnv({
+    baseEnv,
+    compatHostVersion,
+    sourceConfigPath,
+  });
   delete env.OPENCLAW_SERVICE_MARKER;
   delete env.OPENCLAW_SERVICE_KIND;
   delete env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
   env[UPDATE_EFFECTIVE_CHANNEL_ENV] = effectiveChannel;
-  if (compatHostVersion) {
-    env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatHostVersion;
-  }
-  if (sourceConfigPath) {
-    env[POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV] = sourceConfigPath;
-  }
   if (serviceRepairPolicy) {
     env.OPENCLAW_SERVICE_REPAIR_POLICY = serviceRepairPolicy;
   }
@@ -96,7 +112,7 @@ type PostCoreFinalizeSpawner = (params: {
 }) => Promise<FinalizeSpawnResult>;
 
 const defaultFinalizeSpawner: PostCoreFinalizeSpawner = async ({ argv, cwd, timeoutMs, env }) => {
-  const res = await runCommandWithTimeout(argv, { cwd, timeoutMs, env });
+  const res = await runCommandWithTimeout(argv, { baseEnv: {}, cwd, timeoutMs, env });
   return { code: res.code, ...(res.stderr ? { stderr: res.stderr } : {}) };
 };
 

@@ -12,7 +12,9 @@ scenario:
   gatewayConfigPatch:
     channels:
       slack:
-        botToken: xoxb-intentionally-invalid-lifecycle
+        accounts:
+          $selectedAccount:
+            botToken: xoxb-intentionally-invalid-lifecycle
         healthMonitor:
           enabled: true
   gatewayRuntime:
@@ -38,18 +40,14 @@ flow:
   steps:
     - name: reports blocked without restarting
       actions:
-        - call: waitForTransportReady
-          args: [{ ref: env }, 60000]
-        - call: env.gateway.call
-          saveAs: initialStatus
+        - call: waitForCondition
+          saveAs: initialAccount
           args:
-            - channels.status
-            - probe: false
-              timeoutMs: 10000
-            - timeoutMs: 15000
-        - set: initialAccount
-          value:
-            expr: "(initialStatus.channelAccounts?.slack ?? []).find((account) => account.accountId === 'default')"
+            - lambda:
+                async: true
+                expr: "((status) => { const account = (status.channelAccounts?.slack ?? []).find((candidate) => candidate.accountId === transport.accountId); return account?.lifecycle === 'blocked' && account?.healthState === 'blocked' ? account : undefined; })(await env.gateway.call('channels.status', { probe: false, timeoutMs: 10000 }, { timeoutMs: 15000 }))"
+            - 30000
+            - 250
         - assert:
             expr: "initialAccount?.lifecycle === 'blocked' && initialAccount?.healthState === 'blocked' && initialAccount?.running === true && initialAccount?.restartPending !== true && typeof initialAccount?.lastStartAt === 'number'"
             message:
@@ -66,7 +64,7 @@ flow:
             - timeoutMs: 15000
         - set: finalAccount
           value:
-            expr: "(finalStatus.channelAccounts?.slack ?? []).find((account) => account.accountId === 'default')"
+            expr: "(finalStatus.channelAccounts?.slack ?? []).find((account) => account.accountId === transport.accountId)"
         - assert:
             expr: "finalAccount?.lifecycle === 'blocked' && finalAccount?.healthState === 'blocked' && finalAccount?.running === true && finalAccount?.restartPending !== true && finalAccount?.lastStartAt === initialAccount.lastStartAt"
             message:

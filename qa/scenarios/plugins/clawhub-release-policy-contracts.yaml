@@ -1,0 +1,34 @@
+title: ClawHub release policy contracts
+
+scenario:
+  id: clawhub-release-policy-contracts
+  surface: clawhub
+  category: clawhub.publishing
+  coverage:
+    primary:
+      - clawhub.package-release-validation
+      - clawhub.version-bump-gates
+      - clawhub.npm-trusted-publishing-provenance
+      - clawhub.external-code-plugin-package-contract-required
+  objective: Verify the real OpenClaw ClawHub and npm release checks enforce publishable plugin identity, provenance, compatibility metadata, and version bumps.
+  successCriteria:
+    - Valid publishable metadata passes both release checks with the expected package name, version, and extension id.
+    - A noncanonical repository URL fails the npm trusted-publishing provenance gate.
+    - Missing plugin API compatibility or build-version metadata fails the external code plugin package contract.
+    - A committed source change without a version bump fails the ClawHub release check.
+    - The same source change passes after the package version and compatibility metadata are bumped and committed.
+  docsRefs:
+    - docs/plugins/building-plugins.md
+    - docs/plugins/community.md
+    - docs/help/testing-updates-plugins.md
+  codeRefs:
+    - scripts/plugin-clawhub-release-check.ts
+    - scripts/plugin-npm-release-check.ts
+    - scripts/lib/plugin-clawhub-release.ts
+    - scripts/lib/plugin-npm-release.ts
+    - packages/plugin-package-contract/src/index.ts
+    - test/e2e/qa-lab/plugins/clawhub-release-policy-contracts.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/plugins/clawhub-release-policy-contracts.e2e.test.ts
+    summary: Execute the real ClawHub and npm release-check scripts against valid and invalid temporary git plugin packages.

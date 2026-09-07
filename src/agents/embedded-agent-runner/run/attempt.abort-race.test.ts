@@ -1,5 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { buildAgentRunTerminalOutcomeFromAttempt } from "../../agent-run-terminal-outcome.js";
+import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
 import {
   cleanupTempPaths,
   createContextEngineAttemptRunner,
@@ -7,7 +9,7 @@ import {
   getHoisted,
   preloadRunEmbeddedAttemptForTests,
   resetEmbeddedAttemptHarness,
-} from "./attempt.spawn-workspace.test-support.js";
+} from "./attempt-spawn-workspace.test-support.js";
 
 const hoisted = getHoisted();
 const tempPaths: string[] = [];
@@ -26,43 +28,50 @@ describe("runEmbeddedAttempt abort races", () => {
     tempPaths.length = 0;
   });
 
-  it("stops before session creation when aborted during eager lock acquisition", async () => {
-    const abortController = new AbortController();
-    const prompt = vi.fn(async () => {});
-    const abortError = new Error("stopped during lock acquisition");
-    abortError.name = "AbortError";
-    let markLockRequested!: () => void;
-    let observedSignal: AbortSignal | undefined;
-    const lockRequested = new Promise<void>((resolve) => {
-      markLockRequested = resolve;
-    });
-    hoisted.acquireSessionWriteLockMock.mockImplementationOnce(async (params) => {
-      observedSignal = params.signal;
-      markLockRequested();
-      await new Promise<void>((resolve) => {
-        params.signal?.addEventListener("abort", () => resolve(), { once: true });
+  it.each([false, true])(
+    "bounds registered one-shot cleanup after a completed turn (fails=%s)",
+    async (fails) => {
+      const held = createDeferred();
+      const started = createDeferred();
+      const cleanupScope = createAgentCleanupScope();
+      hoisted.createOpenClawCodingToolsMock.mockImplementation((options: unknown) => {
+        (
+          options as { registerRunCleanup: (cleanup: () => Promise<void>) => void }
+        ).registerRunCleanup(async () => {
+          started.resolve();
+          await held.promise;
+          if (fails) {
+            throw new Error("registered resource teardown failed");
+          }
+        });
+        return [];
       });
-      throw params.signal?.reason;
-    });
-
-    const attempt = createContextEngineAttemptRunner({
-      contextEngine: createContextEngineBootstrapAndAssemble(),
-      sessionKey: "agent:main:telegram:direct:123",
-      tempPaths,
-      sessionPrompt: prompt,
-      attemptOverrides: {
-        abortSignal: abortController.signal,
-      },
-    });
-    await lockRequested;
-    abortController.abort(abortError);
-
-    await expect(attempt).rejects.toBe(abortError);
-
-    expect(hoisted.createAgentSessionMock).not.toHaveBeenCalled();
-    expect(prompt).not.toHaveBeenCalled();
-    expect(observedSignal).toBe(abortController.signal);
-  });
+      const attempt = cleanupScope.run(() =>
+        createContextEngineAttemptRunner({
+          contextEngine: createContextEngineBootstrapAndAssemble(),
+          sessionKey: "agent:main:triage:cleanup",
+          tempPaths,
+          sessionPrompt: async () => {
+            vi.useFakeTimers();
+          },
+          attemptOverrides: { oneShotCliRun: true, disableTools: false },
+        }),
+      );
+      try {
+        await started.promise;
+        if (fails) {
+          held.resolve();
+        }
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(cleanupScope.outcome).toBe("uncertain");
+        expect((await attempt).terminal).toEqual({ kind: "ok" });
+      } finally {
+        held.resolve();
+        await attempt;
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("preserves a run-budget timeout when abort blocks prompt submission", async () => {
     let releasePendingEvents!: () => void;

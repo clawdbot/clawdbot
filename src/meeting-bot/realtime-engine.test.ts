@@ -5,16 +5,22 @@ import type {
   RealtimeVoiceBridgeCreateRequest,
 } from "../talk/provider-types.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
-import { startMeetingRealtimeEngine } from "./realtime-engine.js";
+import {
+  startMeetingRealtimeEngine,
+  type MeetingRealtimeToolCallParams,
+} from "./realtime-engine.js";
 
 type PendingWrite = {
   resolve: () => void;
 };
 
-async function createEngineFixture() {
+async function createEngineFixture(options?: {
+  handleToolCall?: (params: MeetingRealtimeToolCallParams) => Promise<void>;
+}) {
   let callbacks: RealtimeVoiceBridgeCreateRequest | undefined;
   let onHumanBargeIn: ((audio: Buffer) => boolean) | undefined;
   const handleBargeIn = vi.fn();
+  const submitToolResult = vi.fn();
   const bridge: RealtimeVoiceBridge = {
     acknowledgeMark: vi.fn(),
     close: vi.fn(),
@@ -23,7 +29,7 @@ async function createEngineFixture() {
     isConnected: vi.fn(() => true),
     sendAudio: vi.fn(),
     setMediaTimestamp: vi.fn(),
-    submitToolResult: vi.fn(),
+    submitToolResult,
   };
   const provider: RealtimeVoiceProviderPlugin = {
     id: "test",
@@ -66,7 +72,7 @@ async function createEngineFixture() {
     },
     consultAgent: vi.fn(async () => ({ text: "unused" })),
     fullConfig: {} as never,
-    handleToolCall: vi.fn(async () => {}),
+    handleToolCall: options?.handleToolCall ?? vi.fn(async () => {}),
     logger: {
       debug: vi.fn(),
       error: vi.fn(),
@@ -94,6 +100,7 @@ async function createEngineFixture() {
     clearOutput,
     handle,
     handleBargeIn,
+    submitToolResult,
     releaseWrite(index: number) {
       const pending = pendingWrites[index];
       if (!pending) {
@@ -127,6 +134,183 @@ async function createEngineFixture() {
 }
 
 describe("meeting realtime engine output ownership", () => {
+  it.each([
+    [{ status: "completed" as const, responseId: "response-1" }, "turn.ended"],
+    [
+      { status: "failed" as const, responseId: "response-1", message: "provider failed" },
+      "turn.ended",
+    ],
+    [
+      {
+        status: "incomplete" as const,
+        responseId: "response-1",
+        reason: "max_output_tokens",
+        message: "provider response incomplete",
+      },
+      "turn.ended",
+    ],
+    [
+      { status: "cancelled" as const, responseId: "response-1", reason: "client_cancelled" },
+      "turn.cancelled",
+    ],
+  ])("finishes each response once and accepts a later response", async (outcome, terminalType) => {
+    const fixture = await createEngineFixture();
+    try {
+      fixture.callbacks.onTranscript?.("user", "first turn", true);
+      fixture.announceOutputResponse("response-1");
+      fixture.sendOutputAudio(Buffer.from([1]), "response-1");
+      await vi.waitFor(() => expect(fixture.writeOutput).toHaveBeenCalledTimes(1));
+      fixture.callbacks.onResponseDone?.(outcome);
+      fixture.callbacks.onEvent?.({
+        direction: "server",
+        responseId: outcome.responseId,
+        type: "response.done",
+      });
+
+      const firstEvents = fixture.handle.getHealth().recentTalkEvents;
+      expect(firstEvents.filter((event) => event.type === terminalType)).toHaveLength(1);
+      expect(firstEvents.filter((event) => event.type === "output.audio.done")).toHaveLength(1);
+      expect(firstEvents.filter((event) => event.type === "session.error")).toHaveLength(
+        outcome.status === "failed" || outcome.status === "incomplete" ? 1 : 0,
+      );
+      expect(fixture.handle.getHealth().bridgeClosed).toBe(false);
+
+      fixture.releaseWrite(0);
+      fixture.callbacks.onTranscript?.("user", "later turn", true);
+      fixture.announceOutputResponse("response-2");
+      fixture.sendOutputAudio(Buffer.from([2]), "response-2");
+      await vi.waitFor(() => expect(fixture.writeOutput).toHaveBeenCalledTimes(2));
+      fixture.callbacks.onResponseDone?.({ status: "completed", responseId: "response-2" });
+      fixture.callbacks.onEvent?.({
+        direction: "server",
+        responseId: "response-2",
+        type: "response.done",
+      });
+
+      const finalEvents = fixture.handle.getHealth().recentTalkEvents;
+      expect(
+        finalEvents.filter(
+          (event) => event.type === "turn.ended" || event.type === "turn.cancelled",
+        ),
+      ).toHaveLength(2);
+      expect(finalEvents.filter((event) => event.type === "output.audio.done")).toHaveLength(2);
+      fixture.releaseWrite(1);
+    } finally {
+      await fixture.handle.stop();
+    }
+  });
+
+  it("rearms continuity reset when the provider creates a fresh session before ready", async () => {
+    const fixture = await createEngineFixture();
+    try {
+      fixture.callbacks.onEvent?.({
+        direction: "client",
+        type: "session.continuity.reset",
+      });
+      fixture.callbacks.onEvent?.({
+        direction: "client",
+        type: "session.continuity.reset",
+      });
+      await vi.waitFor(() => {
+        expect(fixture.clearOutput).toHaveBeenCalledOnce();
+      });
+
+      fixture.callbacks.onEvent?.({
+        direction: "server",
+        type: "session.created",
+      });
+      fixture.callbacks.onEvent?.({
+        direction: "client",
+        type: "session.continuity.reset",
+      });
+      await vi.waitFor(() => {
+        expect(fixture.clearOutput).toHaveBeenCalledTimes(2);
+      });
+    } finally {
+      await fixture.handle.stop();
+    }
+  });
+
+  it("resets provider continuity without replaying old output or tool work", async () => {
+    let releaseTool: (() => void) | undefined;
+    const toolGate = new Promise<void>((resolve) => {
+      releaseTool = resolve;
+    });
+    const fixture = await createEngineFixture({
+      handleToolCall: async ({ session, event, onTalkEvent }) => {
+        await toolGate;
+        await session.submitToolResult(event.callId, { text: "stale result" });
+        onTalkEvent({
+          type: "tool.result",
+          callId: event.callId,
+          payload: { name: event.name },
+          final: true,
+        });
+      },
+    });
+    try {
+      const active = Buffer.from([1]);
+      const stale = Buffer.from([2]);
+      const fresh = Buffer.from([3]);
+      fixture.callbacks.onReady?.();
+      fixture.callbacks.onTranscript?.("user", "old turn", true);
+      fixture.sendOutputAudio(active, "response-1");
+      await vi.waitFor(() => {
+        expect(fixture.writeOutput).toHaveBeenCalledOnce();
+      });
+      fixture.sendOutputAudio(stale, "response-1");
+      fixture.callbacks.onToolCall?.({
+        itemId: "item-old",
+        callId: "call-old",
+        name: "openclaw_agent_consult",
+        args: { question: "old work" },
+      });
+
+      fixture.callbacks.onEvent?.({
+        direction: "client",
+        type: "session.continuity.reset",
+      });
+      fixture.callbacks.onEvent?.({
+        direction: "client",
+        type: "session.continuity.reset",
+      });
+
+      await vi.waitFor(() => {
+        expect(fixture.clearOutput).toHaveBeenCalledOnce();
+      });
+      expect(fixture.handleBargeIn).not.toHaveBeenCalled();
+      expect(
+        fixture.handle
+          .getHealth()
+          .recentTalkEvents.filter((event) => event.type === "turn.cancelled"),
+      ).toHaveLength(1);
+
+      releaseTool?.();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(fixture.submitToolResult).not.toHaveBeenCalled();
+      expect(
+        fixture.handle.getHealth().recentTalkEvents.some((event) => event.type === "tool.result"),
+      ).toBe(false);
+
+      fixture.releaseWrite(0);
+      await vi.waitFor(() => {
+        expect(fixture.clearOutput).toHaveBeenCalledTimes(2);
+      });
+      expect(fixture.writeOutput).not.toHaveBeenCalledWith(stale);
+
+      fixture.callbacks.onReady?.();
+      fixture.sendOutputAudio(fresh, "response-1");
+      await vi.waitFor(() => {
+        expect(fixture.writeOutput).toHaveBeenCalledTimes(2);
+      });
+      expect(fixture.writeOutput).toHaveBeenLastCalledWith(fresh);
+      fixture.releaseWrite(1);
+    } finally {
+      await fixture.handle.stop();
+    }
+  });
+
   it("serializes transport writes and coalesces queued 20 ms frames", async () => {
     const fixture = await createEngineFixture();
     try {

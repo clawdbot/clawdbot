@@ -3,6 +3,7 @@ type BoundedSerialQueueAdmission<T> =
   | { accepted: false; reason: "capacity" | "overflow" | "sealed" };
 
 type BoundedSerialQueueTask = {
+  sequence: number;
   weight: number;
   run: () => unknown;
   resolve: (value: unknown) => void;
@@ -21,6 +22,8 @@ export class BoundedSerialQueue {
   private active = false;
   private sealed = false;
   private overflowed = false;
+  private acceptedSequence = 0;
+  private firstFailure?: { sequence: number; error: unknown };
   private settledPrefix: Promise<void> = Promise.resolve();
 
   constructor(
@@ -76,6 +79,7 @@ export class BoundedSerialQueue {
       reject = fail;
     });
     const task: BoundedSerialQueueTask = {
+      sequence: ++this.acceptedSequence,
       weight,
       run,
       resolve: (value) => resolve(value as T),
@@ -104,9 +108,19 @@ export class BoundedSerialQueue {
    *
    * Later admissions do not extend this barrier, which keeps consult flushes
    * finite while close can seal first to drain the entire accepted prefix.
+   * Success checks exclude later tasks that fail before this barrier resumes.
    */
-  flush(): Promise<void> {
-    return this.settledPrefix;
+  flush(options: { requireSuccess?: boolean } = {}): Promise<void> {
+    const prefix = this.settledPrefix;
+    const sequence = this.acceptedSequence;
+    if (options.requireSuccess !== true) {
+      return prefix;
+    }
+    return prefix.then(() => {
+      if (this.firstFailure && this.firstFailure.sequence <= sequence) {
+        throw this.firstFailure.error;
+      }
+    });
   }
 
   private startTask(task: BoundedSerialQueueTask): void {
@@ -117,6 +131,7 @@ export class BoundedSerialQueue {
     try {
       task.resolve(await task.run());
     } catch (error) {
+      this.firstFailure ??= { sequence: task.sequence, error };
       task.reject(error);
     } finally {
       const next = this.pending.shift();

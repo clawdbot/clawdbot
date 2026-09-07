@@ -5,6 +5,7 @@ import {
   findNormalizedProviderKey,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { resolvePrimaryStringValue } from "../../packages/normalization-core/src/string-coerce.js";
 import { ensureStaticModelAllowlistEntry } from "../agents/model-allowlist-entry.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
@@ -40,7 +41,7 @@ const LEGACY_OPENCODE_ZEN_DEFAULT_MODELS = new Set([
 ]);
 
 /** Current OpenCode Zen default model ref used by onboarding and repair flows. */
-export const OPENCODE_ZEN_DEFAULT_MODEL = "opencode/claude-opus-4-6";
+export const OPENCODE_ZEN_DEFAULT_MODEL = "opencode/claude-opus-5";
 
 /** Pair of preset appliers exposed by provider setup modules. */
 export type ProviderOnboardPresetAppliers<TArgs extends unknown[]> = {
@@ -266,10 +267,35 @@ export function withAgentModelAliases(
   return next;
 }
 
+/** Build alias-only onboarding appliers without mutating provider catalog config. */
+export function createAliasOnlyPresetAppliers(params: {
+  modelRef: string;
+  alias: string;
+}): ProviderOnboardPresetAppliers<[]> {
+  const applyProviderConfig = (cfg: OpenClawConfig): OpenClawConfig => {
+    const models = { ...cfg.agents?.defaults?.models };
+    models[params.modelRef] = {
+      ...models[params.modelRef],
+      alias: models[params.modelRef]?.alias ?? params.alias,
+    };
+    return {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        defaults: { ...cfg.agents?.defaults, models },
+      },
+    };
+  };
+  return {
+    applyProviderConfig,
+    applyConfig: (cfg) => applyAgentDefaultModelPrimary(applyProviderConfig(cfg), params.modelRef),
+  };
+}
+
 function isMergeableProviderConfig(
   value: ModelProviderConfig | undefined,
 ): value is ModelProviderConfig {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+  return isRecord(value);
 }
 
 function mergeOnboardProviderRequest(

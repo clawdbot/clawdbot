@@ -23,6 +23,7 @@
  */
 
 import type { MdAst } from "./ast.js";
+import { formatFrontmatterValue } from "./frontmatter-format.js";
 import { guardSentinel } from "./sentinel.js";
 
 /**
@@ -112,17 +113,6 @@ export function emitMd(ast: MdAst, opts: EmitOptions = {}): string {
   }
 
   return parts.join("\n");
-}
-
-function formatFrontmatterValue(value: string): string {
-  // Frontmatter is yaml-ish; quote values with structural chars.
-  if (value.length === 0) {
-    return '""';
-  }
-  if (/[:#&*?|<>=!%@`,[\]{}\r\n]/.test(value)) {
-    return JSON.stringify(value);
-  }
-  return value;
 }
 
 // Re-export the frontmatter type for convenience so tests don't need

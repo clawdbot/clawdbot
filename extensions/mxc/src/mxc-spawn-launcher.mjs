@@ -35,9 +35,9 @@ export function forwardSignals(spawned, options = {}) {
     if (exitTimer) {
       return;
     }
-    const setTimeoutFn = options.setTimeout ?? setTimeout;
+    const setTimeoutFn = options.setTimeout?.bind(undefined) ?? setTimeout;
     exitTimer = setTimeoutFn(() => {
-      const exit = options.exit ?? process.exit;
+      const exit = options.exit?.bind(undefined) ?? ((code) => process.exit(code));
       exit(signalExitCode(signal));
     }, exitGraceMs);
     exitTimer?.unref?.();
@@ -86,9 +86,35 @@ function bridgeChildProcess(child) {
 
 export function exitOnChildProcessClose(child, options = {}) {
   child.on("close", (exitCode, signal) => {
-    const exit = options.exit ?? process.exit;
+    const exit = options.exit?.bind(undefined) ?? ((code) => process.exit(code));
     exit(typeof exitCode === "number" ? exitCode : signalExitCode(signal));
   });
+}
+
+function attachPtyProcess(spawned) {
+  bridgeStdio(spawned);
+  forwardSignals(spawned);
+  spawned.onExit(({ exitCode, signal }) => {
+    process.exit(typeof exitCode === "number" ? exitCode : signalExitCode(signal));
+  });
+}
+
+function attachChildProcess(spawned) {
+  bridgeChildProcess(spawned);
+  forwardSignals(spawned);
+  exitOnChildProcessClose(spawned);
+}
+
+export async function launchSandbox(spawnSandboxFromConfig, config, options, bridges = {}) {
+  // Normalize sync and Promise-returning SDK implementations before selecting an I/O bridge.
+  const spawned = await spawnSandboxFromConfig(config, options ?? {});
+
+  if (typeof spawned.onData === "function") {
+    (bridges.pty ?? attachPtyProcess)(spawned);
+    return;
+  }
+
+  (bridges.child ?? attachChildProcess)(spawned);
 }
 
 const SIGNAL_NUMBERS = new Map([
@@ -123,20 +149,7 @@ export async function main() {
   try {
     const { config, options } = decodePayload(process.argv.slice(2));
     const { spawnSandboxFromConfig } = await import("@microsoft/mxc-sdk");
-    const spawned = await spawnSandboxFromConfig(config, options ?? {});
-
-    if (typeof spawned.onData === "function") {
-      bridgeStdio(spawned);
-      forwardSignals(spawned);
-      spawned.onExit(({ exitCode, signal }) => {
-        process.exit(typeof exitCode === "number" ? exitCode : signalExitCode(signal));
-      });
-      return;
-    }
-
-    bridgeChildProcess(spawned);
-    forwardSignals(spawned);
-    exitOnChildProcessClose(spawned);
+    await launchSandbox(spawnSandboxFromConfig, config, options);
   } catch (error) {
     process.stderr.write(`${formatErrorStack(error)}\n`);
     process.exit(127);

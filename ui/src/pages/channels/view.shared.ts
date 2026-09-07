@@ -1,9 +1,12 @@
 // Channels page shared view helpers.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import type { ChannelAccountSnapshot } from "../../api/types.ts";
+import { icons } from "../../components/icons.ts";
 import { renderSettingsSection, renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { channelSnapshotEntryIsActive } from "../../lib/channels/index.ts";
+import { channelSnapshotEntryIsActive, resolveChannelAccounts } from "../../lib/channels/index.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import type { ChannelKey, ChannelsProps } from "./view.types.ts";
 
@@ -28,16 +31,20 @@ function resolveChannelStatus(
   key: ChannelKey,
   props: ChannelsProps,
 ): Record<string, unknown> | undefined {
-  const channels = props.snapshot?.channels as Record<string, unknown> | null;
-  return channels?.[key] as Record<string, unknown> | undefined;
+  const channels = props.snapshot?.channels;
+  return channels && Object.hasOwn(channels, key)
+    ? (asNullableRecord(channels[key]) ?? undefined)
+    : undefined;
 }
 
 function resolveDefaultChannelAccount(
   key: ChannelKey,
   props: ChannelsProps,
 ): ChannelAccountSnapshot | null {
-  const accounts = props.snapshot?.channelAccounts?.[key] ?? [];
-  const defaultAccountId = props.snapshot?.channelDefaultAccountId?.[key];
+  const accounts = resolveChannelAccounts(props.snapshot?.channelAccounts, key);
+  const defaultAccountIds = props.snapshot?.channelDefaultAccountId;
+  const defaultAccountId =
+    defaultAccountIds && Object.hasOwn(defaultAccountIds, key) ? defaultAccountIds[key] : undefined;
   return (
     (defaultAccountId
       ? accounts.find((account) => account.accountId === defaultAccountId)
@@ -99,9 +106,11 @@ export function renderChannelFacts(rows: readonly ChannelStatusRow[]) {
         (row) => html`
           <dt>${row.label}</dt>
           <dd>
-            ${row.kind !== undefined
-              ? renderSettingsStatus({ kind: row.kind, label: row.value })
-              : row.value}
+            ${
+              row.kind !== undefined
+                ? renderSettingsStatus({ kind: row.kind, label: row.value })
+                : row.value
+            }
           </dd>
         `,
       )}
@@ -117,7 +126,7 @@ export function renderChannelErrorRow(message: unknown) {
         <span class="settings-row__title"
           >${renderSettingsStatus({ kind: "danger", label: t("channels.lastError") })}</span
         >
-        <span class="settings-row__desc">${message}</span>
+        <span class="settings-row__desc">${formatUiError(message)}</span>
       </div>
     </div>
   `;
@@ -129,7 +138,9 @@ export function renderChannelProbeRow(probe: {
   status?: number | string | null;
   error?: string | null;
 }) {
-  const detail = [probe.status ?? "", probe.error ?? ""].filter(Boolean).join(" ");
+  const detail = formatUiExternalText(
+    [probe.status ?? "", probe.error ?? ""].filter(Boolean).join(" "),
+  );
   return html`
     <div class="settings-row">
       <div class="settings-row__text">
@@ -154,6 +165,27 @@ export function renderChannelActionRow(actions: unknown) {
   `;
 }
 
+export function renderChannelRefreshAction(params: {
+  updatedAt?: number | null;
+  disabled: boolean;
+  onRefresh: () => void;
+}) {
+  const updatedLabel = params.updatedAt
+    ? t("channels.hub.updatedAgo", { ago: formatRelativeTimestamp(params.updatedAt) })
+    : t("common.na");
+  return html`<openclaw-tooltip .content=${updatedLabel}>
+    <button
+      type="button"
+      class="btn btn--xs btn--icon"
+      aria-label=${t("common.refresh")}
+      ?disabled=${params.disabled}
+      @click=${params.onRefresh}
+    >
+      ${icons.refresh}
+    </button>
+  </openclaw-tooltip>`;
+}
+
 /** One account inside a multi-account channel group. */
 export function renderChannelAccountRow(params: {
   title: unknown;
@@ -169,16 +201,20 @@ export function renderChannelAccountRow(params: {
       <div class="settings-row__text">
         <span class="settings-row__title">${params.title}</span>
         <span class="settings-row__desc">${factLine}</span>
-        ${params.lastError
-          ? html`<span class="settings-row__desc">${params.lastError}</span>`
-          : nothing}
+        ${
+          params.lastError
+            ? html`<span class="settings-row__desc"
+                >${formatUiExternalText(params.lastError)}</span
+              >`
+            : nothing
+        }
       </div>
       <div class="settings-row__control">
         ${renderSettingsStatus(params.status)}
         <span class="settings-row__value"
-          >${params.lastInboundAt
-            ? formatRelativeTimestamp(params.lastInboundAt)
-            : t("common.na")}</span
+          >${
+            params.lastInboundAt ? formatRelativeTimestamp(params.lastInboundAt) : t("common.na")
+          }</span
         >
       </div>
     </div>
@@ -219,18 +255,11 @@ export function renderSingleAccountChannelCard(params: {
   );
 }
 
-function getChannelAccountCount(
-  key: ChannelKey,
-  channelAccounts?: Record<string, ChannelAccountSnapshot[]> | null,
-): number {
-  return channelAccounts?.[key]?.length ?? 0;
-}
-
 /** Multi-account channels surface the account count next to the heading. */
 export function resolveChannelAccountCount(
   key: ChannelKey,
   channelAccounts?: Record<string, ChannelAccountSnapshot[]> | null,
 ): number | undefined {
-  const count = getChannelAccountCount(key, channelAccounts);
+  const count = resolveChannelAccounts(channelAccounts, key).length;
   return count >= 2 ? count : undefined;
 }

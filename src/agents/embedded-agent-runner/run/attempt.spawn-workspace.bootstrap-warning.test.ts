@@ -1,12 +1,12 @@
 // Coverage for bootstrap warning text in system prompt assembly.
 import { describe, expect, it } from "vitest";
+import { buildBootstrapPromptWarning } from "../../bootstrap-budget-warning.js";
 import {
   analyzeBootstrapBudget,
   buildBootstrapPromptWarningNotice,
   buildBootstrapInjectionStats,
-  buildBootstrapPromptWarning,
 } from "../../bootstrap-budget.js";
-import { composeSystemPromptWithHookContext } from "./attempt.thread-helpers.js";
+import { composeSystemPromptWithHookContext } from "./attempt-thread-helpers.js";
 
 describe("runEmbeddedAttempt bootstrap warning prompt assembly", () => {
   it("keeps bootstrap warnings in system context without raw diagnostics", () => {
@@ -22,7 +22,9 @@ describe("runEmbeddedAttempt bootstrap warning prompt assembly", () => {
             missing: false,
           },
         ],
-        injectedFiles: [{ path: "AGENTS.md", content: "A".repeat(20) }],
+        injectedFiles: [
+          { path: "/tmp/openclaw-warning-workspace/AGENTS.md", content: "A".repeat(20) },
+        ],
       }),
       bootstrapMaxChars: 50,
       bootstrapTotalMaxChars: 50,

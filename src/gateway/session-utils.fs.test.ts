@@ -1,21 +1,27 @@
-// Session filesystem utility tests cover transcript reading, usage extraction,
-// preview rows, message counts, title fields, and archive candidate resolution.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  estimateStringChars,
+  estimateTokensFromChars,
+} from "@openclaw/normalization-core/cjk-chars";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+// Session filesystem utility tests cover transcript reading, usage extraction,
+// preview rows, message counts, title fields, and archive candidate resolution.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import {
   createFileBackedSessionManagerForTest,
   openFileBackedSessionManagerForTest,
 } from "../../test/helpers/session-manager-file-fixture.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
-import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
+import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {
   ArchivedTranscriptReader,
   buildSessionPreviewItems,
-  readLatestSessionUsageFromTranscriptAsync,
+  readLatestSessionUsageFromTranscriptFileAsync,
   resolveSessionTranscriptCandidates,
   type ReadRecentSessionMessagesOptions,
   type ReadSessionMessagesAsyncOptions,
@@ -219,12 +225,7 @@ function appendBlockedUserMessage(
   return messageId;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function expectMessageContents(messages: unknown[], expected: unknown[]) {
   expect(messages.map((message) => requireRecord(message, "message").content)).toEqual(expected);
@@ -460,31 +461,149 @@ describe("readSessionMessages", () => {
     }
   });
 
-  test("applies reset kept-tail projection to file-backed history", async () => {
-    const sessionId = "test-session-reset-boundary";
-    writeTranscript(tmpDir, sessionId, [
-      { type: "session", version: 3, id: sessionId },
-      createTranscriptMessage("old", null, "user", "old"),
-      createTranscriptMessage("kept-user", "old", "user", "kept question"),
-      createTranscriptMessage("kept-tool", "kept-user", "toolResult", "hidden tool"),
-      createTranscriptMessage("kept-assistant", "kept-tool", "assistant", "kept answer"),
-      {
-        type: "reset",
-        id: "reset-boundary",
-        parentId: "kept-assistant",
-        timestamp: "2026-07-22T00:00:00.000Z",
-        reason: "new",
-        firstKeptEntryId: "kept-user",
-      },
-      createTranscriptMessage("post-reset", "reset-boundary", "user", "new turn"),
-    ]);
+  test.each([
+    {
+      name: "keeps the reset marker first when no earlier entries survive",
+      sessionId: "test-session-reset-no-kept",
+      entries: (sessionId: string) => [
+        { type: "session", version: 3, id: sessionId },
+        createTranscriptMessage("old", null, "user", "old"),
+        {
+          type: "reset",
+          id: "reset-boundary",
+          parentId: "old",
+          timestamp: "2026-07-22T00:00:00.000Z",
+          reason: "reset",
+        },
+        createTranscriptMessage("post-reset", "reset-boundary", "user", "new turn"),
+      ],
+      expected: ["reset", "new turn"],
+    },
+    {
+      name: "places the reset marker between retained and new turns",
+      sessionId: "test-session-reset-kept-tail",
+      entries: (sessionId: string) => [
+        { type: "session", version: 3, id: sessionId },
+        createTranscriptMessage("old", null, "user", "old"),
+        createTranscriptMessage("kept-user", "old", "user", "kept question"),
+        createTranscriptMessage("kept-tool", "kept-user", "toolResult", "hidden tool"),
+        createTranscriptMessage("kept-assistant", "kept-tool", "assistant", "kept answer"),
+        {
+          type: "reset",
+          id: "reset-boundary",
+          parentId: "kept-assistant",
+          timestamp: "2026-07-22T00:00:00.000Z",
+          reason: "new",
+          firstKeptEntryId: "kept-user",
+        },
+        createTranscriptMessage("post-reset", "reset-boundary", "user", "new turn"),
+      ],
+      expected: ["kept question", "kept answer", "reset", "new turn"],
+    },
+    {
+      name: "drops an earlier compaction marker at a later reset boundary",
+      sessionId: "test-session-compaction-then-reset",
+      entries: (sessionId: string) => [
+        { type: "session", version: 3, id: sessionId },
+        createTranscriptMessage("old", null, "user", "old"),
+        {
+          type: "compaction",
+          id: "compaction-before-reset",
+          timestamp: "2026-07-22T00:00:00.000Z",
+        },
+        {
+          type: "reset",
+          id: "reset-boundary",
+          parentId: "compaction-before-reset",
+          timestamp: "2026-07-22T00:01:00.000Z",
+          reason: "reset",
+        },
+        createTranscriptMessage("post-reset", "reset-boundary", "assistant", "new answer"),
+      ],
+      expected: ["reset", "new answer"],
+    },
+    {
+      name: "preserves reset then compaction marker order",
+      sessionId: "test-session-reset-then-compaction",
+      entries: (sessionId: string) => [
+        { type: "session", version: 3, id: sessionId },
+        {
+          type: "reset",
+          id: "reset-boundary",
+          parentId: null,
+          timestamp: "2026-07-22T00:00:00.000Z",
+          reason: "reset",
+        },
+        createTranscriptMessage("post-reset", "reset-boundary", "user", "new turn"),
+        {
+          type: "compaction",
+          id: "compaction-after-reset",
+          parentId: "post-reset",
+          timestamp: "2026-07-22T00:01:00.000Z",
+        },
+        createTranscriptMessage(
+          "post-compaction",
+          "compaction-after-reset",
+          "assistant",
+          "new answer",
+        ),
+      ],
+      expected: ["reset", "new turn", "compaction", "new answer"],
+    },
+  ])("$name", async ({ sessionId, entries, expected }) => {
+    writeTranscript(tmpDir, sessionId, entries(sessionId));
 
-    const messages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
+    const project = (messages: unknown[]) =>
+      messages.map((message) => {
+        const record = message as { content?: unknown; __openclaw?: { kind?: string } };
+        return record["__openclaw"]?.kind ?? record.content;
+      });
+    const full = await readSessionMessagesAsync(sessionId, storePath, undefined, {
       mode: "full",
       reason: "test reset boundary",
     });
+    const recent = await readRecentSessionMessagesWithStatsAsync(sessionId, storePath, undefined, {
+      maxMessages: 10,
+      maxBytes: 16_384,
+    });
 
-    expectMessageContents(messages, ["kept question", "kept answer", "new turn"]);
+    expect(project(full)).toEqual(expected);
+    expect(project(recent.messages)).toEqual(expected);
+  });
+
+  test("keeps reset markers reachable through pagination", async () => {
+    const sessionId = "paginated-branch-with-reset";
+    const sessionFile = writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      createTranscriptMessage("old-user", null, "user", "old prompt"),
+      {
+        type: "reset",
+        id: "reset-1",
+        parentId: "old-user",
+        timestamp: "2026-07-22T00:00:00.000Z",
+        reason: "reset",
+      },
+      createTranscriptMessage("active-user", "reset-1", "user", "active prompt"),
+      createTranscriptMessage("active-assistant", "active-user", "assistant", "active answer"),
+    ]);
+    const newest = await readSessionMessagesPageWithStatsAsync(sessionId, storePath, sessionFile, {
+      offset: 0,
+      maxMessages: 2,
+    });
+    const oldest = await readSessionMessagesPageWithStatsAsync(sessionId, storePath, sessionFile, {
+      offset: 2,
+      maxMessages: 1,
+    });
+
+    expect(newest.totalMessages).toBe(3);
+    expectMessageFields(newest.messages[0], { content: "active prompt", openclaw: { seq: 2 } });
+    expectMessageFields(newest.messages[1], { content: "active answer", openclaw: { seq: 3 } });
+    expect(oldest.totalMessages).toBe(3);
+    expectMessageFields(oldest.messages[0], {
+      role: "system",
+      content: [{ type: "text", text: "Reset" }],
+      openclaw: { kind: "reset", id: "reset-1", seq: 1 },
+    });
   });
 
   test("keeps parentless linear history after a leaf control", async () => {
@@ -902,31 +1021,6 @@ describe("readSessionMessages", () => {
     }
   });
 
-  test("readSessionMessagesAsync recent mode honors byte caps", async () => {
-    const sessionId = "test-session-async-recent-mode";
-    writeTranscript(tmpDir, sessionId, [
-      { type: "session", version: 1, id: sessionId },
-      { message: { role: "user", content: "older" } },
-      { message: { role: "assistant", content: "x".repeat(32 * 1024) } },
-      { message: { role: "user", content: "latest" } },
-    ]);
-    const openSpy = vi.spyOn(fs.promises, "open");
-
-    try {
-      const messages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
-        mode: "recent",
-        maxMessages: 1,
-        maxBytes: 2048,
-      });
-      expect(messages).toHaveLength(1);
-      expectMessageFields(messages[0], { role: "user", content: "latest" });
-      expect(JSON.stringify(messages)).not.toContain("older");
-      expect(openSpy).toHaveBeenCalledTimes(1);
-    } finally {
-      openSpy.mockRestore();
-    }
-  });
-
   test("reads only the active branch when transcript rewrites abandon older entries", async () => {
     const sessionId = "test-session-active-branch";
     const recordTimestamp = (second: number) => ({
@@ -1295,40 +1389,16 @@ describe("buildSessionPreviewItems", () => {
     return buildSessionPreviewItems(messages, maxItems, maxChars);
   }
 
-  test("returns recent preview items with tool summary", () => {
+  test("returns only recent user and assistant display text", () => {
     const sessionId = "preview-session";
     const lines = createToolSummaryPreviewTranscriptLines(sessionId);
     const result = readPreview(lines);
 
-    expect(result.map((item) => item.role)).toEqual(["assistant", "tool", "assistant"]);
-    expect(result[1]?.text).toContain("call weather");
-  });
-
-  test("detects tool calls from tool_use/tool_call blocks and toolName field", () => {
-    const sessionId = "preview-session-tools";
-    const lines = [
-      JSON.stringify({ type: "session", version: 1, id: sessionId }),
-      JSON.stringify({ message: { role: "assistant", content: "Hi" } }),
-      JSON.stringify({
-        message: {
-          role: "assistant",
-          toolName: "camera",
-          content: [
-            { type: "tool_use", name: "read" },
-            { type: "tool_call", name: "write" },
-          ],
-        },
-      }),
-      JSON.stringify({ message: { role: "assistant", content: "Done" } }),
-    ];
-    const result = readPreview(lines);
-
-    expect(result.map((item) => item.role)).toEqual(["assistant", "tool", "assistant"]);
-    expect(result[1]?.text).toContain("call");
-    expect(result[1]?.text).toContain("camera");
-    expect(result[1]?.text).toContain("read");
-    // Preview text may not list every tool name; it should at least hint there were multiple calls.
-    expect(result[1]?.text).toMatch(/\+\d+/);
+    expect(result).toEqual([
+      { role: "user", text: "Hello" },
+      { role: "assistant", text: "Hi" },
+      { role: "assistant", text: "Forecast ready" },
+    ]);
   });
 
   const commentaryText = {
@@ -1351,10 +1421,10 @@ describe("buildSessionPreviewItems", () => {
       expected: [{ role: "assistant", text: `${"t".repeat(196)}...` }],
     },
     {
-      name: "strips inline directives from preview items",
-      content: "A [[reply_to:abc-123]] B [[audio_as_voice]]",
+      name: "preserves quoted inline directives in preview items",
+      content: "Use `[[reply_to_current]]` literally",
       maxChars: 120,
-      expected: [{ role: "assistant", text: "A  B" }],
+      expected: [{ role: "assistant", text: "Use `[[reply_to_current]]` literally" }],
     },
     {
       name: "prefers final_answer text for assistant preview items",
@@ -1422,7 +1492,7 @@ describe("readLatestSessionUsageFromTranscript", () => {
     const readFileSpy = vi.spyOn(fs, "readFileSync");
 
     try {
-      const snapshot = await readLatestSessionUsageFromTranscriptAsync(sessionId, storePath);
+      const snapshot = await readLatestSessionUsageFromTranscriptFileAsync(sessionId, storePath);
       expectUsageFields(snapshot, {
         modelProvider: "anthropic",
         model: "claude-sonnet-4-6",
@@ -1437,6 +1507,84 @@ describe("readLatestSessionUsageFromTranscript", () => {
     } finally {
       readFileSpy.mockRestore();
     }
+  });
+
+  test.each([
+    { name: "an unattributed assistant", identity: {} },
+    {
+      name: "a delivery mirror",
+      identity: { provider: "openclaw", model: "delivery-mirror" },
+    },
+  ])("retains a meaningful zero-cost artifact snapshot for $name", async ({ identity }) => {
+    const sessionId = "usage-zero-cost-artifact";
+    writeTranscript(tmpDir, sessionId, [
+      { message: { role: "assistant", ...identity, usage: { cost: { total: 0 } } } },
+    ]);
+
+    await expect(
+      readLatestSessionUsageFromTranscriptFileAsync(sessionId, storePath),
+    ).resolves.toEqual({ costUsd: 0 });
+  });
+
+  test("treats unavailable JSONL context as terminal until a later valid snapshot", async () => {
+    const sessionId = "usage-unavailable-upgrade-sequence";
+    const oldCumulative = {
+      message: {
+        role: "assistant",
+        api: "cli",
+        provider: "claude-cli",
+        model: "claude-opus-4-7",
+        usage: { input: 128_814, output: 3_000, cacheRead: 992_953, totalTokens: 1_124_767 },
+      },
+    };
+    const unavailable = {
+      message: {
+        role: "assistant",
+        provider: "claude-cli",
+        model: "claude-opus-4-7",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          contextUsage: { state: "unavailable" },
+        },
+      },
+    };
+    writeTranscript(tmpDir, sessionId, [oldCumulative]);
+    const legacySnapshot = await readLatestSessionUsageFromTranscriptFileAsync(
+      sessionId,
+      storePath,
+    );
+    expect(legacySnapshot?.contextUsage).toEqual({ state: "unavailable" });
+    expect(legacySnapshot?.totalTokens).toBeUndefined();
+    writeTranscript(tmpDir, sessionId, [oldCumulative, unavailable]);
+
+    const unavailableSnapshot = await readLatestSessionUsageFromTranscriptFileAsync(
+      sessionId,
+      storePath,
+    );
+    expect(unavailableSnapshot?.contextUsage).toEqual({ state: "unavailable" });
+    expect(unavailableSnapshot?.totalTokens).toBeUndefined();
+    expect(unavailableSnapshot?.totalTokensFresh).toBeUndefined();
+
+    writeTranscript(tmpDir, sessionId, [
+      oldCumulative,
+      unavailable,
+      {
+        message: {
+          role: "assistant",
+          provider: "claude-cli",
+          model: "claude-opus-4-7",
+          usage: { input: 67_932, output: 2_000, cacheRead: 18_944, totalTokens: 88_876 },
+        },
+      },
+    ]);
+    expectUsageFields(await readLatestSessionUsageFromTranscriptFileAsync(sessionId, storePath), {
+      totalTokens: 86_876,
+      totalTokensFresh: true,
+    });
   });
 
   test("estimates transcript context when local model telemetry is missing", async () => {
@@ -1459,7 +1607,7 @@ describe("readLatestSessionUsageFromTranscript", () => {
       estimateStringChars(userText) + estimateStringChars(assistantText),
     );
 
-    expectUsageFields(await readLatestSessionUsageFromTranscriptAsync(sessionId, storePath), {
+    expectUsageFields(await readLatestSessionUsageFromTranscriptFileAsync(sessionId, storePath), {
       modelProvider: "openai-completions",
       model: "local-llama",
       totalTokens: expectedTotalTokens,
@@ -1600,6 +1748,382 @@ describe("oversized transcript line guards", () => {
     expect(serialized).not.toContain(oversizedContent);
     expect(serialized).toContain("[chat.history omitted: message too large]");
     expect(serialized).toContain("after oversized");
+  });
+
+  test.each([
+    {
+      name: "native image data",
+      image: (data: string) => ({ type: "image", mimeType: "image/png", data }),
+    },
+    {
+      name: "native image data before type",
+      image: (data: string) => ({ data, mimeType: "image/png", type: "image" }),
+    },
+    {
+      name: "Anthropic image source",
+      image: (data: string) => ({
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data },
+      }),
+    },
+    {
+      name: "Anthropic image source before type",
+      image: (data: string) => ({
+        source: { type: "base64", media_type: "image/png", data },
+        type: "image",
+      }),
+    },
+    {
+      name: "Anthropic image source before cache control and type",
+      image: (data: string) => ({
+        source: { type: "base64", media_type: "image/png", data },
+        cache_control: { type: "ephemeral" },
+        type: "image",
+      }),
+    },
+    {
+      name: "native and Anthropic image payloads together",
+      image: (data: string) => ({
+        type: "image",
+        data,
+        source: { type: "base64", media_type: "image/png", data },
+      }),
+    },
+  ])("preserves recoverable reset-archive text around oversized $name", async ({ name, image }) => {
+    const sessionId = `test-oversized-archive-${name.replaceAll(" ", "-")}`;
+    const png = createNoisyPngBuffer(320, 320);
+    const encoded = png.toString("base64");
+    writeResetArchive(tmpDir, sessionId, "2026-07-12T18-00-00.000Z", [
+      { type: "session", version: 3, id: sessionId },
+      createTranscriptMessage("archived-image", null, "user", [
+        { type: "text", text: "keep prefix text" },
+        image(encoded),
+        { type: "text", text: "keep suffix text" },
+      ]),
+    ]);
+
+    const messages = projectChatDisplayMessages(
+      await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+        maxMessages: 10,
+        allowResetArchiveFallback: true,
+        resetArchiveOnly: true,
+      }),
+    );
+
+    expect(messages).toMatchObject([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "keep prefix text" },
+          { type: "image", omitted: true, bytes: png.length },
+          { type: "text", text: "keep suffix text" },
+        ],
+        __openclaw: { id: "archived-image" },
+      },
+    ]);
+    expect(JSON.stringify(messages)).not.toContain(encoded);
+    if (name.includes("cache control")) {
+      expect(JSON.stringify(messages)).toContain('"cache_control":{"type":"ephemeral"}');
+    }
+
+    const singleMessage = await filesystemReader(sessionId, storePath).readById("archived-image", {
+      allowResetArchiveFallback: true,
+      resetArchiveOnly: true,
+    });
+    expect(singleMessage).toMatchObject({
+      found: true,
+      oversized: false,
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "keep prefix text" },
+          { type: "image", omitted: true, bytes: png.length },
+          { type: "text", text: "keep suffix text" },
+        ],
+      },
+    });
+  });
+
+  test("omits every image even when its data is distant from its type", async () => {
+    const sessionId = "test-oversized-distant-image";
+    const privateImage = Buffer.from("private-image-payload");
+    const privateEncoded = privateImage.toString("base64");
+    const largeImage = createNoisyPngBuffer(320, 320);
+    const largeEncoded = largeImage.toString("base64");
+    writeResetArchive(tmpDir, sessionId, "2026-07-12T18-00-00.000Z", [
+      { type: "session", version: 3, id: sessionId },
+      createTranscriptMessage("distant-image", null, "user", [
+        { type: "text", text: "keep prefix text" },
+        {
+          type: "image",
+          metadata: { caption: "x".repeat(70 * 1024) },
+          data: privateEncoded,
+        },
+        { type: "image", data: largeEncoded },
+        { type: "text", text: "keep suffix text" },
+      ]),
+    ]);
+
+    const reader = filesystemReader(sessionId, storePath);
+    const messages = await reader.read({
+      mode: "recent",
+      maxMessages: 10,
+      allowResetArchiveFallback: true,
+      resetArchiveOnly: true,
+    });
+    const singleMessage = await reader.readById("distant-image", {
+      allowResetArchiveFallback: true,
+      resetArchiveOnly: true,
+    });
+
+    for (const message of [messages.messages[0], singleMessage.message]) {
+      expect(message).toMatchObject({
+        content: [
+          { type: "text", text: "keep prefix text" },
+          { type: "image", omitted: true, bytes: privateImage.length },
+          { type: "image", omitted: true, bytes: largeImage.length },
+          { type: "text", text: "keep suffix text" },
+        ],
+      });
+      expect(JSON.stringify(message)).not.toContain(privateEncoded);
+      expect(JSON.stringify(message)).not.toContain(largeEncoded);
+    }
+    expect(singleMessage).toMatchObject({ found: true, oversized: false });
+  });
+
+  test("preserves image metadata data while omitting the actual image payload", async () => {
+    const sessionId = "test-oversized-image-metadata";
+    const image = createNoisyPngBuffer(320, 320);
+    const encoded = image.toString("base64");
+    const metadata = { data: Buffer.from("notes").toString("base64") };
+    writeResetArchive(tmpDir, sessionId, "2026-07-12T18-00-00.000Z", [
+      { type: "session", version: 3, id: sessionId },
+      createTranscriptMessage("image-metadata", null, "user", [
+        { type: "text", text: "keep prefix text" },
+        { type: "image", metadata, data: encoded },
+        { type: "text", text: "keep suffix text" },
+      ]),
+    ]);
+
+    const messages = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 10,
+      allowResetArchiveFallback: true,
+      resetArchiveOnly: true,
+    });
+
+    expect(messages).toMatchObject([
+      {
+        content: [
+          { type: "text", text: "keep prefix text" },
+          { type: "image", metadata, omitted: true, bytes: image.length },
+          { type: "text", text: "keep suffix text" },
+        ],
+      },
+    ]);
+    expect(JSON.stringify(messages)).not.toContain(encoded);
+  });
+
+  test.each([
+    {
+      name: "text document",
+      document: { type: "document", source: { type: "text", data: "notes" } },
+    },
+    {
+      name: "base64 PDF document",
+      document: {
+        type: "document",
+        source: {
+          type: "base64",
+          media_type: "application/pdf",
+          data: Buffer.from("%PDF-1.4\nexample").toString("base64"),
+        },
+      },
+    },
+  ])("preserves a $name preceding an oversized image", async ({ name, document }) => {
+    const sessionId = `test-oversized-mixed-${name.replaceAll(" ", "-")}`;
+    const png = createNoisyPngBuffer(320, 320);
+    const encoded = png.toString("base64");
+    writeResetArchive(tmpDir, sessionId, "2026-07-12T18-00-00.000Z", [
+      { type: "session", version: 3, id: sessionId },
+      createTranscriptMessage("archived-mixed", null, "user", [
+        document,
+        { type: "text", text: "keep prefix text" },
+        { type: "image", source: { type: "base64", media_type: "image/png", data: encoded } },
+        { type: "text", text: "keep suffix text" },
+      ]),
+    ]);
+
+    const messages = projectChatDisplayMessages(
+      await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+        maxMessages: 10,
+        allowResetArchiveFallback: true,
+        resetArchiveOnly: true,
+      }),
+    );
+
+    expect(messages).toMatchObject([
+      {
+        role: "user",
+        content: [
+          document,
+          { type: "text", text: "keep prefix text" },
+          { type: "image", omitted: true, bytes: png.length },
+          { type: "text", text: "keep suffix text" },
+        ],
+      },
+    ]);
+    expect(JSON.stringify(messages)).not.toContain(encoded);
+  });
+
+  test("keeps oversized fallback when recovered JSON numbers expand after parsing", async () => {
+    const sessionId = "test-oversized-expanded-json";
+    const encoded = createNoisyPngBuffer(320, 320).toString("base64");
+    const archivePath = writeResetArchive(tmpDir, sessionId, "2026-07-12T18-00-00.000Z", [
+      { type: "session", version: 3, id: sessionId },
+      createTranscriptMessage(
+        "expanded-json",
+        null,
+        "user",
+        [
+          { type: "text", text: "keep prefix text" },
+          { type: "image", data: encoded },
+        ],
+        { message: { compactNumbers: "__OPENCLAW_COMPACT_NUMBERS__" } },
+      ),
+    ]);
+    const compactNumbers = Array.from({ length: 13_000 }, () => "1e20").join(",");
+    const archive = fs.readFileSync(archivePath, "utf8");
+    fs.writeFileSync(
+      archivePath,
+      archive.replace('"__OPENCLAW_COMPACT_NUMBERS__"', `[${compactNumbers}]`),
+      "utf8",
+    );
+
+    const messages = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 10,
+      allowResetArchiveFallback: true,
+      resetArchiveOnly: true,
+    });
+
+    expect(messages).toMatchObject([
+      {
+        content: [{ type: "text", text: "[chat.history omitted: message too large]" }],
+        __openclaw: { id: "expanded-json", truncated: true, reason: "oversized" },
+      },
+    ]);
+    expect(
+      await filesystemReader(sessionId, storePath).readById("expanded-json", {
+        allowResetArchiveFallback: true,
+        resetArchiveOnly: true,
+      }),
+    ).toMatchObject({ found: true, oversized: true });
+  });
+
+  test("rejects JSON-escaped transcript recovery marker collisions", async () => {
+    const sessionId = "test-oversized-escaped-marker";
+    const encoded = createNoisyPngBuffer(320, 320).toString("base64");
+    const archivePath = writeResetArchive(tmpDir, sessionId, "2026-07-12T18-00-00.000Z", [
+      { type: "session", version: 3, id: sessionId },
+      createTranscriptMessage("escaped-marker", null, "user", [
+        { type: "text", text: "__MARKER_SPOOF__" },
+        { type: "image", data: encoded },
+      ]),
+    ]);
+    const archive = fs.readFileSync(archivePath, "utf8");
+    fs.writeFileSync(
+      archivePath,
+      archive.replace('"__MARKER_SPOOF__"', '"\\u005f_openclaw_omitted_image_0__"'),
+      "utf8",
+    );
+
+    const messages = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 10,
+      allowResetArchiveFallback: true,
+      resetArchiveOnly: true,
+    });
+
+    expect(messages).toMatchObject([
+      {
+        content: [{ type: "text", text: "[chat.history omitted: message too large]" }],
+        __openclaw: { id: "escaped-marker", truncated: true, reason: "oversized" },
+      },
+    ]);
+    expect(
+      await filesystemReader(sessionId, storePath).readById("escaped-marker", {
+        allowResetArchiveFallback: true,
+        resetArchiveOnly: true,
+      }),
+    ).toMatchObject({ found: true, oversized: true });
+  });
+
+  test.each([
+    {
+      name: "unrelated oversized data",
+      content: (data: string) => [{ type: "document", source: { type: "base64", data } }],
+    },
+    {
+      name: "unrelated oversized image metadata",
+      content: (data: string) => [{ type: "image", metadata: { data } }],
+    },
+    {
+      name: "URL image source with oversized data",
+      content: (data: string) => [
+        { type: "image", source: { type: "url", url: "https://example.invalid/image", data } },
+      ],
+    },
+    {
+      name: "malformed image base64",
+      content: (data: string) => [{ type: "image", data: `${data.slice(0, -1)}!` }],
+    },
+    {
+      name: "oversized non-image residual",
+      content: (data: string) => [
+        { type: "image", data },
+        { type: "text", text: "x".repeat(300 * 1024) },
+      ],
+    },
+    {
+      name: "oversized unrelated data after a small image",
+      content: (data: string) => [
+        { type: "image", data: "aGVsbG8=" },
+        { type: "document", data },
+      ],
+    },
+    {
+      name: "too many image candidates",
+      content: (data: string) => [
+        ...Array.from({ length: 33 }, () => ({ type: "image", data: "aGVsbG8=" })),
+        { type: "image", data },
+      ],
+    },
+  ])("keeps the existing oversized fallback for $name", async ({ name, content }) => {
+    const sessionId = `test-oversized-adversarial-${name.replaceAll(" ", "-")}`;
+    const encoded = createNoisyPngBuffer(320, 320).toString("base64");
+    writeResetArchive(tmpDir, sessionId, "2026-07-12T18-00-00.000Z", [
+      { type: "session", version: 3, id: sessionId },
+      createTranscriptMessage("adversarial-image", null, "user", content(encoded)),
+    ]);
+
+    const messages = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 10,
+      allowResetArchiveFallback: true,
+      resetArchiveOnly: true,
+    });
+
+    expect(messages).toMatchObject([
+      {
+        role: "user",
+        content: [{ type: "text", text: "[chat.history omitted: message too large]" }],
+        __openclaw: { id: "adversarial-image", truncated: true, reason: "oversized" },
+      },
+    ]);
+    expect(JSON.stringify(messages)).not.toContain(encoded);
+    expect(
+      await filesystemReader(sessionId, storePath).readById("adversarial-image", {
+        allowResetArchiveFallback: true,
+        resetArchiveOnly: true,
+      }),
+    ).toMatchObject({ found: true, oversized: true });
   });
 
   test("readRecentSessionMessagesAsync keeps oversized active-tree leaves", async () => {

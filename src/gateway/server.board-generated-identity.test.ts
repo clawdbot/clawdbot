@@ -11,7 +11,11 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { READ_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
-import { getFreePort, installGatewayTestHooks, startGatewayServer } from "./test-helpers.js";
+import {
+  getGatewayTestPort,
+  installGatewayTestHooks,
+  startTestGatewayServer,
+} from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -47,8 +51,8 @@ it(
 
     const events: string[] = [];
     const start = async () => {
-      const port = await getFreePort();
-      const server = await startGatewayServer(port, {
+      const port = await getGatewayTestPort();
+      const server = await startTestGatewayServer(port, {
         auth: { mode: "none" },
         bind: "loopback",
         controlUiEnabled: false,
@@ -74,10 +78,10 @@ it(
         timeoutMs: 30_000,
       });
 
-    let firstServer: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+    let firstServer: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
     let firstClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
     let secondClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-    let restartedServer: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+    let restartedServer: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
     let restartedClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
     try {
       const first = await start();

@@ -1,136 +1,36 @@
 import { expect, vi } from "vitest";
-import { setPluginToolMeta } from "../plugins/tools.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
+import { resolveCodeModeHeadlessConfig } from "./code-mode-runtime.js";
 import type { CodeModeSkill } from "./code-mode-skills.js";
+import {
+  activeRuns,
+  disposeAllCodeModeRuns,
+  removeExpiredRuns,
+  resumingRunIds,
+} from "./code-mode-state.js";
+import { normalizeCodeModeTimeoutResult, runCodeModeWorker } from "./code-mode-worker.js";
 import { createCodeModeTools } from "./code-mode.js";
 import {
   createToolSearchCatalogRef,
+  registerHeadlessToolSearchCatalog,
   type ToolSearchCatalogRef,
   type ToolSearchToolContext,
 } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
-type CodeModeConfig = {
-  enabled: boolean;
-  runtime: "quickjs-wasi";
-  mode: "only";
-  languages: ("javascript" | "typescript")[];
-  timeoutMs: number;
-  memoryLimitBytes: number;
-  maxOutputBytes: number;
-  maxSnapshotBytes: number;
-  maxPendingToolCalls: number;
-  snapshotTtlSeconds: number;
-  searchDefaultLimit: number;
-  maxSearchLimit: number;
+export const testing = {
+  activeRuns,
+  resumingRunIds,
+  codeModeReplayIdForToolCall,
+  removeExpiredRuns,
+  normalizeCodeModeTimeoutResult,
+  runCodeModeWorker,
+  resolveCodeModeHeadlessConfig,
 };
-
-type CodeModeFailureCode =
-  | "aborted"
-  | "invalid_input"
-  | "runtime_unavailable"
-  | "timeout"
-  | "output_limit_exceeded"
-  | "snapshot_limit_exceeded"
-  | "internal_error";
-
-type CodeModeWorkerResult =
-  | { status: "completed"; value: unknown; output: unknown[] }
-  | {
-      status: "waiting";
-      snapshotBytes: Uint8Array;
-      pendingRequests: Array<{ id: string; method: string; args: unknown[] }>;
-      output: unknown[];
-    }
-  | {
-      status: "failed";
-      error: string;
-      code: CodeModeFailureCode;
-      failurePhase: "input" | "guest" | "bridge" | "host";
-      bridgeDispatchStarted: boolean;
-      output: unknown[];
-    };
-
-type CodeModeTestApi = {
-  activeRuns: Map<
-    string,
-    {
-      runId: string;
-      config: CodeModeConfig;
-      expiresAt: number;
-      replayId?: string;
-      agentWaitRetainUntil?: number;
-      pending: Array<{
-        id: string;
-        method: string;
-        args: unknown[];
-        promise: Promise<unknown>;
-        settled?: unknown;
-        cancel?: () => void;
-      }>;
-    }
-  >;
-  resumingRunIds: Set<string>;
-  codeModeReplayIdForToolCall(
-    ctx: ToolSearchToolContext,
-    toolCallId: string,
-    code: string,
-    assistantTurnId?: string,
-  ): string;
-  removeExpiredRuns(now?: number): void;
-  runBridgeRequest(
-    params: Record<string, unknown>,
-  ): Promise<{ id: string; ok: true; value: unknown } | { id: string; ok: false; error: string }>;
-  createHeadlessAbortScope(
-    signal: AbortSignal | undefined,
-    wallClockMs: number,
-  ): { signal: AbortSignal; cleanup: () => void };
-  normalizeCodeModeWorkerResult(result: CodeModeWorkerResult): CodeModeWorkerResult;
-  runCodeModeWorker(
-    workerData: unknown,
-    timeoutMs: number,
-    workerUrl?: URL,
-    signal?: AbortSignal,
-  ): Promise<CodeModeWorkerResult>;
-  resolveCodeModeHeadlessConfig(
-    ctx: ToolSearchToolContext,
-    overrides?: Partial<
-      Pick<
-        CodeModeConfig,
-        | "timeoutMs"
-        | "memoryLimitBytes"
-        | "maxOutputBytes"
-        | "maxSnapshotBytes"
-        | "maxPendingToolCalls"
-      >
-    >,
-  ): CodeModeConfig;
-  resolveCodeModeWorkerUrl(currentModuleUrl: string): URL;
-  getTypescriptRuntimePromise(): Promise<typeof import("typescript")> | null;
-  setTypescriptRuntimeForTest(
-    runtime: typeof import("typescript") | Promise<typeof import("typescript")> | null,
-  ): void;
-  setSwarmDepsForTest(overrides?: {
-    emitSessionLifecycleEvent?: (event: Record<string, unknown>) => void;
-    getSwarmRunByLaunchReplayKey?: (key: string, requesterSessionKey?: string) => unknown;
-    initSubagentRegistry?: () => void;
-    waitForCollectorCompletion?: (params: Record<string, unknown>) => Promise<unknown>;
-  }): void;
-};
-
-function getTestApi(): CodeModeTestApi {
-  const api = (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.codeModeTestApi")];
-  if (!api) {
-    throw new Error("code mode test API is unavailable");
-  }
-  return api as CodeModeTestApi;
-}
-
-export const testing = getTestApi();
 
 export function resetCodeModeTestState(): void {
-  testing.activeRuns.clear();
-  testing.resumingRunIds.clear();
-  testing.setTypescriptRuntimeForTest(null);
+  disposeAllCodeModeRuns();
 }
 
 export function fakeTool(name: string, description: string): AnyAgentTool {
@@ -220,6 +120,59 @@ export function resultDetails(result: { details?: unknown }): Record<string, unk
   return result.details as Record<string, unknown>;
 }
 
+/** Compare public summaries to independently constructed, normalized guest data. */
+export function expectOriginalCodeModeMarker(marker: unknown, original: unknown): void {
+  expect(marker).toMatchObject({
+    truncated: true,
+    guidance: "Output truncated; rerun with narrower args.",
+    prefix: expect.any(String),
+    omittedBytes: expect.any(Number),
+  });
+  const { prefix, omittedBytes } = marker as { prefix: string; omittedBytes: number };
+  const serialized = JSON.stringify(original);
+  expect(serialized.startsWith(prefix), "summary must retain the original JSON prefix").toBe(true);
+  expect(omittedBytes).toBe(Buffer.byteLength(serialized) - Buffer.byteLength(prefix));
+  expect(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.from(prefix))).toBe(prefix);
+}
+
+export function expectCodeModeSharedBudget(
+  result: { output?: unknown; value?: unknown; error?: unknown },
+  maxBytes: number,
+): void {
+  let bytes = 0;
+  for (const field of ["output", "value", "error"] as const) {
+    if (!Object.hasOwn(result, field)) {
+      continue;
+    }
+    const value = result[field];
+    if (field === "output" && Array.isArray(value) && value.length === 0) {
+      continue;
+    }
+    bytes += Buffer.byteLength(JSON.stringify(value));
+  }
+  expect(bytes).toBeLessThanOrEqual(maxBytes);
+}
+
+export function createHeadlessCodeModeHarness(
+  tools: AnyAgentTool[] = [],
+  options: { swarmEnabled?: boolean } = {},
+): ToolSearchToolContext {
+  const config = {
+    tools: {
+      codeMode: { enabled: false, timeoutMs: 60_000 },
+      ...(options.swarmEnabled ? { swarm: true } : {}),
+    },
+  } as never;
+  const catalogRef = createToolSearchCatalogRef();
+  registerHeadlessToolSearchCatalog({ catalogRef, tools });
+  return {
+    config,
+    runtimeConfig: config,
+    agentId: "main",
+    catalogRef,
+  };
+}
+
 export function createCodeModeHarness(
   params: {
     agentId?: string;
@@ -252,15 +205,22 @@ export async function runUntilCompleted(params: {
   language?: "javascript" | "typescript";
   restartSafe?: boolean;
 }) {
-  // Code Mode may return a waiting state before completion; tests poll through
-  // the public wait tool instead of reaching into activeRuns.
-  let details = resultDetails(
+  const details = resultDetails(
     await params.execTool.execute("code-call-1", {
       code: params.code,
       language: params.language,
       restartSafe: params.restartSafe,
     }),
   );
+  return await waitUntilCompleted({ details, waitTool: params.waitTool });
+}
+
+export async function waitUntilCompleted(params: {
+  details: Record<string, unknown>;
+  waitTool: AnyAgentTool;
+}) {
+  // Resume the existing run through public waits; never replay its actions.
+  let details = params.details;
   for (let index = 0; index < 8 && details.status === "waiting"; index += 1) {
     const runId = details.runId;
     expect(typeof runId).toBe("string");

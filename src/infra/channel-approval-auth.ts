@@ -3,6 +3,7 @@ import { getChannelPlugin, resolveChannelApprovalCapability } from "../channels/
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isImplicitSameChatApprovalAuthorization } from "../plugin-sdk/approval-auth-helpers.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
+import type { ChannelApprovalKind } from "./approval-types.js";
 
 type ApprovalCommandAuthorization = {
   authorized: boolean;
@@ -16,7 +17,7 @@ export function resolveApprovalCommandAuthorization(params: {
   channel?: string | null;
   accountId?: string | null;
   senderId?: string | null;
-  kind: "exec" | "plugin";
+  kind: ChannelApprovalKind;
 }): ApprovalCommandAuthorization {
   const channel = normalizeMessageChannel(params.channel);
   if (!channel) {

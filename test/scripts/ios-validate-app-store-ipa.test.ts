@@ -1,5 +1,5 @@
 // iOS IPA validation tests cover the App Store upload gate without real signing assets.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
   mkdirSync,
@@ -12,7 +12,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "ios-validate-app-store-ipa.sh");
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
@@ -20,6 +20,7 @@ const BUILD_COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const BUILD_TIMESTAMP = "2026-07-10T12:34:56.000Z";
 
 const tempDirs: string[] = [];
+let toolsDir: string;
 
 function bashArgs(scriptPath: string): string[] {
   return process.platform === "win32" ? [scriptPath] : ["--noprofile", "--norc", scriptPath];
@@ -138,8 +139,11 @@ if (extractIndex < 0 || expectIndex < 0 || process.argv[expectIndex + 1] !== "st
 const key = process.argv[extractIndex + 1];
 const file = process.argv[process.argv.length - 1];
 const xml = readFileSync(file, "utf8");
-const escapedKey = key.replace(/[.*+?^\${}()|[\]\\]/g, "\\$&");
-const match = xml.match(new RegExp("<key>" + escapedKey + "<\\/key>\\s*<string>([^<]*)<\\/string>"));
+// Escapes are doubled for the template-literal -> emitted-file hop: the emitted script
+// must contain \\] in the class and \\$& in the replacement, or keys with regex
+// metacharacters interpolate unescaped into the RegExp below and stop emulating plutil.
+const escapedKey = key.replace(/[.*+?^\${}()|[\\]\\\\]/g, "\\\\$&");
+const match = xml.match(new RegExp("<key>" + escapedKey + "</key>\\\\s*<string>([^<]*)</string>"));
 if (!match) process.exit(1);
 process.stdout.write(match[1]);
 `,
@@ -311,12 +315,9 @@ async function writeValidFixture(
     "utf8",
   );
 
-  const plistBuddy = path.join(binDir, "plistbuddy");
-  writeFakePlistBuddy(plistBuddy);
-  const plutil = path.join(binDir, "plutil");
-  writeFakePlutil(plutil);
-  const unzip = path.join(binDir, "unzip");
-  writeFakeUnzip(unzip);
+  const plistBuddy = path.join(toolsDir, "plistbuddy");
+  const plutil = path.join(toolsDir, "plutil");
+  const unzip = path.join(toolsDir, "unzip");
   const codesign = path.join(binDir, "codesign");
   writeExecutable(
     codesign,
@@ -378,17 +379,65 @@ function runValidator(
     return { ok: true, stdout, stderr: "" };
   } catch (error) {
     const e = error as { stdout?: unknown; stderr?: unknown };
-    const stdout = Buffer.isBuffer(e.stdout) ? e.stdout.toString("utf8") : String(e.stdout ?? "");
-    const stderr = Buffer.isBuffer(e.stderr) ? e.stderr.toString("utf8") : String(e.stderr ?? "");
+    const stdout = Buffer.isBuffer(e.stdout)
+      ? e.stdout.toString("utf8")
+      : ((e.stdout ?? "") as string);
+    const stderr = Buffer.isBuffer(e.stderr)
+      ? e.stderr.toString("utf8")
+      : ((e.stderr ?? "") as string);
     return { ok: false, stdout, stderr };
   }
 }
 
 describe("scripts/ios-validate-app-store-ipa.sh", () => {
+  beforeAll(() => {
+    // Interpreters read fixture paths from argv; signing inputs remain case-owned.
+    toolsDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-tools-"));
+    writeFakePlistBuddy(path.join(toolsDir, "plistbuddy"));
+    writeFakePlutil(path.join(toolsDir, "plutil"));
+    writeFakeUnzip(path.join(toolsDir, "unzip"));
+  });
+
+  afterAll(() => {
+    if (toolsDir) {
+      rmSync(toolsDir, { recursive: true, force: true });
+    }
+  });
+
   afterEach(() => {
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("fake plutil escapes regex-metacharacter keys before matching", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-ios-ipa-"));
+    tempDirs.push(root);
+    const plutil = path.join(toolsDir, "plutil");
+    const plistPath = path.join(root, "meta.plist");
+    writeFileSync(
+      plistPath,
+      "<plist><dict>\n<key>Weird[Key]*</key>\n<string>metavalue</string>\n</dict></plist>",
+      "utf8",
+    );
+    const escaped = spawnSync(
+      process.execPath,
+      [plutil, "-extract", "Weird[Key]*", "-expect", "string", plistPath],
+      {
+        encoding: "utf8",
+      },
+    );
+    expect(escaped.status).toBe(0);
+    expect(escaped.stdout).toBe("metavalue");
+    // An unescaped interpolation would let this key match as a regex; it must miss instead.
+    const missing = spawnSync(
+      process.execPath,
+      [plutil, "-extract", "Weird.Key.*", "-expect", "string", plistPath],
+      {
+        encoding: "utf8",
+      },
+    );
+    expect(missing.status).toBe(1);
   });
 
   it("accepts an App Store IPA with appStore mode and production entitlements", async () => {

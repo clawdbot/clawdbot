@@ -169,7 +169,7 @@ function chatMessageWidgets(message) {
         suffix += 1;
       }
       emitted.add(key);
-      return key === widget.key ? widget : { ...widget, key };
+      return key === widget.key ? widget : Object.assign({}, widget, { key });
     });
 }
 
@@ -346,6 +346,11 @@ function setGatewayState(payload) {
   const wasUp = gatewayState === "up";
   gatewayState = payload?.state || "down";
   gatewayNotice = typeof payload?.notice === "string" ? payload.notice : "";
+  if (typeof payload?.accent === "string") {
+    document.documentElement.style.setProperty("--accent", payload.accent);
+  } else {
+    document.documentElement.style.removeProperty("--accent");
+  }
   const nextCanvasSurfaceUrl =
     gatewayState === "up" && typeof payload?.canvasSurfaceUrl === "string"
       ? payload.canvasSurfaceUrl
@@ -573,7 +578,7 @@ function scheduleWidgetSync() {
           generation,
         }),
       )
-      .catch((error) => {
+      .catch(/** @param {unknown} error */ (error) => {
         sendError = friendlyError(error, "Could not render the widget.");
         renderStatus();
       });
@@ -903,7 +908,7 @@ async function openNamedPopover(kind) {
   setPopoverVisibility(kind);
   if (kind === "agents") {
     const selectedIndex = agents.findIndex((agent) => agent.id === activeIdentity.id);
-    menuIndex = selectedIndex >= 0 ? selectedIndex : 0;
+    menuIndex = Math.max(selectedIndex, 0);
     renderAgentList();
     elements.agentList.querySelectorAll(".agent-option")[menuIndex]?.focus();
   } else {
@@ -967,10 +972,18 @@ function acceleratorFromEvent(event) {
     return null;
   }
   const parts = [];
-  if (event.ctrlKey) parts.push("Ctrl");
-  if (event.altKey) parts.push("Alt");
-  if (event.shiftKey) parts.push("Shift");
-  if (event.metaKey) parts.push("Super");
+  if (event.ctrlKey) {
+    parts.push("Ctrl");
+  }
+  if (event.altKey) {
+    parts.push("Alt");
+  }
+  if (event.shiftKey) {
+    parts.push("Shift");
+  }
+  if (event.metaKey) {
+    parts.push("Super");
+  }
   if (parts.length === 0) {
     return null;
   }
@@ -1005,34 +1018,36 @@ async function requestHide() {
   document.body.classList.remove("shown");
   window.clearTimeout(hideTimer);
   hideTimer = window.setTimeout(
-    async () => {
-      try {
-        const hidden = await invoke("quickchat_hide", {
-          sessionId: rendererSessionId,
-          rendererEpoch,
-          generation: operationGeneration,
-        });
-        if (visibilitySequence !== operationGeneration) {
-          return;
+    () => {
+      void (async () => {
+        try {
+          const hidden = await invoke("quickchat_hide", {
+            sessionId: rendererSessionId,
+            rendererEpoch,
+            generation: operationGeneration,
+          });
+          if (visibilitySequence !== operationGeneration) {
+            return;
+          }
+          if (hidden !== true) {
+            document.body.classList.add("shown");
+            return;
+          }
+          resetAccepted();
+          clearReply();
+        } catch (error) {
+          if (visibilitySequence === operationGeneration) {
+            sendError = friendlyError(error);
+            renderStatus();
+            document.body.classList.add("shown");
+            elements.input.focus();
+          }
+        } finally {
+          if (visibilitySequence === operationGeneration) {
+            hiding = false;
+          }
         }
-        if (hidden !== true) {
-          document.body.classList.add("shown");
-          return;
-        }
-        resetAccepted();
-        clearReply();
-      } catch (error) {
-        if (visibilitySequence === operationGeneration) {
-          sendError = friendlyError(error);
-          renderStatus();
-          document.body.classList.add("shown");
-          elements.input.focus();
-        }
-      } finally {
-        if (visibilitySequence === operationGeneration) {
-          hiding = false;
-        }
-      }
+      })();
     },
     reducedMotion.matches ? 45 : 120,
   );
@@ -1045,13 +1060,13 @@ function reveal() {
     rendererEpoch,
     generation: operationGeneration,
   })
-    .then((accepted) => {
-      if (accepted !== true && visibilitySequence === operationGeneration) {
+    .then((activated) => {
+      if (activated !== true && visibilitySequence === operationGeneration) {
         document.body.classList.remove("shown");
         return;
       }
       if (
-        accepted === true &&
+        activated === true &&
         visibilitySequence === operationGeneration &&
         activeReply?.widgets.length
       ) {
@@ -1149,6 +1164,7 @@ elements.input.addEventListener("input", () => {
   updateSendButton();
 });
 elements.input.addEventListener("keydown", (event) => {
+  // oxlint-disable-next-line unicorn/prefer-keyboard-event-key -- keyCode 229 covers WebView IME events when isComposing/key are unreliable.
   if (event.defaultPrevented || event.isComposing || event.keyCode === 229) {
     return;
   }

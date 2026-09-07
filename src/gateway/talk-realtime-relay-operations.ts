@@ -1,14 +1,20 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { createDeferredCore } from "../shared/deferred.js";
 import { buildRealtimeVoiceAgentCancelProviderResult } from "../talk/agent-run-control-shared.js";
 import {
   controlRealtimeVoiceAgentRun,
   type RealtimeVoiceAgentControlResult,
 } from "../talk/agent-run-control.js";
 import { registerClientVoiceConsultRun } from "../talk/client-voice-session.js";
-import type { RealtimeVoiceToolResultOptions } from "../talk/provider-types.js";
+import type {
+  RealtimeVoiceCloseOptions,
+  RealtimeVoiceToolResultOptions,
+} from "../talk/provider-types.js";
+import type { TalkEvent } from "../talk/talk-session-controller.js";
 import { abortChatRunById } from "./chat-abort.js";
+import { resolveOwnedActiveTalkRunTarget } from "./server-methods/talk-client-run-ownership.js";
 import { formatError } from "./server-utils.js";
 import {
-  cancelForcedConsults,
   submitForcedTalkRealtimeRelayToolResult,
   submitRelayAgentControlProviderResults,
 } from "./talk-realtime-relay-forced-consults.js";
@@ -30,15 +36,10 @@ import {
   ensureRelayTurn,
   noFallbackRelayOutputFlush,
   relaySessions,
+  resolveRelayProviderToolCallId,
   type RelaySession,
 } from "./talk-realtime-relay-state.js";
-import {
-  bindRelaySessionKey,
-  closeRelayVoiceSession,
-  enqueueRelayVoiceTranscript,
-  ensureRelayVoiceSession,
-  resolveRelayAgentId,
-} from "./talk-realtime-relay-voice.js";
+import { closeRelayVoiceSession, ensureRelayVoiceSession } from "./talk-realtime-relay-voice.js";
 import { decodeTalkRelayAudioBase64 } from "./talk-relay-audio-base64.js";
 import {
   closeExpiredTalkRelaySessions,
@@ -47,6 +48,8 @@ import {
 } from "./talk-relay-session-lifecycle.js";
 import { forgetUnifiedTalkSession } from "./talk-session-registry.js";
 
+const TURN_BOUND_CANCELLATION_DRAIN_MS = 1_000;
+
 /** Ensure a gateway-relay call has its durable record before transcript-free RPCs. */
 export function ensureTalkRealtimeRelayVoiceSession(params: {
   relaySessionId: string;
@@ -54,17 +57,15 @@ export function ensureTalkRealtimeRelayVoiceSession(params: {
   sessionKey: string;
 }): void {
   const session = getRelaySession(params.relaySessionId, params.connId);
-  bindRelaySessionKey(session, params.sessionKey);
+  if (session.sessionTarget.sessionKey !== params.sessionKey.trim()) {
+    throw new Error("Realtime relay session belongs to another agent session");
+  }
   if (!ensureRelayVoiceSession(session)) {
     throw new Error("Realtime relay voice session could not be created");
   }
-  const buffered = session.pendingVoiceTranscripts.splice(0);
-  for (const entry of buffered) {
-    enqueueRelayVoiceTranscript(session, entry.role, entry.text);
-  }
 }
 
-export function abortRelayAgentRuns(session: RelaySession, reason: string): void {
+function abortRelayAgentRuns(session: RelaySession, reason: string): void {
   for (const [runId, sessionKey] of session.activeAgentRuns) {
     abortChatRunById(session.context, {
       runId,
@@ -72,6 +73,12 @@ export function abortRelayAgentRuns(session: RelaySession, reason: string): void
       stopReason: reason,
     });
   }
+  session.activeAgentRuns.clear();
+  session.activeAgentToolCalls.clear();
+}
+
+/** Releases relay-local correlation without cancelling durable voice-bound agent runs. */
+function detachRelayAgentRuns(session: RelaySession): void {
   session.activeAgentRuns.clear();
   session.activeAgentToolCalls.clear();
 }
@@ -90,14 +97,24 @@ export function pruneInactiveRelayAgentRuns(session: RelaySession): number {
   return session.activeAgentRuns.size;
 }
 
-export function closeRelaySession(session: RelaySession, reason: "completed" | "error"): void {
+export function closeRelaySession(
+  session: RelaySession,
+  reason: "completed" | "error",
+  options?: RealtimeVoiceCloseOptions,
+): void {
+  const disposition = options?.disposition ?? "abort";
   session.harness.close();
+  session.outputOwnership.drain?.resolve();
   relaySessions.delete(session.id);
   forgetUnifiedTalkSession(session.id);
   clearTimeout(session.cleanupTimer);
-  abortRelayAgentRuns(session, reason === "error" ? "relay-error" : "relay-closed");
+  if (disposition === "detach") {
+    detachRelayAgentRuns(session);
+  } else {
+    abortRelayAgentRuns(session, reason === "error" ? "relay-error" : "relay-closed");
+  }
   try {
-    session.bridge.close();
+    session.bridge.close({ disposition });
   } finally {
     // Provider teardown may throw, but the relay must still reach its durable
     // voice and owner-visible terminal state before that error is surfaced.
@@ -120,7 +137,7 @@ export function closeTalkRealtimeRelaySessionsForConnection(connId: string): voi
   closeTalkRelaySessionsForConnection({
     sessions: relaySessions.values(),
     connId,
-    closeSession: (session) => closeRelaySession(session, "completed"),
+    closeSession: (session) => closeRelaySession(session, "completed", { disposition: "detach" }),
     onCloseError: (error, session) => {
       session.context.logGateway.warn(
         `failed to close realtime relay session after connection disconnect: ${formatError(error)}`,
@@ -178,11 +195,14 @@ export function sendTalkRealtimeRelayAudio(params: {
   connId: string;
   audioBase64: string;
   timestamp?: number;
-}): void {
+}): void | Promise<void> {
   if (params.audioBase64.length > MAX_AUDIO_BASE64_BYTES) {
     throw new Error("Realtime relay audio frame is too large");
   }
   const session = getRelaySession(params.relaySessionId, params.connId);
+  if (session.outputOwnership.phase === "cancelling") {
+    return session.outputOwnership.drain!.promise.then(() => sendTalkRealtimeRelayAudio(params));
+  }
   const audio = decodeTalkRelayAudioBase64(params.audioBase64, "Realtime relay");
   const turnId = ensureRelayTurn(session);
   session.bridge.sendAudio(audio);
@@ -220,11 +240,20 @@ export function submitTalkRealtimeRelayToolResult(params: {
   options?: RealtimeVoiceToolResultOptions;
 }): void | Promise<void> {
   const session = getRelaySession(params.relaySessionId, params.connId);
-  if (session.completedAgentToolCalls.has(params.callId)) {
+  if (session.toolCalls.isAgentCompleted(params.callId)) {
+    return;
+  }
+  if (
+    session.outputOwnership.phase === "cancelling" &&
+    !session.toolCalls.hasCancelled(params.callId)
+  ) {
+    return;
+  }
+  if (!session.toolCalls.tryAdmit([params.callId])) {
     return;
   }
   const pendingFinal = session.pendingFinalToolResults.get(params.callId);
-  const cancelledAgentCall = session.cancelledAgentToolCalls.has(params.callId);
+  const cancelledAgentCall = session.toolCalls.hasCancelled(params.callId);
   if (pendingFinal && !cancelledAgentCall) {
     return pendingFinal;
   }
@@ -251,8 +280,8 @@ export function submitTalkRealtimeRelayToolResult(params: {
         result: providerResult,
         options: suppressedToolResultOptions(session),
         onAccepted: () => {
-          session.cancelledAgentToolCalls.delete(params.callId);
-          session.completedAgentToolCalls.add(params.callId);
+          session.toolCalls.deleteCancelled(params.callId);
+          session.toolCalls.markAgentCompleted([params.callId]);
         },
       });
     const pendingProvider = session.pendingProviderToolResults.get(params.callId);
@@ -278,7 +307,9 @@ export function submitTalkRealtimeRelayToolResult(params: {
     }
     if (final) {
       clearRelayAgentToolCall(session, params.callId);
-      session.completedAgentToolCalls.add(params.callId);
+      if (!session.toolCalls.markAgentCompleted([params.callId])) {
+        return;
+      }
     }
     broadcastToolResultToOwner(session, {
       callId: params.callId,
@@ -298,7 +329,11 @@ export function submitTalkRealtimeRelayToolResult(params: {
     return trackAgentFinalToolResult(session, params.callId, completion);
   }
   const submit = () =>
-    session.bridge.submitToolResult(params.callId, params.result, params.options);
+    session.bridge.submitToolResult(
+      resolveRelayProviderToolCallId(session, params.callId),
+      params.result,
+      params.options,
+    );
   const pendingWorking = session.pendingWorkingToolResults.get(params.callId);
   if (pendingWorking) {
     const submission = pendingWorking.then(async () => {
@@ -329,26 +364,88 @@ export function registerTalkRealtimeRelayAgentRun(params: {
   callId?: string;
 }): void {
   const session = getRelaySession(params.relaySessionId, params.connId);
-  if (!session.sessionKey) {
-    bindRelaySessionKey(session, params.sessionKey);
+  const callId = params.callId?.trim();
+  if (callId && session.toolCalls.isAgentCompleted(callId)) {
+    // Provider cancellation can win while chat.send is still acknowledging. Abort
+    // the late run before it can escape the relay's call-ownership tombstone.
+    abortChatRunById(session.context, {
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      stopReason: "realtime provider cancelled tool call",
+    });
+    throw new Error("Realtime provider cancelled the tool call before run registration");
+  }
+  if (callId && !session.toolCalls.tryAdmit([callId])) {
+    throw new Error("Realtime relay tool-call session limit exceeded");
   }
   session.activeAgentRuns.set(params.runId, params.sessionKey);
-  if (params.callId?.trim()) {
-    session.activeAgentToolCalls.set(params.callId.trim(), params.runId);
+  if (callId) {
+    session.activeAgentToolCalls.set(callId, params.runId);
   }
   if (!ensureRelayVoiceSession(session)) {
     throw new Error("Realtime relay voice session could not be created for agent consult");
   }
-  const voiceSessionKey = session.sessionKey;
-  if (!voiceSessionKey) {
-    throw new Error("Realtime relay voice session has no pinned session key");
-  }
+  const { agentId, sessionKey } = session.sessionTarget;
   registerClientVoiceConsultRun({
-    agentId: resolveRelayAgentId(session, voiceSessionKey),
-    sessionKey: voiceSessionKey,
+    agentId,
+    sessionKey,
     voiceSessionId: session.id,
     runId: params.runId,
   });
+}
+
+/** Retires one provider-owned tool call and aborts its exact relay consult, if started. */
+export function cancelTalkRealtimeRelayProviderToolCall(
+  session: RelaySession,
+  providerCallId: string,
+): string | undefined {
+  const mappedRelayCallId = session.relayToolCallIdsByProviderId.get(providerCallId);
+  if (!mappedRelayCallId) {
+    return undefined;
+  }
+  const forcedConsult = session.harness.forcedConsults
+    .handles()
+    .find((handle) =>
+      session.harness.forcedConsults.nativeCallIds(handle).includes(providerCallId),
+    );
+  // A native call can alias an already-started forced consult. Cancellation owns
+  // the forced handle because that is where the browser run was registered.
+  const relayCallId = forcedConsult?.id ?? mappedRelayCallId;
+  if (
+    session.toolCalls.isAgentCompleted(relayCallId) ||
+    session.toolCalls.isAgentCompleted(mappedRelayCallId) ||
+    session.toolCalls.isProviderCompleted(providerCallId)
+  ) {
+    return undefined;
+  }
+  if (forcedConsult) {
+    session.harness.forcedConsults.markCancelled(forcedConsult);
+    if (!session.toolCalls.markCancelled([relayCallId], ensureRelayTurn(session))) {
+      return undefined;
+    }
+  } else {
+    session.toolCalls.deleteCancelled(relayCallId);
+  }
+  if (
+    !session.toolCalls.markAgentCompleted([relayCallId, mappedRelayCallId]) ||
+    !session.toolCalls.markProviderCompleted([providerCallId])
+  ) {
+    return undefined;
+  }
+
+  const runId = session.activeAgentToolCalls.get(relayCallId);
+  const sessionKey = runId ? session.activeAgentRuns.get(runId) : undefined;
+  if (runId && sessionKey) {
+    abortChatRunById(session.context, {
+      runId,
+      sessionKey,
+      stopReason: "realtime provider cancelled tool call",
+    });
+  }
+  clearRelayAgentToolCall(session, relayCallId);
+  session.providerToolCallIds.delete(mappedRelayCallId);
+  session.relayToolCallIdsByProviderId.delete(providerCallId);
+  return relayCallId;
 }
 
 /** Wait for server-owned final transcript appends before a relay consult is authorized. */
@@ -365,80 +462,140 @@ export async function steerTalkRealtimeRelayAgentRun(params: {
   relaySessionId: string;
   connId: string;
   sessionKey?: string;
+  authority?: import("./talk-client-gateway-control.js").TalkAgentConsultAuthority;
   text: string;
   mode?: string;
+  assertCurrent?: () => void;
 }): Promise<RealtimeVoiceAgentControlResult> {
+  return await prepareTalkRealtimeRelayAgentControl(params)();
+}
+
+/** Capture the call-owned registration before control queue/readiness waits. */
+export function prepareTalkRealtimeRelayAgentControl(
+  params: Parameters<typeof steerTalkRealtimeRelayAgentRun>[0],
+): () => Promise<RealtimeVoiceAgentControlResult> {
   const session = getRelaySession(params.relaySessionId, params.connId);
-  const sessionKey = session.sessionKey;
-  if (!sessionKey) {
-    throw new Error("Realtime relay steering requires a session key");
-  }
+  const { sessionKey, canonicalKey } = session.sessionTarget;
   const requestedSessionKey = params.sessionKey?.trim();
   if (requestedSessionKey && requestedSessionKey !== sessionKey) {
     throw new Error("Realtime relay steering session key does not match the relay session");
   }
-  const result = await controlRealtimeVoiceAgentRun({
-    sessionKey,
-    text: params.text,
-    mode: params.mode,
-    recentEvents: session.harness.talk.recentEvents,
+  const runTarget = resolveOwnedActiveTalkRunTarget({
+    context: session.context,
+    clientConnId: session.connId,
+    sessionTarget: session.sessionTarget,
+    scope: { kind: "voice-session", voiceSessionId: session.id },
+    assertCurrent: () => {
+      params.assertCurrent?.();
+      if (relaySessions.get(session.id) !== session) {
+        throw new Error("Realtime relay session closed while steering the agent run");
+      }
+    },
   });
-  if (relaySessions.get(session.id) !== session) {
-    throw new Error("Realtime relay session closed while steering the agent run");
-  }
-  const turnId = ensureRelayTurn(session);
-  const providerSubmission = submitRelayAgentControlProviderResults(session, result, turnId);
-  if (providerSubmission?.completion) {
-    await providerSubmission.completion;
-  }
-  const finalResult = providerSubmission?.providerResponseStarted
-    ? { ...result, suppress: true }
-    : result;
-  if (relaySessions.get(session.id) !== session) {
-    return finalResult;
-  }
-  broadcastToOwner(session.context, session.connId, {
-    relaySessionId: session.id,
-    type: "toolProgress",
-    result: finalResult,
-    talkEvent: session.harness.talk.emit({
-      type: "tool.progress",
-      turnId,
-      payload: {
-        name: "openclaw_agent_control",
-        phase: finalResult.mode,
-        result: finalResult,
+  return async () => {
+    params.assertCurrent?.();
+    if (relaySessions.get(session.id) !== session) {
+      throw new Error("Realtime relay session closed while steering the agent run");
+    }
+    const result = await controlRealtimeVoiceAgentRun({
+      sessionKey: canonicalKey,
+      runTarget,
+      getToolAuthorityOverlay: () => {
+        if (!session.getToolAuthorityOverlay) {
+          throw new Error("Relay steering caller authority is unavailable");
+        }
+        return session.getToolAuthorityOverlay(params.authority, runTarget?.toolAuthoritySource);
       },
-      final: finalResult.mode === "cancel" || finalResult.mode === "status",
-    }),
-  });
-  return finalResult;
+      text: params.text,
+      mode: params.mode,
+      recentEvents: session.harness.talk.recentEvents,
+    });
+    if (relaySessions.get(session.id) !== session) {
+      throw new Error("Realtime relay session closed while steering the agent run");
+    }
+    const turnId = ensureRelayTurn(session);
+    const providerSubmission = submitRelayAgentControlProviderResults(session, result, turnId);
+    if (providerSubmission?.completion) {
+      await providerSubmission.completion;
+    }
+    const finalResult = providerSubmission?.providerResponseStarted
+      ? { ...result, suppress: true }
+      : result;
+    if (relaySessions.get(session.id) !== session) {
+      return finalResult;
+    }
+    broadcastToOwner(session.context, session.connId, {
+      relaySessionId: session.id,
+      type: "toolProgress",
+      result: finalResult,
+      talkEvent: session.harness.talk.emit({
+        type: "tool.progress",
+        turnId,
+        payload: {
+          name: "openclaw_agent_control",
+          phase: finalResult.mode,
+          result: finalResult,
+        },
+        final: finalResult.mode === "cancel" || finalResult.mode === "status",
+      }),
+    });
+    return finalResult;
+  };
 }
 
 /** Cancels the active relay turn, aborts agent work, and clears provider audio. */
-export function cancelTalkRealtimeRelayTurn(params: {
+export async function cancelTalkRealtimeRelayTurn(params: {
   relaySessionId: string;
   connId: string;
   reason?: string;
-}): void {
+  turnId?: string;
+}) {
   const session = getRelaySession(params.relaySessionId, params.connId);
-  session.toolResultEpoch += 1;
+  const turnId = session.harness.talk.activeTurnId;
+  if (!turnId) {
+    return { status: "idle" as const };
+  }
+  const requestedTurnId = normalizeOptionalString(params.turnId);
+  if (requestedTurnId && turnId !== requestedTurnId) {
+    return { status: "stale" as const };
+  }
+  if (session.outputOwnership.phase === "owned" && session.outputOwnership.turnId !== turnId) {
+    return { status: "stale" as const };
+  }
+  const forcedConsults = session.harness.forcedConsults.handles().map((handle) => ({
+    handle,
+    nativeCallIds: session.harness.forcedConsults.nativeCallIds(handle),
+  }));
+  const rootCallIds = new Set([
+    ...session.activeAgentToolCalls.keys(),
+    ...forcedConsults.map(({ handle }) => handle.id),
+  ]);
+  const terminalEpoch = ++session.toolResultEpoch;
   session.forcedTerminalProviderResults.clear();
-  const turnId = ensureRelayTurn(session);
   const reason = params.reason ?? "client-cancelled";
-  cancelForcedConsults(session);
-  for (const callId of session.activeAgentToolCalls.keys()) {
-    session.cancelledAgentToolCalls.set(callId, turnId);
+  if (
+    !session.toolCalls.markCancelled(
+      [...rootCallIds, ...forcedConsults.flatMap(({ nativeCallIds }) => nativeCallIds)],
+      turnId,
+    )
+  ) {
+    throw new Error("Realtime relay cancellation could not record tool state");
   }
-  for (const forcedConsult of session.harness.forcedConsults.handles()) {
-    if (session.harness.forcedConsults.isCancelled(forcedConsult)) {
-      session.cancelledAgentToolCalls.set(forcedConsult.id, turnId);
-      for (const nativeCallId of session.harness.forcedConsults.nativeCallIds(forcedConsult)) {
-        session.cancelledAgentToolCalls.set(nativeCallId, turnId);
-      }
-    }
+  for (const { handle, nativeCallIds } of forcedConsults) {
+    session.harness.forcedConsults.markCancelled(handle);
+    session.forcedTerminalProviderResults.set(handle.id, {
+      result: buildRealtimeVoiceAgentCancelProviderResult(
+        "OpenClaw cancelled this consult before completion. Do not restart it.",
+      ),
+      options: suppressedToolResultOptions(session),
+      turnId,
+      epoch: terminalEpoch,
+      nativeCallIds,
+    });
   }
-  session.harness.handleBargeIn({ audioPlaybackActive: true }, noFallbackRelayOutputFlush);
+  session.outputOwnership.phase = "cancelling";
+  session.outputOwnership.turnId = turnId;
+  const cancellationDrained = (session.outputOwnership.drain = createDeferredCore());
   abortRelayAgentRuns(session, reason);
   const cancelled = session.harness.talk.cancelTurn({
     turnId,
@@ -449,6 +606,81 @@ export function cancelTalkRealtimeRelayTurn(params: {
     type: "clear",
     talkEvent: cancelled.ok ? cancelled.event : undefined,
   });
+  const closeAfterCancellation = () => {
+    if (
+      relaySessions.get(session.id) === session &&
+      session.toolResultEpoch === terminalEpoch &&
+      session.outputOwnership.phase === "cancelling"
+    ) {
+      session.outputOwnership.drain?.resolve();
+      closeRelaySession(session, "completed");
+    }
+  };
+  setTimeout(closeAfterCancellation, TURN_BOUND_CANCELLATION_DRAIN_MS).unref?.();
+  void Promise.allSettled(
+    [...rootCallIds].map(async (callId) => {
+      await submitTalkRealtimeRelayToolResult({
+        relaySessionId: session.id,
+        connId: session.connId,
+        callId,
+        result: { status: "cancelled" },
+      });
+    }),
+  );
+  try {
+    session.bridge.handleBargeIn({ audioPlaybackActive: true });
+  } catch {
+    session.failSession("Realtime provider cancellation failed. Reconnecting.");
+  }
+  return cancellationDrained.promise.then(() => ({ status: "applied" as const, turnId }));
+}
+
+/** Drops one provider generation without sending cancellation into its replacement. */
+export function resetTalkRealtimeRelayContinuity(
+  session: RelaySession,
+  reason = "session.continuity.reset",
+): TalkEvent | undefined {
+  session.toolResultEpoch += 1;
+  const retiredCallIds = new Set<string>([
+    ...session.activeAgentToolCalls.keys(),
+    ...session.toolCalls.cancelledCallIds(),
+    ...session.providerToolCallIds.keys(),
+    ...session.providerToolCallIds.values(),
+    ...session.pendingFinalToolResults.keys(),
+    ...session.pendingProviderToolResults.keys(),
+    ...session.pendingWorkingToolResults.keys(),
+    ...session.forcedTerminalProviderResults.keys(),
+  ]);
+  for (const handle of session.harness.forcedConsults.handles()) {
+    retiredCallIds.add(handle.id);
+    for (const nativeCallId of session.harness.forcedConsults.nativeCallIds(handle)) {
+      retiredCallIds.add(nativeCallId);
+    }
+  }
+  if (!session.toolCalls.markAgentCompleted(retiredCallIds)) {
+    return undefined;
+  }
+  session.toolCalls.clearCancelled();
+  session.providerToolCallIds.clear();
+  session.relayToolCallIdsByProviderId.clear();
+  session.pendingFinalToolResults.clear();
+  session.toolCalls.clearProviderCompleted();
+  session.pendingProviderToolResults.clear();
+  session.pendingWorkingToolResults.clear();
+  session.forcedTerminalProviderResults.clear();
+  session.harness.forcedConsults.clear();
+  abortRelayAgentRuns(session, reason);
+  const turnId = session.harness.talk.activeTurnId;
+  session.harness.flushOutput(noFallbackRelayOutputFlush);
+  session.harness.finishOutputAudio(reason);
+  if (!turnId) {
+    return undefined;
+  }
+  const cancelled = session.harness.talk.cancelTurn({
+    turnId,
+    payload: { reason },
+  });
+  return cancelled.ok ? cancelled.event : undefined;
 }
 
 /** Closes a realtime relay session owned by the current connection. */

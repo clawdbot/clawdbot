@@ -1,4 +1,4 @@
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { PluginHookToolContext } from "openclaw/plugin-sdk/types";
 
 type CodexHookRequester = NonNullable<PluginHookToolContext["requester"]>;

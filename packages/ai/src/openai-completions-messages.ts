@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   ChatCompletionAssistantMessageParam,
   ChatCompletionContentPart,
@@ -6,18 +7,23 @@ import type {
   ChatCompletionMessageParam,
   ChatCompletionToolMessageParam,
 } from "openai/resources/chat/completions.js";
+import { transformProviderMessages as transformMessages } from "./provider-transcript-transform.js";
+import type { ProviderMessage } from "./provider-types.js";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
   isImageWithMediaPayload,
 } from "./providers/tool-result-text.js";
-import { transformMessages } from "./transcript-transform.js";
 import type { ResolvedOpenAICompletionsCompat } from "./transports/openai-completions-compat.js";
 import type { Context, Model, TextContent, ThinkingContent, ToolCall } from "./types.js";
 import { sanitizeSurrogates } from "./utils/sanitize-unicode.js";
 import { stripSystemPromptCacheBoundary } from "./utils/system-prompt-cache-boundary.js";
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
+type ChatCompletionContentPartVideo = {
+  type: "video_url";
+  video_url: { url: string };
+};
 
 function isTextContentBlock(block: { type: string }): block is TextContent {
   return block.type === "text";
@@ -34,6 +40,17 @@ function isToolCallBlock(block: { type: string }): block is ToolCall {
 function sanitizeToolResultText(text: string, fallback: string): string {
   const sanitized = sanitizeSurrogates(text);
   return sanitized.trim().length > 0 ? sanitized : fallback;
+}
+
+/** Whether replayed messages require a tools marker for proxy compatibility. */
+export function hasToolCallHistory(messages: Context["messages"]): boolean {
+  return messages.some(
+    (message) =>
+      message.role === "toolResult" ||
+      (message.role === "assistant" &&
+        Array.isArray(message.content) &&
+        message.content.some((block) => block.type === "toolCall")),
+  );
 }
 
 /** Convert a normalized transcript to OpenAI Chat Completions messages. */
@@ -57,14 +74,14 @@ export function convertMessages(
     }
 
     if (model.provider === "openai") {
-      return id.length > 40 ? id.slice(0, 40) : id;
+      return id.length > 40 ? truncateUtf16Safe(id, 40) : id;
     }
     return id;
   };
 
   const transformedMessages = transformMessages(context.messages, model, (id) =>
     normalizeToolCallId(id),
-  );
+  ) as ProviderMessage[];
 
   if (context.systemPrompt) {
     const useDeveloperRole = model.reasoning && compat.supportsDeveloperRole;
@@ -102,24 +119,29 @@ export function convertMessages(
         }
         params.push(userParam);
       } else {
-        const content: ChatCompletionContentPart[] = msg.content.map(
-          (item): ChatCompletionContentPart => {
+        const content: Array<ChatCompletionContentPart | ChatCompletionContentPartVideo> =
+          msg.content.map((item) => {
             if (item.type === "text") {
               return {
                 type: "text",
                 text: sanitizeSurrogates(item.text),
               } satisfies ChatCompletionContentPartText;
             }
+            if (item.type === "video") {
+              return {
+                type: "video_url",
+                video_url: { url: `data:${item.mimeType};base64,${item.data}` },
+              } satisfies ChatCompletionContentPartVideo;
+            }
             return {
               type: "image_url",
               image_url: { url: `data:${item.mimeType};base64,${item.data}` },
             } satisfies ChatCompletionContentPartImage;
-          },
-        );
+          });
         if (content.length === 0) {
           continue;
         }
-        const userParam: ChatCompletionMessageParam = { role: "user", content };
+        const userParam = { role: "user", content } as ChatCompletionMessageParam;
         if (isRuntimeContextCarrier) {
           options.cacheOptOutIndexes?.add(params.length);
         }
@@ -131,19 +153,13 @@ export function convertMessages(
         content: compat.requiresAssistantAfterToolResult ? "" : null,
       };
 
-      const assistantTextParts = msg.content
+      const assistantTexts = msg.content
         .filter(isTextContentBlock)
         .filter((block) => block.text.trim().length > 0)
-        .map(
-          (block) =>
-            ({
-              type: "text",
-              text: sanitizeSurrogates(block.text),
-            }) satisfies ChatCompletionContentPartText,
-        );
+        .map((block) => sanitizeSurrogates(block.text));
       // Separate content blocks are distinct utterances, so replay them the way
       // the string-content flattener does rather than running them together.
-      const assistantText = assistantTextParts.map((part) => part.text).join("\n");
+      const assistantText = assistantTexts.join("\n");
 
       const nonEmptyThinkingBlocks = msg.content
         .filter(isThinkingContentBlock)
@@ -153,7 +169,13 @@ export function convertMessages(
           const thinkingText = nonEmptyThinkingBlocks
             .map((block) => sanitizeSurrogates(block.thinking))
             .join("\n\n");
-          assistantMsg.content = [{ type: "text", text: thinkingText }, ...assistantTextParts];
+          assistantMsg.content = [
+            { type: "text", text: thinkingText },
+            ...assistantTexts.map((text): ChatCompletionContentPartText => ({
+              type: "text",
+              text,
+            })),
+          ];
         } else {
           // String content is the interoperable Chat Completions replay shape;
           // content-part arrays make some compatible servers mirror JSON.
@@ -218,7 +240,9 @@ export function convertMessages(
       }
       params.push(assistantMsg);
     } else if (msg.role === "toolResult") {
-      const imageBlocks: Array<{ type: "image_url"; image_url: { url: string } }> = [];
+      const imageContentParts: Array<
+        ChatCompletionContentPartText | { type: "image_url"; image_url: { url: string } }
+      > = [];
       let j = i;
 
       while (j < transformedMessages.length) {
@@ -229,7 +253,7 @@ export function convertMessages(
 
         const textResult = extractToolResultText(toolMsg.content);
         const mediaPlaceholder = describeToolResultMediaPlaceholder(toolMsg.content);
-        const hasImages = toolMsg.content.some(isImageWithMediaPayload);
+        const images = toolMsg.content.filter(isImageWithMediaPayload);
         const content = sanitizeToolResultText(
           textResult,
           mediaPlaceholder ?? EMPTY_TOOL_RESULT_TEXT,
@@ -244,14 +268,18 @@ export function convertMessages(
         }
         params.push(toolResultMsg);
 
-        if (hasImages && model.input.includes("image")) {
-          for (const block of toolMsg.content) {
-            if (isImageWithMediaPayload(block)) {
-              imageBlocks.push({
-                type: "image_url",
-                image_url: { url: `data:${block.mimeType};base64,${block.data}` },
-              });
-            }
+        if (images.length > 0 && model.input.includes("image")) {
+          const boundedToolName = sanitizeSurrogates(truncateUtf16Safe(toolMsg.toolName ?? "", 64));
+          // Count text-only replies too: names and bounded call IDs can collide.
+          imageContentParts.push({
+            type: "text",
+            text: `Image(s) from tool result #${j - i + 1}${boundedToolName ? ` (${boundedToolName})` : ""}:`,
+          });
+          for (const block of images) {
+            imageContentParts.push({
+              type: "image_url",
+              image_url: { url: `data:${block.mimeType};base64,${block.data}` },
+            });
           }
         }
         j += 1;
@@ -259,13 +287,13 @@ export function convertMessages(
 
       i = j - 1;
 
-      if (imageBlocks.length > 0) {
+      if (imageContentParts.length > 0) {
         if (compat.requiresAssistantAfterToolResult) {
           params.push({ role: "assistant", content: "I have processed the tool results." });
         }
         params.push({
           role: "user",
-          content: [{ type: "text", text: "Attached image(s) from tool result:" }, ...imageBlocks],
+          content: imageContentParts,
         });
         lastRole = "user";
       } else {

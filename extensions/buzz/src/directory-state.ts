@@ -1,6 +1,8 @@
 import type { Event } from "nostr-tools";
 import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk/directory-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { isNewerBuzzRevision } from "./event-order.js";
+import type { BuzzMentionMember } from "./mentions.js";
 import type { BuzzRoomMembership } from "./room-membership.js";
 import { buildBuzzTarget, parseBuzzTarget } from "./target.js";
 
@@ -54,17 +56,6 @@ function readPreferredString(params: {
     return normalizeBoundedString(params.content[params.primary], params.maxChars);
   }
   return normalizeBoundedString(params.content[params.fallback], params.maxChars);
-}
-
-function isNewerEvent(
-  candidate: { createdAt: number; eventId: string },
-  current: { createdAt: number; eventId: string } | undefined,
-): boolean {
-  return (
-    !current ||
-    candidate.createdAt > current.createdAt ||
-    (candidate.createdAt === current.createdAt && candidate.eventId < current.eventId)
-  );
 }
 
 function fallbackPublicKeyLabel(publicKey: string): string {
@@ -236,12 +227,27 @@ export class BuzzDirectoryState {
     return this.#rooms.get(parseBuzzTarget(roomId))?.archived === true;
   }
 
+  isBotMember(roomId: string, publicKey: string): boolean {
+    return (
+      this.isMember(roomId, publicKey) &&
+      this.#memberships.get(parseBuzzTarget(roomId))?.roles.get(publicKey) === "bot"
+    );
+  }
+
+  isMember(roomId: string, publicKey: string): boolean {
+    const normalizedRoomId = parseBuzzTarget(roomId);
+    return (
+      !this.#rooms.get(normalizedRoomId)?.archived &&
+      this.#memberships.get(normalizedRoomId)?.members.has(publicKey) === true
+    );
+  }
+
   applyProfileEvent(event: Event): boolean {
     const profile = parseBuzzDirectoryProfileEvent(event);
     if (
       !profile ||
       !this.#profilePublicKeys.has(profile.publicKey) ||
-      !isNewerEvent(profile, this.#profiles.get(profile.publicKey))
+      !isNewerBuzzRevision(profile, this.#profiles.get(profile.publicKey))
     ) {
       return false;
     }
@@ -254,7 +260,7 @@ export class BuzzDirectoryState {
     if (
       !room ||
       !this.#configuredRoomIds.has(room.roomId) ||
-      !isNewerEvent(room, this.#rooms.get(room.roomId))
+      !isNewerBuzzRevision(room, this.#rooms.get(room.roomId))
     ) {
       return false;
     }
@@ -328,6 +334,23 @@ export class BuzzDirectoryState {
       })
       .toSorted(compareDirectoryEntries);
     return applyQueryAndLimit(entries, { limit: params.limit });
+  }
+
+  mentionMembers(roomId: string): BuzzMentionMember[] | undefined {
+    const normalized = parseBuzzTarget(roomId);
+    if (this.#rooms.get(normalized)?.archived) {
+      return undefined;
+    }
+    const membership = this.#memberships.get(normalized);
+    if (!membership) {
+      return undefined;
+    }
+    return [...membership.members]
+      .map((publicKey) => ({
+        publicKey,
+        displayName: this.#profiles.get(publicKey)?.displayName,
+      }))
+      .toSorted((left, right) => left.publicKey.localeCompare(right.publicKey));
   }
 
   #buildUserEntry(publicKey: string): ChannelDirectoryEntry {

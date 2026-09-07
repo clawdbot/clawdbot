@@ -121,34 +121,28 @@ export function resolveModelEntries(params: {
   const sharedModels = cfg.tools?.media?.models ?? [];
   const entries = sharedModels.map((entry, index) => ({
     entry,
-    source: "shared" as const,
-    secretOwnerId: runtimeMediaModelSecretOwnerId({ source: "shared", index }),
+    secretOwnerId: runtimeMediaModelSecretOwnerId(index),
   }));
   if (entries.length === 0) {
     return [];
   }
 
   return entries
-    .filter(({ entry, source }) => {
+    .filter(({ entry }) => {
       const caps = resolveEffectiveMediaEntryCapabilities({
         entry,
-        source,
         providerRegistry: params.providerRegistry,
       });
       if (!caps || caps.length === 0) {
-        if (source === "shared") {
-          if (shouldLogVerbose()) {
-            logVerbose(
-              `Skipping shared media model without capabilities: ${entry.provider ?? entry.command ?? "unknown"}`,
-            );
-          }
-          return false;
+        if (shouldLogVerbose()) {
+          logVerbose(
+            `Skipping shared media model without capabilities: ${entry.provider ?? entry.command ?? "unknown"}`,
+          );
         }
-        return true;
+        return false;
       }
       return caps.includes(capability);
     })
-    .map(({ entry, secretOwnerId }) => ({ entry, secretOwnerId }))
     .toSorted((left, right) => {
       const preferred = config?.preferredModel?.trim();
       if (!preferred) {

@@ -2,8 +2,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { readWebhookBodyOrReject } from "openclaw/plugin-sdk/webhook-request-guards";
-import type { ResolvedZaloAccount } from "./accounts.js";
-import type { ZaloRuntimeEnv } from "./monitor.types.js";
 import {
   createFixedWindowRateLimiter,
   createWebhookAnomalyTracker,
@@ -18,7 +16,9 @@ import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   resolveClientIp,
   type OpenClawConfig,
-} from "./runtime-api.js";
+} from "../runtime-api.js";
+import type { ResolvedZaloAccount } from "./accounts.js";
+import type { ZaloRuntimeEnv } from "./monitor.types.js";
 import { ZaloWebhookPayloadError } from "./webhook-spool.js";
 
 type ZaloWebhookTarget = {
@@ -48,10 +48,6 @@ const webhookAnomalyTracker = createWebhookAnomalyTracker({
 function clearZaloWebhookSecurityStateForTest(): void {
   webhookRateLimiter.clear();
   webhookAnomalyTracker.clear();
-}
-
-function getZaloWebhookRateLimitStateSizeForTest(): number {
-  return webhookRateLimiter.size();
 }
 
 function getZaloWebhookStatusCounterSizeForTest(): number {
@@ -192,7 +188,6 @@ async function handleZaloWebhookRequest(
 
 export const zaloWebhookRuntime = {
   clearZaloWebhookSecurityStateForTest,
-  getZaloWebhookRateLimitStateSizeForTest,
   getZaloWebhookStatusCounterSizeForTest,
   handleZaloWebhookRequest,
   registerZaloWebhookTarget,

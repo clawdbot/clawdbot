@@ -92,4 +92,20 @@ describe("config IO state caches", () => {
     expect(loggedConfigWarningFingerprints.size).toBe(CACHE_MAX_SIZE);
     expect(warnSpy).toHaveBeenCalledTimes(CACHE_MAX_SIZE + 2);
   });
+
+  it("emits each config warning record on one physical line", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    logConfigWarningsOnce({
+      configPath: "/config.json",
+      warnings: [
+        { path: "root", message: "first line\ncontinuation" },
+        { path: "nested.value", message: "second warning" },
+      ],
+      logger: console,
+    });
+
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(String(warnSpy.mock.calls[0]?.[0])).not.toContain("\n");
+  });
 });

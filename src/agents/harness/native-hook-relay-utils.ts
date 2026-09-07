@@ -1,4 +1,5 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { readNonEmptyStringPreservingWhitespace as readOptionalNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe, truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import type {
   JsonValue,
   NativeHookRelayEvent,
@@ -66,9 +67,7 @@ export function readNonEmptyString(value: unknown, name: string): string {
   throw new Error(`native hook relay ${name} is required`);
 }
 
-export function readOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
+export { readOptionalNonEmptyString };
 
 export function readOptionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
@@ -212,9 +211,6 @@ function snapshotString(value: string, state: { remainingStringLength: number })
   return `${prefix}...[truncated]`;
 }
 
-export function truncateText(value: string, maxLength: number): string {
-  if (value.length <= maxLength) {
-    return value;
-  }
-  return `${truncateUtf16Safe(value, Math.max(0, maxLength - 3))}...`;
+export function truncateRelayText(value: string, maxLength: number): string {
+  return truncateWithMarker(value, maxLength, { marker: "...", reserve: 3, trimEnd: false });
 }

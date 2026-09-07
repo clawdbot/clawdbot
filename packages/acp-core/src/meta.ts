@@ -1,4 +1,5 @@
 // ACP Core module implements meta behavior.
+import { asFiniteNumber, asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 function readMetaValue<T>(
@@ -19,7 +20,7 @@ function readMetaValue<T>(
 }
 
 /** Reads the first present string metadata value from a current-to-legacy key list. */
-export function readString(
+export function readMetadataString(
   meta: Record<string, unknown> | null | undefined,
   keys: string[],
 ): string | undefined {
@@ -35,13 +36,11 @@ export function readBool(
 }
 
 /** Reads the first finite numeric metadata value from a current-to-legacy key list. */
-export function readNumber(
+export function readMetadataNumber(
   meta: Record<string, unknown> | null | undefined,
   keys: string[],
 ): number | undefined {
-  return readMetaValue(meta, keys, (value) =>
-    typeof value === "number" && Number.isFinite(value) ? value : undefined,
-  );
+  return readMetaValue(meta, keys, asFiniteNumber);
 }
 
 /** Reads the first safe non-negative integer metadata value, preserving zero. */
@@ -49,7 +48,5 @@ export function readNonNegativeInteger(
   meta: Record<string, unknown> | null | undefined,
   keys: string[],
 ): number | undefined {
-  return readMetaValue(meta, keys, (value) =>
-    typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined,
-  );
+  return readMetaValue(meta, keys, (value) => asSafeIntegerInRange(value, { min: 0 }));
 }

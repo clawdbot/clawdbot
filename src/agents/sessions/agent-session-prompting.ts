@@ -4,49 +4,138 @@ import { attachRuntimePromptMediaFacts, type MediaFact } from "../../media/media
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { readRuntimePromptImageFactIndexes } from "../../media/runtime-prompt-image-provenance.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
+import { mergePreparedUserTurnMessageForRuntime } from "../../sessions/user-turn-transcript.message.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.types.js";
+import { resolvePendingRuntimeContextReplay } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
 import { AgentSessionBase } from "./agent-session-base.js";
 import type { PromptOptions } from "./agent-session-types.js";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.js";
+import {
+  createCompactionRequestBudget,
+  takePromptCompactionRequestBudget,
+  withCompactionQueuedContext,
+} from "./compaction/request-budget.js";
 import type { CustomMessage } from "./messages.js";
 import { expandPromptTemplate } from "./prompt-templates.js";
 import type { ResourceLoader } from "./resource-loader.js";
+import { setSteeringMessageIdentity } from "./steering-message-identity.js";
 
 type PostAgentRunAction = "continue" | "settled" | "handoff";
 
+function rethrowPromptFinalizationFailure(failed: boolean, error: unknown): void {
+  if (failed) {
+    throw error;
+  }
+}
+
+/** @internal Host preparation runs after SDK prompt hooks and owns its run cancellation. */
+export const agentSessionSetPromptPreparation: unique symbol = Symbol.for(
+  "openclaw.agent-session.set-prompt-preparation",
+);
+
+/** @internal Queue prompt-owned context with cleanup for preflight exits. */
+export const agentSessionQueuePromptContext: unique symbol = Symbol.for(
+  "openclaw.agent-session.queue-prompt-context",
+);
+
 export abstract class AgentSessionPrompting extends AgentSessionBase {
+  private logicalPromptActive = false;
+  private promptPreparation?: () => Promise<void | (() => void)>;
+
+  [agentSessionQueuePromptContext](message: CustomMessage): () => void {
+    // The carrier belongs immediately after its user, ahead of queued extension context.
+    this.pendingNextTurnMessages.unshift(message);
+    return () => {
+      this.pendingNextTurnMessages = this.pendingNextTurnMessages.filter(
+        (pending) => pending !== message,
+      );
+    };
+  }
+
+  [agentSessionSetPromptPreparation](
+    prepare: (() => Promise<void | (() => void)>) | undefined,
+  ): void {
+    this.promptPreparation = prepare;
+  }
+
+  override dispose(): void {
+    this.promptPreparation = undefined;
+    super.dispose();
+  }
+
   // =========================================================================
   // Prompting
   // =========================================================================
 
   private async runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
+    if (this.logicalPromptActive) {
+      throw new Error(
+        "Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.",
+      );
+    }
+    // Retry and compaction gaps briefly make the core idle, but the logical prompt
+    // still owns continuation and its one terminal fact until this scope closes.
+    this.logicalPromptActive = true;
     let endedForTurnHandoff = false;
     try {
-      await this.agent.prompt(messages);
+      await this.runPreparedAgentLoop(() => this.agent.prompt(messages));
       while (true) {
         const action = await this.handlePostAgentRun();
         if (action !== "continue") {
           endedForTurnHandoff = action === "handoff";
           break;
         }
-        await this.agent.continue();
+        await this.runPreparedAgentLoop(() => this.agent.continue());
       }
     } finally {
       this.systemPromptOverride = undefined;
-      this.flushPendingBashMessages();
-      // Consume handoff state before callbacks can start a nested run and set it again.
-      endedForTurnHandoff ||= this.lastRunEndedForTurnHandoff;
-      this.lastRunEndedForTurnHandoff = false;
-      // Failed or aborted runs can still be idle; only handoff leaves external delivery pending.
-      if (!endedForTurnHandoff) {
-        await this.currentExtensionRunner.emit({ type: "agent_settled" });
+      let flushFailed = false;
+      let flushError: unknown;
+      try {
+        this.flushPendingBashMessages();
+      } catch (error) {
+        flushFailed = true;
+        flushError = error;
       }
+      this.logicalPromptActive = false;
+      let terminalFailed = false;
+      let terminalError: unknown;
+      try {
+        // Consume handoff state before callbacks can start a nested run and set it again.
+        endedForTurnHandoff ||= this.lastRunEndedForTurnHandoff;
+        this.lastRunEndedForTurnHandoff = false;
+        // Failed or aborted runs can still be idle; only handoff leaves external delivery pending.
+        if (endedForTurnHandoff) {
+          this.emit({ type: "agent_handoff" });
+        } else {
+          this.emit({ type: "agent_settled" });
+          await this.currentExtensionRunner.emit({ type: "agent_settled" });
+        }
+      } catch (error) {
+        terminalFailed = true;
+        terminalError = error;
+      }
+      rethrowPromptFinalizationFailure(flushFailed, flushError);
+      rethrowPromptFinalizationFailure(terminalFailed, terminalError);
     }
+  }
+
+  private async runPreparedAgentLoop(run: () => Promise<void>): Promise<void> {
+    const prepare = this.promptPreparation;
+    if (prepare) {
+      const admit = await prepare();
+      if (prepare !== this.promptPreparation) {
+        throw new Error("Session prompt preparation is stale after replacement or disposal.");
+      }
+      admit?.();
+    }
+    // Start synchronously after the owner check; disposal must not reopen a core loop.
+    return run();
   }
 
   private async handlePostAgentRun(): Promise<PostAgentRunAction> {
@@ -58,7 +147,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       // External delivery owns the next run after a deliberate turn handoff.
       return "handoff";
     }
-    if (!msg) {
+    if (!msg || msg.stopReason === "aborted") {
       return "settled";
     }
 
@@ -91,19 +180,25 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     return [{ type: "text", text }, ...(images ?? [])];
   }
 
-  private createUserMessage(text: string, images?: ImageContent[]): PersistedUserTurnMessage {
+  private createUserMessage(
+    text: string,
+    images?: ImageContent[],
+    preparedMessage?: PersistedUserTurnMessage,
+  ): PersistedUserTurnMessage {
+    const imageFactIndexes = readRuntimePromptImageFactIndexes(images);
     const message = {
       role: "user",
       content: this.createUserContent(text, images),
       timestamp: Date.now(),
+      ...(imageFactIndexes ? { __openclaw: { mediaImageBlockFactIndexes: imageFactIndexes } } : {}),
     } satisfies PersistedUserTurnMessage;
-    const imageFactIndexes = readRuntimePromptImageFactIndexes(images);
-    return imageFactIndexes
-      ? ({
-          ...message,
-          __openclaw: { mediaImageBlockFactIndexes: imageFactIndexes },
-        } as unknown as PersistedUserTurnMessage)
-      : message;
+    // Admission facts must precede accepted steering input. Keep expanded runtime
+    // content separate from the prepared display text used during persistence.
+    return Object.assign(
+      message,
+      mergePreparedUserTurnMessageForRuntime({ runtimeMessage: message, preparedMessage }),
+      { content: message.content },
+    );
   }
 
   /**
@@ -116,6 +211,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
    * @throws Error if no model selected or no API key available (when not streaming)
    */
   async prompt(text: string, options?: PromptOptions): Promise<void> {
+    const preparedCompactionBudget = takePromptCompactionRequestBudget(options);
     const expandPromptTemplates = options?.expandPromptTemplates ?? true;
     const preflightResult = options?.preflightResult;
     let messages: AgentMessage[] | undefined;
@@ -159,7 +255,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       }
 
       // If streaming, queue via steer() or followUp() based on option
-      if (this.isStreaming) {
+      if (this.isStreaming || this.logicalPromptActive) {
         if (!options?.streamingBehavior) {
           throw new Error(
             "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
@@ -196,21 +292,63 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
 
       // Check if we need to compact before sending (catches aborted responses).
       // The pending user prompt below starts the next run; no intermediate continuation is needed.
+      const persistedUserIdempotencyKey = options?.persistedUserIdempotencyKey;
+      const contextWindow = this.model.contextWindow;
       const lastAssistant = this.findLastAssistantMessage();
       if (lastAssistant) {
-        await this.checkCompaction(lastAssistant, false);
+        const pendingQueuedContextMessages = resolvePendingRuntimeContextReplay({
+          messages: this.agent.state.messages,
+          pendingContextMessages: this.pendingNextTurnMessages,
+          persistedUserIdempotencyKey,
+        }).pendingContextMessages;
+        await this.checkCompaction(
+          lastAssistant,
+          false,
+          preparedCompactionBudget
+            ? withCompactionQueuedContext(preparedCompactionBudget, pendingQueuedContextMessages)
+            : typeof contextWindow === "number" &&
+                Number.isFinite(contextWindow) &&
+                contextWindow > 0
+              ? createCompactionRequestBudget({
+                  contextWindow,
+                  reserveTokens: this.settingsManager.getCompactionSettings().reserveTokens,
+                  systemPrompt: this.agent.state.systemPrompt,
+                  tools: this.agent.state.tools,
+                  pendingPrompt: expandedText,
+                  pendingImageCount: currentImages?.length,
+                  pendingQueuedContextMessages,
+                  pendingUserIdempotencyKey: persistedUserIdempotencyKey,
+                })
+              : undefined,
+        );
       }
 
-      // Build messages array (custom message if any, then user message)
+      // Re-read after compaction: indices and queued context may have changed.
+      const { persistedUserIndex, replayPersistedCarrier, pendingContextMessages } =
+        resolvePendingRuntimeContextReplay({
+          messages: this.agent.state.messages,
+          pendingContextMessages: this.pendingNextTurnMessages,
+          persistedUserIdempotencyKey,
+        });
+      const replayPersistedTurn = persistedUserIndex >= 0;
+      const persistedUser = this.agent.state.messages[persistedUserIndex];
+      if (!replayPersistedCarrier && persistedUser?.role === "user") {
+        // Transient replay still consumes freshly resolved text/images. Preserve
+        // admission facts in place; a recorded carrier pair must keep its signed prefix.
+        const runtimeUser = this.createUserMessage(expandedText, currentImages, persistedUser);
+        this.agent.state.messages = this.agent.state.messages.with(persistedUserIndex, runtimeUser);
+      }
+
       messages = [];
 
-      // Add user message
-      messages.push(this.createUserMessage(expandedText, currentImages));
-
-      // Inject any pending "nextTurn" messages as context alongside the user message
-      for (const msg of this.pendingNextTurnMessages) {
-        messages.push(msg);
+      if (!replayPersistedTurn) {
+        messages.push({
+          ...this.createUserMessage(expandedText, currentImages),
+          ...(persistedUserIdempotencyKey ? { idempotencyKey: persistedUserIdempotencyKey } : {}),
+        });
       }
+
+      messages.push(...pendingContextMessages);
       this.pendingNextTurnMessages = [];
 
       // Emit before_agent_start extension event
@@ -323,8 +461,8 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
 
   /**
    * Queue a steering message while the agent is running.
-   * Delivered after the current assistant turn finishes executing its tool calls,
-   * before the next LLM call.
+   * Delivered before the next unstarted tool launch or model call. Running tools
+   * continue; suppressed calls receive paired synthetic results.
    * Expands skill commands and prompt templates. Errors on extension commands.
    * @param images Optional image attachments to include with the message
    * @param userTurnTranscriptRecorder Prepared channel fields for transcript-only persistence
@@ -336,6 +474,8 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
+    queueIdentity?: string,
+    canInject?: () => boolean,
   ): Promise<void> {
     // Check for extension commands (cannot be queued)
     if (text.startsWith("/")) {
@@ -347,6 +487,11 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 
     const preparedMessage = await userTurnTranscriptRecorder?.resolveMessage();
+    // Transcript preparation may outlive the captured attempt. Recheck its owner
+    // fence immediately before enqueue so a successor cannot inherit this steer.
+    if (canInject && !canInject()) {
+      throw new Error("active session is finalizing");
+    }
     await this.queueSteer(
       expandedText,
       images,
@@ -355,6 +500,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         : undefined,
       media,
       imageOrder,
+      queueIdentity,
     );
   }
 
@@ -390,13 +536,14 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     },
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
+    queueIdentity?: string,
   ): Promise<void> {
-    this.steeringMessages.push(text);
-    this.emitQueueUpdate();
-    const runtimeMessage = this.createUserMessage(text, images);
+    const runtimeMessage = this.createUserMessage(text, images, transcriptContext?.message);
     const promptMessage = media?.length
       ? attachRuntimePromptMediaFacts(runtimeMessage, media, imageOrder)
       : runtimeMessage;
+    setSteeringMessageIdentity(promptMessage, queueIdentity);
+    this.trackQueuedUserMessage(promptMessage, "steering", text);
     this.agent.steer(
       transcriptContext
         ? attachRuntimeUserTurnTranscriptContext(promptMessage, transcriptContext)
@@ -408,13 +555,9 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
    * Internal: Queue a follow-up message (already expanded, no extension command check).
    */
   private async queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
-    this.followUpMessages.push(text);
-    this.emitQueueUpdate();
-    this.agent.followUp({
-      role: "user",
-      content: this.createUserContent(text, images),
-      timestamp: Date.now(),
-    });
+    const message = this.createUserMessage(text, images);
+    this.trackQueuedUserMessage(message, "followUp", text);
+    this.agent.followUp(message);
   }
 
   /**
@@ -527,8 +670,8 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
    * @returns Object with steering and followUp arrays
    */
   clearQueue(): { steering: string[]; followUp: string[] } {
-    const steering = [...this.steeringMessages];
-    const followUp = [...this.followUpMessages];
+    const steering = this.steeringMessages.map((entry) => entry.text);
+    const followUp = this.followUpMessages.map((entry) => entry.text);
     this.steeringMessages = [];
     this.followUpMessages = [];
     this.agent.clearAllQueues();
@@ -543,12 +686,12 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
 
   /** Get pending steering messages (read-only) */
   getSteeringMessages(): readonly string[] {
-    return this.steeringMessages;
+    return this.steeringMessages.map((entry) => entry.text);
   }
 
   /** Get pending follow-up messages (read-only) */
   getFollowUpMessages(): readonly string[] {
-    return this.followUpMessages;
+    return this.followUpMessages.map((entry) => entry.text);
   }
 
   get resourceLoader(): ResourceLoader {

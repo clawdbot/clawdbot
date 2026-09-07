@@ -199,6 +199,19 @@ describe("Buzz message events", () => {
       ["e", "root-id", "", "root"],
       ["e", "parent-id", "", "reply"],
     ]);
+    expect(
+      buildBuzzMessageTags({
+        channelId: "channel-id",
+        threadId: "root-id",
+        replyToId: "parent-id",
+        mentionedPubkeys: ["B".repeat(64), "b".repeat(64)],
+      }),
+    ).toEqual([
+      ["h", "channel-id"],
+      ["e", "root-id", "", "root"],
+      ["e", "parent-id", "", "reply"],
+      ["p", "b".repeat(64)],
+    ]);
   });
 
   it("validates the Buzz NIP-OA authentication tag shape", () => {

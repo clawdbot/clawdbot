@@ -10,6 +10,12 @@ import {
 } from "openclaw/plugin-sdk/provider-setup";
 import { asPositiveSafeInteger, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_DEFAULT_BASE_URL, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
+import {
+  buildLmstudioReasoningEffortMap,
+  LMSTUDIO_OPENAI_COMPAT_ENABLED_REASONING_EFFORTS,
+  LMSTUDIO_OPENAI_COMPAT_REASONING_EFFORTS,
+  normalizeLmstudioTransportReasoningCompat,
+} from "./model-reasoning.js";
 
 export type LmstudioModelWire = {
   type?: "llm" | "embedding";
@@ -46,19 +52,6 @@ type LmstudioConfiguredCatalogEntry = {
   input?: ("text" | "image" | "document")[];
   compat?: ModelDefinitionConfig["compat"];
 };
-
-const LMSTUDIO_OPENAI_COMPAT_ENABLED_REASONING_EFFORTS = [
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-] as const;
-
-const LMSTUDIO_OPENAI_COMPAT_REASONING_EFFORTS = [
-  "none",
-  ...LMSTUDIO_OPENAI_COMPAT_ENABLED_REASONING_EFFORTS,
-] as const;
 
 const LMSTUDIO_CONFIGURED_BOOLEAN_COMPAT_FIELDS = [
   "supportsStore",
@@ -134,28 +127,6 @@ function resolveLmstudioTransportReasoningEfforts(allowedOptions: readonly strin
   );
 }
 
-function resolveLmstudioEnabledTransportReasoningOption(
-  supportedReasoningEfforts: readonly string[],
-): string | undefined {
-  return (
-    supportedReasoningEfforts.find((option) => option === "xhigh") ??
-    supportedReasoningEfforts.find((option) => option === "high") ??
-    supportedReasoningEfforts.find((option) => option !== "none")
-  );
-}
-
-function buildLmstudioReasoningEffortMap(
-  supportedReasoningEfforts: readonly string[],
-): Record<string, string> | undefined {
-  const disabled = supportedReasoningEfforts.includes("none") ? "none" : undefined;
-  const max = resolveLmstudioEnabledTransportReasoningOption(supportedReasoningEfforts);
-  const map = {
-    ...(disabled ? { off: disabled, none: disabled } : {}),
-    ...(max ? { adaptive: max, max } : {}),
-  };
-  return Object.keys(map).length > 0 ? map : undefined;
-}
-
 function buildLmstudioReasoningCompat(
   allowedOptions: readonly string[],
 ): ModelDefinitionConfig["compat"] | undefined {
@@ -170,33 +141,6 @@ function buildLmstudioReasoningCompat(
     supportsReasoningEffort: true,
     supportedReasoningEfforts,
     reasoningEffortMap: buildLmstudioReasoningEffortMap(supportedReasoningEfforts),
-  };
-}
-
-function normalizeLmstudioTransportReasoningCompat(
-  compat: NonNullable<ModelDefinitionConfig["compat"]>,
-): NonNullable<ModelDefinitionConfig["compat"]> {
-  const supportedReasoningEfforts = compat.supportedReasoningEfforts;
-  const map = compat.reasoningEffortMap;
-  const hasBinarySupported =
-    Array.isArray(supportedReasoningEfforts) &&
-    supportedReasoningEfforts.some((option) => option === "on");
-  const hasBinaryMapValue =
-    map !== undefined && Object.values(map).some((value) => value === "on" || value === "off");
-  if (!hasBinarySupported && !hasBinaryMapValue) {
-    return compat;
-  }
-  const hasDisabled =
-    supportedReasoningEfforts?.includes("off") === true ||
-    supportedReasoningEfforts?.includes("none") === true ||
-    Object.values(map ?? {}).some((value) => value === "off" || value === "none");
-  const normalizedSupportedReasoningEfforts = hasDisabled
-    ? [...LMSTUDIO_OPENAI_COMPAT_REASONING_EFFORTS]
-    : [...LMSTUDIO_OPENAI_COMPAT_ENABLED_REASONING_EFFORTS];
-  return {
-    ...compat,
-    supportedReasoningEfforts: normalizedSupportedReasoningEfforts,
-    reasoningEffortMap: buildLmstudioReasoningEffortMap(normalizedSupportedReasoningEfforts),
   };
 }
 
@@ -250,15 +194,6 @@ export function resolveLoadedContextWindow(
     contextWindow = contextWindow === null ? normalized : Math.max(contextWindow, normalized);
   }
   return contextWindow;
-}
-
-/** Uses the loaded context when present, otherwise the model's advertised maximum. */
-export function resolveLmstudioEffectiveContextWindow(
-  entry: Pick<LmstudioModelWire, "loaded_instances" | "max_context_length">,
-): number | null {
-  return (
-    resolveLoadedContextWindow(entry) ?? asPositiveSafeInteger(entry.max_context_length) ?? null
-  );
 }
 
 function normalizeLmstudioVariantIds(value: unknown): string[] {
@@ -387,6 +322,9 @@ function normalizeLmstudioConfiguredCompat(value: unknown): ModelDefinitionConfi
     if (typeof configuredValue === "boolean") {
       compat[key] = configuredValue;
     }
+  }
+  if (record.codeMode === "preferred" || record.codeMode === "capable") {
+    compat.codeMode = record.codeMode;
   }
   const visibleReasoningDetailTypes = normalizeConfiguredCompatStringList(
     record.visibleReasoningDetailTypes,

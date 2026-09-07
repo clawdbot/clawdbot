@@ -1,15 +1,23 @@
 // Telegram helper module supports body helpers behavior.
-import type { Chat, Message, MessageOrigin, User } from "grammy/types";
+import type {
+  Chat,
+  Message,
+  MessageOrigin,
+  RichBlock,
+  RichBlockCaption,
+  RichMessageButton,
+  RichText,
+  User,
+} from "grammy/types";
 import type {
   ChannelInboundMediaInput,
   NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
-  isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { telegramHtmlToPlainTextFallback } from "../format.js";
+import { renderTelegramTextEntities } from "./inbound-text-entities.js";
 
 type TelegramMediaMessage = Pick<
   Message,
@@ -99,11 +107,7 @@ const TELEGRAM_RICH_MESSAGE_PLACEHOLDER = "[unsupported Telegram rich_message re
 type TelegramTextMessage = Pick<
   Message,
   "text" | "caption" | "entities" | "caption_entities" | "poll"
-> & { rich_message?: unknown };
-
-function hasTelegramRichMessage(value: unknown): boolean {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+> & { rich_message?: Message.RichMessageMessage["rich_message"] };
 
 function compactRichText(value: string): string {
   return value
@@ -117,84 +121,118 @@ function joinRichText(parts: string[], separator: string): string {
   return parts.map(compactRichText).filter(Boolean).join(separator);
 }
 
-function renderRichInlineText(value: unknown): string {
+function renderRichMessageButton(button: RichMessageButton): string {
+  return renderRichInlineText(button.text);
+}
+
+function renderRichInlineText(value: RichText | undefined): string {
+  if (value === undefined) {
+    return "";
+  }
   if (typeof value === "string") {
     return value;
   }
   if (Array.isArray(value)) {
     return value.map(renderRichInlineText).filter(Boolean).join("");
   }
-  if (!isRecord(value)) {
-    return "";
+  switch (value.type) {
+    case "anchor":
+      return "";
+    case "button":
+      return renderRichMessageButton(value.button);
+    case "custom_emoji":
+      return value.alternative_text;
+    case "mathematical_expression":
+      return value.expression;
+    default:
+      return renderRichInlineText(value.text);
   }
-  const directText = value.text;
-  if (directText !== undefined) {
-    return renderRichInlineText(directText);
+}
+
+function renderRichCaption(caption: RichBlockCaption | undefined): string {
+  return caption
+    ? joinRichText(
+        [renderRichInlineText(caption.text), renderRichInlineText(caption.credit ?? "")],
+        "\n",
+      )
+    : "";
+}
+
+function renderRichBlock(block: RichBlock): string {
+  switch (block.type) {
+    case "paragraph":
+    case "heading":
+    case "pre":
+    case "footer":
+    case "thinking":
+      return renderRichInlineText(block.text);
+    case "expandable_blockquote":
+    case "pullquote":
+      return joinRichText(
+        [renderRichInlineText(block.text), renderRichInlineText(block.credit ?? "")],
+        "\n",
+      );
+    case "mathematical_expression":
+      return block.expression;
+    case "blockquote":
+      return joinRichText(
+        [renderRichInlineText(block.credit ?? ""), renderRichBlocks(block.blocks)],
+        "\n",
+      );
+    case "collage":
+    case "slideshow":
+      return joinRichText([renderRichCaption(block.caption), renderRichBlocks(block.blocks)], "\n");
+    case "details":
+      return joinRichText(
+        [renderRichInlineText(block.summary), renderRichBlocks(block.blocks)],
+        "\n",
+      );
+    case "list":
+      return joinRichText(
+        block.items.map((item) => joinRichText([item.label, renderRichBlocks(item.blocks)], "\n")),
+        "\n",
+      );
+    case "table":
+      return joinRichText(
+        [
+          renderRichInlineText(block.caption ?? ""),
+          ...block.cells.flatMap((row) => row.map((cell) => renderRichInlineText(cell.text ?? ""))),
+        ],
+        "\n",
+      );
+    case "animation":
+    case "audio":
+    case "document":
+    case "map":
+    case "photo":
+    case "video":
+    case "voice_note":
+      return renderRichCaption(block.caption);
+    case "buttons":
+      return joinRichText(block.buttons.map(renderRichMessageButton), "\n");
+    case "anchor":
+    case "divider":
+      return "";
   }
-  for (const key of ["alternative_text", "expression"] as const) {
-    const text = value[key];
-    if (typeof text === "string") {
-      return text;
-    }
-  }
+  block satisfies never;
   return "";
 }
 
-function renderRichBlocks(value: unknown): string {
-  if (Array.isArray(value)) {
-    return joinRichText(value.map(renderRichBlocks), "\n");
-  }
-  if (!isRecord(value)) {
-    return renderRichInlineText(value);
-  }
-  if (typeof value.markdown === "string") {
-    return value.markdown;
-  }
-  if (typeof value.html === "string") {
-    return telegramHtmlToPlainTextFallback(value.html);
-  }
-  const parts: string[] = [];
-  for (const key of [
-    "text",
-    "summary",
-    "label",
-    "title",
-    "subtitle",
-    "credit",
-    "expression",
-  ] as const) {
-    parts.push(renderRichInlineText(value[key]));
-  }
-  if (value.caption !== undefined) {
-    const caption = value.caption;
-    if (isRecord(caption) && caption.credit !== undefined) {
-      parts.push(
-        joinRichText(
-          [renderRichInlineText(caption.text), renderRichInlineText(caption.credit)],
-          "\n",
-        ),
-      );
-    } else {
-      parts.push(renderRichInlineText(caption));
-    }
-  }
-  for (const key of ["blocks", "items", "rows", "cells", "headers", "children"] as const) {
-    parts.push(renderRichBlocks(value[key]));
-  }
-  return joinRichText(parts, "\n");
+function renderRichBlocks(blocks: readonly RichBlock[]): string {
+  return joinRichText(blocks.map(renderRichBlock), "\n");
 }
 
 export function resolveTelegramRichMessagePlaceholder(
   msg: TelegramTextMessage,
 ): string | undefined {
-  return hasTelegramRichMessage(msg.rich_message) ? TELEGRAM_RICH_MESSAGE_PLACEHOLDER : undefined;
+  return msg.rich_message ? TELEGRAM_RICH_MESSAGE_PLACEHOLDER : undefined;
 }
 
 export function resolveTelegramRichMessageText(msg: TelegramTextMessage): string | undefined {
-  if (!hasTelegramRichMessage(msg.rich_message)) {
+  if (!msg.rich_message) {
     return undefined;
   }
-  return compactRichText(renderRichBlocks(msg.rich_message)) || undefined;
+  return compactRichText(renderRichBlocks(msg.rich_message.blocks)) || undefined;
 }
 
 export function resolveTelegramRichMessageBody(msg: TelegramTextMessage): string | undefined {
@@ -327,164 +365,31 @@ export function hasBotMention(msg: Message, botUsername: string) {
   return false;
 }
 
+export function hasLeadingBotCommandAddressedToOtherBot(
+  msg: Message,
+  botUsername: string,
+): boolean {
+  const { text, entities } = getTelegramTextParts(msg);
+  const normalizedBotUsername = normalizeLowercaseStringOrEmpty(botUsername).replace(/^@/u, "");
+  if (!normalizedBotUsername) {
+    return false;
+  }
+  const leadingCommand = entities.find(
+    (entity) => entity.type === "bot_command" && entity.offset === 0,
+  );
+  if (!leadingCommand) {
+    return false;
+  }
+  const command = text.slice(0, leadingCommand.length);
+  const target = command.match(/^\/[^@\s]+@([a-z0-9_]+)$/iu)?.[1];
+  return Boolean(target && target.toLowerCase() !== normalizedBotUsername);
+}
+
 export function hasBotMentionInText(text: string, botUsername: string): boolean {
   return hasStandaloneTelegramMention(
     normalizeLowercaseStringOrEmpty(text),
     normalizeLowercaseStringOrEmpty(`@${botUsername}`),
   );
-}
-
-type TelegramMarkdownEntity = {
-  type: string;
-  offset: number;
-  length: number;
-  url?: string;
-  language?: string;
-};
-
-type TelegramMarkdownBoundary = {
-  open: string;
-  close: string;
-  start: number;
-  end: number;
-  length: number;
-  priority: number;
-  index: number;
-};
-
-const TELEGRAM_ENTITY_MARKDOWN_PRIORITY: Record<string, number> = {
-  bold: 10,
-  italic: 20,
-  underline: 30,
-  strikethrough: 40,
-  spoiler: 50,
-  text_link: 60,
-  code: 70,
-  pre: 80,
-};
-
-function longestBacktickRun(text: string): number {
-  let longest = 0;
-  let current = 0;
-  for (const char of text) {
-    if (char === "`") {
-      current += 1;
-      longest = Math.max(longest, current);
-    } else {
-      current = 0;
-    }
-  }
-  return longest;
-}
-
-function markdownInlineCodeDelimiters(content: string): [string, string] {
-  const delimiter = "`".repeat(longestBacktickRun(content) + 1);
-  if (content.startsWith(" ") || content.endsWith(" ")) {
-    return [`${delimiter} `, ` ${delimiter}`];
-  }
-  return [delimiter, delimiter];
-}
-
-function markdownPreAffixes(entity: TelegramMarkdownEntity, content: string): [string, string] {
-  const language = entity.language?.replace(/[\s`]+/g, "").trim();
-  const fence = "`".repeat(Math.max(3, longestBacktickRun(content) + 1));
-  const opener = language ? `${fence}${language}\n` : `${fence}\n`;
-  const closer = content.endsWith("\n") ? fence : `\n${fence}`;
-  return [opener, closer];
-}
-
-function markdownAffixesForTelegramEntity(
-  entity: TelegramMarkdownEntity,
-  content: string,
-): [string, string] | null {
-  switch (entity.type) {
-    case "bold":
-      return ["**", "**"];
-    case "italic":
-      return ["_", "_"];
-    case "underline":
-      return ["__", "__"];
-    case "strikethrough":
-      return ["~~", "~~"];
-    case "spoiler":
-      return ["||", "||"];
-    case "code":
-      return markdownInlineCodeDelimiters(content);
-    case "pre":
-      return markdownPreAffixes(entity, content);
-    case "text_link":
-      return entity.url ? ["[", `](${entity.url})`] : null;
-    default:
-      return null;
-  }
-}
-
-export function renderTelegramTextEntities(
-  text: string,
-  entities?: TelegramMarkdownEntity[] | null,
-): string {
-  if (!text || !entities?.length) {
-    return text;
-  }
-
-  const boundaries = new Map<number, TelegramMarkdownBoundary[]>();
-  const addBoundary = (offset: number, boundary: TelegramMarkdownBoundary) => {
-    boundaries.set(offset, [...(boundaries.get(offset) ?? []), boundary]);
-  };
-  entities.forEach((entity, index) => {
-    if (
-      !Number.isInteger(entity.offset) ||
-      !Number.isInteger(entity.length) ||
-      entity.offset < 0 ||
-      entity.length <= 0 ||
-      entity.offset + entity.length > text.length
-    ) {
-      return;
-    }
-    const content = text.slice(entity.offset, entity.offset + entity.length);
-    const affixes = markdownAffixesForTelegramEntity(entity, content);
-    if (!affixes) {
-      return;
-    }
-    const boundary: TelegramMarkdownBoundary = {
-      open: affixes[0],
-      close: affixes[1],
-      start: entity.offset,
-      end: entity.offset + entity.length,
-      length: entity.length,
-      priority: TELEGRAM_ENTITY_MARKDOWN_PRIORITY[entity.type] ?? 100,
-      index,
-    };
-    addBoundary(boundary.start, boundary);
-    addBoundary(boundary.end, boundary);
-  });
-
-  if (boundaries.size === 0) {
-    return text;
-  }
-
-  let result = "";
-  for (let offset = 0; offset <= text.length; offset += 1) {
-    const boundary = boundaries.get(offset);
-    if (boundary) {
-      boundary
-        .filter((entity) => entity.end === offset)
-        .toSorted((a, b) => a.length - b.length || b.priority - a.priority || b.index - a.index)
-        .forEach((entity) => {
-          result += entity.close;
-        });
-      boundary
-        .filter((entity) => entity.start === offset)
-        .toSorted((a, b) => b.length - a.length || a.priority - b.priority || a.index - b.index)
-        .forEach((entity) => {
-          result += entity.open;
-        });
-    }
-    if (offset < text.length) {
-      result += text[offset];
-    }
-  }
-  return result;
 }
 
 export type TelegramForwardedContext = {

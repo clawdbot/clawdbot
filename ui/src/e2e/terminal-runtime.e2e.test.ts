@@ -1,16 +1,15 @@
-import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  canRunPlaywrightChromium,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import type { Page } from "playwright";
+import { expect, it } from "vitest";
+import { startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI terminal runtime isolation",
+  startServer: () => startControlUiE2eServer(undefined, { source: true }),
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+});
 
 type BrowserTerminalController = {
   terminal: {
@@ -29,44 +28,87 @@ type BrowserTerminalFactory = (options: {
   size: { columns: number; rows: number };
 }) => Promise<BrowserTerminalController>;
 
-let browser: Browser;
-let server: ControlUiE2eServer;
+async function loadRuntime(page: Page): Promise<void> {
+  const moduleUrl = new URL("src/components/terminal/terminal-runtime.ts", suite.server.baseUrl)
+    .href;
 
-describeControlUiE2e("Control UI terminal runtime isolation", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(
-        `Playwright Chromium is not installed or cannot start at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
-      );
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+  await page.goto(suite.server.baseUrl);
+  // addScriptTag resolves before the module body runs, so the global is not
+  // observable yet; wait for the assignment instead of racing page.evaluate.
+  await page.addScriptTag({
+    content: `globalThis.openclawTerminalRuntimeModule = import(${JSON.stringify(moduleUrl)});`,
+    type: "module",
   });
+  await page.waitForFunction(() =>
+    Boolean(
+      (globalThis as unknown as { openclawTerminalRuntimeModule?: unknown })
+        .openclawTerminalRuntimeModule,
+    ),
+  );
+}
 
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
+suite.define(() => {
+  it("keeps app-handled keys out of terminal input without suppressing terminal controls", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      await loadRuntime(page);
+      const result = await page.evaluate(async () => {
+        const runtime = await (
+          window as unknown as {
+            openclawTerminalRuntimeModule: Promise<
+              typeof import("../components/terminal/terminal-runtime.ts")
+            >;
+          }
+        ).openclawTerminalRuntimeModule;
+        const host = document.body.appendChild(document.createElement("div"));
+        const input: string[] = [];
+        const controller = await runtime.createIsolatedGhosttyTerminal({
+          parent: host,
+          autoFit: false,
+          readOnly: false,
+          size: { columns: 80, rows: 24 },
+          onData: (bytes) => input.push(new TextDecoder().decode(bytes)),
+        });
+        const key = (value: string, ctrlKey = false) =>
+          host.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              key: value,
+              code: value === "`" ? "Backquote" : `Key${value.toUpperCase()}`,
+              ctrlKey,
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
+        const handleShortcut = (event: KeyboardEvent) => event.preventDefault();
+        document.addEventListener("keydown", handleShortcut, { capture: true, once: true });
+        key("`", true);
+        const handled = input.splice(0);
+        key("a");
+        key("c", true);
+        key("v", true);
+        const controls = input.splice(0);
+        // Without an app handler (e.g. a focused terminal document), the same
+        // chord still belongs to the terminal rather than toggling a dock.
+        key("`", true);
+        const unhandled = input.splice(0);
+        controller.setReadOnly(true);
+        key("b");
+        const readOnly = input.splice(0);
+        controller.dispose();
+        key("d");
+        host.remove();
+        return { handled, controls, unhandled, readOnly, disposed: input };
+      });
+      expect(result.handled).toEqual([]);
+      expect(result.controls).toEqual(["a", "\u0003"]);
+      expect(result.unhandled.join("")).not.toBe("");
+      expect(result.readOnly).toEqual([]);
+      expect(result.disposed).toEqual([]);
+    });
   });
 
   it("does not reuse freed terminal cells in the next tab", async () => {
-    const context = await browser.newContext({ serviceWorkers: "block" });
-    const page = await context.newPage();
-    const moduleUrl = new URL("src/components/terminal/terminal-runtime.ts", server.baseUrl).href;
-
-    try {
-      await page.goto(server.baseUrl);
-      // addScriptTag resolves before the module body runs, so the global is not
-      // observable yet; wait for the assignment instead of racing page.evaluate.
-      await page.addScriptTag({
-        content: `globalThis.openclawTerminalRuntimeModule = import(${JSON.stringify(moduleUrl)});`,
-        type: "module",
-      });
-      await page.waitForFunction(() =>
-        Boolean(
-          (globalThis as unknown as { openclawTerminalRuntimeModule?: unknown })
-            .openclawTerminalRuntimeModule,
-        ),
-      );
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      await loadRuntime(page);
       const sentinel = "CLOSE_RESET_SENTINEL";
       const result = await page.evaluate(
         async ({ staleText }) => {
@@ -120,8 +162,6 @@ describeControlUiE2e("Control UI terminal runtime isolation", () => {
       expect(result.initialSecondLine).not.toContain(sentinel);
       expect(result.initialSecondLine.trim()).toBe("");
       expect(result.finalSecondLine).toContain("FRESH");
-    } finally {
-      await context.close();
-    }
+    });
   });
 });

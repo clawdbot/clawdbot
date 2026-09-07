@@ -15,6 +15,7 @@ export type RowBuilderContext = {
   agentDir: string;
   inheritedAuthDir?: string;
   authIndex: ModelListAuthIndex;
+  canonicalizeProvider: (provider: string) => string;
   providerDiscoveryProviderIds?: readonly string[];
   providerRuntimeDiscoveryProviderIds?: readonly string[];
   providerManifestFallbackProviderIds?: readonly string[];
@@ -22,7 +23,6 @@ export type RowBuilderContext = {
   configuredByKey: Map<string, ConfiguredEntry>;
   discoveredKeys: Set<string>;
   filter: RowFilter;
-  skipRuntimeModelSuppression?: boolean;
   metadataSnapshot?: PluginMetadataSnapshot;
   workspaceDir?: string;
 };

@@ -1,6 +1,7 @@
 // Runtime implementations for `openclaw plugins` subcommands. Heavy plugin modules stay
 // lazy-loaded so the base CLI can start without activating the plugin registry.
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   collectConfiguredRuntimePluginIds,
@@ -10,16 +11,21 @@ import {
   assertConfigWriteAllowedInCurrentMode,
   getRuntimeConfig,
   readConfigFileSnapshot,
-  replaceConfigFile,
 } from "../config/config.js";
+import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitDiagnosticsTimelineEvent } from "../infra/diagnostics-timeline.js";
+import { resolvePluginInstallSources } from "../plugins/install-channel-specs.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
+import { ExpectedCliError, formatCliJsonFailure } from "./failure-output.js";
+import { exitCliAfterOutput } from "./one-shot-exit.js";
+import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import type {
+  PluginDoctorOptions,
   PluginMarketplaceEntriesOptions,
   PluginMarketplaceListOptions,
   PluginMarketplaceRefreshOptions,
@@ -27,7 +33,7 @@ import type {
 } from "./plugins-cli.js";
 
 type PluginInstallActionOptions = {
-  acknowledgeClawHubRisk?: boolean;
+  acceptCapabilities?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
   force?: boolean;
   link?: boolean;
@@ -40,13 +46,8 @@ function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
   return () => (promise ??= load());
 }
 
-const loadPluginsConfigState = createModuleLoader(() => import("../plugins/config-state.js"));
 const loadPluginsStatus = createModuleLoader(() => import("../plugins/status.js"));
-const loadPluginSlotSelection = createModuleLoader(() => import("../plugins/slot-selection.js"));
 const loadPluginsCommandHelpers = createModuleLoader(() => import("./plugins-command-helpers.js"));
-const loadPluginsRegistryRefresh = createModuleLoader(
-  () => import("../plugins/registry-refresh.js"),
-);
 
 function countEnabledPlugins(plugins: readonly { enabled: boolean }[]): number {
   return plugins.filter((plugin) => plugin.enabled).length;
@@ -90,12 +91,10 @@ function formatConfiguredRuntimePluginInstallSpec(params: {
   npmSpec?: string;
   pluginId: string;
 }): string {
-  const clawhubSpec = params.clawhubSpec?.trim();
-  const npmSpec = params.npmSpec?.trim();
-  if (clawhubSpec && params.defaultChoice !== "npm") {
-    return clawhubSpec;
-  }
-  return npmSpec ?? clawhubSpec ?? params.pluginId;
+  return (
+    resolvePluginInstallSources({ npmSpec: params.npmSpec, clawhubSpec: params.clawhubSpec })[0]
+      ?.spec ?? params.pluginId
+  );
 }
 
 function pluginIdListIncludes(list: readonly string[] | undefined, pluginId: string): boolean {
@@ -140,7 +139,6 @@ function formatDisabledRuntimePluginGuidance(params: {
 
 function collectConfiguredRuntimePluginWarnings(params: {
   cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
   plugins: readonly { enabled?: boolean; id: string; status?: string }[];
 }): string[] {
   const enabledPluginIds = new Set(
@@ -178,115 +176,58 @@ function collectConfiguredRuntimePluginWarnings(params: {
 }
 
 /** Enable a plugin in config and refresh the registry snapshot for the changed policy. */
-export async function runPluginsEnableCommand(idInput: string): Promise<void> {
-  assertConfigWriteAllowedInCurrentMode();
-  return await withPluginLifecycleLease(
-    {},
-    async () => await runPluginsEnableCommandUnlocked(idInput),
-  );
-}
-
-async function runPluginsEnableCommandUnlocked(idInput: string): Promise<void> {
-  let id = idInput;
-  assertConfigWriteAllowedInCurrentMode();
-
-  const { enableExplicitlySelectedPluginInConfig } = await import("../plugins/enable.js");
-  const { normalizePluginId } = await loadPluginsConfigState();
-  const { buildPluginRegistrySnapshotReport } = await loadPluginsStatus();
-  const snapshot = await readConfigFileSnapshot();
-  const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
-  const report = buildPluginRegistrySnapshotReport({ config: cfg });
-  id = normalizePluginId(id);
-  if (!report.plugins.some((plugin) => plugin.id === id)) {
-    return reportMissingPlugin(id);
-  }
-  const enableResult = enableExplicitlySelectedPluginInConfig(cfg, id, {
-    updateChannelConfig: false,
-  });
-  // A blocked request must not displace the active slot or rewrite persisted state.
-  if (!enableResult.enabled) {
-    defaultRuntime.log(
-      theme.warn(
-        `Plugin "${id}" could not be enabled (${enableResult.reason ?? "unknown reason"}).`,
-      ),
-    );
-    return;
-  }
-
-  const { applySlotSelectionForPlugin } = await loadPluginSlotSelection();
-  const { logSlotWarnings } = await loadPluginsCommandHelpers();
-  const { refreshPluginRegistryAfterConfigMutation } = await loadPluginsRegistryRefresh();
-  let next: OpenClawConfig = enableResult.config;
-  const slotResult = applySlotSelectionForPlugin(next, id);
-  next = slotResult.config;
-  await replaceConfigFile({
-    nextConfig: next,
-    ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-    // Source/runtime projection must retain the explicitly merged canonical
-    // entry; otherwise compatibility-only nested settings are silently lost.
-    writeOptions: {
-      explicitSetPaths: [["plugins", "entries", enableResult.pluginId]],
-    },
-  });
-  await refreshPluginRegistryAfterConfigMutation({
-    config: next,
-    reason: "policy-changed",
-    invalidateRuntimeCache: false,
-    policyPluginIds: [enableResult.pluginId],
-    logger: {
-      warn: (message) => defaultRuntime.log(theme.warn(message)),
-    },
-  });
-  logSlotWarnings(slotResult.warnings);
-  defaultRuntime.log(`Enabled plugin "${id}". Restart the gateway to apply.`);
+export async function runPluginsEnableCommand(
+  id: string,
+  opts: { acceptCapabilities?: boolean } = {},
+): Promise<void> {
+  await runPluginPolicyCommand(id, true, opts.acceptCapabilities);
 }
 
 /** Disable a plugin in config and refresh the registry snapshot for the changed policy. */
-export async function runPluginsDisableCommand(idInput: string): Promise<void> {
-  assertConfigWriteAllowedInCurrentMode();
-  return await withPluginLifecycleLease(
-    {},
-    async () => await runPluginsDisableCommandUnlocked(idInput),
-  );
+export async function runPluginsDisableCommand(id: string): Promise<void> {
+  await runPluginPolicyCommand(id, false);
 }
 
-async function runPluginsDisableCommandUnlocked(idInput: string): Promise<void> {
-  let id = idInput;
+async function runPluginPolicyCommand(
+  id: string,
+  enabled: boolean,
+  acceptCapabilities?: boolean,
+): Promise<void> {
   assertConfigWriteAllowedInCurrentMode();
-
-  const { normalizePluginId } = await loadPluginsConfigState();
-  const { buildPluginRegistrySnapshotReport } = await loadPluginsStatus();
-  const { setPluginEnabledInConfig } = await import("./plugins-config.js");
-  const { refreshPluginRegistryAfterConfigMutation } = await loadPluginsRegistryRefresh();
-  const snapshot = await readConfigFileSnapshot();
-  const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
-  const report = buildPluginRegistrySnapshotReport({ config: cfg });
-  id = normalizePluginId(id);
-  if (!report.plugins.some((plugin) => plugin.id === id)) {
-    return reportMissingPlugin(id);
-  }
-  const next = setPluginEnabledInConfig(cfg, id, false, {
-    updateChannelConfig: false,
+  const { mutateManagedPluginEnabled } = await import("../plugins/management-mutations.js");
+  const { ManagedPluginLifecycleError } = await import("../plugins/management-lifecycle-error.js");
+  await withPluginLifecycleLease({}, async () => {
+    try {
+      const result = await mutateManagedPluginEnabled({
+        pluginId: id,
+        enabled,
+        caller: "cli",
+        requestCapabilityConsent: acceptCapabilities,
+        ...resolvePluginCapabilityConsentCliOptions({ acceptCapabilities, action: "enable" }),
+      });
+      if (result.status === "missing") {
+        return reportMissingPlugin(result.pluginId);
+      }
+      if (result.status === "blocked") {
+        defaultRuntime.error(
+          `Plugin "${result.pluginId}" could not be enabled (${result.reason ?? "unknown reason"}).`,
+        );
+        return defaultRuntime.exit(1);
+      }
+      for (const warning of result.warnings) {
+        defaultRuntime.log(theme.warn(warning));
+      }
+      defaultRuntime.log(
+        `${enabled ? "Enabled" : "Disabled"} plugin "${result.pluginId}". Restart the gateway to apply.`,
+      );
+    } catch (error) {
+      if (!(error instanceof ManagedPluginLifecycleError) || !error.capabilityConsent) {
+        throw error;
+      }
+      defaultRuntime.error(error.message);
+      return defaultRuntime.exit(1);
+    }
   });
-  await replaceConfigFile({
-    nextConfig: next,
-    ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-    // `id` was normalized before discovery; persist that same canonical entry
-    // so alias invocations cannot lose settings during source projection.
-    writeOptions: {
-      explicitSetPaths: [["plugins", "entries", id]],
-    },
-  });
-  await refreshPluginRegistryAfterConfigMutation({
-    config: next,
-    reason: "policy-changed",
-    invalidateRuntimeCache: false,
-    policyPluginIds: [id],
-    logger: {
-      warn: (message) => defaultRuntime.log(theme.warn(message)),
-    },
-  });
-  defaultRuntime.log(`Disabled plugin "${id}". Restart the gateway to apply.`);
 }
 
 export async function runPluginsInstallAction(
@@ -297,7 +238,12 @@ export async function runPluginsInstallAction(
     "install command",
     async () => {
       const { runPluginInstallCommand } = await import("./plugins-install-command.js");
-      await runPluginInstallCommand({ raw, opts, invalidateRuntimeCache: false });
+      await runPluginInstallCommand({
+        raw,
+        opts,
+        allowInstallPolicyWarningPrompt: true,
+        invalidateRuntimeCache: false,
+      });
     },
     { command: "install" },
   );
@@ -305,18 +251,53 @@ export async function runPluginsInstallAction(
 
 /** Inspect or refresh the persisted plugin registry index. */
 export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Promise<void> {
-  const { inspectPluginRegistry, refreshPluginRegistry } =
-    await import("../plugins/plugin-registry.js");
+  const { inspectPluginRegistry } = await import("../plugins/plugin-registry.js");
+
+  const formatDifferences = (
+    differences: Awaited<ReturnType<typeof inspectPluginRegistry>>["differences"],
+  ) => {
+    const formatSource = (source: string | null) =>
+      source ? sanitizeTerminalText(shortenHomeInString(source)) : "missing";
+    return differences.map(
+      (difference) =>
+        `${sanitizeTerminalText(difference.pluginId)}: persisted ${formatSource(difference.persistedSource)}; derived ${formatSource(difference.derivedSource)}`,
+    );
+  };
 
   if (opts.refresh) {
+    const { refreshPluginRegistry } = await import("../plugins/plugin-registry-refresh.js");
     return await withPluginLifecycleLease({}, async () => {
+      const config = getRuntimeConfig();
       const index = await refreshPluginRegistry({
-        config: getRuntimeConfig(),
+        config,
         reason: "manual",
       });
+      const inspection = await inspectPluginRegistry({ config });
+      if (inspection.state !== "fresh") {
+        const differenceLines = formatDifferences(inspection.differences);
+        const message = [
+          "Plugin registry refresh could not verify the persisted replacement.",
+          ...differenceLines.map((difference) => `- ${difference}`),
+          "Stop plugin package changes, then run `openclaw plugins registry --refresh` again.",
+        ].join("\n");
+        if (opts.json) {
+          defaultRuntime.writeJson({
+            ...formatCliJsonFailure(message),
+            refreshed: false,
+            state: inspection.state,
+            refreshReasons: inspection.refreshReasons,
+            differences: inspection.differences,
+          });
+          exitCliAfterOutput(defaultRuntime, 1);
+        }
+        throw new Error(message);
+      }
       if (opts.json) {
         defaultRuntime.writeJson({
           refreshed: true,
+          state: inspection.state,
+          refreshReasons: inspection.refreshReasons,
+          differences: inspection.differences,
           registry: index,
         });
         return;
@@ -332,6 +313,7 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
     defaultRuntime.writeJson({
       state: inspection.state,
       refreshReasons: inspection.refreshReasons,
+      differences: inspection.differences,
       persisted: inspection.persisted,
       current: inspection.current,
     });
@@ -351,13 +333,14 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
   ];
   if (inspection.refreshReasons.length > 0) {
     lines.push(`${theme.muted("Refresh reasons:")} ${inspection.refreshReasons.join(", ")}`);
+    lines.push(...formatDifferences(inspection.differences).map((difference) => `- ${difference}`));
     lines.push(`${theme.muted("Repair:")} ${theme.command("openclaw plugins registry --refresh")}`);
   }
   defaultRuntime.log(lines.join("\n"));
 }
 
 /** Print plugin install-tree, compatibility, and plugin-owned config diagnostics. */
-export async function runPluginsDoctorCommand(): Promise<void> {
+export async function runPluginsDoctorCommand(opts: PluginDoctorOptions = {}): Promise<void> {
   const {
     buildPluginCompatibilityNotices,
     buildPluginDiagnosticsReport,
@@ -370,9 +353,7 @@ export async function runPluginsDoctorCommand(): Promise<void> {
   } = await import("../commands/doctor/shared/stale-plugin-config.js");
   const cfg = getRuntimeConfig();
   const configSnapshot = await readConfigFileSnapshot().catch(() => null);
-  const sourceCfg = (configSnapshot?.sourceConfig ?? configSnapshot?.config ?? cfg) as
-    | OpenClawConfig
-    | undefined;
+  const sourceCfg = configSnapshot?.sourceConfig ?? configSnapshot?.config ?? cfg;
   const report = buildPluginDiagnosticsReport({ config: cfg, effectiveOnly: true });
   const errors = report.plugins.filter((p) => p.status === "error");
   const diags = report.diagnostics.filter((entry) => !isConfigSelectedShadowDiagnostic(entry));
@@ -380,26 +361,78 @@ export async function runPluginsDoctorCommand(): Promise<void> {
     isErroredConfigSelectedShadowDiagnostic({ entry, plugins: report.plugins }),
   );
   const compatibility = buildPluginCompatibilityNotices({ report });
-  const stalePluginConfigHits = scanStalePluginConfig(sourceCfg ?? cfg, process.env);
-  const stalePluginConfigWarnings = collectStalePluginConfigWarnings({
-    hits: stalePluginConfigHits,
-    doctorFixCommand: "openclaw doctor --fix",
-    autoRepairBlocked: isStalePluginAutoRepairBlocked(sourceCfg ?? cfg, process.env),
-  });
-  const configuredRuntimePluginWarnings = collectConfiguredRuntimePluginWarnings({
-    cfg: sourceCfg ?? cfg,
-    env: process.env,
-    plugins: report.plugins,
-  });
+  const pluginConfigWarnings = new Set([
+    ...formatConfigIssueLines(
+      (configSnapshot?.warnings ?? []).filter(
+        ({ path }) => path === "plugins" || path.startsWith("plugins."),
+      ),
+    ),
+    ...collectStalePluginConfigWarnings({
+      hits: scanStalePluginConfig(sourceCfg, process.env),
+      doctorFixCommand: "openclaw doctor --fix",
+      autoRepairBlocked: isStalePluginAutoRepairBlocked(sourceCfg, process.env),
+    }),
+    ...collectConfiguredRuntimePluginWarnings({ cfg: sourceCfg, plugins: report.plugins }),
+  ]);
   const hasInstallTreeIssues =
-    errors.length > 0 || diags.length > 0 || shadowed.length > 0 || compatibility.length > 0;
-  const pluginConfigWarnings = [...stalePluginConfigWarnings, ...configuredRuntimePluginWarnings];
+    [errors, diags, shadowed].some(({ length }) => length > 0) ||
+    compatibility.some(({ severity }) => severity === "warn");
+  const doctorOk = !hasInstallTreeIssues && pluginConfigWarnings.size === 0;
+  process.exitCode = doctorOk ? 0 : 1;
 
-  if (!hasInstallTreeIssues && pluginConfigWarnings.length === 0) {
-    defaultRuntime.log(
-      "Plugin discovery, module loading, compatibility, and configuration checks passed. " +
-        'Run "openclaw health" to check the running Gateway, including runtime quarantines and fallbacks.',
-    );
+  if (opts.json) {
+    defaultRuntime.writeJson({
+      ok: doctorOk,
+      pluginErrors: errors.map((entry) => ({
+        id: entry.id,
+        ...(entry.failurePhase ? { failurePhase: entry.failurePhase } : {}),
+        error: shortenHomeInString(entry.error ?? "failed to load"),
+        source: shortenHomeInString(entry.source),
+      })),
+      diagnostics: diags.map((entry) => ({
+        level: entry.level,
+        ...(entry.pluginId ? { pluginId: entry.pluginId } : {}),
+        message: shortenHomeInString(entry.message),
+        ...(entry.source ? { source: shortenHomeInString(entry.source) } : {}),
+      })),
+      sourceShadowing: shadowed.map((entry) => {
+        const active = report.plugins.find((plugin) => plugin.id === entry.pluginId);
+        return {
+          ...(entry.pluginId ? { pluginId: entry.pluginId } : {}),
+          message: shortenHomeInString(entry.message),
+          ...(active
+            ? {
+                active: {
+                  source: shortenHomeInString(active.source),
+                  origin: active.origin,
+                  status: active.status,
+                  ...(active.error ? { error: shortenHomeInString(active.error) } : {}),
+                },
+              }
+            : {}),
+          ...(entry.source ? { shadowedSource: shortenHomeInString(entry.source) } : {}),
+          repair: [
+            `openclaw plugins inspect ${entry.pluginId ?? "<plugin-id>"}`,
+            "edit or remove the config-selected plugin source",
+            "openclaw plugins registry --refresh",
+            "openclaw gateway restart --force",
+          ],
+        };
+      }),
+      compatibility: compatibility.map((notice) => ({
+        ...notice,
+        message: shortenHomeInString(notice.message),
+      })),
+      configurationWarnings: Array.from(pluginConfigWarnings, shortenHomeInString),
+    });
+    return;
+  }
+
+  const healthyMessage =
+    "Plugin discovery, module loading, compatibility, and configuration checks passed. " +
+    'Run "openclaw health" to check the running Gateway, including runtime quarantines and fallbacks.';
+  if (!hasInstallTreeIssues && pluginConfigWarnings.size === 0 && compatibility.length === 0) {
+    defaultRuntime.log(healthyMessage);
     return;
   }
 
@@ -456,18 +489,17 @@ export async function runPluginsDoctorCommand(): Promise<void> {
       lines.push(`- ${formatPluginCompatibilityNotice(notice)} [${marker}]`);
     }
   }
-  if (pluginConfigWarnings.length > 0) {
+  if (pluginConfigWarnings.size > 0) {
     if (lines.length > 0) {
       lines.push("");
     }
-    lines.push(theme.warn("Plugin configuration:"));
-    lines.push(...pluginConfigWarnings);
+    lines.push(theme.warn("Plugin configuration:"), ...pluginConfigWarnings);
   }
-  if (!hasInstallTreeIssues && pluginConfigWarnings.length > 0) {
-    if (lines.length > 0) {
-      lines.push("");
-    }
-    lines.push("No plugin install-tree issues detected; configuration warnings remain.");
+  if (!hasInstallTreeIssues) {
+    const summary = pluginConfigWarnings.size
+      ? "No plugin install-tree issues detected; configuration warnings remain."
+      : healthyMessage;
+    lines.push("", summary);
   }
   const docs = formatDocsLink("/plugin", "docs.openclaw.ai/plugin");
   lines.push("");
@@ -693,10 +725,12 @@ function sanitizeMarketplaceRefreshPayload(
 }
 
 function formatMarketplaceEntryInstall(entry: MarketplaceEntryPayload): string | undefined {
-  if (entry.install?.defaultChoice === "npm") {
-    return entry.install.npmSpec ?? entry.install.clawhubSpec ?? entry.install.localPath;
-  }
-  return entry.install?.clawhubSpec ?? entry.install?.npmSpec ?? entry.install?.localPath;
+  return (
+    resolvePluginInstallSources({
+      npmSpec: entry.install?.npmSpec,
+      clawhubSpec: entry.install?.clawhubSpec,
+    })[0]?.spec ?? entry.install?.localPath
+  );
 }
 
 function formatMarketplaceEntryLine(entry: MarketplaceEntryPayload): string {
@@ -778,6 +812,9 @@ function formatPinnedMarketplaceRefreshFailure(payload: MarketplaceRefreshPayloa
   return `Pinned marketplace feed refresh did not accept a fresh hosted payload (source: ${payload.source}).`;
 }
 
+const MARKETPLACE_GATEWAY_RESTART_GUIDANCE =
+  'The running Gateway could not refresh its marketplace catalog. Run "openclaw gateway restart" to apply the current catalog state.';
+
 /** List entries from the configured OpenClaw marketplace feed. */
 export async function runPluginMarketplaceEntriesCommand(
   opts: PluginMarketplaceEntriesOptions,
@@ -851,8 +888,15 @@ export async function runPluginMarketplaceRefreshCommand(
     requireSnapshotWrite: true,
   });
   const { clearManagedPluginOfficialCatalogCache } =
-    await import("../plugins/management-service.js");
+    await import("../plugins/management-catalog.js");
   clearManagedPluginOfficialCatalogCache();
+  let gatewayRefreshed = true;
+  // Reused snapshots can lose install authority as they age, so their Gateway projection is stale too.
+  if (result.source !== "bundled-fallback") {
+    const { notifyGatewayPluginMetadataChanged } =
+      await import("./plugins-update-gateway-signal.js");
+    gatewayRefreshed = await notifyGatewayPluginMetadataChanged(cfg);
+  }
   const payload = sanitizeMarketplaceRefreshPayload(buildMarketplaceRefreshPayload(result), {
     feedUrl: opts.feedUrl,
   });
@@ -871,6 +915,9 @@ export async function runPluginMarketplaceRefreshCommand(
 
   if (opts.json) {
     defaultRuntime.writeJson(payload);
+    if (!gatewayRefreshed) {
+      defaultRuntime.error(MARKETPLACE_GATEWAY_RESTART_GUIDANCE);
+    }
     if (failedPinnedRefresh) {
       defaultRuntime.error(formatPinnedMarketplaceRefreshFailure(payload));
       return defaultRuntime.exit(1);
@@ -879,6 +926,9 @@ export async function runPluginMarketplaceRefreshCommand(
   }
 
   const lines = formatMarketplaceFeedLines(payload, { includeChecksum: true });
+  if (!gatewayRefreshed) {
+    lines.push("", theme.warn(MARKETPLACE_GATEWAY_RESTART_GUIDANCE));
+  }
   defaultRuntime.log(lines.join("\n"));
   if (failedPinnedRefresh) {
     defaultRuntime.error(formatPinnedMarketplaceRefreshFailure(payload));
@@ -898,18 +948,17 @@ export async function runPluginMarketplaceListCommand(
     logger: opts.json ? quietPluginJsonLogger : createPluginInstallLogger(),
   });
   if (!result.ok) {
-    defaultRuntime.error(result.error);
-    return defaultRuntime.exit(1);
+    const message = result.error;
+    throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
   }
 
   if (opts.json) {
-    defaultRuntime.writeJson({
+    return defaultRuntime.writeJson({
       source: result.sourceLabel,
       name: result.manifest.name,
       version: result.manifest.version,
       plugins: result.manifest.plugins,
     });
-    return;
   }
 
   if (result.manifest.plugins.length === 0) {

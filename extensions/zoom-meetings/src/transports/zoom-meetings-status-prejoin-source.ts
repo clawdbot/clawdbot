@@ -189,45 +189,7 @@ export function zoomMeetingStatusPreludeSource(params: MeetingStatusPreludeParam
   ) {
     controlManualAction = manualActionFor("zoom-camera-required", inCall ? "Turn the Zoom camera off and verify the in-call camera control shows it is off." : "Turn the Zoom camera off and verify the camera control shows it is off, then retry joining.");
   }
-  const isBlackHole = (value) =>
-    /^blackhole 2ch(?: \\(virtual\\))?$/i.test(String(value || "").replace(/\\s+/g, " ").trim());
-  const isBlackHoleNode = (node) => [
-    node?.getAttribute?.("aria-label"),
-    node?.getAttribute?.("title"),
-    node?.label,
-    node?.value,
-    text(node),
-  ].some(isBlackHole);
-  const microphoneDeviceRoots = () => {
-    // Consumer in-call controls expose the listbox itself, without the prejoin
-    // selected-device button/combobox wrapper.
-    const control = firstRaw(selectors.microphoneDevice) || firstRaw(selectors.microphoneDeviceMenu);
-    if (!control) return { control, roots: [] };
-    const roots = [control];
-    const scope = control.closest?.('[data-tid="device-settings-microphone"]');
-    if (scope && !roots.includes(scope)) roots.push(scope);
-    const listboxId = control.getAttribute?.("aria-controls");
-    const listbox = listboxId ? document.getElementById?.(listboxId) : undefined;
-    if (listbox && !roots.includes(listbox)) roots.push(listbox);
-    const liveMenu = firstRaw(selectors.microphoneDeviceMenu);
-    if (liveMenu && !roots.includes(liveMenu)) roots.push(liveMenu);
-    return { control, roots };
-  };
-  const selectedMicrophoneLabel = () => {
-    const { control, roots } = microphoneDeviceRoots();
-    const selectedOption = control?.selectedOptions?.[0];
-    if (selectedOption && isBlackHoleNode(selectedOption)) {
-      return label(selectedOption) || selectedOption.value;
-    }
-    if (control && isBlackHoleNode(control)) return label(control) || control.value;
-    for (const root of roots) {
-      const selected = firstWithin(root, selectors.selectedMicrophoneDevice);
-      if (selected && isBlackHoleNode(selected)) {
-        return label(selected) || selected.value;
-      }
-    }
-    return undefined;
-  };
+  const { isVirtualAudioDevice, isVirtualAudioDeviceNode, microphoneDeviceRoots, selectedMicrophoneLabel } = meetingAudioInput;
   let audioInputRouted;
   let audioInputDeviceLabel;
   let audioInputRouteError;
@@ -239,9 +201,11 @@ export function zoomMeetingStatusPreludeSource(params: MeetingStatusPreludeParam
     if (!navigator.mediaDevices?.enumerateDevices) return false;
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
-      const input = devices.find((device) => device.kind === "audioinput" && isBlackHole(device.label));
+      const input = devices.find(
+        (device) => device.kind === "audioinput" && isVirtualAudioDevice(device.label)
+      );
       if (!input?.deviceId) return false;
-      audioInputDeviceLabel = input.label || "BlackHole 2ch";
+      audioInputDeviceLabel = input.label || "Virtual audio device";
       // Zoom hides the selected-device control after admission. Reopen the in-call audio
       // options and verify the current selection before unmuting; installed devices alone
       // do not prove which microphone Zoom is using.
@@ -255,7 +219,7 @@ export function zoomMeetingStatusPreludeSource(params: MeetingStatusPreludeParam
         const { control } = microphoneDeviceRoots();
         if (control?.tagName?.toLowerCase() === "select") {
           const options = [...control.options];
-          const option = options.find(isBlackHoleNode);
+          const option = options.find(isVirtualAudioDeviceNode);
           if (option) {
             control.value = option.value;
             control.dispatchEvent(new Event("change", { bubbles: true }));
@@ -270,7 +234,7 @@ export function zoomMeetingStatusPreludeSource(params: MeetingStatusPreludeParam
             ...(root.querySelectorAll?.(selector) || []),
           ])
         );
-        const choice = choices.find(isBlackHoleNode);
+        const choice = choices.find(isVirtualAudioDeviceNode);
         if (choice && choice.getAttribute?.("aria-selected") !== "true") {
           clickable(choice)?.click?.();
           await waitForUi();
@@ -292,14 +256,14 @@ export function zoomMeetingStatusPreludeSource(params: MeetingStatusPreludeParam
         const currentMicrophone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
         microphoneState = toggleState(currentMicrophone, "microphone");
       }
-      notes.push("BlackHole input will be selected from Zoom's in-call audio controls.");
+      notes.push("The virtual audio input will be selected from Zoom's in-call audio controls.");
     } else if (canMutateSession && microphoneState === "off") {
       microphone.click();
       await waitForUi();
       const currentMicrophone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
       microphoneState = toggleState(currentMicrophone, "microphone");
       if (microphoneState === "on") {
-        notes.push("Unmuted the Zoom microphone after verifying BlackHole 2ch input.");
+        notes.push("Unmuted the Zoom microphone after verifying the virtual audio input.");
       }
     }
   } else if (canMutateSession && identityVerified && !allowMicrophone && microphoneState === "on") {
@@ -330,7 +294,7 @@ export function zoomMeetingStatusPreludeSource(params: MeetingStatusPreludeParam
       const currentMicrophone = first(selectors.microphone) || findTextButton(/mute|unmute|microphone/i);
       microphoneState = toggleState(currentMicrophone, "microphone");
       if (microphoneState === "off") {
-        notes.push("Muted the Zoom microphone because BlackHole 2ch input could not be reverified.");
+        notes.push("Muted the Zoom microphone because the virtual audio input could not be reverified.");
       }
     }
   }
@@ -358,7 +322,7 @@ export function zoomMeetingStatusPreludeSource(params: MeetingStatusPreludeParam
     first(selectors.permissionPrompt) || continueWithoutDevices
   );
   // Zoom shows the same no-audio/video warning when only camera access is denied.
-  // A granted microphone plus the verified BlackHole input is sufficient for talk-back.
+  // A granted microphone plus the verified virtual audio input is sufficient for talk-back.
   const permissionRequired = devicePermissionPrompt &&
     (!allowMicrophone || microphonePermissionState !== "granted");
   let manualAction;

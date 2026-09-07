@@ -1,10 +1,14 @@
 import type { CommandOptions } from "../process/exec.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
-import type { PackageUpdateStepAdvisory } from "./package-update-steps.js";
 import type { UpdateChannel } from "./update-channels.js";
+import type { DevUpdateTarget } from "./update-dev-target.js";
+import type { PackageUpdateStepAdvisory } from "./update-doctor-result.js";
 import type { GlobalInstallManager } from "./update-global.js";
+import type { UpdateRecovery } from "./update-recovery.js";
 
-export type UpdateStepAdvisory = PackageUpdateStepAdvisory;
+export type UpdateStepAdvisory =
+  | PackageUpdateStepAdvisory
+  | { kind: "candidate-runtime-unavailable"; message: string };
 
 export type UpdateStepResult = {
   name: string;
@@ -21,25 +25,21 @@ export type UpdateStepResult = {
 };
 
 export type UpdateRunResult = {
+  runId?: string;
   status: "ok" | "error" | "skipped";
   mode: "git" | "pnpm" | "bun" | "npm" | "unknown";
   root?: string;
   reason?: string;
-  before?: { sha?: string | null; version?: string | null };
-  after?: { sha?: string | null; version?: string | null };
+  before?: { sha?: string | null; version?: string | null; buildId?: string | null };
+  after?: {
+    sha?: string | null;
+    version?: string | null;
+    buildId?: string | null;
+    upstreamRef?: string;
+  };
   steps: UpdateStepResult[];
   durationMs: number;
-  recovery?:
-    | { serviceRestartSafe: true }
-    | {
-        serviceRestartSafe: false;
-        reason:
-          | "source-rollback-failed"
-          | "manager-unavailable"
-          | "deps-install-failed"
-          | "build-failed"
-          | "runtime-verification-failed";
-      };
+  recovery?: UpdateRecovery;
   postUpdate?: {
     plugins?: {
       status: "ok" | "warning" | "skipped" | "error";
@@ -108,15 +108,7 @@ export type UpdateStepInfo = {
   total: number;
 };
 
-type UpdateStepCompletion = UpdateStepInfo & {
-  durationMs: number;
-  exitCode: number | null;
-  stderrTail?: string | null;
-  signal?: NodeJS.Signals | null;
-  killed?: boolean;
-  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
-  advisory?: UpdateStepAdvisory;
-};
+type UpdateStepCompletion = UpdateStepInfo & Omit<UpdateStepResult, "cwd">;
 
 export type UpdateStepProgress = {
   onStepStart?: (step: UpdateStepInfo) => void;
@@ -124,14 +116,28 @@ export type UpdateStepProgress = {
 };
 
 export type UpdateRunnerOptions = {
+  runId?: string;
   cwd?: string;
   argv1?: string;
   tag?: string;
   channel?: UpdateChannel;
-  devTargetRef?: string;
+  devTarget?: DevUpdateTarget;
   deferConfiguredPluginInstallRepair?: boolean;
   allowGatewayServiceRepair?: boolean;
   allowGatewayActivation?: boolean;
+  /** Expose a new checkout only after target admission; subsequent work uses the published path. */
+  publishGitCheckout?: () => Promise<string>;
+  /** Read-only admission before executing a fetched candidate; never stops a service. */
+  inspectGitTarget?: (target: {
+    schemaVersions?: OpenClawSchemaVersions;
+    metadataUnreadable?: string;
+  }) => Promise<void>;
+  validateCandidate?: (root: string) => Promise<void>;
+  prepareGitExposure?: (
+    candidateRoot: string,
+    candidateSha: string,
+    env: NodeJS.ProcessEnv | undefined,
+  ) => Promise<void>;
   beforeGitMutation?: (target: {
     schemaVersions?: OpenClawSchemaVersions;
     metadataUnreadable?: string;
@@ -160,4 +166,5 @@ export type RunStepOptions = {
   progress?: UpdateStepProgress;
   stepIndex: number;
   totalSteps: number;
+  results?: UpdateStepResult[];
 };

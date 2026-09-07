@@ -216,11 +216,25 @@ describe("parseAbsoluteTimeMs", () => {
       expect(parseAbsoluteTimeMs(year2050.toString())).toBe(year2050);
     });
 
-    it("handles maximum valid timestamp", () => {
-      // JavaScript Date range ends at +100,000,000 days
-      const maxValid = new Date(8640000000000000).getTime();
-      expect(parseAbsoluteTimeMs(maxValid.toString())).toBe(maxValid);
-    });
+    it.each([
+      ["8640000000000000", 8_640_000_000_000_000],
+      ["+275760-09-13T00:00:00.000Z", 8_640_000_000_000_000],
+      ["-271821-04-20T00:00:00.000Z", -8_640_000_000_000_000],
+      ["+275760-09-13T01:00:00+01:00", 8_640_000_000_000_000],
+      ["-271821-04-19T23:00:00-01:00", -8_640_000_000_000_000],
+      ["+275760-09-13T00:00:00.001+00:01", 8_639_999_999_940_001],
+      ["-271821-04-19T23:59:59.999-00:01", -8_639_999_999_940_001],
+      ["-271821-04-19T24:00:00Z", -8_640_000_000_000_000],
+      ["+275760-09-13T00:00:00.001Z", null],
+      ["+275760-09-13T01:00:00.001+01:00", null],
+      ["-271821-04-19T22:59:59.999-01:00", null],
+      ["-000000-01-01", null],
+    ] as const)(
+      "applies Date bounds after offset and end-of-day conversion for %s",
+      (input, expected) => {
+        expect(parseAbsoluteTimeMs(input)).toBe(expected);
+      },
+    );
   });
 
   describe("real-world cron examples", () => {
@@ -258,6 +272,32 @@ describe("parseAbsoluteTimeMs", () => {
     expect(parseAbsoluteTimeMs("2026-02-28T12:34:56+08:00")).toBe(
       Date.parse("2026-02-28T12:34:56+08:00"),
     );
+  });
+
+  it.each([
+    ["2027-02-28T24:00:00", "2027-03-01T00:00:00.000Z"],
+    ["2027-02-28T24:00:00Z", "2027-03-01T00:00:00.000Z"],
+    ["2027-02-28T24:00:00.000", "2027-03-01T00:00:00.000Z"],
+    ["2027-02-28T24:00:00.0000Z", "2027-03-01T00:00:00.000Z"],
+    ["2027-02-28T24:00:00+05:45", "2027-02-28T18:15:00.000Z"],
+    ["2027-02-28t24:00", "2027-03-01T00:00:00.000Z"],
+    ["2027-02-28t24:00:00", "2027-03-01T00:00:00.000Z"],
+    ["2027-02-28t24:00:00.000z", "2027-03-01T00:00:00.000Z"],
+    ["2027-02-28t24:00:00+05:45", "2027-02-28T18:15:00.000Z"],
+  ])("preserves shipped ISO end-of-day timestamp %s", (input, expected) => {
+    expect(parseAbsoluteTimeMs(input)).toBe(Date.parse(expected));
+  });
+
+  it.each([
+    "2027-02-28T24:01:00Z",
+    "2027-02-28t24:01z",
+    "2027-02-28T24:00:01Z",
+    "2027-02-28T24:00:00.001Z",
+    "2027-02-28t24:00:00.001z",
+    "2027-02-28T24:00:00.0001Z",
+    "2027-02-29T24:00:00Z",
+  ])("rejects invalid end-of-day timestamp %s", (input) => {
+    expect(parseAbsoluteTimeMs(input)).toBeNull();
   });
 
   it.each([

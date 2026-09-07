@@ -5,6 +5,7 @@ import {
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   discordComponentRegistryState,
@@ -29,16 +30,6 @@ function getComponentEntries(): Map<string, DiscordComponentEntry> {
 
 function getModalEntries(): Map<string, DiscordModalEntry> {
   return discordComponentRegistryState.modalEntries;
-}
-
-function reportPersistentComponentRegistryError(error: unknown): void {
-  try {
-    getOptionalDiscordRuntime()
-      ?.logging.getChildLogger({ plugin: "discord", feature: "component-registry-state" })
-      .warn("Discord persistent component registry state failed", formatRegistryError(error));
-  } catch {
-    // Best effort only: persistent state must never break Discord interactions.
-  }
 }
 
 function formatRegistryError(error: unknown): Record<string, unknown> {
@@ -66,6 +57,14 @@ function formatRegistryError(error: unknown): Record<string, unknown> {
   }
   return details;
 }
+
+const reportPersistentComponentRegistryError = createPluginStateErrorReporter(
+  getOptionalDiscordRuntime,
+  "discord",
+  "component-registry-state",
+  "Discord persistent component registry state failed",
+  formatRegistryError,
+);
 
 function formatRegistryErrorValue(value: unknown): string {
   if (typeof value === "string") {

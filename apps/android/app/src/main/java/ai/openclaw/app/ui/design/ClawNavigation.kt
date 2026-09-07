@@ -54,7 +54,7 @@ internal fun ClawTopBar(
     modifier =
       modifier
         .fillMaxWidth()
-        .padding(horizontal = ClawTheme.spacing.lg, vertical = ClawTheme.spacing.sm),
+        .padding(horizontal = ClawTheme.spacing.sm, vertical = ClawTheme.spacing.xs),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(12.dp),
   ) {
@@ -96,11 +96,9 @@ internal fun ClawBottomNav(
   Box(modifier = modifier.fillMaxWidth().background(ClawTheme.colors.canvas)) {
     Surface(
       modifier = Modifier.fillMaxWidth(),
-      color = ClawTheme.colors.surface.copy(alpha = 0.92f),
-      border = BorderStroke(1.dp, ClawTheme.colors.border.copy(alpha = 0.42f)),
-      shape = RoundedCornerShape(topStart = ClawTheme.radii.sheet, topEnd = ClawTheme.radii.sheet),
-      tonalElevation = 2.dp,
-      shadowElevation = 8.dp,
+      color = ClawTheme.colors.surface,
+      border = BorderStroke(1.dp, ClawTheme.colors.border),
+      shape = RoundedCornerShape(topStart = ClawTheme.radii.panel, topEnd = ClawTheme.radii.panel),
     ) {
       Row(
         modifier =
@@ -133,17 +131,17 @@ private fun ClawBottomNavItem(
 ) {
   Surface(
     onClick = onClick,
-    modifier = modifier.heightIn(min = 52.dp),
+    modifier = modifier.heightIn(min = ClawTheme.spacing.row),
     shape = RoundedCornerShape(ClawTheme.radii.control),
-    color = if (selected) ClawTheme.colors.surfacePressed.copy(alpha = 0.72f) else Color.Transparent,
+    color = if (selected) ClawTheme.colors.accentSoft else Color.Transparent,
     contentColor = if (selected) ClawTheme.colors.text else ClawTheme.colors.textMuted,
   ) {
     Column(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 5.dp, vertical = 5.dp),
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
       horizontalAlignment = Alignment.CenterHorizontally,
       verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-      Icon(imageVector = item.icon, contentDescription = item.label, modifier = Modifier.size(20.dp))
+      Icon(imageVector = item.icon, contentDescription = item.label, modifier = Modifier.size(ClawTheme.spacing.icon))
       Text(
         modifier = Modifier.fillMaxWidth(),
         text = item.label,
@@ -165,7 +163,7 @@ internal fun ClawAvatarMark(
   modifier: Modifier = Modifier,
 ) {
   Surface(
-    modifier = modifier.size(38.dp),
+    modifier = modifier.size(34.dp),
     shape = CircleShape,
     color = ClawTheme.colors.surfaceRaised,
     contentColor = ClawTheme.colors.text,

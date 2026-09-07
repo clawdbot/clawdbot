@@ -701,7 +701,6 @@ describe("MemorySettingsPage tab routing", () => {
     ["/settings/memory?tab=search", "/settings/memory/settings"],
     ["/settings/memory?tab=overview", "/settings/memory"],
     ["/settings/memory?section=memory", "/settings/memory/settings"],
-    ["/settings/memory#memory-backend", "/settings/memory/settings#memory-backend"],
     ["/settings/memory#config-section-memory", "/settings/memory/settings#config-section-memory"],
     [
       "/settings/memory#config-section-memory-search",

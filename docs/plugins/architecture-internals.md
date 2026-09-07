@@ -107,60 +107,74 @@ choices, and install-catalog metadata without loading provider runtime. Explicit
 `requiresRuntime` keeps the legacy setup-api fallback for compatibility. If
 more than one discovered plugin claims the same normalized setup provider or
 CLI backend id, setup lookup refuses the ambiguous owner instead of relying on
-discovery order. When setup runtime does execute, registry diagnostics report
-drift between `setup.providers` / `setup.cliBackends` and the providers or CLI
-backends actually registered by setup-api, without blocking legacy plugins.
+discovery order. When setup runtime executes, registry diagnostics reject
+undeclared provider and CLI backend registrations. CLI backend descriptors also
+report missing runtime registrations; provider descriptors may stay
+metadata-only while the setup module contributes other setup hooks.
 
 ### Plugin cache boundary
 
-OpenClaw does not cache plugin discovery results or direct manifest registry
-data behind wall-clock windows. Installs, manifest edits, and load-path changes
-must become visible on the next explicit metadata read or snapshot rebuild.
-The manifest file parser keeps a bounded file-signature cache keyed by the
-opened manifest path plus device/inode, size, and mtime/ctime; that cache only
-avoids re-parsing unchanged bytes and must not cache discovery, registry,
-owner, or policy answers.
+One `PluginCache` owns plugin facts from first access until Gateway shutdown.
+CLI preflight and startup progressively fill the same cache; later access fills
+only facts not yet acquired. Its immutable metadata snapshot combines the installed index, manifests, owner maps, and available
+discovery facts from every configured agent workspace. Disabled plugins remain
+in the inventory so later enablement does not require discovery. Conflicting
+plugin IDs from different workspace sources remain rejected.
 
-The safe metadata fast path is explicit object ownership, not a hidden cache.
-Gateway startup hot paths should pass the current `PluginMetadataSnapshot`, the
-derived `PluginLookUpTable`, or an explicit manifest registry through the call
-chain. Config validation, startup auto-enable, plugin bootstrap, and provider
-selection can reuse those objects while they represent the current config and
-plugin inventory. Setup lookup still reconstructs manifest metadata on demand
-unless the specific setup path receives an explicit manifest registry; keep
-that as a cold-path fallback rather than adding hidden lookup caches. When the
-input changes, rebuild and replace the snapshot instead of mutating it or
-keeping historical copies. Views over the active plugin registry and bundled
-channel bootstrap helpers should be recomputed from the current
-registry/root. Short-lived maps are fine inside one call to dedupe work or
-guard reentry; they must not become process metadata caches.
+Runtime readers use this `PluginMetadataSnapshot`, a derived `PluginLookUpTable`,
+or an explicit manifest registry. Plugin scopes are in-memory projections;
+config changes, account changes, and run workspace changes must not trigger
+filesystem scanning, `stat`/`realpath` freshness polling, manifest rereads, or
+hashing. Activation and runtime service generations can change while their
+package metadata stays fixed. Account health and authentication state are not
+part of the immutable package inventory.
 
-For plugin loading, the persistent cache layer is runtime loading. It may reuse
-loader state when code or installed artifacts are actually loaded, such as:
+Provider auth aliases are normalized and indexed with the snapshot. Lookups
+select among those prepared candidates using the current workspace trust config;
+they do not cache trust decisions or credentials. Callers supplying a partial
+manifest view keep fresh per-call projection rather than sharing mutable metadata.
 
-- `PluginLoaderCacheState` and compatible active runtime registries
-- jiti/module caches and public-surface loader caches used to avoid importing
-  the same runtime surface repeatedly
-- filesystem caches for installed plugin artifacts
-- short-lived per-call maps for path normalization or duplicate resolution
+Explicit install, update, registry refresh, and doctor operations use isolated
+generations of the same cache type, acquired after their lifecycle lease. They may inspect changed files and rebuild the persisted
+installed index, but cannot clear or replace the running Gateway's inventory.
+The new inventory takes effect after restart. The `plugins.refresh` RPC reports
+`restartRequired: true`; with reload disabled, it leaves the running inventory
+in place until a manual restart.
 
-Those caches are data-plane implementation details. They must not answer
-control-plane questions such as "which plugin owns this provider?" unless the
-caller deliberately asked for runtime loading.
+The shared cache owns checked file contents, parsed package and manifest data,
+bundle MCP/LSP/settings files, plugin skill paths, discovery paths, installed-index
+projections, compiled model policies, SDK aliases, artifact locations, and lazy
+module exports. Missing files and artifacts are facts too: they remain
+missing until a new generation. Discovery, registry assembly, and index hashing
+reuse the same checked bytes rather than reopening a file at each stage.
 
-Do not add persistent or wall-clock caches for:
+Actual code imports retain their boundary and file-identity checks before first
+execution. Consent checks use a fresh inspection after an awaited approval so
+changed artifacts cannot inherit approval for older capabilities. Failed module
+evaluation remains retryable; a successful import is shared across consumers.
 
-- discovery results
-- direct manifest registries
-- manifest registries reconstructed from the installed plugin index
-- provider owner lookup, model suppression, provider policy, or public-artifact
-  metadata
-- any other manifest-derived answer where a changed manifest, installed index,
-  or load path should be visible on the next metadata read
+The CLI invocation owns one operation cache across config reads, output metadata,
+command ownership, nested registration, and actions. Standalone registration uses
+its caller's active generation. Config validation covers every
+workspace; execution uses the original selected workspace snapshot, or shared
+roots when no workspace owner is proven. Exact config/source identities and
+revision checks fence retained registrars. Preparation closes before Commander
+actions, while its cache scope lasts through action completion for late imports.
+Changed package files require a new operation; changing activation inputs does
+not retire compatible package facts. SDK alias maps are prepared on first alias
+or transformer demand under their captured host and permission scope. State
+registration uses a light facade that the full runtime later adopts; only the
+registry proxy grants store access. Config reads import the writer only when an
+actual write begins.
 
-Callers that rebuild manifest metadata from the persisted installed plugin
-index reconstruct that registry on demand. The installed index is durable
-source-plane state; it is not a hidden in-process metadata cache.
+Registered services, hooks, tools, session MCP overlays, generated skill-link
+publication, and activation state remain runtime-owned.
+An active registry pins its chosen artifact binding so source and built modules
+cannot split its registrations. Native ESM module lifetime still follows Node's
+module loader. Manifest-derived questions such as "which plugin owns this
+provider?" use the metadata snapshot without executing plugin code. The persisted
+installed index belongs to management and startup; it is not a freshness signal
+for runtime readers.
 
 ## Registry model
 
@@ -235,6 +249,12 @@ OpenClaw still owns the generic agent loop, failover, transcript handling, and
 tool policy. These hooks are the extension surface for provider-specific
 behavior without needing a whole custom inference transport.
 
+Hook lookup uses the prepared generation or a matching loaded registry first.
+On a miss, provider/model-scoped discovery reuses the loader's registry cache;
+explicit runtime-discovery invalidation clears that lookup rather than leaving
+another provider cache holding old hooks. Attempt-prepared provider handles
+retain their selected plugin, while each hook receives the current call context.
+
 Use manifest `setup.providers[].envVars` when the provider has env-based
 credentials that generic auth/status/model-picker paths should see without
 loading plugin runtime. Use manifest `providerAuthAliases`
@@ -264,14 +284,14 @@ listed here.
 | _(built-in model lookup)_         | OpenClaw tries the normal registry/catalog path first                                                          | _(not a plugin hook)_                                                                                                                         |
 | `normalizeModelId`                | Normalize legacy or preview model-id aliases before lookup                                                     | Provider owns alias cleanup before canonical model resolution                                                                                 |
 | `normalizeTransport`              | Normalize provider-family `api` / `baseUrl` before generic model assembly                                      | Provider owns transport cleanup for custom provider ids in the same transport family                                                          |
-| `normalizeConfig`                 | Normalize `models.providers.<id>` before runtime/provider resolution                                           | Provider needs config cleanup that should live with the plugin; bundled Google-family helpers also backstop supported Google config entries   |
+| `normalizeConfig`                 | Normalize `models.providers.<id>` before runtime/provider resolution                                           | Provider needs config cleanup that should live with the owning plugin                                                                         |
 | `applyNativeStreamingUsageCompat` | Apply native streaming-usage compat rewrites to config providers                                               | Provider needs endpoint-driven native streaming usage metadata fixes                                                                          |
 | `resolveConfigApiKey`             | Resolve env-marker auth for config providers before runtime auth loading                                       | Providers expose their own env-marker API-key resolution hooks                                                                                |
 | `resolveSyntheticAuth`            | Surface local/self-hosted or config-backed auth without persisting plaintext                                   | Provider can operate with a synthetic/local credential marker                                                                                 |
 | `resolveExternalAuthProfiles`     | Overlay provider-owned external auth profiles; default `persistence` is `runtime-only` for CLI/app-owned creds | Provider reuses external auth credentials without persisting copied refresh tokens; declare `contracts.externalAuthProviders` in the manifest |
 | `shouldDeferSyntheticProfileAuth` | Lower stored synthetic profile placeholders behind env/config-backed auth                                      | Provider stores synthetic placeholder profiles that should not win precedence                                                                 |
 | `resolveDynamicModel`             | Sync fallback for provider-owned model ids not in the local registry yet                                       | Provider accepts arbitrary upstream model ids                                                                                                 |
-| `prepareDynamicModel`             | Async warm-up, then `resolveDynamicModel` runs again                                                           | Provider needs network metadata before resolving unknown ids                                                                                  |
+| `prepareDynamicModel`             | Return an asynchronously prepared model, or warm reusable metadata before retrying `resolveDynamicModel`       | Provider needs network metadata before resolving unknown ids                                                                                  |
 | `normalizeResolvedModel`          | Final rewrite before the embedded runner uses the resolved model                                               | Provider needs transport rewrites but still uses a core transport                                                                             |
 | `normalizeToolSchemas`            | Normalize tool schemas before the embedded runner sees them                                                    | Provider needs transport-family schema cleanup                                                                                                |
 | `inspectToolSchemas`              | Surface provider-owned schema diagnostics after normalization                                                  | Provider wants keyword warnings without teaching core provider-specific rules                                                                 |
@@ -279,8 +299,9 @@ listed here.
 | `prepareExtraParams`              | Request-param normalization before generic stream option wrappers                                              | Provider needs default request params or per-provider param cleanup                                                                           |
 | `createStreamFn`                  | Fully replace the normal stream path with a custom transport                                                   | Provider needs a custom wire protocol, not just a wrapper                                                                                     |
 | `wrapStreamFn`                    | Stream wrapper after generic wrappers are applied                                                              | Provider needs request headers/body/model compat wrappers without a custom transport                                                          |
-| `resolveTransportTurnState`       | Attach native per-turn transport headers or metadata                                                           | Provider wants generic transports to send provider-native turn identity                                                                       |
-| `resolveWebSocketSessionPolicy`   | Attach native WebSocket headers or session cool-down policy                                                    | Provider wants generic WS transports to tune session headers or fallback policy                                                               |
+| `reconcileLocalService`           | Reconcile provider-owned state after local-service health and before every request                             | A managed local router must reload durable provider state without moving provider policy into core                                            |
+| `resolveTransportTurnState`       | Attach native per-turn headers, metadata, or WebSocket policy                                                  | Provider wants generic transports to send provider-native turn identity or tune WebSocket headers and fallback cool-down                      |
+| `resolveWebSocketSessionPolicy`   | Deprecated compatibility hook for WebSocket policy                                                             | Existing plugins migrate WebSocket fields into `resolveTransportTurnState`                                                                    |
 | `formatApiKey`                    | Auth-profile formatter: stored profile becomes the runtime `apiKey` string                                     | Provider stores extra auth metadata and needs a custom runtime token shape                                                                    |
 | `refreshOAuth`                    | OAuth refresh override for custom refresh endpoints or refresh-failure policy                                  | Provider does not fit the shared OpenClaw refreshers                                                                                          |
 | `buildAuthDoctorHint`             | Repair hint appended when OAuth refresh fails                                                                  | Provider needs provider-owned auth repair guidance after refresh failure                                                                      |
@@ -303,13 +324,30 @@ listed here.
 | `validateReplayTurns`             | Final replay-turn validation or reshaping before the embedded runner                                           | Provider transport needs stricter turn validation after generic sanitation                                                                    |
 | `onModelSelected`                 | Run provider-owned post-selection side effects                                                                 | Provider needs telemetry or provider-owned state when a model becomes active                                                                  |
 
-`normalizeModelId`, `normalizeTransport`, and `normalizeConfig` first check the
-matched provider plugin, then fall through other hook-capable provider plugins
-until one actually changes the model id or transport/config. That keeps
-alias/compat provider shims working without requiring the caller to know which
-bundled plugin owns the rewrite. If no provider hook rewrites a supported
-Google-family config entry, the bundled Google config normalizer still applies
-that compatibility cleanup.
+`reconcileLocalService` runs only for configured local services, including a
+healthy process reused from outside the current Gateway process. Keep it cheap,
+idempotent, and abort-aware. A rejection blocks the provider request and
+releases its lease without classifying the healthy process as a startup failure.
+
+Normalization dispatch is hook-specific:
+
+- `normalizeModelId` uses the matched provider hook's non-empty result. If none
+  is returned, OpenClaw applies manifest-declared model-ID normalization; it does
+  not try other providers' normalization hooks.
+- `normalizeTransport` tries the matched provider first. Only if that does not
+  change `api` or `baseUrl` and the provider has no `models.providers.<id>` entry
+  does it try other transport hooks, stopping at the first change.
+- `normalizeConfig` uses the owning bundled provider's lightweight policy surface
+  first. If that surface has no `normalizeConfig` hook, OpenClaw may call the
+  matched runtime owner, provided runtime loading is allowed and, when a config
+  is supplied, that owner has explicit plugin activation. It never scans other
+  providers' hooks or falls through after the owning hook returns no change.
+  Config assembly passes `allowRuntimePluginLoad: false`, so it uses bundled
+  policy without loading provider runtime.
+
+Google-family config cleanup is implemented by the Google plugin's own
+`normalizeConfig` hook, shared with its lightweight policy surface. It is not a
+separate core compatibility backstop.
 
 If the provider needs a fully custom wire protocol or custom request executor,
 that is a different class of extension. These hooks are for provider behavior
@@ -652,15 +690,20 @@ Route fields:
 - `auth`: required, `"gateway"` or `"plugin"`. Use `"gateway"` to require normal gateway auth, or `"plugin"` for plugin-managed auth/webhook verification.
 - `match`: optional. `"exact"` (default) or `"prefix"`.
 - `handleUpgrade`: optional handler for WebSocket upgrade requests on the same route.
-- `replaceExisting`: optional. Allows the same plugin to replace its own existing route registration.
+- `replaceExisting`: optional. Required only for dynamic lifecycle registration to replace its own existing route.
 - `handler`: return `true` when the route handled the request.
 
 Notes:
 
 - `api.registerHttpHandler(...)` was removed and will cause a plugin-load error. Use `api.registerHttpRoute(...)` instead.
 - Plugin routes must declare `auth` explicitly.
-- Exact `path + match` conflicts are rejected unless `replaceExisting: true`, and one plugin cannot replace another plugin's route.
+- Canonically equivalent paths with the same `match` mode occupy one route. Static `api.registerHttpRoute(...)` calls from the same plugin replace that route; another plugin cannot replace it.
 - Overlapping routes with different `auth` levels are rejected. Keep `exact`/`prefix` fallthrough chains on the same auth level only.
+- Dynamic lifecycle code using `registerPluginHttpRoute(...)` from `openclaw/plugin-sdk/webhook-ingress` must set `replaceExisting: true` to refresh its own canonical route. Named registrations can replace only the same nonempty `pluginId`; when either side sets a route `source`, both must set the same nonempty source. Same-plugin source-less-to-source-less refresh and anonymous-to-anonymous refresh remain supported for shipped SDK callers, but named and anonymous routes cannot replace each other.
+- Set `reuseExistingSameOwner: true` to share a canonical route with the same nonempty `pluginId` and `source`. A dynamically created route remains until its last holder releases it; reusing a static `api.registerHttpRoute(...)` route leaves its lifetime with the plugin registry.
+- Channel lifecycle callbacks use their Gateway's route registry. Startup routes expire when their task settles or recovery abandons it; `stopAccount` routes expire when that stop attempt settles or times out. Recovery revokes abandoned task routes before replacement startup, even if startup fails. Expired callbacks cannot dynamically register or replace routes.
+- Treat route `source` as a stable same-plugin sub-owner, not a diagnostic label. Existing source-less callers may keep omitting it; source-aware callers must keep it unchanged across refreshes.
+- Dynamic lifecycle registration logs and returns a no-op unregister callback on rejection by default. Set `throwOnFailure: true` when readiness depends on that route; required bundled webhook transports use strict registration so they cannot report ready without live ingress.
 - `auth: "plugin"` routes do **not** receive operator runtime scopes automatically. They are for plugin-managed webhooks/signature verification, not privileged Gateway helper calls.
 - `auth: "gateway"` routes run inside a Gateway request runtime scope. The default surface (`gatewayRuntimeScopeSurface: "write-default"`) is intentionally conservative:
   - shared-secret bearer auth (`gateway.auth.mode = "token"` / `"password"`) and any non-trusted-proxy auth method get a single `operator.write` scope, even if the caller sends `x-openclaw-scopes`
@@ -670,6 +713,7 @@ Notes:
 - Sandboxed external Control UI tabs backed by `auth: "gateway"` routes use a short-lived signed cookie grant minted only by authenticated bootstrap; plugin-auth tabs keep their direct iframe path. Before mounting, the parent runs a route-owned probe inside the same opaque sandbox and fails closed when browser privacy policy blocks the cookie. The grant is bound to the owning plugin, matched route root, and current auth generation; its process-random cookie name prevents trusted same-host Gateways from overwriting one another, but cookies never isolate TCP ports. The Gateway hostname is therefore one credential boundary: do not cohost mutually untrusted services on that hostname, including other ports. Route dispatch rejects reuse against a nested route owned by another plugin. Because sandbox descendants are cross-site for cookie purposes, the grant accepts only `GET` and `HEAD` with `operator.read`; mutations and WebSocket upgrades stay on explicit Gateway-authenticated surfaces. The cookie intentionally cannot use CHIPS: current browsers include a cross-site-ancestor bit in the partition key, so nested opaque sandbox frames would lose access to same-route assets. The cookie requires a secure context and browser permission for cross-site cookies, so gateway-auth external tabs are unavailable on plain-HTTP LAN origins or under full third-party-cookie blocking; use HTTPS/Tailscale Serve or browser-trusted loopback with a compatible cookie policy.
 - The grant prevents Gateway bearer-token disclosure and accidental route/scope reuse; it does not create a security boundary between native plugins. Native plugin code and the UI content it serves remain part of the same trusted in-process plugin boundary.
 - Practical rule: do not assume a gateway-auth plugin route is an implicit admin surface. If your route needs admin-only behavior, opt into `trusted-operator` scope surface, require an identity-bearing auth mode, and document the explicit `x-openclaw-scopes` header contract.
+- Startup plugins register HTTP routes with their full runtime after the Gateway starts listening. Until startup sidecars are ready, an otherwise-unclaimed HTTP request returns `503` with `Retry-After: 1`; core routes continue to dispatch normally. This generic fallback covers plugin routes before the runtime registry can identify their owners.
 - After route matching and authentication, ordinary handlers participate in Gateway root-work admission. A prepared or restarting Gateway returns `503` before invoking the handler. The narrow exception is a manifest-entitled `auth: "gateway"` route that also opts into the route-specific `trusted-operator` surface; it remains reachable so suspension control dispatch cannot be stranded, while ordinary sibling routes from the same plugin remain behind the admission boundary. WebSocket `handleUpgrade` ownership uses the same atomic admission boundary; once the handler accepts a socket, the socket's later lifetime is plugin-owned and is not tracked by this boundary.
 
 ## Plugin SDK import paths
@@ -693,7 +737,7 @@ plugin fields. See [Channel plugins](/plugins/sdk-channel-plugins).
 
 Runtime and config helpers live under matching focused `*-runtime` subpaths
 (`approval-runtime`, `agent-runtime`, `lazy-runtime`, `directory-runtime`,
-`text-runtime`, `runtime-store`, `system-event-runtime`, `heartbeat-runtime`,
+`text-utility-runtime`, `runtime-store`, `system-event-runtime`, `heartbeat-runtime`,
 `channel-activity-runtime`, etc.). Prefer `config-contracts`,
 `plugin-config-runtime`, `runtime-config-snapshot`, and `config-mutation`
 instead of the broad `config-runtime` compatibility barrel.
@@ -731,6 +775,11 @@ instead of provider-native button, component, block, or card fields.
 See [Message Presentation](/plugins/message-presentation) for the contract,
 fallback rules, provider mapping, and plugin author checklist.
 
+Provider-native schema extensions require explicit maintainer approval,
+channel-owned parsing, documented cross-channel behavior, and capabilities that
+`MessagePresentation` cannot express. Discord `components` is the approved
+built-in exception for its advanced Components V2 layouts.
+
 Send-capable plugins declare what they can render through message capabilities:
 
 - `presentation` for semantic presentation blocks (`text`, `context`,
@@ -738,9 +787,9 @@ Send-capable plugins declare what they can render through message capabilities:
 - `delivery-pin` for pinned-delivery requests
 
 Core decides whether to render the presentation natively or degrade it to text.
-Do not expose provider-native UI escape hatches from the generic message tool.
-Deprecated SDK helpers for legacy native schemas remain exported for existing
-third-party plugins, but new plugins should not use them.
+Do not expose unapproved provider-native UI escape hatches from the generic
+message tool. Deprecated SDK helpers for legacy native schemas remain exported
+for existing third-party plugins, but new plugins should not use them.
 
 ## Channel target resolution
 
@@ -749,6 +798,8 @@ outbound host generic and use the messaging adapter surface for provider rules:
 
 - `messaging.inferTargetChatType({ to })` decides whether a normalized target
   should be treated as `direct`, `group`, or `channel` before directory lookup.
+  Implicit owner heartbeat delivery requires this direct classification; without
+  it, Gateway status reports `waiting for route`.
 - `messaging.targetResolver.looksLikeId(raw, normalized)` tells core whether an
   input should skip straight to id-like resolution instead of directory search.
 - `messaging.targetResolver.reservedLiterals` lists bare words that are
@@ -907,22 +958,6 @@ instead of the full plugin entry. This keeps startup and setup lighter
 when your main plugin entry also wires tools, hooks, or other runtime-only
 code.
 
-Optional: `openclaw.startup.deferConfiguredChannelFullLoadUntilAfterListen`
-can opt a channel plugin into the same `setupEntry` path during the gateway's
-pre-listen startup phase, even when the channel is already configured.
-
-Use this only when `setupEntry` fully covers the startup surface that must exist
-before the gateway starts listening. In practice, that means the setup entry
-must register every channel-owned capability that startup depends on, such as:
-
-- channel registration itself
-- any HTTP routes that must be available before the gateway starts listening
-- any gateway methods, tools, or services that must exist during that same window
-
-If your full entry still owns any required startup capability, do not enable
-this flag. Keep the plugin on the default behavior and let OpenClaw load the
-full entry during startup.
-
 Bundled channels can also publish setup-only contract-surface helpers that core
 can consult before the full channel runtime is loaded. The current setup
 promotion surface is:
@@ -942,25 +977,10 @@ Those setup patch adapters keep bundled contract-surface discovery lazy. Import
 time stays light; the promotion surface is loaded only on first use instead of
 re-entering bundled channel startup on module import.
 
-When those startup surfaces include gateway RPC methods, keep them on a
+When setup surfaces include gateway RPC methods, keep them on a
 plugin-specific prefix. Core admin namespaces (`config.*`,
 `exec.approvals.*`, `wizard.*`, `update.*`) remain reserved and always resolve
 to `operator.admin`, even if a plugin requests a narrower scope.
-
-Example:
-
-```json
-{
-  "name": "@scope/my-channel",
-  "openclaw": {
-    "extensions": ["./index.ts"],
-    "setupEntry": "./setup-entry.ts",
-    "startup": {
-      "deferConfiguredChannelFullLoadUntilAfterListen": true
-    }
-  }
-}
-```
 
 ### Channel catalog metadata
 
@@ -1035,16 +1055,24 @@ Official external npm entries should prefer an exact `npmSpec` plus
 `expectedIntegrity`. Bare package names and dist-tags still work for
 compatibility, but they surface source-plane warnings so the catalog can move
 toward pinned, integrity-checked installs without breaking existing plugins.
+When an official package is renamed, the catalog entry may declare
+`legacyNpmPackageNames` with the former package names. Trusted update rewrites
+matching npm records to the current `npmSpec`, and migrates a catalog lookup
+alias such as a channel id to the canonical plugin id. Duplicate alias+canonical
+records drop only when the canonical install is also trusted official.
+`legacyPluginIds` remains the contract for plugin-id cutovers that are not lookup
+aliases.
 When onboarding installs from a local catalog path, it records a managed plugin
 plugin index entry with `source: "path"` and a workspace-relative
 `sourcePath` when possible. The absolute operational load path stays in
 `plugins.load.paths`; the install record avoids duplicating local workstation
 paths into long-lived config. This keeps local development installs visible to
 source-plane diagnostics without adding a second raw filesystem-path disclosure
-surface. The persisted `installed_plugin_index` SQLite table is the install
-source of truth and can be refreshed without loading plugin runtime modules.
-Its `installRecords` map is durable even when a plugin manifest is missing or
-invalid; its `plugins` payload is a rebuildable manifest view.
+surface. The persisted `config_machine_state` value under
+`plugins.installedIndex` is the install source of truth and can be refreshed
+without loading plugin runtime modules. Its `installRecords` map is durable
+even when a plugin manifest is missing or invalid; its `plugins` payload is a
+rebuildable manifest view.
 
 ## Context engine plugins
 
@@ -1166,7 +1194,7 @@ Recommended sequence:
    stay explicit over time.
 
 This is how OpenClaw stays opinionated without becoming hardcoded to one
-provider's worldview. See the [Capability Cookbook](/tools/capability-cookbook)
+provider's worldview. See [Adding capabilities](/plugins/adding-capabilities)
 for a concrete file checklist and worked example.
 
 ### Capability checklist

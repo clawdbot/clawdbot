@@ -1,4 +1,5 @@
 // Windows database path tests exercise canonical state lifecycles beyond MAX_PATH.
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -13,11 +14,11 @@ import {
 } from "./openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { preflightOpenClawDatabaseSchemas } from "./openclaw-database-preflight.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openExistingOpenClawStateDatabaseReadOnly,
-  OPENCLAW_STATE_SCHEMA_VERSION,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
@@ -110,7 +111,7 @@ describe("OpenClaw database paths on Windows", () => {
         },
       });
       expect(
-        preflightOpenClawDatabaseSchemas({
+        await preflightOpenClawDatabaseSchemas({
           env,
           supportedVersions: {
             state: OPENCLAW_STATE_SCHEMA_VERSION,
@@ -139,7 +140,7 @@ describe("OpenClaw database paths on Windows", () => {
       const privateDirectory = path.dirname(String(openedStatePath?.file));
       expect(readOnlyState?.walMaintenance.close()).toBe(true);
       expect(fs.existsSync(privateDirectory)).toBe(false);
-      expect(fs.readFileSync(statePath)).toEqual(stateBytesBeforeReadOnly);
+      assert.deepStrictEqual(fs.readFileSync(statePath), stateBytesBeforeReadOnly);
       expect(
         fs
           .readdirSync(path.dirname(statePath), { withFileTypes: true })
@@ -153,7 +154,7 @@ describe("OpenClaw database paths on Windows", () => {
         skipped: false,
       });
       expect(
-        compactDoctorSessionSqliteTarget(
+        await compactDoctorSessionSqliteTarget(
           {
             agentId: AGENT_ID,
             storePath: path.join(

@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
 import {
@@ -6,9 +5,8 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
 export type ReservedKeyRename = { from: string; to: string };
 
@@ -26,6 +24,18 @@ type SharedStateSchemaDatabase = {
 };
 
 type DynamicSharedStateDatabase = Record<string, Record<string, unknown>>;
+
+function listTuiLastSessionStateRows(database: DatabaseSync) {
+  const db =
+    getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "config_machine_state">>(database);
+  return executeSqliteQuerySync(
+    database,
+    db
+      .selectFrom("config_machine_state")
+      .select(["state_key", "value_json"])
+      .where("state_key", "like", "tui.lastSession.%"),
+  ).rows;
+}
 
 function sqliteSchemaIdentifier(value: string) {
   return sql.id(value); // kysely-allow-raw -- value comes only from SQLite schema metadata.
@@ -82,6 +92,12 @@ export function collectSharedStateSessionKeys(database: DatabaseSync): Set<strin
       }
     }
   }
+  for (const row of listTuiLastSessionStateRows(database)) {
+    const sessionKey: unknown = JSON.parse(row.value_json);
+    if (typeof sessionKey === "string") {
+      keys.add(sessionKey);
+    }
+  }
   return keys;
 }
 
@@ -132,6 +148,21 @@ export function rewriteSharedStateSessionKeys(
             .where(rowId, "=", row.rowid),
         );
       }
+    }
+  }
+  const stateDb =
+    getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "config_machine_state">>(database);
+  for (const row of listTuiLastSessionStateRows(database)) {
+    const sessionKey: unknown = JSON.parse(row.value_json);
+    const renamedKey = typeof sessionKey === "string" ? renames.get(sessionKey) : undefined;
+    if (renamedKey) {
+      executeSqliteQuerySync(
+        database,
+        stateDb
+          .updateTable("config_machine_state")
+          .set({ value_json: JSON.stringify(renamedKey) })
+          .where("state_key", "=", row.state_key),
+      );
     }
   }
 }
@@ -187,14 +218,11 @@ export function readRepairJournal(database: DatabaseSync): ReservedKeyRename[] {
 }
 
 export function readRepairJournalReadOnly(env: NodeJS.ProcessEnv): ReservedKeyRename[] {
-  const statePath = resolveOpenClawStateSqlitePath(env);
-  if (!fs.existsSync(statePath)) {
-    return [];
-  }
-  return withOpenClawStateDatabaseReadOnly((database) => readRepairJournal(database.db), {
-    env,
-    path: statePath,
-  });
+  return (
+    withExistingOpenClawStateDatabaseReadOnly((database) => readRepairJournal(database.db), {
+      env,
+    }) ?? []
+  );
 }
 
 export function writeRepairJournal(

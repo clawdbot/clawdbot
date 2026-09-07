@@ -1,15 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
-import { readCodexCliCredentialsCached } from "openclaw/plugin-sdk/provider-auth";
+import {
+  readCodexCliCredentialsCached,
+  resolveOpenAICodexAuthIdentity,
+} from "openclaw/plugin-sdk/provider-auth";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "openclaw/plugin-sdk/realtime-voice";
 import type { Page } from "playwright";
 import { describe, expect, it } from "vitest";
 import WebSocket, { type RawData } from "ws";
-import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
+import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-auth.js";
+import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
 import {
   createOpenAIQuicksilverBrowserSessionBroker,
   OPENAI_QUICKSILVER_OFFER_PATH,
-  resolveOpenAIChatGptSubscriptionAuth,
 } from "./realtime-quicksilver-session.js";
 import {
   buildOpenAIQuicksilverSession,
@@ -17,11 +21,14 @@ import {
   openAIQuicksilverAuthHeaders,
   type OpenAIQuicksilverAuth,
 } from "./realtime-quicksilver-wire.js";
+import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
+import { OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL } from "./realtime-voice-session-policy.js";
 
 const LIVE_ENABLED =
   process.env.OPENCLAW_LIVE_TEST === "1" && process.env.OPENCLAW_LIVE_GPT_LIVE === "1";
 const describeLive = LIVE_ENABLED ? describe : describe.skip;
 const LIVE_TIMEOUT_MS = 60_000;
+const LIVE_MILESTONE_TIMEOUT_MS = 30_000;
 
 type BrowserWithGptLivePeer = typeof globalThis & {
   openclawGptLivePeer?: RTCPeerConnection;
@@ -37,11 +44,13 @@ function decodeTextFrame(data: RawData): string {
   return data.toString("utf8");
 }
 
-async function createBrowserOffer(page: Page): Promise<string> {
-  return await page.evaluate(async () => {
+async function createBrowserOffer(page: Page, includeDataChannel = true): Promise<string> {
+  return await page.evaluate(async (shouldCreateDataChannel) => {
     const peer = new RTCPeerConnection();
     peer.addTransceiver("audio", { direction: "sendrecv" });
-    peer.createDataChannel("oai-events");
+    if (shouldCreateDataChannel) {
+      peer.createDataChannel("oai-events");
+    }
     const offer = await peer.createOffer();
     await peer.setLocalDescription(offer);
     const sdp = offer.sdp;
@@ -51,7 +60,7 @@ async function createBrowserOffer(page: Page): Promise<string> {
     }
     (globalThis as BrowserWithGptLivePeer).openclawGptLivePeer = peer;
     return sdp;
-  });
+  }, includeDataChannel);
 }
 
 async function applyBrowserAnswer(page: Page, sdp: string): Promise<void> {
@@ -62,6 +71,33 @@ async function applyBrowserAnswer(page: Page, sdp: string): Promise<void> {
     }
     await peer.setRemoteDescription({ type: "answer", sdp: answerSdp });
   }, sdp);
+}
+
+async function waitForLiveMilestone(
+  milestone: Promise<void>,
+  label: string,
+  eventClasses: readonly string[],
+): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      milestone,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new Error(`GA sideband ${label} timed out; eventClasses=${eventClasses.join(",")}`),
+            ),
+          LIVE_MILESTONE_TIMEOUT_MS,
+        );
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 async function closeBrowserPeer(page: Page): Promise<void> {
@@ -136,7 +172,7 @@ async function resolveLiveOAuthProfile(): Promise<
   Extract<OpenAIQuicksilverAuth, { type: "oauth" }> | undefined
 > {
   try {
-    const profile = await resolveOpenAIChatGptSubscriptionAuth({});
+    const profile = await resolveOpenAIChatGptSubscriptionAuth({}, openAIRealtimeHost);
     if (profile) {
       return profile;
     }
@@ -152,7 +188,7 @@ async function resolveLiveOAuthProfile(): Promise<
     return undefined;
   }
   const accountId =
-    credential.accountId ?? resolveCodexAuthIdentity({ accessToken: credential.access }).accountId;
+    credential.accountId ?? resolveOpenAICodexAuthIdentity({ access: credential.access }).accountId;
   return accountId ? { type: "oauth", token: credential.access, accountId } : undefined;
 }
 
@@ -186,21 +222,213 @@ describeLive("GPT-Live Platform WebSocket", () => {
         skip("No OpenAI Platform API key is available");
         return;
       }
-      const bridge = new OpenAIQuicksilverVoiceBridge({
-        providerConfig: {},
-        model: "gpt-live-1-codex",
-        voice: "marin",
-        instructions: "Keep this transport verification session silent.",
-        audioFormat: { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
-        resolveAuth: async () => ({ type: "api-key", token: apiKey }),
-        onAudio: () => {},
-        onClearAudio: () => {},
-      });
+      const bridge = new OpenAIQuicksilverVoiceBridge(
+        {
+          providerConfig: {},
+          model: "gpt-live-1-codex",
+          voice: "spruce",
+          instructions: "Keep this transport verification session silent.",
+          audioFormat: { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
+          resolveAuth: async () => ({ type: "api-key", token: apiKey }),
+          onAudio: () => {},
+          onClearAudio: () => {},
+        },
+        openAIRealtimeHost,
+      );
       try {
         await bridge.connect();
         expect(bridge.isConnected()).toBe(true);
       } finally {
         bridge.close();
+      }
+    },
+    LIVE_TIMEOUT_MS,
+  );
+});
+
+describeLive("OpenAI GA Gateway-controlled WebRTC", () => {
+  it(
+    "brokers audio-only SDP, attaches the Platform sideband, and completes one tool response",
+    async ({ skip }) => {
+      const apiKey = process.env.OPENAI_API_KEY?.trim();
+      if (!apiKey) {
+        skip("No OpenAI Platform API key is available");
+        return;
+      }
+      const realtime = createOpenAIQuicksilverBrowserSessionBroker(
+        {
+          getConfig: () => ({}),
+          logger: { debug: () => undefined, warn: () => undefined },
+        },
+        openAIRealtimeHost,
+      );
+      const provider = buildOpenAIRealtimeVoiceProvider({
+        quicksilverBrowserSessionBroker: realtime.broker,
+      });
+      const server = createServer((req, res) => {
+        if (req.url === "/") {
+          res.statusCode = 200;
+          res.end("<!doctype html><title>OpenClaw GA sideband proof</title>");
+          return;
+        }
+        if (req.url === OPENAI_QUICKSILVER_OFFER_PATH) {
+          void realtime.handler(req, res);
+          return;
+        }
+        res.statusCode = 404;
+        res.end("Not found");
+      });
+      const baseUrl = await listen(server);
+      const { chromium } = await import("playwright");
+      const browser = await chromium.launch({
+        headless: true,
+        args: ["--no-sandbox", "--use-fake-device-for-media-stream"],
+      });
+      const page = await browser.newPage();
+      let controlBridge: ReturnType<typeof provider.createBridge> | undefined;
+      let reservation:
+        | Awaited<ReturnType<NonNullable<typeof provider.createBrowserSession>>>
+        | undefined;
+      let resolveTool!: () => void;
+      let resolveFunctionOutputAdded!: () => void;
+      let resolveFunctionOutputDone!: () => void;
+      let resolveResponse!: () => void;
+      let rejectFunctionOutputAdded!: (error: Error) => void;
+      let responseDoneCount = 0;
+      let responseCreateCount = 0;
+      let responseCreateCountAtToolCall = 0;
+      let sessionPolicyReady = false;
+      const eventClasses: string[] = [];
+      const toolObserved = new Promise<void>((resolve) => {
+        resolveTool = resolve;
+      });
+      const functionOutputAdded = new Promise<void>((resolve, reject) => {
+        resolveFunctionOutputAdded = resolve;
+        rejectFunctionOutputAdded = reject;
+      });
+      const functionOutputDone = new Promise<void>((resolve) => {
+        resolveFunctionOutputDone = resolve;
+      });
+      const responseObserved = new Promise<void>((resolve) => {
+        resolveResponse = resolve;
+      });
+      try {
+        await page.goto(baseUrl);
+        reservation = await provider.createBrowserSession!({
+          providerConfig: { apiKey },
+          model: "gpt-realtime-2.1",
+          voice: "marin",
+          instructions:
+            "When the user asks for a check, call openclaw_agent_consult exactly once, then speak its result.",
+          tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL],
+          gatewayControl: {
+            bindBridge: (bridge) => {
+              controlBridge = bridge;
+            },
+            onToolCall: (event) => {
+              responseCreateCountAtToolCall = responseCreateCount;
+              resolveTool();
+              try {
+                void Promise.resolve(
+                  controlBridge?.submitToolResult(event.callId, {
+                    result: "OpenClaw GA sideband live proof passed.",
+                  }),
+                ).catch((error: unknown) =>
+                  rejectFunctionOutputAdded(
+                    error instanceof Error ? error : new Error("function output submission failed"),
+                  ),
+                );
+              } catch (error) {
+                rejectFunctionOutputAdded(
+                  error instanceof Error ? error : new Error("function output submission failed"),
+                );
+              }
+            },
+            onEvent: (event) => {
+              if (eventClasses.length < 64) {
+                eventClasses.push(`${event.direction}:${event.type}`);
+              }
+              if (
+                event.direction === "server" &&
+                event.type === "session.updated" &&
+                event.detail === "tools=1 toolChoice=auto"
+              ) {
+                sessionPolicyReady = true;
+              }
+              if (event.direction === "client" && event.type === "response.create") {
+                responseCreateCount += 1;
+              }
+              if (
+                event.direction === "server" &&
+                event.type === "conversation.item.added" &&
+                event.detail === "itemType=function_call_output"
+              ) {
+                resolveFunctionOutputAdded();
+              }
+              if (
+                event.direction === "server" &&
+                event.type === "conversation.item.done" &&
+                event.detail === "itemType=function_call_output"
+              ) {
+                resolveFunctionOutputDone();
+              }
+              if (event.direction === "server" && event.type === "response.done") {
+                responseDoneCount += 1;
+                if (responseDoneCount === 2) {
+                  resolveResponse();
+                }
+              }
+            },
+          },
+        });
+        if (reservation.transport !== "webrtc" || !reservation.offerUrl) {
+          throw new Error("GA Gateway control did not return a WebRTC broker reservation");
+        }
+        const offerSdp = await createBrowserOffer(page, false);
+        expect(offerSdp).not.toMatch(/^m=application /m);
+        const brokerResponse = await page.evaluate(
+          async ({ offerUrl, token, sdp }) => {
+            const response = await fetch(offerUrl, {
+              method: "POST",
+              headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/sdp" },
+              body: sdp,
+            });
+            return { status: response.status, answerSdp: await response.text() };
+          },
+          {
+            offerUrl: `${baseUrl}${reservation.offerUrl}`,
+            token: reservation.clientSecret,
+            sdp: offerSdp,
+          },
+        );
+        expect(brokerResponse.status).toBe(201);
+        await applyBrowserAnswer(page, brokerResponse.answerSdp);
+        expect(sessionPolicyReady).toBe(true);
+        controlBridge?.sendUserMessage?.("Run the requested OpenClaw verification.", {
+          toolChoice: { type: "function", name: "openclaw_agent_consult" },
+        });
+        await waitForLiveMilestone(toolObserved, "tool call", eventClasses);
+        await waitForLiveMilestone(functionOutputAdded, "function output added", eventClasses);
+        await waitForLiveMilestone(functionOutputDone, "function output done", eventClasses);
+        await waitForLiveMilestone(responseObserved, "terminal response", eventClasses);
+        expect(responseCreateCount - responseCreateCountAtToolCall).toBe(1);
+        expect(responseDoneCount).toBe(2);
+      } finally {
+        if (reservation) {
+          await Promise.resolve(realtime.broker.cancelBrowserSession(reservation)).catch(
+            () => undefined,
+          );
+        }
+        await closeBrowserPeer(page).catch(() => undefined);
+        await browser.close();
+        await realtime.cleanup();
+        await closeServer(server);
+        expect(realtime.getSessionCounts()).toEqual({
+          pending: 0,
+          inFlight: 0,
+          active: 0,
+          reservations: 0,
+        });
       }
     },
     LIVE_TIMEOUT_MS,
@@ -231,16 +459,19 @@ describeLive("OpenAI OAuth WebRTC", () => {
           sessionId: randomUUID(),
           threadId: randomUUID(),
         };
-        const call = await createOpenAIQuicksilverCall({
-          auth,
-          requestIds,
-          sdp: offerSdp,
-          session: buildOpenAIQuicksilverSession({
-            model: "gpt-live-1-codex",
-            instructions: "Keep this transport verification session silent.",
-            voice: "marin",
-          }),
-        });
+        const call = await createOpenAIQuicksilverCall(
+          {
+            auth,
+            requestIds,
+            sdp: offerSdp,
+            session: buildOpenAIQuicksilverSession({
+              model: "gpt-live-1-codex",
+              instructions: "Keep this transport verification session silent.",
+              voice: "spruce",
+            }),
+          },
+          openAIRealtimeHost,
+        );
 
         if (call.kind !== "gpt-live") {
           throw new Error("GPT-Live call unexpectedly used the GA realtime wire shape");
@@ -252,7 +483,7 @@ describeLive("OpenAI OAuth WebRTC", () => {
 
         const started = await waitForSidebandSessionStarted({
           url: call.sidebandUrl,
-          headers: openAIQuicksilverAuthHeaders(auth, requestIds),
+          headers: openAIQuicksilverAuthHeaders(auth, requestIds, openAIRealtimeHost),
         });
         sideband = started.socket;
         expect(started.sessionId).toBe(call.callId);
@@ -276,10 +507,13 @@ describeLive("OpenAI OAuth WebRTC", () => {
         return;
       }
 
-      const realtime = createOpenAIQuicksilverBrowserSessionBroker({
-        getConfig: () => ({}),
-        logger: { debug: () => undefined, warn: () => undefined },
-      });
+      const realtime = createOpenAIQuicksilverBrowserSessionBroker(
+        {
+          getConfig: () => ({}),
+          logger: { debug: () => undefined, warn: () => undefined },
+        },
+        openAIRealtimeHost,
+      );
       const server = createServer((req, res) => {
         if (req.url === "/") {
           res.statusCode = 200;
@@ -306,7 +540,30 @@ describeLive("OpenAI OAuth WebRTC", () => {
         for (const model of ["gpt-realtime-2.1", "gpt-realtime-2.1-mini", "gpt-realtime-2"]) {
           try {
             const reservation = await realtime.broker.createBrowserSession(
-              { providerConfig: {}, model, voice: "marin" },
+              {
+                providerConfig: {},
+                model,
+                voice: "marin",
+                gaSession: {
+                  type: "realtime",
+                  model,
+                  instructions: "Keep this transport verification session silent.",
+                  audio: {
+                    input: {
+                      noise_reduction: { type: "near_field" },
+                      turn_detection: {
+                        type: "server_vad",
+                        create_response: true,
+                        interrupt_response: true,
+                      },
+                      transcription: { model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL },
+                    },
+                    output: { voice: "marin" },
+                  },
+                  tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL],
+                  tool_choice: "auto",
+                },
+              },
               auth,
             );
             if (reservation.transport !== "webrtc") {

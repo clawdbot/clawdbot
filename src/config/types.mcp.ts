@@ -46,6 +46,8 @@ export type McpServerConfig = {
   auth?: "oauth";
   /** Optional OAuth client metadata overrides for HTTP MCP servers. */
   oauth?: {
+    /** Credential ownership for this server. Defaults to shared operator credentials. */
+    identity?: "shared" | "per-requester";
     /** Refresh-capable auth profile used to inject the current bearer token. */
     authProfileId?: string;
     scope?: string;

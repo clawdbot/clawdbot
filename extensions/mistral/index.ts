@@ -29,6 +29,7 @@ export default defineSingleProviderPluginEntry({
     docsPath: "/providers/models",
     manifestAuth: { applyConfig: applyMistralConfig },
     catalog: {
+      discoveryMode: "strict",
       allowExplicitBaseUrl: true,
       liveModelDiscovery: true,
     },
@@ -44,7 +45,7 @@ export default defineSingleProviderPluginEntry({
     buildReplayPolicy: () => buildMistralReplayPolicy(),
   },
   register(api) {
-    api.registerMemoryEmbeddingProvider(mistralMemoryEmbeddingProviderAdapter);
+    api.registerEmbeddingProvider(mistralMemoryEmbeddingProviderAdapter);
     api.registerMediaUnderstandingProvider(mistralMediaUnderstandingProvider);
     api.registerRealtimeTranscriptionProvider(buildMistralRealtimeTranscriptionProvider());
   },

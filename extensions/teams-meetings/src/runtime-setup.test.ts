@@ -47,6 +47,9 @@ describe("Microsoft Teams meetings runtime setup", () => {
       nodeId: "node-1",
       params: {
         action: "setup",
+        audioBackend: "auto",
+        audioBufferBytes: 4_096,
+        audioFormat: "pcm16-24khz",
         audioInputCommand: ["custom-input", "--read"],
         audioOutputCommand: ["custom-output", "--write"],
         bargeInInputCommand: ["custom-barge-in"],
@@ -55,7 +58,7 @@ describe("Microsoft Teams meetings runtime setup", () => {
     });
     expect(status.checks).toContainEqual({
       id: "chrome-node-audio-prerequisites",
-      message: "Remote macOS, BlackHole 2ch, and SoX prerequisites are ready",
+      message: "Remote virtual audio backend and command-pair prerequisites are ready",
       ok: true,
     });
     expect(status.ok).toBe(true);
@@ -78,5 +81,29 @@ describe("Microsoft Teams meetings runtime setup", () => {
       message: "SoX audio command not found on the node.",
       ok: false,
     });
+  });
+
+  it("returns structured diagnostics when local talk-back is unsupported", async () => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const runCommandWithTimeout = vi.fn();
+    try {
+      const status = await getTeamsMeetingsSetupStatus({
+        config: resolveTeamsMeetingsConfig({}),
+        fullConfig: {},
+        runtime: { system: { runCommandWithTimeout } } as unknown as PluginRuntime,
+        options: { mode: "agent", transport: "chrome" },
+      });
+
+      expect(status.ok).toBe(false);
+      expect(status.checks).toContainEqual({
+        id: "chrome-local-audio-device",
+        message: expect.stringContaining("unsupported on win32"),
+        ok: false,
+      });
+      expect(status.checks.some((check) => check.id === "chrome-local-audio-commands")).toBe(false);
+      expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    } finally {
+      platform.mockRestore();
+    }
   });
 });

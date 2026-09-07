@@ -1,6 +1,6 @@
 import path from "node:path";
 
-function toInboundMediaPath(id: string): string | undefined {
+export function resolveTelegramInboundMediaUri(id: string): string | undefined {
   if (
     !id ||
     id === "." ||
@@ -26,11 +26,11 @@ export function resolveTelegramPromptMediaPath(mediaPath: string): string | unde
   const canonicalMatch = /^media:\/\/inbound\/([^/\\]+)$/i.exec(mediaPath);
   if (canonicalMatch?.[1]) {
     const id = decodeInboundMediaId(canonicalMatch[1]);
-    return id ? toInboundMediaPath(id) : undefined;
+    return id ? resolveTelegramInboundMediaUri(id) : undefined;
   }
   const normalized = mediaPath.replace(/\\/g, "/");
   if (!normalized.includes("/media/inbound/")) {
     return undefined;
   }
-  return toInboundMediaPath(path.posix.basename(normalized));
+  return resolveTelegramInboundMediaUri(path.posix.basename(normalized));
 }

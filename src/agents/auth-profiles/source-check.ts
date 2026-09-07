@@ -4,10 +4,12 @@
  */
 import { evaluateStoredCredentialEligibility } from "./credential-state.js";
 import { hasLegacyAuthProfileCredentialSource } from "./legacy-source-diagnostic.js";
+import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { coercePersistedAuthProfileStore } from "./persisted.js";
 import {
-  getRuntimeAuthProfileStoreSnapshot,
+  getRuntimeAuthProfileStoreSnapshotCore,
   hasAnyRuntimeAuthProfileStoreSource,
+  hasRuntimeAuthProfileStoreSource,
 } from "./runtime-snapshots.js";
 import {
   inspectPersistedAuthProfileStoreRaw,
@@ -100,8 +102,10 @@ export function hasAnyAuthProfileStoreSource(agentDir?: string): boolean {
     return true;
   }
 
-  const authPath = resolveAuthProfileDatabasePath(agentDir);
-  const mainAuthPath = resolveAuthProfileDatabasePath();
+  const authPath = agentDir
+    ? resolveAuthProfileDatabasePath(agentDir)
+    : resolveSharedAuthStorePath();
+  const mainAuthPath = resolveSharedAuthStorePath();
   if (
     agentDir &&
     authPath !== mainAuthPath &&
@@ -116,8 +120,7 @@ export function hasAnyAuthProfileStoreSource(agentDir?: string): boolean {
 
 /** Returns true when the requested agent dir has a local auth profile source. */
 export function hasLocalAuthProfileStoreSource(agentDir?: string): boolean {
-  const runtimeStore = getRuntimeAuthProfileStoreSnapshot(agentDir);
-  if (runtimeStore && Object.keys(runtimeStore.profiles).length > 0) {
+  if (hasRuntimeAuthProfileStoreSource(agentDir)) {
     return true;
   }
   if (hasLegacyAuthProfileCredentialSource(agentDir)) {
@@ -147,7 +150,7 @@ export function hasAuthProfileStoreSourceForProvider(
   if (profileIds?.length === 0) {
     return false;
   }
-  const localRuntimeStore = getRuntimeAuthProfileStoreSnapshot(agentDir);
+  const localRuntimeStore = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
   if (runtimeStoreHasProviderProfile(localRuntimeStore, provider, profileIds)) {
     return true;
   }
@@ -164,7 +167,7 @@ export function hasAuthProfileStoreSourceForProvider(
   if (!agentDir) {
     return false;
   }
-  const mainRuntimeStore = getRuntimeAuthProfileStoreSnapshot();
+  const mainRuntimeStore = getRuntimeAuthProfileStoreSnapshotCore();
   if (runtimeStoreHasProviderProfile(mainRuntimeStore, provider, profileIds)) {
     return true;
   }

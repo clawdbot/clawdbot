@@ -67,7 +67,7 @@ async function resolveExistingDreamsPath(workspaceDir: string): Promise<string |
       await fs.access(candidate);
       return candidate;
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      if (extractErrorCode(err) !== "ENOENT") {
         throw err;
       }
     }
@@ -164,7 +164,7 @@ export async function auditDreamingArtifacts(params: {
       issues.push({
         severity: "error",
         code: "dreaming-diary-unreadable",
-        message: `Dream diary could not be inspected: ${(err as NodeJS.ErrnoException).code ?? "error"}.`,
+        message: `Dream diary could not be inspected: ${extractErrorCode(err) ?? "error"}.`,
         fixable: false,
       });
     }
@@ -185,11 +185,11 @@ export async function auditDreamingArtifacts(params: {
       }
     }
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+    if (extractErrorCode(err) !== "ENOENT") {
       issues.push({
         severity: "error",
         code: "dreaming-session-corpus-unreadable",
-        message: `Dreaming session corpus could not be inspected: ${(err as NodeJS.ErrnoException).code ?? "error"}.`,
+        message: `Dreaming session corpus could not be inspected: ${extractErrorCode(err) ?? "error"}.`,
         fixable: false,
       });
     }
@@ -199,11 +199,11 @@ export async function auditDreamingArtifacts(params: {
     await fs.access(sessionIngestionPath);
     sessionIngestionExists = true;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+    if (extractErrorCode(err) !== "ENOENT") {
       issues.push({
         severity: "error",
         code: "dreaming-session-ingestion-unreadable",
-        message: `Dreaming session-ingestion state could not be inspected: ${(err as NodeJS.ErrnoException).code ?? "error"}.`,
+        message: `Dreaming session-ingestion state could not be inspected: ${extractErrorCode(err) ?? "error"}.`,
         fixable: false,
       });
     }

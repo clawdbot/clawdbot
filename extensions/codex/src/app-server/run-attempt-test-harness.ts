@@ -1,12 +1,15 @@
 // Codex plugin module implements run attempt test harness behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import {
   abortAndDrainAgentHarnessRun,
   nativeHookRelayTesting,
   queueAgentHarnessMessage,
   resetAgentEventsForTest,
-  type EmbeddedRunAttemptParams,
+  runBeforeToolCallHook,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import { resetDiagnosticEventsForTest } from "openclaw/plugin-sdk/diagnostic-runtime";
@@ -14,13 +17,26 @@ import type { ExecApprovalsFile } from "openclaw/plugin-sdk/exec-approvals-runti
 import { clearInternalHooks, resetGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { clearPluginCommands } from "openclaw/plugin-sdk/plugin-runtime";
+import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  deleteSessionEntry,
+  resolveStorePath,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
-import type { CodexAppServerClient } from "./client.js";
+import { CodexAppServerClient } from "./client.js";
+import {
+  mockClientRuntimeMethods,
+  threadStartResult as createThreadStartResult,
+  turnStartResult,
+} from "./codex-app-server.test-fixtures.js";
 import * as codexRequirements from "./config-requirements.js";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import { setManagedCodexPluginRoot } from "./managed-binary.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import type { CodexServerNotification } from "./protocol.js";
@@ -38,12 +54,53 @@ import {
   createCodexTestToolTerminalObserver,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
+import { createCodexLifecycleTurnHarness } from "./thread-lifecycle.test-fixtures.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 import { codexWorkspaceDirCache } from "./workspace-dir-cache.js";
+
+export {
+  extractGenerationFromThreadRequest,
+  extractRelayIdFromThreadRequest,
+} from "./run-attempt-hook-test-support.js";
 
 const execApprovalsRuntimeMocks = vi.hoisted(() => ({
   loadExecApprovals: vi.fn<() => ExecApprovalsFile>(() => ({ version: 1, agents: {} })),
 }));
+
+function createHarnessHostCapabilities(
+  params: EmbeddedRunAttemptParams,
+): EmbeddedRunAttemptParams["hostCapabilities"] {
+  return Object.freeze({
+    kind: "agent-harness-host-capability",
+    version: 1,
+    assertActive: () => {},
+    bindToolSurface: (tools) => tools,
+    createToolSurface: (options) => createOpenClawCodingTools(options),
+    runBeforeToolCall: async ({ nativeOperation: _nativeOperation, approvalMode, ...request }) =>
+      await runBeforeToolCallHook({
+        ...request,
+        approvalMode: approvalMode === "defer" ? "defer" : "request",
+        ctx: Object.freeze({
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          ...(params.config ? { config: params.config } : {}),
+          ...(params.workspaceDir
+            ? { cwd: params.workspaceDir, workspaceDir: params.workspaceDir }
+            : {}),
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+          runId: params.runId,
+          trigger: params.trigger,
+          approvalReviewerDeviceId: params.approvalReviewerDeviceId,
+          turnSourceChannel: params.messageChannel ?? params.messageProvider,
+          turnSourceTo: params.currentMessagingTarget ?? params.currentChannelId,
+          turnSourceAccountId: params.agentAccountId,
+          turnSourceThreadId: params.currentThreadTs,
+        }),
+      }),
+    requestApproval: async () => undefined,
+    waitForApproval: async () => undefined,
+  });
+}
 
 vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => {
   const actual =
@@ -55,6 +112,7 @@ vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => 
 });
 
 export let tempDir: string;
+const seededSessionOwnersForTest: Array<Parameters<typeof deleteSessionEntry>[0]> = [];
 let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
 const multiplexedTestClients = new WeakSet<CodexAppServerClient>();
 export const fastWait = { interval: 1, timeout: 5_000 } as const;
@@ -65,6 +123,7 @@ const activeAppServerAttemptsForTest = new Set<{
   sessionId: string;
   sessionKey?: string;
 }>();
+const activeHarnessHostClosuresForTest = new Set<() => void>();
 
 type RunCodexAppServerAttemptOptions = Omit<
   NonNullable<Parameters<typeof runCodexAppServerAttemptImpl>[1]>,
@@ -90,14 +149,16 @@ export function setCodexAppServerClientFactoryForTest(
     // Narrow test doubles still need the client lifecycle hook installed by
     // the keyed router, even when the test never simulates transport closure.
     testClient.addCloseHandler ??= () => () => undefined;
-    multiplexTestClientHandlers(client);
+    if (!(client instanceof CodexAppServerClient)) {
+      multiplexCodexTestClientHandlers(client);
+    }
     return client;
   });
 }
 
 // The keyed router, client runtime, and subagent monitor each register their
 // own handlers; single-slot test doubles would silently drop all but the last.
-function multiplexTestClientHandlers(client: CodexAppServerClient): void {
+export function multiplexCodexTestClientHandlers(client: CodexAppServerClient): void {
   if (multiplexedTestClients.has(client)) {
     return;
   }
@@ -203,16 +264,29 @@ async function drainActiveAppServerAttemptsForTest(): Promise<void> {
   }
 }
 
-export function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
-  const model = createCodexTestModel("codex");
-  return {
-    prompt: "hello",
-    sessionId: "session-1",
-    sessionKey: "agent:main:session-1",
+export function createParams(
+  sessionFile: string,
+  workspaceDir: string,
+  identity: {
+    prompt?: string;
+    provider?: string;
+    runId?: string;
+    sessionId?: string;
+    sessionKey?: string;
+  } = {},
+): EmbeddedRunAttemptParams {
+  const sessionId = identity.sessionId ?? "session-1";
+  const sessionKey = identity.sessionKey ?? "agent:main:session-1";
+  const provider = identity.provider ?? "codex";
+  const model = createCodexTestModel(provider);
+  const params = {
+    prompt: identity.prompt ?? "hello",
+    sessionId,
+    sessionKey,
     sessionFile,
     workspaceDir,
-    runId: "run-1",
-    provider: "codex",
+    runId: identity.runId ?? "run-1",
+    provider,
     modelId: "gpt-5.4-codex",
     model: {
       ...model,
@@ -232,43 +306,64 @@ export function createParams(sessionFile: string, workspaceDir: string): Embedde
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
     observeToolTerminal: createCodexTestToolTerminalObserver(),
-  } as EmbeddedRunAttemptParams;
+  } as unknown as EmbeddedRunAttemptParams;
+  params.hostCapabilities = createHarnessHostCapabilities(params);
+  return params;
 }
 
 export function createTestParams(): EmbeddedRunAttemptParams {
   return createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace"));
 }
 
-export function setCodexTestModelSupportsTools(
-  params: EmbeddedRunAttemptParams,
-  supportsTools: boolean,
-): void {
-  params.model = {
-    ...params.model,
-    compat: { ...params.model.compat, supportsTools },
-  } as EmbeddedRunAttemptParams["model"] & { compat: { supportsTools: boolean } };
+/** Models the core owner required for a reusable stable-key Codex binding. */
+export async function seedRunSessionOwnerForTest(sessionId: string, sessionKey: string) {
+  const scope = {
+    agentId: "main",
+    sessionKey,
+    storePath: resolveStorePath(undefined, { agentId: "main" }),
+  };
+  await upsertSessionEntry({ ...scope, entry: { sessionId, updatedAt: Date.now() } });
+  seededSessionOwnersForTest.push({ ...scope, expectedSessionId: sessionId });
 }
 
-export function createCodexRuntimePlanFixture(): NonNullable<
-  EmbeddedRunAttemptParams["runtimePlan"]
-> {
-  return {
-    auth: {},
-    observability: {
-      resolvedRef: "codex/gpt-5.4-codex",
-      provider: "codex",
-      modelId: "gpt-5.4-codex",
-      harnessId: "codex",
-    },
-    prompt: {
-      resolveSystemPromptContribution: () => undefined,
-    },
-    tools: {
-      normalize: (tools: unknown[]) => tools,
-      logDiagnostics: () => undefined,
-    },
-  } as unknown as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
+export function createNativeRunParams(
+  sessionFile: string,
+  workspaceDir: string,
+  sessionKey = "agent:main:session-1",
+): EmbeddedRunAttemptParams {
+  const params = createParams(sessionFile, workspaceDir, { sessionKey });
+  params.disableTools = true;
+  params.config = undefined;
+  delete params.contextTokenBudget;
+  delete params.contextWindowInfo;
+  delete params.observeToolTerminal;
+  return params;
 }
+
+/** Replaces the lightweight default with the admitted host boundary used in production. */
+export async function bindProductionHarnessHostCapabilitiesForTest(
+  params: EmbeddedRunAttemptParams,
+): Promise<() => void> {
+  const { hostCapabilities: _hostCapabilities, ...attempt } = params;
+  const host = await createAgentHarnessHostCapabilitiesForTest({ attempt, pluginId: "codex" });
+  params.hostCapabilities = host.capabilities;
+  let active = true;
+  const close = () => {
+    if (!active) {
+      return;
+    }
+    active = false;
+    activeHarnessHostClosuresForTest.delete(close);
+    host.close();
+  };
+  activeHarnessHostClosuresForTest.add(close);
+  return close;
+}
+
+export {
+  setCodexTestModelSupportsTools,
+  createCodexRuntimePlanFixture,
+} from "./thread-lifecycle.test-fixtures.js";
 
 export function assistantMessage(text: string, timestamp: number) {
   return {
@@ -306,69 +401,15 @@ export function mockCall(mock: unknown, label: string, index = 0): unknown[] {
   return call;
 }
 
-function getMockServerVersion() {
-  return CODEX_APP_SERVER_VERSION;
-}
-
 export function getMockRuntimeIdentity() {
-  return { serverVersion: getMockServerVersion() };
+  return { serverVersion: CODEX_APP_SERVER_VERSION };
 }
 
-export function mockClientRuntimeMethods() {
-  return {
-    getInstanceId: () => "test-client-1",
-    getRuntimeIdentity: getMockRuntimeIdentity,
-    getServerVersion: getMockServerVersion,
-  };
-}
+export { mockClientRuntimeMethods, turnStartResult } from "./codex-app-server.test-fixtures.js";
 
-export function threadStartResult(threadId = "thread-1") {
-  return {
-    thread: {
-      id: threadId,
-      sessionId: "session-1",
-      forkedFromId: null,
-      preview: "",
-      ephemeral: false,
-      modelProvider: "openai",
-      createdAt: 1,
-      updatedAt: 1,
-      status: { type: "idle" },
-      path: null,
-      cwd: tempDir || "/tmp/openclaw-codex-test",
-      cliVersion: "0.146.0",
-      source: "unknown",
-      agentNickname: null,
-      agentRole: null,
-      gitInfo: null,
-      name: null,
-      turns: [],
-    },
-    model: "gpt-5.4-codex",
-    modelProvider: "openai",
-    serviceTier: null,
-    cwd: tempDir || "/tmp/openclaw-codex-test",
-    instructionSources: [],
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    sandbox: { type: "dangerFullAccess" },
-    permissionProfile: null,
-    reasoningEffort: null,
-  };
-}
-
-export function turnStartResult(turnId = "turn-1", status = "inProgress") {
-  return {
-    turn: {
-      id: turnId,
-      status,
-      items: [],
-      error: null,
-      startedAt: null,
-      completedAt: null,
-      durationMs: null,
-    },
-  };
+export function threadStartResult(threadId = "thread-1", options: { cwd?: string } = {}) {
+  const cwd = options.cwd ?? tempDir ?? "/tmp/openclaw-codex-test";
+  return createThreadStartResult(threadId, cwd);
 }
 
 export function rateLimitsUpdated(resetsAt: number): CodexServerNotification {
@@ -401,6 +442,7 @@ export function createAppServerHarness(
     options?: { signal?: AbortSignal },
   ) => Promise<unknown>,
   options: {
+    persistedThreads?: string[];
     onStart?: (
       authProfileId: string | undefined,
       agentDir: string | undefined,
@@ -408,13 +450,39 @@ export function createAppServerHarness(
     ) => void;
   } = {},
 ) {
+  if (options.persistedThreads) {
+    const harness = createCodexLifecycleTurnHarness({
+      respond: requestImpl,
+      persistedThreads: options.persistedThreads,
+      agentDir: path.join(tempDir, "wire-agent"),
+      wait: appServerHarnessWait,
+    });
+    setCodexAppServerClientFactoryForTest(
+      async (_start, auth, agentDir, _config, clientOptions) => {
+        options.onStart?.(auth, agentDir, clientOptions);
+        return await harness.acquire(clientOptions);
+      },
+    );
+    return harness;
+  }
   const requests: Array<{ method: string; params: unknown }> = [];
   const notificationHandlers = new Set<
     (notification: CodexServerNotification) => Promise<void> | void
   >();
   const serverRequestHandlers = new Set<AppServerRequestHandler>();
   const closeHandlers = new Set<(client: CodexAppServerClient) => void>();
+  let closed = false;
   let closeError: Error | undefined;
+  const close = (error?: Error) => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    closeError = error;
+    for (const handler of closeHandlers) {
+      handler(client);
+    }
+  };
   const request = vi.fn(async (method: string, params?: unknown, requestOptions?: unknown) => {
     requests.push({ method, params });
     const result = await requestImpl(
@@ -461,6 +529,11 @@ export function createAppServerHarness(
       return () => closeHandlers.delete(handler);
     },
     getCloseError: () => closeError,
+    close: () => close(new Error("codex app-server client is closed")),
+    closeAndWait: async () => {
+      close(new Error("codex app-server client is closed"));
+      return true;
+    },
   } as unknown as CodexAppServerClient;
   setCodexAppServerClientFactoryForTest(
     async (_startOptions, authProfileId, agentDir, _config, clientOptions) => {
@@ -470,10 +543,10 @@ export function createAppServerHarness(
   );
 
   const waitForServerRequestHandler = async () => {
-    await vi.waitFor(() => expect(serverRequestHandlers.size).toBeGreaterThan(0), {
-      interval: 1,
-      timeout: appServerHarnessWait.timeout,
-    });
+    await vi.waitFor(
+      () => expect(serverRequestHandlers.size).toBeGreaterThan(0),
+      appServerHarnessWait,
+    );
     return async (requestLocal: Parameters<AppServerRequestHandler>[0]) => {
       for (const handler of serverRequestHandlers) {
         const result = await handler(requestLocal);
@@ -485,24 +558,18 @@ export function createAppServerHarness(
     };
   };
 
-  const waitForNotificationHandler = async () => {
-    await vi.waitFor(() => expect(notificationHandlers.size).toBeGreaterThan(0), {
-      interval: 1,
-      timeout: appServerHarnessWait.timeout,
-    });
-  };
-  const dispatchNotification = async (notification: CodexServerNotification) => {
-    await Promise.all(
-      [...notificationHandlers].map((handler) => Promise.resolve(handler(notification))),
-    );
-  };
   const sendNotification = async (notification: CodexServerNotification) => {
     // Dispatch synchronously when handlers exist so wire-order interactions
     // (for example completeTurn immediately followed by close) stay faithful.
     if (notificationHandlers.size === 0) {
-      await waitForNotificationHandler();
+      await vi.waitFor(
+        () => expect(notificationHandlers.size).toBeGreaterThan(0),
+        appServerHarnessWait,
+      );
     }
-    await dispatchNotification(notification);
+    await Promise.all(
+      [...notificationHandlers].map((handler) => Promise.resolve(handler(notification))),
+    );
   };
 
   return {
@@ -527,9 +594,7 @@ export function createAppServerHarness(
         { interval: 1, timeout: timeoutMs },
       );
     },
-    notify: async (notification: CodexServerNotification) => {
-      await sendNotification(notification);
-    },
+    notify: sendNotification,
     waitForServerRequestHandler,
     handleServerRequest: async (requestLocal: Parameters<AppServerRequestHandler>[0]) => {
       const handler = await waitForServerRequestHandler();
@@ -545,33 +610,24 @@ export function createAppServerHarness(
         },
       });
     },
-    close: (error?: Error) => {
-      closeError = error;
-      for (const handler of closeHandlers) {
-        handler(client);
-      }
-    },
+    close,
   };
 }
 
 export function createStartedThreadHarness(
-  requestImpl: (
-    method: string,
-    params: unknown,
-    options?: { signal?: AbortSignal },
-  ) => Promise<unknown> = async () => undefined,
-  options: {
-    onStart?: (
-      authProfileId: string | undefined,
-      agentDir: string | undefined,
-      options: CodexAppServerClientOptions | undefined,
-    ) => void;
-  } = {},
+  requestImpl: Parameters<typeof createAppServerHarness>[0] = async () => undefined,
+  options: Parameters<typeof createAppServerHarness>[1] = {},
 ) {
   return createAppServerHarness(async (method, params, requestOptions) => {
     const override = await requestImpl(method, params, requestOptions);
     if (override !== undefined) {
       return override;
+    }
+    if (method === "configRequirements/read") {
+      return { requirements: null };
+    }
+    if (method === "config/read") {
+      return { config: {}, origins: {} };
     }
     if (method === "thread/start") {
       return threadStartResult();
@@ -579,69 +635,38 @@ export function createStartedThreadHarness(
     if (method === "turn/start") {
       return turnStartResult();
     }
+    if (method === "thread/backgroundTerminals/list") {
+      return { data: [], nextCursor: null };
+    }
     return {};
   }, options);
 }
 
-export function createResumeHarness() {
-  return createAppServerHarness(async (method, params) => {
-    if (method === "thread/resume") {
-      // Resume must echo the requested thread; a different id is rejected as
-      // an unsafe subscription.
-      return threadStartResult((params as { threadId?: string })?.threadId ?? "thread-existing");
-    }
-    if (method === "turn/start") {
-      return turnStartResult();
-    }
-    return {};
-  });
-}
-
-export function extractRelayIdFromThreadRequest(params: unknown): string {
-  const command = extractNativeHookRelayCommandFromThreadRequest(params);
-  const match = command.match(/--relay-id ([^ ]+)/);
-  if (!match?.[1]) {
-    throw new Error(`relay id missing from command: ${command}`);
-  }
-  return match[1];
-}
-
-export function extractGenerationFromThreadRequest(params: unknown): string {
-  const command = extractNativeHookRelayCommandFromThreadRequest(params);
-  const match = command.match(/--generation ([^ ]+)/);
-  if (!match?.[1]) {
-    throw new Error(`relay generation missing from command: ${command}`);
-  }
-  return match[1];
-}
-
-function extractNativeHookRelayCommandFromThreadRequest(params: unknown): string {
-  const config = (params as { config?: Record<string, unknown> }).config;
-  let command: string | undefined;
-  for (const key of [
-    "hooks.PreToolUse",
-    "hooks.PostToolUse",
-    "hooks.PermissionRequest",
-    "hooks.Stop",
-  ]) {
-    const entries = config?.[key];
-    if (!Array.isArray(entries)) {
-      continue;
-    }
-    for (const entry of entries as Array<{ hooks?: Array<{ command?: string }> }>) {
-      command = entry.hooks?.find((hook) => typeof hook.command === "string")?.command;
-      if (command) {
-        break;
+export function createResumeHarness(threadId = "thread-existing") {
+  return createAppServerHarness(
+    async (method, params) => {
+      if (method === "configRequirements/read") {
+        return { requirements: null };
       }
-    }
-    if (command) {
-      break;
-    }
-  }
-  if (!command) {
-    throw new Error("native hook relay command missing from thread request");
-  }
-  return command;
+      if (method === "config/read") {
+        return { config: {}, origins: {} };
+      }
+      if (method === "thread/resume") {
+        // Resume must echo the requested thread; a different id is rejected as
+        // an unsafe subscription.
+        const resumeParams = params as { threadId?: string; modelProvider?: string };
+        return {
+          ...threadStartResult(resumeParams.threadId ?? "thread-existing"),
+          ...(resumeParams.modelProvider ? { modelProvider: resumeParams.modelProvider } : {}),
+        };
+      }
+      if (method === "turn/start") {
+        return turnStartResult();
+      }
+      return {};
+    },
+    { persistedThreads: [threadId] },
+  );
 }
 
 type RuntimeDynamicToolForTest = Parameters<
@@ -667,6 +692,8 @@ export function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTes
 
 export function setupRunAttemptTestHooks(): void {
   beforeEach(async () => {
+    // Direct runtime tests supply the plugin root normally owned by loader registration.
+    setManagedCodexPluginRoot(fileURLToPath(new URL("../../", import.meta.url)));
     // Machine-managed sandbox requirements must not leak into policy fixtures.
     vi.spyOn(codexRequirements, "readCodexRequirementsToml").mockReturnValue(undefined);
     // An uninitialized real host approvals store intentionally fails closed.
@@ -685,12 +712,19 @@ export function setupRunAttemptTestHooks(): void {
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
     tempDir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-codex-run-"));
+    // createParams models an ordinary durable session; seeded native bindings
+    // must have the same authoritative core owner as a real resumed conversation.
+    await seedRunSessionOwnerForTest("session-1", "agent:main:session-1");
   });
 
   afterEach(async () => {
     await drainActiveAppServerAttemptsForTest();
+    for (const close of activeHarnessHostClosuresForTest) {
+      close();
+    }
     await sandboxExecServerRegistry.closeAll();
     resetCodexAppServerClientFactoryForTest();
+    setManagedCodexPluginRoot(undefined);
     clearRuntimeAuthProfileStoreSnapshots();
     dynamicToolBuildState.openClawCodingToolsFactory = undefined;
     codexWorkspaceDirCache.clear();
@@ -708,6 +742,10 @@ export function setupRunAttemptTestHooks(): void {
     vi.useRealTimers();
     vi.unstubAllEnvs();
     await sandboxExecServerRegistry.closeAll();
+    for (const owner of seededSessionOwnersForTest.splice(0)) {
+      await deleteSessionEntry(owner);
+    }
+    closeOpenClawAgentDatabasesForTest();
     await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 }

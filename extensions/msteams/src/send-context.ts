@@ -3,7 +3,6 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import {
   resolveChannelMediaMaxBytes,
   type MSTeamsConfig,
-  type MSTeamsReplyStyle,
   type OpenClawConfig,
   type PluginRuntime,
 } from "../runtime-api.js";
@@ -13,6 +12,7 @@ import {
   isAllowedBotFrameworkServiceUrl,
   normalizeBotFrameworkServiceUrl,
 } from "./bot-framework-service-url.js";
+import { resolveMSTeamsAccount } from "./channel-config.js";
 import {
   resolveMSTeamsSdkCloudOptions,
   validateMSTeamsProactiveServiceUrlBoundary,
@@ -33,6 +33,12 @@ import { resolveMSTeamsCredentials } from "./token.js";
 
 type MSTeamsConversationType = "personal" | "groupChat" | "channel";
 
+// Keep reply policy and the Connector thread suffix together so every proactive
+// activity kind uses the same resolved destination instead of re-deriving it.
+type MSTeamsProactiveReplyTarget =
+  | { replyStyle: "thread"; threadActivityId: string }
+  | { replyStyle: "top-level"; threadActivityId?: never };
+
 export type MSTeamsProactiveContext = {
   appId: string;
   conversationId: string;
@@ -41,8 +47,6 @@ export type MSTeamsProactiveContext = {
   log: ReturnType<PluginRuntime["logging"]["getChildLogger"]>;
   /** The type of conversation: personal (1:1), groupChat, or channel */
   conversationType: MSTeamsConversationType;
-  /** Reply style resolved for proactive text/media sends. */
-  replyStyle: MSTeamsReplyStyle;
   /** Teams SDK cloud/service endpoint used to validate proactive sends. */
   sdkCloudOptions: MSTeamsSdkCloudOptions;
   /** Token provider for Graph API / SharePoint operations */
@@ -51,17 +55,17 @@ export type MSTeamsProactiveContext = {
   sharePointSiteId?: string;
   /** Resolved media max bytes from config (default: 100MB) */
   mediaMaxBytes?: number;
-};
+} & MSTeamsProactiveReplyTarget;
 
-function resolveMSTeamsProactiveReplyStyle(params: {
+function resolveMSTeamsProactiveReplyTarget(params: {
   cfg?: MSTeamsConfig;
   conversationId: string;
   ref: StoredConversationReference;
   conversationType: MSTeamsConversationType;
-}): MSTeamsReplyStyle {
+}): MSTeamsProactiveReplyTarget {
   const threadRootId = params.ref.threadId ?? params.ref.activityId;
   if (params.conversationType !== "channel" || !threadRootId) {
-    return "top-level";
+    return { replyStyle: "top-level" };
   }
 
   const routeConfig = resolveMSTeamsRouteConfig({
@@ -76,7 +80,7 @@ function resolveMSTeamsProactiveReplyStyle(params: {
     teamConfig: routeConfig.teamConfig,
     channelConfig: routeConfig.channelConfig,
   });
-  return replyStyle;
+  return replyStyle === "thread" ? { replyStyle, threadActivityId: threadRootId } : { replyStyle };
 }
 
 /**
@@ -165,6 +169,13 @@ export async function resolveMSTeamsSendContext(params: {
     throw new Error("msteams provider is not enabled");
   }
 
+  const account = resolveMSTeamsAccount(params.cfg);
+  if (account.tokenStatus === "configured_unavailable") {
+    throw new Error("msteams credential file is configured but unavailable");
+  }
+  if (!account.configured) {
+    throw new Error("msteams credentials not configured");
+  }
   const creds = resolveMSTeamsCredentials(msteamsCfg);
   if (!creds) {
     throw new Error("msteams credentials not configured");
@@ -250,10 +261,10 @@ export async function resolveMSTeamsSendContext(params: {
   // An explicit messageid is a caller-owned destination. Ambient and stored
   // roots still obey route policy, but explicit channel roots must not be
   // flattened by a top-level default.
-  const replyStyle =
+  const replyTarget: MSTeamsProactiveReplyTarget =
     recipient.threadId && conversationType === "channel"
-      ? "thread"
-      : resolveMSTeamsProactiveReplyStyle({
+      ? { replyStyle: "thread", threadActivityId: recipient.threadId }
+      : resolveMSTeamsProactiveReplyTarget({
           cfg: msteamsCfg,
           conversationId,
           ref: safeRef,
@@ -276,7 +287,7 @@ export async function resolveMSTeamsSendContext(params: {
     app,
     log,
     conversationType,
-    replyStyle,
+    ...replyTarget,
     sdkCloudOptions,
     tokenProvider,
     sharePointSiteId,

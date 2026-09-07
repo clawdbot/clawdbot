@@ -7,7 +7,11 @@ import {
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
-import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  formatErrorMessage,
+} from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getZalouserRuntime } from "./runtime.js";
@@ -118,10 +122,6 @@ function isZalouserAuthenticationFailure(error: unknown): boolean {
   return false;
 }
 
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 export function createZalouserIngressMonitor(options: {
   accountId: string;
   ownUserId: string;
@@ -196,7 +196,7 @@ export function createZalouserIngressMonitor(options: {
           return { reason: "invalid-event", message: error.message };
         }
         if (isZalouserAuthenticationFailure(error)) {
-          return { reason: "authentication-failed", message: errorText(error) };
+          return { reason: "authentication-failed", message: formatErrorMessage(error) };
         }
         return null;
       },
@@ -204,7 +204,7 @@ export function createZalouserIngressMonitor(options: {
     },
     createStoppedError: () => new Error("Zalouser ingress monitor is stopped."),
     onError: (error) =>
-      options.runtime.error?.(`zalouser ingress drain failed: ${errorText(error)}`),
+      options.runtime.error?.(`zalouser ingress drain failed: ${formatErrorMessage(error)}`),
   });
   monitor.start();
 

@@ -1,17 +1,22 @@
 // Runtime boundary for resolving provider auth choices from plugins.
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
+import { loadInstalledPluginIndexWithDiscovery } from "./installed-plugin-index.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
-  resolveProviderPluginChoice as resolveProviderPluginChoiceImpl,
-  runProviderModelSelectedHook as runProviderModelSelectedHookImpl,
+  resolveProviderPluginChoiceCore as resolveProviderPluginChoiceImpl,
+  runProviderModelSelectedHookCore as runProviderModelSelectedHookImpl,
 } from "./provider-wizard.js";
-import { resolvePluginProviders as resolvePluginProvidersImpl } from "./providers.runtime.js";
-import { resolvePluginSetupProvider as resolvePluginSetupProviderImpl } from "./setup-registry.js";
+import { resolvePluginProvidersCore as resolvePluginProvidersImpl } from "./providers.runtime.js";
+import { resolvePluginSetupProviderCore as resolvePluginSetupProviderImpl } from "./setup-registry.js";
 
 type ResolveProviderPluginChoice =
-  typeof import("./provider-wizard.js").resolveProviderPluginChoice;
+  typeof import("./provider-wizard.js").resolveProviderPluginChoiceCore;
 type RunProviderModelSelectedHook =
-  typeof import("./provider-wizard.js").runProviderModelSelectedHook;
-type ResolvePluginProviders = typeof import("./providers.runtime.js").resolvePluginProviders;
-type ResolvePluginSetupProvider = typeof import("./setup-registry.js").resolvePluginSetupProvider;
+  typeof import("./provider-wizard.js").runProviderModelSelectedHookCore;
+type ResolvePluginProviders = typeof import("./providers.runtime.js").resolvePluginProvidersCore;
+type ResolvePluginSetupProvider =
+  typeof import("./setup-registry.js").resolvePluginSetupProviderCore;
 
 /** Runtime wrapper for provider plugin wizard choice resolution. */
 export function resolveProviderPluginChoice(
@@ -29,9 +34,26 @@ export function runProviderModelSelectedHook(
 
 /** Runtime wrapper for registered model provider discovery. */
 export function resolvePluginProviders(
-  ...args: Parameters<ResolvePluginProviders>
+  params: Parameters<ResolvePluginProviders>[0],
+  preparedInstallRecords?: Record<string, PluginInstallRecord>,
 ): ReturnType<ResolvePluginProviders> {
-  return resolvePluginProvidersImpl(...args);
+  if (!preparedInstallRecords) {
+    return resolvePluginProvidersImpl(params);
+  }
+  // Installation changes package facts within the lease. Build a separate view
+  // with the installer's accepted records without replacing Gateway inventory.
+  return withPluginCache(createPluginCache(), () => {
+    const pluginMetadataSnapshot = loadInstalledPluginIndexWithDiscovery({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      installRecords: {
+        ...loadInstalledPluginIndexInstallRecordsSync({ env: params.env }),
+        ...preparedInstallRecords,
+      },
+    });
+    return resolvePluginProvidersImpl({ ...params, pluginMetadataSnapshot });
+  });
 }
 
 /** Runtime wrapper for plugin setup-provider discovery. */

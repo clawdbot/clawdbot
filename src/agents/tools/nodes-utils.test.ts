@@ -1,6 +1,8 @@
 // Node utility tests cover node selection defaults and gateway fallback between
 // current and legacy node list methods.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-client/src/protocol-request.js";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 
 const gatewayMocks = vi.hoisted(() => ({
   callGatewayTool: vi.fn(),
@@ -145,7 +147,12 @@ describe("listNodes", () => {
     // Old gateways only expose node.pair.list; newer authorization failures
     // must still surface instead of being hidden by fallback.
     gatewayMocks.callGatewayTool
-      .mockRejectedValueOnce(new Error("unknown method: node.list"))
+      .mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: "unknown method: node.list",
+        }),
+      )
       .mockResolvedValueOnce({
         pending: [],
         paired: [{ nodeId: "pair-1", displayName: "Pair 1", platform: "ios", remoteIp: "1.2.3.4" }],
@@ -178,13 +185,88 @@ describe("listNodes", () => {
     );
   });
 
-  it("rethrows unexpected node.list failures without fallback", async () => {
-    gatewayMocks.callGatewayTool.mockRejectedValueOnce(
-      new Error("gateway closed (1008): unauthorized"),
-    );
+  it.each([
+    {
+      label: "a local request timeout",
+      error: new GatewayProtocolRequestTimeoutError({
+        method: "node.list",
+        timeoutMs: 80,
+        requestSent: true,
+      }),
+    },
+    {
+      label: "an authorization rejection",
+      error: new GatewayClientRequestError({
+        code: "FORBIDDEN",
+        message: "unknown method: node.list",
+      }),
+    },
+    {
+      label: "an INVALID_REQUEST authentication failure",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "unauthorized",
+      }),
+    },
+    {
+      label: "a retryable unknown-method rejection",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "unknown method: node.list",
+        retryable: true,
+      }),
+    },
+    {
+      label: "an unknown-method rejection for another method",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "unknown method: node.list.extra",
+      }),
+    },
+    {
+      label: "malformed request retry metadata",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "unknown method: node.list",
+        retryAfterMs: -1,
+      }),
+    },
+    {
+      label: "an unsupported-method prose error",
+      error: new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "node.list is not implemented",
+      }),
+    },
+    {
+      label: "a network connection error",
+      error: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:18789"), {
+        code: "ECONNREFUSED",
+      }),
+    },
+    {
+      label: "a closed Gateway transport",
+      error: new Error("gateway closed (1008): unauthorized"),
+    },
+    {
+      label: "a malformed request-error lookalike",
+      error: Object.assign(new Error("unknown method: node.list"), {
+        name: "GatewayClientRequestError",
+        gatewayCode: "INVALID_REQUEST",
+      }),
+    },
+    {
+      label: "a plain unknown-method error",
+      error: new Error("unknown method: node.list"),
+    },
+  ])("rethrows $label without consulting paired nodes", async ({ error }) => {
+    gatewayMocks.callGatewayTool.mockRejectedValueOnce(error).mockResolvedValueOnce({
+      pending: [],
+      paired: [{ nodeId: "stale-node", displayName: "Stale Node" }],
+    });
 
     const signal = new AbortController().signal;
-    await expect(listNodes({}, signal)).rejects.toThrow("gateway closed (1008): unauthorized");
+    await expect(listNodes({}, signal)).rejects.toBe(error);
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(1);
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith("node.list", {}, {}, { signal });
   });

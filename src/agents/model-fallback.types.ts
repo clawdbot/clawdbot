@@ -1,7 +1,7 @@
 /**
  * Shared candidate and attempt types for model fallback execution.
  */
-import type { FailoverReason } from "./embedded-agent-helpers/types.js";
+import type { FailoverReason } from "./failover/signal.js";
 
 // Shared model fallback record types used by selection, observation, and retry
 // reporting.
@@ -27,4 +27,12 @@ export type FallbackAttempt = {
   authMode?: string;
   status?: number;
   code?: string;
+};
+
+/** Original route plus the outer fallback stage that admitted one real attempt. */
+export type ModelFallbackAttemptProvenance = {
+  requestedProvider: string;
+  requestedModel: string;
+  stage: "initial" | "fallback";
+  fallbackReason?: FailoverReason;
 };

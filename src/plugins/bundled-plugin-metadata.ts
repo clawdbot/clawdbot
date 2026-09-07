@@ -4,7 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { tryReadJsonSync } from "../infra/json-files.js";
-import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
+import { isPathInside } from "../infra/path-guards.js";
+import { collectBundledChannelConfigsCore } from "./bundled-channel-config-metadata.js";
 import {
   collectBundledPluginPublicSurfaceArtifacts,
   collectBundledPluginRuntimeSidecarArtifacts,
@@ -71,13 +72,6 @@ function resolveBundledPluginMetadataScanDir(
   });
 }
 
-function resolveBundledPluginLookupParams(params: { rootDir: string; scanDir?: string }): {
-  rootDir: string;
-  scanDir?: string;
-} {
-  return params.scanDir ? params : { rootDir: params.rootDir };
-}
-
 function collectBundledPluginMetadata(
   resolvedScanDir: string | undefined,
   includeChannelConfigs: boolean,
@@ -128,7 +122,7 @@ function collectBundledPluginMetadata(
       collectBundledPluginRuntimeSidecarArtifacts(publicSurfaceArtifacts);
     const channelConfigs =
       includeChannelConfigs && includeSyntheticChannelConfigs
-        ? collectBundledChannelConfigs({
+        ? collectBundledChannelConfigsCore({
             pluginDir,
             manifest: manifestResult.manifest,
             packageManifest,
@@ -225,11 +219,6 @@ function listBundledPluginEntryBaseDirs(params: {
   return uniqueStrings(baseDirs);
 }
 
-function isPathInsideRoot(rootDir: string, targetPath: string): boolean {
-  const relative = path.relative(rootDir, targetPath);
-  return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
-}
-
 function listBundledPluginEntryRoots(params: {
   rootDir: string;
   pluginDirName?: string;
@@ -264,7 +253,7 @@ function listBundledPluginEntrySearchPaths(
     }
     const normalizedEntry = path.normalize(rawEntry);
     for (const root of roots) {
-      if (!isPathInsideRoot(root, normalizedEntry)) {
+      if (!isPathInside(root, normalizedEntry)) {
         continue;
       }
       const relativeEntry = path.relative(root, normalizedEntry);
@@ -321,52 +310,8 @@ function resolveBundledPluginEntryCandidate(baseDir: string, entryPath: string):
   const candidate = path.isAbsolute(normalizedEntryPath)
     ? path.normalize(normalizedEntryPath)
     : path.resolve(baseDir, normalizedEntryPath);
-  const relative = path.relative(baseDir, candidate);
-  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+  if (!isPathInside(baseDir, candidate)) {
     return null;
   }
   return candidate;
-}
-
-/** Resolves the repo entry path for a bundled plugin, preferring source unless requested. */
-export function resolveBundledPluginRepoEntryPath(params: {
-  rootDir: string;
-  pluginId: string;
-  preferBuilt?: boolean;
-  scanDir?: string;
-}): string | null {
-  const metadata = findBundledPluginMetadataById(params.pluginId, {
-    ...resolveBundledPluginLookupParams({
-      rootDir: params.rootDir,
-      scanDir: params.scanDir,
-    }),
-    includeChannelConfigs: false,
-    includeSyntheticChannelConfigs: false,
-  });
-  if (!metadata) {
-    return null;
-  }
-
-  const entryOrder = params.preferBuilt
-    ? [metadata.source.built, metadata.source.source]
-    : [metadata.source.source, metadata.source.built];
-  const baseDirs = listBundledPluginEntryBaseDirs({
-    rootDir: params.rootDir,
-    pluginDirName: metadata.dirName,
-    ...(params.scanDir ? { scanDir: params.scanDir } : {}),
-  });
-
-  for (const baseDir of baseDirs) {
-    for (const entryPath of entryOrder) {
-      const candidate = resolveBundledPluginEntryCandidate(baseDir, entryPath);
-      if (!candidate) {
-        continue;
-      }
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  }
-
-  return null;
 }

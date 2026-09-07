@@ -1,5 +1,5 @@
 import { type ApiClientOptions, Bot, HttpError } from "grammy";
-import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-flags";
 import { formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -7,13 +7,14 @@ import { createChannelApiRetryRunner, type RetryConfig } from "openclaw/plugin-s
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
 import { resolveTelegramTransport, type TelegramTransport } from "./fetch.js";
-import { isSafeToRetrySendError, isTelegramRateLimitError } from "./network-errors.js";
+import { rethrowTelegramSendError, shouldRetryTelegramSendError } from "./network-errors.js";
 import type { TelegramOutboundPromptContextMessage as TelegramMessageLike } from "./outbound-message-context.js";
 import { makeProxyFetch } from "./proxy.js";
 import {
@@ -23,7 +24,6 @@ import {
 } from "./reply-parameters.js";
 import { TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS } from "./retry-after.js";
 import type { TelegramRichMessageContextParams } from "./rich-message.js";
-import { isTelegramHtmlParseError } from "./rich-plain-fallback.js";
 import { requireRuntimeConfig, type OpenClawConfig } from "./send.runtime.js";
 import { maybePersistResolvedTelegramTarget } from "./target-writeback.js";
 import { normalizeTelegramChatId, normalizeTelegramLookupTarget } from "./targets.js";
@@ -121,9 +121,6 @@ export function toAcceptedThreadScopedParams(
   return Object.keys(scoped).length > 0 ? scoped : undefined;
 }
 
-const MESSAGE_NOT_MODIFIED_RE =
-  /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
-const MESSAGE_HAS_NO_TEXT_RE = /400:\s*Bad Request:\s*there is no text in the message to edit/i;
 const MESSAGE_DELETE_NOOP_RE =
   /message to delete not found|message can't be deleted|MESSAGE_ID_INVALID|MESSAGE_DELETE_FORBIDDEN/i;
 const CHAT_NOT_FOUND_RE = /400: Bad Request: chat not found/i;
@@ -378,39 +375,8 @@ export function normalizeMessageId(raw: string | number): number {
   throw new Error("Message id is required for Telegram actions");
 }
 
-export function isTelegramMessageNotModifiedError(err: unknown): boolean {
-  return MESSAGE_NOT_MODIFIED_RE.test(formatErrorMessage(err));
-}
-
-export function isTelegramMessageHasNoTextError(err: unknown): boolean {
-  return MESSAGE_HAS_NO_TEXT_RE.test(formatErrorMessage(err));
-}
-
 export function isTelegramMessageDeleteNoopError(err: unknown): boolean {
   return MESSAGE_DELETE_NOOP_RE.test(formatErrorMessage(err));
-}
-
-export async function withTelegramHtmlParseFallback<T>(params: {
-  label: string;
-  verbose?: boolean;
-  requestHtml: (label: string) => Promise<T>;
-  requestPlain: (label: string) => Promise<T>;
-}): Promise<T> {
-  try {
-    return await params.requestHtml(params.label);
-  } catch (err) {
-    if (!isTelegramHtmlParseError(err)) {
-      throw err;
-    }
-    if (params.verbose) {
-      sendLogger.warn(
-        `telegram ${params.label} failed with HTML parse error, retrying as plain text: ${formatErrorMessage(
-          err,
-        )}`,
-      );
-    }
-    return await params.requestPlain(`${params.label}-plain`);
-  }
 }
 
 export async function withTelegramNativeQuoteFallback<T>(params: {
@@ -431,8 +397,8 @@ export async function withTelegramNativeQuoteFallback<T>(params: {
     ) {
       throw err;
     }
-    // Mirror delivery.send.ts legacy-reply retry: model quotes can drift from
-    // the source text, but final replies should keep the message reply target.
+    // Model quotes can drift from the source text; rejecting the quote must not
+    // discard its message reply target or topic routing.
     sendLogger.warn(
       `telegram ${params.label} native quote rejected, retrying with legacy reply_to_message_id: ${formatErrorMessage(
         err,
@@ -451,6 +417,7 @@ export async function withTelegramNativeQuoteFallback<T>(params: {
 export type TelegramApiContext = {
   cfg: OpenClawConfig;
   account: ResolvedTelegramAccount;
+  ownerAgentId: string;
   api: TelegramApi;
   clientOptionsLease?: TelegramClientOptionsLease | undefined;
 };
@@ -477,12 +444,13 @@ export function resolveTelegramApiContext(opts: {
     // and retries) so eviction cannot close the transport mid-operation.
     clientOptionsLease = client.lease?.();
     const bot = new Bot(token, client.clientOptions ? { client: client.clientOptions } : undefined);
-    bot.api.config.use(getOrCreateAccountThrottler(token));
+    bot.api.config.use(getOrCreateAccountThrottler(token).transformer);
     api = bot.api;
   }
   return {
     cfg,
     account,
+    ownerAgentId: resolveTelegramAccountOwnerAgentId({ cfg, accountId: account.accountId }),
     api,
     ...(clientOptionsLease ? { clientOptionsLease } : {}),
   };
@@ -595,14 +563,15 @@ export function createTelegramNonIdempotentRequestWithDiag(params: {
   verbose?: boolean;
   useApiErrorLogging?: boolean;
 }): TelegramRequestWithDiag {
-  return createTelegramRequestWithDiag({
+  const request = createTelegramRequestWithDiag({
     cfg: params.cfg,
     account: params.account,
     retry: params.retry,
     verbose: params.verbose,
     useApiErrorLogging: params.useApiErrorLogging,
     retryAfterMaxDelayMs: TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS,
-    shouldRetry: (err) => isSafeToRetrySendError(err) || isTelegramRateLimitError(err),
+    shouldRetry: shouldRetryTelegramSendError,
     strictShouldRetry: true,
   });
+  return (fn, label, options) => request(fn, label, options).catch(rethrowTelegramSendError);
 }

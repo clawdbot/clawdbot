@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe } from "vitest";
-import { approveDevicePairing, requestDevicePairing } from "../infra/device-pairing.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import { requestDevicePairing } from "../infra/device-pairing.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { startServerWithClient } from "./test-helpers.js";
 

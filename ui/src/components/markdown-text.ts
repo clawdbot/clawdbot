@@ -15,6 +15,9 @@ export function normalizeMarkdownLineBreaks(value: string): string {
 }
 
 export function isMarkdownBlockArtText(value: string): boolean {
+  if (!BLOCK_ART_GLYPH_RE.test(value)) {
+    return false;
+  }
   const lines = normalizeMarkdownLineBreaks(value).split("\n");
   const artLines = lines.filter((line) => line.trim().length > 0);
   if (artLines.length < 2) {

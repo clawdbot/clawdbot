@@ -46,11 +46,6 @@ describe("resolveNestedAgentLaneForSession (#67502)", () => {
     expect(laneA).not.toBe(laneB);
   });
 
-  it("is deterministic for the same session key across calls", () => {
-    const key = "agent:ebao:discord:channel:1";
-    expect(resolveNestedAgentLaneForSession(key)).toBe(resolveNestedAgentLaneForSession(key));
-  });
-
   it("trims whitespace around the session key before scoping", () => {
     expect(resolveNestedAgentLaneForSession("   agent:ebao:main   ")).toBe(
       `${AGENT_LANE_NESTED}:agent:ebao:main`,

@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionsResolveResult } from "../../packages/gateway-protocol/src/index.js";
 
 const spawnedChild = Object.assign(new EventEmitter(), { kill: vi.fn() });
 vi.mock("node:child_process", () => ({ spawn: vi.fn(() => spawnedChild) }));
@@ -9,6 +10,10 @@ const gatewayCalls: Array<{
   method: string;
   params: Record<string, unknown>;
   mode?: string;
+  url?: string;
+  token?: string;
+  useStoredDeviceAuth?: boolean;
+  requiredStoredDeviceAuthScopes?: string[];
   hasDeviceIdentityKey: boolean;
 }> = [];
 
@@ -21,13 +26,31 @@ function gatewayParams(params: unknown): Record<string, unknown> {
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(
-    async (p: { method: string; params: Record<string, unknown>; mode?: string }) => {
+    async (p: {
+      method: string;
+      params: Record<string, unknown>;
+      mode?: string;
+      url?: string;
+      token?: string;
+      useStoredDeviceAuth?: boolean;
+      requiredStoredDeviceAuthScopes?: string[];
+    }) => {
       gatewayCalls.push({
         method: p.method,
         params: gatewayParams(p.params),
         mode: p.mode,
+        url: p.url,
+        token: p.token,
+        useStoredDeviceAuth: p.useStoredDeviceAuth,
+        requiredStoredDeviceAuthScopes: p.requiredStoredDeviceAuthScopes,
         hasDeviceIdentityKey: "deviceIdentity" in p,
       });
+      if (p.method === "sessions.resolve") {
+        return { ok: true, key: "agent:ops:thread:resolved" };
+      }
+      if (p.method === "agents.list") {
+        return { defaultId: "main", mainKey: "main", scope: "global", agents: [] };
+      }
       if (p.method === "attach.grant") {
         const sessionKey = (p.params.sessionKey as string) ?? "agent:main:main";
         return {
@@ -49,6 +72,8 @@ vi.mock("../gateway/call.js", () => ({
       return {};
     },
   ),
+  GatewayStoredDeviceAuthUnavailableError: class extends Error {},
+  GatewayTransportError: class extends Error {},
 }));
 
 const logs: string[] = [];
@@ -86,6 +111,129 @@ describe("openclaw attach (action)", () => {
     spawnedChild.kill.mockClear();
   });
 
+  it.each([
+    {
+      name: "fitting ASCII labels",
+      labels: ["Alpha", "  Beta  "],
+      expectedLines: [
+        "SESSION  ID PREFIX",
+        "Alpha    123456780aaa4000",
+        "Beta     123456780bbb4000",
+      ],
+    },
+    {
+      name: "sanitized wide labels",
+      labels: ["\u001b[31m界界界\u001b[0m", "Alpha"],
+      expectedLines: [
+        "SESSION  ID PREFIX",
+        "界界界   123456780aaa4000",
+        "Alpha    123456780bbb4000",
+      ],
+    },
+    {
+      name: "an emoji crossing the name limit",
+      labels: ["A".repeat(39) + "😀", "Alpha"],
+      expectedLines: [
+        `SESSION${" ".repeat(35)}ID PREFIX`,
+        `${"A".repeat(39)}…  123456780aaa4000`,
+        `Alpha${" ".repeat(37)}123456780bbb4000`,
+      ],
+    },
+    {
+      name: "a combining label that exactly fits",
+      labels: ["A".repeat(39) + "e\u0301", "Alpha"],
+      expectedLines: [
+        `SESSION${" ".repeat(35)}ID PREFIX`,
+        `${"A".repeat(39)}e\u0301  123456780aaa4000`,
+        `Alpha${" ".repeat(37)}123456780bbb4000`,
+      ],
+    },
+    {
+      name: "a bounded zero-width label",
+      labels: ["\u200b".repeat(512), "Alpha"],
+      expectedLines: [
+        "SESSION  ID PREFIX",
+        `${"\u200b".repeat(49)}…        123456780aaa4000`,
+        "Alpha    123456780bbb4000",
+      ],
+    },
+    {
+      name: "an oversized combining grapheme",
+      labels: ["e" + "\u0301".repeat(512), "Alpha"],
+      expectedLines: [
+        "SESSION  ID PREFIX",
+        "…        123456780aaa4000",
+        "Alpha    123456780bbb4000",
+      ],
+    },
+    {
+      name: "an oversized ZWJ grapheme",
+      labels: ["👩" + "\u200d👩".repeat(128), "Alpha"],
+      expectedLines: [
+        "SESSION  ID PREFIX",
+        "…        123456780aaa4000",
+        "Alpha    123456780bbb4000",
+      ],
+    },
+    {
+      name: "ordinary multi-person emoji",
+      labels: ["👨‍👩‍👧‍👦".repeat(5), "Alpha"],
+      expectedLines: [
+        "SESSION     ID PREFIX",
+        `${"👨‍👩‍👧‍👦".repeat(5)}  123456780aaa4000`,
+        "Alpha       123456780bbb4000",
+      ],
+    },
+  ])("renders ambiguous session candidates with $name", async ({ labels, expectedLines }) => {
+    const response = {
+      ok: false,
+      candidates: [
+        {
+          key: "agent:main:thread:12345678-0aaa-4000-8000-000000000001",
+          agentId: "main",
+          displayName: labels[0],
+        },
+        {
+          key: "agent:main:thread:12345678-0bbb-4000-8000-000000000002",
+          agentId: "main",
+          displayName: labels[1],
+        },
+      ],
+    } satisfies SessionsResolveResult;
+    const gateway = vi.mocked(callGateway);
+    const originalImplementation = gateway.getMockImplementation();
+    const { spawn } = await import("node:child_process");
+    const spawnCount = vi.mocked(spawn).mock.calls.length;
+    gateway.mockReset();
+    // Any request after resolution must fail before a grant can reach config writing or spawn.
+    gateway.mockRejectedValue(new Error("Unexpected Gateway request after session resolution"));
+    gateway.mockResolvedValueOnce(response);
+    try {
+      const error = await runAttach("12345678").catch((caught: unknown) => caught);
+      if (!(error instanceof Error)) {
+        throw new Error("Expected ambiguous session target rejection");
+      }
+      expect(error.message).toBe(
+        [
+          "Session reference is ambiguous:",
+          ...expectedLines,
+          "Pass a longer reference. Run `openclaw sessions list` to choose a full session key.",
+        ].join("\n"),
+      );
+      expect(Buffer.from(error.message, "utf8").toString("utf8")).toBe(error.message);
+      expect(gateway).toHaveBeenCalledTimes(1);
+      expect(gateway).toHaveBeenCalledWith(
+        expect.objectContaining({ method: "sessions.resolve", params: { shortId: "12345678" } }),
+      );
+      expect(vi.mocked(spawn).mock.calls.length).toBe(spawnCount);
+    } finally {
+      gateway.mockReset();
+      if (originalImplementation) {
+        gateway.mockImplementation(originalImplementation);
+      }
+    }
+  });
+
   it("--print-config: mints + writes config + prints launch, does NOT revoke or name a nonexistent command", async () => {
     await runAttach("--print-config", "--session", "agent:main:cli");
     expect(gatewayCalls.find((c) => c.method === "attach.grant")?.params.sessionKey).toBe(
@@ -109,6 +257,55 @@ describe("openclaw attach (action)", () => {
     const grant = gatewayCalls.find((c) => c.method === "attach.grant");
     expect(grant?.mode).toBe("cli");
     expect(grant?.hasDeviceIdentityKey).toBe(false);
+  });
+
+  it("resolves a URL target before granting on the same origin", async () => {
+    await runAttach(
+      "https://gateway.example/base/dashboard/ops/movies-a1166b81",
+      "--token",
+      "explicit-token",
+      "--print-config",
+    );
+
+    const resolve = gatewayCalls.find((call) => call.method === "sessions.resolve");
+    expect(resolve).toMatchObject({
+      url: "wss://gateway.example/base",
+      token: "explicit-token",
+      useStoredDeviceAuth: true,
+      requiredStoredDeviceAuthScopes: ["operator.read"],
+      params: { shortId: "a1166b81", slugHint: "movies" },
+    });
+    expect(gatewayCalls.find((call) => call.method === "attach.grant")).toMatchObject({
+      url: "wss://gateway.example/base",
+      token: "explicit-token",
+      useStoredDeviceAuth: true,
+      requiredStoredDeviceAuthScopes: ["operator.admin"],
+      params: { sessionKey: "agent:ops:thread:resolved" },
+    });
+  });
+
+  it("preserves a global-scope URL main session when granting attach access", async () => {
+    await runAttach(
+      "https://gateway.example/base/dashboard/ops",
+      "--token",
+      "explicit-token",
+      "--print-config",
+    );
+
+    expect(gatewayCalls.find((call) => call.method === "agents.list")).toMatchObject({
+      url: "wss://gateway.example/base",
+      token: "explicit-token",
+      useStoredDeviceAuth: true,
+      requiredStoredDeviceAuthScopes: ["operator.read"],
+      params: {},
+    });
+    expect(gatewayCalls.find((call) => call.method === "attach.grant")).toMatchObject({
+      url: "wss://gateway.example/base",
+      token: "explicit-token",
+      useStoredDeviceAuth: true,
+      requiredStoredDeviceAuthScopes: ["operator.admin"],
+      params: { sessionKey: "global", agentId: "ops" },
+    });
   });
 
   it("rejects a non-positive --ttl before minting", async () => {

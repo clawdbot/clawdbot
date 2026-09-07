@@ -15,9 +15,9 @@ import {
   expectBareNewOrResetAcknowledged,
   withTempHome,
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
+import { renderControlUiAgentFailureCopy } from "../agents/failover/user-copy.js";
 import { resolveSessionKey } from "../config/sessions.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   loadExactSessionEntry,
   loadSessionEntry,
@@ -25,7 +25,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { registerGroupIntroPromptCases } from "./reply.triggers.group-intro-prompts.cases.js";
 import { registerTriggerHandlingUsageSummaryCases } from "./reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.cases.js";
-import { buildControlUiAgentFailureText } from "./reply/agent-runner-failure-copy.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./reply/queue.js";
 import type { MsgContext } from "./templating.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
@@ -66,7 +65,7 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
       if (/context window exceeded/i.test(message)) {
         return "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model.";
       }
-      return buildControlUiAgentFailureText(message);
+      return renderControlUiAgentFailureCopy(message);
     };
     const stripHeartbeat = (text?: string) => {
       const trimmed = text?.trim();
@@ -285,6 +284,7 @@ function mockSuccessfulCompaction() {
       summary: "summary",
       firstKeptEntryId: "x",
       tokensBefore: 12000,
+      tokensAfter: 1000,
     },
   });
 }
@@ -361,7 +361,7 @@ describe("trigger handling", () => {
   for (const testCase of [
     {
       error: "sandbox is not defined.",
-      expected: buildControlUiAgentFailureText("sandbox is not defined."),
+      expected: renderControlUiAgentFailureCopy("sandbox is not defined."),
     },
     {
       error: "Context window exceeded",
@@ -449,24 +449,39 @@ describe("trigger handling", () => {
     });
   });
 
-  it("sanitizes thinking directives before the agent run", async () => {
+  it("strips current thinking directives without rewriting history", async () => {
     await withTempHome(async (home) => {
+      const historyBody = [
+        "[Chat messages since your last reply - for context]",
+        "Peter: /thinking high [2025-12-05T21:45:00.000Z]",
+        "",
+        "[Current message - respond to this]",
+        "Give me the status",
+      ].join("\n");
+      const currentBody = "Give me the status\n\nif ready:\n    report_status()";
       const thinkCases = [
         {
           label: "context-wrapper",
           request: {
-            Body: [
-              "[Chat messages since your last reply - for context]",
-              "Peter: /thinking high [2025-12-05T21:45:00.000Z]",
-              "",
-              "[Current message - respond to this]",
-              "Give me the status",
-            ].join("\n"),
+            Body: historyBody,
+            commandText: "Give me the status",
             From: "+1002",
             To: "+2000",
+            CommandAuthorized: true,
           },
           options: {},
-          assertPrompt: true,
+          expectedPrompt: historyBody,
+        },
+        {
+          label: "current-message",
+          request: {
+            Body: `/thinking high ${currentBody}`,
+            From: "+1002",
+            To: "+2000",
+            CommandAuthorized: true,
+          },
+          options: {},
+          expectedPrompt: currentBody,
         },
         {
           label: "heartbeat",
@@ -476,7 +491,7 @@ describe("trigger handling", () => {
             To: "+1003",
           },
           options: { isHeartbeat: true },
-          assertPrompt: false,
+          expectedPrompt: undefined,
         },
       ] as const;
 
@@ -489,12 +504,10 @@ describe("trigger handling", () => {
         expect(text, testCase.label).toBe("ok");
         expect(text, testCase.label).not.toMatch(/Thinking level set/i);
         expect(runEmbeddedAgentMock, testCase.label).toHaveBeenCalledOnce();
-        if (testCase.assertPrompt) {
+        if (testCase.expectedPrompt !== undefined) {
           const prompt =
             firstMockCallArg(runEmbeddedAgentMock, "embedded OpenClaw agent").prompt ?? "";
-          expect(prompt).toContain("Give me the status");
-          expect(prompt).not.toContain("/thinking high");
-          expect(prompt).not.toContain("/think high");
+          expect(prompt, testCase.label).toBe(testCase.expectedPrompt);
         }
       }
     });
@@ -545,13 +558,17 @@ describe("trigger handling", () => {
       const storePath = join(home, "compact-main.sessions.json");
       const cfg = makeCfg(home);
       cfg.session = { ...cfg.session, store: storePath };
-      mockSuccessfulCompaction();
-
       const request = {
         Body: "/compact focus on decisions",
         From: "+1003",
         To: "+2000",
       };
+      const sessionKey = resolveSessionKey("per-sender", request, undefined, "main");
+      await replaceSessionEntry(
+        { storePath, sessionKey },
+        { sessionId: "compact-main-session", updatedAt: Date.now() },
+      );
+      mockSuccessfulCompaction();
 
       const res = await getReplyFromConfig(
         {
@@ -562,25 +579,30 @@ describe("trigger handling", () => {
         cfg,
       );
       const text = maybeReplyText(res);
-      expect(text?.startsWith("⚙️ Compacted")).toBe(true);
+      expect(text).toMatch(/^⚙️ Compacted/u);
       expect(getCompactEmbeddedAgentSessionMock()).toHaveBeenCalledOnce();
-      const sessionKey = resolveSessionKey("per-sender", request);
       expect(loadSessionEntry({ storePath, sessionKey })?.compactionCount).toBe(1);
     });
   });
 
-  it("compacts worker sessions via the agent session file", async () => {
+  it("compacts worker sessions via the explicit session target", async () => {
     await withTempHome(async (home) => {
       getCompactEmbeddedAgentSessionMock().mockReset();
       mockSuccessfulCompaction();
       const cfg = makeCfg(home);
-      cfg.session = { ...cfg.session, store: join(home, "compact-worker.sessions.json") };
+      const storePath = join(home, "compact-worker.sessions.json");
+      const sessionKey = "agent:worker1:telegram:12345";
+      cfg.session = { ...cfg.session, store: storePath };
+      await replaceSessionEntry(
+        { storePath, sessionKey },
+        { sessionId: "compact-worker-session", updatedAt: Date.now() },
+      );
       const res = await getReplyFromConfig(
         {
           Body: "/compact",
           From: "+1004",
           To: "+2000",
-          SessionKey: "agent:worker1:telegram:12345",
+          SessionKey: sessionKey,
           CommandAuthorized: true,
         },
         {},
@@ -588,19 +610,18 @@ describe("trigger handling", () => {
       );
 
       const text = maybeReplyText(res);
-      expect(text?.startsWith("⚙️ Compacted")).toBe(true);
+      expect(text).toMatch(/^⚙️ Compacted/u);
       expect(getCompactEmbeddedAgentSessionMock()).toHaveBeenCalledOnce();
-      const sessionFile = firstMockCallArg(
+      const call = firstMockCallArg(
         getCompactEmbeddedAgentSessionMock(),
         "embedded OpenClaw compaction",
-      ).sessionFile;
-      if (typeof sessionFile !== "string") {
-        throw new Error("expected embedded OpenClaw compaction sessionFile");
-      }
-      expect(parseSqliteSessionFileMarker(sessionFile)).toMatchObject({
+      );
+      expect(call.sessionTarget).toMatchObject({
         agentId: "worker1",
+        sessionKey: "agent:worker1:telegram:12345",
         storePath: cfg.session.store,
       });
+      expect(call.sessionFile).toBe("agent:worker1:telegram:12345");
     });
   });
 

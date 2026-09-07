@@ -18,7 +18,6 @@ export const browserCoreExamples = [
   "openclaw browser snapshot --format aria --limit 200",
   "openclaw browser snapshot --efficient",
   "openclaw browser snapshot --labels",
-  'openclaw browser extract "What is the main conclusion?"',
 ];
 
 /** Browser CLI examples for interaction/action commands. */

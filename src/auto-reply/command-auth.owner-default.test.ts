@@ -1,13 +1,40 @@
 /** Tests command authorization owner defaults for direct-message senders. */
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { resolveOwnerPromptNumbers } from "../agents/owner-display.js";
+import { buildAgentSystemPrompt } from "../agents/system-prompt.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveCommandAuthorization } from "./command-auth.js";
+import { isResetAuthorizedForContext, resolveCommandAuthorization } from "./command-auth.js";
 import type { MsgContext } from "./templating.js";
 import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registry-fixture.js";
 
 installDiscordRegistryHooks();
 
 describe("senderIsOwner only reflects explicit owner authorization", () => {
+  it.each([{ allowFrom: ["*"] }, { allowFrom: ["456"] }])(
+    "suppresses command access without revoking owner identity for allowFrom $allowFrom",
+    ({ allowFrom }) => {
+      const cfg = { commands: { ownerAllowFrom: ["456"], allowFrom: { "*": allowFrom } } };
+      const ctx = {
+        Provider: "discord",
+        Surface: "discord",
+        SenderId: "456",
+        CommandInterpretationSuppressed: true,
+      };
+      const params = { ctx, cfg, commandAuthorized: true };
+
+      expect(resolveCommandAuthorization(params)).toMatchObject({
+        senderId: "456",
+        senderIsOwner: true,
+        isAuthorizedSender: false,
+      });
+      expect(isResetAuthorizedForContext(params)).toBe(false);
+      ctx.CommandInterpretationSuppressed = false;
+      expect(resolveCommandAuthorization(params).isAuthorizedSender).toBe(true);
+      expect(isResetAuthorizedForContext(params)).toBe(true);
+    },
+  );
+
   it("does not treat direct-message senders as owners when no ownerAllowFrom is configured", () => {
     const cfg = {
       channels: { discord: {} },
@@ -169,6 +196,65 @@ describe("senderIsOwner only reflects explicit owner authorization", () => {
     });
 
     expect(auth.senderIsOwner).toBe(true);
+  });
+
+  it("keeps a large owner allowlist authorized without exhausting the model prompt", () => {
+    const ownerIds = Array.from({ length: 9_282 }, (_, index) =>
+      String(100_000_000_000_000_000n + BigInt(index)),
+    );
+    const currentOwnerId = ownerIds.at(-1)!;
+    const cfg = {
+      channels: { discord: {} },
+      commands: { ownerAllowFrom: ownerIds.map((ownerId) => `discord:${ownerId}`) },
+    } as OpenClawConfig;
+    const context = {
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "direct",
+      From: `discord:${currentOwnerId}`,
+      SenderId: `<@!${currentOwnerId}>`,
+    } as MsgContext;
+    const auth = resolveCommandAuthorization({
+      cfg,
+      commandAuthorized: true,
+      ctx: context,
+    });
+
+    expect(auth.ownerList).toHaveLength(ownerIds.length);
+    expect(auth.senderId).toBe(currentOwnerId);
+    expect(auth.senderIsOwner).toBe(true);
+    expect(auth.isAuthorizedSender).toBe(true);
+
+    const ownerNumbers = resolveOwnerPromptNumbers({
+      ownerNumbers: auth.ownerList,
+      senderId: auth.senderId,
+      senderIsOwner: auth.senderIsOwner,
+    });
+    const promptParams = {
+      workspaceDir: "/tmp/openclaw",
+      ownerNumbers,
+      runtimeInfo: { channel: "discord" },
+    };
+    const prompt = buildAgentSystemPrompt(promptParams);
+    const ownerLine = prompt.split("## Authorized Senders\n")[1]?.split("\n")[0] ?? "";
+
+    expect(ownerLine).toContain(currentOwnerId);
+    expect(Buffer.byteLength(ownerLine, "utf8")).toBeLessThanOrEqual(1_024);
+
+    const hashedPrompt = buildAgentSystemPrompt({ ...promptParams, ownerDisplay: "hash" });
+    const currentOwnerHash = createHash("sha256").update(currentOwnerId).digest("hex").slice(0, 12);
+    expect(hashedPrompt).toContain(currentOwnerHash);
+    expect(hashedPrompt).not.toContain(currentOwnerId);
+
+    cfg.commands?.ownerAllowFrom?.pop();
+    const revoked = resolveCommandAuthorization({
+      cfg,
+      commandAuthorized: true,
+      ctx: context,
+    });
+    expect(revoked.ownerList).toHaveLength(ownerIds.length - 1);
+    expect(revoked.senderIsOwner).toBe(false);
+    expect(revoked.isAuthorizedSender).toBe(false);
   });
 
   it("ignores ownerAllowFrom wildcards", () => {

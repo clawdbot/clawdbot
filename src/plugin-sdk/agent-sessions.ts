@@ -13,6 +13,7 @@ export {
   parseSessionEntries,
   CURRENT_SESSION_VERSION,
   AuthStorage,
+  OAuthProviderConfiguredUnavailableError,
   ExtensionRunner,
   ModelRegistry,
   SessionManager,

@@ -1,17 +1,18 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { MemorySearchResult } from "../../memory-host-sdk/host/types.js";
+import type { MemoryProviderStatus, MemorySearchResult } from "../../memory-host-sdk/host/types.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
-const getActiveMemorySearchManager = vi.hoisted(() => vi.fn());
+const getActiveMemorySearchManagerCore = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
 
-vi.mock("../../plugins/memory-runtime.js", () => ({ getActiveMemorySearchManager }));
+vi.mock("../../plugins/memory-runtime.js", () => ({ getActiveMemorySearchManagerCore }));
 vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
   resolveDefaultAgentId,
@@ -55,9 +56,10 @@ async function invokeMemorySearch(params: unknown, cfg: OpenClawConfig) {
 function createStubManager() {
   return {
     search: vi.fn(async (): Promise<MemorySearchResult[]> => []),
-    status: vi.fn(() => ({
+    status: vi.fn((): MemoryProviderStatus => ({
       backend: "builtin" as const,
       provider: "none",
+      dirty: false,
       custom: { searchMode: "fts-only" },
     })),
     close: vi.fn(async () => undefined),
@@ -70,7 +72,7 @@ describe("memory.search gateway method", () => {
       label: "gateway-memory-search",
       layout: "state-only",
     });
-    getActiveMemorySearchManager.mockReset();
+    getActiveMemorySearchManagerCore.mockReset();
     resolveDefaultAgentId.mockClear();
   });
 
@@ -92,7 +94,7 @@ describe("memory.search gateway method", () => {
         }),
       );
     }
-    expect(getActiveMemorySearchManager).not.toHaveBeenCalled();
+    expect(getActiveMemorySearchManagerCore).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -101,7 +103,7 @@ describe("memory.search gateway method", () => {
   ])("clamps maxResults=$requested to $expected", async ({ requested, expected }) => {
     const cfg = createConfig(testState.workspaceDir);
     const manager = createStubManager();
-    getActiveMemorySearchManager.mockResolvedValue({ manager });
+    getActiveMemorySearchManagerCore.mockResolvedValue({ manager });
 
     await invokeMemorySearch({ query: "lantern", maxResults: requested, minScore: 0.42 }, cfg);
 
@@ -125,7 +127,34 @@ describe("memory.search gateway method", () => {
         message: "unknown agentId",
       }),
     );
-    expect(getActiveMemorySearchManager).not.toHaveBeenCalled();
+    expect(getActiveMemorySearchManagerCore).not.toHaveBeenCalled();
+  });
+
+  it("returns typed selection-required when an explicit fleet omits agentId", async () => {
+    const cfg = createConfig(testState.workspaceDir);
+    cfg.agents = {
+      ...cfg.agents,
+      ownership: "explicit",
+      list: [{ id: "ops" }, { id: "research" }],
+    };
+    resolveDefaultAgentId.mockImplementationOnce(() => {
+      throw new AgentSelectionRequiredError(["ops", "research"], {
+        surface: "memory search",
+        hint: "Pass agentId to select a configured agent.",
+      });
+    });
+
+    const respond = await invokeMemorySearch({ query: "lantern" }, cfg);
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("agent"),
+      }),
+    );
+    expect(getActiveMemorySearchManagerCore).not.toHaveBeenCalled();
   });
 
   it("rejects a non-string agentId without acquiring a manager", async () => {
@@ -141,7 +170,7 @@ describe("memory.search gateway method", () => {
         message: "agentId must be a string",
       }),
     );
-    expect(getActiveMemorySearchManager).not.toHaveBeenCalled();
+    expect(getActiveMemorySearchManagerCore).not.toHaveBeenCalled();
   });
 
   it.each(["   ", "---", "ſ"])(
@@ -160,7 +189,7 @@ describe("memory.search gateway method", () => {
         }),
       );
       expect(resolveDefaultAgentId).not.toHaveBeenCalled();
-      expect(getActiveMemorySearchManager).not.toHaveBeenCalled();
+      expect(getActiveMemorySearchManagerCore).not.toHaveBeenCalled();
     },
   );
 
@@ -183,11 +212,11 @@ describe("memory.search gateway method", () => {
     };
     const manager = createStubManager();
     manager.search.mockResolvedValue([result]);
-    getActiveMemorySearchManager.mockResolvedValue({ manager });
+    getActiveMemorySearchManagerCore.mockResolvedValue({ manager });
 
     const respond = await invokeMemorySearch({ query: "lantern", agentId: requested }, cfg);
 
-    expect(getActiveMemorySearchManager).toHaveBeenCalledWith({
+    expect(getActiveMemorySearchManagerCore).toHaveBeenCalledWith({
       cfg,
       agentId: configured,
       purpose: "cli",
@@ -207,14 +236,17 @@ describe("memory.search gateway method", () => {
 
   it("returns unavailable when no memory manager is configured", async () => {
     const cfg: OpenClawConfig = {};
-    getActiveMemorySearchManager.mockResolvedValue({
+    getActiveMemorySearchManagerCore.mockResolvedValue({
       manager: null,
       error: "memory plugin unavailable",
     });
 
     const respond = await invokeMemorySearch({ query: "lantern" }, cfg);
 
-    expect(resolveDefaultAgentId).toHaveBeenCalledWith(cfg);
+    expect(resolveDefaultAgentId).toHaveBeenCalledWith(cfg, {
+      surface: "memory search",
+      hint: "Pass agentId to select a configured agent.",
+    });
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
@@ -222,6 +254,101 @@ describe("memory.search gateway method", () => {
         code: "UNAVAILABLE",
         message: "memory plugin unavailable",
       }),
+    );
+  });
+
+  it("does not qualify routine pending index work as a search failure", async () => {
+    const cfg = createConfig(testState.workspaceDir);
+    const manager = createStubManager();
+    manager.status.mockReturnValue({
+      backend: "builtin",
+      provider: "none",
+      dirty: true,
+      custom: { searchMode: "fts-only" },
+    });
+    getActiveMemorySearchManagerCore.mockResolvedValue({ manager });
+
+    const respond = await invokeMemorySearch({ query: "hidden codeword" }, cfg);
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        agentId: "main",
+        provider: "none",
+        searchMode: "fts-only",
+        results: [],
+      },
+      undefined,
+    );
+  });
+
+  it("qualifies results after automatic indexing fails", async () => {
+    const cfg = createConfig(testState.workspaceDir);
+    const manager = createStubManager();
+    manager.status.mockReturnValue({
+      backend: "builtin",
+      provider: "none",
+      dirty: true,
+      lastSyncError: "embedding request timed out",
+      custom: { searchMode: "fts-only" },
+    });
+    getActiveMemorySearchManagerCore.mockResolvedValue({ manager });
+
+    const respond = await invokeMemorySearch({ query: "hidden codeword" }, cfg);
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        agentId: "main",
+        provider: "none",
+        searchMode: "fts-only",
+        results: [],
+        stale: true,
+        warning:
+          "Memory index is stale: embedding request timed out. Search results may be incomplete.",
+        action:
+          "Run: openclaw memory status --index --agent main. Rebuilding uses keyword indexing only and does not call an embedding provider.",
+      },
+      undefined,
+    );
+  });
+
+  it("preserves OpenClaw index ownership and configured provider intent", async () => {
+    const cfg = createConfig(testState.workspaceDir);
+    const manager = createStubManager();
+    manager.status.mockReturnValue({
+      backend: "builtin",
+      provider: "none",
+      requestedProvider: "openai",
+      dirty: true,
+      custom: {
+        searchMode: "fts-only",
+        indexIdentity: {
+          status: "mismatched",
+          reason: "index provenance classifier changed",
+          code: "provenance_version",
+          owner: "openclaw",
+        },
+      },
+    });
+    getActiveMemorySearchManagerCore.mockResolvedValue({ manager });
+
+    const respond = await invokeMemorySearch({ query: "hidden codeword" }, cfg);
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        agentId: "main",
+        provider: "none",
+        searchMode: "fts-only",
+        results: [],
+        stale: true,
+        warning:
+          "Memory index is stale: index provenance classifier changed (owner: openclaw, code: provenance_version). Search results may be incomplete.",
+        action:
+          "Run: openclaw memory status --index --agent main. Rebuilding may call the configured embedding provider and can incur provider cost.",
+      },
+      undefined,
     );
   });
 });

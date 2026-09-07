@@ -10,6 +10,14 @@ type TeamsLoopbackRequest = {
   status: number;
 };
 
+function createOneShot() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
 const acknowledgedPrefix = "a".repeat(4_000);
 const completeReply = `${acknowledgedPrefix}${"b".repeat(200)}`;
 const replacementReply = "provider-final replacement";
@@ -76,7 +84,10 @@ afterAll(async () => {
   });
 });
 
-function createLoopbackController(scenario: string) {
+function createLoopbackController(
+  scenario: string,
+  msteamsConfig?: Parameters<typeof createTeamsReplyStreamController>[0]["msteamsConfig"],
+) {
   const send = async (activity: Record<string, unknown>) => {
     const result = await new Promise<{
       status: number;
@@ -116,12 +127,18 @@ function createLoopbackController(scenario: string) {
     }
     return result.body;
   };
+  const firstAcknowledgement = createOneShot();
+  const firstFlushFailure = createOneShot();
   const logger = {
     child: vi.fn(),
     debug: vi.fn(),
-    error: vi.fn(),
+    error: vi.fn(() => firstFlushFailure.resolve()),
     info: vi.fn(),
-    warn: vi.fn(),
+    warn: vi.fn(() => {
+      if (scenario.startsWith("cancel")) {
+        firstFlushFailure.resolve();
+      }
+    }),
   };
   logger.child.mockReturnValue(logger);
   const stream = new HttpStream(
@@ -146,37 +163,85 @@ function createLoopbackController(scenario: string) {
   const acknowledgements: Array<{ id: string; text: string }> = [];
   stream.events.on("chunk", (activity) => {
     acknowledgements.push({ id: activity.id, text: activity.text ?? "" });
+    firstAcknowledgement.resolve();
   });
   const controller = createTeamsReplyStreamController({
     allowProviderPreview: true,
     conversationType: "personal",
     context: { activity: { type: "message" }, stream } as never,
     feedbackLoopEnabled: false,
+    msteamsConfig,
   });
-  return { acknowledgements, controller, logger, stream };
+  return {
+    acknowledgements,
+    controller,
+    firstAcknowledgement: firstAcknowledgement.promise,
+    firstFlushFailure: firstFlushFailure.promise,
+    logger,
+    stream,
+  };
 }
 
 describe("Microsoft Teams SDK acknowledged stream fallback", () => {
+  it.each([
+    { label: "default", progress: {}, expectedLabel: "Working" },
+    { label: "custom", progress: { label: "Custom progress" }, expectedLabel: "Custom progress" },
+  ])(
+    "clears and recreates a plan with the $label label before the final reply",
+    async ({ label, progress, expectedLabel }) => {
+      const scenario = `plan-clear-${label}`;
+      const { acknowledgements, controller } = createLoopbackController(scenario, {
+        streaming: { mode: "progress", progress },
+      });
+      const plan = [{ step: "Inspect", status: "in_progress" as const }];
+
+      try {
+        await controller.pushPlanProgress(plan);
+        await expect
+          .poll(() => acknowledgements.at(-1)?.text)
+          .toBe(`${expectedLabel}\n\n▸ Inspect`);
+
+        await controller.pushPlanProgress([]);
+        await expect.poll(() => acknowledgements.at(-1)?.text).toBe(expectedLabel);
+
+        await controller.pushPlanProgress(plan);
+        await expect
+          .poll(() => acknowledgements.at(-1)?.text)
+          .toBe(`${expectedLabel}\n\n▸ Inspect`);
+      } finally {
+        expect(controller.preparePayload({ text: "Done" })).toBeUndefined();
+        await expect(controller.finalize()).resolves.toEqual({
+          visibleReplySent: true,
+          content: "Done",
+          messageId: `stream-${scenario}`,
+        });
+      }
+      expect(requests.findLast((request) => request.scenario === scenario)).toEqual({
+        scenario,
+        type: "message",
+        text: "Done",
+        status: 201,
+      });
+    },
+  );
+
   it("redelivers only text not acknowledged by the real Teams SDK and HTTP provider", async () => {
-    const { acknowledgements, controller, logger } = createLoopbackController("size-limit");
+    const { acknowledgements, controller, firstAcknowledgement, firstFlushFailure, logger } =
+      createLoopbackController("size-limit");
 
     controller.onPartialReply({ text: acknowledgedPrefix });
-    await vi.waitFor(() => {
-      expect(logger.error).not.toHaveBeenCalled();
-      expect(acknowledgements).toEqual([{ id: "stream-size-limit", text: acknowledgedPrefix }]);
-    });
+    await firstAcknowledgement;
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(acknowledgements).toEqual([{ id: "stream-size-limit", text: acknowledgedPrefix }]);
 
     controller.onPartialReply({ text: completeReply });
-    await vi.waitFor(() => {
-      expect(
-        requests.filter(
-          (request) =>
-            request.scenario === "size-limit" &&
-            request.type === "typing" &&
-            request.status === 403,
-        ),
-      ).toHaveLength(1);
-    });
+    await firstFlushFailure;
+    expect(
+      requests.filter(
+        (request) =>
+          request.scenario === "size-limit" && request.type === "typing" && request.status === 403,
+      ),
+    ).toHaveLength(1);
     expect(acknowledgements).toEqual([{ id: "stream-size-limit", text: acknowledgedPrefix }]);
     expect(controller.preparePayload({ text: completeReply })).toBeUndefined();
 
@@ -197,30 +262,33 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
   });
 
   it("never acknowledges a Teams HTTP request rejected before delivery", async () => {
-    const { acknowledgements, controller, logger } = createLoopbackController("no-ack");
+    const { acknowledgements, controller, firstFlushFailure } = createLoopbackController("no-ack");
 
     controller.onPartialReply({ text: acknowledgedPrefix });
-    await vi.waitFor(() => {
-      expect(logger.error).toHaveBeenCalled();
-      expect(requests.filter((request) => request.scenario === "no-ack")).toHaveLength(1);
-    });
+    await firstFlushFailure;
 
     expect(acknowledgements).toEqual([]);
     expect(requests.find((request) => request.scenario === "no-ack")?.status).toBe(403);
   });
 
   it("honors a real Teams HTTP cancellation without redelivering the remaining text", async () => {
-    const { acknowledgements, controller, logger, stream } = createLoopbackController("cancel");
+    const {
+      acknowledgements,
+      controller,
+      firstAcknowledgement,
+      firstFlushFailure,
+      logger,
+      stream,
+    } = createLoopbackController("cancel");
 
     controller.onPartialReply({ text: acknowledgedPrefix });
-    await vi.waitFor(() => {
-      expect(logger.error).not.toHaveBeenCalled();
-      expect(acknowledgements).toEqual([{ id: "stream-cancel", text: acknowledgedPrefix }]);
-    });
+    await firstAcknowledgement;
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(acknowledgements).toEqual([{ id: "stream-cancel", text: acknowledgedPrefix }]);
     controller.onPartialReply({ text: completeReply });
-    await vi.waitFor(() => {
-      expect(stream.canceled).toBe(true);
-    });
+    await firstFlushFailure;
+    await stream.close();
+    expect(stream.canceled).toBe(true);
 
     expect(controller.preparePayload({ text: completeReply })).toBeUndefined();
     await expect(controller.finalize()).resolves.toEqual({
@@ -232,13 +300,13 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
   });
 
   it("replaces a divergent preview through the same real Teams stream", async () => {
-    const { acknowledgements, controller, logger } = createLoopbackController("replacement");
+    const { acknowledgements, controller, firstAcknowledgement, logger } =
+      createLoopbackController("replacement");
 
     controller.onPartialReply({ text: acknowledgedPrefix });
-    await vi.waitFor(() => {
-      expect(logger.error).not.toHaveBeenCalled();
-      expect(acknowledgements).toEqual([{ id: "stream-replacement", text: acknowledgedPrefix }]);
-    });
+    await firstAcknowledgement;
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(acknowledgements).toEqual([{ id: "stream-replacement", text: acknowledgedPrefix }]);
 
     controller.onPartialReply({ text: replacementReply });
     expect(
@@ -267,16 +335,15 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
   });
 
   it("detects Stop while replacing a divergent preview and suppresses the final", async () => {
-    const { acknowledgements, controller, logger, stream } =
+    const { acknowledgements, controller, firstAcknowledgement, logger, stream } =
       createLoopbackController("cancel-replacement");
 
     controller.onPartialReply({ text: acknowledgedPrefix });
-    await vi.waitFor(() => {
-      expect(logger.error).not.toHaveBeenCalled();
-      expect(acknowledgements).toEqual([
-        { id: "stream-cancel-replacement", text: acknowledgedPrefix },
-      ]);
-    });
+    await firstAcknowledgement;
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(acknowledgements).toEqual([
+      { id: "stream-cancel-replacement", text: acknowledgedPrefix },
+    ]);
 
     controller.onPartialReply({ text: replacementReply });
     expect(

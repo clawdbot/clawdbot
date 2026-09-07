@@ -279,15 +279,26 @@ async function renderLocal(template, texts, flags) {
   const out = flags.out ?? path.resolve(process.cwd(), `${template.id}.svg`);
   await mkdir(path.dirname(path.resolve(out)), { recursive: true });
   if (path.extname(out).toLowerCase() === ".png") {
-    let sharp;
+    let browser;
     try {
-      sharp = (await import("sharp")).default;
+      const { chromium } = await import("playwright-core");
+      const executablePath = chromium.executablePath();
+      browser = await chromium.launch({
+        headless: true,
+        ...(existsSync(executablePath) ? { executablePath } : { channel: "chrome" }),
+      });
     } catch {
       // Keep this message free of package-install advice: agents follow it
       // literally and can corrupt pnpm-managed OpenClaw installs (see #109405).
-      throw new Error("PNG output needs the optional sharp package. Use --out meme.svg instead.");
+      throw new Error("PNG output needs Chromium or Chrome. Use --out meme.svg instead.");
     }
-    await sharp(Buffer.from(svg)).png().toFile(out);
+    try {
+      const page = await browser.newPage({ viewport: { width, height } });
+      await page.setContent(`<style>body { margin: 0; }</style>${svg}`);
+      await page.locator("svg").screenshot({ path: out, type: "png", omitBackground: true });
+    } finally {
+      await browser.close();
+    }
   } else {
     await writeFile(out, svg, "utf8");
   }

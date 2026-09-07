@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import process from "node:process";
 import { StringDecoder } from "node:string_decoder";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -11,6 +12,7 @@ export type CommandOutputCaptureOption =
 export type CommandOutputLimitOption =
   | boolean
   | { stdout?: boolean; stderr?: boolean; combined?: boolean };
+export type CommandOutputErrorOption = boolean | { stdout?: boolean; stderr?: boolean };
 export type PreserveOutputLine = (line: string, stream: CommandOutputStream) => boolean;
 
 export type CapturedOutputBuffers = {
@@ -64,6 +66,13 @@ export function shouldTerminateOnOutputLimit(
   return typeof value === "boolean" ? value : value?.[limit] === true;
 }
 
+export function shouldTerminateOnOutputError(
+  value: CommandOutputErrorOption | undefined,
+  stream: CommandOutputStream,
+): boolean {
+  return typeof value === "boolean" ? value : value?.[stream] === true;
+}
+
 export function appendCapturedOutput(
   capture: CapturedOutputBuffers,
   chunk: Buffer | string,
@@ -79,7 +88,8 @@ export function appendCapturedOutput(
     const remaining = Math.max(0, maxBytes - capture.bytes);
     if (remaining > 0) {
       const kept = buffer.subarray(0, remaining);
-      capture.chunks.push(kept);
+      // A clipped prefix must not retain the discarded backing bytes.
+      capture.chunks.push(kept.byteLength < buffer.byteLength ? Buffer.from(kept) : kept);
       capture.bytes += kept.byteLength;
     }
     capture.truncatedBytes += Math.max(0, buffer.byteLength - remaining);
@@ -125,14 +135,12 @@ function trimTruncatedUtf8Boundary(
     }
     return buffer.subarray(start);
   }
-  const decoder = new TextDecoder("utf-8", { fatal: true });
+  // A UTF-8 code point is at most four bytes. Keep the original buffer when
+  // no boundary yields a valid prefix, including malformed interior output.
   for (let removed = 0; removed <= 3 && removed <= buffer.length; removed += 1) {
     const end = buffer.length - removed;
-    try {
-      decoder.decode(buffer.subarray(0, end));
+    if (isUtf8(buffer.subarray(0, end))) {
       return buffer.subarray(0, end);
-    } catch {
-      // A UTF-8 code point is at most four bytes; try the preceding boundary.
     }
   }
   return buffer;
@@ -149,10 +157,6 @@ export function finalizeCapturedOutput(
   return trimmed;
 }
 
-function trimPreservedPendingLine(value: string, maxBytes: number): string {
-  return truncateUtf8Suffix(value, maxBytes);
-}
-
 export function appendPreservedOutputLines(params: {
   capture: CapturedOutputBuffers;
   chunk: Buffer | string;
@@ -161,26 +165,23 @@ export function appendPreservedOutputLines(params: {
   maxPreservedOutputLines: number;
   maxPendingLineBytes: number;
 }): void {
-  if (!params.preserveOutputLine || params.maxPreservedOutputLines <= 0) {
+  const { capture, maxPreservedOutputLines, preserveOutputLine } = params;
+  // The command's quota is fixed, so later text cannot reach a full preserved result.
+  if (!preserveOutputLine || capture.preservedLines.length >= maxPreservedOutputLines) {
     return;
   }
-  const text = Buffer.isBuffer(params.chunk)
-    ? params.capture.decoder.write(params.chunk)
-    : params.chunk;
+  const text = Buffer.isBuffer(params.chunk) ? capture.decoder.write(params.chunk) : params.chunk;
   if (!text) {
     return;
   }
-  const lines = (params.capture.pendingLine + text).split(/\r?\n/);
-  params.capture.pendingLine = trimPreservedPendingLine(
-    lines.pop() ?? "",
-    params.maxPendingLineBytes,
-  );
+  const lines = (capture.pendingLine + text).split(/\r?\n/);
+  capture.pendingLine = truncateUtf8Suffix(lines.pop() ?? "", params.maxPendingLineBytes);
   for (const line of lines) {
     if (
-      params.capture.preservedLines.length < params.maxPreservedOutputLines &&
-      params.preserveOutputLine(line, params.stream)
+      capture.preservedLines.length < maxPreservedOutputLines &&
+      preserveOutputLine(line, params.stream)
     ) {
-      params.capture.preservedLines.push(line);
+      capture.preservedLines.push(line);
     }
   }
 }
@@ -192,19 +193,20 @@ export function flushPreservedOutputLine(params: {
   maxPreservedOutputLines: number;
   maxPendingLineBytes: number;
 }): void {
-  if (!params.preserveOutputLine || params.maxPreservedOutputLines <= 0) {
+  const { capture, maxPreservedOutputLines, preserveOutputLine } = params;
+  if (!preserveOutputLine || maxPreservedOutputLines <= 0) {
     return;
   }
-  const trailing = trimPreservedPendingLine(
-    params.capture.pendingLine + params.capture.decoder.end(),
+  const trailing = truncateUtf8Suffix(
+    capture.pendingLine + capture.decoder.end(),
     params.maxPendingLineBytes,
   );
-  params.capture.pendingLine = "";
+  capture.pendingLine = "";
   if (
     trailing &&
-    params.capture.preservedLines.length < params.maxPreservedOutputLines &&
-    params.preserveOutputLine(trailing, params.stream)
+    capture.preservedLines.length < maxPreservedOutputLines &&
+    preserveOutputLine(trailing, params.stream)
   ) {
-    params.capture.preservedLines.push(trailing);
+    capture.preservedLines.push(trailing);
   }
 }

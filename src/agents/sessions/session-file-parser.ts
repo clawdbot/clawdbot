@@ -6,7 +6,7 @@ type SessionFileParseWarning = {
   row: number;
 };
 
-function isSessionFileEntry(value: unknown): value is FileEntry {
+export function isSessionFileEntry(value: unknown): value is FileEntry {
   if (!isRecord(value) || typeof value.type !== "string") {
     return false;
   }

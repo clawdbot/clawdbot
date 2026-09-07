@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../src/talk/describe-view-tool.js";
+import { prepareRealtimeTalkTestInput } from "./realtime-talk-input.test-support.ts";
 import { WebRtcSdpRealtimeTalkTransport } from "./realtime-talk-webrtc.ts";
 
 class FakeDataChannel extends EventTarget {
@@ -52,7 +53,34 @@ function sentRealtimeEvents(): Array<Record<string, unknown>> {
   );
 }
 
-describe("OpenAI Realtime Video Talk", () => {
+function dispatchDescribeViewToolCall(
+  peer: FakePeerConnection | undefined,
+  ids: { itemId: string; callId: string },
+): void {
+  peer?.channel.dispatchEvent(
+    new MessageEvent("message", {
+      data: JSON.stringify({
+        type: "response.done",
+        response: {
+          id: `response-${ids.callId}`,
+          status: "completed",
+          output: [
+            {
+              type: "function_call",
+              status: "completed",
+              id: ids.itemId,
+              call_id: ids.callId,
+              name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME,
+              arguments: "{}",
+            },
+          ],
+        },
+      }),
+    }),
+  );
+}
+
+describe("OpenAI Realtime media lifecycle", () => {
   beforeEach(() => {
     FakePeerConnection.instance = undefined;
     vi.stubGlobal("RTCPeerConnection", FakePeerConnection as unknown as typeof RTCPeerConnection);
@@ -67,10 +95,43 @@ describe("OpenAI Realtime Video Talk", () => {
     vi.restoreAllMocks();
   });
 
+  it("ends the call visibly when the microphone track ends", async () => {
+    const track = Object.assign(new EventTarget(), { stop: vi.fn() });
+    const getUserMedia = vi.fn(async () => ({
+      getTracks: () => [track],
+      getAudioTracks: () => [track],
+    }));
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    const onStatus = vi.fn();
+    const transport = new WebRtcSdpRealtimeTalkTransport(
+      { provider: "openai", transport: "webrtc", clientSecret: "test-client-secret" },
+      {
+        input: await prepareRealtimeTalkTestInput(),
+        client: {} as never,
+        sessionKey: "main",
+        callbacks: { onStatus },
+      },
+    );
+    try {
+      await transport.start();
+
+      track.dispatchEvent(new Event("ended"));
+
+      expect(onStatus).toHaveBeenCalledWith("error", expect.stringContaining("Microphone"));
+      expect(FakePeerConnection.instance?.connectionState).toBe("closed");
+      expect(track.stop).toHaveBeenCalledOnce();
+      expect(document.querySelector("audio")).toBeNull();
+    } finally {
+      transport.stop();
+    }
+  });
+
   it("starts audio-only, toggles local camera, and reports camera-off tool calls", async () => {
     const audioStop = vi.fn();
     const videoStop = vi.fn();
-    const audioTrack = { stop: audioStop } as unknown as MediaStreamTrack;
+    const audioTrack = Object.assign(new EventTarget(), {
+      stop: audioStop,
+    }) as unknown as MediaStreamTrack;
     const videoTrack = Object.assign(new EventTarget(), {
       stop: videoStop,
       readyState: "live",
@@ -117,6 +178,7 @@ describe("OpenAI Realtime Video Talk", () => {
         clientSecret: "test-client-secret",
       },
       {
+        input: await prepareRealtimeTalkTestInput(),
         client: {} as never,
         sessionKey: "main",
         callbacks: { onStatus, onTalkEvent, onVideoStream },
@@ -131,17 +193,7 @@ describe("OpenAI Realtime Video Talk", () => {
 
     await transport.setVideoEnabled(true);
     expect(onVideoStream).toHaveBeenCalledWith(camera);
-    peer?.channel.dispatchEvent(
-      new MessageEvent("message", {
-        data: JSON.stringify({
-          type: "response.function_call_arguments.done",
-          item_id: "item-camera",
-          call_id: "call-camera",
-          name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME,
-          arguments: "{}",
-        }),
-      }),
-    );
+    dispatchDescribeViewToolCall(peer, { itemId: "item-camera", callId: "call-camera" });
     await Promise.resolve();
     expect(sentRealtimeEvents()).not.toContainEqual(
       expect.objectContaining({
@@ -190,17 +242,10 @@ describe("OpenAI Realtime Video Talk", () => {
     expect(videoStop).toHaveBeenCalledOnce();
     expect(audioStop).not.toHaveBeenCalled();
 
-    peer?.channel.dispatchEvent(
-      new MessageEvent("message", {
-        data: JSON.stringify({
-          type: "response.function_call_arguments.done",
-          item_id: "item-camera-off",
-          call_id: "call-camera-off",
-          name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME,
-          arguments: "{}",
-        }),
-      }),
-    );
+    dispatchDescribeViewToolCall(peer, {
+      itemId: "item-camera-off",
+      callId: "call-camera-off",
+    });
     await vi.waitFor(() =>
       expect(sentRealtimeEvents()).toContainEqual({
         type: "conversation.item.create",
@@ -218,7 +263,9 @@ describe("OpenAI Realtime Video Talk", () => {
   });
 
   it("clears ended camera state and reacquires on the next enable", async () => {
-    const audioTrack = { stop: vi.fn() } as unknown as MediaStreamTrack;
+    const audioTrack = Object.assign(new EventTarget(), {
+      stop: vi.fn(),
+    }) as unknown as MediaStreamTrack;
     const firstVideoTrack = Object.assign(new EventTarget(), {
       stop: vi.fn(),
       readyState: "live",
@@ -250,6 +297,7 @@ describe("OpenAI Realtime Video Talk", () => {
     const transport = new WebRtcSdpRealtimeTalkTransport(
       { provider: "openai", transport: "webrtc", clientSecret: "test-client-secret" },
       {
+        input: await prepareRealtimeTalkTestInput(),
         client: {} as never,
         sessionKey: "main",
         callbacks: { onVideoStream },
@@ -270,7 +318,9 @@ describe("OpenAI Realtime Video Talk", () => {
 
   it("keeps voice alive when lazy camera acquisition fails", async () => {
     const audioStop = vi.fn();
-    const audioTrack = { stop: audioStop } as unknown as MediaStreamTrack;
+    const audioTrack = Object.assign(new EventTarget(), {
+      stop: audioStop,
+    }) as unknown as MediaStreamTrack;
     const audio = {
       getAudioTracks: () => [audioTrack],
       getTracks: () => [audioTrack],
@@ -285,6 +335,7 @@ describe("OpenAI Realtime Video Talk", () => {
     const transport = new WebRtcSdpRealtimeTalkTransport(
       { provider: "openai", transport: "webrtc", clientSecret: "test-client-secret" },
       {
+        input: await prepareRealtimeTalkTestInput(),
         client: {} as never,
         sessionKey: "main",
         callbacks: { onStatus, onVideoStream },
@@ -306,7 +357,7 @@ describe("OpenAI Realtime Video Talk", () => {
     const videoStop = vi.fn();
     const audio = {
       getAudioTracks: () => [{} as MediaStreamTrack],
-      getTracks: () => [{ stop: audioStop }],
+      getTracks: () => [Object.assign(new EventTarget(), { stop: audioStop })],
     } as unknown as MediaStream;
     const camera = {
       getVideoTracks: () => [{} as MediaStreamTrack],
@@ -325,6 +376,7 @@ describe("OpenAI Realtime Video Talk", () => {
         clientSecret: "test-client-secret",
       },
       {
+        input: await prepareRealtimeTalkTestInput(),
         client: {} as never,
         sessionKey: "main",
         callbacks: {},
@@ -343,7 +395,9 @@ describe("OpenAI Realtime Video Talk", () => {
   });
 
   it("switches an active camera and updates the capture stream", async () => {
-    const audioTrack = { stop: vi.fn() } as unknown as MediaStreamTrack;
+    const audioTrack = Object.assign(new EventTarget(), {
+      stop: vi.fn(),
+    }) as unknown as MediaStreamTrack;
     const frontStop = vi.fn();
     const frontTrack = Object.assign(new EventTarget(), {
       stop: frontStop,
@@ -376,6 +430,7 @@ describe("OpenAI Realtime Video Talk", () => {
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     const onVideoStream = vi.fn();
     const context = {
+      input: await prepareRealtimeTalkTestInput(),
       client: {} as never,
       sessionKey: "main",
       callbacks: { onVideoStream },
@@ -403,7 +458,9 @@ describe("OpenAI Realtime Video Talk", () => {
   });
 
   it("restores the previous camera when a live switch fails", async () => {
-    const audioTrack = { stop: vi.fn() } as unknown as MediaStreamTrack;
+    const audioTrack = Object.assign(new EventTarget(), {
+      stop: vi.fn(),
+    }) as unknown as MediaStreamTrack;
     const firstFrontTrack = Object.assign(new EventTarget(), {
       stop: vi.fn(),
       readyState: "live",
@@ -436,6 +493,7 @@ describe("OpenAI Realtime Video Talk", () => {
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     const onVideoStream = vi.fn();
     const context = {
+      input: await prepareRealtimeTalkTestInput(),
       client: {} as never,
       sessionKey: "main",
       callbacks: { onVideoStream },

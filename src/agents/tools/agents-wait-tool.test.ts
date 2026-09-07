@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SubagentRunRecord } from "../subagent-registry.types.js";
+import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
 
 const records = new Map<string, SubagentRunRecord>();
 const registryEvents = vi.hoisted(() => ({ listeners: new Set<() => void>() }));
 
-vi.mock("../subagent-registry.js", () => ({
+vi.mock("../subagents/registry/subagent-registry.js", () => ({
   getSubagentRunsByRunIds: (runIds: readonly string[]) => ({
     entries: new Map(
       runIds.flatMap((runId) => {
@@ -14,13 +14,11 @@ vi.mock("../subagent-registry.js", () => ({
         return entry ? [[runId, entry] as const] : [];
       }),
     ),
-    latestByChildSessionKey: new Map(
-      [...records.values()].map((entry) => [entry.childSessionKey, entry]),
-    ),
   }),
 }));
 
-vi.mock("../subagent-registry-state.js", () => ({
+vi.mock("../subagents/registry/subagent-registry-state.js", () => ({
+  SUBAGENT_RUNS_READ_CACHE_TTL_MS: 500,
   onSubagentRegistryPersisted: (listener: () => void) => {
     registryEvents.listeners.add(listener);
     return () => registryEvents.listeners.delete(listener);
@@ -29,7 +27,14 @@ vi.mock("../subagent-registry-state.js", () => ({
 
 import { isToolResultError } from "../tool-result-error.js";
 import { createAgentsWaitTool, waitForCollectorCompletion } from "./agents-wait-tool.js";
-import { testing } from "./agents-wait-tool.test-support.js";
+
+function createMainSessionWaitTool() {
+  return createAgentsWaitTool({
+    agentSessionKey: "agent:main:main",
+    agentId: "main",
+    config: { tools: { swarm: true } },
+  });
+}
 
 function collectorRun(
   runId: string,
@@ -82,6 +87,24 @@ describe("agents_wait", () => {
     expect(registryEvents.listeners.size).toBe(0);
   });
 
+  it("returns retained visible output when a successful collector ends with NO_REPLY", async () => {
+    const entry = collectorRun("retained", "agent:main:main", { status: "done" });
+    entry.execution = { status: "terminal", outcome: { status: "ok" } };
+    entry.completion = {
+      required: false,
+      resultText: "NO_REPLY",
+      fallbackResultText: "retained collector result",
+    };
+    records.set(entry.runId, entry);
+
+    await expect(
+      waitForCollectorCompletion({
+        runId: entry.runId,
+        currentSessionKeys: new Set(["agent:main:main"]),
+      }),
+    ).resolves.toMatchObject({ result: "retained collector result" });
+  });
+
   it("rejects when abort wins the listener-registration race", async () => {
     const entry = collectorRun("abort-race", "agent:main:main");
     records.set(entry.runId, entry);
@@ -102,19 +125,10 @@ describe("agents_wait", () => {
     expect(registryEvents.listeners.size).toBe(0);
   });
 
-  it("exposes ownership helpers through test support", () => {
-    const entry = collectorRun("owned", "agent:main:main");
-    expect(testing.ownsRun(entry, new Set(["agent:main:main"]))).toBe(true);
-  });
-
   it("returns the first completed child and leaves siblings pending", async () => {
     records.set("one", collectorRun("one", "agent:main:main"));
     records.set("two", collectorRun("two", "agent:main:main"));
-    const tool = createAgentsWaitTool({
-      agentSessionKey: "agent:main:main",
-      agentId: "main",
-      config: { tools: { swarm: true } },
-    });
+    const tool = createMainSessionWaitTool();
     setTimeout(() => {
       const entry = records.get("two");
       if (!entry) {
@@ -142,18 +156,107 @@ describe("agents_wait", () => {
     });
   });
 
-  it("orders completions by their durable capture time instead of input order", async () => {
+  it("wakes from a local completion without waiting for the next poll", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const entry = collectorRun("local-wake", "agent:main:main");
+    records.set(entry.runId, entry);
+    const controller = new AbortController();
+    const tool = createMainSessionWaitTool();
+    let result: unknown;
+    const waiting = tool
+      .execute("call", { ids: [entry.runId], timeoutSeconds: 1 }, controller.signal)
+      .then((value) => {
+        result = value.details;
+      });
+    try {
+      await vi.advanceTimersByTimeAsync(10);
+      entry.collectorCompletion = { status: "done" };
+      for (const listener of registryEvents.listeners) {
+        listener();
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(result).toMatchObject({ completed: [{ runId: entry.runId }], pending: [] });
+      expect(registryEvents.listeners.size).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      controller.abort();
+      await waiting.catch(() => {});
+      vi.useRealTimers();
+    }
+  });
+
+  it("projects an authorized collector failure without failing a mixed batch", async () => {
+    const failed = collectorRun("failed", "agent:main:main", {
+      status: "failed",
+      structured: { partial: true },
+    });
+    failed.execution = {
+      status: "terminal",
+      outcome: { status: "error", error: "provider failed after tool output" },
+    };
+    failed.completion = { required: false, resultText: null, capturedAt: 10 };
+    records.set(failed.runId, failed);
+    records.set("pending", collectorRun("pending", "agent:main:main"));
+    const tool = createMainSessionWaitTool();
+
+    const result = await tool.execute("call", {
+      ids: [failed.runId, "pending"],
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toEqual({
+      completed: [
+        {
+          runId: failed.runId,
+          status: "failed",
+          result: "",
+          structured: { partial: true },
+          error: "provider failed after tool output",
+          sessionKey: failed.childSessionKey,
+        },
+      ],
+      pending: ["pending"],
+    });
+    expect(isToolResultError(result)).toBe(false);
+  });
+
+  it.each([-60_000, 60_000])(
+    "keeps its elapsed deadline after a %d ms clock step",
+    async (step) => {
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      vi.setSystemTime(100_000);
+      const controller = new AbortController();
+      records.set("clock-step", collectorRun("clock-step", "agent:main:main"));
+      const tool = createMainSessionWaitTool();
+      let result: unknown;
+      const waiting = tool
+        .execute("clock", { ids: ["clock-step"], timeoutSeconds: 0.1 }, controller.signal)
+        .then((value) => {
+          result = value.details;
+        });
+      try {
+        await vi.advanceTimersByTimeAsync(25);
+        vi.setSystemTime(Date.now() + step);
+        await vi.advanceTimersByTimeAsync(74);
+        expect(result).toBeUndefined();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(result).toEqual({ completed: [], pending: ["clock-step"] });
+      } finally {
+        controller.abort();
+        await waiting.catch(() => {});
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("orders completions by durable capture time with input-order ties", async () => {
     const later = collectorRun("later", "agent:main:main", { status: "done" });
     later.completion = { required: false, resultText: "later", capturedAt: 10 };
     const earlier = collectorRun("earlier", "agent:main:main", { status: "done" });
     earlier.completion = { required: false, resultText: "earlier", capturedAt: 5 };
     records.set(later.runId, later);
     records.set(earlier.runId, earlier);
-    const tool = createAgentsWaitTool({
-      agentSessionKey: "agent:main:main",
-      agentId: "main",
-      config: { tools: { swarm: true } },
-    });
+    const tool = createMainSessionWaitTool();
 
     const result = await tool.execute("call", {
       ids: ["later", "earlier"],
@@ -164,6 +267,28 @@ describe("agents_wait", () => {
       completed: [{ runId: "earlier" }, { runId: "later" }],
       pending: [],
     });
+
+    const tied = collectorRun("tied", "agent:main:main", { status: "done" });
+    tied.completion = { required: false, resultText: "tied", capturedAt: 5 };
+    records.set(tied.runId, tied);
+    records.set("foreign", collectorRun("foreign", "agent:other:main", { status: "done" }));
+    records.set("pending-one", collectorRun("pending-one", "agent:main:main"));
+    records.set("pending-two", collectorRun("pending-two", "agent:main:main"));
+
+    const mixed = await tool.execute("mixed", {
+      ids: ["later", "missing", "tied", "pending-two", "foreign", "earlier", "pending-one"],
+      timeoutSeconds: 0,
+    });
+
+    expect(mixed.details).toMatchObject({
+      completed: [{ runId: "tied" }, { runId: "earlier" }, { runId: "later" }],
+      pending: ["pending-two", "pending-one"],
+      errors: [
+        { runId: "missing", error: "not_found" },
+        { runId: "foreign", error: "not_owner" },
+      ],
+    });
+    expect(isToolResultError(mixed)).toBe(false);
   });
 
   it("is idempotent and returns per-id ownership and unknown errors", async () => {
@@ -215,11 +340,7 @@ describe("agents_wait", () => {
     completed.swarmWaitOwnerSessionKeys = [ownerSessionKey, "agent:main:main"];
     records.set(completed.runId, completed);
     records.delete("ordinary-owner");
-    const tool = createAgentsWaitTool({
-      agentSessionKey: "agent:main:main",
-      agentId: "main",
-      config: { tools: { swarm: true } },
-    });
+    const tool = createMainSessionWaitTool();
 
     const result = await tool.execute("call", { ids: ["nested"], timeoutSeconds: 0 });
 
@@ -233,11 +354,7 @@ describe("agents_wait", () => {
     const remapped = collectorRun("gateway-run", "agent:main:main", { status: "done" });
     remapped.swarmRunId = "collector-run";
     records.set(remapped.runId, remapped);
-    const tool = createAgentsWaitTool({
-      agentSessionKey: "agent:main:main",
-      agentId: "main",
-      config: { tools: { swarm: true } },
-    });
+    const tool = createMainSessionWaitTool();
 
     const result = await tool.execute("call", { ids: ["collector-run"], timeoutSeconds: 0 });
 
@@ -251,11 +368,7 @@ describe("agents_wait", () => {
     const pending = collectorRun("old-gateway-run", "agent:main:main");
     pending.swarmRunId = "collector-run";
     records.set(pending.runId, pending);
-    const tool = createAgentsWaitTool({
-      agentSessionKey: "agent:main:main",
-      agentId: "main",
-      config: { tools: { swarm: true } },
-    });
+    const tool = createMainSessionWaitTool();
     setTimeout(() => {
       records.delete(pending.runId);
       const completed = collectorRun("new-gateway-run", "agent:main:main", { status: "done" });
@@ -270,6 +383,64 @@ describe("agents_wait", () => {
     });
   });
 
+  it.each(["tool", "bridge"] as const)(
+    "rejects a foreign replacement while the %s is parked",
+    async (boundary) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      const pending = collectorRun("old-gateway-run", "agent:main:main");
+      pending.swarmRunId = "collector-run";
+      records.set(pending.runId, pending);
+      const controller = new AbortController();
+      const waiting =
+        boundary === "tool"
+          ? createMainSessionWaitTool()
+              .execute("wait", { ids: ["collector-run"], timeoutSeconds: 1 }, controller.signal)
+              .then((result) => result.details)
+          : waitForCollectorCompletion({
+              runId: "collector-run",
+              currentSessionKeys: new Set(["agent:main:main"]),
+              currentAgentId: "main",
+              signal: controller.signal,
+            });
+      const observed = waiting.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        expect(registryEvents.listeners.size).toBe(1);
+        records.delete(pending.runId);
+        const foreign = collectorRun("new-gateway-run", "agent:other:main", { status: "done" });
+        foreign.swarmRunId = "collector-run";
+        foreign.completion = { required: false, resultText: "foreign result" };
+        records.set(foreign.runId, foreign);
+        for (const listener of registryEvents.listeners) {
+          listener();
+        }
+
+        expect(await observed).toEqual(
+          boundary === "tool"
+            ? {
+                value: {
+                  completed: [],
+                  pending: [],
+                  errors: [{ runId: "collector-run", error: "not_owner" }],
+                  success: false,
+                },
+              }
+            : {
+                error: expect.objectContaining({ message: "agents.run not_owner: collector-run" }),
+              },
+        );
+        expect(registryEvents.listeners.size).toBe(0);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        controller.abort();
+        await observed;
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("does not treat a routed completion owner as the spawning session", async () => {
     const routed = collectorRun("routed", "agent:main:main", { status: "done" });
     routed.controllerSessionKey = "agent:worker:route-a";
@@ -280,11 +451,7 @@ describe("agents_wait", () => {
       agentId: "worker",
       config: { tools: { swarm: true } },
     });
-    const completionOwner = createAgentsWaitTool({
-      agentSessionKey: "agent:main:main",
-      agentId: "main",
-      config: { tools: { swarm: true } },
-    });
+    const completionOwner = createMainSessionWaitTool();
 
     const allowed = await routedOwner.execute("owner", { ids: ["routed"], timeoutSeconds: 0 });
     const denied = await completionOwner.execute("proxy", {
@@ -302,12 +469,32 @@ describe("agents_wait", () => {
     expect(isToolResultError(denied)).toBe(true);
   });
 
-  it("marks entirely missing collector batches as failures without losing per-id errors", async () => {
+  it("rejects a foreign collector with the same bare requester key", async () => {
+    const foreign = collectorRun("foreign-global", "global", { status: "done" });
+    foreign.requesterAgentId = "ops";
+    records.set(foreign.runId, foreign);
     const tool = createAgentsWaitTool({
-      agentSessionKey: "agent:main:main",
-      agentId: "main",
-      config: { tools: { swarm: true } },
+      agentSessionKey: "global",
+      agentId: "research",
+      config: {
+        agents: { ownership: "explicit", entries: { research: {}, ops: {} } },
+        tools: { swarm: true },
+      },
     });
+
+    const result = await tool.execute("wait", {
+      ids: [foreign.runId],
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({
+      errors: [{ runId: foreign.runId, error: "not_owner" }],
+      success: false,
+    });
+  });
+
+  it("marks entirely missing collector batches as failures without losing per-id errors", async () => {
+    const tool = createMainSessionWaitTool();
 
     const result = await tool.execute("call", { ids: ["missing"], timeoutSeconds: 0 });
 
@@ -321,11 +508,7 @@ describe("agents_wait", () => {
   });
 
   it("rejects collector batches containing only blank run ids", async () => {
-    const tool = createAgentsWaitTool({
-      agentSessionKey: "agent:main:main",
-      agentId: "main",
-      config: { tools: { swarm: true } },
-    });
+    const tool = createMainSessionWaitTool();
 
     await expect(tool.execute("call", { ids: [" ", "\t"], timeoutSeconds: 0 })).rejects.toThrow(
       "at least one non-empty run id",
@@ -336,11 +519,7 @@ describe("agents_wait", () => {
     "rejects when the wait is aborted %s collector polling",
     async (abortTiming) => {
       records.set("pending", collectorRun("pending", "agent:main:main"));
-      const tool = createAgentsWaitTool({
-        agentSessionKey: "agent:main:main",
-        agentId: "main",
-        config: { tools: { swarm: true } },
-      });
+      const tool = createMainSessionWaitTool();
       const controller = new AbortController();
       if (abortTiming === "before") {
         controller.abort();
@@ -370,11 +549,7 @@ describe("agents_wait", () => {
   );
 
   it("rejects oversized wait batches before polling", async () => {
-    const tool = createAgentsWaitTool({
-      agentSessionKey: "agent:main:main",
-      agentId: "main",
-      config: { tools: { swarm: true } },
-    });
+    const tool = createMainSessionWaitTool();
 
     await expect(
       tool.execute("call", {

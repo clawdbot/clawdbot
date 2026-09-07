@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
 import { spawnCommand } from "../../../process/exec.js";
@@ -10,16 +9,17 @@ import { spawnCommand } from "../../../process/exec.js";
  *
  * Searches files by glob through fd/local operations and returns bounded, renderable results.
  */
-import { toPosixPath } from "../../../shared/ignore-rules.js";
+import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
-import { appendBoundedTextTail, normalizePositiveLimit } from "./limits.js";
-import { resolveToCwd } from "./path-utils.js";
+import { appendBoundedTextTail, formatStderrTail, normalizePositiveLimit } from "./limits.js";
+import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import {
   appendSessionToolTruncationWarning,
   formatSessionToolOutput,
   invalidArgText,
+  reuseTextComponent,
   shortenPath,
   str,
 } from "./render-utils.js";
@@ -77,7 +77,7 @@ export interface FindToolOptions {
 
 function formatFindCall(
   args: { pattern: string; path?: string; limit?: number } | undefined,
-  theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+  theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
 ): string {
   const pattern = str(args?.pattern);
   const rawPath = str(args?.path);
@@ -101,7 +101,7 @@ function formatFindResult(
     details?: FindToolDetails;
   },
   options: ToolRenderResultOptions,
-  theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+  theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
   showImages: boolean,
 ): string {
   const resultLimit = result.details?.resultLimitReached;
@@ -116,18 +116,31 @@ function formatFindResult(
 }
 
 function buildFindResult(params: {
-  relativized: string[];
+  paths: string[];
+  searchPath: string;
   effectiveLimit: number;
   limitNotice: string;
 }): {
   content: Array<{ type: "text"; text: string }>;
-  details: FindToolDetails | undefined;
+  details: FindToolDetails;
 } {
-  const resultLimitReached = params.relativized.length >= params.effectiveLimit;
-  const rawOutput = params.relativized.join("\n");
-  const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
-  let resultOutput = truncation.content;
-  const details: FindToolDetails = {};
+  const resultLimitReached = params.paths.length > params.effectiveLimit;
+  const rawOutput = params.paths
+    .slice(0, params.effectiveLimit)
+    .map((foundPath) => {
+      // Backends may return search-relative paths; only absolute paths need relativizing.
+      // Preserve directory markers and filename whitespace when formatting either backend.
+      const normalized = normalizeNativePathSeparators(foundPath);
+      const relativePath = path.isAbsolute(foundPath)
+        ? normalizeNativePathSeparators(path.relative(params.searchPath, foundPath) || ".")
+        : normalized;
+      return normalized.endsWith("/") && !relativePath.endsWith("/")
+        ? `${relativePath}/`
+        : relativePath;
+    })
+    .join("\n");
+  const { content, ...truncation } = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
+  const details: FindToolDetails = { content };
   const notices: string[] = [];
   if (resultLimitReached) {
     notices.push(params.limitNotice);
@@ -138,19 +151,20 @@ function buildFindResult(params: {
     details.truncation = truncation;
   }
   if (notices.length > 0) {
-    resultOutput += `\n\n[${notices.join(". ")}]`;
+    details.content += `\n\n[${notices.join(". ")}]`;
   }
   return {
-    content: [{ type: "text", text: resultOutput }],
-    details: Object.keys(details).length > 0 ? details : undefined,
+    content: [{ type: "text", text: details.content }],
+    details,
   };
 }
 
 export function createFindToolDefinition(
   cwd: string,
   options?: FindToolOptions,
-): ToolDefinition<typeof findSchema, FindToolDetails | undefined> {
+): ToolDefinition<typeof findSchema, FindToolDetails> {
   const customOps = options?.operations;
+  const resolvePath = customOps ? resolveToCwd : resolveLocalPathToCwd;
   return {
     name: "find",
     label: "find",
@@ -196,8 +210,10 @@ export function createFindToolDefinition(
               settle(() => reject(new Error("Limit must be an integer")));
               return;
             }
-            const searchPath = resolveToCwd(searchDir || ".", cwd);
+            const searchPath = resolvePath(searchDir || ".", cwd);
             const effectiveLimit = normalizePositiveLimit(limit, DEFAULT_LIMIT);
+            // One extra candidate distinguishes an exact-size result from a truncated one.
+            const observationLimit = effectiveLimit + 1;
             const ops = customOps ?? defaultFindOperations;
 
             // If custom operations provide glob(), use that instead of fd.
@@ -212,7 +228,7 @@ export function createFindToolDefinition(
               }
               const results = await ops.glob(pattern, searchPath, {
                 ignore: ["**/node_modules/**", "**/.git/**"],
-                limit: effectiveLimit,
+                limit: observationLimit,
               });
               if (signal?.aborted) {
                 settle(() => reject(new Error("Operation aborted")));
@@ -222,23 +238,17 @@ export function createFindToolDefinition(
                 settle(() =>
                   resolve({
                     content: [{ type: "text", text: "No files found matching pattern" }],
-                    details: undefined,
+                    details: { content: "No files found matching pattern" },
                   }),
                 );
                 return;
               }
 
-              // Relativize paths against the search root for stable output.
-              const relativized = results.map((p) => {
-                if (p.startsWith(searchPath)) {
-                  return toPosixPath(p.slice(searchPath.length + 1));
-                }
-                return toPosixPath(path.relative(searchPath, p));
-              });
               settle(() =>
                 resolve(
                   buildFindResult({
-                    relativized,
+                    paths: results,
+                    searchPath,
                     effectiveLimit,
                     limitNotice: `${effectiveLimit} results limit reached`,
                   }),
@@ -264,7 +274,7 @@ export function createFindToolDefinition(
             if (!isInsideGitRepository(searchPath)) {
               args.push("--no-require-git");
             }
-            args.push("--max-results", String(effectiveLimit));
+            args.push("--max-results", String(observationLimit));
 
             // fd --glob matches against the basename unless --full-path is set; in --full-path
             // mode it matches against the absolute candidate path, so a path-containing
@@ -286,6 +296,7 @@ export function createFindToolDefinition(
             releaseChildProcessOutputAfterExit(child.nodeChildProcess);
             const rl = createInterface({ input: child.stdout });
             let stderr = "";
+            let stderrDroppedBytes = 0;
             const lines: string[] = [];
 
             stopChild = () => {
@@ -310,7 +321,9 @@ export function createFindToolDefinition(
             // cannot split multibyte characters into U+FFFD replacement noise.
             child.stderr?.setEncoding("utf8");
             child.stderr?.on("data", (chunk: string) => {
-              stderr = appendBoundedTextTail(stderr, chunk);
+              const appended = appendBoundedTextTail(stderr, chunk);
+              stderr = appended.tail;
+              stderrDroppedBytes += appended.droppedBytes;
             });
             // Readline re-emits input failures, while the stream listener also catches
             // implementations that do not. settle() keeps the shared failure path one-shot.
@@ -335,7 +348,8 @@ export function createFindToolDefinition(
               }
               const output = lines.join("\n");
               if (code !== 0) {
-                const errorMsg = stderr.trim() || `fd exited with code ${code}`;
+                const fallback = `fd exited with code ${code}`;
+                const errorMsg = formatStderrTail(stderr, stderrDroppedBytes, fallback);
                 settle(() => reject(new Error(errorMsg)));
                 return;
               }
@@ -343,35 +357,17 @@ export function createFindToolDefinition(
                 settle(() =>
                   resolve({
                     content: [{ type: "text", text: "No files found matching pattern" }],
-                    details: undefined,
+                    details: { content: "No files found matching pattern" },
                   }),
                 );
                 return;
               }
 
-              const relativized: string[] = [];
-              for (const rawLine of lines) {
-                const line = rawLine.replace(/\r$/, "").trim();
-                if (!line) {
-                  continue;
-                }
-                const hadTrailingSlash = line.endsWith("/") || line.endsWith("\\");
-                let relativePath;
-                if (line.startsWith(searchPath)) {
-                  relativePath = line.slice(searchPath.length + 1);
-                } else {
-                  relativePath = path.relative(searchPath, line);
-                }
-                if (hadTrailingSlash && !relativePath.endsWith("/")) {
-                  relativePath += "/";
-                }
-                relativized.push(toPosixPath(relativePath));
-              }
-
               settle(() =>
                 resolve(
                   buildFindResult({
-                    relativized,
+                    paths: lines,
+                    searchPath,
                     effectiveLimit,
                     limitNotice: `${effectiveLimit} results limit reached. Use limit=${effectiveLimit * 2} for more, or refine pattern`,
                   }),
@@ -390,14 +386,11 @@ export function createFindToolDefinition(
       });
     },
     renderCall(args, theme, context) {
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(formatFindCall(args, theme));
-      return text;
+      return reuseTextComponent(context.lastComponent, formatFindCall(args, theme));
     },
     renderResult(result, optionsLocal, theme, context) {
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(formatFindResult(result, optionsLocal, theme, context.showImages));
-      return text;
+      const content = formatFindResult(result, optionsLocal, theme, context.showImages);
+      return reuseTextComponent(context.lastComponent, content);
     },
   };
 }
@@ -405,6 +398,6 @@ export function createFindToolDefinition(
 export function createFindTool(
   cwd: string,
   options?: FindToolOptions,
-): AgentTool<typeof findSchema> {
+): AgentTool<typeof findSchema, FindToolDetails> {
   return wrapToolDefinition(createFindToolDefinition(cwd, options));
 }

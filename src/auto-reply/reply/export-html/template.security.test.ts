@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { generateExportHtmlVendorAssets } from "../../../../scripts/runtime-postbuild.mts";
 
 type SessionEntry = {
   id: string;
@@ -43,8 +44,12 @@ const exportHtmlDir = path.dirname(fileURLToPath(import.meta.url));
 const templateHtml = fs.readFileSync(path.join(exportHtmlDir, "template.html"), "utf8");
 const templateCss = fs.readFileSync(path.join(exportHtmlDir, "template.css"), "utf8");
 const templateJs = fs.readFileSync(path.join(exportHtmlDir, "template.js"), "utf8");
-const markedJs = fs.readFileSync(path.join(exportHtmlDir, "vendor", "marked.min.js"), "utf8");
-const highlightJs = fs.readFileSync(path.join(exportHtmlDir, "vendor", "highlight.min.js"), "utf8");
+const vendorAssets = generateExportHtmlVendorAssets();
+const markedJs = expectDefined(vendorAssets["marked.min.js"], "generated marked browser asset");
+const highlightJs = expectDefined(
+  vendorAssets["highlight.min.js"],
+  "generated highlight browser asset",
+);
 
 let parseHtmlPromise: Promise<LinkedomModule["parseHTML"]> | null = null;
 
@@ -76,6 +81,7 @@ async function renderTemplate(sessionData: SessionData) {
 
   const parseHTML = await loadParseHTML();
   const { document } = parseHTML(html);
+  const downloads: Blob[] = [];
 
   const immediateTimeout = (fn: (...args: unknown[]) => void) => {
     fn();
@@ -87,6 +93,14 @@ async function renderTemplate(sessionData: SessionData) {
     clearTimeout: () => {},
     setTimeout: immediateTimeout,
     URLSearchParams,
+    Blob,
+    URL: class extends URL {
+      static override createObjectURL(blob: Blob) {
+        downloads.push(blob);
+        return "blob:session-export";
+      }
+      static override revokeObjectURL() {}
+    },
     TextDecoder,
     atob: (s: string) => Buffer.from(s, "base64").toString("binary"),
     btoa: (s: string) => Buffer.from(s, "binary").toString("base64"),
@@ -102,7 +116,13 @@ async function renderTemplate(sessionData: SessionData) {
   vm.runInContext(markedJs, runtime);
   vm.runInContext(highlightJs, runtime);
   vm.runInContext(templateJs, runtime);
-  return { document };
+  return {
+    document,
+    downloadJson: async () => {
+      vm.runInContext("downloadSessionJson()", runtime);
+      return await expectDefined(downloads.at(-1), "download missing").text();
+    },
+  };
 }
 
 function now() {
@@ -176,6 +196,83 @@ describe("export html sidebar trigger affordance", () => {
 });
 
 describe("export html security hardening", () => {
+  it.each(["consult", "answer"])("honors hidden input with %s selected while preserving raw export", async (leafId) => {
+    const session: SessionData = {
+      header: { id: "session-hidden-input", timestamp: now() },
+      entries: [
+        {
+          id: "hidden-root",
+          parentId: "hidden-root",
+          timestamp: now(),
+          type: "custom_message",
+          customType: "context",
+          content: "Hidden root context",
+          display: false,
+        },
+        {
+          id: "speech",
+          parentId: "hidden-root",
+          timestamp: now(),
+          type: "message",
+          message: { role: "user", content: "Explain the change. Context: Spoken style:" },
+        },
+        {
+          id: "consult",
+          parentId: "speech",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "user",
+            content: "Synthetic consultation instructions",
+            display: false,
+            provenance: { kind: "internal_system", sourceTool: "openclaw_agent_consult" },
+          },
+        },
+        {
+          id: "answer",
+          parentId: "consult",
+          timestamp: now(),
+          type: "message",
+          message: { role: "assistant", content: "The change is ready." },
+        },
+      ],
+      leafId,
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document, downloadJson } = await renderTemplate(session);
+    expect(document.querySelectorAll(".user-message")).toHaveLength(1);
+    expect(document.getElementById("entry-speech")?.textContent).toContain(
+      "Explain the change. Context: Spoken style:",
+    );
+    expect(document.getElementById("entry-consult")).toBeNull();
+    expect(document.getElementById("entry-hidden-root")).toBeNull();
+    const treeIds = () => Array.from(document.querySelectorAll(".tree-node"), (node) => node.getAttribute("data-id"));
+    expect(treeIds()).toEqual(["speech", "answer"]);
+    const selectFilter = (filter: string) => requireElement(
+      document.querySelector<HTMLButtonElement>(`[data-filter="${filter}"]`), "filter missing",
+    ).click();
+    selectFilter("all");
+    expect(treeIds()).toEqual(["hidden-root", "speech", "consult", "answer"]);
+    expect(document.querySelector('[data-id="consult"]')?.textContent).toContain("[hidden] user:");
+    requireElement(document.querySelector<HTMLElement>('[data-id="consult"]'), "hidden tree entry missing").click();
+    expect(document.getElementById("entry-answer")?.textContent).toContain("The change is ready.");
+    expect(document.getElementById("entry-consult")).toBeNull();
+    selectFilter("user-only");
+    expect(treeIds()).not.toContain("consult");
+    selectFilter("default");
+    expect(treeIds()).toEqual(["speech", "answer"]);
+    expect(document.getElementById("header-container")?.textContent).toContain("2 user, 1 assistant, 1 custom");
+    const encoded = requireElement(document.getElementById("session-data"), "session data missing");
+    expect(JSON.parse(Buffer.from(encoded.textContent ?? "", "base64").toString("utf8"))).toEqual(
+      session,
+    );
+    expect((await downloadJson()).split("\n").map((line) => JSON.parse(line))).toEqual([
+      { type: "header", ...session.header }, ...session.entries,
+    ]);
+  });
+
   it("renders export warnings in the header without interpreting HTML", async () => {
     const warning = 'Backend <img src=x onerror="alert(1)"> transcript is incomplete';
     const session: SessionData = {
@@ -280,6 +377,34 @@ describe("export html security hardening", () => {
     const messages = requireElement(document.getElementById("messages"), "messages root missing");
     expect(messages.querySelector("img[onerror]")).toBeNull();
     expect(messages.innerHTML).toContain("&lt;img src=x onerror=alert(1)&gt;");
+  });
+
+  it("renders Markdown and TypeScript highlighting without external assets", async () => {
+    const session: SessionData = {
+      header: { id: "session-render", timestamp: now() },
+      entries: [
+        {
+          id: "1",
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "assistant",
+            content: "**rendered**\n\n```typescript\nconst answer = true;\n```",
+          },
+        },
+      ],
+      leafId: "1",
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document } = await renderTemplate(session);
+    const messages = requireElement(document.getElementById("messages"), "messages root missing");
+    expect(messages.querySelector("strong")?.textContent).toBe("rendered");
+    const code = requireElement(messages.querySelector("pre code.hljs"), "highlighted code missing");
+    expect(code.querySelector(".hljs-keyword")?.textContent).toBe("const");
+    expect(code.textContent).toContain("answer = true");
   });
 
   it("escapes tree and header metadata fields", async () => {

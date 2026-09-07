@@ -4,13 +4,13 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { buildWorkspaceSkillStatus } from "../skills/discovery/status.js";
 import {
   detectGhConfigDirMismatch,
   formatGhConfigDirMismatchHint,
   type GhConfigDiscoveryInput,
-  type GhConfigDiscoveryResult,
 } from "../skills/lifecycle/gh-config-discovery.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
@@ -18,37 +18,23 @@ import {
   disableUnavailableSkillsInConfig,
 } from "./doctor-skills-core.js";
 
-function defaultGhConfigDiscoveryInput(): GhConfigDiscoveryInput {
-  return {
-    platform: process.platform,
-    env: process.env as GhConfigDiscoveryInput["env"],
-    fileExists: (absolutePath) => existsSync(absolutePath),
-  };
-}
-
 /** Builds a GitHub CLI config-dir hint for eligible GitHub skill setups. */
 function describeGhConfigDirHint(skills: SkillStatusEntry[]): string[] {
-  return describeGhConfigDirHintFromDiscovery(skills, defaultGhConfigDiscoveryInput());
-}
-
-/** Builds a GitHub CLI config-dir hint from injected discovery inputs for tests. */
-function describeGhConfigDirHintFromDiscovery(
-  skills: SkillStatusEntry[],
-  discoveryInput: GhConfigDiscoveryInput,
-): string[] {
+  const discoveryInput: GhConfigDiscoveryInput = {
+    platform: process.platform,
+    env: process.env as GhConfigDiscoveryInput["env"],
+    fileExists: existsSync,
+  };
   const githubSkill = skills.find((skill) => skill.name === "github");
-  if (!githubSkill) {
-    return [];
-  }
   if (
-    !githubSkill.eligible ||
+    !githubSkill?.eligible ||
     githubSkill.blockedByAgentFilter ||
     githubSkill.disabled ||
     githubSkill.blockedByAllowlist
   ) {
     return [];
   }
-  const result: GhConfigDiscoveryResult = detectGhConfigDirMismatch(discoveryInput);
+  const result = detectGhConfigDirMismatch(discoveryInput);
   if (result.kind !== "mismatch") {
     return [];
   }
@@ -100,6 +86,7 @@ function collectFleetUnavailableSkills(
 export async function maybeRepairSkillReadiness(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;
+  runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
 }): Promise<OpenClawConfig> {
   const agentIds = listAgentIds(params.cfg);
   const scopes = agentIds.map((agentId) => ({
@@ -107,11 +94,16 @@ export async function maybeRepairSkillReadiness(params: {
     workspaceDir: resolveAgentWorkspaceDir(params.cfg, agentId),
   }));
   const reports = scopes.map(({ agentId, workspaceDir }) => {
-    const report = buildWorkspaceSkillStatus(workspaceDir, {
-      config: params.cfg,
-      agentId,
-    });
-    return { agentId, report, unavailable: collectUnavailableAgentSkills(report) };
+    const buildReport = () => {
+      const report = buildWorkspaceSkillStatus(workspaceDir, {
+        config: params.cfg,
+        agentId,
+      });
+      return { agentId, report, unavailable: collectUnavailableAgentSkills(report) };
+    };
+    return params.runWithPluginMetadataSnapshot
+      ? params.runWithPluginMetadataSnapshot({ config: params.cfg, workspaceDir }, buildReport)
+      : buildReport();
   });
   const fleetUnavailable = collectFleetUnavailableSkills(
     reports.map(({ report, unavailable: unavailableForAgent }) => ({
@@ -140,7 +132,8 @@ export async function maybeRepairSkillReadiness(params: {
     return params.cfg;
   }
 
-  const shouldDisable = await params.prompter.confirmAutoFix({
+  // Updating may migrate required state, but must not disable optional skills for this environment.
+  const shouldDisable = await params.prompter.confirmRuntimeRepair({
     message:
       agentIds.length === 1
         ? `Disable ${fleetUnavailable.length} unavailable skill${fleetUnavailable.length === 1 ? "" : "s"} in config?`

@@ -2,18 +2,15 @@
 // timeout validation, and reply-directive defusing.
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as ttsRuntime from "../../tts/tts.js";
+import { getCoreTtsToolResultMediaUrls } from "./tts-tool-result-provenance.js";
 import { createTtsTool } from "./tts-tool.js";
 
 let textToSpeechSpy: ReturnType<typeof vi.spyOn>;
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function latestTextToSpeechArgs(): Record<string, unknown> {
   // Speech runtime args are the public handoff between the model-facing tool
@@ -47,6 +44,7 @@ describe("createTtsTool", () => {
       audioPath: "/tmp/reply.opus",
       provider: "test",
       voiceCompatible: true,
+      audioAsVoice: true,
     });
 
     const tool = createTtsTool();
@@ -62,24 +60,44 @@ describe("createTtsTool", () => {
       audioAsVoice: true,
     });
     expect(JSON.stringify(result.content)).not.toContain("MEDIA:");
+    expect(getCoreTtsToolResultMediaUrls(result)).toEqual(["/tmp/reply.opus"]);
   });
 
-  it("uses audioAsVoice from the TTS runtime even when the provider output is not native", async () => {
-    textToSpeechSpy.mockResolvedValue({
-      success: true,
-      audioPath: "/tmp/reply.mp3",
-      provider: "test",
-      voiceCompatible: false,
+  it.each([
+    {
       audioAsVoice: true,
-    });
+      voiceCompatible: false,
+      audioPath: "/tmp/reply.mp3",
+      channel: "feishu",
+    },
+    {
+      audioAsVoice: false,
+      voiceCompatible: true,
+      audioPath: "/tmp/reply.ogg",
+      channel: undefined,
+    },
+  ])(
+    "preserves runtime voice delivery $audioAsVoice with provider compatibility $voiceCompatible",
+    async ({ audioAsVoice, voiceCompatible, audioPath, channel }) => {
+      textToSpeechSpy.mockResolvedValue({
+        success: true,
+        audioPath,
+        provider: "test",
+        voiceCompatible,
+        audioAsVoice,
+      });
 
-    const tool = createTtsTool();
-    const result = await tool.execute("call-1", { text: "hello", channel: "feishu" });
+      const tool = createTtsTool();
+      const result = await tool.execute("call-1", { text: "hello", channel });
 
-    const media = requireRecord(requireRecord(result.details, "TTS result details").media, "media");
-    expect(media.mediaUrl).toBe("/tmp/reply.mp3");
-    expect(media.audioAsVoice).toBe(true);
-  });
+      const media = requireRecord(
+        requireRecord(result.details, "TTS result details").media,
+        "media",
+      );
+      expect(media.mediaUrl).toBe(audioPath);
+      expect(media.audioAsVoice).toBe(audioAsVoice ? true : undefined);
+    },
+  );
 
   it("passes an optional timeout to speech generation", async () => {
     textToSpeechSpy.mockResolvedValue({

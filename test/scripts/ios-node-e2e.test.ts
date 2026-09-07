@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import { WebSocket, WebSocketServer } from "ws";
+import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 
 type ScriptResult = {
@@ -92,8 +92,13 @@ async function listenGateway(params: {
   server = createServer();
   wss = new WebSocketServer({ server });
   wss.on("connection", (ws: WebSocket) => {
-    ws.on("message", (data) => {
-      const frame = JSON.parse(String(data)) as GatewayFrame;
+    ws.on("message", (data: RawData) => {
+      const text = Array.isArray(data)
+        ? Buffer.concat(data.map((chunk) => Buffer.from(chunk))).toString("utf8")
+        : Buffer.isBuffer(data)
+          ? data.toString("utf8")
+          : Buffer.from(data).toString("utf8");
+      const frame = JSON.parse(text) as GatewayFrame;
       if (frame.type !== "req") {
         return;
       }
@@ -138,7 +143,7 @@ async function listenGateway(params: {
               ok: true,
               nodeId: "ios-node",
               command: frame.params?.command,
-              payload: invokePayload(String(frame.params?.command ?? ""), params.mode),
+              payload: invokePayload(frame.params?.command ?? "", params.mode),
             },
           }),
         );
@@ -290,7 +295,7 @@ describe("ios-node-e2e", () => {
         payload: {},
       },
     });
-    expect(report.results.every((entry) => entry.ok === false)).toBe(true);
+    expect(report.results.every((entry) => !entry.ok)).toBe(true);
     expect(invokeParams.length).toBeGreaterThan(0);
   });
 

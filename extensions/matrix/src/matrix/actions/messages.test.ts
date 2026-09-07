@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { setMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
 import * as sendModule from "../send.js";
-import { editMatrixMessage, readMatrixMessages } from "./messages.js";
+import { editMatrixMessage, readMatrixMessages, sendMatrixMessage } from "./messages.js";
 
 const MATRIX_ACTION_TEST_CFG = {
   channels: {
@@ -23,7 +23,7 @@ function installMatrixActionTestRuntime(): void {
         convertMarkdownTables: (text: string) => text,
       },
     },
-  } as unknown as import("../../runtime-api.js").PluginRuntime);
+  } as unknown as import("openclaw/plugin-sdk/plugin-runtime").PluginRuntime);
 }
 
 function createPollResponseEvent(): Record<string, unknown> {
@@ -110,14 +110,24 @@ function createMessagesClient(params: {
     }
     return null;
   });
-  const getRelations = vi.fn(async (_roomId: string, _eventId: string, relType: string) => ({
-    events:
-      relType === "m.thread"
-        ? (params.threadRelations ?? params.pollRelations ?? [])
-        : (params.pollRelations ?? []),
-    nextBatch: null,
-    prevBatch: null,
-  }));
+  const getRelations = vi.fn(
+    async (
+      _roomId: string,
+      _eventId: string,
+      relType: string,
+    ): Promise<{
+      events: Array<Record<string, unknown>>;
+      nextBatch: string | null;
+      prevBatch: string | null;
+    }> => ({
+      events:
+        relType === "m.thread"
+          ? (params.threadRelations ?? params.pollRelations ?? [])
+          : (params.pollRelations ?? []),
+      nextBatch: null,
+      prevBatch: null,
+    }),
+  );
 
   return {
     client: {
@@ -138,6 +148,7 @@ function createEditClient(originalContent: Record<string, unknown>) {
   const sendMessage = vi.fn().mockResolvedValue("evt-edit");
   const client = {
     getEvent: vi.fn().mockResolvedValue({ content: originalContent }),
+    getRelations: vi.fn().mockResolvedValue({ events: [], nextBatch: null }),
     getJoinedRoomMembers: vi.fn().mockResolvedValue([]),
     getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
     sendMessage,
@@ -177,18 +188,47 @@ function mockCallArg(
 }
 
 describe("matrix message actions", () => {
-  it("forwards timeoutMs to the shared Matrix edit helper", async () => {
+  it("preserves workspace media access through the shared Matrix send helper", async () => {
+    const mediaAccess = {
+      localRoots: ["/tmp/openclaw-matrix-test"],
+      readFile: async () => Buffer.from("chart"),
+      workspaceDir: "/tmp/openclaw-matrix-test",
+    };
+    const sendSpy = vi.spyOn(sendModule, "sendMessageMatrix").mockResolvedValue({
+      messageId: "$sent",
+      roomId: "!room:example.org",
+    } as never);
+
+    try {
+      await sendMatrixMessage("!room:example.org", "caption", {
+        cfg: MATRIX_ACTION_TEST_CFG,
+        mediaUrl: "chart.png",
+        mediaAccess,
+        mediaLocalRoots: mediaAccess.localRoots,
+      });
+
+      const options = sendSpy.mock.calls[0]?.[2];
+      expect(options?.mediaUrl).toBe("chart.png");
+      expect(options?.mediaAccess).toBe(mediaAccess);
+      expect(options?.mediaLocalRoots).toBe(mediaAccess.localRoots);
+    } finally {
+      sendSpy.mockRestore();
+    }
+  });
+
+  it("preserves Markdown indentation and forwards timeoutMs to the Matrix edit helper", async () => {
     const editSpy = vi.spyOn(sendModule, "editMessageMatrix").mockResolvedValue("evt-edit");
 
     try {
       const cfg = {} as never;
-      const result = await editMatrixMessage("!room:example.org", "$original", "hello", {
+      const markdown = "    @room";
+      const result = await editMatrixMessage("!room:example.org", "$original", markdown, {
         cfg,
         timeoutMs: 12_345,
       });
 
       expect(result).toEqual({ eventId: "evt-edit" });
-      expect(editSpy).toHaveBeenCalledWith("!room:example.org", "$original", "hello", {
+      expect(editSpy).toHaveBeenCalledWith("!room:example.org", "$original", markdown, {
         cfg,
         accountId: undefined,
         client: undefined,
@@ -197,6 +237,33 @@ describe("matrix message actions", () => {
     } finally {
       editSpy.mockRestore();
     }
+  });
+
+  it("preserves leading Markdown indentation while trimming trailing edit whitespace", async () => {
+    const editSpy = vi.spyOn(sendModule, "editMessageMatrix").mockResolvedValue("evt-edit");
+
+    try {
+      await editMatrixMessage("!room:example.org", "$original", "    @room  \t\n", {
+        cfg: MATRIX_ACTION_TEST_CFG,
+      });
+
+      expect(editSpy).toHaveBeenCalledWith("!room:example.org", "$original", "    @room", {
+        cfg: MATRIX_ACTION_TEST_CFG,
+        accountId: undefined,
+        client: undefined,
+        timeoutMs: undefined,
+      });
+    } finally {
+      editSpy.mockRestore();
+    }
+  });
+
+  it("rejects whitespace-only Matrix edits", async () => {
+    await expect(
+      editMatrixMessage("!room:example.org", "$original", "   \n  ", {
+        cfg: MATRIX_ACTION_TEST_CFG,
+      }),
+    ).rejects.toThrow("Matrix edit requires content");
   });
 
   it("routes edits through the shared Matrix edit helper so mentions are preserved", async () => {
@@ -298,6 +365,33 @@ describe("matrix message actions", () => {
       eventId: "$msg",
       body: "hello",
     });
+  });
+
+  it.each([
+    { name: "room history", threadId: undefined },
+    { name: "poll-rooted thread history", threadId: "$poll" },
+  ])("fails visibly on cyclic poll pagination in $name", async ({ threadId }) => {
+    const pollRoot = createPollStartEvent();
+    const { client, getRelations } = createMessagesClient({
+      chunk: threadId ? [] : [pollRoot],
+      pollRoot,
+    });
+    let pollPageCalls = 0;
+    getRelations.mockImplementation(async (_roomId, _eventId, relationType) => {
+      if (relationType !== "m.reference") {
+        return { events: [], nextBatch: null, prevBatch: null };
+      }
+      pollPageCalls += 1;
+      if (pollPageCalls > 2) {
+        throw new Error("test stopped unbounded Matrix poll pagination");
+      }
+      return { events: [], nextBatch: "stuck", prevBatch: null };
+    });
+
+    await expect(
+      readMatrixMessages("room:!room:example.org", { client, threadId }),
+    ).rejects.toThrow("Matrix poll pagination returned a repeated cursor");
+    expect(pollPageCalls).toBe(2);
   });
 
   it("dedupes multiple poll events for the same poll within one read page", async () => {

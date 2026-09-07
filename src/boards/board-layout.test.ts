@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { BoardLayout } from "./board-layout.js";
 import { applyBoardOps, BoardValidationError, normalizeBoardLayout } from "./board-layout.js";
+
+type BoardLayout = Parameters<typeof normalizeBoardLayout>[0];
 
 function layout(): BoardLayout {
   return {

@@ -1,11 +1,12 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asToolRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isToolCallContentType,
   isToolResultContentType,
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 
 type ToolMessageRef = {
   id: string;
@@ -66,7 +67,8 @@ export function extractToolMessageRefs(message: unknown): ToolMessageRef[] {
       )
     : [];
   const topLevelToolId = resolveToolUseId({ ...record, id: undefined });
-  const topLevelRunId = normalizeOptionalString(record.runId);
+  const topLevelRunId =
+    readSessionMessageIdentity(record)?.runId ?? normalizeOptionalString(record.runId);
   const role = record.role;
   const messageHasToolShape =
     (typeof role === "string" && normalizeRoleForGrouping(role).toLowerCase() === "tool") ||
@@ -124,4 +126,28 @@ export function resolveMatchingLiveToolIdentity(
       liveRef.id === ref.id && (!ref.runId || !liveRef.runId || liveRef.runId === ref.runId),
   );
   return matches.length === 1 ? matches[0]?.identity : undefined;
+}
+
+export function persistedCurrentToolStreamIds(
+  messages: unknown[],
+  state: LiveToolStreamHost,
+): Set<string> {
+  const liveToolRefs = resolveLiveToolStreamRefs(state);
+  const matchedToolIds = new Set<string>();
+  if (liveToolRefs.length === 0) {
+    return matchedToolIds;
+  }
+  const lastUserIndex = messages.findLastIndex((message) => {
+    const role = asToolRecord(message)?.role;
+    return typeof role === "string" && normalizeRoleForGrouping(role).toLowerCase() === "user";
+  });
+  for (const message of messages.slice(lastUserIndex + 1)) {
+    for (const ref of extractToolMessageRefs(message)) {
+      const identity = resolveMatchingLiveToolIdentity(ref, liveToolRefs);
+      if (identity) {
+        matchedToolIds.add(identity);
+      }
+    }
+  }
+  return matchedToolIds;
 }

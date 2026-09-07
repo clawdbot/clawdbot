@@ -2,13 +2,14 @@
  * BytePlus Seedance video generation provider implementation.
  */
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
-import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import {
+  downloadGeneratedVideoAsset,
+  resolveGeneratedMediaMaxBytes,
+} from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
-  assertProviderBinaryResponseContent,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   fetchProviderDownloadResponse,
@@ -19,7 +20,6 @@ import {
   resolveProviderHttpRequestConfig,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   asSafeIntegerInRange,
   isRecord,
@@ -181,47 +181,27 @@ async function downloadBytePlusVideo(params: {
   fetchFn: typeof fetch;
   maxBytes: number;
 }): Promise<GeneratedVideoAsset> {
-  const deadline = createProviderOperationDeadline({
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    label: "BytePlus generated video download",
-  });
-  const timeoutMs = createProviderOperationTimeoutResolver({
-    deadline,
-    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  });
-  const response = await fetchProviderDownloadResponse({
+  return await downloadGeneratedVideoAsset({
     url: params.url,
-    init: { method: "GET" },
-    deadline,
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
     fetchFn: params.fetchFn,
     provider: "byteplus",
+    label: "BytePlus generated video download",
     requestFailedMessage: "BytePlus generated video download failed",
+    maxBytes: params.maxBytes,
+    validateBinaryResponse: true,
+    fetchResponse: async ({ deadline }) => ({
+      response: await fetchProviderDownloadResponse({
+        url: params.url,
+        init: { method: "GET" },
+        deadline,
+        fetchFn: params.fetchFn,
+        provider: "byteplus",
+        requestFailedMessage: "BytePlus generated video download failed",
+      }),
+    }),
   });
-  try {
-    assertProviderBinaryResponseContent(response, "BytePlus generated video download", "video");
-  } catch (error) {
-    // A rejected binary response still owns a live socket until its unread body is canceled.
-    await response.body?.cancel().catch(() => undefined);
-    throw error;
-  }
-  const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-  const buffer = await readResponseWithLimit(response, params.maxBytes, {
-    timeoutMs,
-    onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
-      new Error(
-        `BytePlus generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
-      ),
-    onOverflow: ({ maxBytes }) =>
-      new Error(`BytePlus generated video download exceeds ${maxBytes} bytes`),
-  });
-  if (buffer.byteLength === 0) {
-    throw new Error("BytePlus generated video download: malformed video response");
-  }
-  return {
-    buffer,
-    mimeType,
-    fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
-  };
 }
 
 /** Builds the BytePlus video generation provider registered by the plugin. */
@@ -231,11 +211,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
     label: "BytePlus",
     defaultModel: DEFAULT_BYTEPLUS_VIDEO_MODEL,
     models: [DEFAULT_BYTEPLUS_VIDEO_MODEL, "seedance-1-5-pro-251215"],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "byteplus",
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "byteplus", ...ctx }),
     capabilities: {
       providerOptions: {
         seed: "number",

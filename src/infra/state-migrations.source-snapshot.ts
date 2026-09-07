@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { Root } from "@openclaw/fs-safe";
+import { pathMayExistSync } from "./path-existence.js";
 
 /** The stable source identity every doctor-owned import verifies before cleanup. */
 export type LegacyMigrationSourceSnapshot = {
@@ -38,6 +39,7 @@ export class LegacyMigrationSourceClaim<
       claimSuffix?: string;
       readSnapshot: (sourcePath: string) => Promise<TSnapshot>;
       formatError?: (error: unknown) => string;
+      includeFilePath?: boolean;
     },
   ) {
     this.sourcePath = params.sourcePath;
@@ -46,11 +48,13 @@ export class LegacyMigrationSourceClaim<
       params.stateDir,
       this.sourcePath,
       params.label,
+      params.includeFilePath,
     );
     this.claimRelativePath = resolveLegacyMigrationRelativePath(
       params.stateDir,
       this.claimPath,
       params.label,
+      params.includeFilePath,
     );
   }
 
@@ -113,6 +117,8 @@ export class LegacyMigrationSourceClaim<
       removeSource?: (sourcePath: string) => Promise<void> | void;
       sourceReappearedMessage?: string;
       remainingMessage?: string;
+      sourceRemainingMessage?: string;
+      claimRemainingMessage?: string;
       skipSourceCheck?: boolean;
     } = {},
   ): Promise<void> {
@@ -127,8 +133,13 @@ export class LegacyMigrationSourceClaim<
     } else {
       await this.params.stateRoot.remove(this.claimRelativePath);
     }
-    if (params.remainingMessage && ((await this.exists()) || (await this.exists(true)))) {
-      throw new Error(params.remainingMessage);
+    const sourceRemainingMessage = params.sourceRemainingMessage ?? params.remainingMessage;
+    if (sourceRemainingMessage && (await this.exists())) {
+      throw new Error(sourceRemainingMessage);
+    }
+    const claimRemainingMessage = params.claimRemainingMessage ?? params.remainingMessage;
+    if (claimRemainingMessage && (await this.exists(true))) {
+      throw new Error(claimRemainingMessage);
     }
   }
 }
@@ -170,24 +181,11 @@ export async function claimLegacyMigrationSourceClaims<
   }
 }
 
-/** A source may be inaccessible; only a proven absence permits skipping repair. */
-export function legacyMigrationPathMayExist(filePath: string): boolean {
-  try {
-    fs.lstatSync(filePath);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
-  }
-}
-
 export function legacyMigrationSourceOrClaimMayExist(
   sourcePath: string,
   claimSuffix = ".doctor-importing",
 ): boolean {
-  return (
-    legacyMigrationPathMayExist(sourcePath) ||
-    legacyMigrationPathMayExist(`${sourcePath}${claimSuffix}`)
-  );
+  return pathMayExistSync(sourcePath) || pathMayExistSync(`${sourcePath}${claimSuffix}`);
 }
 
 /** Constrain migration reads and moves to the original trusted state root. */

@@ -39,7 +39,10 @@ async function prepareArchive(
   const archiveStream = new PassThrough();
   const preparedPromise = writeArchiveStreamToFile({
     archivePath: plan.tempArchivePath,
-    archiveStream,
+    createArchiveStream: () => archiveStream,
+    onPartialArchive: (receipt) => {
+      plan.pendingCleanupArchives.push(receipt);
+    },
   });
   archiveStream.end(content);
   return await preparedPromise;
@@ -297,7 +300,7 @@ describe("backup archive publication", () => {
     try {
       const writePromise = writeArchiveStreamToFile({
         archivePath: plan.tempArchivePath,
-        archiveStream,
+        createArchiveStream: () => archiveStream,
         onPartialArchive: (receipt) => {
           plan.pendingCleanupArchives.push(receipt);
         },

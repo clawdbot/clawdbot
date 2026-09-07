@@ -202,6 +202,17 @@ describe("Matrix durable delivery plans", () => {
     );
   });
 
+  it("preserves the unknown-error fallback for non-error send failures", async () => {
+    await persist();
+    client.sendMessage.mockRejectedValueOnce({ code: "M_UNKNOWN" });
+
+    await expect(reconcileMatrixUnknownSend(reconciliationContext())).resolves.toMatchObject({
+      status: "unresolved",
+      error: "unknown error",
+      retryable: true,
+    });
+  });
+
   it("preserves ordered typed receipt parts and the final event identity", async () => {
     const deliveryIdentity = identity("queue-multi-event");
     const plannedEvents = createMatrixPlannedEvents({

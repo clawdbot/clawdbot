@@ -5,7 +5,10 @@ import {
   buildLimitedBootstrapPromptLines,
 } from "../../agents/bootstrap-prompt.js";
 import { appendCronStyleCurrentTimeLine } from "../../agents/current-time.js";
-import { resolveEffectiveToolInventory } from "../../agents/tools-effective-inventory.js";
+import {
+  resolveEffectiveToolInventory,
+  resolveEffectiveToolInventoryRuntimeModelContextAsync,
+} from "../../agents/tools-effective-inventory.js";
 import { isWorkspaceBootstrapPending } from "../../agents/workspace.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -36,17 +39,24 @@ const BARE_SESSION_RESET_PROMPT_BOOTSTRAP_LIMITED = [
   "Do not mention internal steps, files, tools, or reasoning.",
 ].join(" ");
 
-export function resolveBareResetBootstrapFileAccess(params: {
+export async function resolveBareResetBootstrapFileAccess(params: {
   cfg?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
   workspaceDir?: string;
   modelProvider?: string;
   modelId?: string;
-}): boolean {
+}): Promise<boolean> {
   if (!params.cfg) {
     return false;
   }
+  const runtimeModelContext = await resolveEffectiveToolInventoryRuntimeModelContextAsync({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    workspaceDir: params.workspaceDir,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+  });
   const inventory = resolveEffectiveToolInventory({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -54,6 +64,8 @@ export function resolveBareResetBootstrapFileAccess(params: {
     workspaceDir: params.workspaceDir,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
+    modelApi: runtimeModelContext.modelApi,
+    runtimeModel: runtimeModelContext.runtimeModel,
   });
   return inventory.groups.some((group) => group.tools.some((tool) => tool.id === "read"));
 }
@@ -64,7 +76,7 @@ export async function resolveBareSessionResetPromptState(params: {
   nowMs?: number;
   isPrimaryRun?: boolean;
   isCanonicalWorkspace?: boolean;
-  hasBootstrapFileAccess?: boolean | (() => boolean);
+  hasBootstrapFileAccess?: boolean | (() => boolean | Promise<boolean>);
 }): Promise<{
   bootstrapMode: BootstrapMode;
   prompt: string;
@@ -75,7 +87,7 @@ export async function resolveBareSessionResetPromptState(params: {
     : false;
   const hasBootstrapFileAccess = bootstrapPending
     ? typeof params.hasBootstrapFileAccess === "function"
-      ? params.hasBootstrapFileAccess()
+      ? await params.hasBootstrapFileAccess()
       : (params.hasBootstrapFileAccess ?? true)
     : true;
   const bootstrapMode = resolveBootstrapMode({

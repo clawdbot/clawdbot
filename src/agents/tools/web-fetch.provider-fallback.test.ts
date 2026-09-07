@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { wrapExternalContent } from "../../security/external-content.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import { getToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import { createWebFetchTool } from "./web-fetch.js";
 import * as webGuardedFetch from "./web-guarded-fetch.js";
 
@@ -25,7 +26,7 @@ vi.mock("../../secrets/runtime-state.js", () => ({
   getActiveSecretsRuntimeConfigSnapshot: () => runtimeState.activeSecretsRuntimeSnapshot,
 }));
 vi.mock("../../secrets/runtime-web-tools-state.js", () => ({
-  getActiveRuntimeWebToolsMetadata: () => runtimeState.activeRuntimeWebToolsMetadata,
+  getActiveRuntimeWebToolsMetadataFromState: () => runtimeState.activeRuntimeWebToolsMetadata,
 }));
 
 describe("web_fetch provider fallback normalization", () => {
@@ -159,6 +160,57 @@ describe("web_fetch provider fallback normalization", () => {
     if (details.spill) {
       await rm(details.spill.path, { force: true });
     }
+  });
+
+  it("preserves short source-truncated provider results through cache and presentation", async () => {
+    global.fetch = withFetchPreconnect(
+      vi.fn(async () => {
+        throw new Error("network failed");
+      }),
+    );
+    const providerExecute = vi.fn(async () => ({
+      text: "partial provider body",
+      truncated: true,
+    }));
+    resolveWebFetchDefinitionMock.mockReturnValue({
+      provider: { id: "firecrawl" },
+      definition: {
+        description: "firecrawl",
+        parameters: {},
+        execute: providerExecute,
+      },
+    });
+    const tool = createWebFetchTool({
+      config: {
+        tools: { web: { fetch: { cacheTtlMinutes: 1 } } },
+      } as OpenClawConfig,
+      sandboxed: false,
+    });
+    const args = { url: "https://example.com/short-partial-provider" };
+
+    const first = await tool?.execute?.("short-partial-provider-first", args);
+    const second = await tool?.execute?.("short-partial-provider-second", args);
+    if (!first || !second) {
+      throw new Error("expected web_fetch results");
+    }
+    const firstDetails = first.details as {
+      truncated?: boolean;
+      spill?: { path: string };
+    };
+    const secondDetails = second?.details as {
+      cached?: boolean;
+      truncated?: boolean;
+      spill?: { path: string };
+    };
+    const terminalPresentation = tool ? getToolTerminalPresentation(tool) : undefined;
+
+    expect(firstDetails.truncated).toBe(true);
+    expect(firstDetails.spill).toBeUndefined();
+    expect(secondDetails.cached).toBe(true);
+    expect(secondDetails.truncated).toBe(true);
+    expect(secondDetails.spill).toBeUndefined();
+    expect(providerExecute).toHaveBeenCalledTimes(1);
+    expect(terminalPresentation?.({}, first)?.text).toContain("Truncated: yes");
   });
 
   it("keeps requested url and only accepts safe provider finalUrl values", async () => {

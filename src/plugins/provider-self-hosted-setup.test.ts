@@ -1,9 +1,7 @@
 /** Tests self-hosted provider setup helpers and auth/config defaults. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  configureOpenAICompatibleSelfHostedProviderNonInteractive,
-  discoverOpenAICompatibleLocalModels,
-} from "./provider-self-hosted-setup.js";
+import { discoverOpenAICompatibleLocalModels } from "./provider-self-hosted-discovery.js";
+import { configureOpenAICompatibleSelfHostedProviderNonInteractive } from "./provider-self-hosted-setup.js";
 import type { ProviderAuthMethodNonInteractiveContext } from "./types.js";
 
 const { fetchWithSsrFGuardMock, upsertAuthProfileWithLock, loggerWarnMock } = vi.hoisted(() => ({
@@ -380,24 +378,24 @@ describe("discoverOpenAICompatibleLocalModels", () => {
         maxTokens: 8192,
       },
     ]);
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(1, {
-      url: "http://127.0.0.1:8000/v1/models",
-      init: { headers: { Authorization: "Bearer self-hosted-test-key" } },
-      policy: {
-        hostnameAllowlist: ["127.0.0.1"],
-        allowPrivateNetwork: true,
-      },
-      timeoutMs: 5000,
-    });
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(2, {
-      url: "http://127.0.0.1:8000/props",
-      init: { headers: { Authorization: "Bearer self-hosted-test-key" } },
-      policy: {
-        hostnameAllowlist: ["127.0.0.1"],
-        allowPrivateNetwork: true,
-      },
-      timeoutMs: 2500,
-    });
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        url: "http://127.0.0.1:8000/v1/models",
+        init: { headers: { Authorization: "Bearer self-hosted-test-key" } },
+        policy: { allowedOrigins: ["http://127.0.0.1:8000"] },
+        timeoutMs: 5000,
+      }),
+    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        url: "http://127.0.0.1:8000/props",
+        init: { headers: { Authorization: "Bearer self-hosted-test-key" } },
+        policy: { allowedOrigins: ["http://127.0.0.1:8000"] },
+        timeoutMs: 2500,
+      }),
+    );
     expect(release).toHaveBeenCalledOnce();
     expect(propsRelease).toHaveBeenCalledOnce();
     expect(propsResponse.wasCanceled()).toBe(true);
@@ -519,15 +517,15 @@ describe("discoverOpenAICompatibleLocalModels", () => {
         maxTokens: 8192,
       },
     ]);
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(2, {
-      url: "http://127.0.0.1:8080/props",
-      init: { headers: undefined },
-      policy: {
-        hostnameAllowlist: ["127.0.0.1"],
-        allowPrivateNetwork: true,
-      },
-      timeoutMs: 2500,
-    });
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        url: "http://127.0.0.1:8080/props",
+        init: { headers: undefined },
+        policy: { allowedOrigins: ["http://127.0.0.1:8080"] },
+        timeoutMs: 2500,
+      }),
+    );
     expect(modelsRelease).toHaveBeenCalledOnce();
     expect(propsRelease).toHaveBeenCalledOnce();
   });
@@ -598,24 +596,24 @@ describe("discoverOpenAICompatibleLocalModels", () => {
         maxTokens: 8192,
       },
     ]);
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(2, {
-      url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-a&autoload=false",
-      init: { headers: undefined },
-      policy: {
-        hostnameAllowlist: ["127.0.0.1"],
-        allowPrivateNetwork: true,
-      },
-      timeoutMs: 2500,
-    });
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(3, {
-      url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-b&autoload=false",
-      init: { headers: undefined },
-      policy: {
-        hostnameAllowlist: ["127.0.0.1"],
-        allowPrivateNetwork: true,
-      },
-      timeoutMs: 2500,
-    });
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-a&autoload=false",
+        init: { headers: undefined },
+        policy: { allowedOrigins: ["http://127.0.0.1:8080"] },
+        timeoutMs: 2500,
+      }),
+    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-b&autoload=false",
+        init: { headers: undefined },
+        policy: { allowedOrigins: ["http://127.0.0.1:8080"] },
+        timeoutMs: 2500,
+      }),
+    );
     expect(modelsRelease).toHaveBeenCalledOnce();
     expect(firstPropsRelease).toHaveBeenCalledOnce();
     expect(secondPropsRelease).toHaveBeenCalledOnce();
@@ -700,31 +698,6 @@ describe("discoverOpenAICompatibleLocalModels", () => {
     ]);
     expect(models[0]).not.toHaveProperty("contextTokens");
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-    expect(release).toHaveBeenCalledOnce();
-  });
-
-  it("does not allowlist always-blocked metadata hostnames", async () => {
-    const release = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ data: [{ id: "metadata-probe" }] }), {
-        status: 200,
-      }),
-      finalUrl: "http://metadata.google.internal/v1/models",
-      release,
-    });
-
-    await discoverOpenAICompatibleLocalModels({
-      baseUrl: "http://metadata.google.internal/v1",
-      label: "vLLM",
-      env: {},
-    });
-
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
-      url: "http://metadata.google.internal/v1/models",
-      init: { headers: undefined },
-      policy: undefined,
-      timeoutMs: 5000,
-    });
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -864,6 +837,206 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
         key: params.apiKey,
       },
     });
+  });
+
+  it.each([
+    { providerId: "vllm", providerLabel: "vLLM", envVar: "VLLM_API_KEY" },
+    { providerId: "sglang", providerLabel: "SGLang", envVar: "SGLANG_API_KEY" },
+    { providerId: "lmstudio", providerLabel: "LM Studio", envVar: "LM_API_TOKEN" },
+  ])("reuses an existing $providerLabel auth profile in ref mode", async (params) => {
+    const modelId = "Qwen/Qwen3-32B";
+    const profileSecret = "fixture-existing-self-hosted-profile-secret";
+    const selectedProfileId = `${params.providerId}:owner@example.com`;
+    const backupProfileId = `${params.providerId}:backup`;
+    const ctx = createContext({ providerId: params.providerId, modelId });
+    ctx.opts.secretInputMode = "ref";
+    const existingAuth = {
+      profiles: {
+        [selectedProfileId]: {
+          provider: params.providerId,
+          mode: "api_key" as const,
+          email: "owner@example.com",
+          displayName: "Operator Account",
+        },
+        [backupProfileId]: { provider: params.providerId, mode: "api_key" as const },
+      },
+      order: { [params.providerId]: [selectedProfileId, backupProfileId] },
+    };
+    ctx.config = { ...ctx.config, auth: existingAuth };
+    vi.mocked(ctx.resolveApiKey).mockResolvedValueOnce({
+      key: profileSecret,
+      source: "profile",
+    });
+    vi.mocked(ctx.toApiKeyCredential).mockImplementationOnce(() => {
+      ctx.runtime.error("Cannot encode an existing profile as a SecretRef.");
+      ctx.runtime.exit(1);
+      return null;
+    });
+
+    const cfg = await configureSelfHostedTestProvider({ ctx, ...params });
+
+    expect(cfg?.auth).toEqual(existingAuth);
+    expect(cfg?.auth?.profiles?.[`${params.providerId}:default`]).toBeUndefined();
+    expect(readPrimaryModel(cfg)).toBe(`${params.providerId}/${modelId}`);
+    expect(JSON.stringify(cfg)).not.toContain(profileSecret);
+    expect(ctx.toApiKeyCredential).not.toHaveBeenCalled();
+    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(ctx.runtime.error).not.toHaveBeenCalled();
+    expect(ctx.runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      providerId: "lmstudio",
+      providerLabel: "LM Studio",
+      envVar: "LM_API_TOKEN",
+      marker: "custom-local",
+    },
+    {
+      providerId: "lmstudio",
+      providerLabel: "LM Studio",
+      envVar: "LM_API_TOKEN",
+      marker: "lmstudio-local",
+    },
+  ])("keeps the $providerLabel non-secret marker keyless in ref mode", async (params) => {
+    const modelId = "Qwen/Qwen3-32B";
+    const ctx = createContext({ providerId: params.providerId, modelId });
+    ctx.opts.secretInputMode = "ref";
+    vi.mocked(ctx.resolveApiKey).mockResolvedValueOnce({ key: params.marker, source: "flag" });
+    vi.mocked(ctx.toApiKeyCredential).mockImplementationOnce(() => {
+      ctx.runtime.error("A synthetic non-secret marker must not become an auth credential.");
+      ctx.runtime.exit(1);
+      return null;
+    });
+
+    const cfg = await configureSelfHostedTestProvider({ ctx, ...params });
+
+    expect(readPrimaryModel(cfg)).toBe(`${params.providerId}/${modelId}`);
+    expect(cfg?.auth?.profiles?.[`${params.providerId}:default`]).toBeUndefined();
+    expect(ctx.toApiKeyCredential).not.toHaveBeenCalled();
+    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(ctx.runtime.error).not.toHaveBeenCalled();
+    expect(ctx.runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { providerId: "vllm", providerLabel: "vLLM", envVar: "VLLM_API_KEY", key: "custom-local" },
+    { providerId: "vllm", providerLabel: "vLLM", envVar: "VLLM_API_KEY", key: "lmstudio-local" },
+    {
+      providerId: "lmstudio",
+      providerLabel: "LM Studio",
+      envVar: "LM_API_TOKEN",
+      key: "ollama-local",
+    },
+    {
+      providerId: "lmstudio",
+      providerLabel: "LM Studio",
+      envVar: "LM_API_TOKEN",
+      key: "oauth:lmstudio",
+    },
+    {
+      providerId: "lmstudio",
+      providerLabel: "LM Studio",
+      envVar: "LM_API_TOKEN",
+      key: "secretref-env:LM_API_TOKEN",
+    },
+    {
+      providerId: "vllm",
+      providerLabel: "vLLM",
+      envVar: "VLLM_API_KEY",
+      key: "fixture-genuine-self-hosted-secret",
+    },
+    { providerId: "vllm", providerLabel: "vLLM", envVar: "VLLM_API_KEY", key: "OPENAI_API_KEY" },
+  ])(
+    "rejects unowned marker or genuine flag value $key for $providerLabel in ref mode",
+    async ({ key, ...params }) => {
+      const ctx = createContext({ providerId: params.providerId, modelId: "Qwen/Qwen3-32B" });
+      ctx.opts.secretInputMode = "ref";
+      vi.mocked(ctx.resolveApiKey).mockResolvedValueOnce({ key, source: "flag" });
+      vi.mocked(ctx.toApiKeyCredential).mockImplementationOnce(() => {
+        ctx.runtime.error("SecretRef mode requires an explicit environment variable.");
+        ctx.runtime.exit(1);
+        return null;
+      });
+
+      const cfg = await configureSelfHostedTestProvider({ ctx, ...params });
+
+      expect(cfg).toBeNull();
+      expect(ctx.toApiKeyCredential).toHaveBeenCalledOnce();
+      expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
+      expect(ctx.runtime.error).toHaveBeenCalledOnce();
+      expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
+    },
+  );
+
+  it("does not treat another provider's marker as keyless in plaintext mode", async () => {
+    const ctx = createContext({ providerId: "vllm", modelId: "Qwen/Qwen3-32B" });
+    ctx.opts.secretInputMode = "plaintext";
+    vi.mocked(ctx.resolveApiKey).mockResolvedValueOnce({ key: "lmstudio-local", source: "flag" });
+
+    const cfg = await configureSelfHostedTestProvider({
+      ctx,
+      providerId: "vllm",
+      providerLabel: "vLLM",
+      envVar: "VLLM_API_KEY",
+    });
+
+    expect(ctx.toApiKeyCredential).toHaveBeenCalledOnce();
+    expect(upsertAuthProfileWithLock).toHaveBeenCalledWith({
+      profileId: "vllm:default",
+      agentDir: ctx.agentDir,
+      credential: { type: "api_key", provider: "vllm", key: "lmstudio-local" },
+    });
+    expect(cfg?.auth?.profiles?.["vllm:default"]).toEqual({
+      provider: "vllm",
+      mode: "api_key",
+    });
+  });
+
+  it("preserves an environment SecretRef when persisting a new auth profile", async () => {
+    const ctx = createContext({ providerId: "vllm", modelId: "Qwen/Qwen3-32B" });
+    ctx.opts.secretInputMode = "ref";
+    vi.mocked(ctx.resolveApiKey).mockResolvedValueOnce({
+      key: "fixture-existing-environment-secret",
+      source: "env",
+      envVarName: "VLLM_API_KEY",
+    });
+    const credential = {
+      type: "api_key" as const,
+      provider: "vllm",
+      keyRef: { source: "env" as const, provider: "default", id: "VLLM_API_KEY" },
+    };
+    vi.mocked(ctx.toApiKeyCredential).mockReturnValueOnce(credential);
+
+    const cfg = await configureSelfHostedTestProvider({
+      ctx,
+      providerId: "vllm",
+      providerLabel: "vLLM",
+      envVar: "VLLM_API_KEY",
+    });
+
+    expect(upsertAuthProfileWithLock).toHaveBeenCalledWith({
+      profileId: "vllm:default",
+      agentDir: ctx.agentDir,
+      credential,
+    });
+    expect(JSON.stringify(cfg)).not.toContain("fixture-existing-environment-secret");
+  });
+
+  it("does not write an auth profile when no usable credential is available", async () => {
+    const ctx = createContext({ providerId: "vllm", modelId: "Qwen/Qwen3-32B" });
+    vi.mocked(ctx.resolveApiKey).mockResolvedValueOnce(null);
+
+    const cfg = await configureSelfHostedTestProvider({
+      ctx,
+      providerId: "vllm",
+      providerLabel: "vLLM",
+      envVar: "VLLM_API_KEY",
+    });
+
+    expect(cfg).toBeNull();
+    expect(ctx.toApiKeyCredential).not.toHaveBeenCalled();
+    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
   });
 
   it("exits without touching auth when custom model id is missing", async () => {

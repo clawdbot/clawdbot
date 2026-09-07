@@ -1,4 +1,7 @@
 // Control UI chat module implements realtime talk conversation behavior.
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { RealtimeTalkTranscript } from "./realtime-talk-shared.ts";
+
 type RealtimeTalkConversationRole = "user" | "assistant";
 
 export type RealtimeTalkConversationEntry = {
@@ -6,6 +9,7 @@ export type RealtimeTalkConversationEntry = {
   role: RealtimeTalkConversationRole;
   text: string;
   isStreaming: boolean;
+  order?: number;
 };
 
 export type RealtimeTalkConversationState = {
@@ -17,14 +21,14 @@ export type RealtimeTalkConversationState = {
   assistantEntryId: string | null;
 };
 
-type RealtimeTalkTranscriptUpdate = {
-  role: RealtimeTalkConversationRole;
-  text: string;
-  final: boolean;
+type RealtimeTalkTranscriptUpdate = RealtimeTalkTranscript & {
   nowMs?: number;
 };
 
 const MAX_CONVERSATION_ENTRIES = 60;
+const MAX_CONVERSATION_ENTRY_CHARS = 8_000;
+const CONVERSATION_ENTRY_PREFIX_CHARS = 256;
+const CONVERSATION_ENTRY_TRUNCATION_MARKER = "\n…\n";
 const USER_FINAL_REWRITE_GRACE_MS = 1_500;
 
 export function createRealtimeTalkConversationState(): RealtimeTalkConversationState {
@@ -45,6 +49,23 @@ export function updateRealtimeTalkConversation(
   const text = update.text;
   if (update.final ? text.trim() === "" : text === "") {
     return state;
+  }
+  if (update.itemId !== undefined) {
+    const id = `item-${update.itemId}`;
+    const previous = state.entries.find((entry) => entry.id === id);
+    const entry = {
+      id,
+      role: update.role,
+      order: update.order,
+      text: boundRealtimeConversationText(update.final ? text : (previous?.text ?? "") + text),
+      isStreaming: !update.final,
+    };
+    // Provider identities survive delayed ASR and overlapping responses. Text and
+    // wall-clock proximity cannot identify which utterance a final replaces.
+    return orderRealtimeTalkConversation({
+      ...state,
+      entries: [...state.entries.filter((candidate) => candidate.id !== id), entry],
+    });
   }
   const nowMs = update.nowMs ?? Date.now();
   if (update.role === "assistant") {
@@ -84,6 +105,20 @@ export function updateRealtimeTalkConversation(
   );
 }
 
+export function orderRealtimeTalkConversation(
+  state: RealtimeTalkConversationState,
+  orders: ReadonlyArray<{ itemId: string; order: number }> = [],
+): RealtimeTalkConversationState {
+  const byId = new Map(orders.map(({ itemId, order }) => [`item-${itemId}`, order]));
+  return {
+    ...state,
+    entries: state.entries
+      .map((entry) => (byId.has(entry.id) ? { ...entry, order: byId.get(entry.id) } : entry))
+      .toSorted((left, right) => (left.order ?? Infinity) - (right.order ?? Infinity))
+      .slice(-MAX_CONVERSATION_ENTRIES),
+  };
+}
+
 function upsertRealtimeConversationEntry(
   state: RealtimeTalkConversationState,
   role: RealtimeTalkConversationRole,
@@ -96,7 +131,12 @@ function upsertRealtimeConversationEntry(
     const id = `rt-${state.nextEntryId}`;
     const entries = [
       ...state.entries,
-      { id, role, text: text.trimStart(), isStreaming: !isFinal },
+      {
+        id,
+        role,
+        text: boundRealtimeConversationText(text.trimStart()),
+        isStreaming: !isFinal,
+      },
     ].slice(-MAX_CONVERSATION_ENTRIES);
     return rememberRealtimeConversationEntry(
       { ...state, entries, nextEntryId: state.nextEntryId + 1 },
@@ -115,10 +155,11 @@ function upsertRealtimeConversationEntry(
   if (!entry) {
     return upsertRealtimeConversationEntry(state, role, null, text, isFinal, nowMs);
   }
-  const updatedText =
+  const mergedText =
     role === "assistant"
       ? mergeAssistantTranscriptText(entry.text, text, isFinal)
       : mergeRealtimeTranscriptText(entry.text, text, isFinal);
+  const updatedText = boundRealtimeConversationText(mergedText);
   const entries =
     entry.text === updatedText && entry.isStreaming === !isFinal
       ? state.entries
@@ -261,6 +302,27 @@ function mergeRealtimeTranscriptText(existing: string, incoming: string, isFinal
   }
   const separator = overlap > 0 || !shouldInsertTranscriptSpace(existing, suffix) ? "" : " ";
   return `${existing}${separator}${suffix}`;
+}
+
+function boundRealtimeConversationText(text: string): string {
+  if (text.length <= MAX_CONVERSATION_ENTRY_CHARS) {
+    return text;
+  }
+  // Keep the opening context for late full-final replacement detection and
+  // the newest tail for the visible conversation. Reuse the original prefix
+  // so repeated streaming deltas do not move the truncation boundary.
+  const markerIndex = text.indexOf(CONVERSATION_ENTRY_TRUNCATION_MARKER);
+  const hasBoundedPrefix =
+    markerIndex >= CONVERSATION_ENTRY_PREFIX_CHARS - 1 &&
+    markerIndex <= CONVERSATION_ENTRY_PREFIX_CHARS;
+  const prefixEnd = hasBoundedPrefix ? markerIndex : CONVERSATION_ENTRY_PREFIX_CHARS;
+  // A natural marker can follow malformed provider text ending in a lone high
+  // surrogate. Keep that code unit out of the retained truncation boundary.
+  const prefix = sliceUtf16Safe(text, 0, prefixEnd).replace(/[\uD800-\uDBFF]$/, "");
+  const tailChars =
+    MAX_CONVERSATION_ENTRY_CHARS - prefix.length - CONVERSATION_ENTRY_TRUNCATION_MARKER.length;
+  const tail = sliceUtf16Safe(text, -tailChars);
+  return `${prefix}${CONVERSATION_ENTRY_TRUNCATION_MARKER}${tail}`;
 }
 
 function looksLikeTranscriptReplacement(existing: string, incoming: string): boolean {

@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import { readSecretFileSync } from "@openclaw/fs-safe/secret";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { truncateUtf16Safe } from "../packages/normalization-core/src/utf16-slice.js";
-import { readBoundedResponseText } from "./lib/bounded-response.ts";
+import { cancelResponseReaderSoon, readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 import {
   normalizeGitHubRepo as normalizeRepo,
@@ -187,12 +187,6 @@ async function withGitHubFetchTimeout<T>(
   }
 }
 
-function cancelReaderSoon(reader: ReadableStreamDefaultReader<Uint8Array>): void {
-  void Promise.resolve()
-    .then(() => reader.cancel())
-    .catch(() => undefined);
-}
-
 async function readGitHubErrorChunk(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   timeoutPromise: Promise<never> | undefined,
@@ -206,7 +200,7 @@ async function readGitHubErrorChunk(
     read,
     timeoutPromise.catch((error: unknown) => {
       markCanceled();
-      cancelReaderSoon(reader);
+      cancelResponseReaderSoon(reader);
       throw error;
     }),
   ]);
@@ -261,7 +255,7 @@ export async function readBoundedGitHubJson<T>(
   options: GitHubBodyReadOptions = {},
 ): Promise<T> {
   const text = await readBoundedResponseText(response, "GitHub API", maxBytes, {
-    createTooLargeError: (message) =>
+    createTooLargeError: (message: string) =>
       Object.assign(new Error(message), {
         code: "ETOOBIG",
       }),
