@@ -680,10 +680,27 @@ describe("GPT-Live sideband protocol", () => {
     expect(socket.sent).toEqual([]);
   });
 
-  it("fails visibly when completion ownership is unavailable", async () => {
+  it("preserves successful completion for a plain consult runner", async () => {
     const { controller, onFatalError, socket } = createDelegationHarness({
       claimAppend: null,
-      runAgentConsult: vi.fn(async () => ({ text: "unowned result" })),
+      claimFailureAppend: null,
+      runAgentConsult: vi.fn(async () => ({ text: "plain result" })),
+    });
+
+    delegate(controller, "delegation-plain", "plain task");
+
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+    expect(onFatalError).not.toHaveBeenCalled();
+  });
+
+  it("fails visibly when completion ownership is unavailable", async () => {
+    const runAgentConsult = Object.assign(
+      vi.fn(async () => ({ text: "unowned result" })),
+      { adoptCompletionClaims: vi.fn() },
+    );
+    const { controller, onFatalError, socket } = createDelegationHarness({
+      claimAppend: null,
+      runAgentConsult,
     });
 
     delegate(controller, "delegation-unowned", "unowned task");
@@ -828,9 +845,12 @@ describe("GPT-Live sideband protocol", () => {
   ])(
     "does not append a startup failure when ownership is $state",
     async ({ claimFailureAppend }) => {
-      const runAgentConsult = vi.fn<ConsultRunner>(async () => {
-        throw new Error("startup failed");
-      });
+      const runAgentConsult = Object.assign(
+        vi.fn<ConsultRunner>(async () => {
+          throw new Error("startup failed");
+        }),
+        { adoptCompletionClaims: vi.fn() },
+      );
       const { controller, onFatalError, socket } = createDelegationHarness({
         claimAppend: () => false,
         claimFailureAppend,

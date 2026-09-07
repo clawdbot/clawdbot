@@ -89,6 +89,7 @@ function projectWireEventType(event: OpenAIQuicksilverInboundEvent): string | un
 /** Owns the provider's single active delegation and its once-consumed transcript context. */
 export class OpenAIQuicksilverDelegationController {
   private activeDelegationId: string | undefined;
+  private readonly completionClaimsAdopted: boolean;
   private consultController: AbortController | undefined;
   private readonly onSessionAbort = () => {
     const reason = this.options.signal.reason;
@@ -104,6 +105,7 @@ export class OpenAIQuicksilverDelegationController {
     private readonly options: OpenAIQuicksilverDelegationControllerOptions,
     private readonly formatErrorMessage: OpenAIRealtimeHost["formatErrorMessage"],
   ) {
+    this.completionClaimsAdopted = options.runAgentConsult.adoptCompletionClaims !== undefined;
     options.runAgentConsult.adoptCompletionClaims?.();
     if (options.signal.aborted) {
       this.onSessionAbort();
@@ -408,7 +410,11 @@ export class OpenAIQuicksilverDelegationController {
       return;
     }
     const claim = failed ? runner.claimFailureAppend : runner.claimAppend;
-    if (!claim) {
+    if (claim) {
+      if (!claim()) {
+        return;
+      }
+    } else if (this.completionClaimsAdopted) {
       this.fail(
         new Error(
           failed
@@ -416,9 +422,6 @@ export class OpenAIQuicksilverDelegationController {
             : "Realtime delegation completion ownership is unavailable",
         ),
       );
-      return;
-    }
-    if (!claim()) {
       return;
     }
     const delegationId = this.activeDelegationId;
