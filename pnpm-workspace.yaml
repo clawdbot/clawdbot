@@ -9,6 +9,7 @@ minimumReleaseAge: 2880
 minimumReleaseAgeExclude:
   # GHSA-vp8m-p9jh-q5pm / GHSA-w293-vg96-wgc3 security fix; remove after 2026-09-12.
   - "undici@8.10.2"
+  - "undici@7.29.1"
   # Current fast-uri security baseline; remove after 2026-09-09.
   - "fast-uri@4.1.4"
   - "@openclaw/crabline@0.1.6"
