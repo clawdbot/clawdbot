@@ -164,18 +164,20 @@ export function readArtifactRecord(file: string): ArtifactRecord | undefined {
   }
 }
 
-function artifactRecordMatches(
+function artifactRecordMismatch(
   rootDir: string,
   record: ArtifactRecord | undefined,
   signature: string,
   required: string[] = [],
 ) {
-  if (
-    !record ||
-    record.signature !== signature ||
-    required.some((name) => !Object.hasOwn(record.outputs, name))
-  ) {
-    return false;
+  if (!record) {
+    return "record-unavailable";
+  }
+  if (record.signature !== signature) {
+    return "signature-mismatch";
+  }
+  if (required.some((name) => !Object.hasOwn(record.outputs, name))) {
+    return "required-output-unrecorded";
   }
   try {
     return Object.entries(record.outputs).every(
@@ -183,9 +185,11 @@ function artifactRecordMatches(
         createHash("sha256")
           .update(fs.readFileSync(path.resolve(rootDir, name)))
           .digest("hex") === digest,
-    );
+    )
+      ? undefined
+      : "output-digest-mismatch";
   } catch {
-    return false;
+    return "output-missing-or-unreadable";
   }
 }
 
@@ -399,18 +403,15 @@ export function resolveBuildStepCacheState(
     const relativeOutputFiles = outputFiles.map((file) => portableRelativePath(artifactRoot, file));
     const stampedOutputs = Object.keys(stamp?.outputs ?? {});
     const requiredOutputs = resolveCacheRequiredOutputs(step.cache, params.env ?? process.env);
-    const actualOutputsPresent = artifactRecordMatches(
-      artifactRoot,
-      stamp,
-      signature,
-      requiredOutputs,
-    );
-    const cachedOutputsPresent = artifactRecordMatches(
+    const actualOutputsPresent =
+      artifactRecordMismatch(artifactRoot, stamp, signature, requiredOutputs) === undefined;
+    const cachedOutputMismatch = artifactRecordMismatch(
       outputRoot,
       stamp,
       signature,
       requiredOutputs,
     );
+    const cachedOutputsPresent = cachedOutputMismatch === undefined;
     const stampMatches =
       (!params.inputSignature || consumedInputs !== undefined) && stamp?.signature === signature;
     const alwaysRestore = step.cache.restore === "always";
@@ -422,7 +423,11 @@ export function resolveBuildStepCacheState(
       cacheable: true,
       fresh,
       restorable,
-      reason: fresh ? (restorable ? "fresh-cache" : "fresh") : "stale",
+      reason: fresh
+        ? restorable
+          ? "fresh-cache"
+          : "fresh"
+        : (cachedOutputMismatch ?? "compiler-inputs-unavailable"),
       signature,
       ...(consumedInputs ? { consumedInputs } : {}),
       outputRoot,
@@ -501,7 +506,7 @@ export function writeBuildStepCacheStamp(
     fsImpl.rmSync(cacheState.outputRoot, { force: true, recursive: true });
     publishArtifactFiles(rootDir, cacheState.outputRoot, Object.keys(record.outputs));
     if (
-      !artifactRecordMatches(cacheState.outputRoot, record, cacheState.signature, requiredOutputs)
+      artifactRecordMismatch(cacheState.outputRoot, record, cacheState.signature, requiredOutputs)
     ) {
       throw new Error(`Incomplete build cache snapshot: ${step.label}`);
     }
@@ -544,7 +549,7 @@ export function restoreBuildStepCacheOutputs(
     const record = readArtifactRecord(cacheState.stampPath);
     if (
       JSON.stringify(record) !== JSON.stringify(cacheState.record) ||
-      !artifactRecordMatches(cacheState.outputRoot, record, cacheState.signature)
+      artifactRecordMismatch(cacheState.outputRoot, record, cacheState.signature)
     ) {
       return false;
     }

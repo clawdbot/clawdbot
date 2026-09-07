@@ -25,6 +25,7 @@ import { clearAgentRunContext, getAgentRunContext } from "../infra/agent-run-reg
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
+import { onGatewaySuspendAdmissionChange } from "../process/gateway-work-admission.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createLazyPromise, createLazyPromiseLoader } from "../shared/lazy-runtime.js";
@@ -528,7 +529,11 @@ export function startGatewayEventSubscriptions(params: {
       context: { sessionKey: evt.sessionKey },
     });
   });
+  const unsubscribeSuspension = onGatewaySuspendAdmissionChange((phase) => {
+    params.broadcast("gateway.suspension", { phase });
+  });
   const lifecycleUnsub = () => {
+    unsubscribeSuspension();
     unsubscribeProfileChanges();
     unsubscribeLifecycle();
   };

@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
@@ -105,10 +106,12 @@ export function createTelegramInboundBuffers({
     formatTelegramAmbientTranscriptBody,
     processMessageWithReplyChain,
   } = message;
-  const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
+  const readConfig = createRuntimeConfigReader(cfg);
+  const resolveDebounceMs = () =>
+    resolveInboundDebounceMs({ cfg: readConfig(), channel: "telegram" });
   const FORWARD_BURST_DEBOUNCE_MS = 80;
   const resolveTelegramDebounceEntryMs = (entry: TelegramDebounceEntry): number =>
-    entry.debounceLane === "forward" ? FORWARD_BURST_DEBOUNCE_MS : debounceMs;
+    entry.debounceLane === "forward" ? FORWARD_BURST_DEBOUNCE_MS : resolveDebounceMs();
   const shouldDebounceTelegramEntry = (entry: TelegramDebounceEntry): boolean => {
     const hasDebounceableText = shouldDebounceTextInbound({
       text: getTelegramTextParts(entry.msg).text,
@@ -137,7 +140,7 @@ export function createTelegramInboundBuffers({
       : "default";
   };
   const inboundDebouncer = createInboundDebouncer<TelegramDebounceEntry>({
-    debounceMs,
+    debounceMs: resolveDebounceMs(),
     serializeImmediate: true,
     resolveDebounceMs: resolveTelegramDebounceEntryMs,
     buildKey: (entry) => entry.debounceKey,

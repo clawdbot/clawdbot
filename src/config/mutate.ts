@@ -51,7 +51,10 @@ import {
 } from "./io.js";
 import { containsConfigIncludeDirective, rejectConfigNonFiniteNumbers } from "./io.read-helpers.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
-import { ConfigMutationConflictError } from "./mutation-conflict.js";
+import {
+  ConfigMutationConflictError,
+  GUARDED_CONFIG_INCLUDE_WRITE_ERROR,
+} from "./mutation-conflict.js";
 import type { ConfigMutationBase } from "./mutation-types.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
 import { resolveConfigPath } from "./paths.js";
@@ -602,6 +605,35 @@ async function assertRootConfigStillMatchesSnapshot(snapshot: ConfigFileSnapshot
   }
 }
 
+async function assertIncludeGraphStillMatchesSnapshot(params: {
+  snapshot: ConfigFileSnapshot;
+  writeOptions: ConfigWriteOptions | undefined;
+  includePath: string;
+  includeHash: string;
+}): Promise<void> {
+  await assertRootConfigStillMatchesSnapshot(params.snapshot);
+  for (const [includePath, capturedHash] of Object.entries(
+    params.writeOptions?.includeFileHashesForWrite ?? {},
+  )) {
+    const expectedTarget = params.writeOptions?.includeFileTargetsForWrite?.[includePath];
+    if (!expectedTarget) {
+      throw new ConfigMutationConflictError("included config target changed since last load");
+    }
+    const target = await resolveExpectedRootBoundIncludeFile({
+      configPath: params.snapshot.path,
+      includePath,
+      // Dependencies may be read-only external includes. Pin each read to its
+      // captured target; the selected write still requires the config directory.
+      allowedRoots: [path.dirname(expectedTarget)],
+      expectedAbsolutePath: expectedTarget,
+    });
+    const expectedHash = includePath === params.includePath ? params.includeHash : capturedHash;
+    if (hashConfigIncludeRaw(await readRootBoundFileRawIfExists(target)) !== expectedHash) {
+      throw new ConfigMutationConflictError("included config changed while preparing write");
+    }
+  }
+}
+
 async function rollbackJsonFileWriteIfUnchanged(params: {
   target: RootBoundIncludeFile;
   previousRaw: string | null;
@@ -667,7 +699,7 @@ async function writeRootBoundJsonFile(params: {
   expectedTargetPath: string;
   value: unknown;
   expectedRaw: string | null;
-  rootSnapshot: ConfigFileSnapshot;
+  assertIncludeGraphForWrite: (committedHash?: string) => Promise<void>;
   assertConfigPathForWrite: () => void;
   preCommitRuntimePreflight?: () => Promise<unknown>;
   skipOutputLogs?: boolean;
@@ -685,14 +717,15 @@ async function writeRootBoundJsonFile(params: {
       createRootBoundBackupFs(targetBeforeBackup),
     );
   }
+  await params.preCommitRuntimePreflight?.();
   const targetAtCommit = await resolveExpectedRootBoundIncludeFile({
     configPath: params.configPath,
     includePath: params.includePath,
     allowedRoots: params.allowedRoots,
     expectedAbsolutePath: params.expectedTargetPath,
   });
+  await params.assertIncludeGraphForWrite();
   params.assertConfigPathForWrite();
-  await assertRootConfigStillMatchesSnapshot(params.rootSnapshot);
   const currentRaw = await readRootBoundFileRawIfExists(targetAtCommit);
   const currentHash = hashConfigIncludeRaw(currentRaw);
   if (currentHash !== hashConfigIncludeRaw(params.expectedRaw)) {
@@ -702,7 +735,6 @@ async function writeRootBoundJsonFile(params: {
   // The include fast path bypasses writeConfigFile(); keep its authority guard
   // and comment warning on the final conflict-checked target. No later await may
   // run before the write.
-  await params.preCommitRuntimePreflight?.();
   params.assertConfigPathForWrite();
   warnIfJSON5CommentsWillBeStripped({
     raw: currentRaw,
@@ -715,6 +747,7 @@ async function writeRootBoundJsonFile(params: {
     overwrite: true,
   });
   try {
+    await params.assertIncludeGraphForWrite(hashConfigIncludeRaw(content));
     params.assertConfigPathForWrite();
   } catch (error) {
     await rollbackJsonFileWriteIfUnchanged({
@@ -743,6 +776,10 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
     return null;
   }
   const { nextConfig, boundaryPath, includePath } = includeWrite;
+  if (params.writeOptions?.beforeCommit) {
+    // The pinned include writer cannot revalidate an async authority at publication.
+    throw new Error(GUARDED_CONFIG_INCLUDE_WRITE_ERROR);
+  }
 
   const writeEnv = params.io?.env ?? process.env;
   const allowedRoots: readonly string[] = [];
@@ -882,31 +919,31 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
   const committedIncludeRaw = formatJsonFileValue(includedValueToWrite);
   const committedIncludeHash = hashConfigIncludeRaw(committedIncludeRaw);
   const callerPreCommit = params.writeOptions?.preCommitRuntimePreflight;
-  assertConfigPathForWrite();
-  await assertRootConfigStillMatchesSnapshot(params.snapshot);
-  const includeRawAtCommit = await readRootBoundFileRawIfExists(includeTarget);
-  if (hashConfigIncludeRaw(includeRawAtCommit) !== hashConfigIncludeRaw(previousIncludeRaw)) {
-    throw new ConfigMutationConflictError("included config changed while preparing write");
-  }
+  const assertIncludeGraphForWrite = (includeHash = previousIncludeHash) =>
+    assertIncludeGraphStillMatchesSnapshot({
+      snapshot: params.snapshot,
+      writeOptions: params.writeOptions,
+      includePath,
+      includeHash,
+    });
   await writeRootBoundJsonFile({
     configPath: params.snapshot.path,
     includePath,
     allowedRoots,
     expectedTargetPath: expectedIncludeTarget,
     value: includedValueToWrite,
-    expectedRaw: includeRawAtCommit,
-    rootSnapshot: params.snapshot,
-    assertConfigPathForWrite,
+    expectedRaw: previousIncludeRaw,
+    assertIncludeGraphForWrite,
+    assertConfigPathForWrite: () => {
+      assertConfigPathForWrite();
+      if (runtimeEnvBaseline) {
+        assertManagedRuntimeEnvGeneration(runtimeEnvBaseline.generation);
+      }
+    },
     skipOutputLogs: params.writeOptions?.skipOutputLogs,
-    preCommitRuntimePreflight:
-      runtimeEnvBaseline || callerPreCommit
-        ? async () => {
-            if (runtimeEnvBaseline) {
-              assertManagedRuntimeEnvGeneration(runtimeEnvBaseline.generation);
-            }
-            await callerPreCommit?.(runtimeConfigToWrite);
-          }
-        : undefined,
+    preCommitRuntimePreflight: callerPreCommit
+      ? () => callerPreCommit(runtimeConfigToWrite)
+      : undefined,
   });
   const envBeforePostWriteRead = { ...writeEnv };
   let envAfterPostWriteRead = envBeforePostWriteRead;
@@ -930,6 +967,7 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
       envAfterPostWriteRead = { ...writeEnv };
     }
     const refreshedSnapshot = refreshed.snapshot;
+    await assertIncludeGraphForWrite(committedIncludeHash);
     assertConfigPathForWrite();
     assertExpectedConfigPathMatches(refreshedSnapshot, params.snapshot.path);
     const persistedHash = resolveConfigSnapshotHash(refreshedSnapshot);
@@ -1005,7 +1043,7 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
     try {
       const rolledBack = await rollbackJsonFileWriteIfUnchanged({
         target: includeTarget,
-        previousRaw: includeRawAtCommit,
+        previousRaw: previousIncludeRaw,
         committedHash: committedIncludeHash,
       });
       if (rolledBack) {

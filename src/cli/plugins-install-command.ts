@@ -5,7 +5,7 @@ import { reportClawHubPluginInstallTelemetry } from "../infra/clawhub-packages.j
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub.js";
-import { installManagedPluginSource } from "../plugins/management-service.js";
+import { installManagedPluginSource } from "../plugins/management-install.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
@@ -72,6 +72,7 @@ export async function runPluginInstallCommand(params: RunPluginInstallCommandPar
           },
         },
         preflight,
+        lease.assertOwned.bind(lease),
       ),
   );
 }
@@ -79,6 +80,7 @@ export async function runPluginInstallCommand(params: RunPluginInstallCommandPar
 async function runPluginInstallCommandUnlocked(
   params: RunPluginInstallCommandParams,
   preflight: Extract<PluginInstallPreflight, { ok: true }>,
+  assertOwned: () => void,
 ) {
   assertConfigWriteAllowedInCurrentMode();
 
@@ -99,6 +101,7 @@ async function runPluginInstallCommandUnlocked(
     runtime,
     invalidateRuntimeCache: params.invalidateRuntimeCache ?? true,
     beforePersistentApply: params.beforePersistentApply,
+    assertOwned,
   };
   const safetyOverrides = resolveInstallSafetyOverrides({
     ...opts,

@@ -3,18 +3,17 @@ import { describe, expect, it } from "vitest";
 import { buildGatewayRuntimeHints } from "./doctor-format.js";
 
 describe("buildGatewayRuntimeHints", () => {
-  it("prioritizes macOS GUI-session failures over generic missing supervision", () => {
+  it("renders macOS GUI-session recovery for the selected profile", () => {
     const hints = buildGatewayRuntimeHints(
       {
         status: "unknown",
-        missingSupervision: true,
         missingGuiSession: true,
       },
-      { platform: "darwin", env: {} },
+      { platform: "darwin", env: { OPENCLAW_PROFILE: "work" } },
     );
 
     expect(hints.join("\n")).toContain("logged-in macOS GUI session");
-    expect(hints.join("\n")).not.toContain("LaunchAgent installed but not loaded");
+    expect(hints.join("\n")).toContain("openclaw --profile work gateway restart");
   });
 
   it("surfaces suspicious systemd cgroup hygiene with inspection commands", () => {

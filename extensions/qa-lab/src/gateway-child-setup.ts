@@ -169,7 +169,7 @@ export async function prepareQaGatewayChild(
   const gatewayCommand =
     params.command ??
     (params.useRepoCli ? resolveQaGatewayChildCommand(params.repoRoot) : undefined);
-  const usesPackagedCandidate = params.command?.usePackagedPlugins === true;
+  const usesPackagedCandidate = gatewayCommand?.usePackagedPlugins === true;
   const gatewayExecutablePath = gatewayCommand?.executablePath;
   const gatewayArgsPrefix = gatewayCommand?.argsPrefix ?? [];
   const gatewayArgsSuffix = gatewayCommand?.argsSuffix ?? [];
@@ -344,7 +344,7 @@ export async function prepareQaGatewayChild(
               (pluginId): pluginId is string => typeof pluginId === "string" && pluginId.length > 0,
             ),
           );
-          if (!gatewayCommand?.usePackagedPlugins) {
+          if (!usesPackagedCandidate) {
             // Register the external root before staging so one lifecycle owner
             // also cleans partial copies and host-version resolution failures.
             lifetime.stagedBundledPluginsRoot = resolveQaStagedBundledPluginsRoot({
@@ -352,7 +352,7 @@ export async function prepareQaGatewayChild(
               tempRoot,
             });
           }
-          const stagedPluginRuntime = gatewayCommand?.usePackagedPlugins
+          const stagedPluginRuntime = usesPackagedCandidate
             ? { bundledPluginsDir: undefined, runtimeHostVersion: undefined }
             : {
                 ...(await createQaBundledPluginsDir({
@@ -378,6 +378,7 @@ export async function prepareQaGatewayChild(
             bundledPluginsDir: stagedPluginRuntime.bundledPluginsDir,
             stagedBundledPluginsRoot: lifetime.stagedBundledPluginsRoot,
             compatibilityHostVersion: stagedPluginRuntime.runtimeHostVersion,
+            developmentSourceRoot: usesPackagedCandidate ? null : params.repoRoot,
             providerMode,
             runtimeEnvPatch: {
               ...params.runtimeEnvPatch,

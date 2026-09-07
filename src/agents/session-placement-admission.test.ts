@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import { enqueueCommandInLane } from "../process/command-queue.js";
+import { enqueueCommandInLane, resetCommandLane } from "../process/command-queue.js";
 import { createDeferredCore } from "../shared/deferred.js";
 
 const settleRequesterAfterSessionSpawns = vi.hoisted(() => vi.fn(() => true));
@@ -9,6 +9,7 @@ vi.mock("./subagents/registry/subagent-registry.js", () => ({
 }));
 
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
+import { resolveSessionLane } from "./embedded-agent-runner/lanes.js";
 import {
   captureSessionPlacementCompactionSuccessorAssertion,
   installSessionPlacementAdmissionProvider,
@@ -415,6 +416,25 @@ describe("local turn placement admission", () => {
     expect(secondClaim).toHaveBeenCalledOnce();
   });
 
+  it.each([true, false])(
+    "acknowledges CLI continuation only after successful settlement (%s)",
+    async (settled) => {
+      settleRequesterAfterSessionSpawns.mockReturnValueOnce(settled).mockReturnValueOnce(false);
+      const claim = {
+        sessionId: "continuation",
+        sessionKey: "agent:main:continuation",
+        runId: "parent",
+      };
+      const result = await withLocalSessionPlacementTurnSettlement(claim, async () => ({
+        acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:subagent:child" }],
+        meta: { durationMs: 1, yielded: true },
+      }));
+      expect(result.requesterContinuationSettled).toBe(settled ? true : undefined);
+      const replay = await withLocalSessionPlacementTurnSettlement(claim, async () => result);
+      expect(replay.requesterContinuationSettled).toBe(settled ? true : undefined);
+    },
+  );
+
   it("settles CLI child ownership only after local placement releases", async () => {
     const events: string[] = [];
     settleRequesterAfterSessionSpawns.mockImplementation(() => {
@@ -459,4 +479,45 @@ describe("local turn placement admission", () => {
 
     expect(events).toEqual(["claim", "turn", "release", "settle"]);
   });
+
+  it.each(["settled", "reset"] as const)(
+    "closes a standalone CLI settlement assertion after its lane task is %s",
+    async (ending) => {
+      const sessionId = `standalone-${ending}`;
+      const started = createDeferredCore();
+      const release = createDeferredCore();
+      let retained: (() => void) | undefined;
+      const running = withLocalSessionPlacementTurnSettlement(
+        { sessionId, runId: sessionId },
+        async (assertCurrent) => {
+          retained = assertCurrent;
+          assertCurrent();
+          started.resolve();
+          await release.promise;
+          return { meta: { durationMs: 1 } };
+        },
+      );
+      await started.promise;
+      try {
+        if (ending === "reset") {
+          expect(resetCommandLane(resolveSessionLane(sessionId))).toBe(1);
+          await withLocalSessionPlacementTurnSettlement(
+            { sessionId, runId: `${sessionId}-replacement` },
+            async (assertCurrent) => {
+              assertCurrent();
+              return { meta: { durationMs: 1 } };
+            },
+          );
+        } else {
+          release.resolve();
+          await running;
+        }
+        expect(retained).toBeDefined();
+        expect(() => retained?.()).toThrow("settlement is closed");
+      } finally {
+        release.resolve();
+        await running;
+      }
+    },
+  );
 });

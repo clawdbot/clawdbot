@@ -212,32 +212,24 @@ export function createAnthropicFastModeWrapper(
   };
 }
 
-/** Wrap a direct Anthropic API stream with opt-in server-side compaction. */
+/** Pass opt-in server compaction to the shared request payload policy. */
 function createAnthropicCompactionWrapper(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  const payloadWrapper = createPayloadPatchStreamWrapper(underlying, ({ payload, model }) => {
-    const payloadPolicy = resolveAnthropicPayloadPolicy({
-      provider: readStringValue(model.provider),
-      api: readStringValue(model.api),
-      baseUrl: readStringValue(model.baseUrl),
-      contextWindow: model.contextWindow,
-      enableServerCompaction: true,
-      extraParams,
-    });
-    applyAnthropicPayloadPolicyToParams(payload, payloadPolicy, new Set());
-  });
   return (model, context, options) => {
-    if (!resolveAnthropicServerCompactionPlan(model, extraParams, options?.apiKey).enabled) {
+    const compaction = resolveAnthropicServerCompactionPlan(model, extraParams, options?.apiKey);
+    if (!compaction.enabled) {
       return underlying(model, context, options);
     }
-    return payloadWrapper(model, context, {
+    const requestOptions = {
       ...options,
       anthropicServerCompaction: true,
+      anthropicCompactThreshold: compaction.threshold,
       headers: mergeAnthropicBetaHeader(options?.headers, [ANTHROPIC_COMPACTION_BETA]),
-    } as Parameters<StreamFn>[2]);
+    };
+    return underlying(model, context, requestOptions);
   };
 }
 

@@ -1,6 +1,6 @@
 // Terminal Core tests cover ansi behavior.
 import { describe, expect, it } from "vitest";
-import { AnsiSequenceStripper } from "./ansi-sequences.js";
+import { AnsiSequenceStripper, iterateAnsiSegments } from "./ansi-sequences.js";
 import {
   sanitizeForLog,
   splitGraphemes,
@@ -46,6 +46,48 @@ describe("terminal ansi helpers", () => {
 
     expect(split).toBe("AB");
     expect(split).toBe(joined);
+  });
+
+  it.each(CSI_INTRODUCERS)(
+    "dispatches complete %s controls once across every split",
+    (_label, csi) => {
+      const input = `A${csi}6n${csi}?1hB${csi}?6n${csi}?1l${csi}31mC`;
+      for (let split = 0; split <= input.length; split += 1) {
+        const controls: string[] = [];
+        const stripper = new AnsiSequenceStripper((sequence) => controls.push(sequence));
+        expect(stripper.write(input.slice(0, split)) + stripper.write(input.slice(split))).toBe(
+          "ABC",
+        );
+        expect(controls).toEqual(["6n", "?1h", "?6n", "?1l", "31m"]);
+        expect(stripper.finish()).toBe("");
+      }
+    },
+  );
+
+  it.each([
+    ["OSC payload", "\x1b]0;\x1b[6n\x1b[?1h\x07", []],
+    ["cancelled CSI", "\x1b[6\x18n\x1b[?1\x1ah", []],
+    ["restarted CSI", "\x1b[?1\x1b[6n", ["6n"]],
+    ["C1 restart", "\x1b[?1\x9b6n", ["6n"]],
+    ["embedded C0", "\x1b[6\x07n", ["6n"]],
+    ["compatibility sequence", "\x1b[[6n", []],
+  ])("dispatches only active CSI in %s", (_label, input, expected) => {
+    const controls: string[] = [];
+    const stripper = new AnsiSequenceStripper((sequence) => controls.push(sequence));
+    for (const char of input) {
+      stripper.write(char);
+    }
+    expect(controls).toEqual(expected);
+  });
+
+  it("drops oversized and unfinished CSI metadata without dispatching partial controls", () => {
+    const controls: string[] = [];
+    const stripper = new AnsiSequenceStripper((sequence) => controls.push(sequence));
+    expect(stripper.write("A\x1b[" + "?".repeat(1024 * 1024))).toBe("A");
+    expect(stripper.write("6nB\x1b[6")).toBe("B");
+    stripper.finish();
+    expect(stripper.write("nC\x1b[6n")).toBe("nC");
+    expect(controls).toEqual(["6n"]);
   });
 
   it("keeps a trailing ESC pending until the next chunk can identify OSC", () => {
@@ -349,5 +391,20 @@ describe("terminal ansi helpers", () => {
       truncateToVisibleWidth("\u001B]8;;https://openclaw.ai\u001B\\link\u001B]8;;\u001B\\", 2),
     ).toBe("\u001B]8;;https://openclaw.ai\u001B\\li\u001B]8;;\u001B\\");
     expect(truncateToVisibleWidth("\u001B[32mxy\u001B[0m", 1)).toBe("\u001B[32mx\u001B[0m");
+  });
+
+  it("isolates interleaved segment scans and closes an unfinished iterator", () => {
+    const input = "before\x1b]8;;https://example.test/\x07link\x1b]8;;\x07after";
+    const expected = [...iterateAnsiSegments(input)];
+    const outer = iterateAnsiSegments(input);
+    const inner = iterateAnsiSegments("other" + input);
+    const first = outer.next().value;
+    expect(inner.next().value).toEqual({ kind: "text", value: "otherbefore" });
+    expect(stripAnsi("nested" + input)).toBe("nestedbeforelinkafter");
+    expect([first, ...outer]).toEqual(expected);
+
+    inner.return();
+    expect(inner.next().done).toBe(true);
+    expect([...iterateAnsiSegments(input)]).toEqual(expected);
   });
 });

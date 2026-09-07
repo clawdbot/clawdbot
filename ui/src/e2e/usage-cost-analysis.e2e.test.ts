@@ -1,6 +1,7 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -462,7 +463,12 @@ suite.define(() => {
                     ...totals,
                     activityDates: [selectedDay],
                     dailyBreakdown: [
-                      { date: selectedDay, cost: totals.totalCost, tokens: totals.totalTokens },
+                      {
+                        ...totals,
+                        date: selectedDay,
+                        cost: totals.totalCost,
+                        tokens: totals.totalTokens,
+                      },
                     ],
                   },
                 },
@@ -530,7 +536,7 @@ suite.define(() => {
     );
   });
 
-  it("keeps selected provider alternatives visible and finds quoted session labels", async () => {
+  it("edits equivalent provider filters and finds quoted session labels", async () => {
     const date = dayOffset(0);
     const updatedAt = Date.now();
     const sessions = [
@@ -546,7 +552,7 @@ suite.define(() => {
       usage: {
         ...totals,
         activityDates: [date],
-        dailyBreakdown: [{ date, cost: totals.totalCost, tokens: totals.totalTokens }],
+        dailyBreakdown: [{ ...totals, date, cost: totals.totalCost, tokens: totals.totalTokens }],
       },
     }));
     const empty = emptyUsageResponses();
@@ -597,29 +603,44 @@ suite.define(() => {
           .poll(async () => (await sessionLabels.allTextContents()).toSorted())
           .toEqual(["Research Review", "Team Planning"]);
         if (recordVisuals) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(
+          await writeFile(
+            path.join(
               path.join(suite.artifactDir, "usage-filter-repair"),
               "01-provider-alternatives.png",
             ),
-          });
+            await takeControlUiViewportScreenshot(page, providerFilter.locator('[part="menu"]'), [
+              providerFilter.locator('wa-dropdown-item[value="option:openai"]'),
+            ]),
+          );
         }
 
         const query = page.locator(".usage-query-input");
+        await page.keyboard.press("Escape");
+        for (const token of ["PROVIDER:OpenAI", 'provider:"openai"']) {
+          await query.fill(`${token} provider:anthropic`);
+          await query.press("Enter");
+          await expect
+            .poll(async () => (await sessionLabels.allTextContents()).toSorted())
+            .toEqual(["Research Review", "Team Planning"]);
+          await providerFilter.locator(".usage-filter-trigger").click();
+          const openai = providerFilter.locator('wa-dropdown-item[value="option:openai"]');
+          await expect.poll(() => openai.getAttribute("aria-checked")).toBe("true");
+          await openai.click();
+          await expect.poll(() => sessionLabels.allTextContents()).toEqual(["Research Review"]);
+          await expect.poll(() => query.inputValue()).toBe("provider:anthropic ");
+          await page.keyboard.press("Escape");
+        }
         await query.fill('label:"Team Planning"');
         await query.press("Enter");
         await expect.poll(() => sessionLabels.allTextContents()).toEqual(["Team Planning"]);
         if (recordVisuals) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(
+          await writeFile(
+            path.join(
               path.join(suite.artifactDir, "usage-filter-repair"),
               "02-quoted-session-label.png",
             ),
-          });
+            await takeControlUiViewportScreenshot(page, page.locator(".usage-page"), [query]),
+          );
         }
       },
     );
@@ -660,7 +681,7 @@ suite.define(() => {
                     ...totals,
                     activityDates: daily.map((entry) => entry.date),
                     dailyBreakdown: daily.map((entry) => ({
-                      date: entry.date,
+                      ...entry,
                       cost: entry.totalCost,
                       tokens: entry.totalTokens,
                     })),

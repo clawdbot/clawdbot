@@ -546,48 +546,16 @@ final class RootSidebarModel {
     }
 
     private func loadCronJobs(appModel: NodeAppModel) async -> [CronJob]? {
-        let pageLimit = 5
-        let jobLimit = 1000
-        var jobs: [CronJob] = []
-        var seenJobIDs: Set<String> = []
-        var expectedIdentity: CronJobsSnapshotIdentity?
-        var offset = 0
-        for _ in 0..<pageLimit {
+        let snapshot = await CronJobsListLite.collect(maximumPageCount: 5, maximumJobCount: 1000) { offset in
             let paramsJSON = "{\"includeDisabled\":true,\"limit\":200,\"offset\":\(offset)," +
                 "\"sortBy\":\"name\",\"sortDir\":\"asc\"}"
-            let page = await self.request(
+            return await self.request(
                 CronJobsListLite.self,
                 appModel: appModel,
                 method: "cron.list",
                 paramsJSON: paramsJSON)
-            guard let page,
-                  let identity = cronJobsSnapshotIdentity(page: page, maximumCount: jobLimit)
-            else { return nil }
-            if let expectedIdentity, identity != expectedIdentity {
-                return nil
-            }
-            expectedIdentity = identity
-            let pageJobIDs = Set(page.jobs.map(\.id))
-            guard pageJobIDs.count == page.jobs.count,
-                  seenJobIDs.isDisjoint(with: pageJobIDs)
-            else { return nil }
-            seenJobIDs.formUnion(pageJobIDs)
-            jobs.append(contentsOf: page.jobs)
-            guard jobs.count <= jobLimit else { return nil }
-            if let total = identity.total {
-                guard total >= jobs.count else { return nil }
-                if jobs.count == total {
-                    guard !page.hasMore else { return nil }
-                    return jobs
-                }
-            }
-            guard page.hasMore else { return jobs }
-            guard let nextOffset = nextCronJobsListOffset(page: page, currentOffset: offset),
-                  nextOffset <= jobLimit
-            else { return nil }
-            offset = nextOffset
         }
-        return nil
+        return snapshot?.jobs
     }
 
     private func request<T: Decodable>(

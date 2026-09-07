@@ -20,8 +20,8 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
     mocks.officialCatalog(...args),
 }));
 
-const { clearManagedPluginOfficialCatalogCache, inspectManagedPlugin } =
-  await import("./management-service.js");
+const { clearManagedPluginOfficialCatalogCache } = await import("./management-catalog.js");
+const { inspectManagedPlugin } = await import("./management-service.js");
 
 describe("managed plugin inspection", () => {
   beforeEach(() => {

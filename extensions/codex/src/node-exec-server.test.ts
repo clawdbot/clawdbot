@@ -3,14 +3,15 @@ import { once } from "node:events";
 import { access, readFile, realpath } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { OpenClawPluginNodeHostCommandIo } from "openclaw/plugin-sdk/node-host";
 import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicyContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setManagedCodexPluginRoot } from "./app-server/managed-binary.js";
 import {
   createCodexNodeExecServerCommand,
   createCodexNodeExecServerInvokePolicy,
@@ -133,11 +134,48 @@ async function readNodeProcessNotifications(
   );
 }
 
+beforeEach(() => {
+  setManagedCodexPluginRoot(fileURLToPath(new URL("../", import.meta.url)));
+});
+
 afterEach(() => {
+  setManagedCodexPluginRoot(undefined);
   vi.unstubAllEnvs();
 });
 
 describe("Codex node exec-server", () => {
+  it("reports an unconfirmed transport stop instead of treating its result object as success", async () => {
+    const transport = await import("./app-server/transport.js");
+    const close = transport.closeCodexAppServerTransportAndWait;
+    const failedClose = vi
+      .spyOn(transport, "closeCodexAppServerTransportAndWait")
+      .mockImplementation(async (...args) => {
+        await close(...args);
+        return { exited: false, cleanup: "uncertain" };
+      });
+    const command = createCodexNodeExecServerCommand();
+    const frames = createNodeFrames();
+    const workspace = createManagedWorkspaceInvocation(process.cwd());
+    const invocation = command.handle(
+      JSON.stringify({ placement: workspace.placement, authorization: "human-approved" }),
+      frames.io,
+      workspace.context,
+    );
+    const outcome = invocation.catch((error: unknown) => error);
+    try {
+      await Promise.race([frames.ready, invocation]);
+      frames.controller.abort(new Error("node cleanup fixture disconnected"));
+      await expect(outcome).resolves.toMatchObject({
+        message: "Codex node exec-server process tree did not terminate.",
+      });
+      await expect(command.onDisconnect?.()).rejects.toThrow("did not terminate");
+    } finally {
+      frames.controller.abort();
+      await outcome;
+      failedClose.mockRestore();
+    }
+  });
+
   it("uses admitted Full launch authority without asking for a human decision", async () => {
     const { placement } = createManagedWorkspaceInvocation(process.cwd());
     const request = vi.fn(async () => ({ decision: "deny" as const }));

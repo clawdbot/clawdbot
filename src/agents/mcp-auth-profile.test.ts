@@ -10,7 +10,7 @@ const authMocks = vi.hoisted(() => ({
   resolveMcpOAuthAccessToken: vi.fn(),
 }));
 
-vi.mock("./auth-profiles/store.js", () => ({
+vi.mock("./auth-profiles/store-runtime.js", () => ({
   loadAuthProfileStoreForSecretsRuntime: authMocks.loadAuthProfileStoreForSecretsRuntime,
 }));
 

@@ -4,67 +4,13 @@
  * separately from secret-bearing credentials.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { AUTH_STORE_VERSION } from "./constants.js";
+import { coerceProfileUsageStats } from "./profile-usage-stats.js";
 import { readPersistedAuthProfileStateRaw, type AuthProfileDatabase } from "./sqlite.js";
-import type {
-  AuthProfileBlockedReason,
-  AuthProfileBlockedSource,
-  AuthProfileCooldownClassification,
-  AuthProfileFailureReason,
-  AuthProfileState,
-  AuthProfileStateStore,
-  ProfileUsageStats,
-} from "./types.js";
-
-const AUTH_FAILURE_REASONS = new Set<AuthProfileFailureReason>([
-  "auth",
-  "auth_permanent",
-  "format",
-  "overloaded",
-  "rate_limit",
-  "billing",
-  "timeout",
-  "model_not_found",
-  "session_expired",
-  "empty_response",
-  "no_error_details",
-  "unclassified",
-  "unknown",
-]);
-const AUTH_COOLDOWN_CLASSIFICATIONS = new Set<AuthProfileCooldownClassification>([
-  "wham_token_expired",
-  "wham_account_dead",
-]);
-const AUTH_BLOCKED_REASONS = new Set<AuthProfileBlockedReason>(["subscription_limit"]);
-const AUTH_BLOCKED_SOURCES = new Set<AuthProfileBlockedSource>(["codex_rate_limits", "wham"]);
-
-function normalizeEnumValue<T extends string>(value: unknown, allowed: Set<T>): T | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  return allowed.has(value as T) ? (value as T) : undefined;
-}
-
-function normalizeFailureCounts(raw: unknown): ProfileUsageStats["failureCounts"] {
-  if (!isRecord(raw)) {
-    return undefined;
-  }
-  const normalized: NonNullable<ProfileUsageStats["failureCounts"]> = {};
-  for (const [reason, count] of Object.entries(raw)) {
-    if (!AUTH_FAILURE_REASONS.has(reason as AuthProfileFailureReason)) {
-      continue;
-    }
-    if (typeof count !== "number" || !Number.isFinite(count) || count <= 0) {
-      continue;
-    }
-    normalized[reason as AuthProfileFailureReason] = Math.trunc(count);
-  }
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
-}
+import type { AuthProfileState, AuthProfileStateStore, ProfileUsageStats } from "./types.js";
 
 function normalizeAuthProfileOrder(raw: unknown): AuthProfileState["order"] {
   if (!isRecord(raw)) {
@@ -106,45 +52,6 @@ function normalizeLastGood(raw: unknown): AuthProfileState["lastGood"] {
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-function normalizeUsageStatsEntry(raw: unknown): ProfileUsageStats | undefined {
-  if (!isRecord(raw)) {
-    return undefined;
-  }
-  const cooldownReason = normalizeEnumValue(raw.cooldownReason, AUTH_FAILURE_REASONS);
-  const cooldownClassification = normalizeEnumValue(
-    raw.cooldownClassification,
-    AUTH_COOLDOWN_CLASSIFICATIONS,
-  );
-  const stats: ProfileUsageStats = {
-    lastUsed: asFiniteNumber(raw.lastUsed),
-    blockedUntil: asFiniteNumber(raw.blockedUntil),
-    blockedReason: normalizeEnumValue(raw.blockedReason, AUTH_BLOCKED_REASONS),
-    blockedSource: normalizeEnumValue(raw.blockedSource, AUTH_BLOCKED_SOURCES),
-    blockedModel: normalizeOptionalString(raw.blockedModel),
-    blockedScope: raw.blockedScope === "model" ? "model" : undefined,
-    cooldownUntil: asFiniteNumber(raw.cooldownUntil),
-    cooldownReason,
-    cooldownClassification:
-      (cooldownClassification === "wham_token_expired" && cooldownReason === "auth") ||
-      (cooldownClassification === "wham_account_dead" && cooldownReason === "auth_permanent")
-        ? cooldownClassification
-        : undefined,
-    cooldownModel: normalizeOptionalString(raw.cooldownModel),
-    disabledUntil: asFiniteNumber(raw.disabledUntil),
-    disabledReason: normalizeEnumValue(raw.disabledReason, AUTH_FAILURE_REASONS),
-    errorCount: asFiniteNumber(raw.errorCount),
-    failureCounts: normalizeFailureCounts(raw.failureCounts),
-    lastFailureAt: asFiniteNumber(raw.lastFailureAt),
-    lastProbeAt: asFiniteNumber(raw.lastProbeAt),
-  };
-  for (const key of Object.keys(stats) as Array<keyof ProfileUsageStats>) {
-    if (stats[key] === undefined) {
-      delete stats[key];
-    }
-  }
-  return Object.keys(stats).length > 0 ? stats : undefined;
-}
-
 function normalizeUsageStats(raw: unknown): AuthProfileState["usageStats"] {
   if (!isRecord(raw)) {
     return undefined;
@@ -152,7 +59,7 @@ function normalizeUsageStats(raw: unknown): AuthProfileState["usageStats"] {
   const normalized: Record<string, ProfileUsageStats> = {};
   for (const [profileId, value] of Object.entries(raw)) {
     const normalizedProfileId = normalizeOptionalString(profileId);
-    const stats = normalizeUsageStatsEntry(value);
+    const stats = coerceProfileUsageStats(value);
     if (!normalizedProfileId || !stats) {
       continue;
     }

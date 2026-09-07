@@ -239,6 +239,7 @@ export function prepareChatSendSession(params: {
       request.systemProvenanceReceipt === undefined &&
       !request.suppressCommandInterpretation,
     message: rawMessage,
+    mentions: p.mentions,
     senderIsOwner: hasGatewayAdminScope(client),
   });
 

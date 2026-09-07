@@ -37,6 +37,7 @@ import {
   type TaskRegistryDeliveryRuntime,
   type TaskRegistryGlobalWithRuntimeOverrides,
 } from "./task-registry-state.js";
+import { getTaskRegistryProcessState } from "./task-registry.process-state.js";
 import { getTaskRegistryStore, resetTaskRegistryRuntimeForTests } from "./task-registry.store.js";
 import type { TaskRecord, TaskStatus } from "./task-registry.types.js";
 import { resolveTaskSessionAgentId } from "./task-session-identity.js";
@@ -94,15 +95,24 @@ function taskUpdatedAt(task: TaskRecord): number {
   return task.lastEventAt ?? task.endedAt ?? task.startedAt ?? task.createdAt;
 }
 
-function compareTaskPageOrder(left: TaskRecord, right: TaskRecord): number {
-  const updatedDiff = taskUpdatedAt(right) - taskUpdatedAt(left);
-  if (updatedDiff !== 0) {
-    return updatedDiff;
+function compareTaskPageOrder(
+  left: TaskRecord,
+  right: TaskRecord,
+  sortBy: "updatedAt" | "endedAt",
+): number {
+  const leftAt = sortBy === "endedAt" ? (left.endedAt ?? -1) : taskUpdatedAt(left);
+  const rightAt = sortBy === "endedAt" ? (right.endedAt ?? -1) : taskUpdatedAt(right);
+  if (leftAt !== rightAt) {
+    return rightAt - leftAt;
   }
   return left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0;
 }
 
-function siftWorstTaskDown(heap: TaskRecord[], startIndex: number): void {
+function siftWorstTaskDown(
+  heap: TaskRecord[],
+  startIndex: number,
+  compare: (left: TaskRecord, right: TaskRecord) => number,
+): void {
   let index = startIndex;
   while (true) {
     const leftIndex = index * 2 + 1;
@@ -117,11 +127,11 @@ function siftWorstTaskDown(heap: TaskRecord[], startIndex: number): void {
     const rightIndex = leftIndex + 1;
     let worstIndex = leftIndex;
     const right = heap[rightIndex];
-    if (right && compareTaskPageOrder(right, left) > 0) {
+    if (right && compare(right, left) > 0) {
       worstIndex = rightIndex;
     }
     const worst = heap[worstIndex];
-    if (!worst || compareTaskPageOrder(worst, current) <= 0) {
+    if (!worst || compare(worst, current) <= 0) {
       return;
     }
     heap[index] = worst;
@@ -130,9 +140,12 @@ function siftWorstTaskDown(heap: TaskRecord[], startIndex: number): void {
   }
 }
 
-function heapifyWorstTaskFirst(heap: TaskRecord[]): void {
+function heapifyWorstTaskFirst(
+  heap: TaskRecord[],
+  compare: (left: TaskRecord, right: TaskRecord) => number,
+): void {
   for (let index = Math.floor(heap.length / 2) - 1; index >= 0; index -= 1) {
-    siftWorstTaskDown(heap, index);
+    siftWorstTaskDown(heap, index, compare);
   }
 }
 
@@ -141,73 +154,104 @@ const TASK_PAGE_MAX_ATTEMPTS = 3;
 export async function listTaskRecordPage(params: {
   offset: number;
   limit: number;
+  expectedRevision?: number;
   statuses?: readonly TaskStatus[];
   agentId?: string;
   sessionKey?: string;
   sessionAgentId?: string;
   cfg?: OpenClawConfig;
-  filter?: (task: Readonly<TaskRecord>) => boolean;
-}): Promise<Result<{ tasks: TaskRecord[]; hasMore: boolean }, "registry_changed">> {
+  prepareFilter?: (
+    tasks: readonly Readonly<TaskRecord>[],
+  ) => (task: Readonly<TaskRecord>) => boolean;
+  sortBy?: "updatedAt" | "endedAt";
+}): Promise<
+  Result<
+    { tasks: TaskRecord[]; hasMore: boolean; revision: number },
+    "cursor_stale" | "registry_changed"
+  >
+> {
   ensureTaskRegistryReady();
   const statuses = params.statuses ? new Set(params.statuses) : null;
   const agentId = normalizeOptionalString(params.agentId);
   const sessionKey = normalizeOptionalString(params.sessionKey);
+  const compare = (left: TaskRecord, right: TaskRecord) =>
+    compareTaskPageOrder(left, right, params.sortBy ?? "updatedAt");
   // Filtering and ordering stay registry-owned so authoritative records never
   // cross the boundary; only the bounded selected page is defensively cloned.
   const windowSize = params.offset + params.limit;
   for (let attempt = 0; attempt < TASK_PAGE_MAX_ATTEMPTS; attempt += 1) {
     const revision = readTaskRegistryRevision();
-    const scanLimit = tasks.size;
+    if (params.expectedRevision !== undefined && params.expectedRevision !== revision) {
+      return err("cursor_stale");
+    }
+    // Session pages scan only related candidates; exact owner/agent checks still run below.
+    const source = sessionKey ? taskIdsByRelatedSessionKey.get(sessionKey) : tasks;
+    const scanLimit = source?.size ?? 0;
     const window: TaskRecord[] = [];
     let matchingCount = 0;
     let heapReady = false;
     let scannedCount = 0;
-    for (const task of tasks.values()) {
-      if (scannedCount >= scanLimit) {
-        break;
-      }
-      scannedCount += 1;
-      // Yield large scans in small deterministic slices so task history cannot
-      // monopolize the Gateway event loop while other requests are waiting.
-      if (scannedCount % 32 === 0) {
+    const iterator = source?.keys() ?? [].values();
+    let current = iterator.next();
+    while (!current.done && scannedCount < scanLimit) {
+      // Yield only when another batch exists; completed pages keep their revision.
+      if (scannedCount > 0) {
         await yieldToEventLoop();
       }
-      if (
-        (statuses && !statuses.has(task.status)) ||
-        !taskMatchesAgent(task, agentId, params.cfg) ||
-        !taskMatchesRelatedSession(task, sessionKey, params.sessionAgentId, params.cfg) ||
-        (params.filter && !params.filter(task))
-      ) {
-        continue;
+      const batch: TaskRecord[] = [];
+      while (!current.done && batch.length < 32 && scannedCount < scanLimit) {
+        const task = tasks.get(current.value);
+        if (task) {
+          batch.push(task);
+        }
+        scannedCount += 1;
+        current = iterator.next();
       }
-      matchingCount += 1;
-      if (windowSize <= 0) {
-        continue;
-      }
-      if (window.length < windowSize) {
-        window.push(task);
-        continue;
-      }
-      if (!heapReady) {
-        heapifyWorstTaskFirst(window);
-        heapReady = true;
-      }
-      const cutoff = window[0];
-      if (cutoff && compareTaskPageOrder(task, cutoff) < 0) {
-        window[0] = task;
-        siftWorstTaskDown(window, 0);
+      const candidates = batch.filter(
+        (task) =>
+          (!statuses || statuses.has(task.status)) &&
+          taskMatchesAgent(task, agentId, params.cfg) &&
+          taskMatchesRelatedSession(task, sessionKey, params.sessionAgentId, params.cfg),
+      );
+      // Prepared metadata belongs to this synchronous slice, never the next await.
+      const filter = params.prepareFilter?.(candidates);
+      for (const task of candidates) {
+        if (filter && !filter(task)) {
+          continue;
+        }
+        matchingCount += 1;
+        if (windowSize <= 0) {
+          continue;
+        }
+        if (window.length < windowSize) {
+          window.push(task);
+          continue;
+        }
+        if (!heapReady) {
+          heapifyWorstTaskFirst(window, compare);
+          heapReady = true;
+        }
+        const cutoff = window[0];
+        if (cutoff && compare(task, cutoff) < 0) {
+          window[0] = task;
+          siftWorstTaskDown(window, 0, compare);
+        }
       }
     }
     if (revision !== readTaskRegistryRevision()) {
+      if (params.expectedRevision !== undefined) {
+        return err("cursor_stale");
+      }
       continue;
     }
     if (params.offset >= matchingCount) {
-      return ok({ tasks: [], hasMore: false });
+      return ok({ tasks: [], hasMore: false, revision });
     }
-    const selected = window.toSorted(compareTaskPageOrder).slice(params.offset);
+    const selected = window.toSorted(compare).slice(params.offset);
     return ok({
       tasks: selected.map((task) => cloneTaskRecord(task)),
       hasMore: params.offset + selected.length < matchingCount,
+      revision,
     });
   }
   return err("registry_changed");
@@ -408,6 +452,7 @@ export function deleteTaskRecordById(taskId: string): boolean {
 }
 
 export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
+  getTaskRegistryProcessState().runOwners.clear();
   clearTaskRegistryMemory();
   resetTaskRegistryRestoreState();
   resetTaskRegistryRuntimeForTests();

@@ -69,6 +69,7 @@ async function prestageMediaPathOffloads(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
+  abortSignal: AbortSignal;
 }): Promise<{ paths: string[]; types: string[]; workspaceDir?: string }> {
   const mediaPathRefs = params.offloadedRefs.filter(
     (ref) => params.includeImageRefs || !ref.mimeType.startsWith("image/"),
@@ -128,11 +129,15 @@ async function prestageMediaPathOffloads(params: {
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         workspaceDir,
+        abortSignal: params.abortSignal,
       });
     } catch (stageErr) {
-      // Only managed inbound PDFs have a host-readable fallback. Other files
-      // must fail before ACK or the agent silently loses the attachment.
-      if (refsToStage.some((ref) => !isManagedInboundPdfOffloadRef(ref))) {
+      // Cancellation is terminal; only ordinary managed-PDF failures can use
+      // the host-readable fallback. Other files must fail before ACK.
+      if (
+        (params.abortSignal.aborted && Object.is(stageErr, params.abortSignal.reason)) ||
+        refsToStage.some((ref) => !isManagedInboundPdfOffloadRef(ref))
+      ) {
         throw stageErr;
       }
       return refsByManagedPath(mediaPathRefs);
@@ -170,8 +175,11 @@ async function prestageMediaPathOffloads(params: {
       workspaceDir: sandbox.workspaceDir,
     };
   } catch (err) {
-    await discardPreparedInboundMedia(params.offloadedRefs);
-    if (err instanceof MediaOffloadError || err instanceof UnsupportedAttachmentError) {
+    if (
+      (params.abortSignal.aborted && Object.is(err, params.abortSignal.reason)) ||
+      err instanceof MediaOffloadError ||
+      err instanceof UnsupportedAttachmentError
+    ) {
       throw err;
     }
     throw new MediaOffloadError(
@@ -256,6 +264,7 @@ export async function prepareChatSendAttachments(params: {
             cfg,
             sessionKey,
             agentId,
+            abortSignal: activeRunAbort.controller.signal,
           }));
         },
         {
@@ -267,14 +276,23 @@ export async function prepareChatSendAttachments(params: {
           },
         },
       );
+      // Pass-through media still needs awaited cleanup when preparation was cancelled.
+      activeRunAbort.controller.signal.throwIfAborted();
       prepareAttachmentsMs = roundedChatSendTimingMs(
         performance.now() - prepareAttachmentsStartedAtMs,
       );
     } catch (err) {
-      if (
+      const aborted =
         activeRunAbort.controller.signal.aborted &&
-        context.chatRunState.hasAbortMarker(clientRunId)
-      ) {
+        (context.chatRunState.hasAbortMarker(clientRunId) ||
+          Object.is(err, activeRunAbort.controller.signal.reason));
+      // Retire failed-run cancellation before cleanup yields, but retain work
+      // admission until deletion finishes so a late abort cannot replace the error.
+      if (!aborted) {
+        activeRunAbort.cleanup();
+      }
+      await discardPreparedInboundMedia(offloadedRefs);
+      if (aborted) {
         finishAbortedChatSend();
         return { ok: false as const };
       }

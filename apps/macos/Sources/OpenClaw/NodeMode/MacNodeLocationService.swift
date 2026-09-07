@@ -64,18 +64,10 @@ final class MacNodeLocationService: NSObject, CLLocationManagerDelegate, Concurr
 
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         Task { @MainActor in
-            let continuations = Array(self.locationRequestContinuations.values) + [self.locationContinuation]
-                .compactMap(\.self)
-            self.locationRequestContinuations.removeAll()
-            self.locationContinuation = nil
             if let latest = locations.last {
-                for continuation in continuations {
-                    continuation.resume(returning: latest)
-                }
+                self.completeLocationRequests(with: .success(latest))
             } else {
-                for continuation in continuations {
-                    continuation.resume(throwing: Error.unavailable)
-                }
+                self.completeLocationRequests(with: .failure(Error.unavailable))
             }
         }
     }
@@ -83,13 +75,7 @@ final class MacNodeLocationService: NSObject, CLLocationManagerDelegate, Concurr
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Swift.Error) {
         let errorCopy = error // Capture error for Sendable compliance
         Task { @MainActor in
-            let continuations = Array(self.locationRequestContinuations.values) + [self.locationContinuation]
-                .compactMap(\.self)
-            self.locationRequestContinuations.removeAll()
-            self.locationContinuation = nil
-            for continuation in continuations {
-                continuation.resume(throwing: errorCopy)
-            }
+            self.completeLocationRequests(with: .failure(errorCopy))
         }
     }
 }

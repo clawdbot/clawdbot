@@ -19,10 +19,7 @@ struct ChatMermaidBlockView: View {
     @State private var token: UUID?
     @State private var generation = UUID()
     @State private var showSource = false
-    #if os(macOS)
     @State private var isHovered = false
-    @FocusState private var copyIsFocused: Bool
-    #endif
     /// Keep the selected preview stable while rotation re-renders the inline diagram.
     @State private var expanded: PreviewSelection?
 
@@ -36,23 +33,11 @@ struct ChatMermaidBlockView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
                 Spacer()
-                Button {
-                    self.copySource()
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                        .frame(width: self.controlSize, height: self.controlSize)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Copy diagram source")
-                #if os(macOS)
-                .help("Copy diagram source")
-                .focused(self.$copyIsFocused)
-                .opacity(self.isHovered || self.copyIsFocused ? 1 : 0)
-                #endif
+                ChatCopyButton(text: self.source, label: "Copy diagram source", revealed: self.isHovered)
                 Menu {
                     #if os(macOS)
                     Button {
-                        self.copySource()
+                        ChatPasteboard.copy(self.source)
                     } label: {
                         Text("Copy diagram source").font(OpenClawChatTypography.body)
                     }
@@ -81,7 +66,7 @@ struct ChatMermaidBlockView: View {
                     }
                 } label: {
                     Image(systemName: "ellipsis")
-                        .frame(width: self.controlSize, height: self.controlSize)
+                        .frame(width: ChatCopyButton.controlSize, height: ChatCopyButton.controlSize)
                 }
                 .accessibilityLabel("Diagram options")
                 #if os(macOS)
@@ -126,19 +111,11 @@ struct ChatMermaidBlockView: View {
         } action: { self.width = $0 }
         .onChange(of: self.request, initial: true) { _, _ in self.render() }
         .onDisappear { self.cancel() }
-        #if os(macOS)
         .onHover { self.isHovered = $0 }
+        #if os(macOS)
         .sheet(item: self.$expanded) { self.preview($0) }
         #else
         .fullScreenCover(item: self.$expanded) { self.preview($0) }
-        #endif
-    }
-
-    private var controlSize: CGFloat {
-        #if os(macOS)
-        28
-        #else
-        44
         #endif
     }
 
@@ -227,15 +204,6 @@ struct ChatMermaidBlockView: View {
             ChatMermaidRenderer.shared.cancel(token)
         }
     }
-
-    private func copySource() {
-        #if os(macOS)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(self.source, forType: .string)
-        #else
-        UIPasteboard.general.string = self.source
-        #endif
-    }
 }
 
 @MainActor
@@ -303,7 +271,7 @@ private struct ChatMermaidSvgView {
         view.backgroundColor = .clear
         #endif
         let encoded = Data(self.svg.utf8).base64EncodedString()
-        // Sanitized SVG stays an image document. The preview needs no scripts or network.
+        // Script-free SVG stays an image; auto margins center short diagrams without clipping tall ones.
         view.loadHTMLString("""
         <!doctype html><html><head><meta charset="utf-8">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none';
@@ -311,8 +279,8 @@ private struct ChatMermaidSvgView {
         <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=8, user-scalable=yes">
         <style>
         html,body{margin:0;height:100%;background:\(self.background)}
-        body{display:flex;align-items:center}
-        img{display:block;width:100%;height:auto}
+        body{display:flex}
+        img{display:block;width:100%;height:auto;margin:auto 0}
         </style>
         </head><body><img alt="" src="data:image/svg+xml;base64,\(encoded)"></body></html>
         """, baseURL: nil)

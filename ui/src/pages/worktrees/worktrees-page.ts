@@ -382,7 +382,7 @@ class WorktreesPage extends OpenClawLightDomElement {
             type="text"
             aria-label=${t("worktrees.name")}
             ?disabled=${this.creating}
-            placeholder=${t("newSession.worktreeNamePlaceholder")}
+            placeholder=${t("worktrees.namePlaceholder")}
             .value=${this.createName}
             @input=${(event: Event) => {
               this.createName = (event.target as HTMLInputElement).value;
@@ -391,12 +391,12 @@ class WorktreesPage extends OpenClawLightDomElement {
         `,
       })}
       ${renderSettingsRow({
-        title: t("newSession.baseBranch"),
+        title: t("worktrees.baseBranch"),
         control: html`
           <input
             class="settings-input"
             type="text"
-            aria-label=${t("newSession.baseBranch")}
+            aria-label=${t("worktrees.baseBranch")}
             ?disabled=${this.creating}
             list="worktrees-create-branches"
             .value=${this.createBaseRef}
@@ -432,9 +432,11 @@ class WorktreesPage extends OpenClawLightDomElement {
         ${this.renderOwner(record)} · ${formatRelativeTimestamp(record.lastActiveAt)}
       `,
       control: html`
-        ${record.removedAt
-          ? renderSettingsStatus({ kind: "muted", label: t("worktrees.restorable") })
-          : renderSettingsStatus({ kind: "ok", label: t("common.active") })}
+        ${
+          record.removedAt
+            ? renderSettingsStatus({ kind: "muted", label: t("worktrees.restorable") })
+            : renderSettingsStatus({ kind: "ok", label: t("common.active") })
+        }
         <button
           class=${record.removedAt ? "btn btn--sm" : "btn btn--sm danger"}
           title=${this.canAdmin ? "" : t("worktrees.adminRequired")}
@@ -469,15 +471,19 @@ class WorktreesPage extends OpenClawLightDomElement {
     `;
     const rows = html`
       ${this.renderCreateRows()}
-      ${this.records.length === 0
-        ? renderSettingsEmpty(t("worktrees.empty"))
-        : this.records.map((record) => this.renderRecordRow(record))}
+      ${
+        this.records.length === 0
+          ? renderSettingsEmpty(t("worktrees.empty"))
+          : this.records.map((record) => this.renderRecordRow(record))
+      }
     `;
     const body = renderSettingsPage(
       html`
-        ${!this.canAdmin
-          ? html`<div class="callout info" role="note">${t("worktrees.adminRequired")}</div>`
-          : nothing}
+        ${
+          !this.canAdmin
+            ? html`<div class="callout info" role="note">${t("worktrees.adminRequired")}</div>`
+            : nothing
+        }
         ${this.error ? html`<div class="callout danger" role="alert">${this.error}</div>` : nothing}
         ${renderSettingsSection(
           { title: t("worktrees.title"), description: t("worktrees.subtitle"), actions },

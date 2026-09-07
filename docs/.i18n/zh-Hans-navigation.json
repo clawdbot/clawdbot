@@ -115,21 +115,23 @@
       "tab": "代理",
       "groups": [
         {
-          "group": "基础",
+          "group": "代理运行时",
           "pages": [
             "zh-CN/pi",
             "zh-CN/concepts/architecture",
             "zh-CN/concepts/agent",
             "zh-CN/concepts/agent-loop",
             "zh-CN/concepts/system-prompt",
-            "zh-CN/concepts/context",
-            "zh-CN/concepts/agent-workspace",
-            "zh-CN/concepts/oauth"
+            "zh-CN/concepts/context"
           ]
         },
         {
-          "group": "引导",
-          "pages": ["zh-CN/start/bootstrapping"]
+          "group": "代理工作区",
+          "pages": [
+            "zh-CN/concepts/agent-workspace",
+            "zh-CN/concepts/oauth",
+            "zh-CN/start/bootstrapping"
+          ]
         },
         {
           "group": "会话与记忆",

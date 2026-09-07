@@ -1,5 +1,6 @@
 // Resolves which authored $include file owns a config mutation, at any depth.
 import { isDeepStrictEqual } from "node:util";
+import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { isRecord } from "../utils.js";
 import { isInternalIncludeWriteTarget, type ConfigIncludeOwnership } from "./includes.js";
 
@@ -105,6 +106,12 @@ export function resolveIncludeWriteBoundary(params: {
   if (provenance.some((entry) => entry.path.length === 0)) {
     return null;
   }
+  const targets = provenance.flatMap(
+    (entry) => entry.targetPaths ?? (entry.targetPath ? [entry.targetPath] : []),
+  );
+  const canonicalTargets = new Map(
+    [...new Set(targets)].map((target) => [target, resolvePathViaExistingAncestorSync(target)]),
+  );
   let best: IncludeWriteBoundary | null = null;
   let bestDepth = 0;
   for (const entry of provenance) {
@@ -137,6 +144,19 @@ export function resolveIncludeWriteBoundary(params: {
       continue;
     }
     if (!params.changed.paths.every((changedPath) => isPathPrefix(entry.path, changedPath))) {
+      continue;
+    }
+    // A physical file reused elsewhere would also change an unrequested subtree,
+    // including when the other owner merges it or reaches it through an alias.
+    const canonicalTarget = canonicalTargets.get(entry.targetPath);
+    const sharedTarget = provenance.some(
+      (candidate) =>
+        !pathsEqual(candidate.path, entry.path) &&
+        (candidate.targetPaths ?? (candidate.targetPath ? [candidate.targetPath] : [])).some(
+          (target) => canonicalTargets.get(target) === canonicalTarget,
+        ),
+    );
+    if (sharedTarget) {
       continue;
     }
     // Include events fire depth-first, so a same-path delegation chain records

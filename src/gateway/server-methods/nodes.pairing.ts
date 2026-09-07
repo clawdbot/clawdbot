@@ -22,10 +22,6 @@ import {
   removePairedDeviceRole,
 } from "../../infra/device-pairing.js";
 import { reconcileRevokedDeviceWorker } from "../device-worker-revocation.js";
-import {
-  resolveNodePairingCommandAllowlist,
-  normalizeDeclaredNodeCommands,
-} from "../node-command-policy.js";
 import { clearRemovedNodeRuntimeState } from "../node-runtime-state.js";
 import { invalidateNodeWakeState } from "../node-wake-state.js";
 import { PAIRING_SCOPE } from "../operator-scopes.js";
@@ -143,19 +139,11 @@ function emitNodeRoleRemovalSecurityEvent(params: {
 async function removePairedDeviceBackedNode(params: {
   nodeId: string;
   client: GatewayClient | null;
-  context: Pick<
-    GatewayRequestContext,
-    | "disconnectClientsForDevice"
-    | "invalidateClientsForDevice"
-    | "logGateway"
-    | "workerEnvironmentService"
-    | "workerPlacementDispatchService"
-  >;
+  context: Pick<GatewayRequestContext, "invalidateClientsForDevice" | "logGateway">;
 }): Promise<
   | {
       status: "removed";
       nodeId: string;
-      disconnectDeviceId: string;
     }
   | { status: "denied"; message: string }
   | { status: "unknown" }
@@ -214,11 +202,9 @@ async function removePairedDeviceBackedNode(params: {
     role: "node",
     reason: "device-pair-removed",
   });
-  await reconcileRevokedDeviceWorker(params.context, removed.deviceId);
   return {
     status: "removed",
     nodeId: removed.deviceId,
-    disconnectDeviceId: removed.deviceId,
   };
 }
 
@@ -295,21 +281,6 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
       // Surface approval rotates the persistent generation. Abort any wake
       // already admitted under the prior command surface before it can send.
       invalidateNodeWakeState(approvedNode.nodeId);
-      const cfg = context.getRuntimeConfig();
-      // Pairing allowlist matches connect-time reconciliation: approved
-      // dangerous surfaces stay live so persistent enablement does not require
-      // another reconnect; invoke policy still gates use.
-      const currentAllowlist = resolveNodePairingCommandAllowlist(cfg, {
-        platform: approvedNode.platform,
-        deviceFamily: approvedNode.deviceFamily,
-        caps: approvedNode.caps,
-        commands: approvedNode.commands,
-        approvedCommands: approvedNode.commands,
-      });
-      const currentAllowedCommands = normalizeDeclaredNodeCommands({
-        declaredCommands: approvedNode.commands ?? [],
-        allowlist: currentAllowlist,
-      });
       // Only the exact generation committed by this approval may inherit the
       // authenticated live session. A later re-pair must reconnect instead.
       const persistedApprovedState = await captureNodePairingState(approvedNode.nodeId);
@@ -330,7 +301,7 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
               approvedNode.nodeId,
               {
                 caps: approvedNode.caps ?? [],
-                commands: currentAllowedCommands,
+                commands: approvedNode.commands ?? [],
                 permissions: approvedNode.permissions,
               },
               {
@@ -344,7 +315,7 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
             )
           : null;
       if (updatedNode) {
-        refreshConnectedNodeSurfaceCaches({ context, nodeSession: updatedNode, cfg });
+        refreshConnectedNodeSurfaceCaches({ context, nodeSession: updatedNode });
       }
       context.broadcast(
         "node.pair.resolved",
@@ -395,7 +366,7 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
     });
   },
   // Remove a node pairing (CLI: `openclaw nodes remove`). This revokes the
-  // device's `node` role in devices/paired.json, which drops the approved node
+  // device's `node` role in the paired-device store, which drops the approved node
   // surface with it, and disconnects the device's node-role sessions: a
   // mixed-role device keeps its row and only loses the `node` role, a
   // node-only device row is deleted. Authz mirrors device.pair.remove:
@@ -419,13 +390,14 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
       }
       try {
         clearRemovedNodeRuntimeState({ nodeId: deviceBacked.nodeId, context });
+        await reconcileRevokedDeviceWorker(context, deviceBacked.nodeId);
         broadcastRemovedNodePairing({ nodeId: deviceBacked.nodeId, context });
         respond(true, { nodeId: deviceBacked.nodeId }, undefined);
       } finally {
         // Preserve response-first shutdown on success, while guaranteeing the
         // hard close when runtime cleanup or later bookkeeping throws.
         queueMicrotask(() => {
-          context.disconnectClientsForDevice?.(deviceBacked.disconnectDeviceId, {
+          context.disconnectClientsForDevice?.(deviceBacked.nodeId, {
             role: "node",
           });
         });

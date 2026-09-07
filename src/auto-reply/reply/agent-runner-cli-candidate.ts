@@ -1,15 +1,23 @@
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { buildCliMcpDelegationCapabilityBinding } from "../../agents/cli-runner/mcp-grant-context.js";
 import {
+  clearCliSessionInStore,
+  persistCliSessionBindingResult,
+  settleCliSessionResult,
+} from "../../agents/cli-session-store.js";
+import {
   getCliSessionBinding,
   shouldClearFailedCliSessionBinding,
 } from "../../agents/cli-session.js";
 import { resolveDelegationCapability } from "../../agents/delegation-capability.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
+import type { ModelFallbackResultClassification } from "../../agents/model-fallback-attempt.js";
 import { createAgentRunSupersededAbortError } from "../../agents/run-termination.js";
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
@@ -17,7 +25,6 @@ import {
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
-  clearCliSessionBindingForRun,
   createCliReasoningStreamBridge,
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
@@ -30,11 +37,11 @@ import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
-import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
 
 export async function runCliFallbackCandidate(
   params: AgentFallbackCandidateCommonParams & {
     cliExecutionProvider: string;
+    classifyResult: (result: EmbeddedAgentRunResult) => ModelFallbackResultClassification;
     lifecycleGeneration: string;
   },
 ): Promise<{
@@ -131,7 +138,7 @@ export async function runCliFallbackCandidate(
     Boolean(params.presentation.blockReplyHandler) &&
     (turn.blockStreamingEnabled || turn.opts?.commentaryPayloadsEnabled === true);
   const toolAuthorityRoute = { provider: params.provider, model: params.model };
-  turn.replyOperation?.bindToolAuthorityRoute(toolAuthorityRoute);
+  const toolAuthorityFingerprint = turn.replyOperation?.bindToolAuthorityRoute(toolAuthorityRoute);
   const result = await params.timing.measure("cli_run", () =>
     withLocalSessionPlacementTurnSettlement(
       {
@@ -140,7 +147,7 @@ export async function runCliFallbackCandidate(
         agentId: turn.followupRun.run.agentId,
         runId: params.runId,
       },
-      async () => {
+      async (assertSettlementCurrent) => {
         // Placement admission may wait behind an older turn. Snapshot placement,
         // permission, and native resume identity only after this turn owns it.
         const sessionEntry = sessionTarget
@@ -153,6 +160,7 @@ export async function runCliFallbackCandidate(
         ) {
           throw createAgentRunSupersededAbortError();
         }
+        const diagnosticOwner = params.deferredLifecycle.handoffToCli();
         const cliSessionBinding = getCliSessionBinding(sessionEntry, params.cliExecutionProvider);
         const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(turn.sessionKey);
         let droppedCliSessionReplacement = false;
@@ -180,13 +188,15 @@ export async function runCliFallbackCandidate(
                   ) {
                     return;
                   }
-                  await clearCliSessionBindingForRun({
+                  await clearCliSessionInStore({
                     provider: params.cliExecutionProvider,
-                    expectedSessionId: cliSessionBinding.sessionId,
+                    expectedCliSessionId: cliSessionBinding.sessionId,
+                    expectedSessionId: sessionEntry?.sessionId,
+                    assertCommitAllowed: assertSettlementCurrent,
                     sessionKey: turn.sessionKey,
                     sessionStore: turn.activeSessionStore,
                     storePath: turn.storePath,
-                    activeSessionEntry: turn.getActiveSessionEntry(),
+                    activeSessionEntry: sessionEntry,
                   });
                 }
               : undefined,
@@ -212,6 +222,8 @@ export async function runCliFallbackCandidate(
           onReasoningProgress: async (payload) => {
             await turn.opts?.onReasoningProgress?.(payload);
           },
+          onCompactionStart: turn.opts?.onCompactionStart,
+          onCompactionEnd: turn.opts?.onCompactionEnd,
           onToolEvent: async (payload) => {
             if (!params.preserveProgressCallbackStartOrder) {
               const commandBearing = await cliToolSummaryTracker.noteToolEvent(payload);
@@ -300,6 +312,7 @@ export async function runCliFallbackCandidate(
               : undefined,
           runParams: {
             preparedRunAdmission: params.preparedRunAdmission,
+            diagnosticOwner,
             sessionId: turn.followupRun.run.sessionId,
             sessionKey,
             sessionTarget,
@@ -413,23 +426,49 @@ export async function runCliFallbackCandidate(
             skillWorkshopProposalRevision: params.candidateRun.skillWorkshopProposalRevision,
             skillLibraryAuthoring: params.candidateRun.skillLibraryAuthoring,
             disableTools: turn.opts?.disableTools,
-            toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(
-              turn.followupRun,
-              toolAuthorityRoute,
-            ),
+            toolAuthorityFingerprint,
             abortSignal: params.runAbortSignal,
+            // Native input is already host-authored. Keep its stable delivery
+            // context out of the model-output normalization wrapper.
+            onBlockReply: turn.opts?.onBlockReply,
+            onPartialReply: turn.opts?.onPartialReply,
             onExecutionPhase: params.signalExecutionPhaseForTyping,
             replyOperation: turn.replyOperation,
           },
         });
         if (droppedCliSessionReplacement) {
-          await clearCliSessionBindingForRun({
+          // The room-event transform removed native continuity; only its guarded
+          // invalidation remains, and failure must retain the returned turn.
+          return await settleCliSessionResult(candidateResult, async () => {
+            await clearCliSessionInStore({
+              provider: params.cliExecutionProvider,
+              expectedCliSessionId: cliSessionBinding?.sessionId,
+              expectedSessionId: sessionEntry?.sessionId,
+              assertCommitAllowed: assertSettlementCurrent,
+              sessionKey: turn.sessionKey,
+              sessionStore: turn.activeSessionStore,
+              storePath: turn.storePath,
+              activeSessionEntry: sessionEntry,
+            });
+            params.classifyResult(candidateResult);
+          });
+        }
+        const classification = params.classifyResult(candidateResult);
+        if (
+          (!classification || candidateResult.meta.agentMeta?.clearCliSessionBinding === true) &&
+          !shouldPreserveUserFacingSessionStateForInputProvenance(
+            turn.followupRun.run.inputProvenance,
+          )
+        ) {
+          return await persistCliSessionBindingResult({
             provider: params.cliExecutionProvider,
-            expectedSessionId: cliSessionBinding?.sessionId,
-            sessionKey: turn.sessionKey,
-            sessionStore: turn.activeSessionStore,
+            result: candidateResult,
+            sessionKey,
             storePath: turn.storePath,
-            activeSessionEntry: turn.getActiveSessionEntry(),
+            sessionStore: turn.activeSessionStore,
+            expectedSession: sessionEntry,
+            assertSettlementCurrent,
+            abortSignal: params.runAbortSignal,
           });
         }
         return candidateResult;

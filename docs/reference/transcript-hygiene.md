@@ -27,12 +27,25 @@ Scope includes:
 - Blank text-block cleanup before provider replay
 - Incomplete reasoning-only length-turn cleanup before provider replay
 - User-input provenance tagging (for inter-session routed prompts)
-- Empty assistant error-turn repair for Bedrock Converse replay
+- Empty assistant error-turn removal for provider replay
 
 If you need transcript storage details, see
 [Session management deep dive](/reference/session-management-compaction).
 
 ---
+
+## Failed attempts and recovery
+
+Text-only assistant errors are buffered until the logical run settles. Recovery
+discards their partial text because the recovered reply supersedes it. Terminal
+failure persists the last attempt's partial text and error.
+
+Tool calls, displayable non-text content, and attachment facts are persisted
+immediately, before dependent tool results or the recovered reply. These fact
+rows omit the error and use a replayable stop reason so provider replay retains
+the calls. For mixed text/fact messages, partial text and the error remain
+buffered separately; terminal settlement does not duplicate facts or usage.
+This uses existing assistant-row shapes and requires no database migration.
 
 ## Global rule: runtime context is not user transcript
 
@@ -50,7 +63,7 @@ TUI, REST, or SSE clients.
 
 ## Where this runs
 
-All transcript hygiene is centralized in the embedded runner:
+The embedded runner selects and applies transcript policy:
 
 - Policy selection: `src/agents/transcript-policy.ts`
   (`resolveTranscriptPolicy`, keyed on `provider`, `modelApi`, and `modelId`)
@@ -107,6 +120,12 @@ extras are dropped and missing occurrences receive synthetic error results.
 
 Implementation: `sanitizeToolUseResultPairing` in
 `src/agents/session-transcript-repair.ts`
+
+When switching models, provider replay moves delayed asynchronous tool results
+next to their originating call before removing the source model's async metadata.
+Call and result IDs are trimmed before matching, so surrounding whitespace does
+not turn a real result into a synthetic missing-result error. This projection
+runs in `packages/ai/src/transcript-transform.ts` and leaves stored history intact.
 
 ---
 
@@ -195,17 +214,29 @@ inter-session user turns that only have provenance metadata.
 
 **Anthropic / Minimax (Anthropic-compatible)**
 
+- Prefix-binding Claude models, such as Fable 5.1, persist runtime-context carriers
+  as hidden custom messages immediately after their user turn and replay them in
+  place. Inline inbound metadata on older user turns is also retained. This
+  model-scoped append-only policy includes Bedrock, Vertex, and Foundry routes.
+  Carriers contain only the delimited context body; the shared instruction lives
+  once in the stable system prompt. Carriers remain user-role context and
+  are excluded from chat history and compaction summarization. Other Claude
+  models and Anthropic-compatible models keep transient carriers, avoiding
+  repeated cache-read charges and context use for old carriers when nothing
+  binds the prefix.
 - Tool result pairing repair and synthetic tool results.
 - Turn validation (merge consecutive user turns to satisfy strict
-  alternation).
+  alternation). For prefix-binding models on the Messages API, append-only replay keeps
+  consecutive user turns separate instead, so a command turn followed by a
+  prompt replays with the same per-turn timestamp stamps the active turn was
+  signed over; Bedrock Converse still merges them.
 - Trailing assistant prefill turns are stripped from outgoing Anthropic
   Messages payloads when thinking is enabled, including Cloudflare AI
   Gateway routes.
 - Pre-compaction assistant thinking signatures are stripped before provider
-  replay when a session has been compacted. Thinking signatures are
-  cryptographically bound to the conversation prefix at generation time;
-  after compaction the prefix changes (summarized content replaces the
-  original), so replaying the original signatures causes Anthropic to
+  replay when a session has been compacted. On prefix-binding models,
+  compaction changes the signed prefix (summarized content replaces the
+  original), so replaying the original signatures can cause Anthropic to
   reject the request with "Invalid signature in thinking block". The
   thinking text is preserved as an unsigned block and then handled by the
   rule below.
@@ -218,12 +249,11 @@ inter-session user turns that only have provenance metadata.
 
 **Amazon Bedrock (Converse API)**
 
-- Empty assistant stream-error turns are repaired to a non-empty fallback
-  text block before replay. Bedrock Converse rejects assistant messages
-  with `content: []`, so persisted assistant turns with `stopReason:
-"error"` and empty content are also repaired on disk before load.
-- Assistant stream-error turns with only blank text blocks are dropped from
-  the in-memory replay copy instead of replaying an invalid blank block.
+- Empty assistant stream-error turns and legacy fallback placeholders are dropped
+  from the in-memory replay copy. This avoids invalid empty ContentBlocks and
+  synthetic assistant prefill without rewriting the stored transcript.
+- Zero-usage empty stop turns are dropped too; billed silent replies and errors
+  with real assistant content retain their existing replay handling.
 - Pre-compaction assistant thinking signatures are stripped before Converse
   replay when a session has been compacted, for the same reason as
   Anthropic above.

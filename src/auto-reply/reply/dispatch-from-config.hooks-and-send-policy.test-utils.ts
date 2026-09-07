@@ -1759,6 +1759,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         updatedAt: Date.now(),
         archivedAt,
         archivedBy: { type: "human", id: "profile-operator" },
+        archiveReason: "manual",
       };
       if (blocked || suppliedOwner) {
         placementContextMocks.getMany.mockReturnValue(
@@ -1819,6 +1820,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
           type: "human",
           id: "profile-operator",
         });
+        expect(sessionStoreMocks.currentEntry?.archiveReason).toBe("manual");
         expect(replyResolver).not.toHaveBeenCalled();
         expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
         return;
@@ -1829,6 +1831,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       expect(sessionStoreMocks.currentEntry?.sessionId).toBe(sessionId);
       expect(sessionStoreMocks.currentEntry?.archivedAt).toBeUndefined();
       expect(sessionStoreMocks.currentEntry?.archivedBy).toBeUndefined();
+      expect(sessionStoreMocks.currentEntry?.archiveReason).toBeUndefined();
       if (suppliedOwner) {
         expect(ownerGetMany).toHaveBeenCalledWith([sessionId]);
         expect(placementContextMocks.resolveSessionWorkerPlacementContext).not.toHaveBeenCalled();
@@ -2026,6 +2029,8 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     name: string;
     commands?: OpenClawConfig["commands"];
     admitted: boolean;
+    command?: "/new" | "/reset";
+    tombstoneDuringDispatch?: boolean;
   }>([
     { name: "ordinary channel-authorized reset", admitted: true },
     {
@@ -2038,9 +2043,24 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       commands: { ownerAllowFrom: ["owner"], allowFrom: { matrix: [] } },
       admitted: false,
     },
+    ...(["/new", "/reset"] as const).flatMap((command) => [
+      {
+        name: `authorized ${command} after recovery commits`,
+        command,
+        tombstoneDuringDispatch: true,
+        admitted: true,
+      },
+      {
+        name: `denied ${command} after recovery commits`,
+        command,
+        tombstoneDuringDispatch: true,
+        commands: { allowFrom: { matrix: [] } },
+        admitted: false,
+      },
+    ]),
   ])(
     "gates hard reset admission without pre-unarchiving the tombstone: $name",
-    async ({ commands, admitted }) => {
+    async ({ commands, admitted, command = "/new", tombstoneDuringDispatch }) => {
       setNoAbort();
       const sessionId = "restart-tombstone-session";
       const sessionKey = "agent:main:matrix:channel:room-a";
@@ -2080,9 +2100,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         To: "!room-a:example.test",
         AccountId: "default",
         SessionKey: sessionKey,
-        Body: "/new",
-        CommandBody: "/new",
-        RawBody: "/new",
+        Body: command,
+        CommandBody: command,
+        RawBody: command,
         CommandSource: "text",
         CommandAuthorized: true,
         InboundAccessAuthorized: true,
@@ -2091,11 +2111,27 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       });
 
       const tombstoneBefore = structuredClone(sessionStoreMocks.currentEntry);
+      if (tombstoneDuringDispatch) {
+        sessionStoreMocks.currentEntry = {
+          sessionId,
+          updatedAt: Date.now(),
+          mainRestartRecovery: { cycleId: "cycle-1", revision: 3, chargedAttempts: 3 },
+        };
+      }
       const dispatch = dispatchReplyFromConfig({
         ctx,
         cfg: { ...emptyConfig, commands },
         dispatcher,
         replyResolver,
+        ...(tombstoneDuringDispatch
+          ? {
+              fastAbortResolver: async () => {
+                sessionStoreMocks.currentEntry = structuredClone(tombstoneBefore);
+                return { handled: false, aborted: false };
+              },
+              formatAbortReplyTextResolver: () => "aborted",
+            }
+          : {}),
       });
       if (!admitted) {
         await expect(dispatch).rejects.toMatchObject({

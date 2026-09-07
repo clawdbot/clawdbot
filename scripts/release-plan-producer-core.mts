@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { compareAscii } from "./lib/canonical-json.mjs";
 import { collectExtensionPackageJsonCandidates } from "./lib/plugin-publication-candidates.ts";
 import {
   collectPublishablePluginPackagesFromCandidates,
@@ -66,7 +67,6 @@ const NPM_CORE_PACKAGE_POLICY_PATH = "scripts/lib/npm-core-release-packages.json
 const YAML_PACKAGE_VERSION = "2.9.0";
 const YAML_PACKAGE_INTEGRITY =
   "sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA==";
-const compareAscii = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
 function git(repoRoot: string, args: string[]): string {
   return execFileSync("git", args, {
     cwd: repoRoot,

@@ -1,8 +1,13 @@
 import type { RetiredAuthProfileCleanupPlan } from "../commands/doctor-auth-legacy-oauth.js";
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
+import type { ShippedPluginInstallConfigImport } from "../commands/doctor/shared/plugin-registry-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
+import type {
+  LegacyStateMigrationStepReceipt,
+  PreparedPostSessionPluginMigration,
+} from "../infra/state-migrations.types.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -12,6 +17,7 @@ import type { FlowContribution } from "./types.js";
 
 type DoctorConfigResult = {
   cfg: OpenClawConfig;
+  pluginInstallConfigImport?: ShippedPluginInstallConfigImport;
   path?: string;
   shouldWriteConfig?: boolean;
   /** Repair panels held back until the atomic config write commits. */
@@ -30,8 +36,13 @@ type DoctorConfigResult = {
   blockedCodexModelIdentities?: readonly string[];
   /** Ephemeral doctor-only auth rename plan; never part of persisted config. */
   openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
+  /** Transient pre-retirement alias/default interpretation; current config owns auth and routes. */
+  retiredModelRefConfig?: Pick<OpenClawConfig, "agents" | "models">;
   runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
   invalidatePluginMetadataSnapshot?: () => void;
+  stateMigrationStepReceipts?: LegacyStateMigrationStepReceipt[];
+  postSessionPluginMigration?: PreparedPostSessionPluginMigration;
+  postSessionPluginMigrationPlanBound?: boolean;
 };
 
 export type DoctorHealthFlowContext = {

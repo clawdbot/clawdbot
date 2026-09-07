@@ -43,13 +43,20 @@ export function activityRunInspectorHref(runId: string, basePath: string): strin
   return activityRunInspectorSelectorHref({ kind: "run", id: runId }, basePath);
 }
 
-export function resolveActivityRouteData(search: string): ActivityRouteData {
+export function resolveActivityRouteData(
+  search: string,
+  pathPersonId?: string | null,
+): ActivityRouteData {
   const params = new URLSearchParams(search);
   if (params.get("view") === "live") {
     return { mode: "live", selector: null };
   }
   if (params.get("view") !== "run") {
-    return { mode: "sessions", filters: parseSessionActivityFilters(search), selector: null };
+    return {
+      mode: "sessions",
+      filters: parseSessionActivityFilters(search, pathPersonId),
+      selector: null,
+    };
   }
   const executionId = params.get("execution");
   const selectorId = params.get("receipt")?.trim() || null;

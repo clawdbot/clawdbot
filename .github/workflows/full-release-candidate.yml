@@ -123,6 +123,7 @@ jobs:
       prepared_npm_bundle_json: ${{ inputs.prepared_npm_bundle_json }}
       prepare_only: true
       emit_candidate_evidence: true
+      package_published: ${{ fromJSON(inputs.request_json).packagePublished }}
       release_soak: ${{ fromJSON(inputs.request_json).releaseSoak }}
       include_repo_e2e: false
       include_release_path_suites: false

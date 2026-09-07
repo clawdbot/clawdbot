@@ -88,8 +88,9 @@ describe("GatewayChatClient operator scopes", () => {
     }
 
     vi.resetModules();
-    vi.doMock("ws", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("ws")>();
+    vi.doMock("../../packages/gateway-client/src/websocket.js", async (importOriginal) => {
+      const actual =
+        await importOriginal<typeof import("../../packages/gateway-client/src/websocket.js")>();
       return { ...actual, WebSocket: ScopeUpgradeWebSocket };
     });
     vi.doMock("../gateway/client.js", async (importOriginal) => {
@@ -147,16 +148,10 @@ describe("GatewayChatClient operator scopes", () => {
           role: "operator",
           scopes: requestedScopes,
           device: { id: deviceIdentity.deviceId, nonce },
-          auth: token
-            ? { token }
-            : {
-                token: cachedDeviceAuth.token,
-                deviceToken: cachedDeviceAuth.token,
-              },
         });
-        if (token) {
-          expect(connect.params?.auth?.deviceToken).toBeUndefined();
-        }
+        expect(connect.params?.auth).toEqual(
+          token ? { token } : { deviceToken: cachedDeviceAuth.token },
+        );
         expect(connect.params?.device?.signature).toEqual(expect.any(String));
         return { client, socket, connect };
       };
@@ -271,7 +266,7 @@ describe("GatewayChatClient operator scopes", () => {
       });
     } finally {
       await Promise.all(clients.map((client) => client.stop()));
-      vi.doUnmock("ws");
+      vi.doUnmock("../../packages/gateway-client/src/websocket.js");
       vi.doUnmock("../gateway/client.js");
       vi.resetModules();
     }

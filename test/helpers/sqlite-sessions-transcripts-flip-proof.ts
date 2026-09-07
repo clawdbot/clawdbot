@@ -160,7 +160,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
           throw new Error(`expected built CLI entrypoint, got ${gatewayEntrypoint.join(" ")}`);
         }
         if (options.requireBuiltCli === true) {
-          // Only this provider is exercised; the full inventory can exceed the CLI log-tail bound.
+          // Only this provider is exercised, so inspect it instead of listing every plugin.
           const inspection = await inst.cli(["plugins", "inspect", "openai", "--json"]);
           const plugin = asRecord(parseJsonObject(inspection.stdout)?.plugin);
           if (
@@ -169,7 +169,11 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
             plugin.origin !== "bundled" ||
             typeof plugin.source !== "string"
           ) {
-            throw new Error("built CLI could not inspect the bundled OpenAI artifact");
+            // The Gateway has not started, so its log tail is empty; the command outcome
+            // is the only evidence a CI reader gets.
+            throw new Error(
+              `built CLI could not inspect the bundled OpenAI artifact (code=${String(inspection.code)} signal=${String(inspection.signal)})\n--- plugins inspect stdout ---\n${tail(inspection.stdout, 2_000)}\n--- plugins inspect stderr ---\n${tail(inspection.stderr, 4_000)}`,
+            );
           }
           bundledPlugins = [{ id: plugin.id, source: plugin.source }];
         }

@@ -359,6 +359,46 @@ describe("message-normalizer", () => {
       });
     });
 
+    it.each([
+      { viewId: "cv_widget", url: "/__openclaw__/canvas/documents/cv_widget/index.html" },
+      { url: "/__openclaw__/canvas/documents/cv_widget/index.html" },
+    ])("keeps the canonical Canvas block instead of its shortcode copy: %j", (identity) => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [
+          { type: "text", text: 'Ready.\n[embed ref="cv_widget" title="Widget" /]' },
+          {
+            type: "canvas",
+            preview: {
+              kind: "canvas",
+              surface: "assistant_message",
+              render: "url",
+              ...identity,
+              sandbox: "strict",
+              boardWidgetName: "saved-widget",
+            },
+            rawText: "original tool result",
+          },
+        ],
+      });
+
+      expect(result.content).toEqual([
+        { type: "text", text: "Ready." },
+        {
+          type: "canvas",
+          preview: {
+            kind: "canvas",
+            surface: "assistant_message",
+            render: "url",
+            ...identity,
+            sandbox: "strict",
+            boardWidgetName: "saved-widget",
+          },
+          rawText: "original tool result",
+        },
+      ]);
+    });
+
     it("drops invalid canvas dashboard identity from history", () => {
       const result = normalizeMessage({
         role: "assistant",
@@ -568,6 +608,18 @@ describe("message-normalizer", () => {
               width: value,
               height: value,
             },
+            {
+              type: "attachment",
+              attachment: {
+                kind: "document",
+                url: "/media/document",
+                label: "Document",
+                sizeBytes: value,
+                durationMs: value,
+                width: value,
+                height: value,
+              },
+            },
           ],
         });
         expect(result.content).toEqual([
@@ -582,6 +634,10 @@ describe("message-normalizer", () => {
             rawText: null,
           },
           { type: "attachment", attachment: { kind: "video", url: "/media/clip", label: "Video" } },
+          {
+            type: "attachment",
+            attachment: { kind: "document", url: "/media/document", label: "Document" },
+          },
         ]);
       },
     );

@@ -1,7 +1,8 @@
 import path from "node:path";
 import type { Plugin } from "vite";
-import type { Vitest } from "vitest/node";
-import { isVitestWorkerMetadataRequest } from "../../scripts/lib/vitest-cli-mode.mts";
+// The runner config loader closes before hooks run; capture the native parser while loading.
+import { parseCLI, type Vitest } from "vitest/node";
+import { parseVitestExecutionArgs } from "../../scripts/lib/vitest-cli.mts";
 import {
   isVitestWorkerDeclaration,
   requestVitestWorkerArtifacts,
@@ -25,14 +26,14 @@ export function compiledSubprocessesPlugin(): Plugin {
   return {
     name: "openclaw:compiled-subprocesses",
     enforce: "pre",
-    configureVitest({ vitest, experimental_defineCacheKeyGenerator }) {
+    configureVitest({ vitest, defineCacheKeyGenerator }) {
       const supplied = getVitestWorkerDescriptor();
       // Only the repository runner can join all borrowers before deleting code.
       // Standalone Vitest, watch and metadata collection retain live source.
       if (
         !supplied ||
         vitest.config.watch ||
-        isVitestWorkerMetadataRequest(process.argv.slice(2))
+        !parseVitestExecutionArgs(process.argv.slice(2), parseCLI)
       ) {
         return;
       }
@@ -40,7 +41,7 @@ export function compiledSubprocessesPlugin(): Plugin {
       if (!instance[ownerKey]) {
         // Source and compiled imports differ, but generations within this mode
         // share parent transforms. Keep Vitest's source/config hashing intact.
-        experimental_defineCacheKeyGenerator(() => "openclaw:compiled-subprocesses");
+        defineCacheKeyGenerator(() => "openclaw:compiled-subprocesses");
         const directory = supplied.directory;
         let preparation: Promise<string> | undefined;
         let failure: unknown;

@@ -75,6 +75,7 @@ export const SERVICE_AUDIT_CODES = {
   systemdRestartSec: "systemd-restart-sec",
   systemdWantsNetworkOnline: "systemd-wants-network-online",
   systemdKillModeProcessOrNone: "systemd-kill-mode-process-or-none",
+  systemdKillModeControlGroup: "systemd-kill-mode-control-group",
   systemdUnitBackupUnsafe: "systemd-unit-backup-unsafe",
 } as const;
 
@@ -121,7 +122,7 @@ function parseSystemdUnit(content: string): {
 
   // Parse only unit keys relevant to service resilience; this is not a full
   // systemd parser and intentionally ignores sections.
-  for (const rawLine of content.split(/\r?\n/)) {
+  for (const rawLine of splitSystemdLogicalLines(content)) {
     const line = rawLine.trim();
     if (!line) {
       continue;
@@ -141,16 +142,11 @@ function parseSystemdUnit(content: string): {
     if (!value) {
       continue;
     }
-    if (key === "After") {
+    if (key === "After" || key === "Wants") {
+      const dependencies = key === "After" ? after : wants;
       for (const entry of value.split(/\s+/)) {
         if (entry) {
-          after.add(entry);
-        }
-      }
-    } else if (key === "Wants") {
-      for (const entry of value.split(/\s+/)) {
-        if (entry) {
-          wants.add(entry);
+          dependencies.add(entry);
         }
       }
     } else if (key === "RestartSec") {
@@ -245,12 +241,15 @@ async function auditSystemdUnit(
       level: "recommended",
     });
   }
-  const killMode = normalizeLowercaseStringOrEmpty(parsed.killMode);
-  if (killMode === "process" || killMode === "none") {
+  const killMode = normalizeLowercaseStringOrEmpty(parsed.killMode) || "control-group";
+  if (killMode !== "mixed") {
     issues.push({
-      code: SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone,
+      code:
+        killMode === "process" || killMode === "none"
+          ? SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone
+          : SERVICE_AUDIT_CODES.systemdKillModeControlGroup,
       message:
-        "KillMode is process/none; service child processes can survive gateway stops and restarts.",
+        "KillMode=mixed is required to drain active turns before final service child cleanup; inspect unit and drop-in overrides.",
       detail: `${unitPath}: ${killMode}`,
       level: "recommended",
     });
@@ -441,7 +440,6 @@ function auditGatewayToken(
   issues.push({
     code: SERVICE_AUDIT_CODES.gatewayTokenEmbedded,
     message: "Gateway service embeds OPENCLAW_GATEWAY_TOKEN and should be reinstalled.",
-    detail: "Run `openclaw gateway install --force` to remove embedded service token.",
     level: "recommended",
   });
   const expectedToken = normalizeOptionalString(expectedGatewayToken);
@@ -527,10 +525,6 @@ export function readEmbeddedGatewayToken(command: GatewayServiceCommand): string
   return normalizeOptionalString(command.environment?.OPENCLAW_GATEWAY_TOKEN);
 }
 
-function getPathModule(platform: NodeJS.Platform) {
-  return platform === "win32" ? path.win32 : path.posix;
-}
-
 function getEquivalentMinimalPathEntries(
   entry: string,
   platform: NodeJS.Platform,
@@ -575,13 +569,13 @@ function auditGatewayServicePath(
   }
 
   const expected = expectedServicePath?.trim()
-    ? normalizeStringEntries(expectedServicePath.split(getPathModule(platform).delimiter))
+    ? normalizeStringEntries(expectedServicePath.split(path.posix.delimiter))
     : getMinimalServicePathPartsFromEnv({
         platform,
         env,
         includeMissingUserBinDefaults: false,
       });
-  const parts = normalizeStringEntries(servicePath.split(getPathModule(platform).delimiter));
+  const parts = normalizeStringEntries(servicePath.split(path.posix.delimiter));
   const normalizedParts = new Set(parts.map((entry) => normalizeServicePathEntry(entry, platform)));
   const normalizedExpected = new Set(
     expected.map((entry) => normalizeServicePathEntry(entry, platform)),
@@ -678,6 +672,7 @@ async function auditGatewayRuntime(
 /**
  * Check if the service's embedded token differs from the config file token.
  * Returns an issue if drift is detected (service will use old token after restart).
+ * The invoking CLI selects recovery advice for its installation.
  */
 export function checkTokenDrift(params: {
   serviceToken: string | undefined;
@@ -696,7 +691,6 @@ export function checkTokenDrift(params: {
       code: SERVICE_AUDIT_CODES.gatewayTokenDrift,
       message:
         "Config token differs from service token. The daemon will use the old token after restart.",
-      detail: "Run `openclaw gateway install --force` to sync the token.",
       level: "recommended",
     };
   }
