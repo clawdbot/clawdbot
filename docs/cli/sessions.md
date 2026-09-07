@@ -61,9 +61,9 @@ for a smaller/larger window or `--limit all` when you intentionally need the
 full store. JSON responses include `totalCount`, `limitApplied`, and `hasMore`
 when callers need to show that more rows exist.
 
-JSON session rows include `color` when a session color is set (for example,
-`"color": "blue"`). Uncolored sessions and sessions whose color was cleared omit
-the field.
+JSON session rows include `color` and `category` when those values are set (for
+example, `"color": "blue"` and `"category": "Research"`). Sessions without those
+values omit the corresponding fields.
 
 RPC clients can pass `configuredAgentsOnly: true` to keep the broad combined
 discovery source but return only rows for agents currently present in config.
