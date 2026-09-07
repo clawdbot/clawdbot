@@ -338,8 +338,8 @@ export async function generateSummaries(params: {
     previous?.summary.fingerprint === fingerprint &&
     previous.report.period.period === report.period.period &&
     previous.report.period.key === report.period.key &&
-    (options.enabled ||
-      (previous.summary.source === "fallback" && !previous.summary.warnings?.length))
+    // Enabled runs retry a stored fallback; disabled runs never carry a model-failure warning forward.
+    (options.enabled ? previous.summary.source === "model" : !previous.summary.warnings?.length)
   ) {
     const storedMembers = new Map(previous.report.members.map((member) => [member.login, member]));
     if (report.members.every((member) => storedMembers.get(member.login)?.summary)) {

@@ -284,6 +284,48 @@ describe("team report summaries", () => {
     );
   });
 
+  it("retries the model when the stored summary is a fallback for the same evidence", async () => {
+    const complete = vi
+      .fn<Complete>()
+      .mockRejectedValueOnce(new Error("provider unavailable"))
+      .mockResolvedValue(completion(JSON.stringify(response())));
+    const first = await generateSummaries({
+      report: report(),
+      options: { enabled: true },
+      llm: { complete },
+    });
+    expect(first.summary.source).toBe("fallback");
+    expect(first.summary.warnings).toHaveLength(1);
+    const next = await generateSummaries({
+      report: report(),
+      options: { enabled: true },
+      llm: { complete },
+      previous: first,
+    });
+    expect(next.reused).toBe(false);
+    expect(next.summary.source).toBe("model");
+    expect(next.summary.warnings).toBeUndefined();
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses a stored model summary for unchanged evidence when summaries are disabled", async () => {
+    const complete = vi.fn<Complete>().mockResolvedValue(completion(JSON.stringify(response())));
+    const first = await generateSummaries({
+      report: report(),
+      options: { enabled: true },
+      llm: { complete },
+    });
+    const next = await generateSummaries({
+      report: report(),
+      options: { enabled: false },
+      llm: { complete },
+      previous: first,
+    });
+    expect(next.reused).toBe(true);
+    expect(next.summary.source).toBe("model");
+    expect(complete).toHaveBeenCalledOnce();
+  });
+
   it("regenerates when a source gap changes even if activity counts do not", async () => {
     const complete = vi.fn<Complete>().mockResolvedValue(completion(JSON.stringify(response())));
     const first = await generateSummaries({

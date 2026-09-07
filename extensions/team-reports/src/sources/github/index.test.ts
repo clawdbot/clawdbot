@@ -387,6 +387,11 @@ describe("GitHub reports source", () => {
       actors: ["builder", "helper", "reviewer"],
     },
     { shape: "null credits", credits: null, actors: ["helper"] },
+    {
+      shape: "null credit login",
+      credits: [{ login: null, type: "reporter" }],
+      actors: ["helper"],
+    },
     { shape: "omitted credits", credits: undefined, actors: ["helper"] },
   ])(
     "accepts advisory $shape and attributes visible actors without stale warnings",
