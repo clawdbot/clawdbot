@@ -23,7 +23,7 @@ export type NodeHostConfig = {
     capacity?: number;
     /** Worker process boundary: direct host execution or a container (default: none). */
     isolation?: "none" | "container";
-    /** Optional Node 22+ container image override for isolated worker sessions. */
+    /** Optional Node 24.16+ or 26.1+ container image override for isolated worker sessions. */
     containerImage?: string;
   };
   /** Browser proxy settings for node hosts. */
