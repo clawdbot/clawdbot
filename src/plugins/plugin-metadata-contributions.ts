@@ -18,17 +18,18 @@ export function listPluginManifestContributionIds(
   plugin: PluginManifestRecord,
   contribution: PluginMetadataContributionKey,
 ): readonly string[] {
+  // Retain snapshot projection defaults when contribution arrays are omitted.
   switch (contribution) {
     case "providers":
-      return plugin.providers;
+      return plugin.providers ?? [];
     case "channels":
-      return plugin.channels;
+      return plugin.channels ?? [];
     case "channelConfigs":
       return Object.keys(plugin.channelConfigs ?? {});
     case "setupProviders":
       return plugin.setup?.providers?.map((provider) => provider.id) ?? [];
     case "cliBackends":
-      return [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])];
+      return [...(plugin.cliBackends ?? []), ...(plugin.setup?.cliBackends ?? [])];
     case "modelCatalogProviders":
       return [
         ...Object.keys(plugin.modelCatalog?.providers ?? {}),
