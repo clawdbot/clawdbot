@@ -117,6 +117,10 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
           if (!isConfiguredBuzzChannel(configuredChannelIds, message.channelId)) {
             return;
           }
+          ctx.setStatus({
+            accountId: account.accountId,
+            lastInboundAt: Date.now(),
+          });
           await handleBuzzInbound({
             account,
             cfg: ctx.cfg,
@@ -126,6 +130,12 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
             assertCurrent,
             historyMap,
             buildContext,
+          });
+        },
+        onOutbound: () => {
+          ctx.setStatus({
+            accountId: account.accountId,
+            lastOutboundAt: Date.now(),
           });
         },
         onMessageError: (error) => {

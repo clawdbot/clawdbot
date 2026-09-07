@@ -12,8 +12,8 @@ in a hosted or self-hosted Buzz workspace.
 
 ## What it does
 
-- Receives normal, rich-content, and structured-diff messages from approved
-  Buzz rooms
+- Receives normal, Forum post, rich-content, and structured-diff messages from
+  approved Buzz rooms
 - Replies in the same room and thread
 - Shows typing while an accepted agent turn is running
 - Preserves Markdown in replies and sends text through OpenClaw's built-in
@@ -174,8 +174,8 @@ Agents can:
 
 - Reply to an incoming Buzz message in its room or thread
 - Show room- or thread-scoped typing while generating a reply
-- Receive Buzz kind `9` normal messages, kind `40002` rich-content messages,
-  and kind `40008` structured diffs
+- Receive Buzz kind `9` normal messages, kind `45001` Forum posts, kind
+  `40002` rich-content messages, and kind `40008` structured diffs
 - Send Markdown text to an approved Buzz room as a normal kind `9` message
 - Send native room-member mentions from normal replies and proactive messages
 - Use the configured default room when a workflow does not specify a target

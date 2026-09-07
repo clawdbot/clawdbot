@@ -332,7 +332,7 @@ it("recovers the Gateway account after silent presence without replaying pre-act
     cfg,
     abortSignal: abort.signal,
     statusPatchSink: (next) => {
-      if (next.lifecycle) {
+      if (next.lifecycle && next.lifecycle !== states.at(-1)) {
         states.push(next.lifecycle);
       }
       if (next.lifecycle === "ready") {

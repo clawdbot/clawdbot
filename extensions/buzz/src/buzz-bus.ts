@@ -233,6 +233,7 @@ export async function startBuzzBus(options: {
     signal: AbortSignal,
     assertCurrent: () => void,
   ) => Promise<void>;
+  onOutbound?: () => void;
   onMessageError?: (error: Error) => void;
   onFatalError?: (error: Error) => void;
   onDedupeError?: (error: Error) => void;
@@ -319,6 +320,7 @@ export async function startBuzzBus(options: {
         mentionedPubkeys,
       });
       await relay.publish(event);
+      options.onOutbound?.();
       return event.id;
     },
     sendTyping: async ({ channelId, threadId, replyToId }) => {
