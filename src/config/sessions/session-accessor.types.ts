@@ -485,6 +485,11 @@ export type SessionEntryUpdateOptions = {
   takeCacheOwnership?: boolean;
   /** Throw when best-effort store recovery cannot confirm the requested write. */
   requireWriteSuccess?: boolean;
+  /**
+   * Runs inside the same SQLite write transaction after the patched entry is
+   * written. Throwing here rolls back the entry mutation.
+   */
+  afterWriteInTransaction?: (result: SessionEntry) => void;
 };
 
 export type SessionAbortTargetCutoff = {
@@ -556,6 +561,11 @@ export type SessionEntryPatchOptions = {
   skipMaintenance?: boolean;
   /** Let the writer cache retain the updated object without cloning. */
   takeCacheOwnership?: boolean;
+  /**
+   * Runs inside the same SQLite write transaction after the patched entry is
+   * written. Throwing here rolls back the entry mutation.
+   */
+  afterWriteInTransaction?: (result: SessionEntry) => void;
 };
 
 export type SessionEntryPatchContext = {

@@ -232,7 +232,7 @@ function limitTrajectoryPayloadValue(
   return limited;
 }
 
-function sanitizeTrajectoryPayload(data: Record<string, unknown>): Record<string, unknown> {
+export function sanitizeTrajectoryPayload(data: Record<string, unknown>): Record<string, unknown> {
   const finalPromptText = data.finalPromptText;
   const redactedFinalPromptText =
     typeof finalPromptText === "string" ? (redactSecrets(finalPromptText) as string) : undefined;

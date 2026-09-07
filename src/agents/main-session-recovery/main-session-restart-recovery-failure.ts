@@ -58,7 +58,7 @@ async function sendRestartRecoveryTombstoneNotice(params: {
 }
 
 async function writeRestartRecoveryTombstoneNotice(params: {
-  agentId: string;
+  agentId?: string;
   entry: SessionEntry;
   sessionKey: string;
   storePath: string;
@@ -88,6 +88,7 @@ async function writeRestartRecoveryTombstoneNotice(params: {
 }
 
 async function claimMainRestartRecoveryTombstone(params: {
+  agentId?: string;
   observation: MainSessionRecoveryObservation;
   reason: string;
   storePath: string;
@@ -102,6 +103,7 @@ async function claimMainRestartRecoveryTombstone(params: {
     },
     requireWriteSuccess: true,
     target: { sessionKey: params.sessionKey, storePath: params.storePath },
+    agentId: params.agentId,
   });
   if (claim.transition.kind !== "tombstoned" || !claim.entry) {
     return null;
@@ -113,7 +115,7 @@ async function claimMainRestartRecoveryTombstone(params: {
 }
 
 export async function tombstoneMainRestartRecoveryWithNotice(params: {
-  agentId: string;
+  agentId?: string;
   cfg?: OpenClawConfig;
   entry: SessionEntry;
   gatewayRuntime: GatewayRecoveryRuntime;
@@ -173,6 +175,7 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
       const current = loadSessionEntry({
         sessionKey: params.sessionKey,
         storePath: params.storePath,
+        agentId: params.agentId,
         readConsistency: "latest",
       }) as SessionEntry | undefined;
       const state = current?.mainRestartRecovery;

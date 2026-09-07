@@ -18,6 +18,9 @@ export function scheduleMainSessionRecoveryPendingTarget(
         sessionKey: target.sessionKey,
         stateDir: target.stateDir,
         storePath: target.storePath,
+        // Forward the durable partition owner: the exact retry reopens the
+        // store path without the original admission context.
+        agentId: target.agentId,
       }),
     () => {}, // Startup recovery remains the fallback if this optional module cannot load.
   );

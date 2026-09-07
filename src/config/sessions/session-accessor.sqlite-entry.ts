@@ -558,6 +558,8 @@ async function patchSqliteSessionEntrySnapshot(
           // Identity observers only consume sessionId, already owned by this canonical write.
           currentIdentity = new Map([[sessionKey, persisted]]);
           result = cloneSessionEntry(persisted);
+          // Runs inside the write transaction; throwing rolls back the entry mutation.
+          options.afterWriteInTransaction?.(result);
         }, databaseOptions);
         try {
           if (next && result) {

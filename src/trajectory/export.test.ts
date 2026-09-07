@@ -803,6 +803,20 @@ describe("exportTrajectoryBundle", () => {
     expect(artifacts).toBeUndefined();
   });
 
+  it("exports interrupted terminal status for a matching run-scoped start", async () => {
+    const artifacts = await exportRuntimeArtifacts(
+      runtimeAttemptEvents([
+        ["session.started", "interrupted-run"],
+        ["session.ended", "interrupted-run", { status: "interrupted", aborted: true }],
+      ]),
+    );
+
+    expect(artifacts).toMatchObject({
+      finalStatus: "interrupted",
+      aborted: true,
+    });
+  });
+
   it("preserves numeric transcript timestamps", async () => {
     const tmpDir = makeTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");
