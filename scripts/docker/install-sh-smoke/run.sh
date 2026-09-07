@@ -407,7 +407,7 @@ run_update_smoke() {
 
   assert_update_smoke_offline
   # The idle container owns no Gateway service; exercise the baseline updater
-  # before checking the candidate's default restart policy independently.
+  # before checking the candidate's already-current idle behavior independently.
   run_update_candidate "$UPDATE_BASELINE_VERSION" applied --no-restart
   echo "==> Verify candidate already-current no-op without a Gateway service"
   run_update_candidate "$UPDATE_EXPECT_VERSION" already-current
