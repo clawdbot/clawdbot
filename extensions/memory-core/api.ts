@@ -9,7 +9,7 @@ export {
   dedupeDreamDiaryEntries,
   removeBackfillDiaryEntries,
   writeBackfillDiaryEntries,
-} from "./src/dreaming-dreams-file.js";
+} from "./src/dreaming-diary-file.js";
 export { previewGroundedRemMarkdown } from "./src/rem-evidence.js";
 export { filterRecallEntriesWithinLookback } from "./src/dreaming-phases.js";
 export { previewRemHarness } from "./src/rem-harness.js";
