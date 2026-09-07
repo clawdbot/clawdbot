@@ -9,7 +9,7 @@ import {
   rehomeSessionDeliveryReferencesForCanonicalRepairBatch,
   type SessionEntryLifecycleRemoval,
 } from "../config/sessions/session-accessor.js";
-import { writeTranscriptArchive } from "../config/sessions/session-accessor.sqlite-archive.js";
+import { writeTranscriptArchive } from "../config/sessions/session-accessor.sqlite-archive-files.js";
 import {
   copySessionNodeArtifactsForRepair,
   deleteSessionMembersForRepair,

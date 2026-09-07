@@ -12,8 +12,9 @@ import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
-vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./session-accessor.sqlite-archive.js")>();
+vi.mock("./session-accessor.sqlite-archive-files.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./session-accessor.sqlite-archive-files.js")>();
   return { ...actual, MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES: 1024 };
 });
 

@@ -23,10 +23,8 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "./session-accessor.js";
-import {
-  materializeSessionStateDeletePlans,
-  writeTranscriptArchive,
-} from "./session-accessor.sqlite-archive.js";
+import { writeTranscriptArchive } from "./session-accessor.sqlite-archive-files.js";
+import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import {
   deleteMaterializedSessionStatePlans,
   planSessionStateDeleteIfUnreferenced,
