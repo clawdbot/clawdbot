@@ -1,6 +1,7 @@
 /** Builds prompt body and envelope metadata for reply runs. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
+import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import type { RuntimeContextFragment } from "../../agents/internal-runtime-context.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { normalizeMediaFacts, type MediaFact } from "../../media/media-facts.js";
@@ -28,8 +29,6 @@ function buildReplyPromptBodies(params: {
   effectiveBaseBody: string;
   prefixedBody?: string;
   transcriptBody?: string;
-  threadContextNote?: string;
-  systemEventBlocks?: string[];
   inboundEventKind?: InboundEventKind;
   /** Facts whose text projection is already present in a body variant. */
   media?: readonly MediaFact[];
@@ -76,14 +75,7 @@ function buildReplyPromptBodies(params: {
 type ReplyPromptEnvelopeStartupAction = "new" | "reset";
 
 /** Full prompt envelope passed into reply run preparation. */
-type ReplyPromptEnvelope = ReturnType<typeof buildReplyPromptBodies> & {
-  /** Model-visible body before media, thread context, and inter-session annotation are applied. */
-  effectiveBaseBody: string;
-  /** User-visible body persisted to transcript before media/inter-session annotation. */
-  transcriptBody: string;
-  /** Runtime-only user context for backends that can carry it outside transcript text. */
-  currentInboundContext?: CurrentInboundPromptContext;
-};
+type ReplyPromptEnvelope = ReturnType<typeof buildReplyPromptBodies> & ReplyPromptEnvelopeBase;
 
 /** Base prompt envelope fields before body variants are added. */
 type ReplyPromptEnvelopeBase = {
@@ -259,8 +251,6 @@ export function buildReplyPromptEnvelope(
     effectiveBaseBody: base.effectiveBaseBody,
     prefixedBody,
     transcriptBody: base.transcriptBody,
-    threadContextNote: params.threadContextNote,
-    systemEventBlocks: params.systemEventBlocks,
     inboundEventKind: params.inboundEventKind,
     media: params.media,
   });
@@ -271,14 +261,10 @@ export function buildReplyPromptEnvelope(
     appendChannelPromptContext("", params.sessionCtx.ChannelPromptContext),
   ].filter((text): text is string => Boolean(text?.trim()));
   const currentInboundContext = sourceContext.length
-    ? {
-        ...base.currentInboundContext,
-        text: [base.currentInboundContext?.text, ...sourceContext].filter(Boolean).join("\n\n"),
-        fragments: [
-          ...(base.currentInboundContext?.fragments ?? []),
-          ...sourceContext.map((text) => ({ kind: "conversation-data" as const, text })),
-        ],
-      }
+    ? appendCurrentInboundContext(
+        base.currentInboundContext,
+        sourceContext.map((text) => ({ kind: "conversation-data", text })),
+      )
     : base.currentInboundContext;
   return {
     ...promptBodies,

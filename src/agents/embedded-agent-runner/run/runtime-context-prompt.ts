@@ -27,6 +27,27 @@ export type RuntimeContextCustomMessage = {
   timestamp: number;
 };
 
+/** Appends turn additions to both full and resumed projections without changing their provenance. */
+export function appendCurrentInboundContext(
+  context: CurrentInboundPromptContext | undefined,
+  fragments: RuntimeContextFragment[],
+  legacyText = fragments.map((fragment) => fragment.text).join("\n\n"),
+): CurrentInboundPromptContext {
+  const append = (text?: string) => [text, legacyText].filter(Boolean).join("\n\n");
+  return {
+    ...context,
+    text: append(context?.text),
+    ...(context?.resumableText !== undefined
+      ? { resumableText: append(context.resumableText) }
+      : {}),
+    fragments: [
+      ...(context?.fragments ??
+        (context?.text ? [{ kind: "conversation-data" as const, text: context.text }] : [])),
+      ...fragments,
+    ],
+  };
+}
+
 /** Combines inbound context and the current prompt using the channel-provided joiner. */
 export function buildCurrentInboundPrompt(params: {
   context: CurrentInboundPromptContext | undefined;

@@ -108,11 +108,14 @@ against prompt injection.
 The transcript header selects this projection: new sessions use version 4;
 existing version 3 sessions retain their previous projection across restarts.
 Branches and restored history keep the source version, as do reset boundaries
-and compaction within an existing transcript. Unknown projection versions are
+and compaction within an existing transcript. Adoption leaves retained history
+untouched; Doctor repairs legacy headerless history with version 3. Unknown projection versions are
 rejected before model submission. Provider message roles remain unchanged to
 preserve retained-thinking prefix compatibility. Cloud-worker prompt assembly
 uses a separate launch contract and still needs this hardening; see
 [the cloud-worker follow-up](https://github.com/openclaw/openclaw/issues/140666).
+
+Resumed room CLI turns retain new thread notes, system events, and MCP App context.
 
 On channels with native approval cards/buttons, the prompt tells the agent to rely on that UI first, and to include a manual `/approve` command only when the tool result says chat approvals are unavailable or manual approval is the only path.
 

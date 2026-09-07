@@ -22,6 +22,7 @@ import {
   type DeferredEmbeddedRunLifecycleManager,
 } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
+import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { renderRateLimitOrOverloadedCopy } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
@@ -596,27 +597,11 @@ async function executeAgentTurnOutcome(params: AgentTurnParams): Promise<AgentTu
         ...executionParams,
         followupRun: {
           ...executionParams.followupRun,
-          currentInboundContext: {
-            ...executionParams.followupRun.currentInboundContext,
-            text: [
-              executionParams.followupRun.currentInboundContext?.text,
-              modelContextLease.legacyText,
-            ]
-              .filter(Boolean)
-              .join("\n\n"),
-            fragments: [
-              ...(executionParams.followupRun.currentInboundContext?.fragments ??
-                (executionParams.followupRun.currentInboundContext?.text
-                  ? [
-                      {
-                        kind: "conversation-data" as const,
-                        text: executionParams.followupRun.currentInboundContext.text,
-                      },
-                    ]
-                  : [])),
-              modelContextLease.context,
-            ],
-          },
+          currentInboundContext: appendCurrentInboundContext(
+            executionParams.followupRun.currentInboundContext,
+            [modelContextLease.context],
+            modelContextLease.legacyText,
+          ),
         },
       }
     : executionParams;
