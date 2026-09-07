@@ -29,6 +29,8 @@ import { estimateRenderedLlmBoundaryTokenPressure } from "./preemptive-compactio
 type PreparedEmbeddedAttemptHistory = {
   contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]>;
   contextEngineAssemblySucceeded: boolean;
+  /** Engine-assembly token estimate; keeps the host overflow precheck active when it exceeds the attempt budget. */
+  contextEngineEstimatedTokens?: number;
   unwindowedContextEngineMessagesForPrecheck?: AgentMessage[];
 };
 
@@ -176,6 +178,7 @@ export async function prepareEmbeddedAttemptHistory(
 
   let contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]> = "assembled";
   let contextEngineAssemblySucceeded = false;
+  let contextEngineEstimatedTokens: number | undefined;
   let unwindowedContextEngineMessagesForPrecheck: AgentMessage[] | undefined;
   if (activeContextEngine) {
     try {
@@ -232,6 +235,12 @@ export async function prepareEmbeddedAttemptHistory(
       }
       contextEnginePromptAuthority = assembled.promptAuthority ?? "assembled";
       contextEngineAssemblySucceeded = true;
+      if (
+        typeof assembled.estimatedTokens === "number" &&
+        Number.isFinite(assembled.estimatedTokens)
+      ) {
+        contextEngineEstimatedTokens = assembled.estimatedTokens;
+      }
       if (contextEnginePromptAuthority === "preassembly_may_overflow") {
         unwindowedContextEngineMessagesForPrecheck = preassemblyMessages;
       }
@@ -254,6 +263,7 @@ export async function prepareEmbeddedAttemptHistory(
   return {
     contextEnginePromptAuthority,
     contextEngineAssemblySucceeded,
+    ...(contextEngineEstimatedTokens !== undefined ? { contextEngineEstimatedTokens } : {}),
     ...(unwindowedContextEngineMessagesForPrecheck
       ? { unwindowedContextEngineMessagesForPrecheck }
       : {}),

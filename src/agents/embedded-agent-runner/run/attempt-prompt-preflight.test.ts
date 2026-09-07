@@ -355,6 +355,54 @@ describe("attempt prompt preflight", () => {
     expect(result).toEqual(state);
   });
 
+  it("keeps host precheck active when the engine estimate exceeds the attempt budget", async () => {
+    const makeState = (): Parameters<typeof prepareEmbeddedAttemptPromptPreflight>[0]["state"] => ({
+      contextBudgetStatus: undefined,
+      preflightRecovery: undefined,
+      promptError: null,
+      promptErrorSource: null,
+      skipPromptSubmission: false,
+    });
+    const baseInput = {
+      attempt,
+      compactionReplayEnabled: true,
+      activeContextEngine: {
+        info: { id: "owner", name: "Owner", ownsCompaction: true },
+      },
+      contextEngineAssemblySucceeded: true,
+      contextEnginePromptAuthority: "assembled" as const,
+      contextTokenBudget: 100,
+      hookMessagesForCurrentPrompt: [],
+      includeBoundaryTimestamp: false,
+      promptForPrecheck: "x".repeat(4_000),
+      reserveTokens: 20,
+      sessionMessageCount: 0,
+      systemPrompt: "",
+      toolResultMaxChars: 1_000,
+    };
+
+    // The engine's own assembly already exceeds the CURRENT attempt's budget
+    // (e.g. a fallback chain moved the run to a smaller-context model); the
+    // host precheck must stay active instead of shipping a doomed prompt.
+    const overBudget = await prepareEmbeddedAttemptPromptPreflight({
+      ...baseInput,
+      contextEngineEstimatedTokens: 5_000,
+      state: makeState(),
+    });
+    expect(overBudget.skipPromptSubmission).toBe(false);
+    expect(overBudget.contextBudgetStatus?.shouldCompact).toBe(true);
+    expect(overBudget.contextBudgetStatus?.overflowTokens).toBeGreaterThan(0);
+
+    // A fitting estimate keeps the deferral behavior byte-identical.
+    const state = makeState();
+    const fitting = await prepareEmbeddedAttemptPromptPreflight({
+      ...baseInput,
+      contextEngineEstimatedTokens: 50,
+      state,
+    });
+    expect(fitting).toEqual(state);
+  });
+
   it("does not persist heuristic pre-prompt tool-result truncation", async () => {
     const toolResult = makeToolResultMessage("alpha beta gamma delta epsilon ".repeat(2_200));
     const messages = [toolResult];

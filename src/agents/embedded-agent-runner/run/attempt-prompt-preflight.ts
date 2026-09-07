@@ -169,6 +169,8 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
   compactionReplayEnabled: boolean;
   contextEngineAssemblySucceeded: boolean;
   contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]>;
+  /** Engine-assembly token estimate; keeps the host precheck active when it exceeds the attempt budget. */
+  contextEngineEstimatedTokens?: number;
   contextTokenBudget: number;
   hookMessagesForCurrentPrompt: AgentMessage[];
   includeBoundaryTimestamp: boolean;
@@ -227,9 +229,28 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
       };
     }
   }
+  // Even when the context engine owns compaction, its own assembly estimate can
+  // exceed the CURRENT attempt's per-model budget (e.g. a fallback chain moved
+  // the run to a smaller-context model). Shipping that prompt is a guaranteed
+  // billed terminal overflow, so the host precheck stays active in that case.
+  const contextEngineEstimateExceedsBudget =
+    typeof input.contextEngineEstimatedTokens === "number" &&
+    Number.isFinite(input.contextEngineEstimatedTokens) &&
+    input.contextEngineEstimatedTokens > 0 &&
+    input.contextTokenBudget > 0 &&
+    input.contextEngineEstimatedTokens > input.contextTokenBudget;
+  if (contextEngineEstimateExceedsBudget) {
+    log.warn(
+      `[context-overflow-precheck] engine estimate ${input.contextEngineEstimatedTokens} exceeds ` +
+        `attempt budget ${input.contextTokenBudget}; keeping host precheck active ` +
+        `provider=${input.attempt.provider}/${input.attempt.modelId} ` +
+        `sessionKey=${input.attempt.sessionKey ?? input.attempt.sessionId}`,
+    );
+  }
   const shouldSkipPrecheck =
     skipPromptSubmission ||
-    (input.contextEngineAssemblySucceeded &&
+    (!contextEngineEstimateExceedsBudget &&
+      input.contextEngineAssemblySucceeded &&
       input.activeContextEngine?.info.ownsCompaction &&
       input.contextEnginePromptAuthority !== "preassembly_may_overflow" &&
       !preemptiveCompaction?.compactionReplay);
