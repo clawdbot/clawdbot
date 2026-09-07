@@ -182,7 +182,7 @@ export async function readMemoryFile(params: {
     lines: params.lines,
     defaultLines: params.defaultLines ?? DEFAULT_MEMORY_READ_LINES,
     maxChars: params.maxChars,
-    suggestReadFallback: allowedWorkspace,
+    suggestReadFallback: inWorkspace,
   });
 }
 
