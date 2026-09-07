@@ -34,7 +34,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   initializeNativeOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { ensureCliCommandBootstrap } from "./command-bootstrap.js";
+import { ensureCliExecutionBootstrap } from "./command-execution-startup.js";
 import { resolveCliStartupPolicy } from "./command-startup-policy.js";
 import { testApi as configGuardTestApi } from "./program/config-guard.js";
 
@@ -124,9 +124,9 @@ function fixture() {
 async function bootstrap() {
   const commandPath = ["node", "worker"];
   const error = vi.fn();
-  await ensureCliCommandBootstrap({
+  await ensureCliExecutionBootstrap({
     commandPath,
-    ...resolveCliStartupPolicy({ commandPath, jsonOutputMode: false }),
+    startupPolicy: resolveCliStartupPolicy({ commandPath, jsonOutputMode: false }),
     runtime: {
       log: vi.fn(),
       error,

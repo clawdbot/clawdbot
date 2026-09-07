@@ -71,4 +71,41 @@ describe("runtime config snapshot writes", () => {
     expect(projected.models).toEqual(sourceConfig.models);
     expect(projected.gateway?.port).toBe(19002);
   });
+
+  it("retains an empty object for a changed runtime subtree", () => {
+    const sourceConfig: OpenClawConfig = { gateway: { port: 18789 } };
+    const runtimeConfig: OpenClawConfig = {
+      gateway: { port: 18789, auth: { mode: "token", allowTailscale: true } },
+    };
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    const projected = projectConfigOntoRuntimeSourceSnapshot({
+      gateway: { port: 18789, auth: { mode: "token" } },
+    });
+
+    expect(projected).toStrictEqual({ gateway: { port: 18789, auth: {} } });
+  });
+
+  it("preserves literal nulls and omissions when projecting a runtime edit", () => {
+    const sourceConfig: OpenClawConfig = {
+      ...createProviderConfigFixture(),
+      agents: { defaults: { params: { temperature: 0.2, topP: 0.8 } } },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      ...createProviderConfigFixture("synthetic-runtime-value"),
+      agents: { defaults: { ...sourceConfig.agents?.defaults, maxConcurrent: 4 } },
+    };
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+    const params = { temperature: null, nested: { value: null } };
+
+    const projected = projectConfigOntoRuntimeSourceSnapshot({
+      ...runtimeConfig,
+      agents: { defaults: { ...runtimeConfig.agents?.defaults, params } },
+    });
+
+    expect(projected).toStrictEqual({
+      ...sourceConfig,
+      agents: { defaults: { params } },
+    });
+  });
 });

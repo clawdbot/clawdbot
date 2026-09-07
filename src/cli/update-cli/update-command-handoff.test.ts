@@ -1,15 +1,16 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import type { GatewayServiceState } from "../../daemon/service-types.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import {
   formatUpdateAncestryBlockMessage,
-  gatewayAncestryBlockMessage,
+  gatewayMaintenanceBlockMessage,
 } from "./update-command-handoff.js";
 
 const tempDirs = createTrackedTempDirs();
@@ -69,12 +70,12 @@ if(process.argv[1]===${JSON.stringify(callerPath)} && ${mode !== "transfer"}) {
       callerPath,
       `
 import fs from 'node:fs';
-import {handoffUpdateFromGateway} from ${JSON.stringify(new URL("./update-command-handoff.ts", import.meta.url).href)};
+import {handoffUpdateFromGateway} from ${JSON.stringify(resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.updateHandoff).href)};
 try {
   const transferred=await handoffUpdateFromGateway({state:{env:process.env,runtime:{status:'running',pid:process.ppid}},root:${JSON.stringify(root)},mode:'npm',opts:{json:true},timeoutMs:10000,nodeRunner:process.execPath,stopProgress:()=>{}});
   fs.appendFileSync(${JSON.stringify(tracePath)},JSON.stringify({event:'caller-transferred',transferred})+'\\n');
 } catch(error) {
-  fs.appendFileSync(${JSON.stringify(tracePath)},JSON.stringify({event:'caller-error'})+'\\n');
+  fs.appendFileSync(${JSON.stringify(tracePath)},JSON.stringify({event:'caller-error',message:String(error)})+'\\n');
   process.stdout.write(JSON.stringify({code:error.code})+'\\n');process.exitCode=23;
 }`,
     );
@@ -83,7 +84,7 @@ try {
       gatewayPath,
       `
 const fs=require('node:fs'),{spawn}=require('node:child_process');process.stdin.resume();
-const child=spawn(process.execPath,['--import',${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm")).href)},${JSON.stringify(callerPath)}],{env:process.env,stdio:['pipe','pipe','pipe']});
+const child=spawn(process.execPath,[${JSON.stringify(callerPath)}],{env:process.env,stdio:['pipe','pipe','pipe']});
 let stdout='',stderr='';child.stdout.on('data',chunk=>stdout+=chunk);child.stderr.on('data',chunk=>stderr+=chunk);
 child.once('close',(code,signal)=>{fs.writeFileSync(${JSON.stringify(resultPath)},JSON.stringify({code,signal,stdout,stderr}));child.stdin.destroy();});
 process.stdin.once('end',()=>{if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');process.stdin.destroy();});`,
@@ -157,9 +158,18 @@ process.stdin.once('end',()=>{if(child.exitCode===null&&child.signalCode===null)
   },
 );
 
-describe("gatewayAncestryBlockMessage", () => {
+const callerService = {
+  installed: true,
+  loadState: { status: "loaded" },
+  running: true,
+  env: {},
+  command: null,
+  runtime: { status: "running", pid: process.pid },
+} satisfies GatewayServiceState;
+
+describe("gatewayMaintenanceBlockMessage", () => {
   it("never advises stopping the gateway service or running update from the caller", () => {
-    const message = gatewayAncestryBlockMessage(process.pid);
+    const message = gatewayMaintenanceBlockMessage(callerService, process.cwd());
     expect(message).toContain("inside the gateway process tree");
     expect(message).toContain("from a shell outside the gateway service");
     expect(message).not.toContain("stop the gateway service first");
@@ -167,13 +177,18 @@ describe("gatewayAncestryBlockMessage", () => {
   });
 
   it("returns undefined when the pid is not an ancestor", () => {
-    expect(gatewayAncestryBlockMessage(2)).toBeUndefined();
+    expect(
+      gatewayMaintenanceBlockMessage(
+        { ...callerService, runtime: { status: "running", pid: 2 } },
+        process.cwd(),
+      ),
+    ).toBeUndefined();
   });
 });
 
 describe("formatUpdateAncestryBlockMessage", () => {
   it("adds the chat handoff advice only to ancestry blocks", () => {
-    const ancestry = gatewayAncestryBlockMessage(process.pid) ?? "";
+    const ancestry = gatewayMaintenanceBlockMessage(callerService, process.cwd()) ?? "";
     const updateMessage = formatUpdateAncestryBlockMessage(ancestry);
     expect(updateMessage).toContain("/update");
     expect(updateMessage).not.toContain("shell outside");

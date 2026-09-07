@@ -4572,7 +4572,7 @@ describe("runCliAgent reliability", () => {
     }
   });
 
-  it("builds fresh-session history reseed prompts from hook-mutated prompts", async () => {
+  it("builds fresh-session caller-memory prompts from hook-mutated prompts", async () => {
     const { dir, sessionFile, sessionTarget } = createSessionFixture({
       history: [{ role: "user", content: "earlier ask" }],
     });
@@ -4618,6 +4618,8 @@ describe("runCliAgent reliability", () => {
         model: "gpt-5.4",
         timeoutMs: 1_000,
         runId: "run-history-hook",
+        // This test supplies explicit memory; durable account provenance has separate coverage.
+        sessionManager: SessionManager.fromEntries(manager.getEntries(), dir),
       });
 
       expect(context.params.prompt).toBe("hook context\n\ncurrent ask");

@@ -236,7 +236,6 @@ extensions/telegram/src/format.ts
 extensions/telegram/src/lane-delivery.test.ts
 extensions/telegram/src/message-cache.ts
 extensions/telegram/src/polling-session.test.ts
-extensions/telegram/src/polling-session.ts
 extensions/telegram/src/send.test.ts
 extensions/telegram/src/thread-bindings.ts
 extensions/telegram/src/webhook.test.ts
@@ -447,7 +446,6 @@ src/channels/plugins/bundled.shape-guard.test.ts
 src/channels/plugins/message-actions.security.test.ts
 src/channels/plugins/outbound/interactive.test.ts
 src/channels/plugins/read-only.test.ts
-src/channels/plugins/read-only.ts
 src/channels/plugins/setup-wizard-helpers.test.ts
 src/channels/plugins/setup-wizard-helpers.ts
 src/channels/plugins/types.adapters.ts
@@ -748,7 +746,6 @@ src/plugins/manifest-registry.ts
 src/plugins/marketplace.test.ts
 src/plugins/marketplace.ts
 src/plugins/official-external-plugin-catalog.test.ts
-src/plugins/official-external-plugin-catalog.ts
 src/plugins/plugin-registry-snapshot.test.ts
 src/plugins/provider-runtime.test.ts
 src/plugins/provider-runtime.ts

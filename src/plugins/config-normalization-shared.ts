@@ -1,4 +1,5 @@
 // Shares plugin config normalization helpers across control-plane paths.
+import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { normalizeChatChannelId } from "../channels/ids.js";
@@ -60,20 +61,11 @@ function normalizeList(value: unknown, normalizePluginId: NormalizePluginId): st
 }
 
 function normalizeHookTimeoutMs(value: unknown): number | undefined {
-  if (
-    typeof value !== "number" ||
-    !Number.isInteger(value) ||
-    !Number.isFinite(value) ||
-    value <= 0 ||
-    value > 600_000
-  ) {
-    return undefined;
-  }
-  return value;
+  return asSafeIntegerInRange(value, { min: 1, max: 600_000 });
 }
 
 function normalizeHookTimeouts(value: unknown): Record<string, number> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return undefined;
   }
   const normalized: Record<string, number> = {};
@@ -90,7 +82,7 @@ function normalizePluginEntries(
   entries: unknown,
   normalizePluginId: NormalizePluginId,
 ): NormalizedPluginsConfig["entries"] {
-  if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
+  if (!isRecord(entries)) {
     return {};
   }
   const normalized: NormalizedPluginsConfig["entries"] = {};
@@ -99,23 +91,20 @@ function normalizePluginEntries(
     if (!normalizedKey) {
       continue;
     }
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
+    if (!isRecord(value)) {
       normalized[normalizedKey] = {};
       continue;
     }
-    const entry = value as Record<string, unknown>;
+    const entry = value;
     const hooksRaw = entry.hooks;
-    const hooks =
-      hooksRaw && typeof hooksRaw === "object" && !Array.isArray(hooksRaw)
-        ? {
-            allowPromptInjection: (hooksRaw as { allowPromptInjection?: unknown })
-              .allowPromptInjection,
-            allowConversationAccess: (hooksRaw as { allowConversationAccess?: unknown })
-              .allowConversationAccess,
-            timeoutMs: normalizeHookTimeoutMs((hooksRaw as { timeoutMs?: unknown }).timeoutMs),
-            timeouts: normalizeHookTimeouts((hooksRaw as { timeouts?: unknown }).timeouts),
-          }
-        : undefined;
+    const hooks = isRecord(hooksRaw)
+      ? {
+          allowPromptInjection: hooksRaw.allowPromptInjection,
+          allowConversationAccess: hooksRaw.allowConversationAccess,
+          timeoutMs: normalizeHookTimeoutMs(hooksRaw.timeoutMs),
+          timeouts: normalizeHookTimeouts(hooksRaw.timeouts),
+        }
+      : undefined;
     const normalizedHooks =
       hooks &&
       (typeof hooks.allowPromptInjection === "boolean" ||
@@ -134,21 +123,15 @@ function normalizePluginEntries(
           }
         : undefined;
     const subagentRaw = entry.subagent;
-    const subagent =
-      subagentRaw && typeof subagentRaw === "object" && !Array.isArray(subagentRaw)
-        ? {
-            allowModelOverride: (subagentRaw as { allowModelOverride?: unknown })
-              .allowModelOverride,
-            hasAllowedModelsConfig: Array.isArray(
-              (subagentRaw as { allowedModels?: unknown }).allowedModels,
-            ),
-            allowedModels: Array.isArray((subagentRaw as { allowedModels?: unknown }).allowedModels)
-              ? normalizeArrayBackedTrimmedStringList(
-                  (subagentRaw as { allowedModels?: unknown }).allowedModels,
-                )
-              : undefined,
-          }
-        : undefined;
+    const subagent = isRecord(subagentRaw)
+      ? {
+          allowModelOverride: subagentRaw.allowModelOverride,
+          hasAllowedModelsConfig: Array.isArray(subagentRaw.allowedModels),
+          allowedModels: Array.isArray(subagentRaw.allowedModels)
+            ? normalizeArrayBackedTrimmedStringList(subagentRaw.allowedModels)
+            : undefined,
+        }
+      : undefined;
     const normalizedSubagent =
       subagent &&
       (typeof subagent.allowModelOverride === "boolean" ||
@@ -165,34 +148,21 @@ function normalizePluginEntries(
           }
         : undefined;
     const llmRaw = entry.llm;
-    const llm =
-      llmRaw && typeof llmRaw === "object" && !Array.isArray(llmRaw)
-        ? {
-            allowModelOverride: (llmRaw as { allowModelOverride?: unknown }).allowModelOverride,
-            hasAllowedModelsConfig: Array.isArray(
-              (llmRaw as { allowedModels?: unknown }).allowedModels,
-            ),
-            allowedModels: Array.isArray((llmRaw as { allowedModels?: unknown }).allowedModels)
-              ? normalizeArrayBackedTrimmedStringList(
-                  (llmRaw as { allowedModels?: unknown }).allowedModels,
-                )
-              : undefined,
-            hasAllowedCompletionModelsConfig: Array.isArray(
-              (llmRaw as { allowedCompletionModels?: unknown }).allowedCompletionModels,
-            ),
-            allowedCompletionModels: Array.isArray(
-              (llmRaw as { allowedCompletionModels?: unknown }).allowedCompletionModels,
-            )
-              ? normalizeArrayBackedTrimmedStringList(
-                  (llmRaw as { allowedCompletionModels?: unknown }).allowedCompletionModels,
-                )
-              : undefined,
-            allowAuthProfileOverride: (llmRaw as { allowAuthProfileOverride?: unknown })
-              .allowAuthProfileOverride,
-            allowAgentIdOverride: (llmRaw as { allowAgentIdOverride?: unknown })
-              .allowAgentIdOverride,
-          }
-        : undefined;
+    const llm = isRecord(llmRaw)
+      ? {
+          allowModelOverride: llmRaw.allowModelOverride,
+          hasAllowedModelsConfig: Array.isArray(llmRaw.allowedModels),
+          allowedModels: Array.isArray(llmRaw.allowedModels)
+            ? normalizeArrayBackedTrimmedStringList(llmRaw.allowedModels)
+            : undefined,
+          hasAllowedCompletionModelsConfig: Array.isArray(llmRaw.allowedCompletionModels),
+          allowedCompletionModels: Array.isArray(llmRaw.allowedCompletionModels)
+            ? normalizeArrayBackedTrimmedStringList(llmRaw.allowedCompletionModels)
+            : undefined,
+          allowAuthProfileOverride: llmRaw.allowAuthProfileOverride,
+          allowAgentIdOverride: llmRaw.allowAgentIdOverride,
+        }
+      : undefined;
     const normalizedLlm =
       llm &&
       (typeof llm.allowModelOverride === "boolean" ||

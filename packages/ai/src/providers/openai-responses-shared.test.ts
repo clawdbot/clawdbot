@@ -146,7 +146,7 @@ describe("convertResponsesToolPayload", () => {
       },
     ] satisfies Tool[];
 
-    const converted = convertResponsesToolPayload(tools, { model: nativeOpenAIModel }).tools;
+    const converted = convertResponsesToolPayload(tools, { model: nativeOpenAIModel });
 
     expect(converted).toEqual([
       {
@@ -179,7 +179,7 @@ describe("convertResponsesToolPayload", () => {
         },
       ],
       { model: nativeOpenAIModel },
-    ).tools;
+    );
 
     const tool = expectResponsesFunctionTool(converted[0]);
     expect(tool.strict).toBe(false);
@@ -201,7 +201,7 @@ describe("convertResponsesToolPayload", () => {
         },
       ],
       { model: proxyOpenAIModel },
-    ).tools;
+    );
 
     const tool = expectResponsesFunctionTool(converted[0]);
     expect(tool).not.toHaveProperty("strict");
@@ -224,7 +224,7 @@ describe("convertResponsesToolPayload", () => {
     } satisfies Tool;
 
     expect(
-      convertResponsesToolPayload([zeta, alpha]).tools.map(
+      convertResponsesToolPayload([zeta, alpha]).map(
         (tool) => expectResponsesFunctionTool(tool).name,
       ),
     ).toEqual(["alpha", "zeta"]);
@@ -250,7 +250,7 @@ describe("convertResponsesToolPayload", () => {
         },
       ],
       { model: nativeOpenAIModel },
-    ).tools;
+    );
 
     expect(converted).toEqual([
       {

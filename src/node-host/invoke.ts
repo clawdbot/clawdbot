@@ -1068,12 +1068,7 @@ function decodeParams<T>(raw?: string | null): T {
 async function sendInvokeResult(
   client: NodeHostClient,
   frame: NodeInvokeRequestPayload,
-  result: {
-    ok: boolean;
-    payload?: unknown;
-    payloadJSON?: string | null;
-    error?: { code?: string; message?: string } | null;
-  },
+  result: Parameters<typeof buildNodeInvokeResultParams>[1],
 ) {
   try {
     await client.request("node.invoke.result", buildNodeInvokeResultParams(frame, result));
@@ -1098,14 +1093,7 @@ function buildNodeInvokeResultParams(
   payloadJSON?: string;
   error?: { code?: string; message?: string };
 } {
-  const params: {
-    id: string;
-    nodeId: string;
-    ok: boolean;
-    payload?: unknown;
-    payloadJSON?: string;
-    error?: { code?: string; message?: string };
-  } = {
+  const params: ReturnType<typeof buildNodeInvokeResultParams> = {
     id: frame.id,
     nodeId: frame.nodeId,
     ok: result.ok,

@@ -8,6 +8,12 @@ import { performance } from "node:perf_hooks";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-startup.ts";
+import { stopChild } from "../../scripts/lib/gateway-bench-child.ts";
+import {
+  classifyGatewayReadyLog,
+  collectOutputLines,
+  waitForInitialProbe,
+} from "../../scripts/lib/gateway-bench-runtime.ts";
 import { isStartupTraceDuration } from "../../scripts/lib/gateway-startup-trace-ranking.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { validateConfigObject } from "../../src/config/validation.js";
@@ -182,14 +188,12 @@ describe("gateway startup benchmark script", () => {
   });
 
   it("classifies HTTP listen and gateway ready logs separately", () => {
-    expect(
-      testing.classifyGatewayReadyLog("[gateway] http server listening (0 plugins, 0.8s)"),
-    ).toBe("http-listen");
-    expect(testing.classifyGatewayReadyLog("[gateway] ready (0 plugins, 0.8s)")).toBe(
-      "gateway-ready",
+    expect(classifyGatewayReadyLog("[gateway] http server listening (0 plugins, 0.8s)")).toBe(
+      "http-listen",
     );
-    expect(testing.classifyGatewayReadyLog("[gateway] ready")).toBe("gateway-ready");
-    expect(testing.classifyGatewayReadyLog("[gateway] starting HTTP server...")).toBeNull();
+    expect(classifyGatewayReadyLog("[gateway] ready (0 plugins, 0.8s)")).toBe("gateway-ready");
+    expect(classifyGatewayReadyLog("[gateway] ready")).toBe("gateway-ready");
+    expect(classifyGatewayReadyLog("[gateway] starting HTTP server...")).toBeNull();
   });
 
   it("preserves ready and trace records split across output chunks", () => {
@@ -201,7 +205,7 @@ describe("gateway startup benchmark script", () => {
     let carry = "";
     const lines: string[] = [];
     for (const chunk of chunks) {
-      const parsed = testing.collectOutputLines(carry, chunk);
+      const parsed = collectOutputLines(carry, chunk);
       carry = parsed.carry;
       lines.push(...parsed.lines);
     }
@@ -211,7 +215,7 @@ describe("gateway startup benchmark script", () => {
     }
 
     expect(carry).toBe("");
-    expect(lines.map(testing.classifyGatewayReadyLog)).toContain("gateway-ready");
+    expect(lines.map(classifyGatewayReadyLog)).toContain("gateway-ready");
     expect(trace).toMatchObject({
       "sidecars.ready": 2,
       "sidecars.ready.heapUsedMb": 12,
@@ -471,7 +475,7 @@ describe("gateway startup benchmark script", () => {
   });
 
   registerStopChildBehaviorTests({
-    stopChild: testing.stopChild,
+    stopChild,
     queuedExitCode: 7,
   });
 
@@ -534,7 +538,7 @@ describe("gateway startup benchmark script", () => {
     });
     try {
       const startAt = performance.now();
-      const result = await testing.waitForProbe({
+      const result = await waitForInitialProbe({
         deadlineAt: startAt + 1_000,
         path: "/readyz",
         port,

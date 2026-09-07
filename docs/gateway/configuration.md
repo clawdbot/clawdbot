@@ -277,7 +277,7 @@ skipped when a candidate contains a redacted secret placeholder such as `***` or
     ```
 
     - Use `channels.<provider>.healthMonitor.enabled` or `channels.<provider>.accounts.<id>.healthMonitor.enabled` to control auto-restarts for one channel or account.
-    - See [Health Checks](/gateway/health) for operational debugging and the [full reference](/gateway/configuration-reference#gateway) for all fields.
+    - See [Health Checks](/gateway/health) for operational debugging and the [full reference](/gateway/config-gateway#gateway) for all fields.
 
   </Accordion>
 
@@ -462,7 +462,7 @@ skipped when a candidate contains a redacted secret placeholder such as `***` or
     - Keep hook sessions isolated unless durable context is intentional. Direct persistent hooks require an explicit, prefix-bounded request `sessionKey`; mapped persistent hooks require a stable mapping key or `hooks.defaultSessionKey`.
     - For hook-driven agents, prefer strong modern model tiers and strict tool policy (for example messaging-only plus sandboxing where possible).
 
-    See [full reference](/gateway/configuration-reference#hooks) for all mapping options and Gmail integration.
+    See [full reference](/gateway/config-hooks#hooks) for all mapping options and Gmail integration.
 
   </Accordion>
 
@@ -507,12 +507,30 @@ skipped when a candidate contains a redacted secret placeholder such as `***` or
     - **Sibling keys**: merged after includes (override included values)
     - **Relative paths**: resolved relative to the including file
     - **Path format**: include paths must not contain null bytes and must be strictly shorter than 4096 characters before and after resolution
-    - **OpenClaw-owned writes**: when a write changes only one top-level section
-      backed by a single-file include such as `plugins: { $include: "./plugins.json5" }`,
-      OpenClaw updates that included file and leaves `openclaw.json` intact
-    - **Unsupported write-through**: root includes, include arrays, and includes
-      with sibling overrides fail closed for OpenClaw-owned writes instead of
-      flattening the config
+    - **OpenClaw-owned writes**: when every changed key is owned by one
+      single-file include at an object-key path, OpenClaw updates the deepest
+      owning include and leaves `openclaw.json` intact. This works for both
+      top-level sections such as `plugins: { $include: "./plugins.json5" }` and
+      nested object-map entries. Write-through only targets include files inside
+      the top-level config directory; includes admitted through
+      `OPENCLAW_INCLUDE_ROOTS` stay read-only for OpenClaw-owned writes.
+    - **Unsupported write-through**: root includes (every section of a config
+      whose root object authors `$include`), actual array-entry includes,
+      include arrays, sibling overrides, files shared by multiple logical paths,
+      changes spanning ownership boundaries,
+      any nested include beneath a merged owner, and any include whose own file
+      still authors a nested `$include` directive fail closed instead of
+      flattening the config. Numeric object keys are treated as map keys, not
+      array positions.
+      Include targets and contents are rechecked around persistence; a concurrent
+      edit to an intermediate include refuses the write or rolls back its unchanged leaf.
+    - **Doctor repairs**: `openclaw doctor --fix` writes through the same
+      boundary. A run whose candidate mixes a root-owned repair with an
+      include-owned repair is refused as a whole. That refused write leaves every
+      file unchanged (earlier writes in the same run stay saved), and Doctor names
+      the boundary to repair by hand before rerunning, plus the included file or
+      files when the root file authors that boundary's `$include` (an agent-roster
+      boundary is named without its file).
     - **Confinement**: `$include` paths must resolve under the directory holding
       `openclaw.json`. To share a tree across machines or users, set
       `OPENCLAW_INCLUDE_ROOTS` to a path-list (`:` on POSIX, `;` on Windows) of
@@ -795,6 +813,13 @@ the file watcher takes over the same unapplied write during that wait, the RPC s
 through replay; persistence alone is not an application acknowledgment. Shutdown,
 supersession by different content, or failed application returns `UNAVAILABLE`
 with recovery guidance. `config.set` acknowledges persistence only.
+
+`channels.status` reports active-work deferrals in `statusIssues`, alongside
+channel policy diagnostics shown in the Control UI and `openclaw channels status`.
+`channels.start` also returns a diagnostic when that channel's reload is deferred;
+manual stop/start continues to use the published runtime configuration. Wait for
+active work to finish and refresh status. These diagnostics describe deferred
+channel reloads, not every persisted-but-unapplied configuration state.
 
 Once a reload has committed, it finishes its model and channel work before a
 newer config is applied. If that work needs restart recovery, the RPC returns

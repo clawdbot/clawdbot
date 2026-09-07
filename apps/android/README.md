@@ -24,6 +24,43 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 
 Long-press a row on the **Threads** page and choose **Color**, then select a swatch or **Default** to clear it. The eight colors are red, blue, green, yellow, purple, orange, pink, and cyan. Colored sessions show a narrow leading stripe in the sidebar and Threads page, plus a colored ring around the agent avatar in the open chat header. Unset colors add no indicator. Colors sync through the Gateway and remain visible in the local session cache while offline.
 
+## Foldable layout
+
+With a full-height vertical separator reported by AndroidX WindowManager, the
+main app places its sidebar on the reading-direction start plane and the active
+page on the other plane. Both use the reported bounds, including off-center
+hinges. The sidebar remains visible after selecting a page or session.
+
+Book panes require at least 280 dp for the sidebar, 320 dp for the active page,
+and 320 dp of height. Onboarding and layouts without a supported split use the
+largest rectangular region clear of separating folds and fully occluding hinges.
+Equal regions prefer the top, then the reading-direction start side. Opening
+the keyboard does not select a different fallback region for this outer host.
+Without an intersecting separator, the app keeps its full-window layout and
+modal sidebar.
+
+In Chat, a full-width horizontal separator can place the conversation header,
+transcript, and status above the hinge and the same composer below it. Each
+usable pane must be at least 320 dp wide. The measured space must fit the complete
+header, a transcript band with a complete text line, and status above, with a
+complete input line and controls below, accounting for the current font size
+and padding.
+
+Layout changes retain the draft, cursor, reader position, and existing local
+capture state owners. If keyboard insets or larger text leave too little space,
+Chat uses the existing one-region fallback based on the space remaining after
+insets, then restores the split when it fits.
+
+Command search and gateway trust prompts retain the single-region host.
+
+Gateway trust, QR scan-error, Replace gateway setup, and Forget gateway prompts
+also stay within one safe region. Their complete contents and actions scroll when
+space is limited; opening the keyboard does not move them to another region.
+If the keyboard covers that region entirely, dismiss the keyboard to reach the
+prompt again.
+
+Other dialogs, sheets, and menus are not adapted yet.
+
 ## Wear OS companion
 
 The `wear` app is a paired-phone companion with the same application ID and signing identity as the phone app. The watch discovers the phone through Wear OS Data Layer, then uses the phone's existing authenticated operator session. It never receives or stores Gateway tokens, passwords, TLS pins, or device-signing identity.

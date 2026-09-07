@@ -267,7 +267,6 @@ async function updateCommandInternal(
   let fallbackToLatest = false;
   let packageInstallSpec: string | null = null;
   let packageInstallEnv: NodeJS.ProcessEnv | undefined;
-  let packageInstallCwd: string | undefined;
   let packageInstallTarget: ResolvedGlobalInstallTarget | undefined;
   let installedPackageName = DEFAULT_PACKAGE_NAME;
   let packageAlreadyCurrent = false;
@@ -326,7 +325,6 @@ async function updateCommandInternal(
     recoveryState.triageTarget.root = root;
     recoveryState.triageTarget.nodeRunner = packageUpdateNodeRunner;
     packageInstallEnv = await createGlobalInstallEnv();
-    packageInstallCwd = invocationCwd;
     if (updateInstallKind === "package") {
       installedPackageName = (await readPackageName(root)) ?? DEFAULT_PACKAGE_NAME;
       const manager = await resolveGlobalManager({
@@ -374,7 +372,7 @@ async function updateCommandInternal(
       targetVersion = await resolveTargetVersion(tag, timeoutMs, {
         spec: explicitSpec,
         command: npmMetadataCommand,
-        cwd: packageInstallCwd,
+        cwd: invocationCwd,
         env: packageInstallEnv,
       });
     } else {
@@ -382,7 +380,7 @@ async function updateCommandInternal(
         channel,
         timeoutMs,
         command: npmMetadataCommand,
-        cwd: packageInstallCwd,
+        cwd: invocationCwd,
         env: packageInstallEnv,
       }).then((resolved) => {
         tag = resolved.tag;
@@ -418,7 +416,7 @@ async function updateCommandInternal(
         }),
         command: npmMetadataCommand,
         timeoutMs,
-        cwd: packageInstallCwd,
+        cwd: invocationCwd,
         env: packageInstallEnv,
       });
       if (targetMetadata.error || targetMetadata.version !== targetVersion) {
@@ -472,6 +470,7 @@ async function updateCommandInternal(
     channel,
     devTarget,
     packageTargetSchemaVersions,
+    packageTargetVersion: targetVersion ?? undefined,
     opts,
     refuseUpdate,
   });
@@ -512,13 +511,14 @@ async function updateCommandInternal(
 
   if (packageAlreadyCurrent) {
     const { finishAlreadyCurrentUpdate } = await import("./update-execution.runtime.js");
+    const channelChanged = requestedChannel !== null && requestedChannel !== storedChannel;
     await finishAlreadyCurrentUpdate({
       opts,
       result: {
-        status: "skipped",
+        status: channelChanged ? "ok" : "skipped",
         mode: packageInstallTarget?.manager ?? "unknown",
         root,
-        reason: "already-current",
+        ...(channelChanged ? {} : { reason: "already-current" }),
         before: { version: currentVersion },
         after: { version: currentVersion },
         steps: [],
@@ -651,6 +651,7 @@ async function updateCommandInternal(
     packageInstallEnv,
     packageInstallTarget,
     packageTargetSchemaVersions,
+    packageTargetVersion: targetVersion ?? undefined,
     packageUpdateNodeRunner,
     managedServiceNodeRunner,
     managedServiceRootRedirect,
@@ -679,6 +680,8 @@ async function updateCommandInternal(
   const finalizationConfigSnapshot = ownedManagedUpdateContext?.configSnapshot ?? configSnapshot;
   stop();
   const finalization = {
+    mutationStarted: execution.mutationStarted,
+    expectedVersion: targetVersion ?? undefined,
     result,
     failure: execution.failure,
     root,
@@ -702,6 +705,8 @@ async function updateCommandInternal(
     invocationCwd,
     packageTransaction: execution.packageTransaction,
     schemaVersions: execution.schemaVersions,
+    candidateSchemaVersions: execution.candidateSchemaVersions,
+    previousSchemaVersions: execution.previousSchemaVersions,
     previousVerified: execution.previousVerified,
   };
   const rollbackBlockedReason = await inspectActivatedUpdateState({
@@ -722,7 +727,9 @@ async function updateCommandInternal(
       progress.pendingSteps,
     );
     if (continued.exitCode !== 0) {
-      throw new UpdateCommandFailure(continued.result, continued.exitCode);
+      throw new UpdateCommandFailure(continued.result, continued.exitCode, undefined, {
+        automaticTriage: continued.automaticTriage,
+      });
     }
     return;
   }

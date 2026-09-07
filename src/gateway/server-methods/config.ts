@@ -35,6 +35,7 @@ import {
 import { redactConfigObject, restoreRedactedValues } from "../../config/redact-snapshot.js";
 import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
 import { lookupConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
+import { projectRuntimeChangesOntoSource } from "../../config/source-value-projection.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   validateConfigObjectRawWithPlugins,
@@ -495,10 +496,7 @@ function parseValidateConfigFromRawOrRespond(
   }
   // Full replacements may echo runtime defaults; keep only edits over the source snapshot.
   const sourceCandidate = snapshot.valid
-    ? applyMergePatch(
-        structuredClone(snapshot.resolved),
-        createMergePatch(snapshot.config, restored.result),
-      )
+    ? projectRuntimeChangesOntoSource(snapshot.resolved, snapshot.config, restored.result)
     : restored.result;
   const validatedSubmission = validateSubmittedConfigOrRespond({
     candidate: stripBundledProviderRuntimeDefaults({

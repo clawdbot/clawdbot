@@ -15,6 +15,8 @@ import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.assertCompleteText
 import ai.openclaw.app.ui.design.contrastThemeCases
 import ai.openclaw.app.ui.design.renderedLabelContrast
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Bitmap
 import androidx.compose.runtime.mutableStateOf
@@ -30,6 +32,7 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -38,6 +41,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.SavedStateHandle
@@ -127,6 +131,76 @@ class SettingsScreensContrastTest {
           }
         },
       ).around(composeRule)
+
+  @Test
+  @Config(qualifiers = "fr-rFR-w320dp-h800dp-mdpi")
+  fun gatewayInstanceIdCopiesTheWholeValueAtLargeFont() {
+    val application = RuntimeEnvironment.getApplication()
+    val clipboard = requireNotNull(application.getSystemService(ClipboardManager::class.java))
+    val previousClip = clipboard.primaryClip
+    try {
+      val model = offlineTypographyModel()
+      composeRule.setContent {
+        DeviceConfigurationOverride(DeviceConfigurationOverride.FontScale(2f)) {
+          ClawDesignTheme(dark = false) {
+            SettingsDetailScreen(model, SettingsRoute.Gateway, onBack = {})
+          }
+        }
+      }
+      val expected = model.instanceId.value
+      assertTrue(expected.isNotBlank())
+      val value = composeRule.onNodeWithText(expected, useUnmergedTree = true).performScrollTo()
+      value.assertIsDisplayed()
+      composeRule.runOnIdle { clipboard.setPrimaryClip(ClipData.newPlainText("Previous clipboard", "synthetic clipboard sentinel")) }
+      captureTypography("gateway-instance-id-before-copy")
+      value.performTouchInput { click() }
+      composeRule.runOnIdle {
+        assertEquals(
+          "The copyable Gateway instance ID must copy its full value",
+          expected,
+          clipboard.primaryClip
+            ?.getItemAt(0)
+            ?.text
+            ?.toString(),
+        )
+      }
+    } finally {
+      try {
+        if (previousClip == null) clipboard.clearPrimaryClip() else clipboard.setPrimaryClip(previousClip)
+      } finally {
+        NativeStringResources.setApplicationLocales(LocaleListCompat.getEmptyLocaleList())
+      }
+    }
+  }
+
+  @Test
+  @Config(qualifiers = "fr-rFR-w320dp-h800dp-mdpi")
+  fun gatewayMetricsKeepVisibleLabelsAndFullValuesAtLargeFont() {
+    try {
+      val model = offlineTypographyModel()
+      composeRule.setContent {
+        DeviceConfigurationOverride(DeviceConfigurationOverride.FontScale(2f)) {
+          ClawDesignTheme(dark = false) {
+            SettingsDetailScreen(model, SettingsRoute.Gateway, onBack = {})
+          }
+        }
+      }
+      val failures = mutableListOf<String>()
+      for (text in listOf(nativeString("Connection"), nativeString("Instance ID"), model.instanceId.value)) {
+        // Exact semantic lookup alone must not certify the visible, possibly ellipsized value.
+        val node = composeRule.onNodeWithText(text, useUnmergedTree = true).performScrollTo()
+        captureTypography("gateway-metric-${if (text == model.instanceId.value) "instance-value" else text}")
+        try {
+          node.assertCompleteText(text)
+        } catch (error: AssertionError) {
+          failures += "$text: ${error.message}"
+        }
+      }
+      assertTrue("Gateway metric labels and values must remain readable:\n${failures.joinToString("\n")}", failures.isEmpty())
+    } finally {
+      NativeStringResources.setApplicationLocales(LocaleListCompat.getEmptyLocaleList())
+    }
+  }
 
   @Test
   @Config(qualifiers = "fr-rFR-w320dp-h800dp-mdpi")

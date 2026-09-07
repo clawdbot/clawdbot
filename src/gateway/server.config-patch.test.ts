@@ -1031,6 +1031,43 @@ describe("gateway config methods", () => {
     expect(error?.details?.issues?.[0]?.path).toBe("gateway.bind");
   });
 
+  it.each(["config.set", "config.apply", "config.patch"] as const)(
+    "preserves literal nulls in full replacements and patch deletion through %s",
+    async (method) => {
+      const original = await getCurrentConfigObject();
+      const seed = structuredClone(original.config);
+      const agents = requireConfigObject(seed.agents, "agents");
+      const defaults = requireConfigObject(agents.defaults ?? {}, "agent defaults");
+      agents.defaults = { ...defaults, params: { temperature: 0.2, topP: 0.8 } };
+
+      try {
+        await writeJsonFile(original.path, seed);
+        invalidateConfigGetResponseCache();
+        const current = await getCurrentConfigObject();
+        const next = structuredClone(current.config);
+        const nextAgents = requireConfigObject(next.agents, "agents");
+        const nextDefaults = requireConfigObject(nextAgents.defaults, "agent defaults");
+        nextDefaults.params = { temperature: null, nested: { value: null } };
+        const patch = { agents: { defaults: { params: { temperature: null, topP: null } } } };
+
+        const res = await rpcReq(requireClient(), method, {
+          raw: JSON.stringify(method === "config.patch" ? patch : next),
+          baseHash: current.hash,
+        });
+
+        expect(res.ok, res.error?.message).toBe(true);
+        const persisted = JSON.parse(await fs.readFile(original.path, "utf-8"));
+        expect(persisted.agents.defaults).toStrictEqual({
+          ...defaults,
+          params: method === "config.patch" ? {} : { temperature: null, nested: { value: null } },
+        });
+      } finally {
+        await restoreConfigFileForTest(original);
+        invalidateConfigGetResponseCache();
+      }
+    },
+  );
+
   it("returns noop for config.patch when authored config is unchanged", async () => {
     const current = await getCurrentConfigObject();
 

@@ -54,51 +54,51 @@
   "redirects": [
     {
       "source": "/cli/commitments",
-      "destination": "/en/automation#retired-inferred-commitments"
+      "destination": "/automation#retired-inferred-commitments"
     },
     {
       "source": "/concepts/commitments",
-      "destination": "/en/automation#retired-inferred-commitments"
+      "destination": "/automation#retired-inferred-commitments"
     },
     {
       "source": "/concepts/channel-docking",
-      "destination": "/en/concepts/session#retired-channel-docking"
+      "destination": "/concepts/session#retired-channel-docking"
     },
     {
       "source": "/install/clawdock",
-      "destination": "/en/install/docker#clawdock-migration"
+      "destination": "/install/docker#clawdock-migration"
     },
     {
       "source": "/plan/swarms",
-      "destination": "/en/tools/swarm"
+      "destination": "/tools/swarm"
     },
     {
       "source": "/plugins/reference/linux-canvas",
-      "destination": "/en/platforms/linux#retired-linux-canvas"
+      "destination": "/platforms/linux#retired-linux-canvas"
     },
     {
       "source": "/plugins/reference/open-prose",
-      "destination": "/en/prose"
+      "destination": "/prose"
     },
     {
       "source": "/plugins/reference/workspaces",
-      "destination": "/en/web/dashboards#retired-workspaces"
+      "destination": "/web/dashboards#retired-workspaces"
     },
     {
       "source": "/providers/qwen-oauth",
-      "destination": "/en/providers/qwen#retired-qwen-portal-authentication"
+      "destination": "/providers/qwen#retired-qwen-portal-authentication"
     },
     {
       "source": "/refactor/canvas",
-      "destination": "/en/platforms/mac/canvas"
+      "destination": "/platforms/mac/canvas"
     },
     {
       "source": "/reference/templates/TOOLS.dev",
-      "destination": "/en/reference/templates/AGENTS.dev#tools"
+      "destination": "/reference/templates/AGENTS.dev#tools"
     },
     {
       "source": "/web/workspaces",
-      "destination": "/en/web/dashboards#retired-workspaces"
+      "destination": "/web/dashboards#retired-workspaces"
     },
     {
       "source": "/concepts/message-lifecycle-refactor",
@@ -1175,6 +1175,62 @@
     {
       "source": "/providers/inferrs",
       "destination": "/providers/llmman"
+    },
+    {
+      "source": "/web/control-ui/community-invitation",
+      "destination": "/web/control-ui/settings#community-invitation"
+    },
+    {
+      "source": "/web/control-ui/composer-capability-menu",
+      "destination": "/web/control-ui/chat#composer-capability-menu"
+    },
+    {
+      "source": "/web/control-ui/hosted-embeds",
+      "destination": "/web/control-ui/chat#hosted-embeds"
+    },
+    {
+      "source": "/web/control-ui/import-assistant-memory",
+      "destination": "/web/control-ui/settings#import-assistant-memory"
+    },
+    {
+      "source": "/web/control-ui/insecure-http",
+      "destination": "/web/control-ui/connect-and-pair#insecure-http"
+    },
+    {
+      "source": "/web/control-ui/markdown-tables",
+      "destination": "/web/control-ui/chat#markdown-tables"
+    },
+    {
+      "source": "/web/control-ui/meetings-page",
+      "destination": "/web/control-ui/settings#meetings-page"
+    },
+    {
+      "source": "/web/control-ui/mermaid-diagrams",
+      "destination": "/web/control-ui/chat#mermaid-diagrams"
+    },
+    {
+      "source": "/web/control-ui/new-session-names",
+      "destination": "/web/control-ui/sessions-and-sidebar#new-session-names"
+    },
+    {
+      "source": "/web/control-ui/operator-terminal",
+      "destination": "/web/control-ui/panels#operator-terminal"
+    },
+    {
+      "source": "/web/control-ui/pwa-install-and-web-push",
+      "destination": "/web/control-ui/connect-and-pair#pwa-install-and-web-push"
+    },
+    {
+      "source": "/web/control-ui/session-menu",
+      "destination": "/web/control-ui/sessions-and-sidebar#session-menu"
+    },
+    {
+      "source": "/web/control-ui/start-a-native-coding-cli",
+      "destination": "/web/control-ui/sessions-and-sidebar#start-a-native-coding-cli"
+    },
+    {
+      "source": "/web/control-ui/updates",
+      "destination": "/web/control-ui/settings#updates"
     }
   ],
   "navigation": {
@@ -1903,7 +1959,16 @@
                       "gateway/configuration",
                       "gateway/configuration-reference",
                       "gateway/config-agents",
+                      "gateway/config-automation",
+                      "gateway/config-browser-ui-desktop",
                       "gateway/config-channels",
+                      "gateway/config-cloud-workers",
+                      "gateway/config-extensions",
+                      "gateway/config-gateway",
+                      "gateway/config-hooks",
+                      "gateway/config-observability",
+                      "gateway/config-runtime",
+                      "gateway/config-secrets-env",
                       "gateway/config-tools",
                       "gateway/configuration-examples"
                     ]
@@ -2040,6 +2105,20 @@
                 "pages": [
                   "web/index",
                   "web/control-ui",
+                  {
+                    "group": "Control UI",
+                    "pages": [
+                      "web/control-ui/connect-and-pair",
+                      "web/control-ui/sessions-and-sidebar",
+                      "web/control-ui/chat",
+                      "web/control-ui/panels",
+                      "web/control-ui/settings",
+                      "web/control-ui/feature-reference",
+                      "web/control-ui/offline-and-reconnect",
+                      "web/control-ui/security-model",
+                      "web/control-ui/development"
+                    ]
+                  },
                   "web/notifications",
                   "web/urls",
                   "web/dashboard",
@@ -2209,13 +2288,25 @@
                 "group": "Plugin SDK reference",
                 "pages": [
                   "plugins/sdk-overview",
+                  "plugins/manifest",
+                  {
+                    "group": "Plugin manifest",
+                    "pages": [
+                      "plugins/manifest/models",
+                      "plugins/manifest/providers",
+                      "plugins/manifest/setup-and-auth",
+                      "plugins/manifest/capabilities",
+                      "plugins/manifest/surfaces",
+                      "plugins/manifest/config-and-secrets",
+                      "plugins/manifest/package-json"
+                    ]
+                  },
                   "plugins/sdk-subpaths",
                   "plugins/sdk-entrypoints",
                   "plugins/sdk-runtime",
                   "plugins/sdk-agent-harness",
                   "plugins/sdk-setup",
-                  "plugins/sdk-testing",
-                  "plugins/manifest"
+                  "plugins/sdk-testing"
                 ]
               },
               {
@@ -2305,15 +2396,6 @@
                   "releases/2026.9.1",
                   "releases/2026.8.2",
                   "releases/2026.8.1",
-                  {
-                    "group": "v2026.8.1 sections",
-                    "pages": [
-                      {
-                        "group": "Maintenance changes",
-                        "pages": []
-                      }
-                    ]
-                  },
                   "releases/2026.7.1",
                   "releases/2026.6.11"
                 ]

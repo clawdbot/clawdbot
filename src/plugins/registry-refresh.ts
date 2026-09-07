@@ -35,7 +35,7 @@ export function refreshPluginRegistryAfterConfigMutation(
     // Core-only validation lets registry repair precede plugin migrations and validation.
     const snapshot = await createConfigIO({
       configPath: params.configPath,
-      env: createManagedRuntimeEnvBase(),
+      env: createManagedRuntimeEnvBase(params.env),
       observe: false,
       pluginValidation: "core-only",
     }).readConfigFileSnapshot();

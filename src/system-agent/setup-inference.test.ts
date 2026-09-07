@@ -59,28 +59,28 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { WizardCancelledError, WizardNavigationError } from "../wizard/prompts.js";
 import { cleanupSystemAgentSession, createSystemAgentSession } from "./agent-turn.js";
-import { runSystemAgentTurnWithDeps } from "./agent-turn.test-support.js";
-import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
+import { runSystemAgentTurnWithDeps as runSystemAgentTurnWithDepsImpl } from "./agent-turn.test-support.js";
+import { resolveSystemAgentConfiguredRouteFromConfig as resolveSystemAgentConfiguredRouteFromConfigImpl } from "./inference-route.js";
 import { setupInferenceLog, type ActivateSetupInferenceDeps } from "./setup-inference-core.js";
 import { resolveSetupInferenceProbeStreamParams } from "./setup-inference-probe.js";
-import { runSetupInferenceTest } from "./setup-inference-test.js";
+import { runSetupInferenceTest as runSetupInferenceTestImpl } from "./setup-inference-test.js";
 import {
   SetupInferenceActivationIndeterminateError,
   activateSetupInference as activateSetupInferenceImpl,
   type BoundVerifySetupInferenceResult,
-  detectSetupInference,
-  listManualSetupInferenceOptions,
+  detectSetupInference as detectSetupInferenceImpl,
+  listManualSetupInferenceOptions as listManualSetupInferenceOptionsImpl,
   listSetupInferenceAuthOptions,
   listSetupInferenceManualProviders,
   listSetupInferencePrepareOptions,
-  resolvePersistentApplyInference,
+  resolvePersistentApplyInference as resolvePersistentApplyInferenceImpl,
   type VerifySetupInferenceResult,
   verifySetupInference as verifySetupInferenceImpl,
   verifySetupInferenceConfig as verifySetupInferenceConfigImpl,
 } from "./setup-inference.js";
-import { applySystemAgentModelSelection } from "./setup-model-selection.js";
+import { applySystemAgentModelSelection as applySystemAgentModelSelectionImpl } from "./setup-model-selection.js";
 import {
-  installSystemAgentPluginMetadataTestSnapshot,
+  createSystemAgentPluginMetadataTestSnapshot,
   type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
 import {
@@ -163,10 +163,36 @@ const suiteTempRootTracker = createSuiteTempRootTracker({
   prefix: "setup-inference-test-",
 });
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
+
+const runSystemAgentTurnWithDeps: typeof runSystemAgentTurnWithDepsImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => runSystemAgentTurnWithDepsImpl(...args));
+
+const resolveSystemAgentConfiguredRouteFromConfig: typeof resolveSystemAgentConfiguredRouteFromConfigImpl =
+  (...args) =>
+    pluginMetadataSnapshot!.run(
+      () => resolveSystemAgentConfiguredRouteFromConfigImpl(...args),
+      args[0],
+    );
+
+const resolvePersistentApplyInference: typeof resolvePersistentApplyInferenceImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => resolvePersistentApplyInferenceImpl(...args));
+
+const detectSetupInference: typeof detectSetupInferenceImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => detectSetupInferenceImpl(...args));
+
+const listManualSetupInferenceOptions: typeof listManualSetupInferenceOptionsImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => listManualSetupInferenceOptionsImpl(...args));
+
+const runSetupInferenceTest: typeof runSetupInferenceTestImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => runSetupInferenceTestImpl(...args));
+
+const applySystemAgentModelSelection: typeof applySystemAgentModelSelectionImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => applySystemAgentModelSelectionImpl(...args));
+
 let inMemoryAuthProfileStores = new Map<string, AuthProfileStore>();
 
 beforeAll(async () => {
-  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot(
+  pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot(
     materializedMainRuntimeConfig,
   );
   cliBackendsTesting.setDepsForTest({
@@ -204,13 +230,12 @@ afterAll(async () => {
     }
   } finally {
     cliBackendsTesting.resetDepsForTest();
-    pluginMetadataSnapshot?.restore();
   }
 });
 
 beforeEach(() => {
   inMemoryAuthProfileStores = new Map();
-  pluginMetadataSnapshot?.rebindForCurrentEnv();
+  pluginMetadataSnapshot?.bindForConfig(materializedMainRuntimeConfig);
 });
 
 async function createMainAgentFixture() {
@@ -416,14 +441,16 @@ async function activateSetupInference(
       } as never);
     }) as typeof deps.transformConfigWithPendingPluginInstalls;
   }
-  return activateSetupInferenceImpl({
-    runtime,
-    surface: "gateway",
-    ...activationParams,
-    // Most activation tests isolate commit mechanics from the verified-owner
-    // implementation. Owner-CAS regressions opt back into the real helper.
-    deps,
-  });
+  return pluginMetadataSnapshot!.run(() =>
+    activateSetupInferenceImpl({
+      runtime,
+      surface: "gateway",
+      ...activationParams,
+      // Most activation tests isolate commit mechanics from the verified-owner
+      // implementation. Owner-CAS regressions opt back into the real helper.
+      deps,
+    }),
+  );
 }
 
 type TestVerifySetupInferenceParams = Omit<
@@ -444,11 +471,13 @@ function verifySetupInference(
   params: TestVerifySetupInferenceParams & { bindSession?: boolean },
 ): Promise<VerifySetupInferenceResult | BoundVerifySetupInferenceResult> {
   const { useRealAuthProfileStore = false, ...verifyParams } = params;
-  return verifySetupInferenceImpl({
-    runtime,
-    ...verifyParams,
-    deps: withSuiteFixtures(verifyParams.deps, useRealAuthProfileStore),
-  } as never);
+  return pluginMetadataSnapshot!.run(() =>
+    verifySetupInferenceImpl({
+      runtime,
+      ...verifyParams,
+      deps: withSuiteFixtures(verifyParams.deps, useRealAuthProfileStore),
+    } as never),
+  );
 }
 
 async function verifySetupInferenceConfig(
@@ -459,11 +488,13 @@ async function verifySetupInferenceConfig(
 ): ReturnType<typeof verifySetupInferenceConfigImpl> {
   const { useRealAuthProfileStore = false, ...verifyParams } = params;
   pluginMetadataSnapshot?.bind({ config: verifyParams.config, env: process.env });
-  return verifySetupInferenceConfigImpl({
-    runtime,
-    ...verifyParams,
-    deps: withSuiteFixtures(verifyParams.deps, useRealAuthProfileStore),
-  });
+  return pluginMetadataSnapshot!.run(() =>
+    verifySetupInferenceConfigImpl({
+      runtime,
+      ...verifyParams,
+      deps: withSuiteFixtures(verifyParams.deps, useRealAuthProfileStore),
+    }),
+  );
 }
 
 type SuccessfulRunParams = {
@@ -5172,7 +5203,6 @@ describe("activateSetupInference", () => {
       );
     } finally {
       clearCurrentPluginMetadataSnapshot();
-      pluginMetadataSnapshot?.rebindForCurrentEnv();
     }
     expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
     expect(ownerArtifactRegistry).toBe(stagedRegistry);

@@ -30,6 +30,7 @@ import {
   setRuntimeConfigSnapshot,
   setRuntimeConfigSnapshotRefreshHandler,
   writeConfigFile,
+  type ConfigWriteOptions,
 } from "./io.js";
 import { replaceConfigFile, transformConfigFile, transformConfigFileWithRetry } from "./mutate.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
@@ -266,6 +267,47 @@ describe("config io write", () => {
       env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
       ...options,
     });
+
+  const expectKeyedAgentSiblingWriteRefused = async (params: {
+    home: string;
+    authored: unknown;
+    includeFiles: Record<string, string>;
+    env?: NodeJS.ProcessEnv;
+  }) => {
+    const configPath = configPathForHome(params.home);
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    for (const [relativePath, raw] of Object.entries(params.includeFiles)) {
+      const includePath = path.join(params.home, relativePath);
+      await fs.mkdir(path.dirname(includePath), { recursive: true });
+      await fs.writeFile(includePath, raw, "utf-8");
+    }
+    const rootRaw = formatConfig(params.authored);
+    await fs.writeFile(configPath, rootRaw, "utf-8");
+    const io = createFastConfigIO(params.home, {
+      env: { OPENCLAW_TEST_FAST: "1", ...params.env } as NodeJS.ProcessEnv,
+    });
+    const snapshot = await io.readConfigFileSnapshot();
+    expect(snapshot.valid).toBe(true);
+
+    await expect(
+      io.writeConfigFile({
+        ...snapshot.config,
+        agents: {
+          ...snapshot.config.agents,
+          ownership: "explicit",
+          entries: {
+            ...snapshot.config.agents?.entries,
+            worker: { workspace: "/w/worker" },
+          },
+        },
+      }),
+    ).rejects.toThrow("Config write would flatten $include-owned config at agents");
+
+    await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(rootRaw);
+    for (const [relativePath, raw] of Object.entries(params.includeFiles)) {
+      await expect(fs.readFile(path.join(params.home, relativePath), "utf-8")).resolves.toBe(raw);
+    }
+  };
 
   const writeGatewayPortAndReadConfig = async (home: string, configPath: string) => {
     const io = createFastConfigIO(home);
@@ -1939,6 +1981,122 @@ describe("config io write", () => {
   );
 
   itWithHome(
+    "adds a root-owned agent beside a keyed include without rewriting the include file",
+    async (home) => {
+      const configPath = configPathForHome(home);
+      const tonyPath = path.join(home, ".openclaw", "tony.json5");
+      const tonyRaw = `{
+  // Keep operator comments and references byte-identical.
+  workspace: "/w/tony",
+  model: { primary: "\${TONY_MODEL}" },
+}\n`;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(tonyPath, tonyRaw, "utf-8");
+      await writeConfigJson(configPath, {
+        agents: {
+          ownership: "explicit",
+          entries: { tony: { $include: "./tony.json5" } },
+        },
+      });
+      const io = createFastConfigIO(home, {
+        env: {
+          OPENCLAW_TEST_FAST: "1",
+          TONY_MODEL: "openai/gpt-5.4",
+        } as NodeJS.ProcessEnv,
+      });
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(true);
+
+      await io.writeConfigFile({
+        ...snapshot.config,
+        agents: {
+          ...snapshot.config.agents,
+          ownership: "explicit",
+          entries: {
+            ...snapshot.config.agents?.entries,
+            worker: { workspace: "/w/worker" },
+          },
+        },
+      });
+
+      const rootAfter = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        agents?: {
+          ownership?: string;
+          entries?: Record<string, { $include?: string; workspace?: string }>;
+        };
+      };
+      expect(rootAfter.agents?.ownership).toBe("explicit");
+      expect(rootAfter.agents?.entries).toEqual({
+        tony: { $include: "./tony.json5" },
+        worker: { workspace: "/w/worker" },
+      });
+      await expect(fs.readFile(tonyPath, "utf-8")).resolves.toBe(tonyRaw);
+    },
+  );
+
+  itWithHome("rejects multiple include targets for one keyed agent entry", async (home) => {
+    await expectKeyedAgentSiblingWriteRefused({
+      home,
+      authored: {
+        agents: {
+          ownership: "explicit",
+          entries: { tony: { $include: ["./tony-base.json5", "./tony-extra.json5"] } },
+        },
+      },
+      includeFiles: {
+        ".openclaw/tony-base.json5": `{ workspace: "/w/tony" }\n`,
+        ".openclaw/tony-extra.json5": `{ name: "Tony" }\n`,
+      },
+    });
+  });
+
+  itWithHome("rejects a keyed agent include carrying a root-authored override", async (home) => {
+    await expectKeyedAgentSiblingWriteRefused({
+      home,
+      authored: {
+        agents: {
+          ownership: "explicit",
+          entries: {
+            tony: { $include: "./tony.json5", workspace: "/w/tony" },
+          },
+        },
+      },
+      includeFiles: { ".openclaw/tony.json5": `{ name: "Tony" }\n` },
+    });
+  });
+
+  itWithHome("rejects a delegated keyed agent include", async (home) => {
+    await expectKeyedAgentSiblingWriteRefused({
+      home,
+      authored: {
+        agents: {
+          ownership: "explicit",
+          entries: { tony: { $include: "./tony-delegate.json5" } },
+        },
+      },
+      includeFiles: {
+        ".openclaw/tony-delegate.json5": `{ $include: "./tony.json5" }\n`,
+        ".openclaw/tony.json5": `{ workspace: "/w/tony" }\n`,
+      },
+    });
+  });
+
+  itWithHome("rejects a keyed agent include outside the config directory", async (home) => {
+    const sharedDir = path.join(home, "shared");
+    await expectKeyedAgentSiblingWriteRefused({
+      home,
+      authored: {
+        agents: {
+          ownership: "explicit",
+          entries: { tony: { $include: "../shared/tony.json5" } },
+        },
+      },
+      includeFiles: { "shared/tony.json5": `{ workspace: "/w/tony" }\n` },
+      env: { OPENCLAW_INCLUDE_ROOTS: sharedDir } as NodeJS.ProcessEnv,
+    });
+  });
+
+  itWithHome(
     "rejects repairs that would flatten a valid outer include with a broken nested include",
     async (home) => {
       const configPath = configPathForHome(home);
@@ -2572,6 +2730,225 @@ describe("config io write", () => {
       }
     });
   });
+
+  it.each([null, 123])(
+    "rejects invalid full-replacement $schema %s without writing",
+    async (value) => {
+      await withSuiteHome(async (home) => {
+        const { configPath, raw } = await writeConfigFixture(home, {
+          $schema: "https://openclaw.ai/config.json",
+          gateway: { mode: "local" },
+          plugins: { enabled: false },
+        });
+        const io = createHomeConfigIO(home, { configPath });
+        const prepared = await io.readConfigFileSnapshotForWrite();
+        const next = structuredClone(prepared.snapshot.runtimeConfig);
+        setConfigValueAtPath(next, ["$schema"], value);
+
+        await expect(
+          io.writeConfigFile(next, { ...prepared.writeOptions, inputBase: "runtime" }),
+        ).rejects.toThrow("$schema");
+        expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+      });
+    },
+  );
+
+  it.each([
+    { layout: "include", input: "source", edit: "temperature" },
+    { layout: "include", input: "legacy", edit: "temperature" },
+    { layout: "include", input: "transform", edit: "temperature" },
+    { layout: "include", input: "source", edit: "default" },
+    { layout: "include", input: "runtime", edit: "explicit-default" },
+    { layout: "include", input: "runtime", edit: "model-alias" },
+    { layout: "include", input: "runtime", edit: "model-unset" },
+    { layout: "root", input: "runtime", edit: "array-unset" },
+    { layout: "include", input: "runtime", edit: "array-unset" },
+    { layout: "root", input: "source", edit: "null-and-omit" },
+    { layout: "include", input: "source", edit: "null-and-omit" },
+    { layout: "root", input: "runtime", edit: "null-and-omit" },
+    { layout: "include", input: "runtime", edit: "null-and-omit" },
+    { layout: "root", input: "legacy", edit: "null-and-omit" },
+    { layout: "include", input: "legacy", edit: "null-and-omit" },
+    { layout: "root", input: "runtime", edit: "policy-unset" },
+    { layout: "include", input: "legacy", edit: "active-overlay" },
+    { layout: "include", input: "custom-io", edit: "active-overlay" },
+  ] as const)(
+    "preserves input intent across $layout $input $edit writes",
+    async ({ layout, input, edit }) => {
+      await withSuiteHome(async (home) => {
+        const prefix = "${INCLUDE_PREFIX}";
+        const workspace = "${INCLUDE_WORKSPACE}";
+        const legacyModel = "ANTHROPIC/fixture-model";
+        const canonicalModel = "anthropic/fixture-model";
+        const otherModel = "anthropic/other-model";
+        const entry = { alias: "Before", params: { temperature: 0.2 } };
+        const otherEntry = { alias: "Keep" };
+        const fallbacks = ["anthropic/fixture-a", "anthropic/fixture-b", "anthropic/fixture-c"];
+        const defaultsPath = ["agents", "defaults"];
+        const temperaturePath = [...defaultsPath, "params", "temperature"];
+        const maximumPath = [...defaultsPath, "maxConcurrent"];
+        const modelsPath = [...defaultsPath, "models"];
+        const fallbacksPath = [...defaultsPath, "model", "fallbacks"];
+        const authored: OpenClawConfig = {
+          gateway: { mode: "local" },
+          plugins: { enabled: false },
+          messages: { responsePrefix: prefix },
+          agents: {
+            ownership: "explicit",
+            defaults: {
+              systemAgent: { agentId: "probe" },
+              workspace,
+              params: { temperature: 0.2 },
+            },
+            entries: { probe: { workspace, identity: { name: "${INCLUDE_NAME}" } } },
+          },
+        };
+        if (edit === "null-and-omit") {
+          setConfigValueAtPath(authored, [...defaultsPath, "params", "topP"], 0.8);
+        } else if (edit === "array-unset") {
+          setConfigValueAtPath(authored, fallbacksPath, fallbacks);
+        } else if (edit === "model-alias" || edit === "model-unset") {
+          setConfigValueAtPath(authored, [...defaultsPath, "modelPolicy"], {});
+          setConfigValueAtPath(authored, modelsPath, {
+            [legacyModel]: entry,
+            [otherModel]: otherEntry,
+          });
+        } else if (edit === "policy-unset") {
+          setConfigValueAtPath(authored, modelsPath, { [canonicalModel]: entry });
+        }
+        const include = { $include: "./agents.json" };
+        const { configPath } = await writeConfigFixture(
+          home,
+          layout === "include" ? { ...authored, agents: include } : authored,
+        );
+        const agentsPath = path.join(path.dirname(configPath), "agents.json");
+        if (layout === "include") {
+          await writeConfigJson(agentsPath, authored.agents);
+        }
+        await withEnvAsync(
+          {
+            HOME: home,
+            OPENCLAW_HOME: home,
+            OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+            OPENCLAW_CONFIG_PATH: configPath,
+            INCLUDE_PREFIX: "[include]",
+            INCLUDE_WORKSPACE: path.join(home, "workspace"),
+            INCLUDE_NAME: "Included agent",
+          },
+          async () => {
+            const io = createHomeConfigIO(home, { configPath, env: process.env });
+            if (layout === "include") {
+              const initial = await io.readConfigFileSnapshot();
+              expect(initial.valid).toBe(true);
+              // Keep the native source/runtime difference inside the included section.
+              // Otherwise runtime defaults elsewhere select a root write and hide the bug.
+              await writeConfigJson(configPath, {
+                ...initial.runtimeConfig,
+                agents: include,
+                messages: { ...initial.runtimeConfig.messages, responsePrefix: prefix },
+              });
+            }
+            const prepared = await io.readConfigFileSnapshotForWrite();
+            const { snapshot } = prepared;
+            expect(snapshot.valid).toBe(true);
+            if (layout === "include") {
+              const { agents: sourceAgents, ...sourceRoot } = snapshot.sourceConfig;
+              const { agents: runtimeAgents, ...runtimeRoot } = snapshot.runtimeConfig;
+              expect(sourceRoot).toStrictEqual(runtimeRoot);
+              expect(sourceAgents).not.toStrictEqual(runtimeAgents);
+            }
+            const originalRoot = await fs.readFile(configPath, "utf8");
+            const activeRuntime = structuredClone(snapshot.runtimeConfig);
+            if (edit === "active-overlay") {
+              setConfigValueAtPath(activeRuntime, [...defaultsPath, "params", "topP"], 0.9);
+            }
+            setRuntimeConfigSnapshot(activeRuntime, snapshot.sourceConfig);
+            const maximum = getConfigValueAtPath(snapshot.runtimeConfig, maximumPath);
+            expect(maximum).toEqual(expect.any(Number));
+            const expected = structuredClone(authored);
+            if (input === "custom-io") {
+              setConfigValueAtPath(expected, [...defaultsPath, "params", "topP"], 0.9);
+            }
+            const writeOptions: ConfigWriteOptions = { ...prepared.writeOptions };
+            if (input === "runtime") {
+              writeOptions.inputBase = "runtime";
+            }
+            if (edit === "explicit-default") {
+              writeOptions.explicitSetPaths = [maximumPath];
+            } else if (edit === "array-unset") {
+              writeOptions.unsetPaths = [[...fallbacksPath, "1"]];
+              setConfigValueAtPath(expected, fallbacksPath, [fallbacks[0], fallbacks[2]]);
+            } else if (edit === "model-unset") {
+              writeOptions.unsetPaths = [[...modelsPath, canonicalModel]];
+              setConfigValueAtPath(expected, modelsPath, { [otherModel]: otherEntry });
+            } else if (edit === "policy-unset") {
+              writeOptions.unsetPaths = [[...defaultsPath, "modelPolicy"]];
+            }
+            const edited = (config: OpenClawConfig): OpenClawConfig => {
+              const next = structuredClone(config);
+              if (edit === "temperature" || edit === "active-overlay") {
+                setConfigValueAtPath(next, temperaturePath, 0.7);
+                setConfigValueAtPath(expected, temperaturePath, 0.7);
+              } else if (edit === "default" || edit === "explicit-default") {
+                setConfigValueAtPath(next, maximumPath, maximum);
+                setConfigValueAtPath(expected, maximumPath, maximum);
+              } else if (edit === "null-and-omit") {
+                setConfigValueAtPath(next, temperaturePath, null);
+                setConfigValueAtPath(expected, temperaturePath, null);
+                delete next.agents?.defaults?.params?.topP;
+                delete expected.agents?.defaults?.params?.topP;
+              } else if (edit === "model-alias") {
+                expect(getConfigValueAtPath(next, [...modelsPath, canonicalModel])).toBeDefined();
+                setConfigValueAtPath(next, [...modelsPath, canonicalModel, "alias"], "After");
+                setConfigValueAtPath(expected, modelsPath, {
+                  [canonicalModel]: { ...entry, alias: "After" },
+                  [otherModel]: otherEntry,
+                });
+              }
+              return next;
+            };
+            const base = input === "source" ? snapshot.sourceConfig : activeRuntime;
+            if (input === "transform") {
+              await transformConfigFile({
+                base: "runtime",
+                baseHash: snapshot.hash,
+                writeOptions,
+                transform: (config) => ({ nextConfig: edited(config) }),
+              });
+            } else {
+              await replaceConfigFile({
+                ...(input === "source"
+                  ? { sourceConfig: edited(base) }
+                  : { nextConfig: edited(base) }),
+                ...(input === "custom-io" ? { io } : {}),
+                snapshot,
+                baseHash: snapshot.hash,
+                writeOptions,
+              });
+            }
+            const persisted = await readPersistedConfig(configPath);
+            const savedAgents =
+              layout === "include"
+                ? JSON.parse(await fs.readFile(agentsPath, "utf8"))
+                : persisted.agents;
+            if (edit === "array-unset") {
+              expect(getConfigValueAtPath({ agents: savedAgents }, fallbacksPath)).toStrictEqual([
+                fallbacks[0],
+                fallbacks[2],
+              ]);
+            }
+            expect(savedAgents).toStrictEqual(expected.agents);
+            expect(persisted.messages?.responsePrefix).toBe(prefix);
+            if (layout === "include") {
+              expect(await fs.readFile(configPath, "utf8")).toBe(originalRoot);
+              expect(persisted.agents).toStrictEqual(include);
+            }
+            expect((await io.readConfigFileSnapshot()).valid).toBe(true);
+          },
+        );
+      });
+    },
+  );
 
   it.each([
     { layout: "root", caller: "transform", canonicalPresent: false },

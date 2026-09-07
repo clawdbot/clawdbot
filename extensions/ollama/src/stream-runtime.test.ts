@@ -3194,6 +3194,49 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
+  it("keeps serialized native Ollama tools stable when discovery order changes", async () => {
+    const tools = [
+      {
+        name: "write",
+        description: "Write a file",
+        parameters: {
+          type: "object",
+          properties: { content: { type: "string" } },
+        },
+      },
+      {
+        name: "read",
+        description: "Read a file",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" } },
+        },
+      },
+    ];
+    const serializedTools: string[] = [];
+    for (const orderedTools of [tools, tools.toReversed()]) {
+      fetchWithSsrFGuardMock.mockClear();
+      await expectSuccessfulOllamaRequest(
+        {
+          baseUrl: "http://ollama-host:11434",
+          context: {
+            messages: [{ role: "user", content: "hello" }],
+            tools: orderedTools,
+          },
+        },
+        ({ body }) => {
+          expect(body.tools).toHaveLength(2);
+          expect(body.tools).toEqual(
+            expect.arrayContaining(tools.map((tool) => ({ type: "function", function: tool }))),
+          );
+          serializedTools.push(JSON.stringify(body.tools));
+        },
+      );
+    }
+    expect(serializedTools[1]).toBe(serializedTools[0]);
+    expect(tools.map((tool) => tool.name)).toEqual(["write", "read"]);
+  });
+
   it("lets native Ollama tools win over responseFormat", async () => {
     await expectSuccessfulOllamaRequest(
       {

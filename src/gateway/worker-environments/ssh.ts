@@ -204,8 +204,8 @@ export async function prepareWorkerSsh(params: {
         if (disposed) {
           return;
         }
-        disposed = true;
         await fs.rm(temporaryDir, { recursive: true, force: true });
+        disposed = true;
       },
     };
   } catch (error) {

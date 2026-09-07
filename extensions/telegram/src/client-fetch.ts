@@ -1,11 +1,9 @@
-// Telegram plugin module implements client fetch behavior.
 import type { ApiClientOptions } from "grammy";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { TelegramTransport } from "./fetch.js";
 import {
   isTelegramMisdirectedRequestError,
-  tagTelegramNetworkError,
   TelegramRequestNotStartedError,
 } from "./network-errors.js";
 import { resolveTelegramRequestTimeoutMs } from "./request-timeouts.js";
@@ -243,18 +241,5 @@ export function createTelegramClientFetch(params: {
     }
   };
 
-  return (input: TelegramFetchInput, init?: TelegramFetchInit) => {
-    return Promise.resolve(wrappedFetch(input, init)).catch((err: unknown) => {
-      try {
-        tagTelegramNetworkError(err, {
-          method: extractTelegramApiMethod(input),
-          url: readRequestUrl(input),
-        });
-      } catch {
-        // Tagging is best-effort; preserve the original fetch failure if the
-        // error object cannot accept extra metadata.
-      }
-      throw err;
-    });
-  };
+  return wrappedFetch;
 }

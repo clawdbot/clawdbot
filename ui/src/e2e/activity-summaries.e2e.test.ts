@@ -1,9 +1,14 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  installMockGateway,
+  waitForControlUiRoute,
+  waitForControlUiSettingsTakeover,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -13,6 +18,7 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+type ActivityApp = HTMLElement & { runtime: { context: ApplicationContext } };
 let proofDir: string;
 beforeEach(() => {
   if (captureUiProof) {
@@ -21,6 +27,84 @@ beforeEach(() => {
 });
 
 suite.define(() => {
+  it.each(["return", "first visit"] as const)(
+    "retains recent activity for a %s after unrelated diagnostic traffic",
+    async (visit) => {
+      await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+        const gateway = await installMockGateway(page, { sessionKey: "main" });
+        const emitTool = (id: string) =>
+          gateway.emitGatewayEvent("session.tool", {
+            stream: "tool",
+            runId: `run-${id}`,
+            sessionKey: "main",
+            data: {
+              phase: "result",
+              name: "read",
+              toolCallId: id,
+              result: { text: `${id} completed while this tab was open.` },
+            },
+          });
+        const fillDiagnosticLog = async () => {
+          for (let index = 0; index < 251; index += 1) {
+            await gateway.emitGatewayEvent("diagnostic", { index });
+          }
+        };
+        await page.goto(
+          `${suite.server.baseUrl}${visit === "return" ? "activity?view=live" : "settings/appearance"}`,
+        );
+        if (visit === "return") {
+          await waitForControlUiRoute(page, { routeId: "activity", search: "?view=live" });
+        } else {
+          await waitForControlUiSettingsTakeover(page);
+        }
+        await gateway.waitForRequest("connect");
+        await emitTool("original");
+        await fillDiagnosticLog();
+        if (visit === "return") {
+          await expect.poll(() => page.locator(".activity-entry").count()).toBe(1);
+          const sidebar = page.locator("openclaw-app-sidebar");
+          await sidebar.locator(".sidebar-identity-card").click();
+          await sidebar
+            .locator("wa-dropdown.sidebar-identity-menu")
+            .getByRole("menuitem", { name: "Settings", exact: true })
+            .click();
+          await waitForControlUiSettingsTakeover(page);
+        }
+        await page.locator("openclaw-activity-page").waitFor({ state: "detached" });
+        await emitTool("while-away");
+        await fillDiagnosticLog();
+        const loggedEvents = await page.evaluate(() => {
+          const app = document.querySelector<ActivityApp>("openclaw-app");
+          if (!app) {
+            throw new Error("Control UI app is unavailable");
+          }
+          return app.runtime.context.gateway.eventLog.map((event) => event.event);
+        });
+        expect(loggedEvents).toHaveLength(250);
+        expect(loggedEvents).not.toContain("session.tool");
+
+        await page.evaluate(() => {
+          const app = document.querySelector<ActivityApp>("openclaw-app");
+          if (!app) {
+            throw new Error("Control UI app is unavailable");
+          }
+          app.runtime.context.navigate("activity", { search: "?view=live" });
+        });
+        await waitForControlUiRoute(page, { routeId: "activity", search: "?view=live" });
+        await expect.poll(() => page.locator(".activity-entry").count()).toBe(2);
+        await page.getByRole("button", { name: "Expand all", exact: true }).click();
+        for (const id of ["original", "while-away"]) {
+          await page
+            .locator(".activity-entry__preview", {
+              hasText: `${id} completed while this tab was open.`,
+            })
+            .waitFor({ state: "visible" });
+        }
+        expect(await gateway.getSocketCount()).toBe(1);
+      });
+    },
+  );
+
   it("updates one visible tool summary from running to completed output", async () => {
     if (captureUiProof) {
       await mkdir(path.join(proofDir, "video"), { recursive: true });

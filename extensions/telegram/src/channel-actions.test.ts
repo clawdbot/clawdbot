@@ -595,6 +595,18 @@ describe("telegramMessageActions", () => {
     ).toEqual([]);
   });
 
+  it.each([
+    ["disabled", { enabled: false, botToken: "tok-disabled" }],
+    ["tokenless", {}],
+  ] as const)("hides actions and capabilities for a %s scoped account", (_name, account) => {
+    expect(
+      telegramMessageActions.describeMessageTool?.({
+        cfg: { channels: { telegram: { accounts: { work: account } } } },
+        accountId: "work",
+      }),
+    ).toEqual({ actions: [], capabilities: [], schema: null });
+  });
+
   it("keeps healthy Telegram accounts discoverable when a sibling token is an unresolved SecretRef", () => {
     const cfg = {
       channels: {

@@ -1,11 +1,9 @@
 // Update-channel config repair for legacy config files before normal command startup.
 import { readConfigFileSnapshot, replaceConfigFile } from "../../config/config.js";
 import type { ConfigWriteOptions } from "../../config/io.js";
+import { configWriteTargetsIncludeBoundary } from "../../config/mutate.js";
 import { validateConfigObjectRawWithPlugins } from "../../config/validation.js";
-import {
-  containsAuthoredInclude,
-  isSingleTopLevelIncludeMigration,
-} from "./shared/include-migration-ownership.js";
+import { containsAuthoredInclude } from "./shared/include-migration-ownership.js";
 import { migrateLegacyConfig } from "./shared/legacy-config-migrate.js";
 
 type ConfigSnapshot = Awaited<ReturnType<typeof readConfigFileSnapshot>>;
@@ -27,15 +25,10 @@ export async function repairLegacyConfigForUpdateChannel(params: {
     return { snapshot: params.configSnapshot, repaired: false };
   }
 
-  const nextConfig =
-    hasAuthoredIncludes && migrated.sourceConfig ? migrated.sourceConfig : validated.config;
+  const nextConfig = migrated.sourceConfig ?? migrated.config;
   if (
     hasAuthoredIncludes &&
-    !isSingleTopLevelIncludeMigration({
-      parsed: params.configSnapshot.parsed,
-      sourceConfig: params.configSnapshot.sourceConfig,
-      candidate: nextConfig,
-    })
+    !configWriteTargetsIncludeBoundary({ snapshot: params.configSnapshot, nextConfig })
   ) {
     return { snapshot: params.configSnapshot, repaired: false };
   }

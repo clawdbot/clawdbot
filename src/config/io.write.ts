@@ -25,6 +25,7 @@ import {
   restoreEnvRefsFromMap,
   restoreEnvVarRefs,
 } from "./env-preserve.js";
+import { resolveKeyedAgentEntryIncludePreservation } from "./include-write-boundary.js";
 import { readConfigIncludeFileWithGuards, resolveConfigIncludes } from "./includes.js";
 import {
   appendConfigAuditRecord,
@@ -145,6 +146,10 @@ export async function writeConfigFileFromContext(
   // Doctor repairs need the same authored projection so roster moves preserve nested includes.
   // Missing snapshots also use this owner; exact bootstrap rosters carry explicitSetPaths.
   if (snapshot.valid || (snapshot.exists && hasAuthoredIncludes)) {
+    const keyedAgentEntryIncludes = resolveKeyedAgentEntryIncludePreservation({
+      configPath: snapshot.path,
+      provenance: snapshot.includeProvenance,
+    });
     persistCandidate = resolvePersistCandidateForWrite({
       inputBasis,
       runtimeConfig: snapshot.config,
@@ -154,6 +159,7 @@ export async function writeConfigFileFromContext(
       nextConfig,
       rootAuthoredConfig: snapshot.parsed,
       agentRosterIncludeOwned: snapshot.agentRosterIncludeOwned,
+      keyedAgentEntryIncludePaths: keyedAgentEntryIncludes?.includePaths,
       unsetPaths,
       explicitSetPaths,
       explicitSetValueSource,
@@ -191,14 +197,16 @@ export async function writeConfigFileFromContext(
     }
   }
 
-  persistCandidate = applyUnsetPathsForWrite(persistCandidate as OpenClawConfig, unsetPaths);
   const envForRestore = options.envSnapshotForRestore ?? deps.env;
-  const resolveValidationCandidate = (candidate: unknown) =>
-    containsConfigIncludeDirective(candidate)
+  const resolveValidationCandidate = (candidate: unknown) => {
+    // Validate removals now; apply them once to the final authored output after materialization.
+    const config = applyUnsetPathsForWrite(candidate as OpenClawConfig, unsetPaths);
+    return containsConfigIncludeDirective(config)
       ? context.resolveRuntimePreflightSourceConfig(
-          restoreEnvVarRefs(candidate, snapshot.parsed, envForRestore) as OpenClawConfig,
+          restoreEnvVarRefs(config, snapshot.parsed, envForRestore) as OpenClawConfig,
         )
-      : candidate;
+      : config;
+  };
   const validationCandidate = resolveValidationCandidate(persistCandidate);
   const validateCandidate = (candidate: unknown) => {
     const result = validateConfigObjectRawWithPlugins(candidate, {
