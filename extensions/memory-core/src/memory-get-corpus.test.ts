@@ -347,4 +347,49 @@ describe("memory_get corpus outcomes", () => {
     controller.abort(new Error("cancelled"));
     await expect(pending).rejects.toThrow("cancelled");
   });
+
+  it("leaves a primary read unbounded when no deadline is configured", async () => {
+    vi.useFakeTimers();
+    setMemoryReadFileImpl(async () => await new Promise<never>(() => {}));
+    const pending = createMemoryGetToolOrThrow().execute("call_get_primary_unbounded", {
+      path: lookup,
+    });
+    let settled = false;
+    void pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(settled).toBe(false);
+  });
+
+  it("cuts a hanging primary read at the configured deadline", async () => {
+    vi.useFakeTimers();
+    setMemoryReadFileImpl(async () => await new Promise<never>(() => {}));
+    const pending = createMemoryGetToolOrThrow(
+      asOpenClawConfig({
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { search: { query: { timeoutSeconds: 1 } } },
+      }),
+    ).execute("call_get_primary_timeout", { path: lookup });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(pending).resolves.toMatchObject({
+      details: {
+        path: lookup,
+        text: "",
+        disabled: true,
+        error: "memory_get timed out after 1s",
+        warning:
+          "Memory corpus unavailable: memory_get timed out after 1s Retry memory_get after a short wait, or raise memory.search.query.timeoutSeconds if reads keep timing out.",
+        corpora: [
+          { corpus: "memory", outcome: "unavailable", error: "memory_get timed out after 1s" },
+        ],
+      },
+    });
+  });
 });

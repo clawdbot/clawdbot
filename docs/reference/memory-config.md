@@ -396,15 +396,28 @@ it and the active profile or container hint. See [memory index](/cli/memory#memo
 
 All under `memory.search.query`:
 
-| Key          | Type     | Default | Description                               |
-| ------------ | -------- | ------- | ----------------------------------------- |
-| `maxResults` | `number` | `6`     | Max memory hits returned before injection |
-| `minScore`   | `number` | `0.35`  | Minimum relevance score to include a hit  |
+| Key              | Type     | Default | Description                                                                 |
+| ---------------- | -------- | ------- | --------------------------------------------------------------------------- |
+| `maxResults`     | `number` | `6`     | Max memory hits returned before injection                                   |
+| `minScore`       | `number` | `0.35`  | Minimum relevance score to include a hit                                    |
+| `timeoutSeconds` | `number` | unset   | Seconds a `memory_search` or `memory_get` call may run before it is cut off |
 
 Without a per-call `maxResults`, primary-only `memory_search` calls use this
 configured limit, including `corpus=memory` and `corpus=sessions`. Wiki and
 combined searches (`corpus=wiki` or `corpus=all`) keep their separate default
 of 10 results. An explicit tool `maxResults` overrides the applicable default.
+
+`timeoutSeconds` bounds one `memory_search` or `memory_get` call, covering the
+memory index and any registered wiki corpus together. A call that reaches the
+deadline returns what it already has, or reports the corpus as unavailable with a
+`timed out after` warning. Raise it when a large index or a slow embedding
+provider keeps timing out; per-agent overrides under
+`agents.entries.<id>.memory.search.query.timeoutSeconds` are honored.
+
+When the key is unset, nothing changes from earlier releases: `memory_search`,
+`corpus: "wiki"` reads, and `corpus: "all"` reads keep the built-in 15-second
+deadline, and a primary-only `memory_get` (no `corpus`, or `corpus: "memory"`)
+stays unbounded. Setting the key applies the same deadline to all of them.
 
 Hybrid retrieval remains enabled. The builtin engine always applies a fixed
 30-day recency half-life to dated daily notes and a fixed importance
@@ -427,6 +440,7 @@ auto-injected.
       query: {
         maxResults: 6,
         minScore: 0.35,
+        timeoutSeconds: 15,
       },
     },
   },

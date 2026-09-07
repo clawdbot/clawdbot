@@ -93,6 +93,8 @@ export type MemorySearchConfig = {
   query?: {
     maxResults?: number;
     minScore?: number;
+    /** Seconds a memory_search or memory_get call may take before it is cut off (default: 15). */
+    timeoutSeconds?: number;
   };
   /** Index cache behavior. */
   cache?: {

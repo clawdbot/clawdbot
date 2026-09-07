@@ -562,7 +562,7 @@ describe("memory search config", () => {
               extensionPath: "/opt/sqlite-vec.dylib",
             },
           },
-          query: { maxResults: 4, minScore: 0.2 },
+          query: { maxResults: 4, minScore: 0.2, timeoutSeconds: 45 },
         },
       },
 
@@ -574,7 +574,7 @@ describe("memory search config", () => {
             default: true,
             memory: {
               search: {
-                query: { maxResults: 8 },
+                query: { maxResults: 8, timeoutSeconds: 60 },
               },
             },
           },
@@ -586,9 +586,22 @@ describe("memory search config", () => {
     expect(resolved?.model).toBe("text-embedding-3-small");
     expect(resolved?.query.maxResults).toBe(8);
     expect(resolved?.query.minScore).toBe(0.2);
+    expect(resolved?.query.timeoutMs).toBe(60_000);
     expect(resolved?.query.hybrid.mmr).toEqual({ enabled: true, lambda: 0.7 });
     expect(resolved?.store.vector.enabled).toBe(true);
     expect(resolved?.store.vector.extensionPath).toBe("/opt/sqlite-vec.dylib");
+  });
+
+  it("keeps the query deadline inside the Node timer range", () => {
+    const cfg = asConfig({
+      memory: { search: { query: { timeoutSeconds: 1e9 } } },
+    });
+    expect(resolveMemorySearchConfig(cfg, "main")?.query.timeoutMs).toBe(2_147_000_000);
+  });
+
+  it("leaves the query deadline unset when it is not configured", () => {
+    const cfg = asConfig({ memory: { search: {} }, agents: { defaults: {} } });
+    expect(resolveMemorySearchConfig(cfg, "main")?.query.timeoutMs).toBeUndefined();
   });
 
   it("merges extra memory paths from defaults and overrides", () => {
