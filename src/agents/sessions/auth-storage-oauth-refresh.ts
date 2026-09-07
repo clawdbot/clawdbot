@@ -37,6 +37,7 @@ export async function refreshAuthStorageOAuthCredential(params: {
   const provider = getAuthStorageOAuthProviderRegistry(params.authStorage).get(params.providerId);
   const result = await refreshSerializedOAuthCredential({
     backend: params.storage,
+    provider: params.providerId,
     profileId: `${params.providerId}:default`,
     label: `AuthStorage.refresh(${params.providerId})`,
     timeoutMs: OAUTH_REFRESH_CALL_TIMEOUT_MS,

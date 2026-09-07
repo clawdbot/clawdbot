@@ -98,6 +98,7 @@ describe("OAuth refresh generation fence", () => {
     ) =>
       await refreshSerializedOAuthCredential({
         backend,
+        provider: "openai",
         profileId,
         label: "test serialized refresh",
         timeoutMs: 10,
@@ -176,6 +177,7 @@ describe("OAuth refresh generation fence", () => {
     ) =>
       refreshSerializedOAuthCredential({
         backend,
+        provider: "openai",
         profileId,
         label: "test serialized identity replacement",
         timeoutMs: 1_000,
@@ -244,6 +246,7 @@ describe("OAuth refresh generation fence", () => {
     await expect(
       refreshSerializedOAuthCredential({
         backend,
+        provider: "openai",
         profileId,
         label: "test serialized provider identity mismatch",
         timeoutMs: 1_000,
@@ -313,6 +316,7 @@ describe("OAuth refresh generation fence", () => {
       const initiatingError = new Error("provider refresh failed");
       const run = refreshSerializedOAuthCredential({
         backend,
+        provider: "openai",
         profileId,
         label: `test serialized ${outcome} terminal failure`,
         timeoutMs: 1_000,
@@ -749,6 +753,7 @@ describe("OAuth refresh generation fence", () => {
     ) =>
       refreshSerializedOAuthCredential({
         backend,
+        provider: "openai",
         profileId,
         label: "test ABA refresh",
         timeoutMs: 10,

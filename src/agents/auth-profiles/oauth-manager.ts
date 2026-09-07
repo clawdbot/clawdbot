@@ -627,7 +627,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         async () => {
           const store = loadStoredOAuthRefreshStore(ownerAgentDir, params.profileId);
           const cred = store.profiles[params.profileId];
-          if (!cred || cred.type !== "oauth") {
+          if (!cred || cred.type !== "oauth" || cred.provider !== params.provider) {
             return { kind: "unavailable" };
           }
           const storedFence = isOAuthRefreshFence(cred);
@@ -814,7 +814,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             const current = loadStoredOAuthRefreshStore(ownerAgentDir, params.profileId).profiles[
               params.profileId
             ];
-            if (current?.type !== "oauth") {
+            if (current?.type !== "oauth" || current.provider !== params.provider) {
               return { kind: "unavailable" };
             }
             if (isPendingOAuthRefreshFence(current)) {
@@ -939,7 +939,9 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             params.profileId
           ],
         isPending: (credential) =>
-          credential?.type === "oauth" && isPendingOAuthRefreshFence(credential),
+          credential?.type === "oauth" &&
+          credential.provider === claim.generation.provider &&
+          isPendingOAuthRefreshFence(credential),
         resolve: async (credential) => {
           if (
             credential?.type !== "oauth" ||

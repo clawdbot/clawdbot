@@ -111,6 +111,7 @@ export function normalizeOAuthRefreshCredential(
  */
 export async function refreshSerializedOAuthCredential<TData>(params: {
   backend: SerializedOAuthRefreshBackend;
+  provider: string;
   profileId: string;
   label: string;
   timeoutMs: number;
@@ -135,7 +136,8 @@ export async function refreshSerializedOAuthCredential<TData>(params: {
           const data = params.parse(current);
           return { result: { credential: params.readCredential(data), data } };
         }),
-      isPending: ({ credential }) => isPendingOAuthRefreshFence(credential),
+      isPending: ({ credential }) =>
+        credential?.provider === generation.provider && isPendingOAuthRefreshFence(credential),
       resolve: async ({ credential, data }) => {
         if (!isSafeOAuthPostClaimSettlement(generation, credential)) {
           return null;
@@ -148,7 +150,7 @@ export async function refreshSerializedOAuthCredential<TData>(params: {
   const candidate = params.backend.withLock<SerializedOAuthRefreshCandidate<TData>>((current) => {
     const data = params.parse(current);
     const credential = params.readCredential(data);
-    if (!credential) {
+    if (!credential || credential.provider !== params.provider) {
       return { result: { kind: "unavailable" } };
     }
     if (isPendingOAuthRefreshFence(credential)) {
@@ -179,7 +181,7 @@ export async function refreshSerializedOAuthCredential<TData>(params: {
   const claim = params.backend.withLock<SerializedOAuthRefreshClaim<TData>>((current) => {
     const data = params.parse(current);
     const credential = params.readCredential(data);
-    if (!credential) {
+    if (!credential || credential.provider !== params.provider) {
       return { result: { kind: "unavailable" } };
     }
     if (!isExactOAuthCredential(credential, candidate.credential)) {
