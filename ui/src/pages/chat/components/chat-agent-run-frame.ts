@@ -6,6 +6,7 @@ import {
   type AgentRunFrameRenderItem,
 } from "../chat-agent-run-grouping.ts";
 import type { TurnRecap } from "../chat-progress.ts";
+import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import {
   renderActivityGroup,
   renderMessageGroup,
@@ -23,6 +24,7 @@ type AgentRunFrameOptions = {
   streamOptions: StreamGroupOptions;
   renderGroupOptions: (group: MessageGroup) => MessageGroupRenderOptions;
   isWorkExpanded: (key: string) => boolean;
+  revealMessageId?: string;
   onToggleWork: (key: string, expanded: boolean) => void;
   turnRecap?: TurnRecap;
 };
@@ -60,7 +62,14 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
       return renderStreamGroupParts(part.parts, opts.streamOptions, "standalone");
     }
     if (part.kind === "work-group") {
-      const expanded = opts.isWorkExpanded(part.key);
+      const expanded =
+        opts.isWorkExpanded(part.key) ||
+        (opts.revealMessageId !== undefined &&
+          part.groups.some((group) =>
+            group.messages.some(
+              ({ message }) => persistedMessageEntryId(message) === opts.revealMessageId,
+            ),
+          ));
       return html`
         ${renderWorkGroupSummary(part, {
           expanded,

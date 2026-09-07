@@ -21,6 +21,7 @@ import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { renderChatAvatar, renderForwardedAvatar } from "../chat-avatar.ts";
+import type { ChatBookmarkAccess } from "../chat-bookmarks.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import {
   persistedMessageEntryId,
@@ -35,7 +36,6 @@ import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { renderRewindButton } from "./chat-message-confirmation.ts";
 import {
   renderMessageActionButtons,
-  renderReplyButton,
   resolveMessageActionDetails,
   type MessageActionDetails,
   type MessageReplyTarget,
@@ -98,6 +98,7 @@ type RenderMessageGroupOptions = Omit<
     showAssistantAvatar?: boolean;
     contextWindow?: number | null;
     onReply?: (target: MessageReplyTarget) => void;
+    bookmarkAccess?: ChatBookmarkAccess;
     resolveReplyPreview?: (replyToId: string) => ReplyPreview | undefined;
     onRewind?: () => void;
     rewindDisabled?: boolean;
@@ -394,6 +395,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   const hasUserFooterActions =
     normalizedRole === "user" &&
     Boolean(
+      footerActionDetails?.bookmark ||
       (footerActionDetails?.replyTarget && opts.onReply) ||
       (opts.onRewind && !opts.rewindDisabled) ||
       footerActionDetails?.markdown,
@@ -404,17 +406,12 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           class="chat-group-footer-actions"
           data-message-actions-for=${footerActionMessageKey ?? nothing}
         >
-          ${
-            footerActionDetails?.replyTarget && opts.onReply
-              ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
-              : nothing
-          }
-          ${opts.onRewind && !opts.rewindDisabled ? renderRewindButton(opts.onRewind) : nothing}
-          ${
-            footerActionDetails?.markdown
-              ? renderMessageActionButtons(footerActionDetails, {})
-              : nothing
-          }
+          ${renderMessageActionButtons(footerActionDetails ?? {}, {
+            onReply: opts.onReply,
+            bookmarkAccess: opts.bookmarkAccess,
+            rewindAction:
+              opts.onRewind && !opts.rewindDisabled ? renderRewindButton(opts.onRewind) : nothing,
+          })}
         </div>
       `
     : nothing;

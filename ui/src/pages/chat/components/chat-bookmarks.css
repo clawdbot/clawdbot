@@ -1,0 +1,67 @@
+.chat-bookmarks-dialog {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.chat-bookmarks-dialog__list {
+  list-style: none;
+  padding: 0;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.chat-bookmarks-dialog__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-block: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-bookmarks-dialog__source {
+  display: block;
+  flex: 1 1 12rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  text-align: start;
+}
+
+.chat-bookmark-name {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  max-width: 18em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-bookmark-btn[aria-pressed="true"],
+.chat-bookmark-name:hover {
+  color: var(--accent);
+}
+
+.chat-position-rail__bookmark {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+  background: var(--panel);
+}
+
+.chat-position-rail__bookmark svg {
+  width: 16px;
+  height: 16px;
+}
+
+.chat-position-rail__marker--selected .chat-position-rail__bookmark {
+  color: var(--text);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 50%;
+}

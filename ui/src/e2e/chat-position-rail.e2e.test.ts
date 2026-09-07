@@ -58,14 +58,21 @@ suite.define(() => {
             element.scrollTop = element.scrollHeight;
           });
           await expect.poll(currentMarkerIndex).toBe(9);
-          await transcript.evaluate((element) => {
-            element.scrollTop = Math.round((element.scrollHeight - element.clientHeight) / 2);
-          });
+          await transcript.hover();
+          await page.mouse.wheel(
+            0,
+            -Math.round(
+              await transcript.evaluate(
+                (element) => (element.scrollHeight - element.clientHeight) / 2,
+              ),
+            ),
+          );
           await expect.poll(currentMarkerIndex).toBeGreaterThan(0);
           await expect.poll(currentMarkerIndex).toBeLessThan(9);
-          await transcript.evaluate((element) => {
-            element.scrollTop = 0;
-          });
+          await page.mouse.wheel(
+            0,
+            -(await transcript.evaluate((element) => element.scrollHeight)),
+          );
           await expect.poll(currentMarkerIndex).toBe(0);
 
           const composer = page.locator(".agent-chat__composer-combobox textarea");
@@ -210,7 +217,7 @@ suite.define(() => {
             if (width === "48rem") {
               const inner = await transcript.locator(".chat-thread-inner").boundingBox();
               const marker = await markers.first().boundingBox();
-              expect(marker!.x - (inner!.x + inner!.width)).toBeGreaterThanOrEqual(8);
+              expect(inner!.x - (marker!.x + marker!.width)).toBeGreaterThanOrEqual(8);
             }
             await captureUiProof(
               suite,
@@ -239,6 +246,43 @@ suite.define(() => {
           await transcript.evaluate((element) =>
             element.style.removeProperty("--chat-thread-max-width"),
           );
+          // A shifted reading column must reserve the rail's actual (left) gutter,
+          // not a spacious right gutter that would allow markers over the text.
+          for (const columnAtLeft of [true, false]) {
+            await transcript.evaluate(
+              (element, { alignLeft, eventName }) => {
+                const inner = element.querySelector<HTMLElement>(".chat-thread-inner")!;
+                inner.style.marginLeft = alignLeft ? "32px" : "auto";
+                inner.style.marginRight = alignLeft ? "auto" : "32px";
+                element.dispatchEvent(
+                  new CustomEvent(eventName, {
+                    bubbles: true,
+                    detail: { widthChanged: false },
+                  }),
+                );
+              },
+              { alignLeft: columnAtLeft, eventName: SIDEBAR_GEOMETRY_COMMIT_EVENT },
+            );
+            await markers.first().waitFor({ state: columnAtLeft ? "hidden" : "visible" });
+          }
+          await page.evaluate(() => {
+            document.documentElement.dir = "rtl";
+          });
+          await markers.first().waitFor({ state: "visible" });
+          await expect
+            .poll(() =>
+              markers.first().evaluate((marker) => {
+                const inner = marker.closest(".chat-thread")!.querySelector(".chat-thread-inner")!;
+                return inner.getBoundingClientRect().left - marker.getBoundingClientRect().right;
+              }),
+            )
+            .toBeGreaterThanOrEqual(8);
+          expect(
+            await rail.locator(".chat-position-rail__track").evaluate((track) => ({
+              right: getComputedStyle(track).borderRightWidth,
+              left: getComputedStyle(track).borderLeftWidth,
+            })),
+          ).toEqual({ right: "1px", left: "0px" });
           expect(pageErrors).toEqual([]);
         },
       );

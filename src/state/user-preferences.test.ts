@@ -143,7 +143,7 @@ describe("user preferences", () => {
     });
   });
 
-  it("keeps merged profiles within the same preference cap", () => {
+  it("preserves merged preferences above capacity and permits edits and cleanup after reopen", () => {
     const options = stateOptions();
     for (let start = 0; start < 127; start += 32) {
       const count = Math.min(32, 127 - start);
@@ -158,15 +158,51 @@ describe("user preferences", () => {
       ).toMatchObject({ ok: true });
     }
     expect(
-      setUserPreferences("source", { "source-a": true, "source-b": true }, options),
+      setUserPreferences(
+        "source",
+        { "source-a": "First", "source-b": "Second", "target-0": false },
+        options,
+      ),
     ).toMatchObject({ ok: true });
 
     mergeUserPreferences(openOpenClawStateDatabase(options).db, "source", "target");
 
-    expect(Object.keys(getUserPreferences("target", undefined, options))).toHaveLength(128);
-    expect(getUserPreferences("target", ["source-a", "source-b"], options)).toEqual({
-      "source-a": true,
+    closeOpenClawStateDatabaseForTest();
+    expect(Object.keys(getUserPreferences("target", undefined, options))).toHaveLength(129);
+    expect(getUserPreferences("target", ["source-a", "source-b", "target-0"], options)).toEqual({
+      "source-a": "First",
+      "source-b": "Second",
+      "target-0": true,
     });
     expect(getUserPreferences("source", undefined, options)).toEqual({});
+    expect(setUserPreferences("target", { "source-a": "Renamed" }, options)).toMatchObject({
+      ok: true,
+    });
+    expect(
+      setUserPreferences(
+        "target",
+        { "source-a": "Discarded", "source-b": null, extra: true },
+        options,
+      ),
+    ).toMatchObject({ ok: false, error: { code: "profile-key-limit", currentCount: 129 } });
+    expect(getUserPreferences("target", ["source-a", "source-b", "extra"], options)).toEqual({
+      "source-a": "Renamed",
+      "source-b": "Second",
+    });
+    expect(setUserPreferences("target", { "source-b": null }, options)).toMatchObject({ ok: true });
+    expect(setUserPreferences("target", { extra: true }, options)).toMatchObject({
+      ok: false,
+      error: { code: "profile-key-limit", currentCount: 128 },
+    });
+    expect(setUserPreferences("target", { "target-0": null, extra: true }, options)).toMatchObject({
+      ok: true,
+    });
+    expect(Object.keys(getUserPreferences("target", undefined, options))).toHaveLength(128);
+    expect(
+      getUserPreferences("target", ["source-a", "source-b", "target-0", "extra"], options),
+    ).toEqual({
+      "source-a": "Renamed",
+      extra: true,
+    });
   });
 });

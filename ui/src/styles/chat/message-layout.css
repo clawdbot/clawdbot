@@ -68,16 +68,17 @@
   top: clamp(20px, 3vh, 28px);
   width: 0;
   height: 0;
-  margin-inline-start: auto;
+  margin-left: 0;
+  margin-right: auto;
 }
 
 .chat-position-rail__track {
   position: absolute;
   top: 0;
-  right: calc(var(--chat-thread-gutter) + 4px);
+  left: calc(var(--chat-thread-gutter) + 4px);
   width: 24px;
   height: min(420px, calc(100cqh - 48px));
-  border-inline-start: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
 }
 
 /* The transcript owner measures the actual saved-width gutter. Its 80px
@@ -90,7 +91,7 @@
   position: absolute;
   z-index: 1;
   top: var(--chat-position-marker);
-  left: -13px;
+  right: -13px;
   display: grid;
   place-items: center;
   width: 26px;
@@ -118,7 +119,7 @@
 .chat-position-rail__tick {
   position: absolute;
   top: 50%;
-  right: calc(50% + 9px);
+  left: calc(50% + 9px);
   display: block;
   width: var(--chat-position-proximity-width);
   height: 2px;
@@ -151,7 +152,7 @@
 .chat-position-rail__preview {
   position: absolute;
   top: var(--chat-position-preview);
-  right: 52px;
+  left: 52px;
   display: grid;
   width: 200px;
   gap: 4px;
@@ -171,7 +172,7 @@
 .chat-position-rail__preview::after {
   position: absolute;
   top: 0;
-  left: 100%;
+  right: 100%;
   width: 16px;
   height: 100%;
   content: "";

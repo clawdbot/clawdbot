@@ -263,6 +263,39 @@ Images in your own messages appear above any accompanying text, without a surrou
 
 Messages forwarded by `sessions_send` render as left-aligned speech bubbles with a source-session chip above the message. When avatars are shown, messages from a different known agent use that agent's avatar, or initials in a stable identity color if no avatar is available. Same-agent forwards and unknown senders keep the forward icon. Select the chip to open the source session; hover it to see session progress. Each source session has a stable bubble tint. Forwarded messages without a known source session show the source agent when available, or a generic forwarded-message label. The receiving agent's own replies remain flat text.
 
+## Save important messages
+
+Select the original OpenClaw claw immediately before **Reply** beneath a saved
+message. Give the bookmark a name of up to 70 Unicode characters. Select its name
+to rename it, or select the marked claw again to remove it. These actions do not
+edit the conversation or send a message.
+
+Open **Bookmarks** in the existing three-dot session menu to search names and
+revisit saved locations in the current conversation. Select **All conversations** to
+manage saved references from other or deleted conversations without opening them.
+The position rail sits on the left; bookmarked points use the same claw. Nearby bookmarks share a marker:
+activate it repeatedly to cycle through them, or choose a name in the menu.
+The rail hides when the pane has insufficient gutter space. Existing transcript
+display settings remain unchanged. Opening a bookmark closes transcript search
+and reveals its commentary or containing work section without changing saved
+view preferences.
+
+Bookmarks use the existing personal-preferences service, one preference entry
+per saved message. They survive reloads and follow the authenticated profile.
+The existing limit of **128 preference keys per profile**, shared with other
+personal settings, applies to new entries. Profile consolidation preserves every
+distinct saved entry, even when the combined total exceeds that limit; identical
+keys keep the target profile's value. Existing entries remain editable and
+removable, but adding keys above the limit produces a visible error. Remove
+unneeded entries to free capacity. Reopening the list or reconnecting refreshes
+its contents; a shared Owner profile shares these preferences.
+
+Incognito, external catalog conversations, pending messages, and connections
+without a durable profile cannot create bookmarks. Writing requires write scope.
+A reset cannot redirect a saved location to a replacement message: references
+from the earlier generation remain listed for renaming or removal, but cannot
+be opened. Bookmarks do not restore deleted transcript content.
+
 ## Chat message width
 
 Drag the side-panel divider to resize a task's **Review** transcript. Messages

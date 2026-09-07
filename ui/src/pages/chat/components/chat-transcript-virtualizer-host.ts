@@ -574,6 +574,8 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     this.cancelScroll();
     const command = (this.scrollCommand = { behavior: resolveScrollBehavior(), target: "index" });
     this.virtualizerController.getVirtualizer().scrollToIndex(rowIndex, { align: "center" });
+    // Publish the new scroll offset before Lit commits the virtualized target range.
+    this.syncNativeOffset?.();
     this.host.requestUpdate();
     void this.host.updateComplete.then(() => {
       if (this.scrollCommand !== command) {

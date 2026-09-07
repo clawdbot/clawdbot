@@ -85,6 +85,12 @@ Personal connections share the Gateway's existing trusted-host boundary. They pr
 
 When a Control UI connection is bound to an authenticated Gateway profile, its theme, theme mode, and accent color are stored per profile in the existing `user_preferences` table in the shared state database. Those choices follow that person across devices without changing appearance for other people on the same Gateway.
 
+New preference keys share a 128-key profile limit. Profile consolidation preserves
+all distinct existing keys, including when their combined total exceeds the
+limit; identical keys retain the target's value. Existing preferences remain
+editable and removable. New keys are rejected until their resulting total fits
+the limit, without partially applying the requested batch.
+
 Profile theme and theme mode preferences override their gateway-wide `ui.prefs` settings and otherwise fall back to the active theme's defaults. The imported custom theme is the exception: its palette lives only in the browser that imported it, so selecting it stays browser-local and never follows the profile. Accent precedence is the profile's `ui.accent` preference, gateway-wide `ui.prefs.accent`, `ui.seamColor`, and finally the active theme's default accent. Restoring a default clears only the profile preference. Owner-profile preferences follow the owner across devices. Connections without a profile keep gateway-wide appearance behavior. Language, chat preferences, and sidebar entries continue using gateway configuration.
 
 ## Write directives, not observations
