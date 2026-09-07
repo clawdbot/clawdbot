@@ -9,6 +9,7 @@ import {
   cliRecoveryEntrypoints,
   gatewayDirectStopEntrypoints,
 } from "../../src/cli/cli-entrypoint.test-support.ts";
+import { doctorConfigRuntimeEntrypoints } from "../../src/commands/doctor-config-runtime.test-support.ts";
 import { cronOwnerHardeningEntrypoints } from "../../src/cron/owner-hardening-runtime.test-support.ts";
 import { sessionListCacheRetentionEntrypoint } from "../../src/gateway/server-methods/sessions-list-cache-retention-entrypoint.test-support.ts";
 import { sessionChildCacheRetentionEntrypoint } from "../../src/gateway/session-child-cache-retention-entrypoint.test-support.ts";
@@ -39,6 +40,7 @@ export const vitestWorkerBuildEntries = {
       ...cliCompactionBackendEntrypoints,
       ...Object.values(cliRecoveryEntrypoints),
       ...Object.values(gatewayDirectStopEntrypoints),
+      ...Object.values(doctorConfigRuntimeEntrypoints),
       ...Object.values(cronOwnerHardeningEntrypoints),
       ...Object.values(tuiPtyRuntimeEntrypoints),
       ...Object.values(sessionTitleRetentionEntrypoints),

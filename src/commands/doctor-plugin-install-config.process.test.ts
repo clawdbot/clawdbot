@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   clearLoadInstalledPluginIndexInstallRecordsCache,
   readPersistedInstalledPluginIndexInstallRecords,
@@ -13,6 +14,7 @@ import {
   runBuiltRuntime,
   runIsolatedModuleScript,
 } from "./doctor-config-preflight.process.test-support.js";
+import { doctorConfigRuntimeEntrypoints } from "./doctor-config-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const doctorArgs = ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"];
@@ -109,11 +111,8 @@ describe("Doctor retired plugin install config", () => {
     const legacy = { source: "path" as const, installPath: path.join(root, "missing-plugin") };
     const candidate = { ...config, plugins: { ...config.plugins, installs: { imported: legacy } } };
     fs.writeFileSync(configPath, JSON.stringify({ ...candidate, unknownKey: true }));
-    const writerUrl = new URL(
-      "../flows/doctor-health-contribution-runners.config.ts",
-      import.meta.url,
-    );
-    const configFlowUrl = new URL("./doctor-config-flow.ts", import.meta.url).href;
+    const writerUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.configHealth);
+    const configFlowUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.configFlow).href;
     const result = await runIsolatedModuleScript(
       env,
       `
@@ -170,13 +169,9 @@ describe("Doctor retired plugin install config", () => {
       configPath,
       JSON.stringify({ ...config, plugins: { ...config.plugins, installs: { retired: legacy } } }),
     );
-    const configFlowUrl = new URL("./doctor-config-flow.ts", import.meta.url).href;
-    const writerUrl = new URL(
-      "../flows/doctor-health-contribution-runners.config.ts",
-      import.meta.url,
-    ).href;
-    const recordsUrl = new URL("../plugins/installed-plugin-index-records.ts", import.meta.url)
-      .href;
+    const configFlowUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.configFlow).href;
+    const writerUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.configHealth).href;
+    const recordsUrl = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.installRecords).href;
     const result = await runIsolatedModuleScript(
       env,
       `
