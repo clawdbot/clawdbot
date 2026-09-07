@@ -224,6 +224,23 @@ describe("resolveNpmInstallSpecsForUpdateChannel", () => {
   );
 });
 
+it("rethrows the original abort raised during parallel channel metadata resolution", async () => {
+  const reason = new Error("Gateway startup interrupted by SIGTERM");
+  const controller = new AbortController();
+  vi.mocked(resolveNpmSpecMetadata).mockImplementation(async ({ signal }) => {
+    controller.abort(reason);
+    expect(signal).toBeInstanceOf(AbortSignal);
+    throw reason;
+  });
+
+  await expect(
+    resolveNpmInstallSpecsForUpdateChannel({
+      spec: "@openclaw/demo",
+      updateChannel: "beta",
+      signal: controller.signal,
+    }),
+  ).rejects.toBe(reason);
+});
 describe("resolveClawHubInstallSpecsForUpdateChannel", () => {
   it.each([
     ["stable", false, "2026.7.33", undefined],

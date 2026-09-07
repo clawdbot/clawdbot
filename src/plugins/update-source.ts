@@ -244,7 +244,9 @@ export async function resolveNewerExactPinnedNpmDefaultLine(params: {
     spec: packageName,
     updateChannel: params.updateChannel,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
   }).catch(() => undefined);
+  params.signal?.throwIfAborted();
   if (!specs) {
     return undefined;
   }
@@ -460,6 +462,7 @@ export async function resolveNpmUpdateSpecs(params: {
   officialPackageName?: string;
   coreVersion?: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<{
   installSpec?: string;
   recordSpec?: string;
@@ -478,6 +481,7 @@ export async function resolveNpmUpdateSpecs(params: {
     officialPackageName: params.officialPackageName,
     coreVersion: params.coreVersion,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 }
 

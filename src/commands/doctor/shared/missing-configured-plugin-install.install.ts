@@ -193,6 +193,7 @@ async function installCandidatePackage(
           : undefined,
         coreVersion: resolveCompatibilityHostVersion(params.env),
         versionBoundToCore: candidate.versionBoundToOpenClaw,
+        ...(params.signal ? { signal: params.signal } : {}),
       })
     : null;
   const clawhubInstallSpec = clawhubSpecs?.installSpec ?? candidate.clawhubSpec;

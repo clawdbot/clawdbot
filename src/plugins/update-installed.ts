@@ -233,6 +233,7 @@ export async function updateNpmInstalledPlugins(params: {
               officialPackageName: resolveNpmSpecPackageName(trustedOfficialNpmSpec),
               coreVersion: params.coreVersion,
               timeoutMs: params.timeoutMs,
+              ...(params.signal ? { signal: params.signal } : {}),
             })
           : undefined;
     } catch (error) {
