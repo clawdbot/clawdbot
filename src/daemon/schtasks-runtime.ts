@@ -46,6 +46,18 @@ import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract
 export const SCHEDULED_TASK_FALLBACK_POLL_MS = 250;
 export const SCHEDULED_TASK_FALLBACK_TIMEOUT_MS = 15_000;
 
+/** Read policy independently of runtime state; unavailable policy is not disabled. */
+export async function isScheduledTaskEnabled(args: GatewayServiceEnvArgs): Promise<boolean> {
+  const observed = probeScheduledTaskState(
+    resolveTaskName(args.env ?? process.env),
+    args.timeoutMs,
+  );
+  if (observed.status !== "found" || typeof observed.enabled !== "boolean") {
+    throw new Error("Scheduled Task enable policy could not be inspected.");
+  }
+  return observed.enabled;
+}
+
 export async function assertSchtasksAvailable(): Promise<void> {
   const res = await execSchtasks(["/Query"]);
   if (res.code !== 0) {

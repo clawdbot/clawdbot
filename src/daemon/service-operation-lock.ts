@@ -7,7 +7,7 @@ import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
 import { resolveTaskName } from "./schtasks-layout.js";
 import type { GatewayServiceEnv } from "./service-types.js";
-import { resolveSystemdUnitPath } from "./systemd-service-files.js";
+import { resolveSystemdServiceName } from "./systemd-service-files.js";
 
 type Scope = { active: boolean; pending: Set<Promise<unknown>> };
 const scopes = new AsyncLocalStorage<Map<string, Scope>>();
@@ -25,7 +25,7 @@ export async function withGatewayServiceOperationLock<T>(
       ? `launchd:${resolveLaunchAgentGuiDomain()}/${resolveLaunchAgentLabel(env)}`
       : process.platform === "win32"
         ? `schtasks:${resolveTaskName(env).toLowerCase()}`
-        : `systemd:${resolveSystemdUnitPath(env)}`;
+        : `systemd:${resolveSystemdServiceName(env)}`;
   const file = path.join(
     resolvePreferredOpenClawTmpDir(),
     `service-lifecycle-${sha256Hex(identity)}`,

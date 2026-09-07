@@ -20,6 +20,7 @@ import {
 } from "./launchd.js";
 import {
   installScheduledTask,
+  isScheduledTaskEnabled,
   isScheduledTaskInstalled,
   readScheduledTaskCommand,
   readScheduledTaskRuntime,
@@ -418,6 +419,7 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     stop: stopSystemdService,
     restart: restartSystemdService,
     isLoaded: isSystemdServiceEnabled,
+    isEnabled: isSystemdServiceEnabled,
     isAbsent: ({ env }) => isSystemdServiceAbsent(env ?? process.env),
     hasInstalledDefinition: async ({ env }) =>
       (await findInstalledSystemdGatewayScope(env ?? process.env)) !== null,
@@ -441,6 +443,7 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     stop: stopScheduledTask,
     restart: restartScheduledTask,
     isLoaded: isScheduledTaskInstalled,
+    isEnabled: isScheduledTaskEnabled,
     readCommand: readScheduledTaskCommand,
     readRuntime: readScheduledTaskRuntime,
   },

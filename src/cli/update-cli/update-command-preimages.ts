@@ -13,9 +13,11 @@ import {
   reopenUpdateCheckpointPreimages,
   type UpdateCheckpointResource,
 } from "../../infra/update-checkpoint.js";
+import { bindUpdateRecoveryNativeManager } from "../../infra/update-run-recovery-native.js";
 import { bindUpdateRecoveryPreimages } from "../../infra/update-run-recovery-preimage.js";
 import { assertExactUpdateRecoveryClaim } from "../../infra/update-run-recovery.js";
 import { parseJsonWithJson5Fallback } from "../../utils/parse-json-compat.js";
+import { readUpdateCommandNativeObservation } from "./update-command-native-observation.js";
 import {
   UpdateCommandRecoveryPendingError,
   type UpdateCommandRecovery,
@@ -55,7 +57,8 @@ async function configSources(configPath: string, env: NodeJS.ProcessEnv): Promis
 }
 
 /** Capture and bind original file bytes under their existing write owners.
- * Native-manager facts and full-state capture remain separate prerequisites.
+ * Bind original manager facts under the same native lock before it is released.
+ * Native mutation intents and full-state capture remain separate prerequisites.
  * The native file inventory is reread under its lifecycle lock, not reconstructed
  * from paths or stale observations supplied by a caller.
  */
@@ -161,6 +164,25 @@ export async function captureUpdateCommandPreimages(params: {
           recovery.onRecord(next);
           const reopened = await reopenUpdateCheckpointPreimages(ref, { artifactRoot, binding });
           assertExactUpdateRecoveryClaim(next, { assertCurrent }, recovery.options);
+          if (params.managedService) {
+            const observe = () =>
+              readUpdateCommandNativeObservation({
+                record: next,
+                env: params.env,
+                definitionPaths: serviceFiles,
+                assertCurrent,
+                timeoutMs: params.timeoutMs,
+              });
+            const original = await observe();
+            const bound = await bindUpdateRecoveryNativeManager(
+              next,
+              { identity: original.identity, observe },
+              { assertCurrent },
+              recovery.options,
+            );
+            recovery.onRecord(bound);
+            assertExactUpdateRecoveryClaim(bound, { assertCurrent }, recovery.options);
+          }
           return reopened;
         };
         return await lockNext(0);

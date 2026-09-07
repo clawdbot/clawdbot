@@ -48,6 +48,12 @@ it("captures the root, shared include and observed native file before stopping",
   await fs.writeFile(serviceFile, "original native definition\n");
   vi.spyOn(services, "resolveGatewayService").mockReturnValue(
     createMockGatewayService({
+      isEnabled: async () => false,
+      isLoaded: async () => true,
+      readRuntime: async () => ({
+        status: "stopped",
+        systemd: { unit: "openclaw-gateway.service", managerUid: 1001 },
+      }),
       readCommand: async () => ({
         programArguments: [
           process.execPath,
@@ -115,6 +121,12 @@ it("captures the root, shared include and observed native file before stopping",
     if (!record?.preimages) {
       throw new Error("original files were not bound");
     }
+    expect(record.nativeManager?.original).toEqual({
+      exists: true,
+      enabled: false,
+      loaded: true,
+      stopped: true,
+    });
     const ref = record.preimages.ref;
     const reopened = await checkpoints.reopenUpdateCheckpointPreimages(ref, {
       artifactRoot: path.dirname(path.dirname(ref.manifestPath)),

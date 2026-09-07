@@ -111,3 +111,33 @@ it("allows a caller to reconcile a nested failure before completing its interval
     await withGatewayServiceOperationLock(env, async (assertNested) => assertNested());
   });
 });
+
+it("serializes the same systemd unit across alternate definition homes", async () => {
+  const env = await fixture();
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  const entered = createDeferred();
+  const release = createDeferred();
+  const first = withGatewayServiceOperationLock(env, async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  await entered.promise;
+  let secondEntered = false;
+  const second = withGatewayServiceOperationLock(
+    { ...env, HOME: path.join(env.HOME, "alternate") },
+    async () => {
+      secondEntered = true;
+    },
+  );
+  try {
+    // A distinct lock would admit this native effect while the first remains live.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 150);
+    });
+    expect(secondEntered).toBe(false);
+  } finally {
+    release.resolve();
+    await Promise.all([first, second]);
+  }
+  expect(secondEntered).toBe(true);
+});

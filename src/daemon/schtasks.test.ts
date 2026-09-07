@@ -6,9 +6,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { encodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
 import {
   isScheduledTaskDefinitelyNotRunning,
+  isScheduledTaskEnabled,
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
-import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
+import { probeScheduledTaskExists, probeScheduledTaskState } from "./schtasks-state-probe.js";
 import {
   readScheduledTaskCommand,
   readScheduledTaskRuntime,
@@ -479,3 +480,29 @@ describe("readScheduledTaskCommand", () => {
     );
   });
 });
+
+// Enable policy is not numeric runtime state: a ready task may be disabled.
+it.each([false, true])("retains observed Task Scheduler enable policy %s", (enabled) => {
+  spawnSync.mockReturnValue({
+    status: 0,
+    stdout: JSON.stringify({ state: 3, enabled }),
+    stderr: "",
+  });
+  expect(probeScheduledTaskState("OpenClaw Gateway")).toMatchObject({
+    status: "found",
+    state: 3,
+    enabled,
+  });
+});
+
+it.each([undefined, null, 0, "false"])(
+  "refuses to infer enable policy from a stopped task (%s)",
+  async (enabled) => {
+    spawnSync.mockReturnValue({
+      status: 0,
+      stdout: JSON.stringify({ state: 3, enabled }),
+      stderr: "",
+    });
+    await expect(isScheduledTaskEnabled({ env: {} })).rejects.toThrow("enable policy");
+  },
+);

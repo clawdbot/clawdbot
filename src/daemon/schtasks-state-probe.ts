@@ -5,7 +5,13 @@ import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
 
 type ScheduledTaskStateProbe =
-  | { status: "found"; state: number | null; lastRunResult?: string; lastRunTime?: string }
+  | {
+      status: "found";
+      state: number | null;
+      enabled?: boolean;
+      lastRunResult?: string;
+      lastRunTime?: string;
+    }
   | { status: "missing" }
   | { status: "unknown"; detail: string };
 
@@ -22,6 +28,9 @@ export function probeScheduledTaskState(
     // A registered task stays found even when state or optional history cannot be read.
     "$result=@{state=$null}",
     "try { $result.state=[int]$task.State } catch {}",
+    // Schedule.Service.GetTask returns IRegisteredTask, not a Get-ScheduledTask CIM object.
+    // Its Enabled property is Boolean; missing/non-Boolean data must remain unknown.
+    "try { $enabled=$task.Enabled; if($enabled -is [bool]) { $result.enabled=$enabled } } catch {}",
     "try { $result.lastRunResult=[int]$task.LastTaskResult } catch {}",
     "try { $result.lastRunTime=$task.LastRunTime.ToUniversalTime().ToString('o', [Globalization.CultureInfo]::InvariantCulture) } catch {}",
     "$result | ConvertTo-Json -Compress; exit 0",
@@ -52,13 +61,14 @@ export function probeScheduledTaskState(
     if (!snapshot) {
       return { status: "unknown", detail: "Scheduled Task probe returned invalid JSON." };
     }
-    const { state, lastRunResult, lastRunTime } = snapshot;
+    const { state, enabled, lastRunResult, lastRunTime } = snapshot;
     return {
       status: "found",
       state:
         typeof state === "number" && Number.isInteger(state) && state >= 0 && state <= 4
           ? state
           : null,
+      ...(typeof enabled === "boolean" ? { enabled } : {}),
       ...(typeof lastRunResult === "number" && Number.isInteger(lastRunResult)
         ? { lastRunResult: String(lastRunResult) }
         : {}),
