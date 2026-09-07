@@ -110,6 +110,20 @@ describe("classifyAcpToolApproval", () => {
     });
   });
 
+  it("does not auto-approve reads when a declared location escapes cwd", () => {
+    expect(
+      classify({
+        title: "read: src/index.ts",
+        rawInput: { path: "src/index.ts" },
+        locations: [{ path: "/etc/passwd" }],
+      }),
+    ).toEqual({
+      toolName: "read",
+      approvalClass: "other",
+      autoApprove: false,
+    });
+  });
+
   it("auto-approves readonly search tools", () => {
     expect(
       classify({

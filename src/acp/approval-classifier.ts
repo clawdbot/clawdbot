@@ -211,9 +211,12 @@ export function classifyAcpToolApproval(params: {
       toolName,
       toolTitle: params.toolCall?.title ?? undefined,
     });
+    // Locations alone never grant approval, but a declared location outside cwd
+    // still has to deny, the same way the search branch treats them.
+    const scopedPaths = [...rawPaths, ...readLocationPaths(params.toolCall?.locations)];
     const autoApprove =
       rawPaths.length > 0 &&
-      rawPaths.every((rawPath) => isToolPathScopedToCwd(rawPath, params.cwd));
+      scopedPaths.every((rawPath) => isToolPathScopedToCwd(rawPath, params.cwd));
     return {
       toolName,
       approvalClass: autoApprove ? "readonly_scoped" : "other",
