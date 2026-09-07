@@ -236,6 +236,20 @@ build, precompressed-asset verification, and startup/largest-asset budget result
 any failure blocks fanout. Do not substitute a dev server or raise budgets to admit
 the target.
 
+For local full E2E proof, prepare the frozen, dependency-ready proof checkout
+with private QA entries in the initial build:
+
+```bash
+OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build
+```
+
+Then run the selected E2E command with its normal readiness checks enabled.
+`scripts/lib/vitest-build-prerequisites.mts` requests private QA entries;
+`scripts/run-node.mts` triggers another full build when they are absent. This
+preflight avoids rebuilding solely for `missing_private_qa_dist`. Keep the flag
+scoped to this task-owned proof checkout and command. Publication package and
+image bytes remain owned by the release workflows and their sealed artifacts.
+
 Before full release validation:
 
 ```bash
