@@ -37,7 +37,6 @@ final class CookieSyncManager: NSObject {
     }
 
     @ObservationIgnored private let logger = Logger(subsystem: "ai.openclaw", category: "cookie-sync")
-    @ObservationIgnored private let queue = DispatchQueue(label: "ai.openclaw.cookie-sync")
     @ObservationIgnored private weak var appState: AppState?
     @ObservationIgnored private var endpointState: GatewayEndpointState?
     @ObservationIgnored private var endpointTask: Task<Void, Never>?
@@ -281,17 +280,15 @@ final class CookieSyncManager: NSObject {
     }
 
     private func installStartupWatchdog(generation: UUID) {
-        let timer = DispatchSource.makeTimerSource(queue: self.queue)
+        let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + 5)
         timer.setEventHandler { [weak self] in
-            Task { @MainActor [weak self] in
-                guard let self, self.processGeneration == generation else { return }
-                self.startupWatchdog?.cancel()
-                self.startupWatchdog = nil
-                if self.process?.isRunning == true {
-                    self.retryAttempt = 0
-                    self.logger.debug("cookie sync startup watchdog passed")
-                }
+            guard let self, self.processGeneration == generation else { return }
+            self.startupWatchdog?.cancel()
+            self.startupWatchdog = nil
+            if self.process?.isRunning == true {
+                self.retryAttempt = 0
+                self.logger.debug("cookie sync startup watchdog passed")
             }
         }
         self.startupWatchdog = timer
