@@ -50,6 +50,7 @@ const CODEX_WORKSPACE_DEVELOPER_CONTEXT_BASENAMES = new Set(
 );
 const CODEX_MEMORY_CONTEXT_BASENAME = "memory.md";
 const CODEX_MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
+const CODEX_SKILL_DISCOVERY_DESCRIPTION_MAX_CHARS = 120;
 const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
   ["soul.md", 10],
   ["identity.md", 20],
@@ -643,9 +644,86 @@ export function renderCodexSkillsCollaborationInstructions(params: {
   if (!shouldInjectCodexOpenClawPromptContext(params.attempt)) {
     return undefined;
   }
-  return params.skillsPrompt?.trim()
-    ? ["## OpenClaw Skills", "", params.skillsPrompt.trim()].join("\n")
-    : undefined;
+  const catalog = compactCodexSkillsPrompt(params.skillsPrompt);
+  return catalog ? ["## OpenClaw Skills", "", catalog].join("\n") : undefined;
+}
+
+/**
+ * Codex Code Mode receives the exact skill sources separately, so the model
+ * prompt only needs bounded discovery metadata. Explicit `skills.read(name)`
+ * calls still return the complete selected SKILL.md.
+ */
+export function compactCodexSkillsPrompt(skillsPrompt: string | undefined): string {
+  const prompt = skillsPrompt?.trim();
+  if (!prompt) {
+    return "";
+  }
+  const catalogMatch = /<available_skills>([\s\S]*?)<\/available_skills>/iu.exec(prompt);
+  if (!catalogMatch) {
+    return prompt;
+  }
+  const blocks = Array.from(catalogMatch[1]?.matchAll(/<skill>([\s\S]*?)<\/skill>/giu) ?? []);
+  if (blocks.length === 0) {
+    return prompt;
+  }
+  const entries: Array<{ name: string; description?: string }> = [];
+  for (const blockMatch of blocks) {
+    const block = blockMatch[1] ?? "";
+    const name = /<name>([\s\S]*?)<\/name>/iu.exec(block)?.[1]?.trim();
+    if (!name) {
+      return prompt;
+    }
+    const rawDescription = /<description>([\s\S]*?)<\/description>/iu.exec(block)?.[1];
+    const description = rawDescription
+      ? truncateCodexSkillDescription(decodeCodexSkillXml(rawDescription))
+      : undefined;
+    entries.push({ name, ...(description ? { description } : {}) });
+  }
+  const lines = [
+    "Compact skill discovery catalog. Match by name and summary.",
+    'On a clear match, use `skills.read("<name>")` inside `exec` to load the complete skill before acting. Several matches: read the most specific. No match: read none.',
+    "",
+    "<available_skills>",
+  ];
+  for (const entry of entries) {
+    lines.push("  <skill>", `    <name>${entry.name}</name>`);
+    if (entry.description) {
+      lines.push(`    <description>${encodeCodexSkillXml(entry.description)}</description>`);
+    }
+    lines.push("  </skill>");
+  }
+  lines.push("</available_skills>");
+  return lines.join("\n");
+}
+
+function truncateCodexSkillDescription(description: string): string {
+  const normalized = description.replace(/\s+/gu, " ").trim();
+  const characters = Array.from(normalized);
+  if (characters.length <= CODEX_SKILL_DISCOVERY_DESCRIPTION_MAX_CHARS) {
+    return normalized;
+  }
+  return `${characters
+    .slice(0, CODEX_SKILL_DISCOVERY_DESCRIPTION_MAX_CHARS - 1)
+    .join("")
+    .trimEnd()}…`;
+}
+
+function decodeCodexSkillXml(value: string): string {
+  return value
+    .replace(/&lt;/gu, "<")
+    .replace(/&gt;/gu, ">")
+    .replace(/&quot;/gu, '"')
+    .replace(/&apos;/gu, "'")
+    .replace(/&amp;/gu, "&");
+}
+
+function encodeCodexSkillXml(value: string): string {
+  return value
+    .replace(/&/gu, "&amp;")
+    .replace(/</gu, "&lt;")
+    .replace(/>/gu, "&gt;")
+    .replace(/"/gu, "&quot;")
+    .replace(/'/gu, "&apos;");
 }
 
 /**

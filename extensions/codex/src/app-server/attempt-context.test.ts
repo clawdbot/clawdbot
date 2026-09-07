@@ -17,6 +17,7 @@ import {
   buildCodexWatchedSessionsContext,
   buildCodexWorkspaceBootstrapContext,
   buildCodexSystemPromptReport,
+  compactCodexSkillsPrompt,
   readContextEngineThreadBootstrapProjection,
   readMirroredSessionHistoryMessages,
   resolveContextEngineBootstrapProjectionDecision,
@@ -30,6 +31,33 @@ afterEach(() => {
 });
 
 describe("Codex app-server attempt context", () => {
+  it("compacts skill discovery metadata while preserving every exact skill name", () => {
+    const prompt = [
+      "The following skills are available.",
+      "<available_skills>",
+      "  <skill>",
+      "    <name>weather</name>",
+      `    <description>${"Forecast weather & travel conditions. ".repeat(10)}</description>`,
+      "    <location>/very/long/private/workspace/skills/weather/SKILL.md</location>",
+      "  </skill>",
+      "  <skill>",
+      "    <name>github</name>",
+      "    <description>Inspect &quot;GitHub&quot; repositories.</description>",
+      "    <location>/very/long/private/workspace/skills/github/SKILL.md</location>",
+      "  </skill>",
+      "</available_skills>",
+    ].join("\n");
+
+    const compact = compactCodexSkillsPrompt(prompt);
+    expect(compact.length).toBeLessThan(prompt.length);
+    expect(compact).toContain("<name>weather</name>");
+    expect(compact).toContain("<name>github</name>");
+    expect(compact).toContain("skills.read");
+    expect(compact).toContain("&quot;GitHub&quot;");
+    expect(compact).not.toContain("<location>");
+    expect(compact).not.toContain("/very/long/private/workspace");
+  });
+
   it("treats missing mirrored session history as empty without hook warning", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-attempt-context-history-"));
