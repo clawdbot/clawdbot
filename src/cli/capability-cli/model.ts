@@ -207,6 +207,7 @@ async function runModelRun(params: {
       config: cfg,
       agentDirs: [resolveAgentDir(cfg, agentId)],
       includeConfigRefs: false,
+      allowUnavailableSecretOwners: true,
     });
     secretsRuntime.activateSecretsRuntimeSnapshot(secretsSnapshot);
 
