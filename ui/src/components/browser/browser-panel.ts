@@ -101,7 +101,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
     if (changed.has("suppressed")) {
       const restored = this.dockLayout.setSuppressed(this.suppressed);
       if (this.suppressed) {
-        this.browserPanelController.cancelOverlayPointerGesture();
+        this.browserPanelController.hostDisconnected();
       } else if (restored && this.browserPanelIsOpen()) {
         void this.browserPanelController.refreshAll();
       }
@@ -281,7 +281,7 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
   }
 
   private closePanel(): void {
-    this.browserPanelController.cancelOverlayPointerGesture();
+    this.browserPanelController.hostDisconnected();
     this.dockLayout.setOpen(false);
   }
 

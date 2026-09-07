@@ -134,6 +134,19 @@ export async function handleBrowserGatewayRequest({
     }
   }
 
+  if (nodeTarget && path === "/screencast") {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "browser screencast is not available over a node proxy",
+        { details: { code: "SCREENCAST_UNSUPPORTED", reason: "node" } },
+      ),
+    );
+    return;
+  }
+
   if (nodeTarget && isPersistentBrowserProfileMutation(methodRaw, path)) {
     respond(
       false,

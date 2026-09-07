@@ -23,7 +23,7 @@ agent tools, but nothing listens on the loopback control port.
 - Status/start/stop: `GET /`, `GET /doctor`, `POST /start`, `POST /stop`, `POST /reset-profile`
 - Profiles: `GET /profiles`, `POST /profiles/create`, `DELETE /profiles/:name`
 - Tabs: `GET /tabs`, `POST /tabs/open`, `POST /tabs/focus`, `DELETE /tabs/:targetId`, `POST /tabs/action`
-- Snapshot/screenshot: `GET /snapshot`, `POST /screenshot`
+- Snapshot/screenshot/stream: `GET /snapshot`, `POST /screenshot`, `POST /screencast`
 - Actions: `POST /navigate`, `POST /act`
 - Hooks: `POST /hooks/file-chooser`, `POST /hooks/dialog`
 - Downloads: `POST /download`, `POST /wait/download`
@@ -84,6 +84,53 @@ Notes:
   Tailscale Serve identity headers.
 - If `gateway.auth.mode` is `none` or `trusted-proxy`, these loopback browser
   routes do not inherit those identity-bearing modes; keep them loopback-only.
+
+### Screencast stream
+
+`POST /screencast` mints a single-use token for a live view of the selected tab.
+Pass an optional `targetId`, `maxWidth`, `maxHeight`, and `quality` in the JSON
+body. Dimensions default to 1280 and are clamped to integers from 320 to 2000;
+JPEG quality defaults to 70 and is clamped from 30 to 90.
+
+The response contains `token`, `wsPath`, `expiresAtMs`, `targetId`, and `url`.
+Resolve `wsPath` against the Gateway URL and open a WebSocket there:
+`/browser/screencast?token=<token>`. The 48-character hexadecimal token expires
+after 60 seconds and can be consumed once. Invalid, expired, and reused tokens
+are rejected with HTTP 401 before upgrade. Viewers send no application messages;
+binary viewer messages close the connection.
+
+The plugin shares one CDP screencast per profile and tab. Chrome sends JPEG
+frames on repaint, paced to approximately 20 frames per second. Slow viewers
+skip frames instead of building a queue. Navigation immediately retires the
+capture session. A new CDP session starts only after the address is allowed,
+so delayed frames from the previous document cannot enter the new stream.
+A rejected navigation stops the stream.
+
+Text messages are JSON with `type` in `ready`, `meta`, or `error`. A `ready`
+message includes `targetId`, `url`, and `title`; `meta` updates `url` and `title`
+after allowed navigation and page load. Binary messages contain:
+
+1. A four-byte unsigned big-endian JSON header length.
+2. That many bytes of UTF-8 JSON: `{ "url", "cssWidth", "cssHeight", "scrollX", "scrollY", "ts" }`.
+3. The JPEG bytes.
+
+`cssWidth` and `cssHeight` come from CDP's `deviceWidth` and `deviceHeight`
+metadata and describe the layout viewport in CSS pixels. `scrollX` and `scrollY`
+come from `scrollOffsetX` and `scrollOffsetY`; `ts` is the CDP frame timestamp.
+
+| Close code | Meaning                                                                   |
+| ---------- | ------------------------------------------------------------------------- |
+| 4001       | Token invalid or expired (normally rejected before upgrade with HTTP 401) |
+| 4003       | `navigation_blocked`                                                      |
+| 4004       | `target_closed`, including a profile lifecycle change                     |
+| 4005       | Unsupported streaming                                                     |
+| 1012       | Gateway shutting down                                                     |
+
+Chrome MCP existing-session profiles and missing Playwright return HTTP 501 with
+`code: "SCREENCAST_UNSUPPORTED"` and `reason: "existing-session"` or `"playwright"`.
+Node-routed requests fail before proxying with `INVALID_REQUEST` and details
+`{ "code": "SCREENCAST_UNSUPPORTED", "reason": "node" }`. The Control UI falls
+back to the existing screenshot route when streaming is unavailable.
 
 ### `/act` error contract
 

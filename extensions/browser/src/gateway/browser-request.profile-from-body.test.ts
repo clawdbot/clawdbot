@@ -157,6 +157,31 @@ describe("browser.request profile selection", () => {
       .mockImplementation(async ({ body }: { body: unknown }) => ({ body }));
   });
 
+  it.each([undefined, "node"] as const)(
+    "rejects screencast on the %s node route before invoking the node",
+    async (target) => {
+      const { respond, nodeRegistry } = await runBrowserRequest({
+        method: "POST",
+        path: "/screencast",
+        target,
+        ...(target === "node" ? { node: "node-1" } : {}),
+      });
+
+      expect(firstRespondCall(respond)).toEqual([
+        false,
+        undefined,
+        {
+          code: "INVALID_REQUEST",
+          message: "browser screencast is not available over a node proxy",
+          details: { code: "SCREENCAST_UNSUPPORTED", reason: "node" },
+        },
+      ]);
+      expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+      expect(uploadMocks.prepareBrowserProxyUploadRequest).not.toHaveBeenCalled();
+      expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([undefined, "host", "node"] as const)(
     "dispatches the requested %s execution host while preserving the profile",
     async (target) => {
