@@ -28,6 +28,7 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
     transports: ["local", "gateway"],
     flags: [
       "--prompt",
+      "--prompt-stdin",
       "--file",
       "--model",
       "--thinking",

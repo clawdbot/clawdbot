@@ -158,6 +158,7 @@ Notes:
 - `model run --file` attaches image content directly to the single user message. Common formats (PNG, JPEG, WebP) work when MIME type is detected as `image/*`; unsupported or unrecognized files fail before the provider is called. Use `infer image describe` instead when you want OpenClaw's image-model routing and fallbacks rather than a direct multimodal-model probe.
 - The selected model must support image input; text-only models may reject the request at the provider layer.
 - `model run --prompt` must contain non-whitespace text; empty prompts are rejected before any provider or Gateway call.
+- Use `model run --prompt-stdin < prompt.txt` to keep prompt text out of process arguments. Stdin is read only with this flag, up to 1 MiB of UTF-8 input; empty input, read errors, and overflow fail before model dispatch. Use either `--prompt` or `--prompt-stdin`, not both. This changes only input delivery, not model routing or session behavior.
 - Local `model run` exits non-zero when the provider returns no text output, so unreachable providers and empty completions do not look like successful probes.
 - Use `model run --gateway` to test Gateway routing or agent-runtime setup while keeping the model input raw. Use `openclaw agent` or a chat surface for full agent context, tools, memory, and session transcript.
 - `--thinking adaptive` maps to the completion-runtime level `medium`; `--thinking max` maps to `max` for OpenAI models that support the native max effort, otherwise `xhigh`.

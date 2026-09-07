@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { detectMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
@@ -51,6 +52,7 @@ import {
 } from "./shared.js";
 
 const LOCAL_MODEL_RUN_SYSTEM_PROMPT = "You are a personal assistant running inside OpenClaw.";
+const MODEL_RUN_STDIN_MAX_BYTES = 1024 * 1024;
 const HEIC_MODEL_RUN_MIMES = new Set([
   "image/heic",
   "image/heic-sequence",
@@ -455,7 +457,8 @@ export function registerModelCapabilityCommands(capability: Command): void {
   model
     .command("run")
     .description("Run a one-shot model turn")
-    .requiredOption("--prompt <text>", "Prompt text")
+    .option("--prompt <text>", "Prompt text")
+    .option("--prompt-stdin", "Read prompt text from stdin (maximum 1 MiB)", false)
     .option("--file <path>", "Image file", collectOption, [])
     .option("--model <provider/model>", "Model override")
     .option("--thinking <level>", "Thinking level override")
@@ -468,7 +471,22 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const prompt = requireModelRunPrompt(opts.prompt);
+        if (opts.prompt !== undefined && opts.promptStdin) {
+          throw new Error("Use either --prompt or --prompt-stdin, not both.");
+        }
+        if (opts.prompt === undefined && !opts.promptStdin) {
+          throw new Error("Specify --prompt <text> or --prompt-stdin.");
+        }
+        const promptInput = opts.promptStdin
+          ? (
+              await readByteStreamWithLimit(process.stdin, {
+                maxBytes: MODEL_RUN_STDIN_MAX_BYTES,
+                onOverflow: ({ maxBytes }) =>
+                  new Error(`--prompt-stdin exceeds ${maxBytes} bytes.`),
+              })
+            ).toString("utf8")
+          : opts.prompt;
+        const prompt = requireModelRunPrompt(promptInput);
         const thinking = normalizeModelRunThinking(opts.thinking);
         const transport = resolveTransport({
           local: Boolean(opts.local),
