@@ -259,7 +259,7 @@ DMs:
 Groups:
 
 - `channels.signal.groupPolicy = open | allowlist | disabled`.
-- `channels.signal.groupAllowFrom` controls which groups or senders can trigger group replies when `allowlist` is set; entries can be Signal group IDs (raw, `group:<id>`, or `signal:group:<id>`), sender phone numbers, `uuid:<id>` values, or `*`.
+- `channels.signal.groupAllowFrom` controls which groups or senders can trigger group replies when `allowlist` is set; entries can be Signal group IDs (raw, `group:<id>`, or `signal:group:<id>`), sender phone numbers, `uuid:<id>` values, or `*`. Group IDs are accepted in either standard or URL-safe base64 (e.g. copied from a `signal.group` invite link); both are normalized to the form `signal-cli` reports before matching.
 - `channels.signal.groups["<group-id>" | "*"]` can override group behavior with `requireMention`, `tools`, and `toolsBySender`.
 - Use `channels.signal.accounts.<id>.groups` for per-account overrides in multi-account setups.
 - Allowlisting a Signal group through `groupAllowFrom` does not disable mention gating by itself. A specifically configured `channels.signal.groups["<group-id>"]` entry processes every group message unless `requireMention=true` is set.
@@ -483,7 +483,7 @@ Provider options:
 - `channels.signal.allowFrom`: DM allowlist (E.164 or `uuid:<id>`). `open` requires `"*"`. Signal has no usernames; use phone/UUID IDs.
 - `channels.signal.aliases`: OpenClaw-side aliases for DM or group delivery targets.
 - `channels.signal.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
-- `channels.signal.groupAllowFrom`: group allowlist; accepts Signal group IDs (raw, `group:<id>`, or `signal:group:<id>`), sender E.164 numbers, or `uuid:<id>` values.
+- `channels.signal.groupAllowFrom`: group allowlist; accepts Signal group IDs (raw, `group:<id>`, or `signal:group:<id>`, in either standard or URL-safe base64), sender E.164 numbers, or `uuid:<id>` values.
 - `channels.signal.groups`: per-group overrides keyed by Signal group ID (or `"*"`). Supported fields: `requireMention`, `tools`, `toolsBySender`.
 - `channels.signal.accounts.<id>.groups`: per-account version of `channels.signal.groups` for multi-account setups.
 - `channels.signal.accounts.<id>.aliases`: per-account aliases, merged with top-level aliases.

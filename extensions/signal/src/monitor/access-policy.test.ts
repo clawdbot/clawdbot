@@ -79,6 +79,20 @@ describe("resolveSignalAccessState", () => {
     expect(signalGroupTargetDecision.groupDecision.decision).toBe("allow");
   });
 
+  it("allows group messages when groupAllowFrom uses URL-safe base64 for a standard-base64 group id", async () => {
+    // signal-cli reports group ids in standard base64 (+, /, = padding);
+    // ids copied from signal.group links are URL-safe base64 (-, _, no padding).
+    const standardGroupId = "v+Fv+bxCgkkTPn4q4HC4IRdt+UyVkD47w/WyoPfb350=";
+    const urlSafeGroupId = "v-Fv-bxCgkkTPn4q4HC4IRdt-UyVkD47w_WyoPfb350";
+
+    const { groupDecision } = await resolveGroupAccess({
+      groupAllowFrom: [urlSafeGroupId],
+      groupId: standardGroupId,
+    });
+
+    expect(groupDecision.decision).toBe("allow");
+  });
+
   it("blocks group messages when groupAllowFrom contains a different Signal group id", async () => {
     const { groupDecision } = await resolveGroupAccess({
       groupAllowFrom: [OTHER_SIGNAL_GROUP_ID],
