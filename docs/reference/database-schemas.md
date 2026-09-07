@@ -68,6 +68,17 @@ lookups.
 
 Reopening an occupancy-driven capture clears `stopped_at` without changing the
 primary key, so the same meeting retains its utterances.
+New transcript admissions record `sessionIdOrigin` (`generated` or `supplied`)
+in `metadata_json`. The store preserves that value, including its absence or
+invalidity in legacy rows, on later writes to the same primary key. Occupancy
+reopening requires an explicitly generated origin; an unknown origin starts a
+fresh capture and leaves the old record intact. The existing newest-candidate
+query and ten-minute window are unchanged.
+
+This adds no schema, index, version, or backfill. Doctor metadata restoration
+preserves an explicitly recorded origin and leaves unknown origins unknown.
+Older runtimes do not enforce this rule, so downgrading also removes the fixed-ID
+history protection. See the [accepted ID-origin decision](https://github.com/openclaw/openclaw/pull/130860).
 
 #### `meeting_transcript_utterances`
 

@@ -421,7 +421,9 @@ durable rows. The latest saved transcript is the most recently updated session
 containing utterances, not an exact last-ingestion ordering. Source speech times
 are labeled explicitly; ingestion timestamps are not recorded. Continuous sources may span several room occupations. With occupancy mode
 enabled, capture saves notes when the room empties and may continue a recently
-stopped capture from the same source and agent within ten minutes.
+stopped capture from the same source and agent within ten minutes when its stored
+ID origin is known to be generated. A supplied or unknown origin starts a fresh
+capture, leaving the existing notes unchanged.
 Speech-to-text may use your configured provider and incur provider usage. The UI
 does not play raw audio, generate summaries on demand, or delete transcripts.
 
