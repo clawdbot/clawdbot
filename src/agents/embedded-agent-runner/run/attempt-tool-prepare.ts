@@ -19,10 +19,7 @@ import { createSkillInstructionDeliveryCache } from "../../agent-tools.read.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import { createCodeModePermissionChangeReason } from "../../code-mode-permission-change.js";
 import type { CodeModeSkill } from "../../code-mode-skills.js";
-import {
-  loadPairedComputerUseAvailability,
-  shouldLoadPairedComputerUseAvailability,
-} from "../../computer-use-node-capabilities.js";
+import { loadPairedComputerUseAvailabilityForSurface } from "../../computer-use-node-capabilities.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { projectConversationToolNames } from "../../conversation-tool-policy-pipeline.js";
 import {
@@ -223,13 +220,14 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       toolNames: ["computer"],
       warn: () => undefined,
     }).length === 1;
-  const pairedNodeComputerUse = shouldLoadPairedComputerUseAvailability({
-    computerAllowed,
-    modelHasVision: attempt.model.input?.includes("image") ?? true,
-    computerTransport,
-  })
-    ? (await loadPairedComputerUseAvailability(params.runAbortController.signal)).prepared
-    : undefined;
+  const pairedNodeComputerUse = (
+    await loadPairedComputerUseAvailabilityForSurface({
+      computerAllowed,
+      modelHasVision: attempt.model.input?.includes("image") ?? true,
+      computerTransport,
+      signal: params.runAbortController.signal,
+    })
+  )?.prepared;
   const localModelLeanEnabled = isLocalModelLeanEnabled({
     config: attempt.config,
     agentId: params.setup.sessionAgentId,

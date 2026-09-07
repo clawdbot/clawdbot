@@ -1,32 +1,40 @@
-import { describe, expect, it } from "vitest";
-import { shouldLoadPairedComputerUseAvailability } from "../computer-use-node-capabilities.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loadPairedComputerUseAvailabilityForSurface } from "../computer-use-node-capabilities.js";
 import { createComputerTool, readActionEnum, v2Descriptor } from "./computer-tool.test-helpers.js";
 
+const listNodes = vi.hoisted(() => vi.fn());
+
+vi.mock("./nodes-utils.js", () => ({ listNodes }));
+
+beforeEach(() => {
+  listNodes.mockReset();
+});
+
 describe("createComputerTool schema", () => {
-  it("loads paired capabilities only for an exposed ordinary paired surface", () => {
+  it("loads paired capabilities only for an exposed ordinary paired surface", async () => {
     const sessionTransport = {
       resolveNode: async () => ({ nodeId: "session-desktop" }),
       invoke: async () => undefined,
     };
 
-    expect(
-      shouldLoadPairedComputerUseAvailability({ computerAllowed: true, modelHasVision: true }),
-    ).toBe(true);
-    expect(
-      shouldLoadPairedComputerUseAvailability({ computerAllowed: false, modelHasVision: true }),
-    ).toBe(false);
-    expect(
-      shouldLoadPairedComputerUseAvailability({ computerAllowed: true, modelHasVision: false }),
-    ).toBe(false);
-    for (const computerTransport of [sessionTransport, null]) {
-      expect(
-        shouldLoadPairedComputerUseAvailability({
-          computerAllowed: true,
-          modelHasVision: true,
-          computerTransport,
-        }),
-      ).toBe(false);
+    listNodes.mockResolvedValue([]);
+    await expect(
+      loadPairedComputerUseAvailabilityForSurface({
+        computerAllowed: true,
+        modelHasVision: true,
+      }),
+    ).resolves.toBeDefined();
+    expect(listNodes).toHaveBeenCalledTimes(1);
+
+    for (const params of [
+      { computerAllowed: false, modelHasVision: true },
+      { computerAllowed: true, modelHasVision: false },
+      { computerAllowed: true, modelHasVision: true, computerTransport: sessionTransport },
+      { computerAllowed: true, modelHasVision: true, computerTransport: null },
+    ]) {
+      expect(await loadPairedComputerUseAvailabilityForSurface(params)).toBeUndefined();
     }
+    expect(listNodes).toHaveBeenCalledTimes(1);
   });
 
   it("keeps an undeclared node on the exact v1 action list", () => {

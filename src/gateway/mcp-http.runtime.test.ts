@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { loadNodeExecAvailability } from "../agents/node-exec-availability.js";
+import { createComputerTool } from "../agents/tools/computer-tool.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
@@ -30,6 +31,38 @@ function scopedToolFixture(names: string[]) {
     agentId: "main",
     tools: names.map((name) => ({ name, description: `${name} tool` })),
   };
+}
+
+function computerNode(nodeId: string, actions: string[]) {
+  return {
+    nodeId,
+    displayName: nodeId === "headless-windows-node" ? "E6540" : "Windows Companion",
+    platform: "win32",
+    connected: true,
+    commands: ["screen.snapshot", "computer.act"],
+    computerUse: {
+      contractVersion: 2,
+      provider: {
+        id: "cua-driver",
+        label: "CUA Driver",
+        generation: `${nodeId}-generation`,
+      },
+      actions,
+      targets: ["screen", "window"],
+      deliveryModes: ["foreground"],
+      observations: ["image", "accessibility"],
+      features: { recording: false, agentCursor: false, multiDisplay: false },
+    },
+  };
+}
+
+function readComputerActions(
+  resolved: Awaited<ReturnType<McpLoopbackToolCache["resolve"]>>,
+): string[] | undefined {
+  const computer = resolved.toolSchema.find((tool) => tool.name === "computer");
+  expect(computer).toBeDefined();
+  return (computer?.inputSchema.properties as { action?: { enum?: string[] } } | undefined)?.action
+    ?.enum;
 }
 
 type ScopeParams = Parameters<typeof resolveMcpLoopbackScopedTools>[0];
@@ -567,5 +600,72 @@ describe("McpLoopbackToolCache", () => {
 
     await cache.resolve(scopeParams({ cfg, delegationCapability: "report_only" }));
     expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("MCP loopback Computer Use schema", () => {
+  beforeEach(() => {
+    resolveGatewayScopedTools.mockImplementation(({ pairedNodeComputerUse }) => ({
+      agentId: "main",
+      tools: [createComputerTool({ modelHasVision: true, pairedNodeComputerUse })],
+    }));
+  });
+
+  it("does not query node inventory when the grant excludes computer", async () => {
+    const resolved = await new McpLoopbackToolCache().resolve(
+      scopeParams({
+        sessionKey: "agent:main:main",
+        senderIsOwner: true,
+        modelHasVision: true,
+        toolsAllow: ["memory_search"],
+      }),
+    );
+
+    expect(resolved.toolSchema.some((tool) => tool.name === "computer")).toBe(false);
+    expect(listNodes).not.toHaveBeenCalled();
+  });
+
+  it("serializes paired-node v2 actions before the first tool execution", async () => {
+    listNodes.mockResolvedValue([
+      computerNode("headless-windows-node", ["screenshot", "list_windows"]),
+    ]);
+    const resolved = await new McpLoopbackToolCache().resolve(
+      scopeParams({
+        cfg: { tools: { allow: ["computer"] } } as OpenClawConfig,
+        sessionKey: "agent:main:main",
+        senderIsOwner: true,
+        modelHasVision: true,
+      }),
+    );
+
+    const actions = readComputerActions(resolved);
+    expect(actions).toContain("list_windows");
+    expect(actions).not.toContain("launch_app");
+    expect(listNodes).toHaveBeenCalledTimes(1);
+  });
+
+  it("unions approved actions across distinct paired node identities", async () => {
+    const cache = new McpLoopbackToolCache();
+    const scope = scopeParams({
+      cfg: { tools: { allow: ["computer"] } } as OpenClawConfig,
+      sessionKey: "agent:main:main",
+      senderIsOwner: true,
+      modelHasVision: true,
+    });
+    listNodes.mockResolvedValue([
+      computerNode("headless-windows-node", ["screenshot", "list_windows"]),
+    ]);
+    expect(readComputerActions(await cache.resolve(scope))).not.toContain("launch_app");
+
+    listNodes.mockResolvedValue([
+      computerNode("headless-windows-node", ["screenshot", "list_windows"]),
+      computerNode("windows-companion-node", ["screenshot", "launch_app"]),
+    ]);
+    const resolved = await cache.resolve(scope);
+
+    expect(readComputerActions(resolved)).toEqual(
+      expect.arrayContaining(["screenshot", "list_windows", "launch_app", "wait"]),
+    );
+    expect(listNodes).toHaveBeenCalledTimes(2);
   });
 });

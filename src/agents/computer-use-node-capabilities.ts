@@ -25,7 +25,7 @@ export type PairedComputerUseAvailability = {
 };
 
 /** Avoids node inventory unless the model will receive an ordinary paired computer tool. */
-export function shouldLoadPairedComputerUseAvailability(params: {
+function shouldLoadPairedComputerUseAvailability(params: {
   computerAllowed: boolean;
   modelHasVision?: boolean;
   computerTransport?: ComputerToolTransport | null;
@@ -35,6 +35,19 @@ export function shouldLoadPairedComputerUseAvailability(params: {
     params.modelHasVision !== false &&
     params.computerTransport === undefined
   );
+}
+
+/** Loads inventory only when an ordinary paired computer tool can reach the model. */
+export async function loadPairedComputerUseAvailabilityForSurface(params: {
+  computerAllowed: boolean;
+  modelHasVision?: boolean;
+  computerTransport?: ComputerToolTransport | null;
+  signal?: AbortSignal;
+}): Promise<PairedComputerUseAvailability | undefined> {
+  if (!shouldLoadPairedComputerUseAvailability(params)) {
+    return undefined;
+  }
+  return loadPairedComputerUseAvailability(params.signal);
 }
 
 /** A paired target must support both observation and input to enter the computer tool pool. */

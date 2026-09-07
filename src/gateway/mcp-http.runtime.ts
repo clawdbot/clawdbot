@@ -3,8 +3,7 @@
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
-  loadPairedComputerUseAvailability,
-  shouldLoadPairedComputerUseAvailability,
+  loadPairedComputerUseAvailabilityForSurface,
   type PairedComputerUseAvailability,
 } from "../agents/computer-use-node-capabilities.js";
 import {
@@ -124,18 +123,18 @@ async function resolveNodeScope(
   mode: LoopbackToolsAllowMode,
 ): Promise<McpLoopbackScopeParams> {
   const params = await resolveNodeExecScope(input, mode);
-  if (
-    !shouldLoadPairedComputerUseAvailability({
-      computerAllowed: isComputerAllowedByMcpScope(params, mode),
-      modelHasVision: params.context.modelHasVision,
-      computerTransport: params.rootedExecution ? null : undefined,
-    })
-  ) {
+  const pairedComputerUseAvailability = await loadPairedComputerUseAvailabilityForSurface({
+    computerAllowed: isComputerAllowedByMcpScope(params, mode),
+    modelHasVision: params.context.modelHasVision,
+    computerTransport: params.rootedExecution ? null : undefined,
+    signal: params.signal,
+  });
+  if (!pairedComputerUseAvailability) {
     return params;
   }
   return {
     ...params,
-    pairedComputerUseAvailability: await loadPairedComputerUseAvailability(params.signal),
+    pairedComputerUseAvailability,
   };
 }
 
