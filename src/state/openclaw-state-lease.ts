@@ -619,33 +619,43 @@ export async function withOpenClawStateLease<T>(
       // Acquisition and callback entry are separate scheduling points. A
       // suspended process must not enter after its persisted lease expires.
       assertOperationOwned();
-      result = await run({
-        withDatabaseFileExclusion: (operation) => fileExclusion.run(operation),
-        signal: operationSignal,
-        renew: renewOperation,
-        assertOwned: assertOperationOwned,
-        assertOwnedInTransaction: assertOperationOwned,
-      });
+      result = await fileExclusion.runWithOwnerScope(() =>
+        run({
+          withDatabaseFileExclusion: (operation) => fileExclusion.run(operation),
+          signal: operationSignal,
+          renew: renewOperation,
+          assertOwned: assertOperationOwned,
+          assertOwnedInTransaction: assertOperationOwned,
+        }),
+      );
       await fileExclusion.drain();
     } catch (error) {
+      let failure = error;
       try {
         await fileExclusion.drain();
       } catch (drainError) {
         if (drainError !== error) {
-          throw createSqliteLifecycleAggregateError(
+          failure = createSqliteLifecycleAggregateError(
             [error, drainError],
             "state lease operation and drainage failed",
             error,
           );
         }
       }
-      if (leaseLost.signal.aborted) {
-        throw leaseLost.signal.reason;
+      const authorityError: unknown = leaseLost.signal.aborted
+        ? leaseLost.signal.reason
+        : validated.signal?.aborted
+          ? abortError(validated.signal, "operation", validated.leaseLabel)
+          : undefined;
+      if (authorityError instanceof Error) {
+        if (failure !== error && authorityError instanceof OpenClawStateLeaseError) {
+          // Nested owners may observe the same failed capture differently. Keep
+          // the caller's authority code and all operation/drainage causes.
+          throw leaseError(authorityError.code, authorityError.message, failure);
+        }
+        throw authorityError;
       }
-      if (validated.signal?.aborted) {
-        throw abortError(validated.signal, "operation", validated.leaseLabel);
-      }
-      throw error;
+      throw failure;
     }
     assertOperationOwned();
     return result;

@@ -1,5 +1,6 @@
 // A paused heartbeat is not renewal. Retain the real file fence until the
-// admitted operation settles, bounded by its freshly read durable deadline.
+// admitted operation settles, bounded by every owner's freshly read deadline.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
 import {
   readStableSqliteFileGeneration,
@@ -9,164 +10,233 @@ import {
 import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
 import { acquireOpenClawStateDatabaseFileExclusion } from "./openclaw-state-db-cache.js";
 
-export function createOpenClawStateLeaseExclusion(params: {
+type LeaseExclusionParams = {
   databasePath: () => string;
   assertActive: () => void;
   readExpiry: (databasePath: string) => number;
   pause: () => Promise<void>;
   resume: (expiresAt: number) => Promise<void>;
   onLost: (error: Error) => void;
-}) {
-  let busy = false;
-  let admissionClosed = false;
-  let assertion: (() => void) | undefined;
-  const admitted: Promise<unknown>[] = [];
-  const fail = (errors: unknown[]): never => {
-    if (errors.length === 1) {
-      throw errors[0];
+};
+type CaptureOwner = {
+  params: LeaseExclusionParams;
+  databasePath?: string;
+  busy: boolean;
+  admissionClosed: boolean;
+  assertion?: () => void;
+  admitted: Promise<unknown>[];
+};
+// Only live lexical owners are composed. Other tasks/processes remain foreign
+// handles; neither a pathname nor inherited serialized data grants admission.
+const activeOwners = new AsyncLocalStorage<readonly CaptureOwner[]>();
+
+function fail(errors: unknown[]): never {
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  throw createSqliteLifecycleAggregateError(errors, "state lease exclusion failed", errors[0]);
+}
+
+async function perform<T>(
+  owners: readonly CaptureOwner[],
+  databasePath: string,
+  operation: (assertCurrent: () => void) => Promise<T>,
+): Promise<T> {
+  const errors: unknown[] = [];
+  const participants = owners.map<{
+    owner: CaptureOwner;
+    paused: boolean;
+    expiresAt?: number;
+  }>((owner) => ({ owner, paused: false }));
+  const assertActive = () => {
+    for (const { owner } of participants) {
+      owner.params.assertActive();
     }
-    throw createSqliteLifecycleAggregateError(errors, "state lease exclusion failed", errors[0]);
   };
-  const perform = async <T>(operation: (assertCurrent: () => void) => Promise<T>): Promise<T> => {
-    const errors: unknown[] = [];
-    let result: T | undefined;
-    let expiresAt: number | undefined;
-    let lifecycle: ReturnType<typeof acquireStateDatabaseCoordinator> | undefined;
-    let exclusion: ReturnType<typeof acquireOpenClawStateDatabaseFileExclusion> | undefined;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let generation: SqliteFileGeneration | undefined;
-    let active = true;
-    let paused = false;
-    const databasePath = params.databasePath();
-    try {
-      await params.pause();
-      paused = true;
-      params.assertActive();
-      lifecycle = acquireStateDatabaseCoordinator({ databasePath, busyTimeoutMs: 0 });
-      expiresAt = params.readExpiry(databasePath);
-      exclusion = acquireOpenClawStateDatabaseFileExclusion(databasePath);
-      generation = readStableSqliteFileGeneration(databasePath);
-      const held = exclusion;
-      const deadline = expiresAt;
-      const assertCurrent = () => {
-        if (!active) {
-          throw new Error("state lease file exclusion is no longer current");
-        }
-        params.assertActive();
-        held.assertCurrent();
-        if (Date.now() >= deadline) {
-          const error = new Error("state lease expired during file exclusion");
-          params.onLost(error);
-          throw error;
-        }
-      };
-      assertion = assertCurrent;
-      timer = setTimeout(
-        () => params.onLost(new Error("state lease expired during file exclusion")),
-        Math.max(1, deadline - Date.now()),
-      );
-      timer.unref();
-      assertCurrent();
-      result = await held.runWithSourceReads(() => operation(assertCurrent));
-      assertCurrent();
-    } catch (error) {
-      errors.push(error);
+  const onLost = (error: Error) => {
+    for (const { owner } of participants) {
+      owner.params.onLost(error);
     }
-    active = false;
-    assertion = undefined;
-    clearTimeout(timer);
-    if (exclusion) {
-      try {
-        exclusion.assertCurrent();
-        if (
-          !generation ||
-          !sameSqliteFileGeneration(generation, readStableSqliteFileGeneration(databasePath))
-        ) {
-          throw new Error("state lease source generation changed during capture");
-        }
-      } catch (error) {
-        errors.push(error);
-        params.onLost(new Error("state lease source binding refused", { cause: error }));
+  };
+  let result: T | undefined;
+  let lifecycle: ReturnType<typeof acquireStateDatabaseCoordinator> | undefined;
+  let exclusion: ReturnType<typeof acquireOpenClawStateDatabaseFileExclusion> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let generation: SqliteFileGeneration | undefined;
+  let active = true;
+  try {
+    for (const participant of participants) {
+      await participant.owner.params.pause();
+      participant.paused = true;
+      assertActive();
+    }
+    lifecycle = acquireStateDatabaseCoordinator({ databasePath, busyTimeoutMs: 0 });
+    for (const participant of participants) {
+      participant.expiresAt = participant.owner.params.readExpiry(databasePath);
+    }
+    exclusion = acquireOpenClawStateDatabaseFileExclusion(databasePath);
+    generation = readStableSqliteFileGeneration(databasePath);
+    const held = exclusion;
+    const deadline = Math.min(...participants.map((participant) => participant.expiresAt ?? 0));
+    const assertCurrent = () => {
+      if (!active) {
+        throw new Error("state lease file exclusion is no longer current");
       }
+      assertActive();
+      held.assertCurrent();
+      if (Date.now() >= deadline) {
+        const error = new Error("state lease expired during file exclusion");
+        onLost(error);
+        throw error;
+      }
+    };
+    for (const { owner } of participants) {
+      owner.assertion = assertCurrent;
     }
+    timer = setTimeout(
+      () => onLost(new Error("state lease expired during file exclusion")),
+      Math.max(1, deadline - Date.now()),
+    );
+    timer.unref();
+    assertCurrent();
+    result = await held.runWithSourceReads(() => operation(assertCurrent));
+    assertCurrent();
+  } catch (error) {
+    errors.push(error);
+  }
+  active = false;
+  for (const { owner } of participants) {
+    owner.assertion = undefined;
+  }
+  clearTimeout(timer);
+  if (exclusion) {
     try {
-      exclusion?.release();
+      exclusion.assertCurrent();
+      if (
+        !generation ||
+        !sameSqliteFileGeneration(generation, readStableSqliteFileGeneration(databasePath))
+      ) {
+        throw new Error("state lease source generation changed during capture");
+      }
     } catch (error) {
       errors.push(error);
-      params.onLost(new Error("state lease file exclusion release failed", { cause: error }));
+      onLost(new Error("state lease source binding refused", { cause: error }));
     }
-    // Capture is read-only. Reopen only the same generation while lifecycle
-    // admission remains held, then require the unchanged original durable lease.
-    // Actual restore publication needs its own verified transition, not this API.
-    try {
-      params.assertActive();
-      const reopenedExpiry = params.readExpiry(databasePath);
-      if (expiresAt !== undefined && reopenedExpiry !== expiresAt) {
+  }
+  try {
+    exclusion?.release();
+  } catch (error) {
+    errors.push(error);
+    onLost(new Error("state lease file exclusion release failed", { cause: error }));
+  }
+  // Reopen the same generation under lifecycle admission and check every exact
+  // original owner/expiry before releasing it to renewal. This is not restore.
+  try {
+    assertActive();
+    for (const participant of participants) {
+      const reopenedExpiry = participant.owner.params.readExpiry(databasePath);
+      if (participant.expiresAt !== undefined && reopenedExpiry !== participant.expiresAt) {
         throw new Error("state lease changed during file exclusion");
       }
-      expiresAt = reopenedExpiry;
+      participant.expiresAt = reopenedExpiry;
+    }
+  } catch (error) {
+    errors.push(error);
+    onLost(new Error("state lease reopen refused", { cause: error }));
+  } finally {
+    try {
+      lifecycle?.release();
     } catch (error) {
       errors.push(error);
-      params.onLost(new Error("state lease reopen refused", { cause: error }));
-    } finally {
-      try {
-        lifecycle?.release();
-      } catch (error) {
-        errors.push(error);
-        params.onLost(new Error("state lease exclusion release failed", { cause: error }));
-      }
+      onLost(new Error("state lease exclusion release failed", { cause: error }));
     }
+  }
+  for (const participant of participants) {
     try {
-      params.assertActive();
-      if (expiresAt === undefined) {
+      assertActive();
+      if (participant.expiresAt === undefined) {
         throw new Error("state lease has no current durable expiry");
       }
-      if (paused) {
-        await params.resume(expiresAt);
+      if (participant.paused) {
+        await participant.owner.params.resume(participant.expiresAt);
       }
-      params.assertActive();
+      assertActive();
     } catch (error) {
       errors.push(error);
     }
-    if (errors.length > 0) {
-      fail(errors);
-    }
-    // SAFETY: the successful operation assigned result; every failure above is rethrown.
-    return result as T;
+  }
+  if (errors.length > 0) {
+    fail(errors);
+  }
+  // SAFETY: successful operation assigned result; every failure above is rethrown.
+  return result as T;
+}
+
+export function createOpenClawStateLeaseExclusion(params: LeaseExclusionParams) {
+  const ancestors = activeOwners.getStore() ?? [];
+  const owner: CaptureOwner = {
+    params,
+    busy: false,
+    admissionClosed: false,
+    admitted: [],
   };
   return {
+    runWithOwnerScope<T>(operation: () => Promise<T>): Promise<T> {
+      // Resolve only inside the lease's protected callback entry/cleanup scope.
+      params.assertActive();
+      owner.databasePath = params.databasePath();
+      return activeOwners.run([...ancestors, owner], operation);
+    },
     assertIfExcluded() {
-      if (!assertion) {
-        if (busy) {
+      if (!owner.assertion) {
+        if (owner.busy) {
           throw new Error("state lease file exclusion is transitioning");
         }
         return false;
       }
-      assertion();
+      owner.assertion();
       return true;
     },
     run<T>(operation: (assertCurrent: () => void) => Promise<T>): Promise<T> {
-      params.assertActive();
-      if (admissionClosed) {
-        throw new Error("state lease no longer accepts file exclusion");
+      const databasePath = owner.databasePath;
+      if (!databasePath) {
+        throw new Error("state lease has not entered its owner scope");
       }
-      if (busy) {
-        throw new Error("state lease file exclusion is already in progress");
+      const participants = [...ancestors, owner].filter(
+        (candidate) => candidate.databasePath === databasePath,
+      );
+      for (const candidate of participants) {
+        candidate.params.assertActive();
+        if (candidate.admissionClosed) {
+          throw new Error("state lease no longer accepts file exclusion");
+        }
+        if (candidate.busy) {
+          throw new Error("state lease file exclusion is already in progress");
+        }
+        if (candidate.params.databasePath() !== databasePath) {
+          throw new Error("state lease database path changed during exclusion");
+        }
       }
-      busy = true;
-      const task = perform(operation).finally(() => {
-        busy = false;
+      for (const candidate of participants) {
+        candidate.busy = true;
+      }
+      const task = perform(participants, databasePath, operation).finally(() => {
+        for (const candidate of participants) {
+          candidate.busy = false;
+        }
       });
-      admitted.push(task);
-      // The owner always drains admitted work, including detached caller work.
+      for (const candidate of participants) {
+        candidate.admitted.push(task);
+      }
+      // Every participating owner drains this same work before cleanup/return.
       void task.catch(() => undefined);
       return task;
     },
     async drain() {
       const errors: unknown[] = [];
       let drained = 0;
-      while (drained < admitted.length) {
-        const batch = admitted.slice(drained);
+      while (drained < owner.admitted.length) {
+        const batch = owner.admitted.slice(drained);
         drained += batch.length;
         const results = await Promise.allSettled(batch);
         for (const result of results) {
@@ -175,9 +245,8 @@ export function createOpenClawStateLeaseExclusion(params: {
           }
         }
       }
-      // Close admission in the same turn as the final empty check: a later
-      // promise reaction cannot add work between drainage and owner cleanup.
-      admissionClosed = true;
+      // Close admission in the same turn as the final empty check.
+      owner.admissionClosed = true;
       if (errors.length > 0) {
         fail(errors);
       }
