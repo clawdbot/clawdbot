@@ -1177,6 +1177,12 @@ effects before choosing another action. Network-controlled tool output and error
 retain their existing untrusted-content wrapping and sanitization; continuing
 after a failure does not grant new permissions or replay completed side effects.
 
+Nested calls honor each tool’s `executionMode`. A `"sequential"` tool waits for
+earlier catalog calls to finish and blocks later calls until its result has been
+accepted. Parallel-capable calls can overlap before the next sequential call.
+Scheduling is shared across cells using the same run catalog; separate catalogs
+remain independent. Queued calls are canceled when their caller or catalog closes.
+
 Parallel nested calls are allowed up to `maxPendingToolCalls`. An oversized raw
 tool batch fails before any call in that batch is dispatched. [Swarm](/tools/swarm)
 launches, notes, and result waits instead queue for available bridge slots;
