@@ -224,6 +224,141 @@ describe("Feishu outbound shared delivery", () => {
     }
   });
 
+  it("preserves replyTo context across a durable payload replay", async () => {
+    const originalSendText = feishuChannelRuntime.feishuOutbound.sendText;
+    if (!originalSendText) {
+      throw new Error("Expected Feishu runtime sendText");
+    }
+    const deliveryIntentId = "feishu-direct-replyto-preserved";
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "feishu", plugin: feishuPlugin, source: "test" }]),
+    );
+    feishuChannelRuntime.feishuOutbound.sendText = undefined;
+
+    try {
+      await withStateDirEnv("openclaw-feishu-durable-replyto-", async ({ stateDir }) => {
+        const initial = await sendDurableMessageBatch({
+          cfg: {},
+          channel: "feishu",
+          to: "chat_1",
+          accountId: "default",
+          durability: "required",
+          deliveryIntentId,
+          completionRetention,
+          maxRetries: 2,
+          replyToId: "om_parent",
+          payloads: [{ text: "reply context must survive replay" }],
+        });
+
+        expect(initial.status).toBe("failed");
+        expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+
+        feishuChannelRuntime.feishuOutbound.sendText = originalSendText;
+        await drainPendingDeliveries({
+          drainKey: "feishu:default",
+          logLabel: "Feishu replyTo replay",
+          cfg: {},
+          stateDir,
+          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          selectEntry: (entry) => ({
+            match: entry.channel === "feishu",
+            bypassBackoff: true,
+          }),
+        });
+
+        expect(sendMessageFeishuMock).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            to: "chat_1",
+            text: "reply context must survive replay",
+            replyToMessageId: "om_parent",
+          }),
+        );
+        expect(readDeliveryQueueRow(stateDir, deliveryIntentId)?.status).toBe("completed");
+      });
+    } finally {
+      feishuChannelRuntime.feishuOutbound.sendText = originalSendText;
+    }
+  });
+
+  it("replays a structured payload through the message-adapter lifecycle sender", async () => {
+    // Structured payloads route through message adapter send.payload, whose
+    // beforeSendAttempt resolves the runtime sender before core records
+    // platform-send start. An unavailable payload sender therefore fails in
+    // preflight (recovery_state stays null) instead of after dispatch, so the
+    // structured send stays safely replayable — the lifecycle guarantee the
+    // declared capabilities advertise. Without send.payload core would fall
+    // back to outbound.sendPayload, skip runChannelMessageSendWithLifecycle,
+    // and mark the payload dispatched before the sender resolves.
+    const originalSendPayload = feishuChannelRuntime.feishuOutbound.sendPayload;
+    if (!originalSendPayload) {
+      throw new Error("Expected Feishu runtime sendPayload");
+    }
+    const deliveryIntentId = "feishu-direct-payload-lifecycle";
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "feishu", plugin: feishuPlugin, source: "test" }]),
+    );
+    feishuChannelRuntime.feishuOutbound.sendPayload = undefined;
+
+    try {
+      await withStateDirEnv("openclaw-feishu-durable-payload-", async ({ stateDir }) => {
+        const initial = await sendDurableMessageBatch({
+          cfg: {},
+          channel: "feishu",
+          to: "chat_1",
+          accountId: "default",
+          durability: "required",
+          deliveryIntentId,
+          completionRetention,
+          maxRetries: 2,
+          replyToId: "om_parent",
+          payloads: [
+            {
+              text: "structured payload must replay through the lifecycle",
+              presentation: {
+                blocks: [{ type: "text" as const, text: "card body" }],
+              },
+            },
+          ],
+        });
+
+        expect(initial.status).toBe("failed");
+        expect(sendCardFeishuMock).not.toHaveBeenCalled();
+        // Preflight failure: platform-send start was never recorded, so the
+        // entry stays replayable instead of becoming an ambiguous send.
+        expect(readDeliveryQueueRow(stateDir, deliveryIntentId)).toMatchObject({
+          status: "pending",
+          recovery_state: null,
+          platform_send_started_at: null,
+        });
+
+        feishuChannelRuntime.feishuOutbound.sendPayload = originalSendPayload;
+        await drainPendingDeliveries({
+          drainKey: "feishu:default",
+          logLabel: "Feishu structured payload replay",
+          cfg: {},
+          stateDir,
+          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          selectEntry: (entry) => ({
+            match: entry.channel === "feishu",
+            bypassBackoff: true,
+          }),
+        });
+
+        expect(sendCardFeishuMock).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            to: "chat_1",
+            replyToMessageId: "om_parent",
+          }),
+        );
+        expect(readDeliveryQueueRow(stateDir, deliveryIntentId)?.status).toBe("completed");
+      });
+    } finally {
+      feishuChannelRuntime.feishuOutbound.sendPayload = originalSendPayload;
+    }
+  });
+
   it("does not replay a Feishu provider call after dispatch may have begun", async () => {
     const deliveryIntentId = "feishu-direct-ambiguous-provider-result";
     sendMessageFeishuMock.mockRejectedValueOnce(new Error("Feishu provider result was lost"));

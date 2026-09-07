@@ -305,6 +305,12 @@ const resolveFeishuMediaSender = () =>
     unavailableMessage: "Feishu media sending is not available.",
   });
 
+const resolveFeishuPayloadSender = () =>
+  resolveFeishuMessageSender({
+    resolve: (runtime) => runtime.feishuOutbound.sendPayload,
+    unavailableMessage: "Feishu payload sending is not available.",
+  });
+
 function toFeishuMessageSendResult(
   result: { messageId?: string; chatId?: string; receipt?: ChannelMessageSendResult["receipt"] },
   kind: MessageReceiptPartKind,
@@ -328,6 +334,14 @@ const feishuMessageAdapter = defineChannelMessageAdapter({
     capabilities: {
       text: true,
       media: true,
+      // Owner boundary: payload is declared because send.payload routes it
+      // through the message-adapter lifecycle, matching text/media so a lost
+      // provider result stays recoverable. Unsupported kinds
+      // (silent/batch/poll/nativeQuote) stay absent so core never assumes them.
+      payload: true,
+      replyTo: true,
+      thread: true,
+      messageSendingHooks: true,
     },
   },
   send: {
@@ -339,6 +353,8 @@ const feishuMessageAdapter = defineChannelMessageAdapter({
           await resolveFeishuTextSender();
         } else if (ctx.kind === "media") {
           await resolveFeishuMediaSender();
+        } else if (ctx.kind === "payload") {
+          await resolveFeishuPayloadSender();
         }
       },
     },
@@ -371,6 +387,26 @@ const feishuMessageAdapter = defineChannelMessageAdapter({
           : {}),
       });
       return toFeishuMessageSendResult(result, "media");
+    },
+    payload: async (ctx) => {
+      // Route structured payloads through the message-adapter lifecycle so a
+      // lost provider result stays ambiguous and recoverable, matching text/
+      // media. Without this sender core falls back to outbound.sendPayload,
+      // which skips runChannelMessageSendWithLifecycle and can mark a payload
+      // dispatched before the sender resolves.
+      const sendPayload = await resolveFeishuPayloadSender();
+      const { onDeliveryResult, ...outboundCtx } = ctx;
+      const result = await sendPayload({
+        ...outboundCtx,
+        ...(onDeliveryResult
+          ? {
+              onDeliveryResult: async (progress) => {
+                await onDeliveryResult(toFeishuMessageSendResult(progress, "card"));
+              },
+            }
+          : {}),
+      });
+      return toFeishuMessageSendResult(result, "card");
     },
   },
 });
