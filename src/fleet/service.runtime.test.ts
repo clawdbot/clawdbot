@@ -836,13 +836,16 @@ describe("fleet service", () => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(null, { status: 200 }))
-      .mockResolvedValue(new Response(null, { status: 503 }));
+      .mockImplementation(async () => {
+        clock += 50_000;
+        return new Response(null, { status: 503 });
+      });
     const service = createFleetService({
       env,
       containers: containers.runtime,
       fetch: fetchMock,
       sleep: async () => {},
-      now: () => (clock += 50_000),
+      now: () => clock,
       generateAttemptId: () => NEXT_ATTEMPT_ID,
     });
     await service.create({ tenant: "acme", gatewayToken: "old-token" });

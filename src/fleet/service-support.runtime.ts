@@ -248,10 +248,11 @@ export function assertManagedInspection(
 export async function probeCellHealth(params: {
   port: number;
   fetchImpl: typeof fetch;
+  timeoutMs?: number;
 }): Promise<FleetHealthResult> {
   const url = `http://127.0.0.1:${params.port}/healthz`;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), params.timeoutMs ?? HEALTH_TIMEOUT_MS);
   let response: Response | undefined;
   try {
     response = await params.fetchImpl(url, {
@@ -464,6 +465,9 @@ export async function verifyReplacementHealthy(params: {
 }): Promise<void> {
   const deadline = params.now() + params.timeoutMs;
   for (;;) {
+    if (params.now() >= deadline) {
+      throw new Error(`Replacement cell container did not become healthy after ${params.context}.`);
+    }
     const replacement = await params.containers.inspect(
       params.record.runtime,
       params.record.containerName,
@@ -479,18 +483,24 @@ export async function verifyReplacementHealthy(params: {
           : `Replacement cell container could not be verified after ${params.context}.`,
       );
     }
+    const remainingProbeMs = deadline - params.now();
+    if (remainingProbeMs <= 0) {
+      throw new Error(`Replacement cell container did not become healthy after ${params.context}.`);
+    }
     const health = await probeCellHealth({
       port: params.record.hostPort,
       fetchImpl: params.fetchImpl,
+      timeoutMs: Math.min(HEALTH_TIMEOUT_MS, remainingProbeMs),
     });
     if (health.status === "ok") {
       return;
     }
-    if (params.now() >= deadline) {
+    const remainingPollMs = deadline - params.now();
+    if (remainingPollMs <= 0) {
       throw new Error(`Replacement cell container did not become healthy after ${params.context}.`);
     }
     params.checkpoint();
-    await params.sleep(params.pollMs);
+    await params.sleep(Math.min(params.pollMs, remainingPollMs));
   }
 }
 
