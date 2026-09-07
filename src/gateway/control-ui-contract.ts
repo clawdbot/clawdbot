@@ -125,6 +125,11 @@ export type ControlUiSessionBranch = {
 export type ControlUiSessionPullRequests = {
   pullRequests: ControlUiSessionPullRequest[];
   /**
+   * Present whenever the session's checkout resolves to a GitHub remote,
+   * independent of whether a PR or branch row exists.
+   */
+  repository?: { owner: string; repo: string };
+  /**
    * Present when the session's non-default GitHub branch has a creatable PR
    * on origin or local changed files in the working tree.
    */

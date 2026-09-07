@@ -2,6 +2,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type {
   ControlUiSessionPullRequest,
+  ControlUiSessionPullRequests,
   ControlUiSessionPullRequestSnapshot,
   ControlUiSessionPullRequestsChanged,
 } from "../../../src/gateway/control-ui-contract.js";
@@ -15,6 +16,13 @@ import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
 import { createGatewaySetSyncLifecycle } from "./gateway-set-sync-lifecycle.ts";
 import { readSessionChangedEvent } from "./sessions/reconcile.ts";
 import { uiSessionEventMatches } from "./sessions/session-key.ts";
+
+export function sessionGitHubRepository(
+  snapshot: ControlUiSessionPullRequests | undefined,
+): { owner: string; repo: string } | null {
+  const repository = snapshot?.repository ?? snapshot?.branch ?? snapshot?.pullRequests[0];
+  return repository ? { owner: repository.owner, repo: repository.repo } : null;
+}
 
 export function summarizeSessionPullRequests(
   pullRequests: readonly ControlUiSessionPullRequest[],
@@ -221,11 +229,14 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
           ...snapshot,
           pullRequests: current.pullRequests,
           branch: snapshot.branch ?? current.branch,
+          repository: snapshot.repository ?? current.repository,
         };
       } else if (
         current &&
         snapshot.status === "unavailable" &&
-        (current.pullRequests.length > 0 || current.branch !== undefined)
+        (current.pullRequests.length > 0 ||
+          current.branch !== undefined ||
+          current.repository !== undefined)
       ) {
         next = { ...current, status: "unavailable" };
       }

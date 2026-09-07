@@ -3,6 +3,7 @@ import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from 
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+  sessionGitHubRepository,
   sessionPullRequestsForGateway,
 } from "./session-pull-requests.ts";
 import { scopedSessionArtifactKey } from "./sessions/session-key.ts";
@@ -102,6 +103,60 @@ afterEach(() => {
 });
 
 describe("session pull request snapshot store", () => {
+  it("derives the repository from explicit context, branch, then the first pull request", () => {
+    const repository = { owner: "explicit", repo: "checkout" };
+    const branch = { owner: "branch-owner", repo: "checkout", branch: "feature/demo" };
+    const pullRequest = {
+      owner: "pr-owner",
+      repo: "checkout",
+      branch: "feature/demo",
+      number: 123,
+      title: "Demo",
+      url: "https://github.com/pr-owner/checkout/pull/123",
+      state: "open" as const,
+    };
+    const snapshot = { repository, branch, pullRequests: [pullRequest], rateLimited: false };
+    expect(sessionGitHubRepository(snapshot)).toEqual(repository);
+    expect(sessionGitHubRepository({ ...snapshot, repository: undefined })).toEqual({
+      owner: "branch-owner",
+      repo: "checkout",
+    });
+    expect(
+      sessionGitHubRepository({ ...snapshot, repository: undefined, branch: undefined }),
+    ).toEqual({
+      owner: "pr-owner",
+      repo: "checkout",
+    });
+    expect(sessionGitHubRepository({ pullRequests: [], rateLimited: false })).toBeNull();
+    expect(sessionGitHubRepository(undefined)).toBeNull();
+  });
+
+  it.each(["rate-limited", "unavailable"] as const)(
+    "preserves repository-only context during %s and replaces it after a ready snapshot",
+    async (status) => {
+      const harness = createGatewayHarness();
+      const store = sessionPullRequestsForGateway(harness.gateway);
+      const key = "agent:main:demo";
+      const owner = {};
+      const repository = { owner: "openclaw", repo: "openclaw" };
+      store.watch(owner, [key]);
+      await flushSync();
+      harness.emit({
+        sessions: { [key]: { repository, pullRequests: [], rateLimited: false, status: "ready" } },
+      });
+      harness.emit({
+        sessions: { [key]: { pullRequests: [], rateLimited: status === "rate-limited", status } },
+      });
+      expect(store.get(key)).toMatchObject({ repository, status });
+      harness.emit({
+        sessions: { [key]: { pullRequests: [], rateLimited: false, status: "ready" } },
+      });
+      expect(sessionGitHubRepository(store.get(key))).toBeNull();
+      store.unwatch(owner);
+      await flushSync();
+    },
+  );
+
   it("sends an empty replace-set while the tab is hidden", async () => {
     const harness = createGatewayHarness();
     const store = sessionPullRequestsForGateway(harness.gateway);
@@ -537,6 +592,7 @@ describe("session pull request snapshot store", () => {
       sessions: {
         [key]: {
           pullRequests: [{ number: 1, state: "open" }],
+          repository: { owner: "openclaw", repo: "openclaw" },
           rateLimited: false,
           status: "ready",
         },
@@ -556,6 +612,7 @@ describe("session pull request snapshot store", () => {
     expect(store.get(key)).toMatchObject({
       pullRequests: [{ number: 1, state: "open" }],
       branch: { branch: "feature/demo" },
+      repository: { owner: "openclaw", repo: "openclaw" },
       rateLimited: true,
       status: "rate-limited",
     });
@@ -579,6 +636,7 @@ describe("session pull request snapshot store", () => {
     });
     expect(store.get(key)).toMatchObject({
       pullRequests: [{ number: 1, state: "open" }],
+      repository: { owner: "openclaw", repo: "openclaw" },
       status: "unavailable",
     });
     store.unwatch(owner);

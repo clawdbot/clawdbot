@@ -15,6 +15,7 @@ import {
   summarizeSessionPullRequests,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
+  sessionGitHubRepository,
 } from "../../lib/session-pull-requests.ts";
 import {
   lookupCatalogSession,
@@ -63,6 +64,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       }
       this.sessionPullRequests = [];
       this.sessionPullRequestsBranch = undefined;
+      this.githubRepo = null;
       this.sessionPullRequestsRateLimited = false;
       this.requestUpdate();
       return false;
@@ -72,6 +74,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       sessionPullRequestsForGateway(scope.context.gateway).unwatch(this);
       this.sessionPullRequests = [];
       this.sessionPullRequestsBranch = undefined;
+      this.githubRepo = null;
       this.sessionPullRequestsRateLimited = false;
       this.requestUpdate();
       return false;
@@ -95,12 +98,15 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       }
       this.sessionPullRequests = [];
       this.sessionPullRequestsBranch = undefined;
+      this.githubRepo = null;
       this.sessionPullRequestsRateLimited = false;
       this.dismissedSessionPullRequestIds = new Set();
       this.requestUpdate();
       return refreshAdmitted;
     }
+    this.githubRepo = sessionGitHubRepository(result);
     if (result.status === "unavailable") {
+      this.requestUpdate();
       return refreshAdmitted;
     }
     this.sessionPullRequests = result.pullRequests;
@@ -143,6 +149,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     sessionPullRequestsForGateway(this.context.gateway).unwatch(this);
     this.sessionPullRequests = [];
     this.sessionPullRequestsBranch = undefined;
+    this.githubRepo = null;
     this.sessionPullRequestsRateLimited = false;
     this.sessionPullRequestsExpanded = false;
     this.githubPublication?.detach();

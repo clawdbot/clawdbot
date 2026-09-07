@@ -84,7 +84,7 @@ type CacheEntry = {
   refreshMode: "normal" | "forced" | null;
   // Survives refetch failures so rate-limited refreshes degrade to stale
   // chips instead of clearing the row.
-  lastGood?: { pullRequests: ControlUiSessionPullRequest[]; mergedHeads: MergedPullHead[] };
+  lastGood?: Pick<BranchPullRequestsSnapshot, "pullRequests" | "mergedHeads" | "repository">;
 };
 
 const branchCache = createSessionPullRequestCache<CacheEntry>();
@@ -587,13 +587,18 @@ async function refreshBranchPullRequests(
   entry: CacheEntry,
   token: string | undefined,
 ): Promise<BranchPullRequestsSnapshot> {
+  const repository = { owner: context.owner, repo: context.repo };
   try {
-    const result = await fetchBranchPullRequests(context, fetchImpl, token);
+    const result = { ...(await fetchBranchPullRequests(context, fetchImpl, token)), repository };
     // Degraded state-only chips still become lastGood: a later refresh that
     // rate-limits at the list fetch must serve the proven PRs, not an empty
     // list that would resurrect the Create PR row mid-outage. The shortened
     // expiry makes the next window retry full detail.
-    entry.lastGood = { pullRequests: result.pullRequests, mergedHeads: result.mergedHeads };
+    entry.lastGood = {
+      pullRequests: result.pullRequests,
+      mergedHeads: result.mergedHeads,
+      repository,
+    };
     if (result.rateLimited) {
       entry.expiresAt = Date.now() + RATE_LIMIT_CACHE_MS;
     }
@@ -602,7 +607,13 @@ async function refreshBranchPullRequests(
     const rateLimited = error instanceof ControlUiGitHubError && error.statusCode === 429;
     entry.expiresAt = Date.now() + (rateLimited ? RATE_LIMIT_CACHE_MS : FAILURE_CACHE_MS);
     if (rateLimited) {
-      return { pullRequests: [], mergedHeads: [], ...entry.lastGood, rateLimited: true };
+      return {
+        pullRequests: [],
+        mergedHeads: [],
+        ...entry.lastGood,
+        repository,
+        rateLimited: true,
+      };
     }
     if (entry.lastGood) {
       return { ...entry.lastGood, rateLimited: false };
@@ -629,6 +640,15 @@ export async function loadControlUiSessionPullRequests(
     releaseSessionPullRequestBranchFacts(deps.cacheSignal);
     branchCache.release(deps.cacheSignal);
     return { pullRequests: [], rateLimited: false };
+  }
+  if (context.branch === context.defaultBranch) {
+    releaseSessionPullRequestBranchFacts(deps.cacheSignal);
+    branchCache.release(deps.cacheSignal);
+    return {
+      pullRequests: [],
+      repository: { owner: context.owner, repo: context.repo },
+      rateLimited: false,
+    };
   }
   // Normal polling reuses local Git facts across a poll cycle; forced
   // structural refreshes observe the replacement checkout immediately.

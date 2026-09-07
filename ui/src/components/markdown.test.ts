@@ -396,6 +396,23 @@ PY
       expect(fragment.querySelector("pre code")?.textContent).toBe(source);
     });
 
+    it("separates cached GitHub references by repository and absent context", () => {
+      const source = "PR #141270";
+      for (const githubRepo of [
+        { owner: "first", repo: "one" },
+        { owner: "second", repo: "one" },
+        { owner: "second", repo: "two" },
+        null,
+      ]) {
+        const fragment = htmlFragment(toSanitizedMarkdownHtml(source, { githubRepo }));
+        expect(fragment.querySelector("a")?.getAttribute("href") ?? null).toBe(
+          githubRepo
+            ? `https://github.com/${githubRepo.owner}/${githubRepo.repo}/pull/141270`
+            : null,
+        );
+      }
+    });
+
     it("keeps the no-chrome code-block cache separate from copy-enabled rendering", () => {
       const markdown = "```\ncode\n```";
       const plain = toSanitizedMarkdownHtml(markdown, { codeBlockChrome: "none" });

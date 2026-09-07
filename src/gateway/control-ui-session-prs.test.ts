@@ -100,6 +100,7 @@ describe("loadControlUiSessionPullRequests", () => {
     );
 
     expect(result).toEqual({
+      repository: { owner: "openclaw", repo: "openclaw" },
       pullRequests: [
         {
           number: 103469,
@@ -471,6 +472,7 @@ describe("loadControlUiSessionPullRequests", () => {
       { fetchImpl, resolveGitContext },
     );
     expect(fresh.rateLimited).toBe(false);
+    expect(fresh.repository).toEqual({ owner: "openclaw", repo: "openclaw" });
 
     limited = true;
     vi.advanceTimersByTime(91_000);
@@ -480,6 +482,7 @@ describe("loadControlUiSessionPullRequests", () => {
     );
     expect(stale.rateLimited).toBe(true);
     expect(stale.pullRequests).toEqual(fresh.pullRequests);
+    expect(stale.repository).toEqual(fresh.repository);
 
     const callsDuringBackoff = fetchImpl.mock.calls.length;
     const explicitRefresh = await loadControlUiSessionPullRequests(
@@ -529,6 +532,52 @@ describe("loadControlUiSessionPullRequests", () => {
     expect(result).toEqual({ pullRequests: [], rateLimited: false });
     expect(fetchImpl.mock.calls).toHaveLength(0);
   });
+
+  it.each([
+    {
+      label: "keeps the repository on the default branch with no PRs",
+      branch: "main",
+      remote: "git@github.com:openclaw/openclaw.git",
+      repository: { owner: "openclaw", repo: "openclaw" },
+      probes: 3,
+    },
+    {
+      label: "omits the repository for a non-GitHub remote",
+      branch: "feature",
+      remote: "https://gitlab.com/openclaw/openclaw.git",
+      repository: undefined,
+      probes: 2,
+    },
+  ])(
+    "$label without extra probes or GitHub requests",
+    async ({ branch, remote, repository, probes }) => {
+      const fetchImpl = routedFetch([]);
+      const gitOutput = vi.fn(async (_root: string, args: string[]) => {
+        if (args[0] === "rev-parse") {
+          return branch;
+        }
+        if (args[0] === "remote") {
+          return remote;
+        }
+        return "origin/main";
+      });
+      const load = () =>
+        loadControlUiSessionPullRequests(
+          { sessionKey: "agent:main:main" },
+          { fetchImpl, gitOutput, resolveGitRoot: async () => `/repo/metadata-${branch}` },
+        );
+
+      const result = await load();
+      expect(result).toEqual({
+        pullRequests: [],
+        ...(repository ? { repository } : {}),
+        rateLimited: false,
+      });
+      expect(await load()).toEqual(result);
+      expect(gitOutput).toHaveBeenCalledTimes(probes);
+      expect(fetchImpl.mock.calls).toHaveLength(0);
+    },
+  );
 
   it("caches git context through repeated GitHub failures, then expires it", async () => {
     const fetchImpl = routedFetch([
@@ -827,6 +876,7 @@ describe("loadControlUiSessionPullRequests", () => {
 
     expect(result).toEqual({
       pullRequests: [],
+      repository: { owner: "openclaw", repo: "openclaw" },
       branch: {
         owner: "openclaw",
         repo: "openclaw",
