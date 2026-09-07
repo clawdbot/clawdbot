@@ -1142,7 +1142,7 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     ]);
   });
 
-  it("plans legacy operator state from the supported floor with one plugin and serial admission", () => {
+  it("plans legacy operator state with tracked and formerly bundled plugins and serial admission", () => {
     const plan = planFor({
       selectedLaneNames: ["published-upgrade-survivor"],
       upgradeSurvivorBaselines: "2026.6.33 2026.6.34 2026.9.1",
@@ -1152,7 +1152,10 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       "published-upgrade-survivor-2026.6.34-legacy-operator-state",
       "published-upgrade-survivor-2026.9.1-legacy-operator-state",
     ]);
-    expect(plan.requiredPrepublishPluginPackages).toEqual(["@openclaw/discord"]);
+    expect(plan.requiredPrepublishPluginPackages).toEqual([
+      "@openclaw/discord",
+      "@openclaw/duckduckgo-plugin",
+    ]);
     expect(plan.lanes.every((lane) => lane.weight === 3)).toBe(true);
     for (const alias of ["reported-issues", "far-reaching"]) {
       expect(

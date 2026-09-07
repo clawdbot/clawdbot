@@ -569,6 +569,7 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLan
     }
     if (scenario === "legacy-operator-state") {
       requiredPackages.add("@openclaw/discord");
+      requiredPackages.add("@openclaw/duckduckgo-plugin");
       continue;
     }
     for (const packageName of UPGRADE_SURVIVOR_RUNTIME_COMPANION_PACKAGES) {
