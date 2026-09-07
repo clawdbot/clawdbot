@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   readActiveTranscriptEntryAnchor,
   type TranscriptEntryAnchor,
@@ -68,10 +69,34 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       }),
     );
     if (persistenceResult?.adoptedMessageId) {
+      const toolResult =
+        canonicalEntry.type === "message" && canonicalEntry.message.role === "toolResult"
+          ? canonicalEntry.message
+          : undefined;
+      if (toolResult && !activeBranchAppend) {
+        throw new Error("Session transcript keyed tool result cannot change the selected branch");
+      }
       this.reloadPersistedTranscript();
-      // Context-excluded users have no payload in byId. The exact SQLite replay
-      // anchors their identity; physical ancestry still closes older turns.
-      if (this.resolveCurrentTurnEntryId() !== persistenceResult.adoptedMessageId) {
+      if (toolResult) {
+        this.ensureCompletePersistedHistory();
+        if (
+          !this.isCurrentToolResult(persistenceResult.adoptedMessageId, toolResult) ||
+          !this.persistenceTarget ||
+          !isDeepStrictEqual(
+            persistenceResult.anchor,
+            readActiveTranscriptEntryAnchor({
+              ...this.persistenceTarget,
+              entryId: persistenceResult.adoptedMessageId,
+            }),
+          )
+        ) {
+          throw new Error(
+            `Session transcript keyed tool result is outside the current group: ${persistenceResult.adoptedMessageId}`,
+          );
+        }
+      } else if (this.resolveCurrentTurnEntryId() !== persistenceResult.adoptedMessageId) {
+        // Context-excluded users have no payload in byId. The exact SQLite replay
+        // anchors their identity; physical ancestry still closes older turns.
         throw new Error(
           `Session transcript keyed user is outside the current turn: ${persistenceResult.adoptedMessageId}`,
         );
@@ -107,6 +132,40 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       // Detached managers append locally; only the storage owner supplies a durable anchor.
       appended: persistenceResult?.appended ?? true,
     };
+  }
+
+  private isCurrentToolResult(
+    entryId: string,
+    message: Extract<SessionMessageEntry["message"], { role: "toolResult" }>,
+  ): boolean {
+    let parentId = this.appendParentId;
+    let remainingAncestors = this.byId.size;
+    let foundResult = false;
+    // Sibling parallel results may follow the canonical row, but a later
+    // assistant/user closes its group. Never move the append cursor backwards.
+    while (parentId && remainingAncestors-- > 0) {
+      const parent = this.byId.get(parentId);
+      if (!parent) {
+        break;
+      }
+      if (parent.type === "message" && parent.message.role === "toolResult") {
+        foundResult ||= parent.id === entryId;
+      } else if (parent.type === "message" && parent.message.role === "assistant") {
+        return (
+          foundResult &&
+          parent.message.content.some(
+            (block) =>
+              block.type === "toolCall" &&
+              block.id === message.toolCallId &&
+              block.name === message.toolName,
+          )
+        );
+      } else if (!isSessionContextMetadataEntry(parent)) {
+        break;
+      }
+      parentId = parent.parentId;
+    }
+    return false;
   }
 
   resolveCurrentTurnEntryId(isInterruptedTail?: (entry: SessionEntry) => boolean): string | null {

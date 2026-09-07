@@ -275,15 +275,16 @@ export class SessionManagerPersistence extends SessionManagerCore {
     entry.message = result.message;
     if (result.messageId !== entry.id) {
       const idempotencyKey =
-        entry.message.role === "user" &&
+        (entry.message.role === "user" ||
+          (entry.message.role === "toolResult" && !result.appended)) &&
         "idempotencyKey" in entry.message &&
         typeof entry.message.idempotencyKey === "string" &&
         entry.message.idempotencyKey.length > 0
           ? entry.message.idempotencyKey
           : undefined;
       if (idempotencyKey && options?.idempotencyLookup !== "caller-checked") {
-        // Ingress can commit the keyed user after this manager loaded. The
-        // caller reloads and adopts only when that canonical row is still active.
+        // SQLite owns keyed replay identity and bytes. The caller reloads and
+        // adopts only the active user turn or current assistant-result group.
         if (!result.anchor) {
           throw new Error(`Session transcript anchor was not returned: ${result.messageId}`);
         }

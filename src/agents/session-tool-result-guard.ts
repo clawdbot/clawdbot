@@ -31,6 +31,10 @@ import {
 import { withRuntimeUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript-runtime-context.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
 import type { AssistantErrorTranscript } from "./assistant-error-transcript.js";
+import {
+  resolveCodeModeTranscriptAuthority,
+  type CodeModeTranscriptAuthority,
+} from "./code-mode-transcript-authority.js";
 import { formatContextLimitTruncationNotice } from "./embedded-agent-runner/context-truncation-notice.js";
 import {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
@@ -706,6 +710,7 @@ export function installSessionToolResultGuard(
     options?: AppendMessageOptions,
     sourceAppend?: CodeModeSourceAppend,
     acknowledgementSource: AgentMessage = message,
+    waitingReservation?: ReturnType<CodeModeTranscriptAuthority["reserve"]>,
   ): {
     anchor?: TranscriptEntryAnchor;
     appended: boolean;
@@ -730,6 +735,22 @@ export function installSessionToolResultGuard(
           : options,
       ),
     );
+    if (waitingReservation) {
+      if (
+        !anchor ||
+        anchor.entryId !== entryId ||
+        anchor.idempotencyKey !== waitingReservation.identity ||
+        persistedMessage.role !== "toolResult" ||
+        persistedMessage.toolCallId !== waitingReservation.claim.toolCallId ||
+        persistedMessage.toolName !== waitingReservation.claim.toolName ||
+        persistedMessage.idempotencyKey !== waitingReservation.identity
+      ) {
+        throw new Error("code mode waiting result lacks its committed active transcript identity");
+      }
+      // Certify this exact durable result before acknowledgements or callbacks
+      // can throw, re-enter, or capture a later waiting reservation.
+      waitingReservation.commit();
+    }
     // Destructive tool-side state commits only after this exact result is durable.
     acknowledgeInternalToolResult(acknowledgementSource);
     const persistedId =
@@ -879,6 +900,8 @@ export function installSessionToolResultGuard(
         toolName,
         id ?? undefined,
       );
+      const waitingReservation =
+        resolveCodeModeTranscriptAuthority(sessionManager)?.reserve(normalizedToolResult);
       // Apply hard size cap before persistence to prevent oversized tool results
       // from consuming the entire context window on subsequent LLM calls.
       const persistedToolResult = persistMessage(normalizedToolResult);
@@ -897,8 +920,14 @@ export function installSessionToolResultGuard(
         return undefined;
       }
       // A blocked or failed append must remain pending for transcript repair.
-      return appendMessageAndCacheTranscriptSeq(
-        capToolResultForPersistence(persisted.message, maxToolResultChars, redactionConfig),
+      const finalMessage = capToolResultForPersistence(
+        persisted.message,
+        maxToolResultChars,
+        redactionConfig,
+      );
+      const committedMessage = waitingReservation?.attach(finalMessage) ?? finalMessage;
+      const result = appendMessageAndCacheTranscriptSeq(
+        committedMessage,
         {
           invalidateSerializedPrefixCache:
             callerInvalidatesCache ||
@@ -908,7 +937,9 @@ export function installSessionToolResultGuard(
         },
         undefined,
         message,
-      ).entryId;
+        waitingReservation,
+      );
+      return result.entryId;
     }
 
     // Skip tool call extraction for aborted/errored assistant messages.
