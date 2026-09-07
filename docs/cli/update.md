@@ -41,6 +41,8 @@ launcher scripts).
 
 Failed update and repair attempts enter [recovery triage](/cli/update#recover-a-failed-update)
 after service recovery and cleanup finish.
+A verified rollback does not start triage: the previous generation is running
+again, and the report keeps the failing check as the reason.
 
 After a final interactive update failure, **Diagnose update failure** and
 **Report update failure** are separate choices. Reporting first shows the exact
