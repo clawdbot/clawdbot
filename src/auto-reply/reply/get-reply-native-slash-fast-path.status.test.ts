@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -25,6 +25,7 @@ type NativeStatusSelectionCase = {
   modelParentSessionKey?: string;
   preparedModel?: string;
   preparedProvider?: string;
+  topicName?: string;
 };
 
 const buildStatusReplyMock = vi.hoisted(() => vi.fn());
@@ -102,6 +103,7 @@ describe("native /status channel model routing", () => {
       selection: "parent group override for a topic",
       source: undefined,
       groupId: "123:topic:77",
+      topicName: "Planning",
       expectedProvider: "anthropic",
       expectedModel: "claude-fable-5",
     },
@@ -154,7 +156,9 @@ describe("native /status channel model routing", () => {
   it.each(statusSelectionCases)(
     "preserves canonical native /status $selection",
     async (testCase) => {
-      const targetSessionKey = "agent:main:main";
+      const targetSessionKey = testCase.topicName
+        ? "agent:main:telegram:group:123:topic:77"
+        : "agent:main:main";
       const storePath = path.join(tempDirs.make("openclaw-native-status-"), "sessions.json");
       const {
         channelModel = "anthropic/claude-fable-5",
@@ -169,6 +173,7 @@ describe("native /status channel model routing", () => {
         preparedModel = "gpt-5.5",
         preparedProvider = "openai",
         source,
+        topicName,
       } = testCase;
       const isDirect = directUserId !== undefined || directSenderId !== undefined;
       const overrideKey = directSenderId ?? directUserId ?? "123";
@@ -187,6 +192,7 @@ describe("native /status channel model routing", () => {
               : {}),
           }),
           ...(isDirect ? {} : { groupId }),
+          ...(topicName ? { subject: "Project Team / Previous" } : {}),
           ...(locked ? { modelSelectionLocked: true } : {}),
           ...(source
             ? {
@@ -215,6 +221,17 @@ describe("native /status channel model routing", () => {
           Provider: "telegram",
           Surface: "telegram",
           ChatType: isDirect ? "direct" : "group",
+          ...(topicName
+            ? {
+                GroupSubject: "Project Team",
+                TopicName: topicName,
+                MessageThreadId: 77,
+                IsForum: true,
+              }
+            : {}),
+          ...(!isDirect
+            ? { From: `telegram:group:${groupId}`, OriginatingTo: `telegram:${groupId}` }
+            : {}),
           ...(directSenderId
             ? { From: `telegram:${directSenderId}`, SenderId: directSenderId }
             : {}),
@@ -297,6 +314,14 @@ describe("native /status channel model routing", () => {
         expect(statusCall.sessionEntry).not.toHaveProperty("modelOverride");
       }
       expect(result).toMatchObject({ reply: { text: "selected model status" } });
+      if (topicName) {
+        expect(
+          loadSessionEntry({ agentId: "main", sessionKey: targetSessionKey, storePath }),
+        ).toMatchObject({
+          sessionId: "status-session",
+          subject: "Project Team / Planning",
+        });
+      }
     },
   );
 });
