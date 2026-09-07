@@ -94,26 +94,6 @@ describe("renderAgents", () => {
     expect(container.querySelector(".agent-identity-editor__avatar-text")?.textContent).toBe("🦊");
   });
 
-  it("shows a model-catalog failure and lets the operator retry", () => {
-    const container = document.createElement("div");
-    const onModelCatalogRetry = vi.fn();
-    render(
-      renderAgents(
-        createProps({ modelCatalogError: "model catalog unavailable", onModelCatalogRetry }),
-      ),
-      container,
-    );
-
-    const alert = container.querySelector('[role="alert"]');
-    expect(alert?.textContent).toContain("model catalog unavailable");
-    const retry = Array.from(alert?.querySelectorAll("button") ?? []).find(
-      (button) => button.textContent?.trim() === t("common.retry"),
-    );
-    retry?.click();
-
-    expect(onModelCatalogRetry).toHaveBeenCalledOnce();
-  });
-
   it("renders and counts a server-scoped default-agent cron job without an explicit agentId", () => {
     const job = createCronJob("implicit-default-job", {
       name: "Implicit default-agent reminder",

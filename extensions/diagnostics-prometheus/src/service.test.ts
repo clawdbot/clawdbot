@@ -15,6 +15,14 @@ import {
   type TrustedExporterInternalDiagnostics,
 } from "./service.test-helpers.js";
 
+// HTTP scrapes here exercise an authorized operator; the exporter's scope guard is covered by
+// service.http-scope.test.ts.
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getPluginRuntimeGatewayRequestScope: () => ({
+    client: { connect: { scopes: ["operator.read"] } },
+  }),
+}));
+
 describe("diagnostics-prometheus service", () => {
   it("records Gateway RPC timings by method and outcomes without method multiplication", () => {
     const metrics = createMetricsHarness();

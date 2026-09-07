@@ -1,6 +1,7 @@
 import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
 import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { inferBasePathFromPathname, normalizeBasePath } from "../app-route-paths.ts";
+import { isNativeEmbedHost } from "./native-web-chrome.ts";
 
 type WindowWithControlUiBasePath = Window &
   typeof globalThis & {
@@ -39,7 +40,23 @@ function writeLocation(location: RouteLocation) {
   return `${location.pathname}${location.search}${location.hash}`;
 }
 
+function nativeEmbedHistoryDepth(): number {
+  const state: unknown = window.history.state;
+  if (state && typeof state === "object" && "openclawNativeEmbedDepth" in state) {
+    const depth = state.openclawNativeEmbedDepth;
+    if (typeof depth === "number" && Number.isSafeInteger(depth) && depth >= 0) {
+      return depth;
+    }
+  }
+  return 0;
+}
+
+export function canGoBackInNativeEmbed(): boolean {
+  return nativeEmbedHistoryDepth() > 0;
+}
+
 export function createBrowserHistory(): RouterHistory {
+  const embedded = isNativeEmbedHost();
   const listeners = new Set<(location: RouteLocation) => void>();
   let stopPopState: (() => void) | undefined;
 
@@ -66,8 +83,20 @@ export function createBrowserHistory(): RouterHistory {
 
   return {
     location: readLocation,
-    push: (location) => window.history.pushState({}, "", writeLocation(location)),
-    replace: (location) => window.history.replaceState({}, "", writeLocation(location)),
+    // Only app-owned pushes establish a usable back target. history.length also
+    // counts a WebView's initial blank document and cannot prove that boundary.
+    push: (location) =>
+      window.history.pushState(
+        embedded ? { openclawNativeEmbedDepth: nativeEmbedHistoryDepth() + 1 } : {},
+        "",
+        writeLocation(location),
+      ),
+    replace: (location) =>
+      window.history.replaceState(
+        embedded ? { openclawNativeEmbedDepth: nativeEmbedHistoryDepth() } : {},
+        "",
+        writeLocation(location),
+      ),
     listen: (listener) => {
       listeners.add(listener);
       ensurePopStateListener();

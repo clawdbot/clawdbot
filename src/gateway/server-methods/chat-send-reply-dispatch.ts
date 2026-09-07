@@ -30,12 +30,11 @@ import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachment
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
-  buildAssistantDisplayContentFromReplyPayloads,
+  buildAssistantReplyContent,
   combineNonStreamingReplyParts,
   extractAssistantDisplayTextFromContent,
   hasAssistantDisplayMediaContent,
   isMediaBearingPayload,
-  replaceAssistantContentTextBlocks,
   sanitizeAssistantDisplayText,
 } from "./chat-assistant-content.js";
 import { isBtwReplyPayload, isSourceReplyTranscriptMirrorPayload } from "./chat-broadcast.js";
@@ -228,26 +227,23 @@ export function createChatSendReplyDispatch(params: {
       getAgentScopedMediaLocalRoots(cfg, agentId),
       latestStorePath ? [latestStorePath] : undefined,
     );
-    const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
-      sessionKey,
-      agentId,
-      payloads: [transcriptPayload],
-      managedMediaLocalRoots: mediaLocalRoots,
-      includeSensitiveMedia: transcriptPayload.sensitiveMedia !== true,
-      onManagedMediaPrepareError: (message) => {
-        logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
-      },
-    });
     const mediaMessage = await buildWebchatAssistantMessageFromReplyPayloads([transcriptPayload], {
       localRoots: mediaLocalRoots,
       onLocalAudioAccessDenied: (err) => {
         logGateway.warn(`webchat audio embedding denied local path: ${formatForLog(err)}`);
       },
     });
-    const persistedAssistantContent = replaceAssistantContentTextBlocks(
-      assistantContent,
-      mediaMessage,
-    );
+    const { assistantContent, persistedAssistantContent } = await buildAssistantReplyContent({
+      sessionKey,
+      agentId,
+      payloads: [transcriptPayload],
+      transcriptMediaMessage: mediaMessage,
+      managedMediaLocalRoots: mediaLocalRoots,
+      includeSensitiveMedia: transcriptPayload.sensitiveMedia !== true,
+      onManagedMediaPrepareError: (message) => {
+        logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
+      },
+    });
     const transcriptPayloadMetadata = getReplyPayloadMetadata(transcriptPayload);
     const mediaFailures = transcriptPayloadMetadata?.assistantMediaFailures ?? [];
     const mediaNormalizationFailed = mediaFailures.length > 0;

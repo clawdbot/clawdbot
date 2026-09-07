@@ -342,7 +342,7 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-footer-bar__status")).toBeNull();
   });
 
-  it("shows the Home spinner without an agent subtitle during an active run", async () => {
+  it("shows the Home ring without an agent subtitle during an active run", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", ["agent:main:main"]);
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
@@ -368,15 +368,16 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
 
     expect(sidebar.querySelector(".sidebar-agent-card__subtitle-row")).toBeNull();
-    // Run state uses the session spinner at the row edge without changing the Home icon.
-    const spinner = sidebar.querySelector(".nav-item--home .nav-item__state .session-run-spinner");
+    // Run state wraps the Home icon and suppresses its unread badge.
+    const spinner = sidebar.querySelector(".nav-item--home .session-glyph__ring");
     expect(spinner).not.toBeNull();
     expect(sidebar.querySelector(".nav-item--home .nav-item__icon")).not.toBeNull();
-    expect(sidebar.querySelector(".nav-item--home .session-glyph__ring")).toBeNull();
+    expect(
+      sidebar.querySelector(".nav-item--home .nav-item__state .session-run-spinner"),
+    ).toBeNull();
     expect(sidebar.querySelector(".nav-item--home .session-glyph__badge--unread")).toBeNull();
     expect(spinner?.getAttribute("role")).toBe("img");
     expect(spinner?.getAttribute("aria-label")).toBe("Active run");
-    expect(spinner?.getAttribute("title")).toBe("Active run");
 
     harness.publishList({
       result: {
@@ -389,7 +390,7 @@ describe("AppSidebar agent chip", () => {
       agentId: "main",
     });
     await sidebar.updateComplete;
-    expect(sidebar.querySelector(".nav-item--home .session-run-spinner")).toBeNull();
+    expect(sidebar.querySelector(".nav-item--home .session-glyph__ring")).toBeNull();
     expect(sidebar.querySelector(".nav-item--home .session-glyph__badge--unread")).not.toBeNull();
   });
 

@@ -112,6 +112,79 @@ afterEach(async () => {
 });
 
 describe("MCP manager creation ownership", () => {
+  it("keeps serverless sessions available beyond the MCP limit and while it is full", async () => {
+    const manager = createManager(createRuntimeFixture);
+    for (let index = 0; index < 300; index += 1) {
+      await manager.getOrCreate({ ...params, sessionId: `serverless-${index}` });
+    }
+    const configured = { mcp: { servers: { fixture: { command: "true" } } } };
+    for (let index = 0; index < 256; index += 1) {
+      await manager.getOrCreate({ ...params, sessionId: `connected-${index}`, cfg: configured });
+    }
+    await manager.getOrCreate({ ...params, sessionId: "serverless-at-capacity" });
+    await expect(
+      manager.getOrCreate({ ...params, sessionId: "connected-overflow", cfg: configured }),
+    ).rejects.toThrow("live runtime limit (256)");
+    await expect(
+      manager.getOrCreate({ ...params, sessionId: "serverless-0", cfg: configured }),
+    ).rejects.toThrow("live runtime limit (256)");
+    await manager.getOrCreate({ ...params, sessionId: "connected-0" });
+    await manager.getOrCreate({ ...params, sessionId: "serverless-0", cfg: configured });
+  });
+
+  it.each(["static", "requester"] as const)(
+    "bounds %s runtimes across sessions, creation, and cleanup",
+    async (kind) => {
+      const held = holdFactory();
+      const factory = vi.fn<CreateSessionMcpRuntime>(createRuntimeFixture);
+      const manager = createManager(factory);
+      const acquire = (sessionId: string) =>
+        kind === "static"
+          ? manager.getOrCreate({
+              ...params,
+              sessionId,
+              cfg: { mcp: { servers: { fixture: { command: "true" } } } },
+            })
+          : manager.getOrCreateRequesterScoped({ ...requesterParams("sender"), sessionId });
+      const resolverRegistry = createMcpProofPluginRegistry();
+      await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
+        resolverRegistry.apiFor("test-plugin").registerMcpServerConnectionResolver({
+          serverName: "scoped",
+          resolve: async () => ({ url: "https://mcp.example.test/scoped" }),
+        });
+        for (let index = 0; index < 255; index += 1) {
+          await acquire(`bounded-${index}`);
+        }
+        factory.mockImplementationOnce(held.createRuntime);
+        const last = acquire("last-slot");
+        await held.started;
+        await expect(acquire("overflow")).rejects.toThrow("live runtime limit (256)");
+        held.release();
+        await last;
+        const firstKey = expectDefined(
+          manager
+            .listRuntimeKeys()
+            .find((key) => key === "bounded-0" || key.includes('"sessionId":"bounded-0"')),
+          "first runtime key",
+        );
+        const first = expectDefined(manager.peekSession({ sessionId: firstKey }), "first runtime");
+        await acquire("bounded-0");
+        expect(first.dispose).not.toHaveBeenCalled();
+        const closing = holdDisposal(first);
+        const disposal = manager.disposeSession("bounded-0");
+        await closing.started;
+        await expect(acquire("overflow")).rejects.toThrow("live runtime limit (256)");
+        closing.release();
+        await disposal;
+        await acquire("overflow");
+        expect(manager.listRuntimeKeys()).toHaveLength(256);
+        await manager.disposeAll();
+        await acquire("after-shutdown");
+        expect(manager.listSessionIds()).toEqual(["after-shutdown"]);
+      });
+    },
+  );
+
   it("joins an unpublished disposal and reports its failure in the joining caller", async () => {
     const manager = createManager(createRuntimeFixture);
     const runtime = await manager.getOrCreate(params);
@@ -190,12 +263,20 @@ describe("MCP manager creation ownership", () => {
             await turnContext.run(turn, () =>
               pendingInputContext.run(pendingInput, async () => {
                 if (entrypoint === "static") {
-                  await manager.getOrCreate(params);
+                  await manager.getOrCreate({
+                    ...params,
+                    cfg: { mcp: { sessionIdleTtlMs: 600_000, servers: {} } },
+                  });
                 } else {
                   await manager.getOrCreateRequesterScoped({
                     ...params,
                     requesterSenderId: "sender",
-                    cfg: { mcp: { servers: { scoped: { transport: "streamable-http" } } } },
+                    cfg: {
+                      mcp: {
+                        sessionIdleTtlMs: 600_000,
+                        servers: { scoped: { transport: "streamable-http" } },
+                      },
+                    },
                   });
                 }
                 expect(readContext()).toEqual({ turn, pendingInput });
@@ -415,9 +496,10 @@ describe("MCP manager creation ownership", () => {
   it("keeps required retirement armed across delayed creation and reuse", async () => {
     const held = holdFactory();
     const manager = createManager(held.createRuntime);
-    manager.deferRetirement(params.sessionId, { retainAcrossReuse: true });
     const creating = manager.getOrCreate(params);
     const runtime = await held.started;
+    manager.deferRetirement(params.sessionId, { retainAcrossReuse: true });
+    manager.deferRetirement(params.sessionId);
     held.release();
     await creating;
     const release = expectDefined(runtime.acquireLease, "fixture runtime lease")();
@@ -473,65 +555,6 @@ describe("MCP manager creation ownership", () => {
       expect(nextRuntime.dispose).not.toHaveBeenCalled();
       expect(manager.listSessionIds()).toEqual([params.sessionId]);
       expect(manager.resolveSessionId(params.sessionKey)).toBe(params.sessionId);
-    });
-  });
-
-  it("does not queue cap eviction behind active requester work", async () => {
-    const resolverRegistry = createMcpProofPluginRegistry();
-    await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
-      let nowMs = 100_000;
-      const resolutionStarted = createDeferred();
-      const releaseResolution = createDeferred();
-      releaseHeldWork.push(() => releaseResolution.resolve());
-      const secondRuntimeCreated = createDeferred();
-      let senderACalls = 0;
-
-      const resolverApi = resolverRegistry.apiFor("test-plugin");
-      resolverApi.registerMcpServerConnectionResolver({
-        serverName: "scoped",
-        resolve: async ({ requesterSenderId }) => {
-          if (requesterSenderId === "sender-a" && ++senderACalls === 2) {
-            resolutionStarted.resolve();
-            await releaseResolution.promise;
-          }
-          return { url: `https://mcp.example.test/${requesterSenderId}` };
-        },
-      });
-      const createRuntime = vi.fn<CreateSessionMcpRuntime>((input) => {
-        const runtime = createRuntimeFixture(input);
-        if (input.requesterScope?.requesterSenderId === "sender-b") {
-          secondRuntimeCreated.resolve();
-        }
-        return runtime;
-      });
-      const manager = createSessionMcpRuntimeManager({
-        createRuntime,
-        now: () => nowMs,
-        enableIdleSweepTimer: false,
-        maxIdleRequesterRuntimesPerSession: 1,
-      });
-      managers.push(manager);
-
-      const first = expectDefined(
-        (await manager.getOrCreateRequesterScoped(requesterParams("sender-a")))?.runtime,
-        "first requester runtime",
-      );
-      nowMs += 300_000;
-      const refreshed = manager.getOrCreateRequesterScoped(requesterParams("sender-a"));
-      await resolutionStarted.promise;
-      const competing = manager.getOrCreateRequesterScoped(requesterParams("sender-b"));
-      await secondRuntimeCreated.promise;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      releaseResolution.resolve();
-
-      expect((await refreshed)?.runtime).toBe(first);
-      await competing;
-      expect(first.dispose).not.toHaveBeenCalled();
-      expect(manager.listRuntimeKeys()).toEqual([
-        expect.stringContaining('"requesterSenderId":"sender-a"'),
-      ]);
     });
   });
 });

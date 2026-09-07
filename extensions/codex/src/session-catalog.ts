@@ -20,7 +20,6 @@ import {
   CODEX_LOCAL_SESSION_HOST_ID,
   DEFAULT_TRANSCRIPT_PAGE_LIMIT,
   isInteractiveThreadSource,
-  parseCatalogPage,
 } from "./session-catalog-parsing.js";
 import {
   CODEX_TERMINAL_RESUME_COMMAND,
@@ -340,7 +339,6 @@ function registerCodexSessionCatalog(params: {
         getPluginConfig: params.getPluginConfig,
         getRuntimeConfig: params.getRuntimeConfig,
         resolveRuntimeOptions: params.resolveRuntimeOptions,
-        parseCatalogPage,
         ...(source ? { source } : {}),
         ...request,
         agentId,

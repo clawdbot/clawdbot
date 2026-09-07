@@ -5,10 +5,7 @@ import type {
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
-import {
-  LiveModelCatalogHttpError,
-  runLiveProviderCatalog,
-} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import * as liveCatalogRuntime from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { LLAMA_CPP_PROVIDER_ID } from "../defaults.js";
 import {
   hasLlamaServerAuthorizationHeader,
@@ -18,6 +15,38 @@ import {
 import { discoverLlamaServer } from "./discovery.js";
 import { resolveLlamaServerEndpoint } from "./endpoint.js";
 import { buildLlamaServerProviderConfig } from "./models.js";
+
+// Published 2026.9.2 understands catalog outcomes but does not export this runner.
+// Remove this fallback when the declared plugin API floor excludes that host.
+const liveCatalogSdk: Partial<Pick<typeof liveCatalogRuntime, "runLiveProviderCatalog">> =
+  liveCatalogRuntime;
+type CatalogOutcome = NonNullable<NonNullable<ProviderCatalogResult>["outcomes"]>[number];
+
+async function runLlamaServerCatalog(
+  params: Parameters<typeof liveCatalogRuntime.runLiveProviderCatalog>[0],
+): Promise<ProviderCatalogResult> {
+  if (liveCatalogSdk.runLiveProviderCatalog) {
+    return await liveCatalogSdk.runLiveProviderCatalog(params);
+  }
+  const identity = {
+    provider: params.providerId,
+    ...(params.profileId ? { profileId: params.profileId } : {}),
+  };
+  try {
+    const result = await params.run();
+    return result
+      ? { ...result, outcomes: [...(result.outcomes ?? []), { ...identity, status: "ready" }] }
+      : result;
+  } catch (error) {
+    const rejected =
+      error instanceof liveCatalogRuntime.LiveModelCatalogHttpError &&
+      (error.status === 401 || error.status === 403);
+    const outcome: CatalogOutcome = rejected
+      ? { ...identity, status: "auth-rejected", rejectionScope: "catalog" }
+      : { ...identity, status: "unavailable" };
+    return { providers: {}, outcomes: [outcome] };
+  }
+}
 
 /** Discovers external llama-server models for provider runtime resolution. */
 export async function discoverLlamaServerProvider(
@@ -36,7 +65,7 @@ export async function discoverLlamaServerProvider(
     (authApiKey && isNonSecretApiKeyMarker(authApiKey))
       ? undefined
       : authApiKey;
-  return await runLiveProviderCatalog({
+  return await runLlamaServerCatalog({
     providerId: LLAMA_CPP_PROVIDER_ID,
     profileId: apiKey ? auth.profileId : undefined,
     run: async () => {
@@ -51,7 +80,10 @@ export async function discoverLlamaServerProvider(
           return null;
         }
         throw discovery.kind === "http-error"
-          ? new LiveModelCatalogHttpError(LLAMA_CPP_PROVIDER_ID, discovery.status)
+          ? new liveCatalogRuntime.LiveModelCatalogHttpError(
+              LLAMA_CPP_PROVIDER_ID,
+              discovery.status,
+            )
           : discovery.error;
       }
       return {

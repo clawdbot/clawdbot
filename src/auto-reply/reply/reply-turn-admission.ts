@@ -162,6 +162,7 @@ function resolveVisibleActiveWaitMs(operation: ReplyOperation | undefined): numb
 type ReplyTurnAdmissionParams = {
   sessionKey: string;
   sessionId: string;
+  agentId?: string;
   expectedSessionId?: string;
   expectedActiveOperation?: ReplyOperation;
   storePath?: string;
@@ -376,12 +377,13 @@ export async function admitReplyTurn(
             // The dispatch closures own this object's abort/delivery lifecycle,
             // so the reservation must move rather than be recreated. Throws
             // ReplyRunAlreadyActiveError into the shared busy handling below.
-            params.adoptOperation.updateSessionKey(params.sessionKey);
+            params.adoptOperation.updateSessionKey(params.sessionKey, params.agentId);
             operation = params.adoptOperation;
           } else {
             operation = createReplyOperation({
               sessionKey: params.sessionKey,
               sessionId,
+              agentId: params.agentId,
               turnKind: params.kind,
               resetTriggered: params.resetTriggered,
               routeThreadId: params.routeThreadId,

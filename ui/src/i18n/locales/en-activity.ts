@@ -27,6 +27,15 @@ const enActivity = {
     session: "Session",
     outputTruncated: "Preview redacted and truncated.",
     noOutputPreview: "No output preview.",
+    currentWork: {
+      title: "Active sessions",
+      loading: "Loading active sessions…",
+      empty: "No active sessions.",
+      disconnected: "Connect to the Gateway to load active sessions.",
+      loadFailed: "Could not load active sessions.",
+      queued: "Queued",
+      limit: "Showing {count} of {total} active sessions.",
+    },
     answerCandidate: {
       title: "Answer candidate",
       itemId: "Item",
