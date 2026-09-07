@@ -1,4 +1,8 @@
 import { isVitestRuntimeEnv } from "../../../infra/env.js";
+import {
+  emitSessionLifecycleEvent,
+  type SessionLifecycleEvent,
+} from "../../../sessions/session-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 /**
  * Subagent registry state persistence bridge.
@@ -40,6 +44,68 @@ const persistedSubagentSessionListRunsReadCache: SubagentRunsCache<SubagentRunRe
   project: projectSubagentRunForSessionList,
 };
 
+// Read caches deliberately advance on failed best-effort writes. Keep notification facts
+// commit-owned so a successful retry still refreshes the parent, including after archive.
+const committedSwarmNotifications = new Map<
+  string,
+  { event: SessionLifecycleEvent; signature: string }
+>();
+
+function swarmNotification(entry: SubagentRunRecord | undefined) {
+  if (
+    !entry?.collect ||
+    !entry.swarmRequesterSessionKey ||
+    !entry.requesterAgentId ||
+    !entry.groupId
+  ) {
+    return undefined;
+  }
+  return {
+    event: {
+      sessionKey: entry.swarmRequesterSessionKey,
+      agentId: entry.requesterAgentId,
+      reason: "swarm",
+    },
+    // Compare the summary's raw inputs, never child results, labels or error text.
+    signature: JSON.stringify([
+      entry.swarmRequesterSessionKey,
+      entry.requesterAgentId,
+      entry.groupId,
+      entry.createdAt,
+      entry.childSessionKey,
+      entry.execution.status,
+      entry.collectorCompletion?.status,
+    ]),
+  };
+}
+
+function updateCommittedSwarmNotifications(
+  runs: Map<string, SubagentRunRecord>,
+  changedRunIds?: readonly string[],
+): SessionLifecycleEvent[] {
+  const events = new Map<string, SessionLifecycleEvent>();
+  const ids = changedRunIds ?? new Set([...committedSwarmNotifications.keys(), ...runs.keys()]);
+  for (const runId of ids) {
+    const previous = committedSwarmNotifications.get(runId);
+    const next = swarmNotification(runs.get(runId));
+    if (previous?.signature === next?.signature) {
+      continue;
+    }
+    if (next) {
+      committedSwarmNotifications.set(runId, next);
+    } else {
+      committedSwarmNotifications.delete(runId);
+    }
+    for (const notification of [previous, next]) {
+      if (notification) {
+        const event = notification.event;
+        events.set(JSON.stringify([event.sessionKey, event.agentId]), event);
+      }
+    }
+  }
+  return [...events.values()];
+}
+
 type SubagentRegistryPersistListener = () => void;
 
 const SUBAGENT_REGISTRY_PERSIST_LISTENERS = new Set<SubagentRegistryPersistListener>();
@@ -68,6 +134,16 @@ function projectSubagentRunForSessionList(entry: SubagentRunRecord): SubagentRun
     childSessionKey: entry.childSessionKey,
     ...(entry.controllerSessionKey ? { controllerSessionKey: entry.controllerSessionKey } : {}),
     requesterSessionKey: entry.requesterSessionKey,
+    ...(entry.collect
+      ? {
+          collect: true,
+          groupId: entry.groupId,
+          swarmRequesterSessionKey: entry.swarmRequesterSessionKey,
+        }
+      : {}),
+    ...(entry.collectorCompletion
+      ? { collectorCompletion: { status: entry.collectorCompletion.status } }
+      : {}),
     ...(entry.requesterAgentId ? { requesterAgentId: entry.requesterAgentId } : {}),
     ...(entry.model ? { model: entry.model } : {}),
     ...(entry.generation !== undefined ? { generation: entry.generation } : {}),
@@ -148,7 +224,11 @@ export function publishSubagentRunsAfterAtomicStore(
   deferredObserverEvents: Array<() => void>,
 ): void {
   rememberPersistedSubagentRunsSnapshot(runs, changedRunIds);
-  deferredObserverEvents.push(() => emitSubagentRegistryPersisted());
+  const events = updateCommittedSwarmNotifications(runs, changedRunIds);
+  deferredObserverEvents.push(() => {
+    emitSubagentRegistryPersisted();
+    events.forEach(emitSessionLifecycleEvent);
+  });
 }
 
 function shouldReadPersistedSubagentRuns(): boolean {
@@ -180,6 +260,7 @@ function loadPersistedSubagentRunsForRead<T extends SubagentRunReadRecord>(
 }
 
 export function clearSubagentRunsReadCacheForTest(): void {
+  committedSwarmNotifications.clear();
   persistedSubagentRunsReadCache.snapshot = undefined;
   persistedSubagentSessionListRunsReadCache.snapshot = undefined;
 }
@@ -189,12 +270,14 @@ function persistSubagentRuns(
   changedRunIds: readonly string[] | undefined,
   strict: boolean,
 ): void {
+  let committed = false;
   try {
     if (changedRunIds) {
       saveSubagentRegistryChangesToSqlite(runs, changedRunIds);
     } else {
       saveSubagentRegistryToSqlite(runs);
     }
+    committed = true;
   } catch (error) {
     if (strict) {
       throw error;
@@ -202,7 +285,9 @@ function persistSubagentRuns(
   }
   // In-process readers must observe the authoritative memory snapshot before the wake.
   rememberPersistedSubagentRunsSnapshot(runs, changedRunIds);
+  const events = committed ? updateCommittedSwarmNotifications(runs, changedRunIds) : [];
   emitSubagentRegistryPersisted();
+  events.forEach(emitSessionLifecycleEvent);
 }
 
 export function persistSubagentRunsToDisk(
@@ -238,6 +323,12 @@ export function restoreSubagentRunsFromDisk(params: {
       continue;
     }
     params.runs.set(runId, entry);
+    const notification = swarmNotification(entry);
+    if (notification) {
+      committedSwarmNotifications.set(runId, notification);
+    } else {
+      committedSwarmNotifications.delete(runId);
+    }
     subagentRuns.commitOwnership(entry);
     added += 1;
   }

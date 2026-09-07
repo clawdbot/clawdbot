@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
 import type { ExternalizedBundledPluginBridge } from "./externalized-bundled-plugins.js";
@@ -37,7 +36,6 @@ export type PluginCohortConvergenceResult = {
 /** Aligns managed plugin install sources and official packages with one core release cohort. */
 export async function convergePluginReleaseCohort(params: {
   config: OpenClawConfig;
-  installRecords: Record<string, PluginInstallRecord>;
   channel: UpdateChannel;
   coreVersion?: string;
   timeoutMs: number;
@@ -79,7 +77,8 @@ export async function convergePluginReleaseCohort(params: {
   }
   const installOwnerMigrations: Record<string, string> = {};
   const missingPayloads = await collectMissingPluginInstallPayloads({
-    records: params.installRecords,
+    // Channel synchronization can replace npm paths with bundled sources.
+    records: config.plugins?.installs ?? {},
     config,
     skipDisabledPlugins: true,
     syncOfficialPluginInstalls: true,

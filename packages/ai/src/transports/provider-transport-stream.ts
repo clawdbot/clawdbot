@@ -12,6 +12,7 @@ import {
   createAzureOpenAIResponsesTransportStreamFn,
   createOpenAIResponsesTransportStreamFn,
 } from "./openai-responses-transport.js";
+import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 
 const SUPPORTED_TRANSPORT_APIS = new Set<Api>([
   "openai-responses",
@@ -39,7 +40,7 @@ function createProviderOwnedGoogleTransportStreamFn(
   model: Model,
   ctx?: ProviderTransportStreamContext,
 ): StreamFn | undefined {
-  return (
+  const streamFn =
     getAiTransportHost().plugin.resolveProviderStream({
       provider: model.provider,
       config: ctx?.cfg,
@@ -68,8 +69,14 @@ function createProviderOwnedGoogleTransportStreamFn(
         model,
       },
     }) ??
-    undefined
-  );
+    undefined;
+  return streamFn
+    ? (requestModel, context, options) =>
+        streamFn(requestModel, context, {
+          ...options,
+          headers: resolveOpencodeSessionHeaders(requestModel, options),
+        })
+    : undefined;
 }
 
 function createSupportedTransportStreamFn(

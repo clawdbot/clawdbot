@@ -237,20 +237,20 @@ function resolvePortableTableCellCharacterCount(
   return values.reduce((total, value) => total + countCharacters(value), 0);
 }
 
-/** True when a portable table fits Slack's per-table and per-message contracts. */
-function canRenderSlackDataTable(
+/** Count portable table cells when the table fits Slack's native message budget. */
+export function resolveSlackDataTableCellCharacterCount(
   block: MessagePresentationTableBlock,
   options: SlackDataTableBuildOptions = {},
-): boolean {
+): number | undefined {
   const cellCharacterCountOffset = options.cellCharacterCountOffset ?? 0;
   if (!Number.isSafeInteger(cellCharacterCountOffset) || cellCharacterCountOffset < 0) {
-    return false;
+    return undefined;
   }
   const cellCharacterCount = resolvePortableTableCellCharacterCount(block);
-  return (
-    cellCharacterCount !== undefined &&
+  return cellCharacterCount !== undefined &&
     cellCharacterCountOffset + cellCharacterCount <= SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX
-  );
+    ? cellCharacterCount
+    : undefined;
 }
 
 /** Map a validated portable table to Slack's current app-facing Block Kit shape. */
@@ -258,7 +258,7 @@ export function buildSlackDataTableBlock(
   block: MessagePresentationTableBlock,
   options: SlackDataTableBuildOptions = {},
 ): SlackDataTableBlock | undefined {
-  if (!canRenderSlackDataTable(block, options)) {
+  if (resolveSlackDataTableCellCharacterCount(block, options) === undefined) {
     return undefined;
   }
   const header: SlackDataTableCell[] = block.headers.map((text) => ({ type: "raw_text", text }));

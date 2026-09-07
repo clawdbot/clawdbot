@@ -1,7 +1,6 @@
 import type { Context, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
-  FunctionTool,
   ResponseFormatTextConfig,
   ResponseInput,
 } from "openai/resources/responses/responses.js";
@@ -13,12 +12,8 @@ import {
   supportsOpenAITemperature,
   type OpenAIApiReasoningEffort,
 } from "../providers/openai-reasoning-effort.js";
-import {
-  projectOpenAITools,
-  reconcileOpenAIResponsesToolChoice,
-  type OpenAIToolProjection,
-} from "../providers/openai-tool-projection.js";
-import { normalizeOpenAIStrictToolParameters } from "../providers/openai-tool-schema.js";
+import { convertResponsesToolPayload } from "../providers/openai-responses-tools.js";
+import { reconcileOpenAIResponsesToolChoice } from "../providers/openai-tool-projection.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { resolveOpenAIStrictToolSetting } from "./host-policy.js";
 import type { OpenAIResponsesReplayMode } from "./openai-responses-compaction-replay.js";
@@ -41,11 +36,7 @@ import {
   resolveOpenAIStrictToolFlagWithDiagnostics,
   usesNativeOpenAICodexResponsesBackend,
 } from "./openai-transport-params.js";
-import {
-  resolvePromptCacheKey,
-  sortTransportToolsByName,
-  type OpenAIModeModel,
-} from "./openai-transport-shared.js";
+import { resolvePromptCacheKey, type OpenAIModeModel } from "./openai-transport-shared.js";
 import { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 const OPENAI_RESPONSES_TOOL_CALL_PROVIDERS = new Set([
@@ -54,37 +45,6 @@ const OPENAI_RESPONSES_TOOL_CALL_PROVIDERS = new Set([
   "azure-openai-responses",
   "github-copilot",
 ]);
-
-function convertResponsesTools(
-  tools: NonNullable<Context["tools"]>,
-  model: OpenAIModeModel,
-  options?: { strict?: boolean | null },
-): { projection: OpenAIToolProjection; tools: FunctionTool[] } {
-  const projection = projectOpenAITools(tools);
-  const strict = resolveOpenAIStrictToolFlagWithDiagnostics(projection, options?.strict, {
-    transport: "responses",
-    model,
-  });
-  return {
-    projection,
-    tools: sortTransportToolsByName(projection.tools).map((tool): FunctionTool => {
-      const result = {
-        type: "function" as const,
-        name: tool.name,
-        description: tool.description,
-        parameters: normalizeOpenAIStrictToolParameters(
-          tool.parameters,
-          strict === true,
-          model.compat,
-        ),
-      } as FunctionTool;
-      if (strict !== undefined) {
-        result.strict = strict;
-      }
-      return result;
-    }),
-  };
-}
 
 function resolveOpenAIReasoningEffort(
   options: OpenAIResponsesOptions | undefined,
@@ -166,6 +126,7 @@ export function sanitizeOpenAICodexResponsesParams<T extends Record<string, unkn
   for (const key of OPENAI_CODEX_RESPONSES_UNSUPPORTED_PARAMS) {
     delete params[key];
   }
+  Object.assign(params, { store: false });
   stripOpenAICodexResponsesUnsupportedTextFields(params);
   return params;
 }
@@ -339,11 +300,20 @@ export function buildOpenAIResponsesParams(
     params.service_tier = options.serviceTier;
   }
   if (context.tools) {
-    const converted = convertResponsesTools(context.tools, model as OpenAIModeModel, {
-      strict: resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
-        transport: "stream",
-      }),
-    });
+    const converted = convertResponsesToolPayload(
+      context.tools,
+      {
+        model,
+        strict: resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
+          transport: "stream",
+        }),
+      },
+      (projection, setting) =>
+        resolveOpenAIStrictToolFlagWithDiagnostics(projection, setting, {
+          transport: "responses",
+          model: model as OpenAIModeModel,
+        }),
+    );
     if (
       converted.tools.length > 0 ||
       (converted.projection.inputToolCount === 0 && converted.projection.diagnostics.length === 0)

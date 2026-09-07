@@ -12,7 +12,7 @@ import {
 } from "../infra/state-migrations.workspace-setup.js";
 import type { CollectionBackupManifest } from "../skills/workshop/collection-backup.js";
 import { resolveSkillCollectionBackupRoot } from "../skills/workshop/collection-paths.js";
-import { restoreLatestSkillCollectionBackup } from "../skills/workshop/collection-reconcile.js";
+import { restoreLatestSkillCollectionBackup } from "../skills/workshop/collection-restore.js";
 import {
   renderProposalMarkdown,
   stripProposalFrontmatterForSkill,

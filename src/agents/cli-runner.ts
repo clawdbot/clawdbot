@@ -2,6 +2,7 @@
  * Top-level CLI-backed agent runner orchestration.
  */
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { runWithCliHistoryWriter } from "../config/sessions/cli-history-boundary.js";
 import { buildGenericCliContextEngineHostSupport } from "../context-engine/host-compat.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
@@ -28,6 +29,7 @@ import {
   markAuthProfileSuccess,
 } from "./auth-profiles.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
+import { runCliCleanup } from "./cli-runner/cleanup.js";
 import { acceptsCliLiveSession } from "./cli-runner/cli-live-session-registry.js";
 import {
   resolveCliSessionId,
@@ -243,6 +245,14 @@ async function runCliAgentInternal(
 
 /** Runs an already-prepared CLI agent context through hooks and execution. */
 export async function runPreparedCliAgent(
+  context: PreparedCliRunContext,
+  diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
+): Promise<EmbeddedAgentRunResult> {
+  const run = () => runPreparedCliAgentOwned(context, diagnosticLifecycle);
+  return await runWithCliHistoryWriter(context.cliHistoryWriter, run);
+}
+
+async function runPreparedCliAgentOwned(
   context: PreparedCliRunContext,
   diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
 ): Promise<EmbeddedAgentRunResult> {
@@ -713,7 +723,9 @@ export async function runPreparedCliAgent(
   }
   let cleanupError: Error | undefined;
   try {
-    await context.preparedBackend.cleanup?.();
+    await runCliCleanup(params, "cli-backend-release", async () => {
+      await context.preparedBackend.cleanup?.();
+    });
   } catch (error) {
     cleanupError = error as Error;
   }

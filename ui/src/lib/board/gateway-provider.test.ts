@@ -638,7 +638,7 @@ describe("gateway board provider lifecycle", () => {
 
       await provider.applyOps([{ kind: "tab_update", tabId: "main", chatDock: "left" }]);
       await provider.grant("canvas-cv-1", "granted");
-      const longTitle = "Pinned ".repeat(20).trim();
+      const longTitle = "📌 Pinned ".repeat(20).trim();
       await provider.pinWidget({ docId: "cv-1", title: longTitle });
       await provider.pinMcpApp({
         viewId: "mcp-app-source",

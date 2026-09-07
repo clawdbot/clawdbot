@@ -47,11 +47,30 @@ const GITHUB_AUTHORIZATION_LABEL = {
   network_error: "agentTools.githubNetworkRetry",
 } as const;
 
-export function renderGitHubHealth(identity: GitHubIdentityFacts | null) {
-  const status = identity ? GITHUB_CREDENTIAL_STATUS[identity.credentialState] : null;
+export function renderGitHubUnloadedStatus(
+  request: Pick<GitHubIdentityController, "loading" | "error">,
+) {
   return renderSettingsStatus({
-    kind: status?.kind ?? "muted",
-    label: status ? t(status.label) : t("githubConnections.notLoaded"),
+    kind: request.error ? "warn" : "muted",
+    label: request.loading
+      ? t("githubConnections.checking")
+      : request.error
+        ? t("githubConnections.statusUnavailable")
+        : t("githubConnections.notLoaded"),
+  });
+}
+
+export function renderGitHubHealth(
+  identity: GitHubIdentityFacts | null,
+  request: Pick<GitHubIdentityController, "loading" | "error">,
+) {
+  if (!identity) {
+    return renderGitHubUnloadedStatus(request);
+  }
+  const status = GITHUB_CREDENTIAL_STATUS[identity.credentialState];
+  return renderSettingsStatus({
+    kind: status.kind,
+    label: t(status.label),
   });
 }
 
@@ -382,7 +401,7 @@ export function renderGitHubIdentity(
           identity?.source === "agent-override"
             ? t("githubConnections.agentOverride")
             : t("githubConnections.system"),
-        control: html`${renderGitHubHealth(identity)}<button
+        control: html`${renderGitHubHealth(identity, controller)}<button
             class="btn btn--sm"
             @click=${onOpenConnections}
           >

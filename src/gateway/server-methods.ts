@@ -492,7 +492,8 @@ export async function handleGatewayRequest(
   },
   diagnostics?: GatewayRpcDiagnostics,
 ): Promise<void> {
-  const { req, respond, client, isWebchatConnect, context, signal } = opts;
+  const { req, respond, client, isWebchatConnect, context, signal, hasCurrentClientAuthority } =
+    opts;
   const entry = opts.requestEntry ?? context.requestEntryLifetime?.enter(opts);
   try {
     entry?.assertOpen();
@@ -538,6 +539,7 @@ export async function handleGatewayRequest(
         respond,
         context,
         signal,
+        ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
         sessionMutationCommitGuard: opts.sessionMutationCommitGuard,
         sessionMutationAuthorization,
       };

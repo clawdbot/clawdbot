@@ -3384,6 +3384,7 @@ struct ChatViewModelTests {
         let viewModel = OpenClawChatViewModel(
             sessionKey: "main",
             transport: TestChatTransport(historyResponses: []))
+        defer { viewModel.detachTransport() }
         var running = sessionEntry(key: "main", updatedAt: 1)
         running.status = "running"
         running.lastRunError = "previous failure"
@@ -3394,6 +3395,10 @@ struct ChatViewModelTests {
             runId: "remote-run",
             outputTokens: 8,
             seq: 1)))
+        viewModel.input = "next message"
+        let request = viewModel.beginHistoryRequest()
+        let activeHistory = historyPayload(
+            inFlightRun: OpenClawChatInFlightRun(runId: "remote-run", text: "older working text"))
 
         viewModel.handleTransportEvent(.sessionsChanged(.init(
             sessionKey: "main",
@@ -3418,6 +3423,15 @@ struct ChatViewModelTests {
         #expect(merged?.activeRunIds == [])
         #expect(viewModel.liveRunOutputTokens == nil)
         #expect(!viewModel.hasBlockingRunActivity)
+
+        _ = viewModel.applyHistoryPayload(
+            activeHistory,
+            for: request,
+            preservingOptimisticLocalMessages: true)
+
+        #expect(viewModel.pendingRunCount == 0)
+        #expect(viewModel.streamingAssistantText == nil)
+        #expect(viewModel.canSend)
     }
 
     @Test @MainActor func `terminal lifecycle retires matching pending run despite stale snapshot`() {
@@ -6688,6 +6702,31 @@ struct ChatViewModelTests {
             }
         }
         #expect(await transport.sentRunIds().count == 1)
+    }
+
+    @Test @MainActor func `repeated refresh preserves an unconfirmed same text turn after pending retirement`() {
+        let firstUser = chatTextModelMessage(
+            role: "user", text: "retry", timestamp: 5000, idempotencyKey: "first:user")
+        let firstAnswer = chatTextModelMessage(
+            role: "assistant", text: "first answer", timestamp: 6000)
+        let secondUser = chatTextModelMessage(
+            role: "user", text: "retry", timestamp: 1000, idempotencyKey: "second:user")
+        let previous = [firstUser, firstAnswer, secondUser]
+        let canonicalHistory = [firstUser, firstAnswer]
+        let expectedIDs = previous.map(\.id)
+
+        let whilePending = OpenClawChatViewModel.reconcileRunRefreshMessages(
+            previous: previous,
+            incoming: canonicalHistory,
+            pendingLocalUserEchoIDs: [secondUser.id])
+        #expect(whilePending.map(\.id) == expectedIDs)
+
+        // Terminal retirement can precede canonical adoption of the second user row.
+        let afterRetirement = OpenClawChatViewModel.reconcileRunRefreshMessages(
+            previous: whilePending,
+            incoming: canonicalHistory,
+            pendingLocalUserEchoIDs: [])
+        #expect(afterRetirement.map(\.id) == expectedIDs)
     }
 
     @Test func `preserves repeated optimistic user messages with identical content during refresh`() async throws {

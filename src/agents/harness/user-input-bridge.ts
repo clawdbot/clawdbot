@@ -109,16 +109,14 @@ function buildAgentHarnessQuestionPresentation(params: {
     return undefined;
   }
   // The question stays in its own leading text block so reaction/native
-  // adapters can keep it while replacing the tap-only guidance below.
+  // adapters can keep it while replacing the reply guidance below.
   const optionGuidance = [
     ...options.map(
       (option) =>
         `- ${formatText(option.label)}${option.description ? `: ${formatText(option.description)}` : ""}`,
     ),
     "",
-    question.isOther
-      ? "Tap an option, or reply with the option text or your own answer."
-      : "Tap an option, or reply with the option number or text.",
+    questionReplyGuidance(params.questions),
   ].join("\n");
   return {
     blocks: [

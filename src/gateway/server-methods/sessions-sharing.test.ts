@@ -698,7 +698,7 @@ describe("session sharing handlers", () => {
     });
   });
 
-  it("lists profile ids and authorizes a selected profile as a member", async () => {
+  it("lists current identities and adds members without decoding unrelated saved prompts", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:profile-member";
       const profile = ensureProfileForEmail("member@example.com");
@@ -716,21 +716,53 @@ describe("session sharing handlers", () => {
           visibility: "read-only",
         },
       );
-      const requestContext = context(vi.fn());
-
-      const listed = await call("session.members.list", { sessionKey }, requestContext);
-      expect(listed[0]?.[1]).toMatchObject({
-        identities: expect.arrayContaining([
-          expect.objectContaining({ type: "human", id: profile.id, label: "Member" }),
-        ]),
+      const savedPrompt = "unrelated saved sharing prompt".repeat(512);
+      for (const [agentId, createdActor] of [
+        ["main", { type: "human", source: "profile", id: profile.id, label: "Old member name" }],
+        ["research", { type: "agent", id: "research", label: "Alpha Research" }],
+      ] as const) {
+        await upsertSessionEntryCore(
+          { agentId, sessionKey: `agent:${agentId}:unrelated-sharing` },
+          {
+            sessionId: `unrelated-sharing-${agentId}`,
+            updatedAt: 1,
+            createdActor,
+            skillsSnapshot: { prompt: savedPrompt, skills: [] },
+          },
+        );
+      }
+      const requestContext = context(vi.fn(), {
+        agents: { ownership: "explicit", entries: { main: {}, research: {} } },
       });
-      expect(
-        await call(
-          "session.members.add",
-          { sessionKey, identityId: selectable.id },
-          requestContext,
-        ),
-      ).toEqual([[true, { ok: true, sessionKey, identityId: profile.id }, undefined]]);
+      await call("session.members.list", { sessionKey }, requestContext);
+      const parse = JSON.parse;
+      let unrelatedDecodes = 0;
+      const parsed = vi.spyOn(JSON, "parse").mockImplementation((value, reviver) => {
+        if (typeof value === "string" && value.includes(savedPrompt)) {
+          unrelatedDecodes++;
+        }
+        return parse(value, reviver);
+      });
+      try {
+        for (const method of ["session.members.list", "session.members.listEvidence"] as const) {
+          const listed = await call(method, { sessionKey }, requestContext);
+          expect(listed[0]?.[1]).toMatchObject({
+            identities: [
+              { type: "agent", id: "research", label: "Alpha Research" },
+              { type: "human", id: profile.id, label: "Member" },
+            ],
+          });
+        }
+        expect(
+          await call(
+            "session.members.add",
+            { sessionKey, identityId: selectable.id },
+            requestContext,
+          ),
+        ).toEqual([[true, { ok: true, sessionKey, identityId: profile.id }, undefined]]);
+      } finally {
+        parsed.mockRestore();
+      }
       expect(
         authorizeResolvedSessionMutation({
           cfg: {},
@@ -739,6 +771,7 @@ describe("session sharing handlers", () => {
           agentId: "main",
         }),
       ).toBeNull();
+      expect(unrelatedDecodes).toBe(0);
     });
   });
 

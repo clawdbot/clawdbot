@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Synchronization
 import Testing
 
 @MainActor
@@ -11,14 +12,7 @@ struct DashboardHTTPFixtureTests {
         defer { second.stop() }
         #expect(first.port != second.port)
 
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.urlCache = nil
-        configuration.httpCookieStorage = nil
-        configuration.urlCredentialStorage = nil
-        configuration.connectionProxyDictionary = [:]
-        configuration.timeoutIntervalForRequest = 2
-        configuration.timeoutIntervalForResource = 5
-        let session = URLSession(configuration: configuration)
+        let session = Self.makeSession()
         defer { session.invalidateAndCancel() }
 
         for fixture in [first, second] {
@@ -36,6 +30,48 @@ struct DashboardHTTPFixtureTests {
             #expect(http.value(forHTTPHeaderField: "Content-Security-Policy") == "default-src 'none'")
             #expect(http.value(forHTTPHeaderField: "Set-Cookie") == nil)
         }
+    }
+
+    @Test func `inert responses do not wait for the main actor`() async {
+        // The child owns the actor stall so parallel suites keep their deadlines.
+        await #expect(processExitsWith: .success) {
+            try await DashboardHTTPFixtureTests.checkResponseWithBlockedMainActor()
+        }
+    }
+
+    private static func checkResponseWithBlockedMainActor() async throws {
+        let fixture = try await DashboardHTTPFixture.start()
+        defer { fixture.stop() }
+        let session = Self.makeSession()
+        defer { session.invalidateAndCancel() }
+        try Self.receiveWhileBlockingMainActor(fixture: fixture, session: session)
+    }
+
+    private static func receiveWhileBlockingMainActor(fixture: DashboardHTTPFixture, session: URLSession) throws {
+        let completed = DispatchSemaphore(value: 0)
+        let servedHTML = Mutex(false)
+        let expectedBody = Data(DashboardHTTPFixture.html.utf8)
+        let task = session.dataTask(with: fixture.url()) { data, response, error in
+            servedHTML.withLock {
+                $0 = error == nil && (response as? HTTPURLResponse)?.statusCode == 200 && data == expectedBody
+            }
+            completed.signal()
+        }
+        task.resume()
+        // No actor suspension: accept/read/write must finish on the transport queue.
+        try #require(completed.wait(timeout: .now() + 5) == .success)
+        #expect(servedHTML.withLock { $0 })
+    }
+
+    private static func makeSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.httpCookieStorage = nil
+        configuration.urlCredentialStorage = nil
+        configuration.connectionProxyDictionary = [:]
+        configuration.timeoutIntervalForRequest = 2
+        configuration.timeoutIntervalForResource = 5
+        return URLSession(configuration: configuration)
     }
 
     @Test func `stopping a fixture closes unfinished clients and releases its listener`() async throws {

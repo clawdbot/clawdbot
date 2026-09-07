@@ -27,6 +27,7 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { parseControlUiUserAvatarPath, parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
 import { controlUiPluginAssetRoot } from "./control-ui-plugin-assets-contract.js";
+import { createControlUiPublicSessionRoute } from "./control-ui-public-session.js";
 import { resolveAssistantMediaRoutePath } from "./control-ui-resource-routes.js";
 import {
   classifyControlUiRequest,
@@ -34,6 +35,7 @@ import {
   isControlUiFocusDocumentPath,
   isControlUiPluginManagerRequest,
 } from "./control-ui-routing.js";
+import { isControlUiSharePath } from "./control-ui-share.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import {
@@ -206,6 +208,7 @@ export function createGatewayHttpServer(opts: {
   const controlUiRouteBasePath =
     controlUiBasePath && controlUiBasePath !== "/" ? controlUiBasePath.replace(/\/$/, "") : "";
   const pluginAssetRoot = controlUiPluginAssetRoot(controlUiRouteBasePath);
+  const publicSessionRoute = createControlUiPublicSessionRoute();
   const handleServerRequest = (
     req: IncomingMessage,
     res: ServerResponse,
@@ -556,7 +559,25 @@ export function createGatewayHttpServer(opts: {
         basePath: controlUiBasePath,
         pathname: scopedRequestPath,
       });
-      addRequestStage(approvalDocument, handleStandaloneControlUiRequest);
+      const publicSessionPath = publicSessionRoute.matches(
+        scopedRequestPath,
+        controlUiRouteBasePath,
+      );
+      addRequestStage(!controlUiEnabled && publicSessionPath, () => publicSessionRoute.reject(res));
+      addAdmittedStage(controlUiEnabled && publicSessionPath, () =>
+        publicSessionRoute.serve({
+          req,
+          res,
+          basePath: controlUiRouteBasePath,
+          config: configSnapshot,
+          ingress: ingressAttribution,
+        }),
+      );
+      addRequestStage(
+        approvalDocument ||
+          (isControlUiSharePath(scopedRequestPath, controlUiRouteBasePath) && !publicSessionPath),
+        handleStandaloneControlUiRequest,
+      );
       addRequestStage(Boolean(nodeCapability), async () => {
         const { authorizePluginNodeCapabilityRequest } = await getPluginNodeCapabilityAuthModule();
         const ok = await authorizePluginNodeCapabilityRequest({

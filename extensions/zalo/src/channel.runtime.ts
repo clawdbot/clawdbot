@@ -1,34 +1,11 @@
 // Zalo plugin module implements channel behavior.
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
-import {
-  PAIRING_APPROVED_MESSAGE,
-  type ChannelPlugin,
-  type OpenClawConfig,
-} from "../runtime-api.js";
+import type { ChannelPlugin } from "../runtime-api.js";
 import { probeZalo } from "./probe.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { sendMessageZalo } from "./send.js";
 import type { ResolvedZaloAccount } from "./types.js";
-
-export async function notifyZaloPairingApproval(params: {
-  cfg: OpenClawConfig;
-  id: string;
-  accountId?: string;
-}) {
-  const { resolveZaloAccount } = await import("./accounts.js");
-  const account = resolveZaloAccount({ cfg: params.cfg, accountId: params.accountId });
-  if (!account.token) {
-    const accountPath = `channels.zalo.accounts.${account.accountId}`;
-    throw new Error(
-      `Zalo token not configured for account ${account.accountId} (set ${accountPath}.botToken or ${accountPath}.tokenFile)`,
-    );
-  }
-  await sendMessageZalo(params.id, PAIRING_APPROVED_MESSAGE, {
-    token: account.token,
-    proxy: account.config.proxy,
-  });
-}
 
 export async function sendZaloText(
   params: Parameters<typeof sendMessageZalo>[2] & {

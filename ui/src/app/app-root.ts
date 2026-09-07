@@ -7,8 +7,8 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { RouteId } from "../app-routes.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard-registration.ts";
-import "../components/openclaw-mascot.ts";
 import { renderLazyElementState, renderLazyViewError } from "../components/lazy-view-error.ts";
+import { renderConnectingSplash } from "../components/loading-skeleton.ts";
 import { installTitleTooltips } from "../components/tooltip-title.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -48,20 +48,6 @@ function routeLocationHref(location: RouteLocation): string {
 
 function isRouteNotFound(result: ChatRouteData | RouteNotFound): result is RouteNotFound {
   return "type" in result && result.type === "notFound";
-}
-
-function renderConnectingSplash(status?: string) {
-  return html`
-    <main
-      class="connect-splash"
-      role="status"
-      aria-live="polite"
-      aria-label=${status ?? t("common.loading")}
-    >
-      <openclaw-mascot mood="thinking" .size=${120}></openclaw-mascot>
-      ${status ? html`<span class="connect-splash__status">${status}</span>` : nothing}
-    </main>
-  `;
 }
 
 export class OpenClawApp extends OpenClawLightDomElement {

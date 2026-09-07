@@ -6,10 +6,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import {
-  AUTONOMOUS_SKILL_MAX_CHARS,
-  type SkillCollectionReconcileContext,
-} from "../../skills/workshop/collection-contracts.js";
+import { AUTONOMOUS_SKILL_MAX_CHARS } from "../../skills/workshop/collection-contracts.js";
 import { resolveSkillWorkshopConfig } from "../../skills/workshop/config.js";
 import { stripProposalFrontmatterForSkill } from "../../skills/workshop/frontmatter.js";
 import { resolveSkillWorkshopProjectionBudgets } from "../../skills/workshop/model-context-budget.js";
@@ -43,9 +40,7 @@ import {
 } from "./common.js";
 import {
   executeSkillCollectionHistory,
-  executeSkillCollectionReconcile,
   executeSkillCollectionRestore,
-  recordSkillCollectionReadReceipt,
 } from "./skill-workshop-tool-collection.js";
 import { buildSkillWorkshopToolDescription } from "./skill-workshop-tool-description.js";
 import {
@@ -148,8 +143,6 @@ type SkillWorkshopToolOptions = {
   proposalMutationBudget?: SkillWorkshopProposalMutationBudget;
   /** Optional durable completion latch shared across runner retries. */
   proposalReviewCompletion?: SkillWorkshopProposalReviewCompletion;
-  /** Isolated collection review latch; when present only read/reconcile are exposed. */
-  collectionReconcile?: SkillCollectionReconcileContext;
   /** Effective selected-model context used for every model-visible Workshop projection. */
   modelContextWindowTokens?: number;
   /** Exact proposal revision reviewed before this operator-requested revision turn. */
@@ -169,14 +162,8 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
   const workshopConfig = resolveSkillWorkshopConfig(options.config);
   const projectionBudgets = resolveSkillWorkshopProjectionBudgets(options.modelContextWindowTokens);
   const readSkillHashes =
-    options.collectionReconcile?.readSkillHashes ??
-    options.proposalMutationBudget?.readSkillHashes ??
-    new Map<string, string>();
+    options.proposalMutationBudget?.readSkillHashes ?? new Map<string, string>();
   const preparedSkillPatches = options.proposalMutationBudget?.preparedSkillPatches ?? new Map();
-  if (options.collectionReconcile) {
-    options.collectionReconcile.readSkillHashes = readSkillHashes;
-    options.collectionReconcile.readSkillTreeHashes ??= new Map();
-  }
   if (options.proposalMutationBudget) {
     options.proposalMutationBudget.readSkillHashes = readSkillHashes;
     options.proposalMutationBudget.preparedSkillPatches = preparedSkillPatches;
@@ -187,13 +174,9 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
     displaySummary: "Propose or improve a reusable skill",
     description: buildSkillWorkshopToolDescription({
       autonomousMode: workshopConfig.autonomous.mode,
-      collectionOnly: options.collectionReconcile !== undefined,
       proposalRevision: options.proposalRevision !== undefined,
     }),
-    parameters: buildSkillWorkshopToolSchema(
-      options.collectionReconcile !== undefined,
-      options.proposalRevision !== undefined,
-    ),
+    parameters: buildSkillWorkshopToolSchema(options.proposalRevision !== undefined),
     execute: async (_toolCallId, args) => {
       const rawParams = asToolParamsRecord(args);
       const action = readToolStringParam(rawParams, "action", { required: true });
@@ -203,15 +186,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         options.proposalReviewCompletion !== undefined,
       );
 
-      if (options.collectionReconcile && action !== "read" && action !== "reconcile") {
-        throw new ToolInputError("this Skill Workshop session can only read and reconcile skills");
-      }
-
-      if (
-        options.proposalOnly === true &&
-        !options.collectionReconcile &&
-        !proposalActions.includes(action)
-      ) {
+      if (options.proposalOnly === true && !proposalActions.includes(action)) {
         throw new ToolInputError(
           `this Skill Workshop review allows only: ${proposalActions.join(", ")}`,
         );
@@ -236,36 +211,16 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       }
 
       if (action === "read") {
-        if (
-          options.proposalOnly === true &&
-          !options.collectionReconcile &&
-          options.updateProposals !== true
-        ) {
+        if (options.proposalOnly === true && options.updateProposals !== true) {
           throw new ToolInputError("this Skill Workshop session cannot read live skills");
         }
         const skill = await readWritableWorkshopSkill(
           readToolStringParam(params, "skill_name", { required: true, label: "skill_name" }),
           { config: options.config, agentId: options.agentId, env: options.env },
         );
-        if (
-          options.collectionReconcile &&
-          !options.collectionReconcile.approvedSkillKeys?.has(skill.skillKey)
-        ) {
-          throw new ToolInputError(`skill is outside this collection review: ${skill.skillName}`);
-        }
         const readMaxChars = projectionBudgets.artifactChars;
         const truncated = skill.content.length > readMaxChars;
-        // A truncated read is context, not sight of the whole skill: it earns no
-        // receipt, so oversized skills cannot be patched by a reviewer that never
-        // saw their later content.
-        if (options.collectionReconcile) {
-          await recordSkillCollectionReadReceipt({
-            context: options.collectionReconcile,
-            readSkillHashes,
-            skill,
-            truncated,
-          });
-        } else if (truncated) {
+        if (truncated) {
           readSkillHashes.delete(skill.skillKey);
         } else {
           readSkillHashes.set(skill.skillKey, sha256Hex(skill.content));
@@ -277,9 +232,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
               [
                 `Skill: ${skill.skillName} (${sizeBytes} bytes)`,
                 "Content omitted: the complete skill exceeds the selected-model read budget.",
-                options.collectionReconcile
-                  ? "Next: leave this skill unlisted in the reconcile call; only the operator can change it."
-                  : "Next: call action=prepare_patch with a non-empty exact old_string for a targeted patch, or use operator/CLI access for the complete skill. Full updates require a complete model read.",
+                "Next: call action=prepare_patch with a non-empty exact old_string for a targeted patch, or use operator/CLI access for the complete skill. Full updates require a complete model read.",
               ].join("\n"),
               readMaxChars,
             )
@@ -293,11 +246,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       }
 
       if (action === "prepare_patch") {
-        if (
-          options.proposalOnly === true &&
-          !options.collectionReconcile &&
-          options.updateProposals !== true
-        ) {
+        if (options.proposalOnly === true && options.updateProposals !== true) {
           throw new ToolInputError("this Skill Workshop session cannot prepare live skill patches");
         }
         return await executePrepareSkillPatch({
@@ -309,21 +258,6 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           preparedSkillPatches,
           proposalMutationBudgetRemaining: options.proposalMutationBudget?.remaining,
           maxChars: projectionBudgets.artifactChars,
-        });
-      }
-
-      if (action === "reconcile") {
-        if (!options.collectionReconcile) {
-          throw new ToolInputError("only an isolated collection review can reconcile skills");
-        }
-        return await executeSkillCollectionReconcile({
-          toolParams: params,
-          workspaceDir: options.workspaceDir,
-          readSkillHashes,
-          context: options.collectionReconcile,
-          config: options.config,
-          agentId: options.agentId,
-          env: options.env,
         });
       }
 

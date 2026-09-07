@@ -117,7 +117,8 @@ export async function readCodexMirroredSessionHistoryMessages(
           "codex mirrored model context",
         );
       } else {
-        result = await readCodexNativeHistory(resolved, target.sessionId, read, admission);
+        const history = await readCodexNativeHistory(resolved, target.sessionId, read, admission);
+        result = history.status === "ok" ? history.value : undefined;
       }
     }
     signal?.throwIfAborted();

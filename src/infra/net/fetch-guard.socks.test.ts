@@ -210,7 +210,8 @@ describe("SOCKS proxy protocol boundaries", () => {
     },
   );
 
-  it.each([
+  // Each row owns its server, sockets, and dispatcher, so native deadline waits can overlap.
+  it.concurrent.each([
     { name: "fixed target", mode: "fixed", stall: "target", target: 100, proxy: 0 },
     { name: "environment target", mode: "environment", stall: "target", target: 100, proxy: 0 },
     {
@@ -365,8 +366,14 @@ describe("SOCKS proxy protocol boundaries", () => {
             budget,
           );
         } else if (mode === "native") {
+          // Raw Undici forwards the proxy IP as SNI; a DNS name keeps this a timeout probe.
+          const nativeOptions = {
+            ...options,
+            uri,
+            proxyTls: { ...options.proxyTls, servername: "proxy.test" },
+          };
           // @ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.
-          dispatcher = new ProxyAgent({ ...options, uri });
+          dispatcher = new ProxyAgent(nativeOptions);
         } else {
           // @ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.
           dispatcher = createHttp1ProxyAgent({ ...options, uri }, budget);

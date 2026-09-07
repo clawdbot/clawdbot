@@ -280,8 +280,9 @@ skill from model-initiated selection.
 [Skill Workshop](/tools/skill-workshop) is a proposal queue between the agent
 and its `<state-dir>/agents/<agentId>/agent/workshop-skills` directory. When the agent spots
 reusable work, it drafts a proposal instead of writing directly to `SKILL.md`.
-Operators edit skills outside that directory through their owning tools or
-files.
+The scheduled weekly collection review is the scoped exception: its normal
+isolated turn may edit `SKILL.md` files directly inside the Workshop directory.
+Operators edit skills outside that directory through their owning tools or files.
 
 ```bash
 openclaw skills workshop list
@@ -695,14 +696,20 @@ Managed library selections keep their exact revisions until an explicit
 attach or refresh. The file-watcher behavior below applies to ordinary
 file-backed skill roots, not immutable library revisions.
 
-File-backed skills refresh mid-session in two cases:
+File-backed skills refresh mid-session when:
 
 - The skills watcher detects a `SKILL.md` change.
 - A new eligible remote node connects.
+- Native file-watch capacity is exhausted and the next agent turn starts.
 
 The refreshed list is picked up on the next agent turn. If the effective agent
 allowlist changes, OpenClaw refreshes the snapshot to keep visible skills
 aligned.
+
+When native watch capacity is exhausted, OpenClaw logs one warning and stops
+the skills watchers. With watching enabled, later agent turns refresh file-backed
+skills through the existing snapshot preparation. Restart the Gateway after
+restoring watch capacity to enable native watching again.
 
 <AccordionGroup>
   <Accordion title="Skills watcher">
@@ -714,8 +721,8 @@ aligned.
     {
       skills: {
         load: {
-          extraDirs: ["~/Projects/agent-scripts/skills"],
-          allowSymlinkTargets: ["~/Projects/manager/skills"],
+          extraDirs: ["~/path/to/agent-scripts/skills"],
+          allowSymlinkTargets: ["~/path/to/skills"],
           watch: true, // default
         },
       },
@@ -725,7 +732,7 @@ aligned.
     Watcher events use a built-in 250 ms debounce. Use `allowSymlinkTargets`
     for intentional symlinked layouts where a skill
     root symlink points outside the configured root, for example
-    `<workspace>/skills/manager -> ~/Projects/manager/skills`.
+    `<workspace>/skills/manager -> ~/path/to/skills`.
     Skill Workshop does not use these configured symlink targets.
 
   </Accordion>
@@ -764,6 +771,12 @@ truncation is required.
 
 Keep descriptions short and descriptive to minimize prompt overhead.
 
+For small context windows, the OpenClaw embedded runtime further shortens the
+descriptions in the already-admitted catalog. It retains every admitted name,
+location, and loading note, even when these exceed the description budget.
+Full skill instructions and saved snapshots are unchanged; Code Mode can still
+read every admitted skill. Native harnesses retain their own prompt policy.
+
 ## Related
 
 <CardGroup cols={2}>
@@ -784,5 +797,8 @@ Keep descriptions short and descriptive to minimize prompt overhead.
   </Card>
   <Card title="Plugins" href="/tools/plugin" icon="plug">
     Plugins can ship skills alongside the tools they document.
+  </Card>
+  <Card title="OpenProse migration" href="/prose" icon="pen-nib">
+    Move from the removed OpenProse plugin to the upstream Agent Skill.
   </Card>
 </CardGroup>

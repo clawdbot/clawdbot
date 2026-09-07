@@ -12,7 +12,8 @@ import {
 } from "./rich-block-model.js";
 import { splitTelegramRichBlocks } from "./rich-block-split.js";
 import { markdownToTelegramRichBlocks } from "./rich-blocks.js";
-import { buildTelegramRichMarkdown, splitTelegramRichMessageTextChunks } from "./rich-message.js";
+import { buildTelegramRichMarkdown } from "./rich-message.js";
+import { planTelegramTextDeliveryPages } from "./telegram-text-delivery.js";
 
 function tableMarkdown(columns: number): string {
   return [
@@ -725,19 +726,19 @@ describe("rich message plan wiring", () => {
       "\n",
     );
 
-    const chunks = splitTelegramRichMessageTextChunks({ text, textLimit: 32_768 });
+    const chunks = planTelegramTextDeliveryPages({ text, maxChars: 32_768, richMessages: true });
     const lists = chunks
-      .flatMap((chunk) => chunk.richMessage.blocks)
+      .flatMap((chunk) => chunk.richMessage?.blocks ?? [])
       .filter((block) => block.type === "list");
 
     expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => countInputRichBlocks(chunk.richMessage.blocks) <= 500)).toBe(
-      true,
-    );
+    expect(
+      chunks.every((chunk) => countInputRichBlocks(chunk.richMessage?.blocks ?? []) <= 500),
+    ).toBe(true);
     expect(lists.flatMap((list) => list.items).map((item) => item.value)).toEqual(
       Array.from({ length: 250 }, (_, index) => index + 1),
     );
-    expect(chunks.flatMap((chunk) => chunk.degradationReasons)).toEqual([]);
+    expect(chunks.flatMap((chunk) => chunk.degradationReasons ?? [])).toEqual([]);
   });
 
   it("emits blocks InputRichMessage and email skip_entity_detection", () => {
@@ -751,29 +752,32 @@ describe("rich message plan wiring", () => {
   });
 
   it("passes skip_entity_detection through chunked rich messages", () => {
-    const chunks = splitTelegramRichMessageTextChunks({
+    const chunks = planTelegramTextDeliveryPages({
       text: `${"hello\n\n".repeat(10)}owner@example.com`,
-      textLimit: 32_768,
+      maxChars: 32_768,
+      richMessages: true,
     });
-    expect(chunks.some((chunk) => chunk.richMessage.skip_entity_detection === true)).toBe(true);
+    expect(chunks.some((chunk) => chunk.richMessage?.skip_entity_detection === true)).toBe(true);
   });
 
   it("applies the document-level skip flag to every chunk", () => {
     // An email anywhere disables linkification for the whole render, so chunks
     // without the email would otherwise expose unprotected file refs (README.md)
     // to Telegram's server-side entity detection.
-    const chunks = splitTelegramRichMessageTextChunks({
+    const chunks = planTelegramTextDeliveryPages({
       text: `see README.md for details\n\n${"filler ".repeat(20)}\n\nping owner@example.com`,
-      textLimit: 80,
+      maxChars: 80,
+      richMessages: true,
     });
     expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk.richMessage.skip_entity_detection === true)).toBe(true);
+    expect(chunks.every((chunk) => chunk.richMessage?.skip_entity_detection === true)).toBe(true);
   });
 
   it("sends readable source text when markdown projects to zero blocks", () => {
-    const chunks = splitTelegramRichMessageTextChunks({
+    const chunks = planTelegramTextDeliveryPages({
       text: "[ref]: https://example.com",
-      textLimit: 32_768,
+      maxChars: 32_768,
+      richMessages: true,
     });
     expect(chunks).toHaveLength(1);
     expect(chunks[0]?.plainText).toContain("example.com");

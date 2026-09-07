@@ -183,7 +183,7 @@ const replaceConfigFile = vi.hoisted(() =>
       nextConfig: OpenClawConfig;
       snapshot?: { hash?: string };
       baseHash?: string;
-    }) => ({ config: params.nextConfig }),
+    }) => ({ nextConfig: params.nextConfig }),
   ),
 );
 const resolveGatewayPort = vi.hoisted(() =>
@@ -655,7 +655,7 @@ describe("runSetupWizard", () => {
     replaceConfigFile.mockReset();
     replaceConfigFile.mockImplementation(async (params) => {
       authoredConfig = structuredClone(params.nextConfig);
-      return { config: params.nextConfig };
+      return { nextConfig: params.nextConfig };
     });
     probeGatewayReachable.mockReset();
     probeGatewayReachable.mockResolvedValue({ ok: false });
@@ -902,7 +902,7 @@ describe("runSetupWizard", () => {
       expect(params.baseHash).toBe(diskHash);
       diskConfig = structuredClone(params.nextConfig);
       diskHash = `hash-${Number(diskHash.slice(5)) + 1}`;
-      return { config: diskConfig };
+      return { nextConfig: diskConfig };
     });
     setupChannels.mockImplementationOnce(async (config) => {
       diskConfig = {
@@ -942,7 +942,7 @@ describe("runSetupWizard", () => {
       }
       diskConfig = structuredClone(params.nextConfig);
       diskHash = `committed-${writeAttempts}`;
-      return { config: diskConfig, persistedHash: diskHash };
+      return { nextConfig: diskConfig, persistedHash: diskHash };
     });
 
     await runWizard({ workspace: "/tmp/conflicting-onboarding-workspace" });
@@ -1817,7 +1817,7 @@ describe("runSetupWizard", () => {
       }
       diskConfig = structuredClone(params.nextConfig);
       diskHash = `pending-${writeAttempts + 1}`;
-      return { config: diskConfig, persistedHash: diskHash };
+      return { nextConfig: diskConfig, persistedHash: diskHash };
     });
 
     const workspaceDir = await makeCaseDir("plugin-install-migration-");
@@ -2978,7 +2978,7 @@ describe("runSetupWizard", () => {
       );
       replaceConfigFile.mockImplementation(async ({ nextConfig }) => {
         readConfigFileSnapshot.mockResolvedValue(configSnapshot(nextConfig));
-        return { config: nextConfig };
+        return { nextConfig };
       });
       applyAuthChoice.mockImplementationOnce(async (args) => ({
         config: {

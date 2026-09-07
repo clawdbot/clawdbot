@@ -311,6 +311,7 @@ export async function runProviderModelSelectedHookCore(params: {
   agentDir?: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  preparedProvider?: ProviderPlugin;
 }): Promise<void> {
   const rawModel = params.model.trim();
   if (!rawModel) {
@@ -325,12 +326,19 @@ export async function runProviderModelSelectedHookCore(params: {
     return;
   }
 
-  const setupProvider = resolvePluginSetupProviderCore({
-    provider: selectedProviderId,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
+  const preparedProvider =
+    params.preparedProvider &&
+    normalizeProviderId(params.preparedProvider.id) === selectedProviderId
+      ? params.preparedProvider
+      : undefined;
+  const setupProvider =
+    preparedProvider ??
+    resolvePluginSetupProviderCore({
+      provider: selectedProviderId,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    });
   const provider =
     setupProvider ??
     resolveProviderWizardProviders({

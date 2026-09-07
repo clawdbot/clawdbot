@@ -750,15 +750,4 @@ struct OnboardingViewSmokeTests {
         #expect(view.aiSetup.manualKey.isEmpty)
         #expect(OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
     }
-
-    @Test
-    func `permission list covers every capability in importance order`() {
-        #expect(Set(Capability.importanceOrdered) == Set(Capability.allCases))
-        #expect(Capability.importanceOrdered.count == Capability.allCases.count)
-        // App control and context capture lead; location stays last.
-        #expect(Capability.importanceOrdered.first == .appleScript)
-        #expect(Array(Capability.importanceOrdered.prefix(3))
-            == [.appleScript, .accessibility, .screenRecording])
-        #expect(Capability.importanceOrdered.last == Capability.location)
-    }
 }

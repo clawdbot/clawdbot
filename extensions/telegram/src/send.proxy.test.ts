@@ -177,8 +177,6 @@ describe("telegram proxy client", () => {
 
   it("reuses cached Telegram client options for repeated sends with same account transport settings", async () => {
     const { proxyFetch, fetchImpl: _fetchImpl } = prepareProxyFetch();
-    vi.stubEnv("VITEST", "");
-    vi.stubEnv("NODE_ENV", "production");
 
     await sendMessageTelegram("123", "first", {
       cfg: TELEGRAM_PROXY_CFG,
@@ -201,8 +199,6 @@ describe("telegram proxy client", () => {
   });
 
   it("closes the evicted Telegram transport when the client options cache exceeds its limit", async () => {
-    vi.stubEnv("VITEST", "");
-    vi.stubEnv("NODE_ENV", "production");
     const closeSpies: Array<ReturnType<typeof vi.fn>> = [];
     makeProxyFetch.mockImplementation(() => vi.fn() as unknown as typeof fetch);
     resolveTelegramTransport.mockImplementation(() => {
@@ -289,8 +285,6 @@ describe("telegram proxy client", () => {
       },
     },
   ])("defers closing an evicted Telegram transport until $name", async ({ setupFirstSend }) => {
-    vi.stubEnv("VITEST", "");
-    vi.stubEnv("NODE_ENV", "production");
     const closeSpies: Array<ReturnType<typeof vi.fn>> = [];
     makeProxyFetch.mockImplementation(() => vi.fn() as unknown as typeof fetch);
     resolveTelegramTransport.mockImplementation(() => {
@@ -347,8 +341,6 @@ describe("telegram proxy client", () => {
   });
 
   it("defers closing an evicted Telegram transport while media loads before the first API request", async () => {
-    vi.stubEnv("VITEST", "");
-    vi.stubEnv("NODE_ENV", "production");
     const closeSpies: Array<ReturnType<typeof vi.fn>> = [];
     makeProxyFetch.mockImplementation(() => vi.fn() as unknown as typeof fetch);
     resolveTelegramTransport.mockImplementation(() => {
@@ -419,8 +411,6 @@ describe("telegram proxy client", () => {
   });
 
   it("defers closing an evicted Telegram transport while reactions persist a resolved target before the first action request", async () => {
-    vi.stubEnv("VITEST", "");
-    vi.stubEnv("NODE_ENV", "production");
     const closeSpies: Array<ReturnType<typeof vi.fn>> = [];
     makeProxyFetch.mockImplementation(() => vi.fn() as unknown as typeof fetch);
     resolveTelegramTransport.mockImplementation(() => {
@@ -481,9 +471,6 @@ describe("telegram proxy client", () => {
   });
 
   it("does not allocate cached client transport when a Telegram API override is provided", async () => {
-    vi.stubEnv("VITEST", "");
-    vi.stubEnv("NODE_ENV", "production");
-
     await reactMessageTelegram("123", "456", "✅", {
       cfg: TELEGRAM_PROXY_CFG,
       token: "tok",

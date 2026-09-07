@@ -1,5 +1,6 @@
 // Codex catalog terminal ownership: validated native start/resume commands and plans.
-import { resolveAgentDir, resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-harness-registration";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { decodeNodePtyResumeParams, decodeNodePtyStartParams } from "openclaw/plugin-sdk/node-host";
 import type {
@@ -9,7 +10,7 @@ import type {
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SessionCatalogTerminalPlan } from "openclaw/plugin-sdk/session-catalog";
 import { resolveCodexAppServerLocalHomeDir } from "./app-server/auth-start-options.js";
-import { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config.js";
+import type { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config-runtime.js";
 import type { CodexCatalogHome } from "./session-catalog-homes.js";
 import {
   CatalogParamsError,
@@ -70,6 +71,7 @@ export function createCodexTerminalStartNodeHostCommand(): OpenClawPluginNodeHos
 export type CodexTerminalConfigSources = {
   getPluginConfig: () => unknown;
   getRuntimeConfig: () => OpenClawConfig | undefined;
+  resolveRuntimeOptions: typeof resolveCodexSupervisionAppServerRuntimeOptions;
 };
 
 function resolveCodexCatalogTerminalHome(
@@ -86,7 +88,7 @@ function resolveCodexCatalogTerminalHome(
       : resolveDefaultAgentDir(runtimeConfig));
   const startOptions =
     sources.source?.appServer.start ??
-    resolveCodexSupervisionAppServerRuntimeOptions({
+    sources.resolveRuntimeOptions({
       pluginConfig: sources.getPluginConfig(),
     }).start;
   return resolveCodexAppServerLocalHomeDir(startOptions, agentDir);

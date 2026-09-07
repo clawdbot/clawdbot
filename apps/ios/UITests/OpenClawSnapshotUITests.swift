@@ -84,6 +84,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
         let delivery = app.buttons.containing(.staticText, identifier: "Message Delivery").firstMatch
         XCTAssertTrue(delivery.waitForExistence(timeout: 8))
         self.attachScreenshot(named: "watch-delivery-settings")
+        XCTAssertTrue(app.buttons["Connect Apple Watch"].exists)
+        XCTAssertFalse(app.buttons["Enable Standalone Voice"].exists)
+        XCTAssertFalse(app.buttons["Enable Direct Gateway Connection"].exists)
         delivery.tap()
         XCTAssertTrue(app.navigationBars["Message Delivery"].waitForExistence(timeout: 8))
         let loaded = app.descendants(matching: .any).matching(NSPredicate(

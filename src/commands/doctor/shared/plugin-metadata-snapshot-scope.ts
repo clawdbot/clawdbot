@@ -93,23 +93,30 @@ export function createDoctorPluginMetadataSnapshotScope(params: {
   };
 
   const resolveSnapshot = (config: OpenClawConfig, workspaceDir: string | undefined) => {
-    const current = snapshotsByWorkspace.get(workspaceDir);
-    if (
-      current &&
-      isPluginMetadataSnapshotCompatible({
-        snapshot: current,
-        config,
-        env,
-        workspaceDir,
-      })
-    ) {
-      const snapshot = resolveConfigWideDoctorPluginMetadataSnapshot({
-        snapshot: current,
-        config,
-        env,
-      });
-      snapshotsByWorkspace.set(workspaceDir, snapshot);
-      return snapshot;
+    // An unqualified operation inherits compatible prepared context, not the system workspace.
+    // Explicit workspace requests and narrower bases must retain their exact scope.
+    const inheritedBase =
+      workspaceDir === undefined && currentBaseSnapshot?.pluginIds === undefined
+        ? currentBaseSnapshot
+        : undefined;
+    for (const current of [snapshotsByWorkspace.get(workspaceDir), inheritedBase]) {
+      if (
+        current &&
+        isPluginMetadataSnapshotCompatible({
+          snapshot: current,
+          config,
+          env,
+          workspaceDir: workspaceDir ?? current.workspaceDir,
+        })
+      ) {
+        const snapshot = resolveConfigWideDoctorPluginMetadataSnapshot({
+          snapshot: current,
+          config,
+          env,
+        });
+        snapshotsByWorkspace.set(workspaceDir, snapshot);
+        return snapshot;
+      }
     }
     const snapshot = resolveConfigWideDoctorPluginMetadataSnapshot({
       snapshot: loadPluginMetadataSnapshot({

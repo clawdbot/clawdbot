@@ -1493,15 +1493,16 @@ describe("runPreparedReply media-only handling", () => {
         allowTextCommands: enabled,
       });
       params.command = { ...params.command, isAuthorizedSender: authorized };
+      const inbound = finalizeInboundContext(params.ctx);
       const routed = resolveReplyDirectiveRouting({
-        commandText: body,
-        agentText: body,
+        commandText: inbound.commandText,
+        agentText: inbound.agentText,
         modelAliases: [],
         canInterpretTextDirectives: authorized && enabled,
         isAuthorizedSender: authorized,
         isGroup: false,
         wasMentioned: false,
-        ctx: finalizeInboundContext(params.ctx),
+        ctx: inbound,
         cfg: params.cfg,
         agentId: params.agentId,
         resetTriggered: false,
@@ -1510,7 +1511,7 @@ describe("runPreparedReply media-only handling", () => {
       params.sessionCtx.agentText = routed.cleanedBody;
       await runPreparedReply(params);
 
-      const expected = authorized && enabled ? code : body;
+      const expected = (authorized && enabled ? code : body).replaceAll("\r\n", "\n");
       const call = requireRunReplyAgentCall();
       expect(call.commandBody).toBe(expected);
       expect(call.followupRun.prompt).toBe(expected);

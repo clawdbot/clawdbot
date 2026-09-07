@@ -51,7 +51,7 @@ Mobile browsers may show the section menu without the full desktop tab bar. Use
 these hub links to reach the same top-level docs areas from the page body.
 
 <Columns>
-  <Card title="Get started" href="/" icon="rocket">
+  <Card title="Get started" href="/start/getting-started" icon="rocket">
     Overview, showcase, first steps, and setup guides.
   </Card>
   <Card title="Install" href="/install" icon="download">
@@ -144,19 +144,40 @@ The Gateway is the single source of truth for sessions, routing, and channel con
 
 <Steps>
   <Step title="Install OpenClaw">
-    On npm 12 or npm 11.16+:
+    <Tabs>
+      <Tab title="macOS / Linux / WSL2">
+        ```bash
+        curl -fsSL https://openclaw.ai/install.sh | bash
+        ```
+      </Tab>
+      <Tab title="Windows (PowerShell)">
+        ```powershell
+        iwr -useb https://openclaw.ai/install.ps1 | iex
+        ```
+      </Tab>
+    </Tabs>
 
-    ```bash
-    npm install -g openclaw@latest --allow-scripts=openclaw
-    ```
-
-    On npm 11.15 and earlier, omit `--allow-scripts=openclaw`.
+    The installer detects your OS, installs Node if needed, installs OpenClaw,
+    and then starts onboarding. Other install methods (npm, pnpm, bun, Docker,
+    Nix, from source) are on the [Install](/install) page.
 
   </Step>
-  <Step title="Onboard and install the service">
+  <Step title="Complete onboarding">
+    Onboarding offers **Quick start** and **Custom setup**. Quick start reuses
+    detected AI access, verifies it with a real completion, and opens the web
+    dashboard with a Gateway in the foreground. Custom setup walks the full
+    guided flow. `openclaw onboard --classic` opens the classic step-by-step
+    wizard instead.
+
+  </Step>
+  <Step title="Install the Gateway service">
+    Quick start leaves the Gateway in the foreground. Press **Ctrl+C**, then
+    install the background service:
+
     ```bash
-    openclaw onboard --install-daemon
+    openclaw gateway install
     ```
+
   </Step>
   <Step title="Chat">
     Open the Control UI in your browser and send a message:
@@ -216,7 +237,7 @@ Example:
   <Card title="Remote access" href="/gateway/remote" icon="globe">
     SSH and tailnet access patterns.
   </Card>
-  <Card title="Channels" href="/channels/telegram" icon="message-square">
+  <Card title="Channels" href="/channels" icon="message-square">
     Channel-specific setup for Discord, Feishu, Microsoft Teams, Telegram, WhatsApp, and more.
   </Card>
   <Card title="Nodes" href="/nodes" icon="smartphone">

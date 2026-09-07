@@ -11,6 +11,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { redactToolPayloadText } from "../logging/redact.js";
+import { isAgentPlanProgressToolName } from "../session-cards/progress-card-channel-summary.js";
 import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
 
 type ToolDisplayActionSpec = {
@@ -94,6 +95,10 @@ export function resolveToolVerbAndDetailForArgs(params: {
   detailMaxEntries?: number;
   detailFormatKey?: (raw: string) => string;
 }): { verb?: string; detail?: string } {
+  // Card arguments belong to the card renderer; generic summaries must not expose them.
+  if (isAgentPlanProgressToolName(params.toolKey)) {
+    return {};
+  }
   return resolveToolVerbAndDetail({
     toolKey: params.toolKey,
     args: params.args,

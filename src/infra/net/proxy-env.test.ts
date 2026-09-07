@@ -320,6 +320,30 @@ describe("matchesNoProxy", () => {
       expected: true,
     },
     {
+      name: "matches zero-valued IPv4 addresses",
+      url: "http://0.0.0.0/",
+      env: { NO_PROXY: "0.*" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "matches high-bit IPv4 wildcard octets",
+      url: "http://255.128.64.32/",
+      env: { NO_PROXY: "255.*.64.32" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "matches IPv4 CIDR with a zero-length prefix",
+      url: "http://255.128.64.32/",
+      env: { NO_PROXY: "0.0.0.0/0" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "matches IPv4 CIDR with a full-length prefix",
+      url: "http://255.128.64.32/",
+      env: { NO_PROXY: "255.128.64.32/32" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
       name: "matches IPv4 wildcard octet entries",
       url: "http://100.64.0.3:8990/v1/messages",
       env: { NO_PROXY: "100.64.*" } as NodeJS.ProcessEnv,

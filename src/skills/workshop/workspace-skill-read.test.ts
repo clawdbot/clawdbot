@@ -6,6 +6,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+import { loadSkillRootRecords } from "../loading/skill-root-loader.js";
 import { proposeUpdateSkill } from "./service.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import {
@@ -38,6 +39,77 @@ async function writeSkill(dir: string, name: string, body = ""): Promise<void> {
 }
 
 describe("listWritableWorkshopSkillSummaries", () => {
+  it("returns an empty collection before its directory exists", () => {
+    expect(
+      listWritableWorkshopSkillSummaries({ config: {}, agentId: "main", env: testState.env }),
+    ).toEqual([]);
+  });
+
+  it
+    .runIf(process.platform !== "win32" && process.getuid?.() !== 0)
+    .each(["root", "group", "skill file"])(
+    "reports an unreadable %s instead of an empty collection",
+    async (target) => {
+      const workshopDir = resolveWorkshopSkillsDir({}, "main", testState.env);
+      const groupDir = path.join(workshopDir, "group");
+      const skillDir = path.join(groupDir, "release-review");
+      await writeSkill(skillDir, "release-review");
+      const deniedPath =
+        target === "root"
+          ? workshopDir
+          : target === "group"
+            ? groupDir
+            : path.join(skillDir, "SKILL.md");
+      const originalMode = (await fs.stat(deniedPath)).mode;
+      await fs.chmod(deniedPath, 0o000);
+      try {
+        expect(() =>
+          listWritableWorkshopSkillSummaries({ config: {}, agentId: "main", env: testState.env }),
+        ).toThrow(/Workshop skills could not be read/);
+      } finally {
+        await fs.chmod(deniedPath, originalMode);
+      }
+      expect(
+        listWritableWorkshopSkillSummaries({ config: {}, agentId: "main", env: testState.env }).map(
+          (skill) => skill.name,
+        ),
+      ).toEqual(["release-review"]);
+    },
+  );
+
+  it.each(
+    [false, true].flatMap((rootManifest) =>
+      [["real"], ["skills"], ["real", "skills"]].map((names) => ({ rootManifest, names })),
+    ),
+  )(
+    "discovers Workshop children $names with root manifest=$rootManifest",
+    async ({ rootManifest, names }) => {
+      const workshopDir = resolveWorkshopSkillsDir({}, "main", testState.env);
+      for (const name of names) {
+        await writeSkill(path.join(workshopDir, name), name);
+      }
+      if (rootManifest) {
+        await fs.writeFile(path.join(workshopDir, "SKILL.md"), "# Root skill\n");
+      }
+
+      expect(
+        listWritableWorkshopSkillSummaries({ config: {}, agentId: "main", env: testState.env }).map(
+          (skill) => skill.name,
+        ),
+      ).toEqual(names);
+      expect(
+        loadSkillRootRecords({ dir: workshopDir, source: "openclaw-workshop" }).map(
+          ({ skill }) => skill.name,
+        ),
+      ).toEqual(names);
+      for (const name of names) {
+        await expect(
+          readWritableWorkshopSkill(name, { config: {}, agentId: "main", env: testState.env }),
+        ).resolves.toMatchObject({ skillName: name, baseDir: path.join(workshopDir, name) });
+      }
+    },
+  );
+
   it("uses the declared name for grouped skills when reading and updating", async () => {
     const baseDir = path.join(
       resolveWorkshopSkillsDir({}, "main", testState.env),
@@ -128,5 +200,18 @@ describe("listWritableWorkshopSkillSummaries", () => {
         (skill) => skill.name,
       ),
     ).toEqual(["inside"]);
+  });
+
+  it("keeps valid siblings when a skill has invalid frontmatter", async () => {
+    const workshopDir = resolveWorkshopSkillsDir({}, "main", testState.env);
+    await writeSkill(path.join(workshopDir, "valid"), "valid");
+    await fs.mkdir(path.join(workshopDir, "invalid"));
+    await fs.writeFile(path.join(workshopDir, "invalid", "SKILL.md"), "---\nname: invalid\n---\n");
+
+    expect(
+      listWritableWorkshopSkillSummaries({ config: {}, agentId: "main", env: testState.env }).map(
+        (skill) => skill.name,
+      ),
+    ).toEqual(["valid"]);
   });
 });

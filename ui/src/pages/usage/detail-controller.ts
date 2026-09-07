@@ -1,4 +1,3 @@
-import { initialState, Task, TaskStatus } from "@lit/task";
 import type { ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
@@ -14,6 +13,7 @@ import {
 } from "../../lib/sessions/usage.ts";
 import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { failUsageDetailRefresh } from "./detail-refresh.ts";
+import { createUsageRequest } from "./request.ts";
 import type { SessionLogEntry, UsageSessionEntry } from "./types.ts";
 
 function createUsageDetailRequest<T>(
@@ -24,13 +24,11 @@ function createUsageDetailRequest<T>(
 ) {
   let value: { sessionKey: string; data: T } | null = null;
   let status = createPanelRefreshStatus();
-  const task = new Task(host, {
-    autoRun: false,
-    args: (): readonly [GatewayBrowserClient | null, string] => [null, ""],
-    task: async ([client, sessionKey], { signal }) =>
-      client && sessionKey
-        ? { sessionKey, data: await request(client, sessionKey, signal) }
-        : initialState,
+  const task = createUsageRequest(host, {
+    task: async ([client, sessionKey]: readonly [GatewayBrowserClient, string], { signal }) => ({
+      sessionKey,
+      data: await request(client, sessionKey, signal),
+    }),
     onComplete: (result) => {
       value = result;
       status = completePanelRefresh();
@@ -44,10 +42,6 @@ function createUsageDetailRequest<T>(
     },
   });
 
-  const cancel = () => {
-    // A null-client run fences late completions while retaining the last displayed detail.
-    void task.run([null, ""]);
-  };
   return {
     get data() {
       return value?.data ?? null;
@@ -56,30 +50,30 @@ function createUsageDetailRequest<T>(
       return status;
     },
     get loading() {
-      return task.status === TaskStatus.PENDING;
+      return task.pending;
     },
     load(sessionKey: string): Promise<void> {
       const client = gateway.client;
       if (!client || !gateway.connected) {
         return Promise.resolve();
       }
-      const enabled = canLoad?.(sessionKey) !== false;
+      const enabled = Boolean(sessionKey) && canLoad?.(sessionKey) !== false;
       if (value?.sessionKey !== sessionKey || !enabled) {
         value = null;
         status = createPanelRefreshStatus();
       }
       if (!enabled) {
-        cancel();
+        task.cancel();
         return Promise.resolve();
       }
       status = beginPanelRefresh(status);
       return task.run([client, sessionKey]);
     },
-    cancel,
+    cancel: task.cancel,
     clear() {
       value = null;
       status = createPanelRefreshStatus();
-      cancel();
+      task.cancel();
     },
   };
 }

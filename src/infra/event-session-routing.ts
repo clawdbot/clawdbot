@@ -56,12 +56,6 @@ function readAccountConfig(value: unknown): UnknownRecord | undefined {
   return isRecord(value) && isRecord(value.config) ? value.config : undefined;
 }
 
-function firstConfiguredAllowFrom(
-  ...candidates: Array<Array<string | number> | undefined>
-): Array<string | number> | undefined {
-  return candidates.find((candidate) => candidate !== undefined);
-}
-
 function normalizeEntry(value: string): string | undefined {
   return normalizeLowercaseStringOrEmpty(value) || undefined;
 }
@@ -96,7 +90,7 @@ function parseDirectAgentSessionTarget(
 /** Resolve the configured DM allowlist that applies to an event session. */
 function resolveEventSessionAllowFrom(params: {
   cfg?: OpenClawConfig;
-  sessionKey?: string | null;
+  target: DirectSessionTarget | null;
   channel?: string | null;
   accountId?: string | null;
 }): Array<string | number> | undefined {
@@ -104,8 +98,7 @@ function resolveEventSessionAllowFrom(params: {
   if (!cfg?.channels) {
     return undefined;
   }
-  const target = parseDirectAgentSessionTarget(params.sessionKey);
-  const channelKey = normalizeLowercaseStringOrEmpty(params.channel ?? target?.channel);
+  const channelKey = normalizeLowercaseStringOrEmpty(params.channel ?? params.target?.channel);
   if (!channelKey) {
     return undefined;
   }
@@ -113,17 +106,17 @@ function resolveEventSessionAllowFrom(params: {
   if (!isRecord(channelConfig)) {
     return undefined;
   }
-  const accountId = normalizeLowercaseStringOrEmpty(params.accountId ?? target?.accountId);
+  const accountId = normalizeLowercaseStringOrEmpty(params.accountId ?? params.target?.accountId);
   const accountConfig =
     accountId && isRecord(channelConfig.accounts) ? channelConfig.accounts[accountId] : undefined;
   const accountNestedConfig = readAccountConfig(accountConfig);
-  return firstConfiguredAllowFrom(
-    readDmAllowFrom(accountConfig),
-    readDmAllowFrom(accountNestedConfig),
-    readAllowFrom(accountConfig),
-    readAllowFrom(accountNestedConfig),
-    readDmAllowFrom(channelConfig),
-    readAllowFrom(channelConfig),
+  return (
+    readDmAllowFrom(accountConfig) ??
+    readDmAllowFrom(accountNestedConfig) ??
+    readAllowFrom(accountConfig) ??
+    readAllowFrom(accountNestedConfig) ??
+    readDmAllowFrom(channelConfig) ??
+    readAllowFrom(channelConfig)
   );
 }
 
@@ -174,7 +167,7 @@ export function resolveEventSessionRoutingPolicy(params: {
     params.allowFrom ??
     resolveEventSessionAllowFrom({
       cfg: params.cfg,
-      sessionKey: params.sessionKey,
+      target,
       channel,
       accountId,
     });
@@ -206,9 +199,8 @@ export function resolveMainScopedEventSessionKey(params: {
   if (!sessionKey || params.policy?.preserveSessionKey === true) {
     return null;
   }
-  const parsed = parseAgentSessionKey(sessionKey);
   const target = parseDirectAgentSessionTarget(sessionKey);
-  if (!parsed || !target) {
+  if (!target) {
     return null;
   }
   const resolvedAgentId = normalizeAgentId(params.agentId ?? target.agentId);

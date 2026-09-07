@@ -18,6 +18,7 @@ import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../src/gateway/control-ui-root-as
 import { controlUiCodeSplitting } from "./config/control-ui-chunking.ts";
 import { controlUiHoverGuardPlugin } from "./config/control-ui-hover-guard.ts";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
+import { controlUiSocialCardPlugin } from "./config/control-ui-social-card.ts";
 import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./src/build-info.ts";
 
@@ -315,6 +316,7 @@ function sourcePackageAlias(packageId: string, subpath?: string): ControlUiViteA
 export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
   return [
     sourcePackageAlias("normalization-core", "agent-id"),
+    sourcePackageAlias("normalization-core", "code-points"),
     sourcePackageAlias("normalization-core", "json-schema"),
     sourcePackageAlias("normalization-core", "markdown-plain-text"),
     sourcePackageAlias("normalization-core", "number-coercion"),
@@ -327,6 +329,7 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
     sourcePackageAlias("normalization-core"),
     sourcePackageAlias("session-url-contract", "parse"),
     sourcePackageAlias("session-url-contract", "share-build"),
+    sourcePackageAlias("session-url-contract", "public-share"),
     sourcePackageAlias("session-url-contract"),
     sourcePackageAlias("workboard-contract"),
   ];
@@ -614,6 +617,7 @@ export default function controlUiViteConfig(options: { outDir?: string } = {}): 
       strictPort: true,
     },
     plugins: [
+      controlUiSocialCardPlugin(),
       controlUiLocaleModulesPlugin(),
       controlUiBrowserOnlySharedModuleAliases(),
       controlUiPrecompressedAssetsPlugin(buildOutDir),
