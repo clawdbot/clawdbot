@@ -188,25 +188,78 @@ function toCatalogEntry(
 }
 
 function shouldCatalogTool(tool: AnyAgentTool): boolean {
-  return !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name) && tool.catalogMode !== "direct-only";
+  return !(TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name) || tool.catalogMode === "direct-only");
 }
 
-/**
- * Core file/shell primitives and caller-required names (e.g. message when it is
- * the only reply path) stay visible while remaining searchable. Both must
- * resolve to trusted OpenClaw tools: an MCP lookalike must never become a
- * direct delivery or core-coding tool.
- */
-export function isDirectVisibleCatalogTool(
-  tool: AnyAgentTool,
-  directToolNames: ReadonlySet<string>,
-): boolean {
+/** Trusted core file/shell tools. Structured Tool Search keeps these native; Code Mode still catalogs them. */
+export function isTrustedCoreCodingSurfaceTool(tool: AnyAgentTool): boolean {
   const classified = classifyTool(tool);
   return (
     classified.source === "openclaw" &&
-    (directToolNames.has(tool.name) ||
-      (isCoreCodingSurfaceToolName(tool.name) && classified.sourceName === "core"))
+    classified.sourceName === "core" &&
+    isCoreCodingSurfaceToolName(tool.name)
   );
+}
+
+/**
+ * Core file/shell primitives stay native on the structured surface. Record the
+ * exact visible instances so tool_call can resolve `id: "read"` without also
+ * listing them in the deferred catalog next to tool_call. An MCP lookalike
+ * never becomes a native core tool.
+ */
+function collectDirectCoreCodingEntries(tools: readonly AnyAgentTool[]): ToolSearchCatalogEntry[] {
+  const present = new Map<string, AnyAgentTool>();
+  for (const tool of tools) {
+    if (isTrustedCoreCodingSurfaceTool(tool)) {
+      present.set(tool.name, tool);
+    }
+  }
+  return ["read", "write", "edit", "apply_patch", "exec", "process"].flatMap((name) => {
+    const tool = present.get(name);
+    return tool ? [toCatalogEntry(tool)] : [];
+  });
+}
+
+function attachDirectCoreCodingEntries(
+  catalog: ToolSearchCatalogSession,
+  visible: readonly AnyAgentTool[],
+): void {
+  const entries = collectDirectCoreCodingEntries(visible);
+  catalog.directCoreEntries = entries;
+  catalog.directCoreToolNames = entries.map((entry) => entry.name);
+}
+
+/** Resolve a native core tool kept visible but omitted from catalog listings. */
+export function resolveNativeCoreCatalogEntry(
+  catalog: ToolSearchCatalogSession,
+  needle: string,
+  options: { exactIdOnly?: boolean } = {},
+): ToolSearchCatalogEntry | undefined {
+  const matches = (catalog.directCoreEntries ?? []).filter((entry) =>
+    options.exactIdOnly ? entry.id === needle : entry.id === needle || entry.name === needle,
+  );
+  if (matches.length > 1) {
+    throw new ToolInputError(`Ambiguous tool name: ${needle}; use an exact tool id.`);
+  }
+  return matches[0];
+}
+
+export function isDirectVisibleCatalogTool(
+  tool: AnyAgentTool,
+  directToolNames: ReadonlySet<string>,
+  options: { includeTrustedCore?: boolean } = {},
+): boolean {
+  const classified = classifyTool(tool);
+  if (classified.source !== "openclaw") {
+    return false;
+  }
+  if (directToolNames.has(tool.name)) {
+    return true;
+  }
+  if (options.includeTrustedCore === false) {
+    return false;
+  }
+  return isCoreCodingSurfaceToolName(tool.name) && classified.sourceName === "core";
 }
 
 export function registerHeadlessToolSearchCatalog(params: {
@@ -290,6 +343,8 @@ function registerToolSearchCatalog(params: {
     searchCount: prior?.searchCount ?? 0,
     describeCount: prior?.describeCount ?? 0,
     callCount: prior?.callCount ?? 0,
+    directCoreToolNames: prior?.directCoreToolNames ?? [],
+    directCoreEntries: prior?.directCoreEntries ?? [],
   };
   // Finalization can narrow schemas after last-write-wins registration.
   catalogMetadata.set(next, {
@@ -335,6 +390,7 @@ export function restrictToolSearchCatalog(params: {
   catalogRef?: ToolSearchCatalogRef;
   allowedToolNames: ReadonlySet<string>;
   baselineEntries?: readonly ToolSearchCatalogEntry[];
+  baselineDirectCoreEntries?: readonly ToolSearchCatalogEntry[];
 }): number {
   const current = params.catalogRef?.current;
   if (!current) {
@@ -347,13 +403,27 @@ export function restrictToolSearchCatalog(params: {
     ),
     metadata?.toolExecutionAllow,
   );
-  if (
+  // Native-core fallback is a second callable surface. Apply the same
+  // allowlist as catalog.entries so a narrowed toolsAllow cannot still
+  // reach exec through tool_call after it left the visible tool list.
+  const directCoreEntries = (
+    params.baselineDirectCoreEntries ??
+    current.directCoreEntries ??
+    []
+  ).filter((entry) => params.allowedToolNames.has(entry.name));
+  const entriesUnchanged =
     entries.length === current.entries.length &&
-    entries.every((entry, index) => entry === current.entries[index])
-  ) {
+    entries.every((entry, index) => entry === current.entries[index]);
+  const currentDirectCore = current.directCoreEntries ?? [];
+  const directCoreUnchanged =
+    directCoreEntries.length === currentDirectCore.length &&
+    directCoreEntries.every((entry, index) => entry === currentDirectCore[index]);
+  if (entriesUnchanged && directCoreUnchanged) {
     return entries.length;
   }
   current.entries = entries;
+  current.directCoreEntries = directCoreEntries;
+  current.directCoreToolNames = directCoreEntries.map((entry) => entry.name);
   catalogMetadata.set(current, {
     ...metadata,
     fingerprint: catalogEntriesFingerprint(current.entries),
@@ -498,12 +568,16 @@ export function applyToolCatalogCompaction(
       : undefined;
   if (existingCatalog && reboundEntries) {
     existingCatalog.entries = reboundEntries;
+    attachDirectCoreCodingEntries(existingCatalog, visible);
   } else {
     registerToolSearchCatalog({
       catalogRef,
       entries: catalog,
       toolExecutionAllow: params.toolExecutionAllow,
     });
+    if (catalogRef.current) {
+      attachDirectCoreCodingEntries(catalogRef.current, visible);
+    }
   }
   return {
     tools: visible,

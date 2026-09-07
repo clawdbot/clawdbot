@@ -25,6 +25,7 @@ import {
 } from "./agent-tools.before-tool-call.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
+import { createAgentHarnessPromptToolPolicy } from "./harness/prompt-tool-policy.js";
 import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
 import {
@@ -1001,7 +1002,7 @@ describe("Tool Search", () => {
     expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["message"]);
   });
 
-  it("keeps core coding tools visible while still cataloging them", () => {
+  it("keeps core coding tools visible without cataloging them", () => {
     const catalogRef = createToolSearchCatalogRef();
     const compacted = applyToolSearchCatalog({
       tools: [
@@ -1025,9 +1026,25 @@ describe("Tool Search", () => {
       "edit",
       "exec",
     ]);
-    // Core tools stay searchable alongside deferred tools (catalog order is deterministic).
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_lookup"]);
+  });
+
+  it("catalogs core coding tools in Tool Search code mode", () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const compacted = applyToolSearchCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode"),
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool("read", "Read files"),
+        fakeTool("exec", "Run shell"),
+        pluginTool("fake_lookup", "Look up a record"),
+      ],
+      config: { tools: { toolSearch: { enabled: true, mode: "code" } } } as never,
+      catalogRef,
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME]);
     expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual([
-      "edit",
       "exec",
       "read",
       "fake_lookup",
@@ -1076,10 +1093,7 @@ describe("Tool Search", () => {
       TOOL_CALL_RAW_TOOL_NAME,
       "write",
     ]);
-    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual([
-      "write",
-      "fake_lookup",
-    ]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_lookup"]);
   });
 
   it("keeps direct-only tools visible in schema-directory mode", () => {
@@ -1116,6 +1130,24 @@ describe("Tool Search", () => {
     });
 
     expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_lookup"]);
+  });
+
+  it("catalogs core coding tools in headless catalogs", () => {
+    const catalogRef = createToolSearchCatalogRef();
+    registerHeadlessToolSearchCatalog({
+      catalogRef,
+      tools: [
+        fakeTool("read", "Read files"),
+        fakeTool("exec", "Run shell"),
+        pluginTool("fake_lookup", "Look up a record"),
+      ],
+    });
+
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual([
+      "exec",
+      "read",
+      "fake_lookup",
+    ]);
   });
 
   it.each([
@@ -1194,51 +1226,130 @@ describe("Tool Search", () => {
     {
       mode: "code" as const,
       expectedGuidance: "Use tool_search_code with openclaw.tools.search(query)",
+      expectedDeferredGuidance: undefined,
     },
     {
       mode: "tools" as const,
-      expectedGuidance: "Deferred names are not directly callable.",
+      expectedGuidance: "Call read, write, edit, apply_patch, exec, and process directly",
+      expectedDeferredGuidance: "Deferred names are not directly callable.",
     },
     {
       mode: "directory" as const,
-      expectedGuidance: "Call a unique deferred tool name directly, or use tool_call",
+      expectedGuidance: "Call read, write, edit, apply_patch, exec, and process directly",
+      expectedDeferredGuidance: "Call a unique deferred tool name directly, or use tool_call",
     },
-  ])("builds a bounded capability directory for $mode mode", ({ mode, expectedGuidance }) => {
+  ])(
+    "builds a bounded capability directory for $mode mode",
+    ({ mode, expectedGuidance, expectedDeferredGuidance }) => {
+      const catalogRef = createToolSearchCatalogRef();
+      const config = { tools: { toolSearch: { enabled: true, mode } } } as never;
+      const controls = [
+        fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode"),
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+      ];
+      const tools = [
+        ...controls,
+        fakeTool("read", "Read a file"),
+        fakeTool("write", "Write a file"),
+        fakeTool("edit", "Edit a file"),
+        fakeTool("apply_patch", "Apply a patch"),
+        fakeTool("exec", "Run a command"),
+        fakeTool("process", "Manage a process"),
+        pluginTool("fake_weather", "Read current weather"),
+        pluginTool("fake_calendar", "Schedule a calendar event"),
+        directOnlyTool("computer", "Control a desktop"),
+      ];
+
+      if (mode === "directory") {
+        applyToolSchemaDirectoryCatalog({ tools, config, catalogRef });
+      } else {
+        applyToolSearchCatalog({ tools, config, catalogRef });
+      }
+
+      const directory = buildToolSchemaDirectoryPrompt({ config, catalogRef });
+
+      expect(directory).toContain("- fake_calendar (fake-catalog): Schedule a calendar event");
+      expect(directory).toContain("- fake_weather (fake-catalog): Read current weather");
+      expect(directory.indexOf("- fake_calendar")).toBeLessThan(
+        directory.indexOf("- fake_weather"),
+      );
+      expect(directory).toContain(expectedGuidance);
+      if (expectedDeferredGuidance) {
+        expect(directory).toContain(expectedDeferredGuidance);
+      }
+      expect(directory).toContain("apply_patch");
+      expect(directory).toContain("process");
+      expect(directory).toContain("Policy-approved MCP and client tools");
+      expect(directory).not.toContain("Control a desktop");
+      expect(directory).not.toContain('"properties"');
+      expect(directory.length).toBeLessThanOrEqual(testing.maxToolSchemaDirectoryPromptChars);
+    },
+  );
+
+  it("names only the core coding tools still visible after policy filtering", () => {
     const catalogRef = createToolSearchCatalogRef();
-    const config = { tools: { toolSearch: { enabled: true, mode } } } as never;
-    const controls = [
-      fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode"),
-      fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
-      fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
-      fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
-    ];
-    const tools = [
-      ...controls,
-      pluginTool("fake_weather", "Read current weather"),
-      pluginTool("fake_calendar", "Schedule a calendar event"),
-      directOnlyTool("computer", "Control a desktop"),
-    ];
-
-    if (mode === "directory") {
-      applyToolSchemaDirectoryCatalog({ tools, config, catalogRef });
-    } else {
-      applyToolSearchCatalog({ tools, config, catalogRef });
-    }
-
+    const config = { tools: { toolSearch: { enabled: true, mode: "tools" } } } as never;
+    applyToolSearchCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        fakeTool("read", "Read a file"),
+        pluginTool("fake_weather", "Read current weather"),
+      ],
+      config,
+      catalogRef,
+    });
     const directory = buildToolSchemaDirectoryPrompt({ config, catalogRef });
+    expect(directory).toContain("Call read directly.");
+    expect(directory).not.toContain("exec");
+    expect(directory).not.toContain("apply_patch");
+    expect(directory).not.toContain("process");
+  });
 
-    expect(directory).toContain("- fake_calendar (fake-catalog): Schedule a calendar event");
-    expect(directory).toContain("- fake_weather (fake-catalog): Read current weather");
-    expect(directory.indexOf("- fake_calendar")).toBeLessThan(directory.indexOf("- fake_weather"));
-    expect(directory).toContain(expectedGuidance);
-    expect(directory).toContain("Policy-approved MCP and client tools");
-    expect(directory).not.toContain("Control a desktop");
-    expect(directory).not.toContain('"properties"');
-    expect(directory.length).toBeLessThanOrEqual(testing.maxToolSchemaDirectoryPromptChars);
+  it("keeps Call read directly when the deferred catalog is empty", () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = { tools: { toolSearch: { enabled: true, mode: "tools" } } } as never;
+    applyToolSearchCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        fakeTool("read", "Read a file"),
+      ],
+      config,
+      catalogRef,
+    });
+    expect(catalogRef.current?.entries ?? []).toEqual([]);
+    const directory = buildToolSchemaDirectoryPrompt({ config, catalogRef });
+    expect(directory).toContain("Available deferred-schema tools: none.");
+    expect(directory).toContain("Call read directly.");
+    expect(directory).not.toContain("exec");
+  });
+
+  it("omits direct-call guidance when no core coding tools are visible", () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = { tools: { toolSearch: { enabled: true, mode: "tools" } } } as never;
+    applyToolSearchCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        pluginTool("fake_weather", "Read current weather"),
+      ],
+      config,
+      catalogRef,
+    });
+    const directory = buildToolSchemaDirectoryPrompt({ config, catalogRef });
+    expect(directory).not.toContain("Call read");
+    expect(directory).not.toContain("apply_patch");
+    expect(directory).toContain("Use tool_search for a compact input signature or tool_describe");
   });
 
   it.each(["tools", "directory"] as const)(
-    "lists only deferred tools while keeping direct tools searchable in %s mode",
+    "lists only deferred tools while keeping native core calls resolvable in %s mode",
     async (mode) => {
       const catalogRef = createToolSearchCatalogRef();
       const config = { tools: { toolSearch: { enabled: true, mode } } };
@@ -1253,9 +1364,8 @@ describe("Tool Search", () => {
       expect(buildToolSchemaDirectoryPrompt(ctx)).not.toContain("- read (core)");
       expect(buildToolSchemaDirectoryPrompt(ctx)).toContain("- session_status (core)");
       const runtime = new ToolSearchRuntime(ctx, resolveToolSearchConfig(config));
-      expect(await runtime.search("read", { limit: 1 })).toEqual([
-        expect.objectContaining({ name: "read" }),
-      ]);
+      // Trusted core read stays native, so the deferred catalog does not list it.
+      expect(await runtime.search("read", { limit: 1 })).toEqual([]);
       expect(await runtime.call("openclaw:core:read", { value: "file.txt" })).toEqual(
         expect.objectContaining({
           result: expect.objectContaining({
@@ -1267,16 +1377,59 @@ describe("Tool Search", () => {
       // Same tools, different native surface: a cached deferred row must disappear.
       const direct = apply({ ...ctx, tools, directToolNames: ["session_status"] });
       expect(direct.tools).toContain(status);
-      expect(buildToolSchemaDirectoryPrompt(ctx)).toBe("Available deferred-schema tools: none.");
+      const emptied = buildToolSchemaDirectoryPrompt(ctx);
+      expect(emptied).toContain("Available deferred-schema tools: none.");
+      expect(emptied).toContain("Call read directly.");
       apply({ ...ctx, tools });
       expect(buildToolSchemaDirectoryPrompt(ctx)).toContain("- session_status (core)");
 
       const lookalike = pluginTool("read", "Unrelated plugin reader");
       apply({ ...ctx, tools: [...tools, lookalike] });
       expect(buildToolSchemaDirectoryPrompt(ctx)).not.toContain("- read (");
-      expect(await runtime.search("read", { limit: 5 })).toHaveLength(2);
+      expect(await runtime.search("read", { limit: 5 })).toEqual([
+        expect.objectContaining({ name: "read", sourceName: "fake-catalog" }),
+      ]);
     },
   );
+
+  it("rejects tool_call for a core tool excluded by the prompt policy", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = { tools: { toolSearch: { enabled: true, mode: "tools" } } } as never;
+    const execTool = fakeTool("exec", "Run a command");
+    const readTool = fakeTool("read", "Read a file");
+    const compacted = applyToolSearchCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        readTool,
+        execTool,
+        pluginTool("fake_weather", "Read current weather"),
+      ],
+      config,
+      catalogRef,
+    });
+    expect(catalogRef.current?.directCoreToolNames).toEqual(["read", "exec"]);
+
+    const policy = createAgentHarnessPromptToolPolicy({
+      tools: compacted.tools,
+      catalogRef,
+      codeModeControlsEnabled: false,
+    });
+    policy.apply({ toolsAllow: ["read"] });
+    expect(catalogRef.current?.directCoreToolNames).toEqual(["read"]);
+
+    const runtime = new ToolSearchRuntime({ catalogRef, config }, resolveToolSearchConfig(config));
+    await expect(runtime.call("exec", { command: "true" })).rejects.toThrow(
+      "Unknown tool id: exec",
+    );
+    expect(execTool.execute).not.toHaveBeenCalled();
+
+    policy.apply();
+    expect(catalogRef.current?.directCoreToolNames).toEqual(["read", "exec"]);
+    await runtime.call("exec", { command: "true" });
+    expect(execTool.execute).toHaveBeenCalledOnce();
+  });
 
   it("keeps the capability directory byte-stable across catalog insertion orders", () => {
     const config = { tools: { toolSearch: true } } as never;

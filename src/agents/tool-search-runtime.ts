@@ -22,6 +22,7 @@ import {
   prepareToolSearchCatalogExecutionTool,
   readToolSearchCatalogTelemetry,
   resolveCatalog,
+  resolveNativeCoreCatalogEntry,
   visibleCatalogEntries,
 } from "./tool-search-catalog.js";
 import { renderToolSearchControlText } from "./tool-search-control-result.js";
@@ -96,10 +97,19 @@ function findEntry(
     throw new ToolInputError(`Ambiguous tool name: ${needle}; use an exact tool id.`);
   }
   const namedEntry = namedEntries[0];
-  if (!namedEntry) {
-    throw new ToolInputError(formatUnknownToolIdError(needle, entries, options));
+  if (namedEntry) {
+    return namedEntry;
   }
-  return namedEntry;
+  // Native core tools stay callable by name after structured compaction removes
+  // them from catalog listings. Unknown-id suggestions include those native
+  // entries so a mistype like file_write can recover to write.
+  const nativeEntry = resolveNativeCoreCatalogEntry(catalog, needle);
+  if (!nativeEntry) {
+    throw new ToolInputError(
+      formatUnknownToolIdError(needle, [...entries, ...(catalog.directCoreEntries ?? [])], options),
+    );
+  }
+  return nativeEntry;
 }
 
 function findEntryByExactId(
@@ -108,10 +118,15 @@ function findEntryByExactId(
   errorOptions: ToolLookupErrorOptions = {},
 ): ToolSearchCatalogEntry {
   const needle = id.trim();
-  const entry = catalog.entries.find((candidate) => candidate.id === needle);
+  const entry =
+    catalog.entries.find((candidate) => candidate.id === needle) ??
+    resolveNativeCoreCatalogEntry(catalog, needle, { exactIdOnly: true });
   if (!entry) {
     throw new ToolInputError(
-      formatUnknownToolIdError(needle, catalog.entries, { ...errorOptions, exactIdOnly: true }),
+      formatUnknownToolIdError(needle, [...catalog.entries, ...(catalog.directCoreEntries ?? [])], {
+        ...errorOptions,
+        exactIdOnly: true,
+      }),
     );
   }
   return entry;
@@ -157,7 +172,7 @@ export function readToolSearchCallArgs(
         if (typeof value !== "string") {
           return [];
         }
-        const matches = catalog.entries.filter(
+        const matches = [...catalog.entries, ...(catalog.directCoreEntries ?? [])].filter(
           (entry) => entry.id === value || entry.name === value,
         );
         return matches.length > 0 ? [{ key, matches }] : [];

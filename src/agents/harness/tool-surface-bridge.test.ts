@@ -343,9 +343,9 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
       expect(restored.tools).toEqual(compacted.tools);
       expect(restored.callableToolNames).toEqual([
         TOOL_SEARCH_CODE_MODE_TOOL_NAME,
-        "read",
         "hidden_alpha",
         "hidden_beta",
+        "read",
       ]);
     } finally {
       runtime.cleanup();
@@ -479,12 +479,13 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
       };
       const runtime = createRuntime(config);
 
-      // Compaction still applies to non-core tools; core coding tools stay visible.
+      // Tool Search code mode catalogs trusted core file/shell tools; only the
+      // compact control stays on the direct model surface.
       expect(
         runtime
           .compactTools(tools([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "exec", "read"]))
           .tools.map((tool) => tool.name),
-      ).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "exec", "read"]);
+      ).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME]);
       runtime.cleanup();
     } finally {
       testing.setToolSearchCodeModeSupportedForTest(undefined);

@@ -5,6 +5,7 @@ import {
   applyToolCatalogCompaction,
   collectUniqueCatalogToolNames,
   isDirectVisibleCatalogTool,
+  isTrustedCoreCodingSurfaceTool,
   resolveCatalog,
   visibleCatalogEntries,
 } from "./tool-search-catalog.js";
@@ -67,6 +68,7 @@ export function applyToolSchemaDirectoryCatalog(params: {
     // shared trust check runs.
     isVisibleCatalogTool: (tool) =>
       uniqueCatalogToolNames.has(tool.name) && isDirectVisibleCatalogTool(tool, directToolNames),
+    shouldCatalogTool: (tool) => !isTrustedCoreCodingSurfaceTool(tool),
   });
 }
 
@@ -76,6 +78,7 @@ export function buildToolSchemaDirectoryPrompt(
 ): string {
   const config = resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config);
   const catalog = resolveCatalog(ctx);
+  const directCoreToolNames = catalog.directCoreToolNames ?? [];
   const contextTokens = options?.contextTokenBudget;
   // At four characters per token, the listing gets 2.5% of the active window.
   // Keep enough room for discovery instructions even in a very small window.
@@ -86,7 +89,8 @@ export function buildToolSchemaDirectoryPrompt(
           Math.max(768, Math.floor(contextTokens / 10)),
         )
       : MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS;
-  const cacheKey = `${config.mode}:${options?.includeMcp === false ? "without-mcp" : "all"}:${maxChars}`;
+  const mcpKey = options?.includeMcp === false ? "without-mcp" : "all";
+  const cacheKey = `${config.mode}:${mcpKey}:${maxChars}:${directCoreToolNames.join(",")}`;
   let cachedPrompts = toolSchemaDirectoryPromptCache.get(catalog.entries);
   // Caller-owned filters may change in place; cached text must not bypass them.
   const cachedPrompt = options?.allowedIds ? undefined : cachedPrompts?.get(cacheKey);
@@ -97,6 +101,7 @@ export function buildToolSchemaDirectoryPrompt(
     visibleCatalogEntries(catalog, options),
     config.mode,
     maxChars,
+    directCoreToolNames,
   );
   if (options?.allowedIds) {
     return prompt;
@@ -168,20 +173,41 @@ function formatToolDirectoryEntry(
   return `- ${name}${owner}: ${description || "No description."}`;
 }
 
+function formatDirectCallGuidance(names: readonly string[]): string {
+  if (names.length === 0) {
+    return "";
+  }
+  if (names.length === 1) {
+    return `Call ${names[0]} directly.`;
+  }
+  if (names.length === 2) {
+    return `Call ${names[0]} and ${names[1]} directly.`;
+  }
+  return `Call ${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]} directly.`;
+}
+
 function formatToolSearchCatalogDirectory(
   entries: ToolSearchCatalogEntry[],
   mode: ToolSearchMode,
   maxChars: number,
+  directCoreToolNames: readonly string[],
 ): string {
   const deferredEntries = entries.filter((entry) => !entry.directVisible);
+  const direct = formatDirectCallGuidance(directCoreToolNames);
   if (deferredEntries.length === 0) {
-    return "Available deferred-schema tools: none.";
+    return direct
+      ? `Available deferred-schema tools: none.\n\n${direct}`
+      : "Available deferred-schema tools: none.";
   }
   const nameCounts = new Map<string, number>();
   for (const entry of entries) {
     nameCounts.set(entry.name, (nameCounts.get(entry.name) ?? 0) + 1);
   }
-  // Count collisions before excluding native tools: their lookalikes remain ambiguous.
+  // Native core tools are omitted from entries. Count them too so a plugin
+  // lookalike is not listed as a unique deferred name.
+  for (const name of directCoreToolNames) {
+    nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
+  }
   const listedEntries = deferredEntries
     .filter((entry) => nameCounts.get(entry.name) === 1)
     .toSorted(
@@ -215,6 +241,9 @@ function formatToolSearchCatalogDirectory(
     } else if (mode === "directory") {
       guidance +=
         " Call a unique deferred tool name directly, or use tool_call with its id and args.";
+    }
+    if (direct) {
+      guidance = `${direct} ${guidance}`;
     }
     const footerChars =
       guidance.length + (omitted > 0 ? String(omitted).length + omittedLabel.length : 0);

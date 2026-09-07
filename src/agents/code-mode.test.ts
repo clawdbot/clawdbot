@@ -164,6 +164,33 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_create_ticket"]);
   });
 
+  it("catalogs core coding tools for headless-style Code Mode file/shell calls", () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const compacted = applyCodeModeCatalog({
+      tools: [
+        ...codeModeTools,
+        fakeTool("read", "Read files"),
+        fakeTool("exec", "Run shell"),
+        pluginTool("fake_create_ticket", "Create a fake ticket"),
+      ],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([
+      CODE_MODE_EXEC_TOOL_NAME,
+      CODE_MODE_WAIT_TOOL_NAME,
+    ]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual([
+      "exec",
+      "read",
+      "fake_create_ticket",
+    ]);
+  });
+
   it("keeps explicitly required native message delivery visible and searchable", () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const message = fakeTool("message", "Deliver the visible response");
