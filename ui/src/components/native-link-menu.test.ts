@@ -68,7 +68,7 @@ describe("native link menu", () => {
 
     expect(
       items.map((item) => item.querySelector(".session-menu__text")?.textContent?.trim()),
-    ).toEqual(["Open in Sidebar", "Open in Default Browser", "Copy Link"]);
+    ).toEqual(["Open in Browser Panel", "Open in Default Browser", "Copy Link"]);
 
     items[0]?.click();
     expect(calls).toEqual(["close", "inline"]);
@@ -95,7 +95,8 @@ describe("native link menu", () => {
     expect(
       menuItems(menu).map((item) => item.querySelector(".session-menu__text")?.textContent?.trim()),
     ).toEqual([
-      german.get("nativeLinkMenu.openInline"),
+      // Changed English copy falls back until the post-merge locale refresh.
+      german.get("nativeLinkMenu.openInline") ?? "Open in Browser Panel",
       german.get("nativeLinkMenu.openExternal"),
       german.get("nativeLinkMenu.copy"),
     ]);
