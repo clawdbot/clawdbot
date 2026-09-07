@@ -365,10 +365,13 @@ export function createMentionInbox(params: {
           return current;
         }
         const owned = new Set(current.value.items.map((item) => item.id));
-        for (const id of ids) {
-          if (owned.has(id)) {
-            removeItem(items.get(id));
+        for (const rawId of ids) {
+          // Exact Set/Map match; clipboard/RPC padding must not skip a live mention.
+          const id = rawId.trim();
+          if (!id || !owned.has(id)) {
+            continue;
           }
+          removeItem(items.get(id));
         }
         refresh();
         return readView(client);

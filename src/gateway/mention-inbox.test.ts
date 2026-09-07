@@ -670,3 +670,28 @@ describe("human mention directory", () => {
     });
   });
 });
+
+
+describe("mentions.dismiss padded ids", () => {
+  it("dismisses a live mention when mentions.dismiss receives a padded id", async () => {
+    await withInbox(async (f) => {
+      for (const client of f.clients) {
+        read(f.inbox, client);
+      }
+      f.post("padded-dismiss-source");
+      const listed = await f.call("mentions.list", {}, f.bobClient);
+      expect(listed.ok).toBe(true);
+      const items = (listed.payload as { items: Array<{ id: string }> }).items;
+      expect(items).toHaveLength(1);
+      const exactId = items[0]!.id;
+      const padded = ` ${exactId} `;
+      // Schema accepts surrounding whitespace; exact Set/Map keys do not.
+      expect(padded).not.toBe(exactId);
+
+      const dismissed = await f.call("mentions.dismiss", { ids: [padded] }, f.bobClient);
+      expect(dismissed.ok).toBe(true);
+      const remaining = read(f.inbox, f.bobClient);
+      expect(remaining.items.map((item) => item.id)).not.toContain(exactId);
+    });
+  });
+});
