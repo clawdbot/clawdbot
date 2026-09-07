@@ -11,27 +11,16 @@ import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { tryResolveConfiguredAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveConfigWidePluginManifestRegistry } from "../../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   hasExplicitChannelConfig,
   listConfiguredChannelIdsForReadOnlyScope,
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../plugins/channel-plugin-ids.js";
-import { shouldRejectHardlinkedPluginFiles } from "../../plugins/hardlink-policy.js";
-import {
-  channelPluginIdBelongsToManifest,
-  resolveSetupChannelRegistration,
-} from "../../plugins/loader-channel-setup.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { getPluginCache } from "../../plugins/plugin-cache.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import {
-  getCachedPluginModuleLoader,
-  preparePluginModule,
-} from "../../plugins/plugin-module-loader-cache.js";
 import { resolveNormalizedAccountEntry } from "../../routing/account-lookup.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -48,9 +37,11 @@ import {
   resolveReadOnlyChannelCommandDefaults,
 } from "./read-only-command-defaults.js";
 import { listChannelPlugins } from "./registry.js";
+import {
+  loadSetupChannelPluginFromManifestRecord,
+  type ChannelSetupPluginLoadFailure,
+} from "./setup-entry-loader.js";
 import type { ChannelPlugin } from "./types.plugin.js";
-
-const log = createSubsystemLogger("channels");
 
 type ReadOnlyChannelPluginOptions = {
   env?: NodeJS.ProcessEnv;
@@ -67,15 +58,9 @@ type ReadOnlyChannelPluginResolution = {
   manifestRecords: readonly PluginManifestRecord[];
   configuredChannelIds: string[];
   missingConfiguredChannelIds: string[];
-  loadFailures: ReadOnlyChannelPluginLoadFailure[];
+  loadFailures: ChannelSetupPluginLoadFailure[];
 };
 type ManifestChannelConfigRecord = NonNullable<PluginManifestRecord["channelConfigs"]>[string];
-type ReadOnlyChannelPluginLoadFailure = {
-  channelId: string;
-  pluginId: string;
-  message: string;
-  source?: string;
-};
 
 function addChannelPlugins(
   byId: Map<string, ChannelPlugin>,
@@ -349,73 +334,6 @@ function canUseManifestChannelPlugin(record: PluginManifestRecord, channelId: st
 
 export { resolveReadOnlyChannelCommandDefaults };
 
-function loadSetupChannelPluginFromManifestRecord(params: {
-  record: PluginManifestRecord;
-  channelId: string;
-  env: NodeJS.ProcessEnv;
-}): { plugin?: ChannelPlugin; failure?: ReadOnlyChannelPluginLoadFailure } {
-  if (!params.record.setupSource || !params.record.channels.includes(params.channelId)) {
-    return {};
-  }
-  try {
-    const { modulePath } = preparePluginModule({
-      modulePath: params.record.setupSource,
-      boundaryRoot: params.record.rootDir,
-      boundaryLabel: "plugin root",
-      surfaceLabel: `channel setup entry ${params.record.id}`,
-      rejectHardlinks: shouldRejectHardlinkedPluginFiles({
-        origin: params.record.origin,
-        rootDir: params.record.rootDir,
-        env: params.env,
-      }),
-    });
-    const moduleLoader = getCachedPluginModuleLoader({
-      modulePath,
-      rootDir: params.record.rootDir,
-      importerUrl: import.meta.url,
-      preferBuiltDist: true,
-      loaderFilename: import.meta.url,
-      tryNative: true,
-      cacheScopeKey: "read-only-setup-entry",
-    });
-    const registration = resolveSetupChannelRegistration(moduleLoader(modulePath));
-    if (registration.loadError) {
-      return {
-        failure: {
-          channelId: params.channelId,
-          pluginId: params.record.id,
-          source: params.record.setupSource,
-          message: `failed to load setup entry: ${formatErrorMessage(registration.loadError)}`,
-        },
-      };
-    }
-    if (!registration.plugin) {
-      return {};
-    }
-    if (
-      !channelPluginIdBelongsToManifest({
-        channelId: registration.plugin.id,
-        pluginId: params.record.id,
-        manifestChannels: params.record.channels,
-      })
-    ) {
-      return {};
-    }
-    return { plugin: registration.plugin };
-  } catch (error) {
-    const detail = formatErrorMessage(error);
-    log.warn(`[channels] failed to load channel setup ${params.record.id}: ${detail}`);
-    return {
-      failure: {
-        channelId: params.channelId,
-        pluginId: params.record.id,
-        source: params.record.setupSource,
-        message: `failed to load setup entry: ${detail}`,
-      },
-    };
-  }
-}
-
 function rebindChannelPluginConfig(
   config: ChannelPlugin["config"],
   sourceChannelId: string,
@@ -673,7 +591,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
         })),
   ]).filter(isSafeManifestChannelId);
   const byId = new Map<string, ChannelPlugin>();
-  const loadFailures: ReadOnlyChannelPluginLoadFailure[] = [];
+  const loadFailures: ChannelSetupPluginLoadFailure[] = [];
 
   addChannelPlugins(byId, loadedChannelPlugins);
 
@@ -694,7 +612,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
       loadFailures.push(
         ...setupResults
           .map((result) => result.failure)
-          .filter((failure): failure is ReadOnlyChannelPluginLoadFailure => Boolean(failure)),
+          .filter((failure): failure is ChannelSetupPluginLoadFailure => Boolean(failure)),
       );
       const bundledSetupPlugin =
         setupResults.map((result) => result.plugin).find((plugin) => plugin) ??
@@ -790,4 +708,3 @@ export function resolveReadOnlyChannelPluginsForConfig(
     loadFailures,
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

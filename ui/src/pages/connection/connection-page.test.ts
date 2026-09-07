@@ -18,7 +18,8 @@ import {
 import { deviceSystemInfo } from "../../test-helpers/devices-fixtures.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../../test-helpers/lit-settle.ts";
-import { ConnectionPage, supportsSystemInfo } from "./connection-page.ts";
+import { ConnectionPage } from "./connection-page.ts";
+import { supportsSystemInfo } from "./system-info.ts";
 
 function source(client: GatewayBrowserClient) {
   return createApplicationGateway({

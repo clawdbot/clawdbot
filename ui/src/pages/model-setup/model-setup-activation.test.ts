@@ -13,6 +13,8 @@ import {
 import { FirstRunSetup } from "./first-run-setup.ts";
 import {
   candidate,
+  clickCandidate,
+  selectManualProvider,
   createFirstRunContext,
   detection,
   mountPage,
@@ -33,6 +35,106 @@ describe("ModelSetupPage first-run activation ownership", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
+  it.each([false, true])(
+    "refreshes a missing wizard without replay when a committed model exists: %s",
+    async (configured) => {
+      const { context, client, request } = createFirstRunContext();
+      request.mockImplementation(async (method) => {
+        if (method === "openclaw.setup.auth.start") {
+          return { done: false, status: "running" };
+        }
+        if (method === "wizard.next") {
+          throw new GatewayRequestError({
+            code: "INVALID_REQUEST",
+            message: "wizard not found",
+            details: { code: "WIZARD_NOT_FOUND" },
+          });
+        }
+        if (method === "openclaw.setup.detect") {
+          return {
+            ...detection,
+            authOptions: [
+              { id: "provider-login", label: "Provider", kind: "oauth", featured: true },
+            ],
+            ...(configured ? { configuredModel: "provider/selected", setupComplete: true } : {}),
+          };
+        }
+        if (method === "openclaw.setup.verify") {
+          return { ok: true, modelRef: "provider/selected", latencyMs: 12 };
+        }
+        throw new Error(`Unexpected setup request: ${method}`);
+      });
+      const { page } = await mountPage(context, {
+        client,
+        firstRun: true,
+        state: {
+          phase: "ready",
+          result: {
+            ...detection,
+            authOptions: [
+              { id: "provider-login", label: "Provider", kind: "oauth", featured: true },
+            ],
+          },
+        },
+      });
+      page.querySelector<HTMLButtonElement>('[data-auth-choice="provider-login"] button')!.click();
+      await waitForFast(() =>
+        expect(page.textContent).toContain("Gateway no longer has this setup session"),
+      );
+      const receipt = localStorage.getItem("openclaw.modelSetup.pendingActivation.v1");
+      expect(receipt).not.toBeNull();
+      [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
+        .find((button) => button.textContent?.trim() === "Close")!
+        .click();
+      await page.updateComplete;
+      const checkAgain = () =>
+        [...page.querySelectorAll<HTMLButtonElement>(".model-setup__recovery button")].find(
+          (button) => button.textContent?.trim() === "Check again",
+        )!;
+      checkAgain().click();
+      await waitForFast(() =>
+        expect(request.mock.calls.map(([method]) => method)).toEqual([
+          "openclaw.setup.auth.start",
+          "wizard.next",
+          "openclaw.setup.detect",
+        ]),
+      );
+      await waitForFast(() => expect(page.querySelector(".model-setup__loading")).toBeNull());
+      expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBe(receipt);
+      expect(context.navigate).not.toHaveBeenCalled();
+      if (configured) {
+        page.querySelector<HTMLButtonElement>(".model-setup__recovery .btn.primary")!.click();
+        await waitForFast(() =>
+          expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" }),
+        );
+        expect(request.mock.calls.map(([method]) => method)).toEqual([
+          "openclaw.setup.auth.start",
+          "wizard.next",
+          "openclaw.setup.detect",
+          "openclaw.setup.verify",
+        ]);
+      } else {
+        expect(
+          page.querySelector<HTMLButtonElement>('[data-auth-choice="provider-login"] button')!
+            .disabled,
+        ).toBe(true);
+        const deadline = JSON.parse(receipt!).deadlineMs;
+        vi.spyOn(Date, "now").mockReturnValue(deadline + 1);
+        checkAgain().click();
+        await waitForFast(() =>
+          expect(
+            page.querySelector<HTMLButtonElement>('[data-auth-choice="provider-login"] button')!
+              .disabled,
+          ).toBe(false),
+        );
+        expect(
+          request.mock.calls.filter(([method]) => method === "openclaw.setup.auth.start"),
+        ).toHaveLength(1);
+        expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBeNull();
+      }
+    },
+  );
+
   it("keeps first-run activation owned through an equivalent route-data refresh", async () => {
     const { context, client, request } = createFirstRunContext();
     const response = createDeferred<unknown>();
@@ -56,6 +158,8 @@ describe("ModelSetupPage first-run activation ownership", () => {
       client,
       firstRun: true,
     });
+    expect(request).not.toHaveBeenCalled();
+    await clickCandidate(page, "openai-api-key");
     const success = {
       done: true,
       status: "done",
@@ -91,6 +195,13 @@ describe("ModelSetupPage first-run activation ownership", () => {
           return { sessionId: "auth", done: false, status: "running" };
         }
         if (method === activatedMethod) {
+          if (entry === "provider sign-in" && releaseActivation) {
+            throw new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "wizard not found",
+              details: { code: "WIZARD_NOT_FOUND" },
+            });
+          }
           return await new Promise((resolve) => {
             releaseActivation = resolve;
           });
@@ -123,6 +234,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
         firstRun: true,
       });
       if (entry === "manual key") {
+        await selectManualProvider(page, "provider-key");
         const input = page.querySelector<HTMLInputElement>('input[type="password"]')!;
         input.value = "test-only-provider-key";
         input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -140,6 +252,18 @@ describe("ModelSetupPage first-run activation ownership", () => {
       publishGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
       await page.updateComplete;
       publishGatewaySnapshot({ ...snapshot, hello: { ...snapshot.hello } });
+      if (entry === "provider sign-in") {
+        await waitForFast(() =>
+          expect(page.textContent).toContain("Gateway no longer has this setup session"),
+        );
+        [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
+          .find((button) => button.textContent?.trim() === "Close")!
+          .click();
+        await page.updateComplete;
+        [...page.querySelectorAll<HTMLButtonElement>(".model-setup__recovery button")]
+          .find((button) => button.textContent?.trim() === "Check again")!
+          .click();
+      }
       await waitForFast(() => expect(page.textContent).toContain("Verify & use selected model"));
       expect(
         request.mock.calls.filter(([method]) => method === "openclaw.setup.verify"),
@@ -155,7 +279,10 @@ describe("ModelSetupPage first-run activation ownership", () => {
         modelActivation: { modelRef: "provider/late-other" },
       });
       await page.updateComplete;
-      expect(request.mock.calls.filter(([method]) => method === activatedMethod)).toHaveLength(1);
+      expect(request.mock.calls.filter(([method]) => method === activatedMethod)).toHaveLength(
+        entry === "provider sign-in" ? 2 : 1,
+      );
+      expect(request.mock.calls.filter(([method]) => method.endsWith(".start"))).toHaveLength(1);
       expect(context.navigate).toHaveBeenCalledOnce();
       expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBeNull();
     },
@@ -269,7 +396,14 @@ describe("ModelSetupPage first-run activation ownership", () => {
       )!
       .click();
     await page.updateComplete;
-    expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
+    if (outcome === "validation error") {
+      await waitForFast(() =>
+        expect(page.textContent).toContain("Setup is finishing the current step"),
+      );
+      expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
+    } else {
+      expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
+    }
     const terminal =
       (mode === "prepare" && outcome === "terminal error") ||
       outcome === "rejected test" ||
@@ -429,7 +563,6 @@ describe("ModelSetupPage first-run activation ownership", () => {
       canUseSetup: () => true,
       canVerify: () => true,
       verify: async () => undefined,
-      activate: async () => undefined,
       setVerifyState: () => undefined,
       setActivationState: () => undefined,
       setRefreshWarning: () => undefined,
@@ -514,6 +647,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
         firstRun: true,
       });
       if (entry === "manual key") {
+        await selectManualProvider(page, "provider");
         const input = page.querySelector<HTMLInputElement>('input[type="password"]')!;
         input.value = "test-only-key";
         input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -633,10 +767,13 @@ describe("ModelSetupPage first-run activation ownership", () => {
         firstRun: true,
       });
       if (entry === "manual") {
+        await selectManualProvider(page, "provider-key");
         const input = page.querySelector<HTMLInputElement>('input[type="password"]')!;
         input.value = "test-only-provider-key";
         input.dispatchEvent(new Event("input", { bubbles: true }));
         page.querySelector<HTMLButtonElement>(".model-setup__manual .btn.primary")!.click();
+      } else {
+        await clickCandidate(page, "openai-api-key");
       }
       await waitForFast(() => expect(request).toHaveBeenCalledOnce());
       const originalReceipt = localStorage.getItem("openclaw.modelSetup.pendingActivation.v1");
@@ -728,6 +865,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
       const { context, client, request, snapshot, publishGatewaySnapshot } =
         createFirstRunContext();
       const cancelled = createDeferred<unknown>();
+      let serverStatus: "running" | "cancelled" | "error" = "running";
       const result = {
         ...detection,
         authOptions: [
@@ -742,6 +880,9 @@ describe("ModelSetupPage first-run activation ownership", () => {
           return { sessionId: "auth", done: false, status: "running" };
         }
         if (method === "wizard.next") {
+          if (serverStatus !== "running") {
+            return { done: true, status: serverStatus };
+          }
           return {
             done: false,
             status: "running",
@@ -750,7 +891,16 @@ describe("ModelSetupPage first-run activation ownership", () => {
         }
         if (method === "wizard.cancel") {
           if (cancelStatus === "busy") {
-            throw new Error("wizard not found");
+            throw new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "wizard not found",
+              details: { code: "WIZARD_NOT_FOUND" },
+            });
+          }
+          // The server settles its status before sending the reply. A resumed
+          // next request sees that outcome even while this transport is delayed.
+          if (cancelStatus === "cancelled" || cancelStatus === "error") {
+            serverStatus = cancelStatus;
           }
           return await cancelled.promise;
         }
@@ -784,7 +934,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
         ),
       );
       await page.updateComplete;
-      expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
       expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).not.toBeNull();
       if (lifecycle === "route refresh") {
         page.routeData = { ...page.routeData! };
@@ -805,7 +955,13 @@ describe("ModelSetupPage first-run activation ownership", () => {
           }),
         );
       } else if (cancelStatus === "absent") {
-        cancelled.reject(new Error("wizard not found"));
+        cancelled.reject(
+          new GatewayRequestError({
+            code: "INVALID_REQUEST",
+            message: "wizard not found",
+            details: { code: "WIZARD_NOT_FOUND" },
+          }),
+        );
       } else {
         cancelled.resolve(cancelStatus === "unknown" ? {} : { status: cancelStatus });
       }
@@ -818,6 +974,22 @@ describe("ModelSetupPage first-run activation ownership", () => {
           cancelStatus === "absent" || cancelStatus === "busy" ? "rejected" : "fulfilled",
         );
       });
+      if (lifecycle !== "unmount" && ["cancelled", "error", "busy"].includes(cancelStatus)) {
+        const terminalClose = () =>
+          [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")].find(
+            (button) => button.textContent?.trim() === "Close",
+          );
+        await waitForFast(() =>
+          expect(
+            page.querySelector("openclaw-modal-dialog") === null || terminalClose() !== undefined,
+          ).toBe(true),
+        );
+        terminalClose()?.click();
+        await page.updateComplete;
+        expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
+      } else if (lifecycle === "in place" && cancelStatus === "running") {
+        expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
+      }
       if (lifecycle === "unmount") {
         ({ page } = await mountPage(context, {
           state: { phase: "ready", result },

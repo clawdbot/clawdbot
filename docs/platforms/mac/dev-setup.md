@@ -41,6 +41,12 @@ then replaces the previous app. `scripts/restart-mac.sh` uses
 the same path; `SKIP_TSC=1` no longer bypasses the runtime build. Existing
 content-checked build caches still avoid unnecessary declaration work.
 
+Each worker keeps native binaries that support its architecture and omits
+incompatible macOS, Linux, and Windows prebuilds. This prevents unused Intel-only
+dependencies from triggering macOS compatibility warnings in Apple silicon
+builds. Compatible universal binaries, JavaScript, WASM, and other resources
+remain intact.
+
 Universal builds require both arm64 and x86_64 runtimes to execute during
 validation. Building x86_64 on Apple Silicon requires Rosetta; a missing
 architecture or nonportable native dependency fails packaging. Node downloads

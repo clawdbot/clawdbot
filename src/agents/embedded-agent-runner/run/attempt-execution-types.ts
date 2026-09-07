@@ -11,6 +11,7 @@ import type { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt
 import type { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import type { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
+import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import type {
   EmbeddedAttemptExecutionState,
   EmbeddedAttemptExternalAbortController,
@@ -21,7 +22,7 @@ type Prepared<T extends (...args: never[]) => unknown> = Awaited<ReturnType<T>>;
 type PreparedTranscriptLifecycle = Prepared<typeof prepareEmbeddedAttemptTranscriptLifecycle>;
 
 export type EmbeddedAttemptExecutionPhaseInput = {
-  attempt: EmbeddedRunAttemptParams;
+  attempt: EmbeddedRunAttemptInternalParams;
   activeContextEngine?: AttemptContextEngine;
   agentDir: string;
   isRawModelRun: boolean;

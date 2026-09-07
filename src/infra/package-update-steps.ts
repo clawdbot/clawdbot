@@ -599,7 +599,7 @@ async function prepareStagedPackageInstall(
       const packageRoot = path.join(native.globalRoot, packageName);
       return {
         stagedInstall: {
-          prefix: native.prefix,
+          prefix: native.projectRoot,
           layout: {
             prefix: native.projectRoot,
             globalRoot: native.globalRoot,

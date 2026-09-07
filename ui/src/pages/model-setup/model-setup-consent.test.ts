@@ -5,6 +5,7 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   candidate,
+  clickCandidate,
   createFirstRunContext,
   detection,
   mountPage,
@@ -92,6 +93,8 @@ describe("ModelSetupPage activation consent", () => {
         client,
         firstRun: true,
       });
+      expect(request).not.toHaveBeenCalled();
+      await clickCandidate(page, "openai-api-key");
       await waitForFast(() => expect(page.textContent).toContain("Review model setup"));
       expect(context.navigate).not.toHaveBeenCalled();
       const button = (label: string) =>

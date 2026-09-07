@@ -237,7 +237,8 @@ function knownSessionIdentities(params: {
   if (params.actor.state === "present") {
     remember(params.actor.actor);
   }
-  for (const entry of Object.values(loadCombinedSessionStoreForGatewayCore(params.cfg).store)) {
+  const { store } = loadCombinedSessionStoreForGatewayCore(params.cfg, { projection: "list" });
+  for (const entry of Object.values(store)) {
     remember(entry.createdActor ?? null);
   }
   for (const profile of listProfiles()) {
@@ -247,11 +248,7 @@ function knownSessionIdentities(params: {
       ...(profile.displayName ? { label: profile.displayName } : {}),
     });
   }
-  return [...identities.values()].toSorted(
-    (left, right) =>
-      (left.label ?? left.id).localeCompare(right.label ?? right.id) ||
-      left.id.localeCompare(right.id),
-  );
+  return [...identities.values()];
 }
 
 function publishSharingChange(params: {

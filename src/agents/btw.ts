@@ -71,10 +71,8 @@ import {
   type PreparedModelRuntimeStores,
 } from "./prepared-model-runtime.js";
 import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
-import {
-  protectPreparedProviderRuntimeAuth,
-  unwrapSecretSentinelsForProviderEgress,
-} from "./provider-secret-egress.js";
+import { protectPreparedProviderRuntimeAuth } from "./provider-runtime-auth-protection.js";
+import { unwrapSecretSentinelsForProviderEgress } from "./provider-secret-egress.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
 import { materializePreparedRuntimeModel } from "./runtime-plan/materialize-model.js";
 import { prepareAgentRuntimeAuth } from "./runtime-plan/prepare-auth.js";

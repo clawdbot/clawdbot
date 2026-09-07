@@ -28,11 +28,7 @@ import {
   withCdpSocket,
 } from "./cdp.helpers.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
-import {
-  finalizeRoleSnapshot,
-  findRoleSnapshotLineRef,
-  type RoleSnapshotIdentityMode,
-} from "./pw-role-snapshot.js";
+import { finalizeRoleSnapshot, type RoleSnapshotIdentityMode } from "./pw-role-snapshot.js";
 import {
   appendRoleSnapshotDepthTruncationMarker,
   ROLE_SNAPSHOT_MAX_DEPTH,
@@ -423,6 +419,7 @@ type RoleTreeNode = {
   url?: string;
   cursorInfo?: CursorInteractiveInfo;
   frameId?: string;
+  iframeLineIndex?: number;
 };
 
 function buildRoleTree(nodes: RawAXNode[]): { tree: RoleTreeNode[]; roots: number[] } {
@@ -508,7 +505,7 @@ function renderRoleTree(
   index: number,
   output: string[],
   options: CdpRoleSnapshotOptions,
-  state: { truncated: boolean },
+  state: { truncated: boolean; recordIframePositions?: boolean },
   indentOffset = 0,
 ): void {
   const node = tree[index];
@@ -530,6 +527,10 @@ function renderRoleTree(
     const nth = node.nth !== undefined && node.nth > 0 ? ` [nth=${node.nth}]` : "";
     const value = node.value ? ` value=${JSON.stringify(node.value)}` : "";
     const url = node.url ? ` [url=${node.url}]` : "";
+    if (state.recordIframePositions && node.ref && node.frameId) {
+      // A repeated AX child still expands after its first rendered occurrence.
+      node.iframeLineIndex ??= output.length;
+    }
     output.push(
       `${indent}- ${node.role}${name}${ref}${nth}${value}${url}${cursorSuffix(node.cursorInfo)}`,
     );
@@ -796,17 +797,16 @@ async function buildCdpRoleSnapshot(params: {
     }
   }
 
-  const lines: string[] = [];
-  const renderState = { truncated: false };
+  let lines: string[] = [];
+  const renderState = { truncated: false, recordIframePositions: params.recurseIframes };
   for (const root of roots) {
     renderRoleTree(tree, root, lines, params.options, renderState);
   }
 
   if (params.recurseIframes) {
-    const iframeNodes = tree.filter((node) => node.ref && node.frameId);
-    for (const iframe of iframeNodes) {
-      const lineIndex = lines.findIndex((line) => findRoleSnapshotLineRef(line) === iframe.ref);
-      if (lineIndex < 0 || !iframe.frameId) {
+    let childLinesByIndex: Map<number, string[]> | undefined;
+    for (const iframe of tree) {
+      if (iframe.iframeLineIndex === undefined || !iframe.frameId) {
         continue;
       }
       const child = await buildCdpRoleSnapshot({
@@ -822,7 +822,20 @@ async function buildCdpRoleSnapshot(params: {
         continue;
       }
       Object.assign(refs, child.refs);
-      lines.splice(lineIndex + 1, 0, ...child.lines.map((line) => `  ${line}`));
+      (childLinesByIndex ??= new Map()).set(iframe.iframeLineIndex, child.lines);
+    }
+    if (childLinesByIndex) {
+      const expanded: string[] = [];
+      for (let index = 0; index < lines.length; index++) {
+        expanded.push(lines[index]!);
+        const childLines = childLinesByIndex.get(index);
+        if (childLines) {
+          for (const childLine of childLines) {
+            expanded.push(`  ${childLine}`);
+          }
+        }
+      }
+      lines = expanded;
     }
   }
 

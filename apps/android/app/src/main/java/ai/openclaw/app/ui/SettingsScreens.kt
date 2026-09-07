@@ -97,6 +97,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -977,39 +978,38 @@ private fun VoiceSetupActionRow(
     contentColor = ClawTheme.colors.text,
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
-    Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = ClawTheme.spacing.xs, vertical = ClawTheme.spacing.xxs),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
-    ) {
-      Surface(
-        modifier = Modifier.size(ClawTheme.spacing.iconSlot),
-        shape = CircleShape,
-        color = ClawTheme.colors.canvas,
-        contentColor = ClawTheme.colors.text,
-        border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(ClawTheme.spacing.icon))
+    ClawListItem(
+      title = title,
+      subtitle = subtitle,
+      modifier = Modifier.padding(horizontal = ClawTheme.spacing.xs),
+      leading = {
+        Surface(
+          modifier = Modifier.size(ClawTheme.spacing.iconSlot),
+          shape = CircleShape,
+          color = ClawTheme.colors.canvas,
+          contentColor = ClawTheme.colors.text,
+          border = BorderStroke(1.dp, ClawTheme.colors.borderStrong),
+        ) {
+          Box(contentAlignment = Alignment.Center) {
+            Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(ClawTheme.spacing.icon))
+          }
         }
-      }
-      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(text = title, style = ClawTheme.type.section, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(text = subtitle, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      }
-      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
-        Box(
-          modifier =
-            Modifier
-              .size(6.dp)
-              .background(if (ready) ClawTheme.colors.success else ClawTheme.colors.textSubtle, CircleShape),
-        )
-        Text(text = statusText, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted, maxLines = 1)
-        if (onClick != null) {
-          Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, modifier = Modifier.size(16.dp), tint = ClawTheme.colors.textMuted)
+      },
+      trailing = {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
+          Box(
+            modifier =
+              Modifier
+                .size(6.dp)
+                .background(if (ready) ClawTheme.colors.success else ClawTheme.colors.textSubtle, CircleShape),
+          )
+          Text(text = statusText, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+          if (onClick != null) {
+            Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, modifier = Modifier.size(16.dp), tint = ClawTheme.colors.textMuted)
+          }
         }
-      }
-    }
+      },
+    )
   }
 }
 
@@ -1824,7 +1824,11 @@ private fun GatewaySettingsScreen(
         }
       }
     }
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    FlowRow(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
       ClawPrimaryButton(text = nativeString("Reconnect"), onClick = viewModel::refreshGatewayConnection, modifier = Modifier.weight(1f))
       ClawSecondaryButton(text = nativeString("Disconnect"), onClick = viewModel::disconnect, modifier = Modifier.weight(1f))
     }
@@ -1847,8 +1851,6 @@ private fun GatewaySettingsScreen(
           text = nativeString("Scan or paste a setup code to add another gateway."),
           style = ClawTheme.type.body,
           color = ClawTheme.colors.textMuted,
-          maxLines = 2,
-          overflow = TextOverflow.Ellipsis,
         )
         ClawSecondaryButton(text = nativeString("Scan QR"), onClick = viewModel::pairNewGateway, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.QrCode2)
         ClawTextField(value = setupCode, onValueChange = { setupCode = it }, placeholder = nativeString("Setup code"), secret = true)
@@ -2883,7 +2885,7 @@ private fun CronJobFieldsPanel(rows: List<SettingsMetric>) {
           Modifier
             .fillMaxWidth()
             .heightIn(min = 46.dp)
-            .clickable(onClickLabel = nativeString("Copy \${row.title}", row.title)) { copyCronDetailValue(context, row.title, row.value) }
+            .clickable(onClickLabel = nativeString("Copy \${row.title}", row.title)) { copySettingsDetailValue(context, row.title, row.value) }
             .padding(vertical = 6.dp)
         } else {
           Modifier
@@ -2916,13 +2918,13 @@ private fun CronJobFieldsPanel(rows: List<SettingsMetric>) {
   }
 }
 
-private fun copyCronDetailValue(
+private fun copySettingsDetailValue(
   context: Context,
   title: String,
   value: String,
 ) {
   val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
-  clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw automation $title", value))
+  clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw $title", value))
   Toast.makeText(context, nativeString("\$title copied", title), Toast.LENGTH_SHORT).show()
 }
 
@@ -3345,33 +3347,33 @@ private fun SettingsToggleListRow(row: SettingsToggleRow) {
   }
 }
 
-/**
- * Reusable metric panel for settings screens with compact title/value rows.
- */
+/** These diagnostics have no detail view, so their rows must show complete values. */
 @Composable
 internal fun SettingsMetricPanel(rows: List<SettingsMetric>) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = ClawTheme.spacing.xs, vertical = 4.dp)) {
-    ClawSeparatedColumn(items = rows) { row ->
-      Row(modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp).padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
-        Text(
-          text = row.title,
-          style = ClawTheme.type.body,
-          color = ClawTheme.colors.text,
-          modifier = Modifier.weight(0.9f),
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-          text = row.value,
-          style = ClawTheme.type.caption,
-          color = ClawTheme.colors.textMuted,
-          modifier = Modifier.weight(1.1f),
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-          textAlign = TextAlign.End,
-        )
+  val context = LocalContext.current
+  ClawListPanel(items = rows) { row ->
+    val rowModifier =
+      if (row.copyable) {
+        Modifier.clickable(onClickLabel = nativeString("Copy \${row.title}", row.title)) {
+          copySettingsDetailValue(context, row.title, row.value)
+        }
+      } else {
+        Modifier
       }
-    }
+    ClawListItem(
+      title = row.title,
+      subtitle = row.value,
+      metadata = nativeString("Tap to copy").takeIf { row.copyable },
+      modifier = rowModifier,
+      trailing =
+        if (row.copyable) {
+          {
+            Icon(imageVector = Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp), tint = ClawTheme.colors.text)
+          }
+        } else {
+          null
+        },
+    )
   }
 }
 

@@ -23,7 +23,7 @@ import { isCurrentManagedServiceUpdateHandoffProcess } from "../../infra/update-
 import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
-import { gatewayAncestryBlockMessage } from "./update-command-handoff.js";
+import { gatewayMaintenanceBlockMessage } from "./update-command-handoff.js";
 import {
   assertGatewayServiceAdmissionUnchanged,
   assertGatewayServiceManagementAllowedForUpdate,
@@ -217,10 +217,6 @@ export type UpdateCommandRecoveryState = {
   triageTarget: import("./update-command-triage.js").UpdateTriageTarget;
 };
 
-function serviceControlStdoutForMode(jsonMode: boolean): NodeJS.WritableStream {
-  return jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout;
-}
-
 export function createWindowsTaskAutoStartGuard(params: {
   root: string;
   before: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict">;
@@ -411,16 +407,18 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   }
   // Pure inventory inspection supplies no handoff callback. Execution supplies it
   // only after complete target admission, before online candidate validation.
-  if (
-    params.shouldRestart &&
-    serviceState.running &&
-    (await params.handoffFromGateway?.(serviceState))
-  ) {
-    throw new UpdateCommandAbort();
+  if (params.shouldRestart && serviceState.running && params.handoffFromGateway) {
+    const blockMessage = gatewayMaintenanceBlockMessage(serviceState, params.root, "handoff");
+    if (blockMessage) {
+      return { ...inspected, blockMessage };
+    }
+    if (await params.handoffFromGateway(serviceState)) {
+      throw new UpdateCommandAbort();
+    }
   }
   if (params.phase === "inspect") {
     const blockMessage = params.handoffFromGateway
-      ? gatewayAncestryBlockMessage(serviceState.runtime?.pid)
+      ? gatewayMaintenanceBlockMessage(serviceState, params.root)
       : undefined;
     if (
       blockMessage &&
@@ -471,9 +469,9 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
       ...(windowsTaskAutoStartRecovery ? { windowsTaskAutoStartRecovery } : {}),
     };
   }
-  const blockMessage = gatewayAncestryBlockMessage(serviceState.runtime?.pid);
+  const blockMessage = gatewayMaintenanceBlockMessage(serviceState, params.root);
   if (blockMessage) {
-    return { ...inspected, running: true, blockMessage };
+    return { ...inspected, blockMessage };
   }
 
   if (!params.jsonMode) {
@@ -502,7 +500,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
             : serviceUpdateVerdict,
       },
     });
-    const currentBlockMessage = gatewayAncestryBlockMessage(currentState.runtime?.pid);
+    const currentBlockMessage = gatewayMaintenanceBlockMessage(currentState, params.root);
     if (currentBlockMessage) {
       throw new UpdatePreMutationError("managed-service-preflight", currentBlockMessage);
     }
@@ -514,7 +512,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     }
     await service.stop({
       env: currentState.env,
-      stdout: serviceControlStdoutForMode(params.jsonMode),
+      stdout: params.jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout,
     });
     if (windowsTaskAutoStartRecovery) {
       await abortWindowsTaskUpdateIfInterrupted(windowsTaskAutoStartRecovery);
