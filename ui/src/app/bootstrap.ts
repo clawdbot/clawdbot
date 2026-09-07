@@ -6,6 +6,7 @@ import {
 import type { RouteLocation } from "@openclaw/uirouter";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { isSettingsTakeover } from "../app-navigation.ts";
 import {
   createApplicationRouter,
   locationForRoute,
@@ -35,6 +36,7 @@ import {
 } from "../pages/model-setup/first-run.ts";
 import { ControlUiPluginRuntime } from "../plugins/control-ui-runtime.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
+import type { ShellRouteState } from "./app-host-route-state.ts";
 import { resolveControlUiDocumentMode, type ControlUiDocumentMode } from "./approval-deep-link.ts";
 import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
@@ -61,7 +63,6 @@ import {
   loadGatewaySessionSelection,
   loadSettings,
   patchSettings,
-  persistSessionToken,
   resolveGatewayCredentialsForUrlEdit,
   resolvePageGatewaySettings,
   saveSettings,
@@ -173,12 +174,8 @@ export function bootstrapApplication(): ApplicationRuntime {
     // Remove URL credentials before deferred routing or Gateway authentication can expose them.
     history.replace(startup.location);
   }
-  if (startup.changed) {
-    if (documentMode) {
-      persistSessionToken(settings.gatewayUrl, settings.token);
-    } else {
-      saveSettings(settings);
-    }
+  if (startup.changed && !documentMode) {
+    saveSettings(settings);
   }
   let applicationLocation = normalizeLegacyTerminalViewLocation(startup.location, basePath);
   const startupSearchParams = new URLSearchParams(applicationLocation.search);
@@ -306,6 +303,13 @@ export function bootstrapApplication(): ApplicationRuntime {
   const theme = createApplicationTheme(settings, gateway);
   const nativeChatDrafts = createNativeChatDrafts();
   const nativeLinkRouting = startNativeLinkRouting({
+    signal: startupLifecycle.signal,
+    canPresentBrowserPanel: () => {
+      const shell = document.querySelector<HTMLElement & { routeState: ShellRouteState }>(
+        "openclaw-app-shell",
+      );
+      return shell?.isConnected === true && !isSettingsTakeover(shell.routeState.routeId);
+    },
     onNativeUpdateDeclined: () => {
       const snapshot = overlays.snapshot;
       const campaign = snapshot.updateSchedule?.campaign;

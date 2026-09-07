@@ -62,7 +62,7 @@ final class AppState {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "app-state")
 
     let isPreview: Bool
-    @ObservationIgnored private let gatewayConfigSaver: ([String: Any]) -> Bool
+    @ObservationIgnored private let gatewayConfigSaver: ([String: Any], Bool) -> Bool
     @ObservationIgnored let bundleLocationAllowsPersistentIntegration: Bool
     @ObservationIgnored private var isHydratingLaunchAtLogin = false
     private var isInitializing = true
@@ -453,7 +453,9 @@ final class AppState {
 
     init(
         preview: Bool = false,
-        gatewayConfigSaver: @escaping ([String: Any]) -> Bool = { OpenClawConfigFile.saveDict($0) })
+        gatewayConfigSaver: @escaping ([String: Any], Bool) -> Bool = {
+            OpenClawConfigFile.saveDict($0, allowGatewayModeRemoval: $1)
+        })
     {
         let isPreview = preview || ProcessInfo.processInfo.isRunningTests
         self.isPreview = isPreview
@@ -1297,6 +1299,61 @@ extension AppState {
         self.syncGatewayConfigNow(primaryGateway: configuration)
     }
 
+    func setPrimaryGateway(_ configuration: PrimaryGatewayControlConfiguration) throws {
+        guard self.gatewayConfigSyncIsEnabled, !self.isInitializing else {
+            throw PrimaryGatewayControlError.unavailable
+        }
+        let previousSyncState = self.gatewayConfigSyncState
+        let currentRoot = OpenClawConfigFile.loadDict()
+        self.applyConfigOverrides(currentRoot)
+        guard self.conflictedGatewayConfigFields.isEmpty else {
+            throw PrimaryGatewayControlError.conflictingEdits
+        }
+        let effectiveLocalPort = GatewayEnvironment.resolvedGatewayPort(
+            environment: ProcessInfo.processInfo.environment,
+            configPort: configuration.requestedLocalPort ?? OpenClawConfigFile.gatewayPort(root: currentRoot),
+            storedPort: GatewayEnvironment.gatewayPort(),
+            profile: .current)
+        let replacement = try configuration.replacingRoot(currentRoot, effectiveLocalPort: effectiveLocalPort)
+        let changed = Self.configFingerprint(currentRoot) != Self.configFingerprint(replacement.root)
+        self.gatewayConfigSyncTask?.cancel()
+        self.setGatewayConfigSyncState(.pending)
+        guard !changed || self.gatewayConfigSaver(replacement.root, configuration.isClear) else {
+            self.setGatewayConfigSyncState(previousSyncState)
+            throw PrimaryGatewayControlError.persistenceFailed
+        }
+
+        // Publish defaults and runtime routing only after the whole auth/route bundle commits.
+        self.dirtyGatewayConfigFields.removeAll()
+        self.conflictedGatewayConfigFields.removeAll()
+        self.lastObservedGatewayConfig = Self.gatewayConfigSnapshot(replacement.root)
+        self.applyGatewayConfigView(replacement.root, forcing: Set(GatewayConfigField.allCases))
+        if replacement.clearsTargetDefaults {
+            self.remoteProjectRoot = ""
+            self.remoteCliPath = ""
+            self.ifNotPreview {
+                AppDefaults.standard.removeObject(forKey: remoteProjectRootKey)
+                AppDefaults.standard.removeObject(forKey: remoteCliPathKey)
+                if self.remoteIdentity.isEmpty {
+                    AppDefaults.standard.removeObject(forKey: remoteIdentityKey)
+                }
+            }
+        }
+        self.onboardingSeen = !configuration.isClear
+        if self.onboardingSeen {
+            self.ifNotPreview {
+                AppDefaults.standard.set(currentOnboardingVersion, forKey: onboardingVersionKey)
+            }
+        }
+        self.lastConfigFingerprint = Self.configFingerprint(replacement.root)
+        self.setGatewayConfigSyncState(.current)
+        if changed {
+            GatewayDiscoveryPreferences.setPreferredStableID(nil)
+            WebChatManager.shared.resetPrimaryConnections()
+            NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
+        }
+    }
+
     private func syncGatewayConfigNow(primaryGateway: PrimaryGatewayConfiguration?) -> Bool {
         guard self.gatewayConfigSyncIsEnabled, !self.isInitializing else { return true }
         let previousSyncState = self.gatewayConfigSyncState
@@ -1324,7 +1381,7 @@ extension AppState {
             currentRoot: currentRoot,
             draft: draft,
             primaryGateway: primaryGateway)
-        guard !synced.changed || self.gatewayConfigSaver(synced.root) else {
+        guard !synced.changed || self.gatewayConfigSaver(synced.root, false) else {
             self.setGatewayConfigSyncState(primaryGateway == nil ? .failed : previousSyncState)
             Self.logger.warning("gateway config sync rejected to protect persisted gateway auth/mode")
             return false

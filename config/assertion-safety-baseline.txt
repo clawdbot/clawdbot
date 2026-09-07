@@ -1934,7 +1934,6 @@ src/agents/sessions/model-resolver.ts	1
 src/agents/sessions/package-manager.ts	3
 src/agents/sessions/resolve-config-value.ts	1
 src/agents/sessions/sdk.ts	3
-src/agents/sessions/session-manager-branching.ts	1
 src/agents/sessions/session-manager-codec.ts	5
 src/agents/sessions/session-manager-core.ts	1
 src/agents/sessions/session-manager-entries.ts	3
@@ -2256,7 +2255,7 @@ src/cli/capability-cli/model.ts	4
 src/cli/capability-cli/shared.ts	4
 src/cli/capability-cli/tts.ts	6
 src/cli/capability-cli/video.ts	7
-src/cli/capability-cli/web.ts	6
+src/cli/capability-cli/web.ts	5
 src/cli/channel-auth.ts	4
 src/cli/channel-options.ts	1
 src/cli/channels-cli.ts	5
@@ -3563,7 +3562,6 @@ src/state/backup-run-records.ts	1
 src/state/config-machine-state.ts	1
 src/state/local-onboarding-state.ts	1
 src/state/openclaw-agent-board-schema.ts	1
-src/state/openclaw-agent-db-migration-required.ts	1
 src/state/openclaw-agent-db-permissions.ts	1
 src/state/openclaw-agent-db-readonly.ts	1
 src/state/openclaw-agent-db-registry-listing.ts	3
@@ -3586,7 +3584,6 @@ src/state/openclaw-state-db-operator-approval-migration.ts	1
 src/state/openclaw-state-db-readonly.ts	1
 src/state/openclaw-state-db-schema-additive.ts	1
 src/state/openclaw-state-db-schema-helpers.ts	4
-src/state/openclaw-state-db-schema-migration-required.ts	2
 src/state/openclaw-state-db-schema-repair.ts	2
 src/state/openclaw-state-ownership.ts	1
 src/state/openclaw-state-snapshot-sanitizer.ts	1
@@ -3687,7 +3684,7 @@ src/wizard/clack-navigation-prompts.ts	11
 src/wizard/clack-prompter.ts	2
 src/wizard/navigation-prompter.ts	5
 src/wizard/session.ts	3
-src/wizard/setup.gateway-config.ts	5
+src/wizard/setup.gateway-config.ts	4
 src/wizard/setup.migration-canonical.ts	1
 src/wizard/setup.migration-finalize.ts	1
 src/wizard/setup.migration-snapshot.ts	5
@@ -3847,7 +3844,7 @@ ui/src/pages/agents/agents-page.ts	1
 ui/src/pages/agents/memory/memory-panel.ts	2
 ui/src/pages/agents/memory/view.ts	1
 ui/src/pages/agents/model-config.ts	3
-ui/src/pages/agents/panels-overview.ts	6
+ui/src/pages/agents/panels-overview.ts	3
 ui/src/pages/agents/panels-status-files.ts	10
 ui/src/pages/agents/panels-tools-skills.ts	1
 ui/src/pages/channels/nostr-profile-ops.ts	1

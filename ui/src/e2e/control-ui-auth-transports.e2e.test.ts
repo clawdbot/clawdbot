@@ -531,7 +531,7 @@ async function createBrowserPage(
   expect(await confirmation.textContent()).toContain(gatewayUrl);
   expect(proxy.evidence).toHaveLength(evidenceStartIndex);
   await confirmation
-    .getByRole("button", { name: "Confirm", exact: true })
+    .getByRole("button", { name: `Switch to ${new URL(gatewayUrl).host}`, exact: true })
     .click({ timeout: controlUiSettleTimeoutMs });
   await expect
     .poll(() => proxy.evidence.length, { timeout: 15_000 })
@@ -553,7 +553,7 @@ async function captureChromiumScreenshot(
 
 async function captureConnectedAuth(fileName: string, page: Page): Promise<void> {
   await captureChromiumScreenshot(fileName, page.locator(".shell"), [
-    page.getByRole("textbox", { name: "WebSocket URL", exact: true }),
+    page.getByRole("textbox", { name: "Gateway URL", exact: true }),
     page.getByText("Authenticated via trusted proxy.", { exact: true }),
   ]);
 }
@@ -907,7 +907,8 @@ suite.define(() => {
             entry.browserConnect !== undefined,
           queryEvidenceStart,
         );
-        expect(queryEvidence.browserConnect?.authFields).toEqual(["token"]);
+        // The shared secret travels in both connect fields since the single secret field.
+        expect(queryEvidence.browserConnect?.authFields).toEqual(["password", "token"]);
 
         const originEvidenceStart = proxy.evidence.length;
         await connected.page.evaluate((gatewayUrl) => {

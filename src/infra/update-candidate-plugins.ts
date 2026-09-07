@@ -7,6 +7,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { INSTALLED_PLUGIN_INDEX_STATE_KEY } from "../plugins/installed-plugin-index-row.js";
 import type { ConfigMachineStateDatabase } from "../state/config-machine-state.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { resolveUserPath } from "./home-dir.js";
 import {
@@ -49,7 +50,8 @@ export async function projectUpdateCandidatePlugins(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<Record<string, string>> {
   const sourceRoot = path.resolve(params.stateDir);
-  const shared = path.join(params.targetStateDir, "state", "openclaw.sqlite");
+  const targetStateDir = resolvePathViaExistingAncestorSync(path.resolve(params.targetStateDir));
+  const shared = path.join(targetStateDir, "state", "openclaw.sqlite");
   let value: Record<string, unknown> | undefined;
   let records: Record<string, PluginInstallRecord> = params.config.plugins?.installs ?? {};
   if (
@@ -98,7 +100,7 @@ export async function projectUpdateCandidatePlugins(params: {
     throw error;
   });
   const project = (source: string) =>
-    resolveUpdateCandidatePluginPath(canonicalStateRoot, params.targetStateDir, source);
+    resolveUpdateCandidatePluginPath(canonicalStateRoot, targetStateDir, source);
   const locators: Array<{ source: string; real: string; file: boolean }> = [];
   const roots = new Map<string, string>();
   const npmProjects = path.join(canonicalStateRoot, "npm", "projects");
@@ -134,7 +136,6 @@ export async function projectUpdateCandidatePlugins(params: {
     const real = await fs.realpath(source);
     const file = stat.isFile();
     locators.push({ source, real, file });
-    const managed = isPathInside(npmProjects, real) || isPathInside(npmModules, real);
     // Copy the whole managed project so hoisted dependencies remain available.
     const owner = isPathInside(npmProjects, real)
       ? path.join(npmProjects, path.relative(npmProjects, real).split(path.sep)[0]!)
@@ -144,13 +145,13 @@ export async function projectUpdateCandidatePlugins(params: {
           ? await resolvePluginFilePackageRoot(real)
           : real;
     if (!roots.has(owner)) {
-      roots.set(owner, project(managed || file ? owner : source));
+      roots.set(owner, project(owner));
     }
   }
-  const { copies, hostLinks } = await copyUpdateCandidatePluginTrees({
+  const copies = await copyUpdateCandidatePluginTrees({
     roots,
     project,
-    targetStateDir: params.targetStateDir,
+    targetStateDir,
     candidateRoot: params.candidateRoot,
   });
   for (const { source, real, file } of locators) {
@@ -159,9 +160,9 @@ export async function projectUpdateCandidatePlugins(params: {
       throw new Error("Plugin payload has no private copy root");
     }
     const target = path.join(copy[1], path.relative(copy[0], real));
-    const alias = file && path.basename(source) !== path.basename(real) ? project(source) : target;
+    const alias = path.basename(source) !== path.basename(real) ? project(source) : target;
     if (alias !== target) {
-      // Preserve the entry filename/ID, while Node resolves relative imports beside its copied target.
+      // Preserve the entry basename/ID while Node resolves imports from its canonical copied owner.
       const [existing, targetIdentity] = await Promise.all([
         fs.stat(alias, { bigint: true }).catch((error: unknown) => {
           if (hasNodeErrorCode(error, "ENOENT")) {
@@ -175,22 +176,14 @@ export async function projectUpdateCandidatePlugins(params: {
       if (!existing || !sameFileIdentity(existing, targetIdentity)) {
         await fs.mkdir(path.dirname(alias), { recursive: true });
         await fs.rm(alias, { force: true });
-        await fs.symlink(target, alias, "file");
+        await fs.symlink(
+          target,
+          alias,
+          file ? "file" : process.platform === "win32" ? "junction" : "dir",
+        );
       }
     }
     pluginPaths[source] = alias;
-  }
-  for (const link of hostLinks) {
-    const { linkOpenClawPeerDependencies } = await import("../plugins/plugin-peer-link.js");
-    const result = await linkOpenClawPeerDependencies({
-      installedDir: path.dirname(path.dirname(link)),
-      hostRoot: params.candidateRoot,
-      peerDependencies: { openclaw: "*" },
-      logger: {},
-    });
-    if (result.skipped) {
-      throw new Error("Could not bind copied plugin to candidate host");
-    }
   }
   if (value) {
     const projected = structuredClone(records);

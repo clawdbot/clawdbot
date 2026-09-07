@@ -115,19 +115,17 @@ export function compactSkillsPromptForContext(prompt: string, contextTokenBudget
   return result.length < prompt.length ? result : prompt;
 }
 
-/**
- * Keep this formatter's XML layout byte-for-byte aligned with the upstream
- * Agent Skills formatter so we can avoid importing the full session runtime
- * package root on the cold skills path. Visibility policy is applied upstream
- * before calling this helper.
- */
-export function formatSkillsForPromptCore(skills: Skill[]): string {
+function formatSkillCatalog(
+  skills: Skill[],
+  loadingInstructions: string,
+  descriptionForSkill: (skill: Skill) => string | undefined,
+): string {
   if (skills.length === 0) {
     return "";
   }
   const lines = [
     "\n\nThe following skills provide specialized instructions for specific tasks.",
-    "Read a skill's file at its listed location when the task matches its description.",
+    loadingInstructions,
     "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
     "",
     "<available_skills>",
@@ -135,7 +133,10 @@ export function formatSkillsForPromptCore(skills: Skill[]): string {
   for (const skill of skills) {
     lines.push("  <skill>");
     lines.push(`    <name>${escapeSkillXml(skill.name)}</name>`);
-    lines.push(`    <description>${escapeSkillXml(skill.description)}</description>`);
+    const description = descriptionForSkill(skill);
+    if (description !== undefined) {
+      lines.push(`    <description>${escapeSkillXml(description)}</description>`);
+    }
     lines.push(`    <location>${escapeSkillXml(skill.filePath)}</location>`);
     if (skill.locationNote) {
       lines.push(`    <location_note>${escapeSkillXml(skill.locationNote)}</location_note>`);
@@ -144,6 +145,15 @@ export function formatSkillsForPromptCore(skills: Skill[]): string {
   }
   lines.push("</available_skills>");
   return lines.join("\n");
+}
+
+/** Render the full catalog without importing the session runtime or reapplying visibility. */
+export function formatSkillsForPromptCore(skills: Skill[]): string {
+  return formatSkillCatalog(
+    skills,
+    "Read a skill's file at its listed location when the task matches its description.",
+    (skill) => skill.description,
+  );
 }
 
 /** Compact prompt catalog with descriptions bounded independently from identities. */
@@ -158,30 +168,14 @@ export function formatSkillsCompactForPrompt(
     0,
     Math.floor(opts?.descriptionMaxChars ?? COMPACT_DESCRIPTION_MAX_CHARS),
   );
-  const lines = [
-    "\n\nThe following skills provide specialized instructions for specific tasks.",
+  return formatSkillCatalog(
+    skills,
     descriptionMaxChars > 0
       ? "Read a skill's file at its listed location when the task matches its name or description."
       : "Read a skill's file at its listed location when the task matches its name.",
-    "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
-    "",
-    "<available_skills>",
-  ];
-  for (const skill of skills) {
-    lines.push("  <skill>");
-    lines.push(`    <name>${escapeSkillXml(skill.name)}</name>`);
-    if (descriptionMaxChars > 0) {
-      const description = truncateSkillDescription(skill.description, descriptionMaxChars);
-      if (description) {
-        lines.push(`    <description>${escapeSkillXml(description)}</description>`);
-      }
-    }
-    lines.push(`    <location>${escapeSkillXml(skill.filePath)}</location>`);
-    if (skill.locationNote) {
-      lines.push(`    <location_note>${escapeSkillXml(skill.locationNote)}</location_note>`);
-    }
-    lines.push("  </skill>");
-  }
-  lines.push("</available_skills>");
-  return lines.join("\n");
+    (skill) =>
+      descriptionMaxChars > 0
+        ? truncateSkillDescription(skill.description, descriptionMaxChars) || undefined
+        : undefined,
+  );
 }

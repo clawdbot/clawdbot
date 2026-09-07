@@ -487,6 +487,15 @@ suite.define(() => {
         if (testCase.webChrome) {
           await installNativeWebChrome(page);
         }
+        if (testCase.preserveCollapsedNavigation) {
+          // Bootstrap consumes this one-shot intent; seed each recovered document
+          // before its router can canonicalize the URL during the retry probe.
+          await page.addInitScript(() => {
+            const url = new URL(window.location.href);
+            url.searchParams.set("nav", "collapsed");
+            window.history.replaceState(window.history.state, "", url);
+          });
+        }
         const failure = await installChunkFailure(page, testCase.chunk);
         await installMockGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
@@ -505,13 +514,6 @@ suite.define(() => {
           });
         }
 
-        if (testCase.preserveCollapsedNavigation) {
-          await page.evaluate(() => {
-            const url = new URL(window.location.href);
-            url.searchParams.set("nav", "collapsed");
-            window.history.replaceState(window.history.state, "", url);
-          });
-        }
         await retryThroughReload(page, error);
         if (testCase.webChrome) {
           const toolbar = page.locator(".macos-titlebar-controls");

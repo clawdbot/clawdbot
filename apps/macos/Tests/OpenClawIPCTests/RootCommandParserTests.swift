@@ -14,7 +14,7 @@ struct RootCommandParserTests {
     }
 
     @Test func `help aliases resolve to usage`() {
-        for args in [[], ["-h"], ["--help"], ["help"]] {
+        for args in [["-h"], ["--help"], ["help"]] {
             #expect(resolveRootCommandAction(args) == .usage)
         }
     }

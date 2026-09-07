@@ -24,21 +24,23 @@ import {
   evictArchivedSessionLineage,
   fetchChildSessionRows,
   fetchSessionLineage,
-  preserveActiveSessionLineageRows,
+  mergeRefreshedChildSessionRows,
   publishActiveSessionLineage,
+  retireStaleChildSessionRows,
 } from "./app-sidebar-child-session-data.ts";
 import { SessionCatalogLiveState } from "./app-sidebar-session-catalog-live.ts";
-import { bindAdoptedCatalogSession } from "./app-sidebar-session-catalogs.ts";
 import type {
   SidebarSessionMutationScope,
   SidebarSessionsScrollState,
 } from "./app-sidebar-session-types.ts";
 import { createPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refresh-status.ts";
 import {
+  applySessionCatalogContinuation,
   applySessionCatalogHostEvent as applySessionCatalogHostEventToData,
   applySessionCatalogPresence as applySessionCatalogPresenceToData,
   loadMoreSessionCatalog as loadMoreSessionCatalogData,
   refreshSessionCatalogs as refreshSessionCatalogData,
+  requestSessionCatalogRefresh,
   resolveSessionCatalogAgentId,
   scheduleSessionCatalogRefresh,
   type SessionCatalogDataOwner,
@@ -327,29 +329,20 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   private readonly handleCatalogSessionContinued = (
     event: CustomEvent<CatalogSessionContinuedDetail>,
   ) => {
-    const detail = event.detail;
-    const rawAgentId = typeof detail?.agentId === "string" ? detail.agentId.trim() : "";
-    const eventAgentId = rawAgentId ? normalizeAgentId(rawAgentId) : null;
-    const currentAgentId = this.sessionCatalogAgentId
-      ? normalizeAgentId(this.sessionCatalogAgentId)
-      : null;
-    if (!detail?.sessionKey || !eventAgentId || eventAgentId !== currentAgentId) {
-      return;
-    }
-    this.sessionCatalogs = bindAdoptedCatalogSession(this.sessionCatalogs, detail);
-    this.requestSessionDataUpdate();
-    // Invalidate in-flight polls and load-more merges so a pre-adoption
-    // snapshot cannot clobber the patched rows; the 30s poll reconfirms.
-    this.sessionCatalogRevision += 1;
-    this.sessionCatalogRevisions.set(
-      detail.catalogId,
-      (this.sessionCatalogRevisions.get(detail.catalogId) ?? 0) + 1,
-    );
+    applySessionCatalogContinuation(this, event.detail);
   };
 
   private readonly handleSessionCatalogPageActivation = (event: Event) => {
     scheduleSessionCatalogRefresh(this, event.type === "visibilitychange");
   };
+
+  invalidateSessionCatalogs(): void {
+    this.sessionCatalogRevision += 1;
+    for (const { id } of this.sessionCatalogs) {
+      this.sessionCatalogRevisions.set(id, (this.sessionCatalogRevisions.get(id) ?? 0) + 1);
+    }
+    requestSessionCatalogRefresh(this, true);
+  }
 
   refreshSessionCatalogs(): Promise<void> {
     return refreshSessionCatalogData(this);
@@ -376,15 +369,10 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   private resetChildSessionState(preserveOperatorContext = false): void {
     this.childSessionGeneration += 1;
-    this.childSessionRowsByParent = preserveOperatorContext
-      ? preserveActiveSessionLineageRows(
-          this.activeSessionLineageRouteKey,
-          this.childSessionRowsByParent,
-        )
-      : {};
     this.loadedChildSessionKeys = new Set();
     this.loadingChildSessionKeys = new Set();
     if (!preserveOperatorContext) {
+      this.childSessionRowsByParent = {};
       this.childSessionErrorsByParent = new Map();
       this.activeSessionLineageRoot = null;
       this.activeSessionLineageSelectedRow = null;
@@ -413,8 +401,8 @@ export class SessionDataController implements ReactiveController, SessionCatalog
           ? preserveRosterPresentationMetadata(canonical, previous)
           : (previous ?? null);
       }
-      // Canonical root changes invalidate successful child snapshots, not operator-owned failures.
-      // Expanded parents refetch only when no failure blocks them.
+      // Navigation retains snapshots for expanded or selected parents that revalidate and
+      // retires collapsed snapshots until reopened. Generation fencing and operator errors persist.
       this.resetChildSessionState(true);
       this.requestSessionDataUpdate();
     }
@@ -563,6 +551,10 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     return refreshSidebarSessionList(this, this.sessionsAgentId, true);
   }
 
+  retireStaleChildSessions(revalidating: ReadonlySet<string>): void {
+    retireStaleChildSessionRows(this, this.activeSessionLineageRouteKey, revalidating);
+  }
+
   async loadChildSessions(parentKey: string): Promise<void> {
     if (
       !parentKey ||
@@ -586,12 +578,14 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       if (!rows || !isCurrent()) {
         return;
       }
-      for (const existing of this.childSessionRowsByParent[parentKey] ?? []) {
-        if (!rows.some((row) => row.key === existing.key)) {
-          rows.push(existing);
-        }
-      }
-      this.childSessionRowsByParent = { ...this.childSessionRowsByParent, [parentKey]: rows };
+      // Server rows replace the snapshot, so removed children disappear; only the
+      // routed lineage survives omission because the selected pane still needs it.
+      this.childSessionRowsByParent = mergeRefreshedChildSessionRows(
+        this.activeSessionLineageRouteKey,
+        this.childSessionRowsByParent,
+        parentKey,
+        rows,
+      );
       this.loadedChildSessionKeys = new Set([...this.loadedChildSessionKeys, parentKey]);
     } catch (error) {
       if (generation !== this.childSessionGeneration || sessions !== this.context?.sessions) {

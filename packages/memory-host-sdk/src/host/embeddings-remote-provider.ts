@@ -1,4 +1,3 @@
-// Memory Host SDK module implements embeddings remote provider behavior.
 import {
   resolveEmbeddingEndpointUrl,
   resolveRemoteEmbeddingBearerClient,

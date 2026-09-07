@@ -11,28 +11,21 @@ type LoginGateElement = HTMLElement & {
   updateComplete: Promise<boolean>;
 };
 
-async function mountFailure(
-  lastError: string,
-  lastErrorCode: string | null,
-  credentials = { token: "", password: "" },
-) {
+async function mountFailure(lastError: string, lastErrorCode: string | null, secret = "") {
   const element = document.createElement("openclaw-login-gate") as LoginGateElement;
   element.props = {
     resourceBasePath: "",
     connected: false,
     lastError,
     lastErrorCode,
-    hasToken: Boolean(credentials.token),
-    hasPassword: Boolean(credentials.password),
+    hasToken: Boolean(secret),
+    hasPassword: Boolean(secret),
     gatewayUrl: "ws://127.0.0.1:18789",
-    ...credentials,
-    showGatewayToken: false,
-    showGatewayPassword: false,
+    secret,
+    showGatewaySecret: false,
     onGatewayUrlChange: vi.fn(),
-    onTokenChange: vi.fn(),
-    onPasswordChange: vi.fn(),
-    onToggleGatewayToken: vi.fn(),
-    onToggleGatewayPassword: vi.fn(),
+    onSecretChange: vi.fn(),
+    onToggleGatewaySecret: vi.fn(),
     onConnect: vi.fn(),
   };
   document.body.append(element);
@@ -68,13 +61,13 @@ describe("login gate failure recovery", () => {
   });
 
   it.each([
-    { name: "empty", token: "", password: "" },
-    { name: "populated", token: "test-token", password: "test-password" },
-  ])("explains missing identity headers with $name credentials", async ({ token, password }) => {
+    { name: "empty", secret: "" },
+    { name: "populated", secret: "test-secret" },
+  ])("explains missing identity headers with $name credentials", async ({ secret }) => {
     const element = await mountFailure(
       "unauthorized",
       ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
-      { token, password },
+      secret,
     );
     const failure = element.querySelector(".login-gate__failure");
     const steps = failure?.querySelector(".login-gate__failure-steps")?.textContent;
@@ -134,66 +127,63 @@ describe("login gate failure recovery", () => {
     ).toEqual(["openclaw gateway auth-token --show", "openclaw doctor --generate-gateway-token"]);
   });
 
-  it("keeps the visible credential mode while a token is being replaced", async () => {
-    const onTokenChange = vi.fn();
-    const onPasswordChange = vi.fn();
-    const element = document.createElement("openclaw-login-gate") as LoginGateElement;
-    const render = (token: string) => {
-      element.props = {
-        resourceBasePath: "",
-        connected: false,
-        lastError: "unauthorized: gateway token mismatch",
-        lastErrorCode: ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
-        hasToken: Boolean(token),
-        hasPassword: true,
-        gatewayUrl: "ws://127.0.0.1:18789",
-        token,
-        password: "shared-password",
-        showGatewayToken: false,
-        showGatewayPassword: false,
-        onGatewayUrlChange: vi.fn(),
-        onTokenChange,
-        onPasswordChange,
-        onToggleGatewayToken: vi.fn(),
-        onToggleGatewayPassword: vi.fn(),
-        onConnect: vi.fn(),
-      };
-    };
-    render("stale-token");
-    document.body.append(element);
-    await element.updateComplete;
+  it("edits and reveals one Gateway secret without choosing a credential type", async () => {
+    const element = await mountFailure("", null, "old-secret");
     const input = element.querySelector<HTMLInputElement>("#login-gate-credential")!;
-    expect(input.value).toBe("stale-token");
+    expect(element.querySelector('label[for="login-gate-credential"]')?.textContent).toBe(
+      "Gateway secret",
+    );
+    expect(input.placeholder).toBe("Paste the token or type the password");
+    expect(input.type).toBe("password");
+    expect(input.value).toBe("old-secret");
+    expect(element.querySelector('[role="radiogroup"]')).toBeNull();
 
     input.value = "";
     input.dispatchEvent(new Event("input", { bubbles: true }));
-    render("");
+    element.props = { ...element.props, secret: "" };
     await element.updateComplete;
-    input.value = "fresh-token";
+    input.value = "replacement-secret";
     input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(element.props.onSecretChange).toHaveBeenNthCalledWith(1, "");
+    expect(element.props.onSecretChange).toHaveBeenNthCalledWith(2, "replacement-secret");
 
-    expect(onTokenChange.mock.calls.map(([value]) => value)).toEqual(["", "fresh-token"]);
-    expect(onPasswordChange).not.toHaveBeenCalled();
-    expect(
-      element.querySelector('.login-gate__segmented [aria-checked="true"]')?.textContent?.trim(),
-    ).toBe("Token");
+    element
+      .querySelector<HTMLButtonElement>('[aria-label="Toggle Gateway secret visibility"]')
+      ?.click();
+    expect(element.props.onToggleGatewaySecret).toHaveBeenCalledOnce();
+    element.props = { ...element.props, secret: "replacement-secret", showGatewaySecret: true };
+    await element.updateComplete;
+    expect(input.type).toBe("text");
+    expect(input.value).toBe("replacement-secret");
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(element.props.onConnect).toHaveBeenCalledOnce();
   });
 
-  it("selects the password field when the Gateway asks for a password despite a saved token", async () => {
-    const element = await mountFailure(
-      "password missing",
-      ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
-      { token: "saved-token", password: "" },
-    );
-
-    expect(
-      element.querySelector('.login-gate__segmented [aria-checked="true"]')?.textContent?.trim(),
-    ).toBe("Password");
-    expect(element.querySelector<HTMLInputElement>("#login-gate-credential")?.value).toBe("");
-    expect(element.querySelector(".login-gate__failure-title")?.textContent?.trim()).toBe(
-      "Password needed",
-    );
-  });
+  it.each([
+    [ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING, "auth-required"],
+    [ConnectErrorDetailCodes.AUTH_PASSWORD_NOT_CONFIGURED, "auth-required"],
+    [ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH, "auth-failed"],
+  ])(
+    "explains a password-mode %s error without changing the input or suggesting token recovery",
+    async (code, kind) => {
+      const element = await mountFailure("unauthorized", code, "entered-secret");
+      const failure = element.querySelector(".login-gate__failure");
+      expect(failure?.getAttribute("data-kind")).toBe(kind);
+      expect(element.querySelector<HTMLInputElement>("#login-gate-credential")?.value).toBe(
+        "entered-secret",
+      );
+      expect(element.querySelector(".login-gate__failure-title")?.textContent?.trim()).toBe(
+        "This Gateway expects its password",
+      );
+      expect(element.querySelector(".login-gate__failure-steps")?.textContent).toContain(
+        "Type the configured Gateway password into Gateway secret.",
+      );
+      expect(element.querySelector(".login-gate__failure-steps")?.textContent).not.toMatch(
+        /auth-token|generate-gateway-token|auth mode/,
+      );
+      expect(element.querySelector('[role="radiogroup"]')).toBeNull();
+    },
+  );
 
   it("keeps Connect available beside Refresh for a protocol mismatch", async () => {
     const element = await mountFailure(
@@ -314,7 +304,7 @@ describe("login gate failure recovery", () => {
     const connection = failure?.querySelector<HTMLDetailsElement>(".login-gate__connection");
     expect(connection?.open).toBe(false);
     expect(connection?.querySelector("summary")?.textContent?.replace(/\s+/g, " ")).toContain(
-      "Connecting to 127.0.0.1:18789 · no credential Change",
+      "Connecting to 127.0.0.1:18789 · no secret Change",
     );
     expect(element.querySelectorAll("button.login-gate__connect")).toHaveLength(1);
   });

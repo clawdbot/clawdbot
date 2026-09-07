@@ -1,3 +1,4 @@
+import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
@@ -40,6 +41,80 @@ describe("CodexAppServerTurnRouter", () => {
     expect(addRequestHandler).toHaveBeenCalledTimes(1);
     expect(addCloseHandler).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["reserve", "activate"] as const)(
+    "runs %s callbacks in each attempt's context on a reused transport",
+    async (registration) => {
+      const context = new AsyncLocalStorage<string>();
+      const transport = context.run("first", () => new AsyncResource("codex-test-transport"));
+      const harness = createHarness();
+      const router = getCodexAppServerTurnRouter(harness.client);
+      try {
+        for (const owner of ["first", "second"]) {
+          const notifications: Array<{ owner: string | undefined; unbound: boolean }> = [];
+          const receipts: Array<{ owner: string | undefined; originalReceiver: boolean }> = [];
+          const handlers = {
+            async onRequest(this: unknown) {
+              await Promise.resolve();
+              return { owner: context.getStore() ?? "missing", unbound: this === undefined };
+            },
+            async onNotification(this: unknown) {
+              await Promise.resolve();
+              notifications.push({ owner: context.getStore(), unbound: this === undefined });
+            },
+            onNotificationReceived(this: unknown) {
+              receipts.push({
+                owner: context.getStore(),
+                originalReceiver: this === originalHandlers,
+              });
+            },
+          };
+          const options = { threadId: "shared-thread", ...handlers };
+          const originalHandlers: object = registration === "reserve" ? options : handlers;
+          const route = context.run(registration === "reserve" ? owner : "reservation", () =>
+            router.reserveThread(
+              registration === "reserve" ? options : { threadId: "shared-thread" },
+            ),
+          );
+          try {
+            if (registration === "activate") {
+              await context.run(owner, () => route.activate(handlers));
+            }
+            route.armTurn();
+            await route.bindTurn(owner);
+            const notification = {
+              method: "item/agentMessage/delta",
+              params: { threadId: "shared-thread", turnId: owner, delta: owner },
+            };
+            transport.runInAsyncScope(() => {
+              harness.send(notification);
+              harness.send({
+                id: owner,
+                method: "item/tool/call",
+                params: { threadId: "shared-thread", turnId: owner, tool: "message" },
+              });
+            });
+            expect(await waitForResponse(harness, owner)).toMatchObject({
+              result: { owner, unbound: true },
+            });
+            await route.drain();
+            expect(notifications).toEqual([{ owner, unbound: true }]);
+            expect(receipts).toEqual([{ owner, originalReceiver: true }]);
+            route.release();
+            transport.runInAsyncScope(() => harness.send(notification));
+            await settleInput();
+            expect(notifications).toHaveLength(1);
+            expect(receipts).toHaveLength(1);
+          } finally {
+            route.release();
+          }
+        }
+      } finally {
+        transport.emitDestroy();
+        context.disable();
+      }
+    },
+  );
 
   it("delivers global startup warnings to the next reserved thread", async () => {
     const harness = createHarness();

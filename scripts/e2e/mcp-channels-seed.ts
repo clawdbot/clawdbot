@@ -2,20 +2,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  normalizeSessionDeliveryState,
-  upsertSessionEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
-import { appendSessionTranscriptMessagesByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import { applyDockerOpenAiProviderConfig, type OpenClawConfig } from "./docker-openai-seed.ts";
 
 async function main() {
   const stateDir = process.env.OPENCLAW_STATE_DIR?.trim() || path.join(os.homedir(), ".openclaw");
   const configPath =
     process.env.OPENCLAW_CONFIG_PATH?.trim() || path.join(stateDir, "openclaw.json");
-  const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
   const now = Date.now();
+  const frozenTarget = process.env.OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT === "legacy";
 
   await fs.mkdir(path.dirname(configPath), { recursive: true });
 
@@ -23,6 +17,7 @@ async function main() {
     {
       gateway: {
         controlUi: {
+          ...(frozenTarget ? { allowInsecureAuth: true } : {}),
           enabled: false,
         },
       },
@@ -41,6 +36,74 @@ async function main() {
   );
 
   await fs.writeFile(configPath, JSON.stringify(seededConfig, null, 2), "utf-8");
+
+  if (frozenTarget) {
+    const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+    const sessionFile = path.join(sessionsDir, "sess-main.jsonl");
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        "agent:main:main": {
+          sessionId: "sess-main",
+          sessionFile,
+          updatedAt: now,
+          deliveryContext: {
+            channel: "imessage",
+            to: "+15551234567",
+            accountId: "imessage-default",
+            threadId: "thread-42",
+          },
+          displayName: "Docker MCP Channel Smoke",
+          derivedTitle: "Docker MCP Channel Smoke",
+          lastMessagePreview: "seeded transcript",
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+        JSON.stringify({
+          id: "msg-1",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "hello from seeded transcript" }],
+            timestamp: now,
+          },
+        }),
+        JSON.stringify({
+          id: "msg-attachment",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "seeded image attachment" },
+              { type: "image", source: { type: "base64", media_type: "image/png", data: "abc" } },
+            ],
+            timestamp: now + 1,
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+    process.stdout.write(
+      `${JSON.stringify({ ok: true, stateDir, configPath, sessionFile, storePath })}\n`,
+    );
+    return;
+  }
+
+  const [
+    { normalizeSessionDeliveryState, upsertSessionEntry },
+    { appendSessionTranscriptMessagesByIdentity },
+    { resolveOpenClawAgentSqlitePath },
+  ] = await Promise.all([
+    import("openclaw/plugin-sdk/session-store-runtime"),
+    import("openclaw/plugin-sdk/session-transcript-runtime"),
+    import("openclaw/plugin-sdk/sqlite-runtime"),
+  ]);
+  const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
 
   await upsertSessionEntry({
     agentId: "main",
