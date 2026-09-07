@@ -54,6 +54,7 @@ export async function prepareSessionWorktree(params: {
   workspace: string;
   name?: string;
   baseRef?: string;
+  checkoutCommit?: string;
   label?: string;
   runSetupScript: boolean;
   signal?: AbortSignal;
@@ -110,6 +111,7 @@ export async function prepareSessionWorktree(params: {
       name: params.name,
       suggestedName: slugifyWorktreeTitle(params.label ?? ""),
       baseRef: params.baseRef,
+      checkoutCommit: params.checkoutCommit,
       runSetupScript: params.runSetupScript,
       signal: params.signal,
       commitGuard,

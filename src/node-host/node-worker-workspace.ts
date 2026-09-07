@@ -9,6 +9,10 @@ import type {
   NodeWorkerPreparedWorkspaceInput,
   NodeWorkerPreparedWorkspaceResult,
 } from "../worker/node-workspace-prepared-protocol.js";
+import {
+  NODE_WORKSPACE_DRAIN_COMMAND,
+  projectNodeWorkerWorkspaceExecResult,
+} from "../worker/node-workspace-protocol.js";
 import type {
   NodeWorkerWorkspaceExecInput,
   NodeWorkerWorkspaceExecResult,
@@ -27,10 +31,11 @@ import {
 } from "./node-worker-transfer-client.js";
 import {
   execNodeWorkerWorkspace,
-  ensureNodeWorkerWorkspaceDirectory,
+  removeIfEmpty,
   removeNodeWorkerWorkspaceDirectory,
 } from "./node-worker-workspace-exec.js";
 import {
+  ensureContainedDirectory as ensureNodeWorkerWorkspaceDirectory,
   hashNodeWorkerWorkspaceComponent as hashPathComponent,
   nodeWorkerWorkspaceGenerationKey as workspaceGenerationKey,
   nodeWorkerWorkspaceLaunchGenerationKey as launchGenerationKey,
@@ -40,28 +45,14 @@ import {
   resolveNodeManagedWorkspaceIdentity,
   resolveNodePreparedWorkspaceIdentity,
   type NodeWorkerManagedWorkspaceRequest,
+  type NodeWorkerWorkspaceLaunchReference,
+  type NodeWorkerWorkspaceSession as WorkspaceSession,
 } from "./node-worker-workspace-identity.js";
 
 const WORKSPACE_RETENTION_DELETE_LIMIT = 256;
 const ENVIRONMENT_HASH_PATTERN = /^[a-f0-9]{16}$/u;
 const SESSION_HASH_PATTERN = /^[a-f0-9]{32}$/u;
 const MANIFEST_FILE_PATTERN = /^[a-f0-9]{64}\.json$/u;
-
-type NodeWorkerWorkspaceLaunchReference = {
-  gatewayNamespace: string;
-  environmentId: string;
-  sessionId: string;
-  ownerEpoch: number;
-};
-
-type WorkspaceSession = {
-  gatewayNamespace: string;
-  environmentHash: string;
-  sessionHash: string;
-  workspacesRoot: string;
-  environmentRoot: string;
-  sessionRoot: string;
-};
 
 type AcceptedRetainSnapshot = {
   controllerId: string;
@@ -119,17 +110,6 @@ async function removeOwnedFile(
       return false;
     }
     throw error;
-  }
-}
-
-async function removeIfEmpty(target: string): Promise<void> {
-  try {
-    await fsp.rmdir(target);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST") {
-      throw error;
-    }
   }
 }
 
@@ -676,6 +656,21 @@ export class NodeWorkerWorkspaceRuntime {
           prepared?.preparation_key !== input.preparationKey
         ) {
           throw new Error("INVALID_REQUEST: prepared workspace registration is missing or changed");
+        }
+        // Drain proves prior queued work settled, including an interrupted prepared
+        // mutation whose durable row is now retiring; it does not reopen that workspace.
+        if (input.argv[0] === NODE_WORKSPACE_DRAIN_COMMAND) {
+          return projectNodeWorkerWorkspaceExecResult(
+            prepared?.workspace_dir ?? path.join(sessionRootCandidate, String(input.generation)),
+            {
+              stdout: "drained\n",
+              stderr: "",
+              code: 0,
+              signal: null,
+              killed: false,
+              termination: "exit",
+            },
+          );
         }
         let sessionRoot: string;
         let workspacePath: string;

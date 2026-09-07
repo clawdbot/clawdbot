@@ -17,7 +17,7 @@ import {
   advancePreparedModelRuntimeConfig,
   loadPublishedGatewayReplyDispatchRuntime,
   prepareModelRuntimeSnapshot,
-  refreshStalePreparedModelRuntimeCatalog,
+  refreshPreparedModelRuntimeCatalog,
   registerPreparedModelRuntimePublicationListener,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
@@ -111,11 +111,11 @@ describe("prepared model runtime reload auth adoption", () => {
       entries: [model],
       routeVariants: [model],
     });
-    await expect(refreshStalePreparedModelRuntimeCatalog(published)).resolves.toMatchObject({
+    await expect(refreshPreparedModelRuntimeCatalog(published)).resolves.toMatchObject({
       entries: [model],
     });
     expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
-    await expect(refreshStalePreparedModelRuntimeCatalog(published)).resolves.toBeUndefined();
+    await expect(refreshPreparedModelRuntimeCatalog(published)).resolves.toBeUndefined();
   });
 
   it("does not refresh a catalog snapshot that is not owned by the runtime", async () => {
@@ -133,7 +133,7 @@ describe("prepared model runtime reload auth adoption", () => {
     const published = await prepareModelRuntimeSnapshot(input);
     const unowned = { ...published };
 
-    await expect(refreshStalePreparedModelRuntimeCatalog(unowned)).resolves.toBeUndefined();
+    await expect(refreshPreparedModelRuntimeCatalog(unowned)).resolves.toBeUndefined();
     expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
   });
 
@@ -197,8 +197,8 @@ describe("prepared model runtime reload auth adoption", () => {
     const published = await prepareModelRuntimeSnapshot(input);
     expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
 
-    const first = refreshStalePreparedModelRuntimeCatalog(published);
-    const second = refreshStalePreparedModelRuntimeCatalog(published);
+    const first = refreshPreparedModelRuntimeCatalog(published);
+    const second = refreshPreparedModelRuntimeCatalog(published);
     await vi.waitFor(() => expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce());
     liveBuild.resolve({ entries: [model], routeVariants: [model] });
 

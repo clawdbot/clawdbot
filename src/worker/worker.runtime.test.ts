@@ -55,6 +55,7 @@ import {
   deleteSession,
   listRunningSessions,
   markBackgrounded,
+  waitForExecScope,
 } from "../agents/bash-process-registry.js";
 import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
 import * as boundaryFileRead from "../infra/boundary-file-read.js";
@@ -1773,7 +1774,7 @@ describe("worker runtime", () => {
         expect(settled).not.toHaveBeenCalled();
         if (processState === "completed") {
           await writeFile(path.join(workspaceDir, "finish-marker"), "finish");
-          await supervisor.waitForScope?.(scopeKey);
+          await waitForExecScope(scopeKey);
           await waitForFast(() =>
             expect(
               listRunningSessions().filter((session) => session.scopeKey === scopeKey),
@@ -1838,7 +1839,7 @@ describe("worker runtime", () => {
           await command;
         } finally {
           supervisor.cancelScope(scopeKey, "manual-cancel");
-          await supervisor.waitForScope?.(scopeKey);
+          await waitForExecScope(scopeKey);
         }
       }
       expect(listRunningSessions().filter((session) => session.scopeKey === scopeKey)).toHaveLength(
@@ -1882,7 +1883,7 @@ describe("worker runtime", () => {
         await command;
       } finally {
         supervisor.cancelScope(scopeKey, "manual-cancel");
-        await supervisor.waitForScope?.(scopeKey);
+        await waitForExecScope(scopeKey);
       }
     }
   });
@@ -1932,7 +1933,6 @@ describe("worker runtime", () => {
           deleteSession(run.session.id);
         }
         await finalizing.promise;
-        await getProcessSupervisor().waitForScope?.(scopeKey);
         const closing = environment.close();
         await Promise.resolve();
 
@@ -2245,7 +2245,7 @@ describe("worker runtime", () => {
           await command;
         } finally {
           supervisor.cancelScope(scopeKey, "manual-cancel");
-          await supervisor.waitForScope?.(scopeKey);
+          await waitForExecScope(scopeKey);
         }
       }
     },

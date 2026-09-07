@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { hasErrnoCode } from "../infra/errno.js";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 
 async function removeTransferArtifact(target: string): Promise<void> {
   await fsp.rm(target, {
@@ -34,7 +34,7 @@ export async function recoverWorkspaceReplacement(workspaceDir: string): Promise
       return true;
     })
     .catch((error: unknown) => {
-      if (hasErrnoCode(error, "ENOENT")) {
+      if (extractErrorCode(error) === "ENOENT") {
         return false;
       }
       throw error;
@@ -66,7 +66,7 @@ export async function replaceWorkspace(workspaceDir: string, staging: string): P
     await fsp.rename(workspaceDir, backup);
     movedOld = true;
   } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
+    if (extractErrorCode(error) !== "ENOENT") {
       throw error;
     }
   }

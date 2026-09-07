@@ -12,9 +12,11 @@ import {
   type WorkerWorkspaceManifest,
 } from "../gateway/worker-environments/workspace-manifest.js";
 import * as workspaceReconcile from "../gateway/worker-environments/workspace-reconcile-core.js";
+import { readActualWorkspaceManifest } from "../gateway/worker-environments/workspace-reconcile.js";
 import { runExec } from "../process/exec.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { NodeWorkerPreparedWorkspaceBinding } from "../worker/node-workspace-prepared-protocol.js";
+import { NODE_WORKSPACE_DRAIN_COMMAND } from "../worker/node-workspace-protocol.js";
 import { NodeWorkerPreparedWorkspaceStore } from "./node-worker-prepared-workspace-store.js";
 import { waitForNodeWorkerTerminal } from "./node-worker-supervisor.fixture.test-support.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
@@ -24,7 +26,6 @@ import {
   testWorkerLaunchInput,
 } from "./node-worker-supervisor.test-support.js";
 import { listen } from "./node-worker-transfer-client.test-support.js";
-import { captureManifest } from "./node-worker-workspace-commands.js";
 import * as workspaceCommands from "./node-worker-workspace-commands.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
@@ -76,17 +77,22 @@ async function fixture() {
     "prepared source",
   );
   const baseCommit = await git("rev-parse", "HEAD");
+  const { manifestRef: sourceManifestRef, manifest } = await readActualWorkspaceManifest({
+    root: workspaceDir,
+    baseCommit,
+  });
+  const manifests = path.join(homeDir, ".openclaw-worker", "manifests");
+  await fsp.mkdir(manifests, { recursive: true });
+  await fsp.writeFile(
+    path.join(manifests, `${sourceManifestRef.slice(7)}.json`),
+    serializeWorkerWorkspaceManifest(manifest),
+  );
+  // Setup output appears after the pristine source manifest, as in project preparation.
   await fsp.mkdir(path.join(workspaceDir, ".venv"));
   await fsp.writeFile(
     path.join(workspaceDir, ".venv", "absolute-path"),
     `${workspaceDir}\n${homeDir}`,
   );
-  const { manifestRef: sourceManifestRef } = await captureManifest({
-    workspaceDir,
-    manifestHome: homeDir,
-    baseCommit,
-    referenceManifestRef: `sha256:${"0".repeat(64)}`,
-  });
   const env = { ...process.env, HOME: root, OPENCLAW_STATE_DIR: path.join(root, "state") };
   const options = { env, ephemeral: true };
   const runtime = new NodeWorkerWorkspaceRuntime(options);
@@ -397,6 +403,13 @@ describe("prepared node workspace ownership", () => {
     const mutation = store.beginMutation(row);
     mutation.close();
     const restarted = new NodeWorkerWorkspaceRuntime(f.options);
+    await expect(
+      restarted.exec({ ...f.command, argv: [NODE_WORKSPACE_DRAIN_COMMAND] }),
+    ).resolves.toMatchObject({
+      workspaceDir: f.workspaceDir,
+      code: 0,
+      stdout: "drained\n",
+    });
     expect(() => restarted.acquireManagedWorkspace(f.request)).toThrow("does not own");
     await expect(restarted.prepare(binding)).rejects.toThrow("consumed");
     expect(() => mutation.complete()).toThrow("closed");

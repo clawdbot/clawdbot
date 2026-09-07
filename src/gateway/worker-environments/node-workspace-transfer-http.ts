@@ -201,11 +201,19 @@ export function createNodeWorkspaceTransferHttpCallback(
           AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
         ]);
         const abortRequest = () => {
+          // A fully read request can already be destroyed while staging still owns
+          // an open response; cancellation must also settle that waiting uploader.
+          if (!res.destroyed) {
+            res.destroy(signal.reason instanceof Error ? signal.reason : undefined);
+          }
           if (!req.destroyed) {
             req.destroy(signal.reason instanceof Error ? signal.reason : undefined);
           }
         };
         signal.addEventListener("abort", abortRequest, { once: true });
+        if (signal.aborted) {
+          abortRequest();
+        }
         const stillCurrent = () => !signal.aborted && service.isAuthorizationCurrent(authorization);
         try {
           if (route.kind === "manifest" || route.kind === "pack") {

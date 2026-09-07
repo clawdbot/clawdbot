@@ -116,7 +116,11 @@ async function fixture(transport: Transport) {
     close = async () => await tunnel.handle.stop();
   }
   try {
-    const synced = await handle.syncWorkspace({ localPath, sessionId: "session", generation: 1 });
+    const synced = await handle.syncWorkspace({
+      source: { kind: "local", path: localPath },
+      sessionId: "session",
+      generation: 1,
+    });
     const remoteArtifact = path.join(synced.remoteWorkspaceDir, "artifact.txt");
     await fs.writeFile(remoteArtifact, "worker\n");
     captureCount = 0;
@@ -183,18 +187,21 @@ it.each(cases)(
     let renewals = 0;
     const reconcile = async () => {
       const result = await f.handle.reconcileWorkspace({
-        localPath: f.localPath,
         remoteWorkspaceDir: f.synced.remoteWorkspaceDir,
         baseManifestRef: f.synced.manifestRef,
-        journal: {
-          load: () => pending,
-          begin,
-          commit,
-          abort: () => {
-            pending = undefined;
+        source: {
+          kind: "local",
+          path: f.localPath,
+          journal: {
+            load: () => pending,
+            begin,
+            commit,
+            abort: () => {
+              pending = undefined;
+            },
           },
+          stagedResult: { ref, record },
         },
-        stagedResult: { ref, record },
       });
       return await verifyReconciledWorkspaceFinal(result, {
         assertActive: async () => {
@@ -270,10 +277,13 @@ it.each(transports)(
     try {
       await expect(
         f.handle.reconcileWorkspace({
-          localPath: f.localPath,
           remoteWorkspaceDir: f.synced.remoteWorkspaceDir,
           baseManifestRef: f.synced.manifestRef,
-          journal: { load: () => undefined, begin, commit, abort: () => {} },
+          source: {
+            kind: "local",
+            path: f.localPath,
+            journal: { load: () => undefined, begin, commit, abort: () => {} },
+          },
         }),
       ).rejects.toThrow("Cloud workspace changed during final reconciliation");
       expect(begin).not.toHaveBeenCalled();

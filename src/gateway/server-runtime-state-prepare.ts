@@ -579,9 +579,5 @@ export async function prepareGatewayKernelState(params: {
     sessionEventSubscribers,
     sessionMessageSubscribers,
     isConnectionActive,
-    getTailscaleIngressEndpoint: transportBridge.getTailscaleIngressEndpoint,
-    getMcpAppSandboxPort: transportBridge.getMcpAppSandboxPort,
-    ensureSandboxHostPort: transportBridge.ensureSandboxHostPort,
-    getPortalService: transportBridge.getPortalService,
   };
 }

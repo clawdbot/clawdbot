@@ -352,6 +352,7 @@ describe("node workspace transfer service", () => {
               direction: "upload",
               token,
               baseManifestRef: prepared.snapshot.manifestRef,
+              referenceManifestRef: prepared.snapshot.manifestRef,
             },
           },
           undefined,
@@ -380,7 +381,9 @@ describe("node workspace transfer service", () => {
         headers: { authorization: `Bearer ${uploadToken}`, "content-length": "0" },
       });
       expect(replay.status).toBe(404);
+      service.revoke("environment-1", uploadToken);
       const uploaded = service.takeUpload("environment-1", prepared.snapshot.manifestRef);
+      await service.discardUpload("environment-1", uploadToken);
       expect(uploaded.current.entries).toContainEqual(
         expect.objectContaining({ path: "result.txt", type: "file" }),
       );
@@ -403,7 +406,11 @@ describe("node workspace transfer service", () => {
         "environment-1",
         prepared.snapshot.manifestRef,
       );
-      service.revoke("environment-1", replacementUploadToken);
+      await service.discardUpload("environment-1", uploadToken);
+      expect(() => service.prepareUpload("environment-1", prepared.snapshot.manifestRef)).toThrow(
+        "already active",
+      );
+      await service.discardUpload("environment-1", replacementUploadToken);
       writeFaults.failNextWrite(new Error("injected terminal upload write failure"));
       const failedUploadToken = service.prepareUpload(
         "environment-1",
@@ -421,6 +428,38 @@ describe("node workspace transfer service", () => {
         prepared.snapshot.manifestRef,
       );
       service.revoke("environment-1", resetUploadToken);
+
+      const discardedWrite = writeFaults.blockNextRetry();
+      const discardedToken = service.prepareUpload("environment-1", prepared.snapshot.manifestRef);
+      const receiving = uploadResult(discardedToken);
+      const receivingFailed = expect(receiving).rejects.toThrow();
+      await expect(retryOrUploadStatus(discardedWrite.started, receiving)).resolves.toBe(
+        "retrying",
+      );
+      let discardSettled = false;
+      const discarding = service.discardUpload("environment-1", discardedToken).then(() => {
+        discardSettled = true;
+      });
+      const nextUpload = service.prepareUpload("environment-1", prepared.snapshot.manifestRef);
+      try {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(discardSettled).toBe(false);
+      } finally {
+        discardedWrite.release();
+        await Promise.all([discarding, receivingFailed]);
+      }
+      expect(discardSettled).toBe(true);
+      await expect(fs.stat(writeFaults.lastStagingRoot()!)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await service.discardUpload("environment-1", discardedToken);
+      expect(() => service.prepareUpload("environment-1", prepared.snapshot.manifestRef)).toThrow(
+        "already active",
+      );
+      await service.discardUpload("environment-1", nextUpload);
+
       const acceptedToken = service.publishSnapshot("environment-1", {
         manifest: uploaded.current,
         manifestRef: uploaded.currentManifestRef,

@@ -112,7 +112,11 @@ it.each([
       runResumeWorkspaceCommand: runWorkspaceCommand,
     });
     try {
-      const synced = await actions.syncWorkspace({ localPath, sessionId, generation: ownerEpoch });
+      const synced = await actions.syncWorkspace({
+        source: { kind: "local", path: localPath },
+        sessionId,
+        generation: ownerEpoch,
+      });
       expect(synced.mode).toBe(mode === "plain" ? "plain" : "git");
       const remote = synced.remoteWorkspaceDir;
       for (const relative of ownership.ownedFiles) {
@@ -152,26 +156,29 @@ it.each([
         const quiescence = await actions.quiesceWorkspace(remote);
         try {
           const result = await actions.reconcileWorkspace({
-            localPath,
             remoteWorkspaceDir: remote,
             baseManifestRef,
-            journal: {
-              load: () => pending,
-              begin: (next) => {
-                pending = next;
+            source: {
+              kind: "local",
+              path: localPath,
+              journal: {
+                load: () => pending,
+                begin: (next) => {
+                  pending = next;
+                },
+                commit: (accepted) => {
+                  baseManifestRef = accepted;
+                  pending = undefined;
+                },
+                abort: () => {
+                  pending = undefined;
+                },
               },
-              commit: (accepted) => {
-                baseManifestRef = accepted;
-                pending = undefined;
-              },
-              abort: () => {
-                pending = undefined;
-              },
-            },
-            stagedResult: {
-              ref,
-              record: (value) => {
-                recorded = value;
+              stagedResult: {
+                ref,
+                record: (value) => {
+                  recorded = value;
+                },
               },
             },
           });
@@ -298,7 +305,7 @@ it.each([
       ]) {
         // Each marker addition/replacement starts from its own authoritative dispatch.
         const collisionDispatch = await actions.syncWorkspace({
-          localPath,
+          source: { kind: "local", path: localPath },
           sessionId,
           generation: ownerEpoch,
         });
@@ -423,7 +430,7 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
     });
   try {
     const synced = await createActions().syncWorkspace({
-      localPath,
+      source: { kind: "local", path: localPath },
       sessionId,
       generation: ownerEpoch,
     });
@@ -443,7 +450,7 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
     service = createService();
     server = await startNodeWorkspaceTransferTestServer(service);
     const restored = createActions({
-      localPath,
+      source: { kind: "local", path: localPath },
       manifestRef: synced.manifestRef,
       remoteWorkspaceDir: remote,
     });
@@ -452,20 +459,23 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
     let pending: WorkerWorkspaceReconciliationJournal | undefined;
     let accepted: string | undefined;
     const request = {
-      localPath,
       remoteWorkspaceDir: remote,
       baseManifestRef: synced.manifestRef,
-      journal: {
-        load: () => pending,
-        begin: (next: WorkerWorkspaceReconciliationJournal) => {
-          pending = next;
-        },
-        commit: (ref: string) => {
-          accepted = ref;
-          pending = undefined;
-        },
-        abort: () => {
-          pending = undefined;
+      source: {
+        kind: "local" as const,
+        path: localPath,
+        journal: {
+          load: () => pending,
+          begin: (next: WorkerWorkspaceReconciliationJournal) => {
+            pending = next;
+          },
+          commit: (ref: string) => {
+            accepted = ref;
+            pending = undefined;
+          },
+          abort: () => {
+            pending = undefined;
+          },
         },
       },
     };

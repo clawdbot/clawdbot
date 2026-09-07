@@ -109,6 +109,53 @@ describe("plugin board widget cells", () => {
     },
   );
 
+  it("renders an advertised pure report independently of optional plugin UI", async () => {
+    const request = vi.fn();
+    const registrations = vi.fn(() => []);
+    const provider = createApplicationContextProvider({
+      gateway: {
+        snapshot: {
+          phase: "connected",
+          client: { request },
+          hello: {
+            controlUiWidgetKinds: [
+              { pluginId: "session", kind: "session:report", label: "Report" },
+            ],
+          },
+        },
+      },
+      plugins: { registrations, isLoading: () => false, errors: [], subscribe: () => () => {} },
+    } as unknown as ApplicationContext);
+    const cell = document.createElement("openclaw-board-widget-cell");
+    cell.widget = {
+      name: "summary",
+      tabId: "main",
+      contentKind: "plugin",
+      pluginKind: "session:report",
+      props: { blocks: [{ type: "text", text: "Saved report content" }] },
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "none",
+      revision: 1,
+    };
+    cell.rect = { name: "summary", x: 0, y: 0, w: 6, h: 4 };
+    cell.sessionKey = "agent:main:dashboard";
+    cell.callbacks = callbacks();
+    provider.append(cell);
+    document.body.append(provider);
+    await vi.waitFor(
+      () =>
+        expect(cell.querySelector("openclaw-report-widget")?.textContent).toContain(
+          "Saved report content",
+        ),
+      CHUNK_LOAD_WAIT,
+    );
+    expect(cell.querySelector("iframe")).toBeNull();
+    expect(request).not.toHaveBeenCalled();
+    expect(registrations).not.toHaveBeenCalled();
+  });
+
   it("renders an advertised session progress card and its empty state", async () => {
     const dashboardSessionKey = "agent:main:dashboard";
     const targetSessionKey = "agent:main:target";

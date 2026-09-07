@@ -10,7 +10,7 @@ import "./agent-command.test-mocks.js";
 import { testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import { executionIdentity } from "../agents/agent-command-execution-identity.js";
 import { createHostWorkspaceWriteTool } from "../agents/agent-tools.read.js";
-import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
+import * as authProfileStoreModule from "../agents/auth-profiles/store-runtime.js";
 import * as attemptExecutionRuntime from "../agents/command/attempt-execution.runtime.js";
 import { deliverAgentCommandResult } from "../agents/command/delivery.runtime.js";
 import { prepareAgentCommandExecution } from "../agents/command/prepare.js";
@@ -85,12 +85,17 @@ vi.mock("../config/io.js", () => ({
   readConfigFileSnapshotForWrite: configIoMocks.readConfigFileSnapshotForWrite,
 }));
 
-vi.mock("../agents/auth-profiles/store.js", () => {
+vi.mock("../agents/auth-profiles/store.js", async (importOriginal) => {
+  return {
+    ...(await importOriginal<typeof import("../agents/auth-profiles/store.js")>()),
+    hasAnyAuthProfileStoreSource: vi.fn(() => false),
+  };
+});
+vi.mock("../agents/auth-profiles/store-runtime.js", () => {
   const createEmptyStore = () => ({ version: 1, profiles: {} });
   return {
     ensureAuthProfileStore: vi.fn(createEmptyStore),
     ensureAuthProfileStoreForLocalUpdate: vi.fn(createEmptyStore),
-    hasAnyAuthProfileStoreSource: vi.fn(() => false),
     loadAuthProfileStore: vi.fn(createEmptyStore),
     loadAuthProfileStoreForRuntime: vi.fn(createEmptyStore),
     loadAuthProfileStoreForSecretsRuntime: vi.fn(createEmptyStore),

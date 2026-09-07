@@ -251,7 +251,7 @@ final class WebChatManager {
                 let profiles = try await MacGatewayProfileStore.shared.profiles()
                 guard generation == self.windowGeneration else { return }
                 guard !profiles.isEmpty else {
-                    AppNavigationActions.openSettings(tab: .gateways)
+                    AppNavigationActions.openConnection(tab: .gateways)
                     return
                 }
                 let preferredID = self.selection.profileID
@@ -260,7 +260,7 @@ final class WebChatManager {
                     guard generation == self.windowGeneration else { return }
                     try await self.show(profile: profile)
                 case .manage:
-                    AppNavigationActions.openSettings(tab: .gateways)
+                    AppNavigationActions.openConnection(tab: .gateways)
                 case nil:
                     break
                 }
@@ -335,6 +335,11 @@ final class WebChatManager {
         guard !self.unavailableProfileIDs.contains(profileID) else {
             throw MacGatewayProfileError.profileNotFound
         }
+    }
+
+    /// Open native chat windows bound to a saved profile's shared fleet connection.
+    func openWindowCount(profileID: String) -> Int {
+        self.profileWindowOrder.count { self.profileWindows[$0]?.profileID == profileID }
     }
 
     func closeGatewayWindows(profileID: String) {

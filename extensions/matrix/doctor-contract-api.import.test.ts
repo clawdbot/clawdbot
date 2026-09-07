@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "./test-support.js";
@@ -14,6 +15,9 @@ vi.mock("openclaw/plugin-sdk/doctor-repair-runtime", () => {
 });
 vi.mock("./src/matrix/client/storage.js", () => {
   throw new Error("Client storage loaded by an absent-state Doctor migration");
+});
+vi.mock("./src/account-selection.js", () => {
+  throw new Error("Account topology loaded without legacy credential sources");
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -47,5 +51,18 @@ it("completes absent legacy-state checks without loading client runtimes", async
       warnings: [],
     });
   }
+  const credentials = stateMigrations.find(
+    (entry) => entry.id === "matrix-credentials-json-to-plugin-state",
+  );
+  if (!credentials) {
+    throw new Error("Missing credential migration");
+  }
+  await expect(credentials.detectLegacyState(params)).resolves.toBeNull();
+  const credentialsDir = path.join(stateDir, "credentials", "matrix");
+  fs.mkdirSync(credentialsDir, { recursive: true });
+  await expect(credentials.detectLegacyState(params)).resolves.toBeNull();
+  fs.writeFileSync(path.join(credentialsDir, "unrelated.json"), "{}");
+  fs.mkdirSync(path.join(credentialsDir, "credentials-ops.json"));
+  await expect(credentials.detectLegacyState(params)).resolves.toBeNull();
   expect(openPluginStateKeyedStore).not.toHaveBeenCalled();
 });

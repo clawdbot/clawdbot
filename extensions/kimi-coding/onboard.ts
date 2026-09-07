@@ -1,6 +1,6 @@
 // Kimi Coding setup module handles plugin onboarding behavior.
 import {
-  createDefaultModelPresetAppliers,
+  createDefaultModelsPresetAppliers,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 import {
@@ -18,9 +18,9 @@ function resolveKimiCodingDefaultModel() {
   );
 }
 
-const kimiCodingPresetAppliers = createDefaultModelPresetAppliers({
+const kimiCodingPresetAppliers = createDefaultModelsPresetAppliers({
   primaryModelRef: KIMI_MODEL_REF,
-  resolveParams: (_cfg: OpenClawConfig) => {
+  resolveParams: (cfg: OpenClawConfig) => {
     const defaultModel = resolveKimiCodingDefaultModel();
     if (!defaultModel) {
       return null;
@@ -29,7 +29,7 @@ const kimiCodingPresetAppliers = createDefaultModelPresetAppliers({
       providerId: "kimi",
       api: "anthropic-messages",
       baseUrl: KIMI_CODING_BASE_URL,
-      defaultModel,
+      defaultModels: cfg.models?.mode === "replace" ? [defaultModel] : [],
       defaultModelId: KIMI_CODING_DEFAULT_MODEL_ID,
       aliases: [{ modelRef: KIMI_MODEL_REF, alias: "Kimi" }],
     };

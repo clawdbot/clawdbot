@@ -191,16 +191,18 @@ describe("staged worker placement result recovery", () => {
     async (refState) => {
       const workspacePath = path.join(root, "accepted-result-cleanup");
       const publishAcceptedWorkspace = vi.fn(async () => undefined);
-      const harness = createHarness(database, placementStore, {
-        workspacePath,
-        publishAcceptedWorkspace,
-      });
-      const fixtureStart = vi.mocked(harness.environments.startTunnel).getMockImplementation()!;
+      const fixtureHarness = createHarness(database, placementStore, { workspacePath });
+      const fixtureStart = vi
+        .mocked(fixtureHarness.environments.startTunnel)
+        .getMockImplementation()!;
       const tunnels = createWorkerTunnelManager();
       let claim: ReturnType<PlacementStore["claimTurn"]> | undefined;
       vi.spyOn(tunnels, "start").mockImplementation(async (request) => ({
         ...(await fixtureStart(request)),
-        reconcileWorkspace: async ({ journal }) => {
+        reconcileWorkspace: async ({ source }) => {
+          if (source.kind !== "local") {
+            throw new Error("expected a local workspace source");
+          }
           const owned = placementStore.get(REQUEST.sessionId);
           if (owned?.state !== "draining" || !owned.turnClaim) {
             throw new Error("reclaim fixture lost its claim");
@@ -223,7 +225,7 @@ describe("staged worker placement result recovery", () => {
             root: workspacePath,
             stagedResultRef: staged.stagedResultRef,
             expectedBaseManifestRef: staged.baseManifestRef,
-            journal,
+            journal: source.journal,
           });
           return {
             ...applied,
@@ -259,8 +261,12 @@ describe("staged worker placement result recovery", () => {
         ownerEpoch: attached.ownerEpoch,
         executionMode: "remote-exec",
       });
-      harness.markEnvironmentOwnerEpoch(attached.ownerEpoch);
-      Object.assign(harness.environments, environments);
+      fixtureHarness.markEnvironmentOwnerEpoch(attached.ownerEpoch);
+      const harness = createHarness(database, placementStore, {
+        workspacePath,
+        publishAcceptedWorkspace,
+        environmentService: environments,
+      });
 
       await expect(harness.service.reclaim(REQUEST)).rejects.toThrow(
         "provider deletion unavailable",
@@ -296,11 +302,22 @@ describe("staged worker placement result recovery", () => {
         recovery = createHarness(database, restartedStore, {
           workspacePath,
           publishAcceptedWorkspace,
+          environmentService: environments,
         });
-        Object.assign(recovery.environments, environments);
       }
 
+      destroy.mockClear();
       await recovery.service.reconcileActive(ready.environmentId);
+      expect(destroy).toHaveBeenCalledOnce();
+      expect(recovery.placements.current()).toMatchObject({
+        state: "draining",
+        environmentId: ready.environmentId,
+        activeOwnerEpoch: attached.ownerEpoch,
+        turnClaim:
+          refState === "retained"
+            ? expect.objectContaining({ claimId: pending.claimId, runId: pending.runId })
+            : null,
+      });
 
       await expect(recovery.service.reclaim(REQUEST)).rejects.toThrow(
         refState === "retained"
@@ -308,8 +325,9 @@ describe("staged worker placement result recovery", () => {
           : "Active cloud worker does not match its session placement",
       );
       expect(placementStore.listPendingWorkspaceResults()).toMatchObject([pending]);
-      destroy.mockResolvedValue(undefined);
+      destroy.mockClear().mockResolvedValue(undefined);
       await recovery.service.reconcileActive(ready.environmentId);
+      expect(destroy).toHaveBeenCalledOnce();
       await expect(recovery.service.reclaim(REQUEST)).resolves.toMatchObject({
         state: "reclaimed",
       });

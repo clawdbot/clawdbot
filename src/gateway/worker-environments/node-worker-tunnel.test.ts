@@ -18,6 +18,7 @@ import {
   preparedEnvironment,
   startRequest,
   transport,
+  withWorkspaceDrain,
   workspaceCommandPayload,
   workspaceManifestCapturePayload,
   workspaceTransfer,
@@ -107,10 +108,12 @@ describe("node worker tunnel manager", () => {
           });
           stdout = `${manifestRef}\n`;
         }
-      } else if (input.argv[0] === "git") {
-        const result = spawnSync("git", ["-C", remoteWorkspaceDir, ...input.argv.slice(1)], {
+      } else if (input.argv[0] === "git" || input.argv.includes("--")) {
+        const result = spawnSync(input.argv[0]!, input.argv.slice(1), {
           encoding: "utf8",
           env: gitEnv,
+          cwd: remoteWorkspaceDir,
+          input: input.input,
         });
         stdout = result.stdout;
         stderr = result.stderr;
@@ -131,7 +134,7 @@ describe("node worker tunnel manager", () => {
         }),
       };
     });
-    nodeTransport.invoke = invoke;
+    nodeTransport.invoke = withWorkspaceDrain(invoke);
     const transfer = {
       prepareSync: vi.fn(async () => ({
         snapshot: { manifest, manifestRef, rawManifest, root: localPath },
@@ -153,17 +156,20 @@ describe("node worker tunnel manager", () => {
 
     await expect(
       handle.syncWorkspace({
-        localPath,
+        source: {
+          kind: "local",
+          path: localPath,
+          ...(syncPath === "prepared-project" ? { projectKey: "a".repeat(64) } : {}),
+        },
         sessionId: "session-1",
         sessionKey: "agent:test:prepared-session",
         generation: 1,
         gitAuthor: { name: "Configured Gateway Author" },
-        ...(syncPath === "prepared-project" ? { projectKey: "a".repeat(64) } : {}),
       }),
     ).resolves.toEqual({ mode: "git", remoteWorkspaceDir, manifestRef });
     await expect(
       handle.syncWorkspace({
-        localPath,
+        source: { kind: "local", path: localPath },
         sessionId: "session-1",
         sessionKey: "agent:test:different-session",
         generation: 1,
@@ -378,7 +384,7 @@ describe("node worker tunnel manager", () => {
           termination: "exit",
         }),
       }));
-      nodeTransport.invoke = invoke;
+      nodeTransport.invoke = withWorkspaceDrain(invoke);
       const prepareSync = vi.fn(async () => {
         await validation.promise;
         if (outcome === "failure") {
@@ -401,7 +407,7 @@ describe("node worker tunnel manager", () => {
         workspaceTransfer: transfer,
       });
       manager.bindWorkspaceBindingResolver(async () => ({
-        localPath: "/gateway/workspace",
+        source: { kind: "local" as const, path: "/gateway/workspace" },
         manifestRef,
         remoteWorkspaceDir: "/node/workspace",
       }));
@@ -505,7 +511,7 @@ describe("node worker tunnel manager", () => {
                 },
               ];
             },
-            invoke,
+            invoke: withWorkspaceDrain(invoke),
           };
         },
         launchNodeWorker: vi.fn(),
@@ -513,7 +519,7 @@ describe("node worker tunnel manager", () => {
         workspaceTransfer: transfer,
       });
       const resolveWorkspaceBinding = vi.fn(async () => ({
-        localPath: "/gateway/workspace",
+        source: { kind: "local" as const, path: "/gateway/workspace" },
         manifestRef,
         remoteWorkspaceDir: "/node/workspace",
         sessionKey: "agent:test:restored-session",
@@ -561,37 +567,39 @@ describe("node worker tunnel manager", () => {
     let commandTimeoutMs: number | undefined;
     let transportTimeoutMs: number | undefined;
     const nodeTransport = transport();
-    nodeTransport.invoke = vi.fn(async (request) => {
-      const input = request.params as NodeWorkerWorkspaceExecInput;
-      if (input.argv[0] === "slow-command") {
-        commandTimeoutMs = input.timeoutMs;
-        transportTimeoutMs = request.timeoutMs;
+    nodeTransport.invoke = withWorkspaceDrain(
+      vi.fn(async (request) => {
+        const input = request.params as NodeWorkerWorkspaceExecInput;
+        if (input.argv[0] === "slow-command") {
+          commandTimeoutMs = input.timeoutMs;
+          transportTimeoutMs = request.timeoutMs;
+          return {
+            ok: true,
+            payloadJSON: JSON.stringify({
+              workspaceDir: "/node/workspace",
+              stdout: "",
+              stderr: "",
+              code: null,
+              signal: "SIGTERM",
+              killed: true,
+              termination: "timeout",
+            }),
+          };
+        }
         return {
           ok: true,
           payloadJSON: JSON.stringify({
             workspaceDir: "/node/workspace",
             stdout: "",
             stderr: "",
-            code: null,
-            signal: "SIGTERM",
-            killed: true,
-            termination: "timeout",
+            code: 0,
+            signal: null,
+            killed: false,
+            termination: "exit",
           }),
         };
-      }
-      return {
-        ok: true,
-        payloadJSON: JSON.stringify({
-          workspaceDir: "/node/workspace",
-          stdout: "",
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        }),
-      };
-    });
+      }),
+    );
     const transfer = workspaceTransfer();
     transfer.prepareSync = vi.fn(async () => ({
       snapshot: {
@@ -612,7 +620,7 @@ describe("node worker tunnel manager", () => {
       workspaceTransfer: transfer,
     });
     manager.bindWorkspaceBindingResolver(async () => ({
-      localPath: "/gateway/workspace",
+      source: { kind: "local" as const, path: "/gateway/workspace" },
       manifestRef,
       remoteWorkspaceDir: "/node/workspace",
     }));
@@ -695,7 +703,11 @@ describe("node worker tunnel manager", () => {
     const handle = await manager.start(startRequest());
 
     await expect(
-      handle.syncWorkspace({ localPath, sessionId: "session-1", generation: 1 }),
+      handle.syncWorkspace({
+        source: { kind: "local", path: localPath },
+        sessionId: "session-1",
+        generation: 1,
+      }),
     ).rejects.toMatchObject({
       name: NodeWorkerWorkspaceTransferError.name,
       code: NODE_WORKSPACE_TRANSFER_ERROR_CODE,
@@ -787,14 +799,21 @@ describe("node worker tunnel manager", () => {
       workspaceTransfer: transfer,
     });
     const handle = await manager.start(startRequest());
-    await handle.syncWorkspace({ localPath, sessionId: "session-1", generation: 1 });
+    await handle.syncWorkspace({
+      source: { kind: "local", path: localPath },
+      sessionId: "session-1",
+      generation: 1,
+    });
 
     await expect(
       handle.reconcileWorkspace({
-        localPath,
+        source: {
+          kind: "local",
+          path: localPath,
+          journal: { load: () => undefined, begin: vi.fn(), commit: vi.fn(), abort: vi.fn() },
+        },
         remoteWorkspaceDir,
         baseManifestRef,
-        journal: { load: () => undefined, begin: vi.fn(), commit: vi.fn(), abort: vi.fn() },
       }),
     ).rejects.toThrow(error);
   });
@@ -845,17 +864,20 @@ describe("node worker tunnel manager", () => {
       workspaceTransfer: transfer,
     });
     const handle = await manager.start(startRequest());
-    await handle.syncWorkspace({ localPath, sessionId: "session-1", generation: 1 });
+    await handle.syncWorkspace({
+      source: { kind: "local", path: localPath },
+      sessionId: "session-1",
+      generation: 1,
+    });
     const quiescence = { assertActive: async () => {}, resume: async () => {} };
     const journal = { load: () => undefined, begin: vi.fn(), commit: vi.fn(), abort: vi.fn() };
     workspaceDebug.mockClear();
 
     for (let turn = 0; turn < 2; turn += 1) {
       const reconciliation = await handle.reconcileWorkspace({
-        localPath,
+        source: { kind: "local", path: localPath, journal },
         remoteWorkspaceDir,
         baseManifestRef: manifestRef,
-        journal,
       });
       await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
     }
@@ -894,7 +916,7 @@ describe("node worker tunnel manager", () => {
         }),
       };
     });
-    nodeTransport.invoke = invoke;
+    nodeTransport.invoke = withWorkspaceDrain(invoke);
     const publishSnapshot = vi.fn(() => "accepted-download-token");
     const transfer = {
       prepareSync: vi.fn(async () => ({
@@ -926,13 +948,20 @@ describe("node worker tunnel manager", () => {
       workspaceTransfer: transfer,
     });
     const handle = await manager.start(startRequest());
-    await handle.syncWorkspace({ localPath, sessionId: "session-1", generation: 1 });
+    await handle.syncWorkspace({
+      source: { kind: "local", path: localPath },
+      sessionId: "session-1",
+      generation: 1,
+    });
 
     const reconciliation = await handle.reconcileWorkspace({
-      localPath,
+      source: {
+        kind: "local",
+        path: localPath,
+        journal: { load: () => undefined, begin: vi.fn(), commit: vi.fn(), abort: vi.fn() },
+      },
       remoteWorkspaceDir,
       baseManifestRef,
-      journal: { load: () => undefined, begin: vi.fn(), commit: vi.fn(), abort: vi.fn() },
     });
 
     expect(reconciliation.manifestRef).toBe(baseManifestRef);

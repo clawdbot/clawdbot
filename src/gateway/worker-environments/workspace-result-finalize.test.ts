@@ -92,7 +92,10 @@ describe("concurrent worker workspace results", () => {
       },
       quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
       reconcileWorkspace: async (request) => {
-        request.journal.commit(MANIFEST_REF);
+        if (request.source.kind !== "local") {
+          throw new Error("expected a local workspace source");
+        }
+        request.source.journal.commit(MANIFEST_REF);
         return {
           manifestRef: MANIFEST_REF,
           changed: false,
@@ -112,7 +115,7 @@ describe("concurrent worker workspace results", () => {
         workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
         turn: inputTurn,
         turnClaim,
-        localWorkspaceDir: root,
+        workspace: { kind: "local", path: root },
         runLocal: async () => ({ meta: { durationMs: 1 } }),
       }),
     ).rejects.toThrow("Skill resource cleanup failed");
@@ -140,7 +143,7 @@ describe("concurrent worker workspace results", () => {
       workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
       turn: nextTurn,
       turnClaim: nextClaim,
-      localWorkspaceDir: root,
+      workspace: { kind: "local", path: root },
       runLocal: async () => {
         expect(await fs.readdir(remote)).toEqual([]);
         expect(await fs.readdir(carrier.home)).toEqual([path.basename(remote)]);
@@ -273,6 +276,9 @@ describe("concurrent worker workspace results", () => {
           stop: async () => {},
           quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
           reconcileWorkspace: async (request) => {
+            if (request.source.kind !== "local") {
+              throw new Error("expected a local workspace source");
+            }
             const uploaded = await node.exec(
               {
                 ...nodeIdentity,
@@ -281,6 +287,7 @@ describe("concurrent worker workspace results", () => {
                   direction: "upload",
                   token: "fixture-upload",
                   baseManifestRef: base.manifestRef,
+                  referenceManifestRef: base.manifestRef,
                 },
               },
               undefined,
@@ -325,7 +332,12 @@ describe("concurrent worker workspace results", () => {
             await verifyStable();
             return {
               ...(await workerWorkspaceResultStaging.prepareRequestedWorkerWorkspaceResult({
-                request,
+                request: {
+                  ...request.source,
+                  localPath: request.source.path,
+                  remoteWorkspaceDir: request.remoteWorkspaceDir,
+                  baseManifestRef: request.baseManifestRef,
+                },
                 stagingRoot: payload,
                 currentManifestRef: current.manifestRef,
                 baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
@@ -337,7 +349,13 @@ describe("concurrent worker workspace results", () => {
             };
           },
         };
-        jobs.push({ placement, turnClaim, tunnel, localWorkspaceDir, transcriptTarget });
+        jobs.push({
+          placement,
+          turnClaim,
+          tunnel,
+          workspace: { kind: "local" as const, path: localWorkspaceDir },
+          transcriptTarget,
+        });
       }
       const outcomes = await Promise.allSettled(
         jobs.map((job) =>
@@ -351,7 +369,7 @@ describe("concurrent worker workspace results", () => {
       expect(outcomes.find((outcome) => outcome.status === "rejected")).toBeUndefined();
       expect(placements.listPendingWorkspaceResults()).toEqual([]);
       for (const job of jobs) {
-        expect(await fs.readFile(path.join(job.localWorkspaceDir, "result.bin"))).toEqual(bytes);
+        expect(await fs.readFile(path.join(job.workspace.path, "result.bin"))).toEqual(bytes);
         expect(placements.get(job.placement.sessionId)?.turnClaim).toBeNull();
       }
     },

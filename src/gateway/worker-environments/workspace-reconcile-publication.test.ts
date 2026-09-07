@@ -184,13 +184,10 @@ describe("worker workspace reconciliation publication", () => {
       },
     });
     const remove = fs.rm;
-    let scratch: string | undefined;
+    const scratch = tempDirs.make("openclaw-workspace-result-cleanup-scratch-");
+    const makeScratch = vi.spyOn(fs, "mkdtemp").mockResolvedValueOnce(scratch);
     const removeSpy = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
-      if (
-        typeof target === "string" &&
-        path.basename(target).startsWith("openclaw-staged-result-")
-      ) {
-        scratch = target;
+      if (target === scratch) {
         if (cleanupFails) {
           throw cleanupError;
         }
@@ -239,15 +236,14 @@ describe("worker workspace reconciliation publication", () => {
         expect(workspaceWarning).toHaveBeenCalledWith(
           "worker workspace staging cleanup failed: scratch removal failed",
         );
-        await expect(fs.access(scratch!)).resolves.toBeUndefined();
+        await expect(fs.access(scratch)).resolves.toBeUndefined();
       } else {
-        await expect(fs.access(scratch!)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.access(scratch)).rejects.toMatchObject({ code: "ENOENT" });
       }
     } finally {
+      makeScratch.mockRestore();
       removeSpy.mockRestore();
-      if (scratch) {
-        await remove(scratch, { recursive: true, force: true });
-      }
+      await remove(scratch, { recursive: true, force: true });
     }
   });
 });

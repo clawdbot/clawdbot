@@ -51,14 +51,18 @@ export class DesktopMobileKeyboard {
     const nextValue = input.value;
     const connection = this.options.connection();
     let prefixLength = 0;
-    const comparableLength = Math.min(this.value.length, nextValue.length);
-    while (
-      prefixLength < comparableLength &&
-      this.value.charAt(prefixLength) === nextValue.charAt(prefixLength)
-    ) {
-      prefixLength += 1;
+    for (const character of this.value) {
+      if (!nextValue.startsWith(character, prefixLength)) {
+        break;
+      }
+      prefixLength += character.length;
     }
-    for (let index = this.value.length - prefixLength; index > 0; index -= 1) {
+    // DOM offsets use UTF-16; a removed supplementary character is one key action.
+    for (
+      let remaining = Array.from(this.value.slice(prefixLength)).length;
+      remaining > 0;
+      remaining -= 1
+    ) {
       connection?.sendBackspace();
     }
     connection?.sendText(nextValue.slice(prefixLength));

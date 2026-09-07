@@ -64,7 +64,7 @@ describe("forced worker environment abandonment", () => {
     const abandonment = forceAbandonWorkerEnvironment({
       placements: store,
       environmentId,
-      resolveWorkspacePath: async () => root,
+      resolveWorkspace: async () => ({ kind: "local" as const, path: root }),
     });
 
     await vi.waitFor(() => {
@@ -121,11 +121,11 @@ describe("forced worker environment abandonment", () => {
       claim,
       "refs/openclaw/worker-results/reclaim-forced-missing-workspace",
     );
-    const resolveWorkspacePath = vi.fn(async () => {
+    const resolveWorkspace = vi.fn(async () => {
       throw new Error("session-owned managed worktree is missing");
     });
 
-    await forceAbandonWorkerEnvironment({ placements: store, environmentId, resolveWorkspacePath });
+    await forceAbandonWorkerEnvironment({ placements: store, environmentId, resolveWorkspace });
 
     expect(store.get(REQUEST.sessionId)).toMatchObject({
       state: "failed",
@@ -133,7 +133,7 @@ describe("forced worker environment abandonment", () => {
       recoveryError: "Worker result abandoned by forced operator teardown",
     });
     expect(store.listPendingWorkspaceResults()).toEqual([]);
-    expect(resolveWorkspacePath).toHaveBeenCalledOnce();
+    expect(resolveWorkspace).toHaveBeenCalledOnce();
   });
 
   it("deletes a stale journal without replaying it into the current workspace", async () => {
@@ -180,15 +180,15 @@ describe("forced worker environment abandonment", () => {
       ownerEpoch: draining.activeOwnerEpoch,
       expectedGeneration: draining.generation,
     });
-    const resolveWorkspacePath = vi.fn(async () => root);
+    const resolveWorkspace = vi.fn(async () => ({ kind: "local" as const, path: root }));
 
     await forceAbandonWorkerEnvironment({
       placements: store,
       environmentId,
-      resolveWorkspacePath,
+      resolveWorkspace,
     });
 
-    expect(resolveWorkspacePath).not.toHaveBeenCalled();
+    expect(resolveWorkspace).not.toHaveBeenCalled();
     expect(store.listWorkspaceReconciliationOwners()).toEqual([]);
     expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
   });
@@ -224,7 +224,7 @@ describe("forced worker environment abandonment", () => {
     });
     const onCleanupError = vi.fn();
 
-    const resolveWorkspacePath = vi.fn(async () => {
+    const resolveWorkspace = vi.fn(async () => {
       throw new Error("workspace temporarily unavailable");
     });
 
@@ -232,14 +232,14 @@ describe("forced worker environment abandonment", () => {
       await forceAbandonWorkerEnvironment({
         placements: store,
         environmentId,
-        resolveWorkspacePath,
+        resolveWorkspace,
         onCleanupError,
       });
     }
 
     expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
     expect(store.listWorkspaceReconciliationOwners()).toEqual([owner]);
-    expect(resolveWorkspacePath).toHaveBeenCalledTimes(2);
+    expect(resolveWorkspace).toHaveBeenCalledTimes(2);
     expect(onCleanupError).toHaveBeenCalledWith(
       expect.objectContaining({ message: "workspace temporarily unavailable" }),
     );
@@ -279,19 +279,19 @@ describe("forced worker environment abandonment", () => {
       throw new Error("journal temporarily unreadable");
     });
 
-    const resolveWorkspacePath = vi.fn(async () => root);
+    const resolveWorkspace = vi.fn(async () => ({ kind: "local" as const, path: root }));
     for (let attempt = 0; attempt < 2; attempt += 1) {
       await forceAbandonWorkerEnvironment({
         placements: store,
         environmentId,
-        resolveWorkspacePath,
+        resolveWorkspace,
         onCleanupError,
       });
     }
 
     expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
     expect(store.listWorkspaceReconciliationOwners()).toEqual([owner]);
-    expect(resolveWorkspacePath).not.toHaveBeenCalled();
+    expect(resolveWorkspace).not.toHaveBeenCalled();
     expect(onCleanupError).toHaveBeenCalledWith(
       expect.objectContaining({ message: "journal temporarily unreadable" }),
     );

@@ -11,6 +11,7 @@ import {
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { respondPlainText } from "./control-ui-http-utils.js";
+import { matchesHttpIfModifiedSince } from "./http-conditional.js";
 
 const CONTROL_UI_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
 const CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES = 4;
@@ -143,7 +144,11 @@ function setControlUiFileHeaders(
 }
 
 /** Revalidate no-cache static assets without generating entity tags. */
-export function isControlUiFileUnmodified(req: IncomingMessage, lastModifiedMs: number): boolean {
+export function isControlUiFileUnmodified(
+  req: IncomingMessage,
+  lastModifiedMs: number,
+  nowMs = Date.now(),
+): boolean {
   if (req.method !== "GET" && req.method !== "HEAD") {
     return false;
   }
@@ -152,9 +157,7 @@ export function isControlUiFileUnmodified(req: IncomingMessage, lastModifiedMs: 
   if (ifNoneMatch !== undefined) {
     return ifNoneMatch.trim() === "*";
   }
-  const header = req.headers?.["if-modified-since"];
-  const since = typeof header === "string" ? Date.parse(header) : Number.NaN;
-  return Number.isFinite(since) && Math.floor(lastModifiedMs / 1000) * 1000 <= since;
+  return matchesHttpIfModifiedSince(req, lastModifiedMs, nowMs);
 }
 
 export function respondControlUiNotModified(

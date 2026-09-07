@@ -1,4 +1,4 @@
-// Cloud-worker dispatch for managed-worktree sessions.
+// Cloud-worker dispatch for session-owned workspaces.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -8,10 +8,10 @@ import {
   validateSessionsReclaimParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
-import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
 import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
@@ -32,6 +32,7 @@ import {
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/session-placement-lifecycle.js";
+import type { WorkerSessionWorkspace } from "../worker-environments/session-workspace.js";
 import { listGatewayEnvironments } from "./environments.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import {
@@ -92,12 +93,26 @@ function resolveWorkerSessionTarget(params: {
   return { cfg, target, entry, sessionId, dispatchTarget: destination.value };
 }
 
-function resolveManagedSessionWorktree(params: {
+function resolveSessionWorkspace(params: {
   entry: NonNullable<ReturnType<typeof loadAccessorSessionEntryForGatewayTarget>["entry"]>;
   sessionKey: string;
+  agentId: string;
   method: "sessions.dispatch" | "sessions.move" | "sessions.reclaim";
   respond: RespondFn;
-}): ManagedWorktreeRecord | undefined {
+}): WorkerSessionWorkspace | undefined {
+  if (params.entry.repositoryWorkspaceId) {
+    const repository = getSessionRepositoryWorkspaceStore().get(params.entry.repositoryWorkspaceId);
+    if (
+      repository &&
+      repository.agentId === params.agentId &&
+      repository.sessionKey === params.sessionKey &&
+      !params.entry.worktree
+    ) {
+      return { kind: "repository", repository };
+    }
+    respondInvalidWorkerSession(params.respond, "The session repository workspace owner changed.");
+    return undefined;
+  }
   const worktree = managedWorktrees.findLiveByOwner("session", params.sessionKey);
   if (
     params.entry.worktree?.id &&
@@ -105,32 +120,34 @@ function resolveManagedSessionWorktree(params: {
     worktree.id === params.entry.worktree.id &&
     worktree.ownerId === params.sessionKey
   ) {
-    return worktree;
+    return { kind: "local", path: worktree.path };
   }
   const article = params.method === "sessions.dispatch" ? "a" : "the";
   respondInvalidWorkerSession(
     params.respond,
-    `${params.method} requires ${article} session-owned managed worktree`,
+    `${params.method} requires ${article} session-owned worktree or repository workspace`,
   );
   return undefined;
 }
 
 async function resolveProjectProfileDestination(params: {
   cfg: ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
-  worktree: ManagedWorktreeRecord;
+  workspace: WorkerSessionWorkspace;
 }) {
-  let originUrl: string;
-  try {
-    const result = await runCommandWithTimeout(
-      ["git", "-C", params.worktree.path, "config", "--get", "remote.origin.url"],
-      { timeoutMs: PROJECT_ORIGIN_TIMEOUT_MS },
-    );
-    if (result.code !== 0) {
+  let originUrl = params.workspace.kind === "repository" ? params.workspace.repository.url : "";
+  if (params.workspace.kind === "local") {
+    try {
+      const result = await runCommandWithTimeout(
+        ["git", "-C", params.workspace.path, "config", "--get", "remote.origin.url"],
+        { timeoutMs: PROJECT_ORIGIN_TIMEOUT_MS },
+      );
+      if (result.code !== 0) {
+        return undefined;
+      }
+      originUrl = result.stdout.trim();
+    } catch {
       return undefined;
     }
-    originUrl = result.stdout.trim();
-  } catch {
-    return undefined;
   }
   const projectKey = normalizeCloudRepo(originUrl);
   if (!projectKey) {
@@ -395,18 +412,19 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const worktree = resolveManagedSessionWorktree({
+    const workspace = resolveSessionWorkspace({
       entry,
       sessionKey: target.canonicalKey,
+      agentId: target.target.agentId,
       method: "sessions.dispatch",
       respond,
     });
-    if (!worktree) {
+    if (!workspace) {
       return;
     }
     if (!dispatchTarget && canUseProjectProfile) {
       try {
-        dispatchTarget = await resolveProjectProfileDestination({ cfg, worktree });
+        dispatchTarget = await resolveProjectProfileDestination({ cfg, workspace });
       } catch (error) {
         respondWorkerDispatchError(error, respond);
         return;
@@ -467,6 +485,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
             sessionKey: target.canonicalKey,
             agentId: target.target.agentId,
             executionMode,
+            runSetupScript: client?.connect?.scopes?.includes(ADMIN_SCOPE) === true,
             ...dispatchTarget,
             setupAuthorized: client?.connect.scopes?.includes(ADMIN_SCOPE) === true,
             ...(devicePlacement ? { devicePlacement } : {}),
@@ -566,9 +585,10 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       return;
     }
     if (
-      !resolveManagedSessionWorktree({
+      !resolveSessionWorkspace({
         entry,
         sessionKey: target.canonicalKey,
+        agentId: target.target.agentId,
         method: "sessions.move",
         respond,
       })
@@ -654,9 +674,10 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     };
     if (
       existingPlacement?.state !== "failed" &&
-      !resolveManagedSessionWorktree({
+      !resolveSessionWorkspace({
         entry,
         sessionKey: target.canonicalKey,
+        agentId: target.target.agentId,
         method: "sessions.reclaim",
         respond,
       })

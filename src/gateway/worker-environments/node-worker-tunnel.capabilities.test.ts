@@ -9,6 +9,7 @@ import {
   environment,
   startRequest,
   transport,
+  withWorkspaceDrain,
   workspaceCommandPayload,
   workspaceTransfer,
 } from "./node-worker-tunnel.test-support.js";
@@ -39,7 +40,7 @@ describe("node worker workspace capability", () => {
           : "";
       return { ok: true, payloadJSON: workspaceCommandPayload("/node/workspace", { stdout }) };
     });
-    nodeTransport.invoke = invoke;
+    nodeTransport.invoke = withWorkspaceDrain(invoke);
     const transfer = {
       ...workspaceTransfer(),
       prepareSync: vi.fn(async () => ({
@@ -60,7 +61,11 @@ describe("node worker workspace capability", () => {
       workspaceTransfer: transfer,
     });
     const handle = await manager.start(startRequest());
-    await handle.syncWorkspace({ localPath, sessionId: "session-1", generation: 1 });
+    await handle.syncWorkspace({
+      source: { kind: "local", path: localPath },
+      sessionId: "session-1",
+      generation: 1,
+    });
     const resources = {
       argv: [WORKER_SKILL_RESOURCE_COMMAND],
       transportRetry: "never" as const,
@@ -118,7 +123,7 @@ describe("node worker workspace capability", () => {
       ok: true,
       payloadJSON: "null",
     }));
-    nodeTransport.invoke = invoke;
+    nodeTransport.invoke = withWorkspaceDrain(invoke);
     const nodes = await nodeTransport.listCurrentNodes();
     const node = nodes[0]!;
     delete node.workerHost.workspaceManifest;

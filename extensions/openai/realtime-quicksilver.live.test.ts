@@ -255,10 +255,13 @@ describeLive("OpenAI GA Gateway-controlled WebRTC", () => {
         skip("No OpenAI Platform API key is available");
         return;
       }
-      const realtime = createOpenAIQuicksilverBrowserSessionBroker({
-        getConfig: () => ({}),
-        logger: { debug: () => undefined, warn: () => undefined },
-      });
+      const realtime = createOpenAIQuicksilverBrowserSessionBroker(
+        {
+          getConfig: () => ({}),
+          logger: { debug: () => undefined, warn: () => undefined },
+        },
+        openAIRealtimeHost,
+      );
       const provider = buildOpenAIRealtimeVoiceProvider({
         quicksilverBrowserSessionBroker: realtime.broker,
       });
@@ -504,10 +507,13 @@ describeLive("OpenAI OAuth WebRTC", () => {
         return;
       }
 
-      const realtime = createOpenAIQuicksilverBrowserSessionBroker({
-        getConfig: () => ({}),
-        logger: { debug: () => undefined, warn: () => undefined },
-      });
+      const realtime = createOpenAIQuicksilverBrowserSessionBroker(
+        {
+          getConfig: () => ({}),
+          logger: { debug: () => undefined, warn: () => undefined },
+        },
+        openAIRealtimeHost,
+      );
       const server = createServer((req, res) => {
         if (req.url === "/") {
           res.statusCode = 200;

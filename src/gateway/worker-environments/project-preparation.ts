@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { requireGit } from "../../agents/worktrees/git.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { WorkerProvider } from "../../plugins/types.js";
 import { createProjectSeedScript } from "./project-seed-script.js";
 import { createProjectSetupScript } from "./project-setup-script.js";
@@ -184,7 +184,9 @@ export function createWorkerProjectPreparation(params: {
     ) {
       throw new Error("Project preparation returned an invalid staging directory");
     }
-    const temporaryRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-project-base-"));
+    const temporaryRoot = await fsp.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-project-base-"),
+    );
     try {
       requireCurrent();
       const pack = await prepareWorkerWorkspaceGitPack({

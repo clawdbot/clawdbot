@@ -164,6 +164,7 @@ export async function resolveCronThinkingSelection(params: {
     immutableThinkLevel ??
     resolveConfiguredThinkingDefault({
       cfg: params.cfg,
+      agentId: params.owner.agentId,
       provider: params.provider,
       model: params.model,
     });

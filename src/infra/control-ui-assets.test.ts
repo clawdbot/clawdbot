@@ -38,7 +38,7 @@ vi.mock("./control-ui-assets.fs.runtime.js", async () => {
       isFixturePath(p) ? state.entries.has(absInMock(p)) : actual.existsSync(p),
     readFileSync: (p: string, encoding?: BufferEncoding) => {
       if (!isFixturePath(p)) {
-        return actual.readFileSync(p, encoding);
+        return actual.readFileSync(p, { encoding });
       }
       const entry = readFixtureEntry(p);
       if (entry?.kind === "file") {

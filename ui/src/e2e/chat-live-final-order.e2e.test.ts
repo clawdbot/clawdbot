@@ -11,6 +11,7 @@ import {
   requireRecord,
   requireString,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -61,11 +62,7 @@ suite.define(() => {
     const artifactDir = artifactRoot
       ? createControlUiE2eArtifactDir("chat-canvas-history-stability", artifactRoot)
       : undefined;
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const documentIds = ["cv_first", "cv_second"];
     const finalText = "Both previews are ready.";
@@ -262,11 +259,7 @@ suite.define(() => {
   });
 
   it("keeps durable turns ordered when a live final arrives before transcript events", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const currentRunId = "current-run";
     const previousPrompt = "What happened before this run?";

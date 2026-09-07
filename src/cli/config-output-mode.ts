@@ -1,4 +1,4 @@
-import { resolveConfigParentCommandPath } from "./parent-command-path.js";
+import { resolveCliParentCommandPath } from "./parent-command-path.js";
 
 function hasFlag(argv: readonly string[], flag: string): boolean {
   for (const arg of argv.slice(2)) {
@@ -14,7 +14,7 @@ function hasFlag(argv: readonly string[], flag: string): boolean {
 
 /** Config values, paths, and schemas reserve stdout for machine-consumed output. */
 export function isConfigMachineOutput(argv: readonly string[]): boolean {
-  const subcommand = resolveConfigParentCommandPath(argv)?.[1];
+  const subcommand = resolveCliParentCommandPath(argv, "config")?.[1];
   return subcommand === "get" || subcommand === "file" || subcommand === "schema";
 }
 

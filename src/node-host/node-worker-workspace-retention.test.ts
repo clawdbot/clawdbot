@@ -383,7 +383,12 @@ describe("node worker workspace retention", () => {
             argv: ["node"],
             transfer:
               direction === "upload"
-                ? { direction, token: "test-token", baseManifestRef: `sha256:${baseDigest}` }
+                ? {
+                    direction,
+                    token: "test-token",
+                    baseManifestRef: `sha256:${baseDigest}`,
+                    referenceManifestRef: `sha256:${baseDigest}`,
+                  }
                 : { direction, token: "test-token", manifestRef },
           },
           undefined,

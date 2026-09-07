@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import { describe, expect, it, onTestFinished } from "vitest";
+import { createTaskUpdateFixture } from "../fixtures/vitest-runner-task-updates.mjs";
 
 type TaskResult = { name: string; state: string };
 type Batch = {
@@ -15,9 +16,6 @@ type Observation = {
   fileStates: string[];
 };
 
-const fixture = fileURLToPath(
-  new URL("../fixtures/vitest-runner-task-updates.mjs", import.meta.url),
-);
 const finished = { name: "completed case", event: "test-finished" };
 
 describe("Vitest runner trailing task updates", () => {
@@ -26,14 +24,19 @@ describe("Vitest runner trailing task updates", () => {
     { timing: "after an early 99 ms callback rearms", firstFireAt: 99 },
     { timing: "after a late 101 ms callback", firstFireAt: 101 },
   ])("delivers actual task completion $timing without later task events", ({ firstFireAt }) => {
-    const child = spawnSync(process.execPath, [fixture, String(firstFireAt)], {
+    const fixture = createTaskUpdateFixture(firstFireAt);
+    onTestFinished(() => fs.rmSync(fixture.root, { recursive: true, force: true }));
+    // One native process owns its threads; a deadline cannot orphan a nested CLI.
+    const child = spawnSync(process.execPath, fixture.args, {
+      cwd: fixture.root,
+      env: fixture.env,
       encoding: "utf8",
       timeout: 5_000,
       killSignal: "SIGKILL",
     });
     expect(child.error, child.stderr).toBeUndefined();
     expect(child.status, child.stderr).toBe(0);
-    const observation: Observation = JSON.parse(child.stdout);
+    const observation: Observation = JSON.parse(fs.readFileSync(fixture.observation, "utf8"));
     const [before, firstCallback, afterRearm] = observation.checkpoints;
     const trailing = afterRearm ?? firstCallback;
 

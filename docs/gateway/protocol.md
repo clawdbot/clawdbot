@@ -744,6 +744,7 @@ methods. Treat this as feature discovery, not a full enumeration of
   <Accordion title="Agent and workspace helpers">
     - `agents.list` returns gateway-visible agent entries, including effective model/runtime metadata and optional semantic `kind` (`agent` or `system`). Entries with recorded creation provenance also include `createdVia` (`operator`, `agent`, or `claw`), nullable `creatorAgentId`, and millisecond `createdAt`; entries without provenance omit those fields. Clients advertise the `agent-kind` handshake capability to receive the complete typed roster; clients without it keep the legacy selector-safe roster without system rows. Kind-aware clients exclude `system` rows from ordinary selectors while retaining them in diagnostic views. Older v4 gateways may return rows without `kind`.
     - `agents.create`, `agents.update`, and `agents.delete` manage agent records and workspace wiring.
+    - `claws.monitors` (`operator.admin`, rate-limited as a control-plane write for all phases) supports [Claw removal](/cli/claws#remove-an-installed-claw). Every request includes `binding: { configPath, statePath, cronStorePath }` for the local profile, checked against the serving owner. `{ phase: "inspect", agentId, binding }` returns at most two corroborated config-owned monitor snapshots, each with `id`, `name`, `enabled`, `agentId`, null `ownerAgentId`, `storeKey`, `declarationKey`, and `revision`. `{ phase: "quiesce", agentId, operationId, monitors, binding }` validates the current deletion journal and exact consented snapshots before cancelling scheduled work. `{ phase: "drain", agentId, operationId, binding }` also requires applied agent removal and monitor convergence. Successful quiescence or drainage returns `{ drained: true }`; incomplete drainage returns `UNAVAILABLE` after a five-second wait. The operation id must match the live journal in the serving Gateway's state; it is not standalone cleanup authority. Extra request fields are rejected.
     - `agents.files.list`, `agents.files.get`, and `agents.files.set` manage the bootstrap workspace files exposed for an agent.
     - `audit.activity.list` returns the versioned metadata-only activity ledger; `audit.run.inspect` discovers execution ids or inspects one exact execution identity context; `audit.list` remains the compatibility-safe run/tool RPC.
     - `agents.workspace.list` and `agents.workspace.get` (`operator.read`) expose read-only, paginated browsing of an agent's workspace directory for clients in the trusted operator domain described in [Operator scopes](/gateway/operator-scopes). Requests accept workspace-relative paths only; reads stay confined to the realpathed workspace root (symlink and hardlink escapes rejected), size-capped, and limited to UTF-8 text plus common image types (base64). Responses do not expose the host workspace path. There are no write operations in this namespace.
@@ -926,6 +927,11 @@ count.
 - `session.observer`: safe live session headline and status digest. A model-authored
   preamble can update the headline immediately; utility-model assessments replace
   it later when available. Web, iOS, and Android use the same run-scoped digest.
+  The optional `sessionId` and opaque `lifecycleRevision` identify the session
+  lifecycle; `lifecycleRevision` can be absent before the first reset. Revisions
+  increase across runs within that lifecycle but can restart after a reset.
+  Critical notice history starts fresh when the identity pair changes, including
+  when `/clear` preserves `sessionId` and changes `lifecycleRevision`.
   Clients show its headline or inspector link only while the digest's exact `runId`
   is present in `activeRunIds`.
 - `sessions.changed`: session index or metadata changed. Active-run fields use the
@@ -1128,7 +1134,7 @@ best-effort and may drop records on saturation, terminal persistence failure,
 or shutdown timeout, so this surface is not a lossless compliance archive.
 
 Recording is on by default and controlled by
-[`logging.audit.enabled`](/gateway/configuration-reference#audit). Message
+[`logging.audit.enabled`](/gateway/config-observability#audit). Message
 recording is separately controlled by `logging.audit.messages` and defaults to
 `"off"`. When
 recording is disabled, `audit.activity.list` keeps serving records written

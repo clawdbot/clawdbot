@@ -21,7 +21,6 @@ import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner
 import { rawDataToString } from "../../infra/ws.js";
 import type { NodeInvokeRequestPayload } from "../../node-host/invoke.js";
 import { invokeNodeWorkerSupervisorCommand } from "../../node-host/node-worker-supervisor-commands.js";
-import { captureManifest } from "../../node-host/node-worker-workspace-commands.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { runExec } from "../../process/exec.js";
 import type { Deferred } from "../../shared/deferred.js";
@@ -38,6 +37,8 @@ import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { createWorkerProjectPreparationIdentity } from "./preparation-identity.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 import { prepareWorkerProjectSnapshot } from "./workspace-git-base.js";
+import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
+import { readActualWorkspaceManifest } from "./workspace-reconcile.js";
 
 const BUNDLE_HASH = "b".repeat(64);
 const ENVIRONMENT_ID = "prepared-authority-environment";
@@ -128,12 +129,16 @@ async function fixture() {
   const homeDir = path.join(ownerRoot, "home");
   await fs.mkdir(homeDir, { recursive: true });
   await git("clone", "--quiet", "--local", "--no-hardlinks", sourceDir, workspaceDir);
-  const { manifestRef } = await captureManifest({
-    workspaceDir,
-    manifestHome: homeDir,
+  const { manifestRef, manifest } = await readActualWorkspaceManifest({
+    root: workspaceDir,
     baseCommit: project.baseCommit,
-    referenceManifestRef: `sha256:${"0".repeat(64)}`,
   });
+  const manifests = path.join(homeDir, ".openclaw-worker", "manifests");
+  await fs.mkdir(manifests, { recursive: true });
+  await fs.writeFile(
+    path.join(manifests, `${manifestRef.slice(7)}.json`),
+    serializeWorkerWorkspaceManifest(manifest),
+  );
   const workspace = new NodeWorkerWorkspaceRuntime({
     ephemeral: true,
     env: {

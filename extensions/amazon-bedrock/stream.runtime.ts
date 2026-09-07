@@ -35,6 +35,7 @@ import {
   calculateCost,
   clampReasoning,
   createHttpProxyAgentsForTarget,
+  createToolArgumentPreviewSchedule,
   parseStreamingJson,
   sanitizeSurrogates,
   transformMessages,
@@ -85,6 +86,10 @@ type Block = (TextContent | ThinkingContent | ToolCall) & {
   partialJson?: string;
 };
 type BedrockEventSink = { push(event: AssistantMessageEvent): void };
+type ToolArgumentPreviewSchedules = WeakMap<
+  ToolCall,
+  ReturnType<typeof createToolArgumentPreviewSchedule>
+>;
 type PendingBedrockToolCall = {
   block: ToolCall & Pick<Block, "partialJson">;
   contentIndex: number;
@@ -173,6 +178,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 
     const blocks = output.content as Block[];
     const pendingToolCallEnds: PendingBedrockToolCall[] = [];
+    const toolArgumentPreviewSchedules: ToolArgumentPreviewSchedules = new WeakMap();
     const redactedReasoningChunks = new Map<number, Uint8Array[]>();
     const fable5 = usesClaudeFable5BedrockContract(model);
     // Claude classifiers may refuse after partial output. Hold every event until
@@ -316,7 +322,13 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
           }
           eventSink.push({ type: "start", partial: output });
         } else if (item.contentBlockStart) {
-          handleContentBlockStart(item.contentBlockStart, blocks, output, eventSink);
+          handleContentBlockStart(
+            item.contentBlockStart,
+            blocks,
+            output,
+            eventSink,
+            toolArgumentPreviewSchedules,
+          );
         } else if (item.contentBlockDelta) {
           handleContentBlockDelta(
             item.contentBlockDelta,
@@ -324,6 +336,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
             output,
             eventSink,
             redactedReasoningChunks,
+            toolArgumentPreviewSchedules,
           );
         } else if (item.contentBlockStop) {
           handleContentBlockStop(
@@ -552,6 +565,7 @@ function handleContentBlockStart(
   blocks: Block[],
   output: AssistantMessage,
   stream: BedrockEventSink,
+  toolArgumentPreviewSchedules: ToolArgumentPreviewSchedules,
 ): void {
   const index = event.contentBlockIndex!;
   const start = event.start;
@@ -566,6 +580,7 @@ function handleContentBlockStart(
       partialJson: "",
       index,
     };
+    toolArgumentPreviewSchedules.set(block, createToolArgumentPreviewSchedule());
     output.content.push(block);
     stream.push({ type: "toolcall_start", contentIndex: blocks.length - 1, partial: output });
   }
@@ -577,6 +592,7 @@ function handleContentBlockDelta(
   output: AssistantMessage,
   stream: BedrockEventSink,
   redactedReasoningChunks: Map<number, Uint8Array[]>,
+  toolArgumentPreviewSchedules: ToolArgumentPreviewSchedules,
 ): void {
   const contentBlockIndex = event.contentBlockIndex!;
   const delta = event.delta;
@@ -598,7 +614,11 @@ function handleContentBlockDelta(
     }
   } else if (delta?.toolUse && block?.type === "toolCall") {
     block.partialJson = (block.partialJson || "") + (delta.toolUse.input || "");
-    block.arguments = parseStreamingJson(block.partialJson);
+    // Preview work grows geometrically; raw deltas and the authoritative
+    // sibling-set validation at message completion remain unchanged.
+    if (toolArgumentPreviewSchedules.get(block)?.(block.partialJson.length)) {
+      block.arguments = parseStreamingJson(block.partialJson);
+    }
     stream.push({
       type: "toolcall_delta",
       contentIndex: index,

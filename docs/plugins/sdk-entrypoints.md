@@ -330,6 +330,35 @@ export default definePluginEntry({
   startup config; command handlers should still validate availability when
   invoked.
 
+### Native provider factories
+
+`registerSpeechProvider`, `registerRealtimeTranscriptionProvider`, and
+`registerRealtimeVoiceProvider` accept either a complete provider descriptor or
+a synchronous factory receiving `PluginCapabilityCatalogContext`:
+
+```typescript
+register(api) {
+  api.registerRealtimeTranscriptionProvider((context) =>
+    buildRealtimeTranscriptionProvider(context),
+  );
+}
+```
+
+Use the same plugin-owned factory for full registration and an optional
+capability catalog. The host supplies native auth, request, and transport
+operations; constructing a descriptor should not load execution SDK barrels,
+read credentials, or start sessions. Keep that work in the descriptor's methods.
+Factories must return synchronously; a thrown error or promise fails registration.
+
+Full registration can bind its own broker or logger in the factory closure.
+Do not substitute a catalog-only descriptor for one that requires those bindings.
+Full plugin registration still owns harnesses, hooks, services, and lifecycle
+callbacks; catalog entries alone do not establish runtime readiness.
+
+Object registrations remain supported. Before publishing a plugin that uses
+factory arguments, set its `compat.pluginApi` floor to a host release that
+supports them; a lower `minHostVersion` does not override that API requirement.
+
 ### Computer Use providers
 
 **Import:** `openclaw/plugin-sdk/computer-use`

@@ -1,12 +1,16 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
+import {
+  NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+  NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+} from "../../infra/node-commands.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { NODE_WORKSPACE_DRAIN_COMMAND } from "../../worker/node-workspace-protocol.js";
 import { environmentsHandlers } from "../server-methods/environments.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import { BUILD, transport, workspaceTransfer } from "./node-worker-tunnel.test-support.js";
@@ -184,6 +188,18 @@ describe("offline device placement abandonment", () => {
         }),
       }),
     );
+    expect(fixture.invoke).toHaveBeenNthCalledWith(
+      fixture.invoke.mock.calls.length - 1,
+      expect.objectContaining({
+        command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+        params: expect.objectContaining({
+          environmentId: fixture.active.environmentId,
+          sessionId: fixture.active.sessionId,
+          generation: fixture.active.activeOwnerEpoch,
+          argv: [NODE_WORKSPACE_DRAIN_COMMAND],
+        }),
+      }),
+    );
     expect(fixture.provider.destroy).toHaveBeenCalledOnce();
   }
 
@@ -204,7 +220,7 @@ describe("offline device placement abandonment", () => {
       expect(invoke).not.toHaveBeenCalled();
       expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
       await finishDeviceCleanup(fixture);
-      expect(invoke).toHaveBeenCalledOnce();
+      expect(invoke).toHaveBeenCalledTimes(2);
     },
   );
 
@@ -223,7 +239,7 @@ describe("offline device placement abandonment", () => {
     expect(invoke).toHaveBeenCalledOnce();
     expectRetainedDeviceCleanup(fixture);
     await finishDeviceCleanup(fixture);
-    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke).toHaveBeenCalledTimes(3);
   });
 
   it("force destroys an unreachable device and accepts its already fenced placement for abandonment", async () => {
@@ -266,7 +282,7 @@ describe("offline device placement abandonment", () => {
       }),
     ).resolves.toMatchObject({ state: "local" });
     await finishDeviceCleanup(fixture);
-    expect(fixture.invoke).toHaveBeenCalledOnce();
+    expect(fixture.invoke).toHaveBeenCalledTimes(2);
     expect(
       isFailedWorkerPlacementEnvironmentGone({
         environmentService: environments,
@@ -298,7 +314,7 @@ describe("offline device placement abandonment", () => {
       await expect(
         harness.service.forceDestroyEnvironment(active.environmentId),
       ).resolves.toMatchObject({ state: "failed", leaseId: null });
-      expect(invoke).toHaveBeenCalledOnce();
+      expect(invoke).toHaveBeenCalledTimes(2);
       expect(provider.destroy).toHaveBeenCalledOnce();
     },
   );

@@ -4,6 +4,10 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import type { NodeWorkerSupervisorReceipt } from "../../worker/node-supervisor-protocol.js";
+import {
+  NODE_WORKSPACE_DRAIN_COMMAND,
+  type NodeWorkerWorkspaceExecInput,
+} from "../../worker/node-workspace-protocol.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import type { createDeviceWorkerRuntime } from "./device-provider.js";
 import { measureNodeWorkerLaunchBytes } from "./node-launch-adapter.js";
@@ -14,7 +18,9 @@ import {
   preparedEnvironment,
   startRequest,
   transport,
+  withWorkspaceDrain,
   workspaceTransfer,
+  workspaceCommandPayload,
 } from "./node-worker-tunnel.test-support.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 
@@ -116,7 +122,7 @@ describe("node worker tunnel lifetime", () => {
         workspaceTransfer: transfer,
       });
       manager.bindWorkspaceBindingResolver(async () => ({
-        localPath: "/gateway/workspace",
+        source: { kind: "local", path: "/gateway/workspace" },
         remoteWorkspaceDir: "/node/workspace",
         manifestRef,
         sessionKey,
@@ -238,7 +244,7 @@ describe("node worker tunnel lifetime", () => {
     }
     nodeTransport.listCurrentNodes = async () => nodes;
     const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>();
-    nodeTransport.invoke = invoke;
+    nodeTransport.invoke = withWorkspaceDrain(invoke);
     const transfer = workspaceTransfer();
     const manager = createNodeWorkerTunnelManager({
       gatewayDeviceId: "gateway-device-1",
@@ -269,7 +275,7 @@ describe("node worker tunnel lifetime", () => {
       await stopped.promise;
       return { ok: true, payloadJSON: "null" };
     });
-    nodeTransport.invoke = invoke;
+    nodeTransport.invoke = withWorkspaceDrain(invoke);
     const manager = createNodeWorkerTunnelManager({
       gatewayDeviceId: "gateway-device-1",
       getEnvironment: () => record,
@@ -322,7 +328,7 @@ describe("node worker tunnel lifetime", () => {
         .fn<NodeWorkerSupervisorTransport["invoke"]>()
         .mockResolvedValueOnce({ ok: false, error: { code: "DISCONNECTED" } })
         .mockResolvedValue({ ok: true, payloadJSON: "null" });
-      nodeTransport.invoke = invoke;
+      nodeTransport.invoke = withWorkspaceDrain(invoke);
       const transfer = { ...workspaceTransfer(), closeAll: vi.fn(async () => {}) };
       const manager = createNodeWorkerTunnelManager({
         gatewayDeviceId: "gateway-device-1",
@@ -351,6 +357,89 @@ describe("node worker tunnel lifetime", () => {
           ownerEpoch: 2,
         }),
       ]);
+    },
+  );
+
+  it.each(["worker-turn", "remote-exec"] as const)(
+    "fences an unconfirmed workspace command until its %s owner drains after reconnect",
+    async (executionMode) => {
+      const record = environment();
+      record.profileSnapshot = { ...record.profileSnapshot, executionMode };
+      const nodeTransport = transport();
+      const nodes = await nodeTransport.listCurrentNodes();
+      let connected = true;
+      let holdDrain = false;
+      const draining = createDeferred();
+      const releaseDrain = createDeferred();
+      nodeTransport.listCurrentNodes = async () => (connected ? nodes : []);
+      nodeTransport.invoke = async (request) => {
+        if (request.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND) {
+          return { ok: true, payloadJSON: "null" };
+        }
+        const input = request.params as NodeWorkerWorkspaceExecInput;
+        if (input.argv[0] === NODE_WORKSPACE_DRAIN_COMMAND) {
+          if (holdDrain) {
+            draining.resolve();
+            await releaseDrain.promise;
+          }
+          return {
+            ok: true,
+            payloadJSON: workspaceCommandPayload("/node/workspace", { stdout: "drained\n" }),
+          };
+        }
+        request.onDispatchReady?.("workspace-invoke");
+        connected = false;
+        return { ok: false, error: { code: "TIMEOUT" } };
+      };
+      const transfer = workspaceTransfer();
+      transfer.prepareRepository = vi.fn(async () => {});
+      const manager = createNodeWorkerTunnelManager({
+        gatewayDeviceId: "gateway-device-1",
+        getEnvironment: () => record,
+        listEnvironments: () => [record],
+        getTransport: () => nodeTransport,
+        launchNodeWorker: vi.fn(),
+        validateWorkerTurn: () => true,
+        workspaceTransfer: transfer,
+      });
+      manager.bindWorkspaceBindingResolver(async () => ({
+        source: {
+          kind: "repository",
+          baseCommit: "a".repeat(40),
+          baseManifestRef: `sha256:${"b".repeat(64)}`,
+        },
+        manifestRef: `sha256:${"b".repeat(64)}`,
+        remoteWorkspaceDir: "/node/workspace",
+      }));
+      const request = { ...startRequest(), executionMode };
+      const first = await manager.start(request);
+      await expect(
+        first.runWorkspaceCommand({ argv: ["write-command"], transportRetry: "never" }),
+      ).rejects.toThrow("not connected");
+      expect(manager.status(record.environmentId)).toBe("stopped");
+      await expect(
+        first.runWorkspaceCommand({ argv: ["write-command"], transportRetry: "never" }),
+      ).rejects.toThrow("authority closed");
+
+      connected = true;
+      holdDrain = true;
+      let ready = false;
+      const replacing = manager.start(request).then((handle) => {
+        ready = true;
+        return handle;
+      });
+      await draining.promise;
+      try {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(ready).toBe(false);
+      } finally {
+        releaseDrain.resolve();
+      }
+      await replacing;
+      expect(manager.status(record.environmentId)).toBe("connected");
+      await manager.stop(record.environmentId);
     },
   );
 

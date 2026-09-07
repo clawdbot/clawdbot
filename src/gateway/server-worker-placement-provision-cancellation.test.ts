@@ -31,6 +31,7 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 import { deriveEnvironmentIntent } from "./worker-environments/service-contract.js";
 import * as support from "./worker-environments/service.test-support.js";
+import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
 
 const REQUEST = {
   ...FIXTURE_REQUEST,
@@ -71,6 +72,7 @@ describe("dispatch Stop before provider allocation", () => {
       target,
       entry,
       worktree,
+      workspace: { kind: "local", path: worktree.path },
     });
   });
 
@@ -459,9 +461,9 @@ describe("dispatch Stop before provider allocation", () => {
             pause(() =>
               options.runRecoveryBarrier({
                 ...request,
-                run: async (path: string) => {
+                run: async (recoveryWorkspace: WorkerSessionWorkspace) => {
                   events.push("phase-started");
-                  await request.run(path);
+                  await request.run(recoveryWorkspace);
                 },
               }),
             ),
@@ -801,6 +803,15 @@ describe("dispatch Stop before provider allocation", () => {
           request.onCancellationStarted?.();
         },
       );
+      if (mode === "late-sweep") {
+        // Recovery captures service methods when its runtime is created.
+        const reconcileOnce = environments.reconcileOnce.bind(environments);
+        vi.spyOn(environments, "reconcileOnce").mockImplementationOnce(async () => {
+          sweepEntered.resolve();
+          await enterSweep.promise;
+          await reconcileOnce();
+        });
+      }
       const runtime = createGatewayWorkerPlacementRuntime({
         placements,
         environments,
@@ -820,14 +831,6 @@ describe("dispatch Stop before provider allocation", () => {
       await environments.reconcileEnvironment(intent.environmentId);
       expect(provisionCalls).toBe(2);
       expect(placements.get(REQUEST.sessionId)?.state).toBe("provisioning");
-      if (mode === "late-sweep") {
-        const reconcileOnce = environments.reconcileOnce.bind(environments);
-        vi.spyOn(environments, "reconcileOnce").mockImplementationOnce(async () => {
-          sweepEntered.resolve();
-          await enterSweep.promise;
-          await reconcileOnce();
-        });
-      }
       const recovery =
         mode === "idle"
           ? Promise.resolve()

@@ -58,7 +58,7 @@ it.each([false, true])(
       ownerSignal: new AbortController().signal,
       isOwnerCurrent: () => true,
       restoredWorkspace: {
-        localPath,
+        source: { kind: "local", path: localPath },
         remoteWorkspaceDir: "/worker/workspace",
         manifestRef: actual.manifestRef,
       },
@@ -94,11 +94,14 @@ it.each([false, true])(
     workspaceDebug.mockClear();
     try {
       const result = await actions.reconcileWorkspace({
-        localPath,
         remoteWorkspaceDir: "/worker/workspace",
         baseManifestRef: actual.manifestRef,
-        journal: { load: () => undefined, begin: () => {}, commit: () => {}, abort: () => {} },
-        stagedResult: { ref: workerWorkspaceResultRef("metrics-claim"), record: () => {} },
+        source: {
+          kind: "local",
+          path: localPath,
+          journal: { load: () => undefined, begin: () => {}, commit: () => {}, abort: () => {} },
+          stagedResult: { ref: workerWorkspaceResultRef("metrics-claim"), record: () => {} },
+        },
       });
       let renewals = 0;
       const verified = verifyReconciledWorkspaceFinal(result, {

@@ -5,7 +5,7 @@ read_when:
   - Managing team-scoped values in the shared secret store
   - Auditing plaintext residues and unresolved refs
   - Configuring SecretRefs and applying one-way scrub changes
-title: "Secrets"
+title: "Secrets CLI"
 ---
 
 # `openclaw secrets`

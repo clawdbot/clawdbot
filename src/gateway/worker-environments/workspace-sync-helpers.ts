@@ -6,13 +6,15 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import { WORKER_BUNDLE_RSYNC_RECEIVER_PATH } from "../../shared/worker-bundle-hash.js";
+import { WORKER_SKILL_RESOURCE_COMMAND } from "../../worker/skill-resource-protocol.js";
+import { buildSkillResourceCommand } from "../../worker/skill-resource-receiver.js";
 import {
   type PreparedWorkerSsh,
   workerSshCommandOptions,
   workerSshOptions,
   workerSshRemoteCommand,
 } from "./ssh.js";
-import type { WorkerWorkspaceCommand, WorkerWorkspaceSyncRequest } from "./tunnel-contract.js";
+import type { WorkerWorkspaceCommand, WorkerLocalWorkspaceSyncRequest } from "./tunnel-contract.js";
 import {
   parseRemoteWorkspaceManifestEnvelope,
   recordRemoteWorkspaceHashMetrics,
@@ -151,6 +153,42 @@ export function workerWorkspaceRsyncReceiverEntryPath(bundleHash: string): strin
     throw new Error("Worker workspace rsync receiver bundle hash is invalid");
   }
   return `.openclaw-worker/${bundleHash}/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`;
+}
+
+export function resolveWorkerWorkspaceCommandArgv(
+  command: WorkerWorkspaceCommand,
+  environmentId: string,
+): readonly string[] {
+  let argv = command.argv;
+  if (command.skillResources) {
+    const { workspaceDir, generation, operation } = command.skillResources;
+    const parts = workspaceDir.split("/");
+    if (
+      !command.assertCurrent ||
+      command.transportRetry !== "never" ||
+      command.argv.length !== 1 ||
+      command.argv[0] !== WORKER_SKILL_RESOURCE_COMMAND ||
+      command.transfer ||
+      command.seed ||
+      command.capture ||
+      !path.posix.isAbsolute(workspaceDir) ||
+      path.posix.normalize(workspaceDir) !== workspaceDir ||
+      workspaceDir.includes("\0") ||
+      parts.at(-5) !== ".openclaw-worker" ||
+      parts.at(-4) !== "workspaces" ||
+      parts.at(-3) !== stableWorkerPathComponent(environmentId, 16) ||
+      !/^[a-f0-9]{32}$/.test(parts.at(-2) ?? "") ||
+      parts.at(-1) !== String(generation)
+    ) {
+      throw new Error("Skill resources do not match the SSH workspace owner");
+    }
+    argv = buildSkillResourceCommand({
+      parentDir: path.posix.dirname(workspaceDir),
+      generation,
+      operation,
+    });
+  }
+  return argv;
 }
 
 export function workerWorkspaceSshArgv(
@@ -299,7 +337,7 @@ export async function probeWorkspaceGitMode(params: {
 }
 
 export async function resolveWorkerWorkspaceGitAuthor(
-  request: Pick<WorkerWorkspaceSyncRequest, "localPath" | "gitAuthor">,
+  request: Pick<WorkerLocalWorkspaceSyncRequest, "localPath" | "gitAuthor">,
   runTask: (argv: string[]) => Promise<SpawnResult>,
 ): Promise<{ name: string; email: string }> {
   const git = ["git", "-C", request.localPath, "config", "--get"];
@@ -318,7 +356,7 @@ export function stableWorkerPathComponent(value: string, length: number): string
   return createHash("sha256").update(value).digest("hex").slice(0, length);
 }
 
-export function validateWorkspaceSyncRequest(request: WorkerWorkspaceSyncRequest): void {
+export function validateWorkspaceSyncRequest(request: WorkerLocalWorkspaceSyncRequest): void {
   if (!request.sessionId.trim()) {
     throw new Error("Worker workspace session id must be non-empty");
   }

@@ -2855,7 +2855,8 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     );
     expect(callArg(sendMessageMatrixMock, 0, 2, "notice options")).toMatchObject({
       accountId: "ops",
-      replyToId: "$thread-root",
+      replyToId: undefined,
+      fallbackReplyToId: "$thread-root",
       threadId: "$thread-root",
       deliveryQueueId: "matrix:restart-recovery-tombstone:ops:!room:example.org:$tombstone-event",
       deliveryPartIndex: 0,
@@ -3126,6 +3127,7 @@ describe("matrix monitor handler draft streaming", () => {
 
   function createStreamingHarness(opts?: {
     replyToMode?: "off" | "first" | "all" | "batched";
+    threadReplies?: "inbound" | "always";
     blockStreamingEnabled?: boolean;
     streaming?: "partial" | "quiet" | "progress" | "off";
     previewToolProgressEnabled?: boolean;
@@ -3165,6 +3167,7 @@ describe("matrix monitor handler draft streaming", () => {
       previewToolProgressEnabled: opts?.previewToolProgressEnabled ?? false,
       blockStreamingEnabled: opts?.blockStreamingEnabled ?? false,
       replyToMode: opts?.replyToMode ?? "off",
+      threadReplies: opts?.threadReplies,
       client: { redactEvent: redactEventMock },
       logVerboseMessage,
       createReplyDispatcherWithTyping: (params: Record<string, unknown> | undefined) => {
@@ -3409,51 +3412,98 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
-  it("replaces Matrix plan snapshots and keeps the explanation", async () => {
-    vi.useFakeTimers();
-    let finish: (() => Promise<void>) | undefined;
-    try {
-      const { dispatch } = createStreamingHarness({
-        streaming: "progress",
-        previewToolProgressEnabled: true,
-        accountConfig: {
-          streaming: { mode: "progress", progress: { toolProgress: true, label: false } },
-        } as never,
-      });
-      const streaming = await dispatch();
-      const { opts } = streaming;
-      finish = streaming.finish;
-
-      await opts.onPlanUpdate?.({
-        phase: "update",
-        explanation: "Initial plan",
-        steps: [{ step: "Inspect", status: "in_progress" }],
-      });
-      await waitForMatrixState(() => {
-        expect(singleTextMessageBody()).toBe("`Initial plan`\n\n`▸ Inspect`");
-      });
-
-      await opts.onPlanUpdate?.({
-        phase: "update",
-        explanation: "Revised plan",
-        steps: [
-          { step: "Inspect", status: "completed" },
-          { step: "Patch", status: "in_progress" },
-        ],
-      });
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(editMessageMatrixMock).toHaveBeenCalled();
-      expect(lastCallArg(editMessageMatrixMock, 2, "Matrix plan edit body")).toBe(
-        "`Revised plan`\n\n`✅ Inspect`\n`▸ Patch`",
-      );
-    } finally {
+  it.each(["partial", "quiet", "progress"] as const)(
+    "replaces, clears, and resumes Matrix plan snapshots in %s mode",
+    async (mode) => {
+      vi.useFakeTimers();
+      let finish: (() => Promise<void>) | undefined;
       try {
-        await finish?.();
+        const { dispatch, redactEventMock } = createStreamingHarness({
+          streaming: mode,
+          previewToolProgressEnabled: true,
+          accountConfig: {
+            streaming: { mode, progress: { toolProgress: true, label: false } },
+          } as never,
+        });
+        const streaming = await dispatch();
+        const { opts } = streaming;
+        finish = streaming.finish;
+
+        await opts.onPlanUpdate?.({ phase: "update", steps: [] });
+        expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+        expect(redactEventMock).not.toHaveBeenCalled();
+
+        await opts.onPlanUpdate?.({
+          phase: "update",
+          explanation: "Initial plan",
+          steps: [{ step: "Inspect", status: "in_progress" }],
+        });
+        await waitForMatrixState(() => {
+          expect(singleTextMessageBody()).toBe("`Initial plan`\n\n`▸ Inspect`");
+        });
+
+        await opts.onPlanUpdate?.({
+          phase: "update",
+          explanation: "Revised plan",
+          steps: [
+            { step: "Inspect", status: "completed" },
+            { step: "Patch", status: "in_progress" },
+          ],
+        });
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(editMessageMatrixMock).toHaveBeenCalled();
+        expect(lastCallArg(editMessageMatrixMock, 2, "Matrix plan edit body")).toBe(
+          "`Revised plan`\n\n`✅ Inspect`\n`▸ Patch`",
+        );
+
+        await opts.onPlanUpdate?.({ phase: "update", steps: [] });
+        expect(redactEventMock).toHaveBeenCalledExactlyOnceWith("!room:example.org", "$draft1");
+        await opts.onPlanUpdate?.({
+          phase: "update",
+          steps: [{ step: "Resume", status: "in_progress" }],
+        });
+        await waitForMatrixState(() => {
+          expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(2);
+        });
+        expect(lastCallArg(sendSingleTextMessageMatrixMock, 1, "Matrix resumed plan body")).toBe(
+          "`▸ Resume`",
+        );
+        opts.onAssistantMessageStart?.();
+        await opts.onItemEvent?.({
+          itemId: "card-rejected",
+          kind: "tool",
+          name: "progress_card",
+          phase: "end",
+          status: "blocked",
+        });
+        opts.onAssistantMessageStart?.();
+        await opts.onToolStart?.({ toolCallId: "exec-1", name: "exec", phase: "start" });
+        await vi.advanceTimersByTimeAsync(1_000);
+        const withActivity = lastCallArg(editMessageMatrixMock, 2, "Matrix plan with activity");
+        expect(withActivity).toContain("▸ Resume");
+        expect(withActivity).toContain("blocked");
+        expect(withActivity).toContain("Exec");
+        opts.onAssistantMessageStart?.();
+        await opts.onPlanUpdate?.({ phase: "update", steps: [] });
+        await vi.advanceTimersByTimeAsync(1_000);
+        const afterClear = lastCallArg(
+          editMessageMatrixMock,
+          2,
+          "Matrix activity after plan clear",
+        );
+        expect(afterClear).not.toContain("Resume");
+        expect(afterClear).toContain("blocked");
+        expect(afterClear).toContain("Exec");
+        expect(redactEventMock).toHaveBeenCalledTimes(1);
       } finally {
-        vi.useRealTimers();
+        try {
+          await finish?.();
+        } finally {
+          vi.useRealTimers();
+        }
       }
-    }
-  });
+    },
+  );
 
   it("uses resolved Matrix account progress maxLines for draft text", async () => {
     vi.useFakeTimers();
@@ -4923,18 +4973,26 @@ describe("matrix monitor handler draft streaming", () => {
   it.each([
     {
       name: "an implicit reply with reply mode first",
+      threadReplies: undefined,
       replyToMode: "first" as const,
       payload: { text: "Final text", replyToId: "$different_msg" },
     },
     {
       name: "an explicit reply tag with reply mode off",
+      threadReplies: undefined,
+      replyToMode: "off" as const,
+      payload: { text: "Final text", replyToId: "$different_msg", replyToTag: true },
+    },
+    {
+      name: "an explicit reply inside a thread",
+      threadReplies: "always" as const,
       replyToMode: "off" as const,
       payload: { text: "Final text", replyToId: "$different_msg", replyToTag: true },
     },
   ])(
     "redacts stale draft when $name targets a different event",
-    async ({ replyToMode, payload }) => {
-      const { dispatch, redactEventMock } = createStreamingHarness({ replyToMode });
+    async ({ replyToMode, payload, threadReplies }) => {
+      const { dispatch, redactEventMock } = createStreamingHarness({ replyToMode, threadReplies });
       const { deliver, opts, finish } = await dispatch();
 
       // Simulate streaming: partial reply creates draft message.
@@ -4956,23 +5014,37 @@ describe("matrix monitor handler draft streaming", () => {
     },
   );
 
-  it("finalizes the existing draft when an implicit reply is suppressed by off mode", async () => {
-    const { dispatch, redactEventMock } = createStreamingHarness({ replyToMode: "off" });
-    const { deliver, opts, finish } = await dispatch();
+  it.each([
+    { name: "off mode", replyToMode: "off" as const, threadReplies: undefined },
+    { name: "thread fallback", replyToMode: "first" as const, threadReplies: "always" as const },
+  ])(
+    "finalizes the existing draft when an implicit reply is only $name",
+    async ({ replyToMode, threadReplies }) => {
+      const { dispatch, redactEventMock } = createStreamingHarness({ replyToMode, threadReplies });
+      const { deliver, opts, finish } = await dispatch();
 
-    opts.onPartialReply?.({ text: "Partial reply" });
-    await waitForMatrixState(() => {
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-    });
+      opts.onPartialReply?.({ text: "Partial reply" });
+      await waitForMatrixState(() => {
+        expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+      });
+      if (threadReplies) {
+        expect(
+          callArg(sendSingleTextMessageMatrixMock, 0, 2, "thread preview options"),
+        ).toMatchObject({
+          threadId: "$msg1",
+          replyToId: undefined,
+        });
+      }
 
-    deliverMatrixRepliesMock.mockClear();
-    await deliver({ text: "Final text", replyToId: "$suppressed_implicit" }, { kind: "final" });
+      deliverMatrixRepliesMock.mockClear();
+      await deliver({ text: "Final text", replyToId: "$suppressed_implicit" }, { kind: "final" });
 
-    expect(editMessageMatrixMock).toHaveBeenCalledOnce();
-    expect(redactEventMock).not.toHaveBeenCalled();
-    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
-    await finish();
-  });
+      expect(editMessageMatrixMock).toHaveBeenCalledOnce();
+      expect(redactEventMock).not.toHaveBeenCalled();
+      expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+      await finish();
+    },
+  );
 
   it("redacts stale draft when final payload intentionally drops reply threading", async () => {
     const { dispatch, redactEventMock } = createStreamingHarness({ replyToMode: "first" });

@@ -59,6 +59,14 @@ active agent workspace profile files. Skill catalogs and tool-routed
 instructions. When memory tools are unavailable, active `BOOTSTRAP.md` content
 and full `MEMORY.md` fall back to plain turn input context instead.
 
+Delivery mode and the current message target requirement arrive as compact
+application context before each user turn. They explicitly supersede earlier
+delivery guidance while preserving permission and temporal context. With the
+same available tools, switching between automatic replies and message-tool-only
+replies keeps the static instructions and message tool definition unchanged.
+If the message tool is unavailable on a message-tool-only turn, final text stays
+private to the invoking workflow; it is not delivered to the source conversation.
+
 When `openclaw_direct.sessions_yield` is available, those instructions also
 tell a native Codex parent to end the current turn when a child's result should
 arrive in a later turn. Native `wait_agent` remains for an intentional same-turn

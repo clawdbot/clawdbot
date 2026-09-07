@@ -139,7 +139,11 @@ describe("node worker transfer client hash memo", () => {
         sessionId: identity.sessionId,
         ownerSignal: new AbortController().signal,
         isOwnerCurrent: () => true,
-        restoredWorkspace: { localPath, remoteWorkspaceDir: workspaceDir, manifestRef },
+        restoredWorkspace: {
+          source: { kind: "local", path: localPath },
+          remoteWorkspaceDir: workspaceDir,
+          manifestRef,
+        },
         runWorkspaceCommand: execute,
         runResumeWorkspaceCommand: execute,
         workspaceTransfer: {
@@ -160,10 +164,9 @@ describe("node worker transfer client hash memo", () => {
       const quiescence = { assertActive: async () => {}, resume: async () => {} };
       for (let pass = 0; pass < 2; pass++) {
         const result = await actions.reconcileWorkspace({
-          localPath,
+          source: { kind: "local", path: localPath, journal },
           remoteWorkspaceDir: workspaceDir,
           baseManifestRef: manifestRef,
-          journal,
         });
         await verifyReconciledWorkspaceFinal(result, quiescence);
       }
@@ -277,7 +280,12 @@ describe("node worker transfer client hash memo", () => {
         {
           ...identity,
           argv: ["openclaw-internal-workspace-transfer"],
-          transfer: { direction: "upload", token: "upload-token", baseManifestRef },
+          transfer: {
+            direction: "upload",
+            token: "upload-token",
+            baseManifestRef,
+            referenceManifestRef: baseManifestRef,
+          },
         },
         undefined,
         { url: gatewayUrl },

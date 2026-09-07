@@ -19,7 +19,7 @@ export type PluginHostSessionCleanupStoreParams = {
   sessionEntrySlotKeys?: ReadonlySet<string>;
   /** Locked-harness ids whose sessions this cleanup must leave untouched. */
   preserveLockedHarnessIds?: ReadonlySet<string>;
-  /** Per-store file-backed transaction boundary. */
+  /** Per-store SQLite transaction boundary. */
   storePath: string;
   /** Cancels the cleanup before persistence when host lifecycle state changes. */
   shouldCleanup?: () => boolean;

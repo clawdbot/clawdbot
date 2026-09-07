@@ -1,4 +1,3 @@
-// User turn transcript helpers extract user-turn text from session transcripts.
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
@@ -13,8 +12,10 @@ import {
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
-import { resolveUserTurnTranscriptAdmission } from "./user-turn-transcript-admission.js";
-import { registerUserTurnTranscriptAdmissionOwner } from "./user-turn-transcript-annotation.js";
+import {
+  registerUserTurnTranscriptAdmissionOwner,
+  resolveUserTurnTranscriptAdmission,
+} from "./user-turn-transcript-admission.js";
 import {
   buildLateResolvedMediaMessage,
   isUserMessage,
@@ -508,6 +509,11 @@ export function createUserTurnTranscriptRecorder(
       }
       return result;
     } catch (error) {
+      // Approved custody retries only its idempotent write under the same live
+      // owner. A cached rejection must not poison a later definitive fallback.
+      if (pendingInput && selfPersistencePromise === persistencePromise) {
+        selfPersistencePromise = undefined;
+      }
       handlePersistenceError(error);
       throw error;
     }
@@ -526,6 +532,7 @@ export function createUserTurnTranscriptRecorder(
         }
         pendingInput = await stageSessionPendingInput(target, {
           ...options,
+          requestFingerprint: params.pendingInputRequestFingerprint,
           message: candidate,
           config: target.config as SessionTranscriptTurnPersistOptions["config"],
           prepareMessageAfterIdempotencyCheck: (next) =>
@@ -668,6 +675,7 @@ export function createUserTurnTranscriptRecorder(
     receipt: () => admissionReceipt,
     message: () => admittedMessage,
     blocked: () => blocked || confirmedSteerTargetRunId !== undefined,
+    sentToProvider: () => sentToProvider,
     refresh: refreshAdmission,
   });
   return recorder;

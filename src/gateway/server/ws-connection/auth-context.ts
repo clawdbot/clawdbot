@@ -1,6 +1,7 @@
 // WebSocket auth context resolves handshake credentials before device pairing and capability checks run.
 import type { IncomingMessage } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ConnectParams } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
@@ -15,15 +16,6 @@ import {
 } from "../../auth.js";
 import { PROXY_ATTRIBUTION_REQUIRED_REASON } from "../../ingress-attribution.js";
 import { withSerializedRateLimitAttempt } from "../../rate-limit-attempt-serialization.js";
-
-type HandshakeConnectAuth = {
-  token?: string;
-  bootstrapToken?: string;
-  deviceToken?: string;
-  password?: string;
-  approvalRuntimeToken?: string;
-  agentRuntimeIdentityToken?: string;
-};
 
 type DeviceTokenCandidateSource = "explicit-device-token" | "shared-token-fallback";
 
@@ -100,7 +92,7 @@ function mapDeviceTokenAuthFailureReason(params: {
 }
 
 function resolveSharedConnectAuth(
-  connectAuth: HandshakeConnectAuth | null | undefined,
+  connectAuth: ConnectParams["auth"] | null,
 ): { token?: string; password?: string } | undefined {
   const token = normalizeOptionalString(connectAuth?.token);
   const password = normalizeOptionalString(connectAuth?.password);
@@ -110,7 +102,7 @@ function resolveSharedConnectAuth(
   return { token, password };
 }
 
-function resolveDeviceTokenCandidate(connectAuth: HandshakeConnectAuth | null | undefined): {
+function resolveDeviceTokenCandidate(connectAuth: ConnectParams["auth"] | null): {
   token?: string;
   source?: DeviceTokenCandidateSource;
 } {
@@ -127,7 +119,7 @@ function resolveDeviceTokenCandidate(connectAuth: HandshakeConnectAuth | null | 
 
 export async function resolveConnectAuthState(params: {
   resolvedAuth: ResolvedGatewayAuth;
-  connectAuth: HandshakeConnectAuth | null | undefined;
+  connectAuth: ConnectParams["auth"] | null;
   hasDeviceIdentity: boolean;
   req: IncomingMessage;
   trustedProxies: string[];

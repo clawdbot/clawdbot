@@ -546,6 +546,6 @@ describe("memory manager database publication", () => {
     await expectPathMissing(oldShadow);
     await expectPathMissing(`${oldShadow}-wal`);
     await expectPathMissing(`${oldShadow}-journal`);
-    await expect(fs.access(youngShadow)).resolves.toBeUndefined();
+    await fs.access(youngShadow);
   });
 });

@@ -1,10 +1,12 @@
 import type fs from "node:fs";
 import path from "node:path";
+import { err, ok } from "@openclaw/normalization-core/result";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { isVerbose } from "../global-state.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
+import { initializeNativeSessionCatalogPreferences } from "../plugins/native-session-catalog-config.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
 import { collectChangedPaths } from "./config-change-paths.js";
 import {
@@ -206,9 +208,12 @@ export async function writeConfigFileFromContext(
   };
   // Validate authored structure before stamping can replace malformed parents.
   validateCandidate(validationCandidate);
+  // SAFETY: the original resolved input was just validated; retain raw values, not parser defaults.
+  const validatedCandidate = validationCandidate as OpenClawConfig;
   const materialized = stampConfigVersion(
-    // SAFETY: the original resolved input was just validated; retain raw values, not parser defaults.
-    validationCandidate as OpenClawConfig,
+    snapshot.exists
+      ? validatedCandidate
+      : initializeNativeSessionCatalogPreferences(validatedCandidate),
     options.lastTouchedVersionOverride,
     snapshot.exists ? (snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig) : null,
   );
@@ -377,13 +382,17 @@ export async function writeConfigFileFromContext(
   const blockingReasons = resolveConfigWriteBlockingReasons(suspiciousReasons, options);
   if (blockingReasons.length > 0 && options.allowDestructiveWrite !== true) {
     const rejectedPath = `${configPath}.rejected.${formatConfigArtifactTimestamp(new Date().toISOString())}`;
-    await deps.fs.promises
+    // Only the completed exclusive create proves this payload is available for inspection.
+    const rejectedSave = await deps.fs.promises
       .writeFile(rejectedPath, json, { encoding: "utf-8", mode: 0o600, flag: "wx" })
-      .catch(() => {});
-    const message = `Config write rejected: ${configPath} (${blockingReasons.join(", ")}). Rejected payload saved to ${rejectedPath}.`;
+      .then(ok, err);
+    const saveDetail = rejectedSave.ok
+      ? `Rejected payload saved to ${rejectedPath}.`
+      : `Rejected payload could not be saved to ${rejectedPath}: ${formatErrorMessage(rejectedSave.error)}.`;
+    const message = `Config write rejected: ${configPath} (${blockingReasons.join(", ")}). ${saveDetail}`;
     const error = Object.assign(new Error(message), {
       code: "CONFIG_WRITE_REJECTED",
-      rejectedPath,
+      ...(rejectedSave.ok ? { rejectedPath } : {}),
       reasons: blockingReasons,
     });
     deps.logger.warn(message);

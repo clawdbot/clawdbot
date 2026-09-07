@@ -68,11 +68,10 @@ export async function captureManifest(params: {
   const hashMemo = params.hashMemo ?? new Map<string, string>();
   // Verification seeds both accepted and original paths so a recreated file cannot
   // disappear behind a new ignore rule. Fresh staging has no published base yet.
-  const priorRefs = params.baseManifestRef
-    ? [params.referenceManifestRef, params.baseManifestRef]
-    : process.platform === "win32"
-      ? [params.referenceManifestRef]
-      : [];
+  const priorRefs = [
+    params.referenceManifestRef,
+    ...(params.baseManifestRef ? [params.baseManifestRef] : []),
+  ];
   const stdout = (
     await runWorkspaceCommand({
       workspaceDir: params.workspaceDir,

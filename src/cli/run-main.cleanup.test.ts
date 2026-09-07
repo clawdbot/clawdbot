@@ -34,7 +34,11 @@ vi.mock("../infra/unhandled-rejections.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/unhandled-rejections.js")>()),
   installUnhandledRejectionHandler() {},
 }));
-vi.mock("../logging.js", () => ({ enableConsoleCapture() {}, routeLogsToStderr() {} }));
+vi.mock("../logging/console.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logging/console.js")>()),
+  enableConsoleCapture() {},
+  routeLogsToStderr() {},
+}));
 vi.mock("../infra/path-env.js", () => ({ ensureOpenClawCliOnPath() {} }));
 vi.mock("./dotenv.js", () => ({ loadCliDotEnv() {} }));
 vi.mock("../config/io.js", () => ({ readBestEffortConfig: async () => ({}) }));
@@ -123,11 +127,15 @@ function resourceHarness(id: string, gate?: Deferred) {
     snapshot: () => ({ disposeCalls, exitCode: child?.exitCode, signalCode: child?.signalCode }),
     async closeAndJoin() {
       gate?.resolve();
-      child?.stdin.end();
+      // Setup can fail before spawn; teardown must preserve that original error.
+      if (!child) {
+        return;
+      }
+      child.stdin.end();
       await closed;
       output?.close();
-      expect(child?.exitCode).toBe(0);
-      expect(child?.signalCode).toBe(null);
+      expect(child.exitCode).toBe(0);
+      expect(child.signalCode).toBe(null);
     },
   };
 }
