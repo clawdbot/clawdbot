@@ -1,0 +1,38 @@
+﻿{
+  "id": "openai-compatible-stt",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "contracts": {
+    "realtimeTranscriptionProviders": ["openai-compatible-stt"]
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "openai-compatible-stt",
+        "envVars": ["OPENAI_COMPATIBLE_STT_ENDPOINT", "OPENAI_COMPATIBLE_STT_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "openai-compatible-stt",
+      "method": "local",
+      "choiceId": "openai-compatible-stt-local",
+      "appGuidedDiscovery": true,
+      "appGuidedActionLabel": "Enter endpoint URL",
+      "choiceLabel": "Local OpenAI-compatible STT",
+      "choiceHint": "Connect OpenClaw to any self-hosted OpenAI-compatible or raw-PCM WebSocket transcription endpoint (whisper.cpp server, faster-whisper-server, vLLM, custom STT).",
+      "groupId": "openai-compatible-stt",
+      "groupLabel": "Local STT (universal)",
+      "groupHint": "Self-hosted transcription ÔÇö OpenAI-compatible, faster-whisper, whisper.cpp, or any custom PCM-over-WebSocket endpoint"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

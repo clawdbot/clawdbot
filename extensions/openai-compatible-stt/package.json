@@ -1,0 +1,15 @@
+﻿{
+  "name": "@openclaw/openai-compatible-stt",
+  "version": "2026.9.2",
+  "private": true,
+  "description": "OpenClaw universal realtime transcription provider for any OpenAI-compatible / WebSocket PCM STT endpoint (whisper.cpp, faster-whisper-server, vLLM, custom).",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
