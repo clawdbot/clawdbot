@@ -1404,9 +1404,9 @@
       }
     },
     "node_modules/fast-uri": {
-      "version": "4.1.2",
-      "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-4.1.2.tgz",
-      "integrity": "sha512-TyGmBcbDTZXcb2cj5MV89DrF42DKvb3y5DDUNh95iO+IMeAzMkVSxK1PZRrRIpc9yg8U2GhGdbofNa0LS/a4Bw==",
+      "version": "4.1.4",
+      "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-4.1.4.tgz",
+      "integrity": "sha512-dODXrIxlS9JSdgAnhIUKOosKV1oMtU2VtVw87QRaHzyl5jxO290Ii5tEZfCfzfWNHi3jKWwBSdQj0qIyshdZdQ==",
       "funding": [
         {
           "type": "github",
