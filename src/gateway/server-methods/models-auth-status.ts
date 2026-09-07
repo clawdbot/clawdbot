@@ -29,10 +29,6 @@ import {
 } from "../../agents/auth-profiles.js";
 import { getRuntimeExternalCliProfileIds } from "../../agents/auth-profiles/runtime-external-profile-references.js";
 import {
-  isNonSecretApiKeyMarker,
-  NON_ENV_SECRETREF_MARKER,
-} from "../../agents/model-auth-markers.js";
-import {
   clearCurrentProviderAuthState,
   warmCurrentProviderAuthStateOffMainThread,
 } from "../../agents/model-provider-auth.js";
@@ -41,7 +37,6 @@ import {
   resolveProviderIdForAuth,
 } from "../../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveProviderUsageAuthEnvCredentialProviders } from "../../infra/provider-usage.auth.js";
 import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import type { UsageProviderId } from "../../infra/provider-usage.types.js";
@@ -54,7 +49,10 @@ import { formatForLog } from "../ws-log.js";
 import { modelAuthAgentScopeError, resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
 import { resolveProviderApiKeys } from "./models-auth-status-api-keys.js";
-import { resolveConfigBoundProfileIds } from "./models-auth-status-config.js";
+import {
+  resolveConfigBoundProfileIds,
+  resolveConfiguredProviders,
+} from "./models-auth-status-config.js";
 import {
   clearModelAuthStatusUsageCache,
   type ProviderUsageStatus,
@@ -64,6 +62,7 @@ import {
 import type {
   ModelAuthExpiry,
   ModelAuthStatusProvider,
+  ModelAuthStatusProfile,
   ModelAuthUsage,
   ModelAuthLogoutResult,
   ModelAuthStatusResult,
@@ -362,39 +361,48 @@ function mapAuthStatusProvider(params: {
       });
       const profileUsage = params.usageByProfile.get(profile.profileId);
       const lastUsedAt = store.usageStats?.[profile.profileId]?.lastUsed;
-      return Object.assign(
-        {
-          profileId: profile.profileId,
-          type: profile.type,
-          status: profile.status,
-          reasonCode: profile.reasonCode,
-          source: params.configBoundProfileIds.has(profile.profileId)
-            ? ("config" as const)
-            : params.externalProfileIds.has(profile.profileId)
-              ? ("external" as const)
-              : localProfileIds.has(profile.profileId)
-                ? ("saved" as const)
-                : ("inherited" as const),
-          expiry: buildExpiry(profile.remainingMs, profile.expiresAt),
-        },
-        params.externalCliProfileIds.has(profile.profileId)
-          ? { externallyManaged: true as const }
-          : {},
-        params.includeProfileDetails && metadata.displayName
-          ? { displayName: metadata.displayName }
-          : {},
-        params.includeProfileDetails && metadata.email ? { email: metadata.email } : {},
-        params.includeProfileDetails && lastUsedAt ? { lastUsedAt } : {},
-        params.includeProfileDetails && profileUsage ? { usage: profileUsage } : {},
-        params.includeProfileDetails && params.pendingUsageProfileIds.has(profile.profileId)
-          ? { usageRefreshPending: true as const }
-          : {},
+      const result: ModelAuthStatusProfile = {
+        profileId: profile.profileId,
+        type: profile.type,
+        status: profile.status,
+        reasonCode: profile.reasonCode,
+        source: params.configBoundProfileIds.has(profile.profileId)
+          ? "config"
+          : params.externalProfileIds.has(profile.profileId)
+            ? "external"
+            : localProfileIds.has(profile.profileId)
+              ? "saved"
+              : "inherited",
+        expiry: buildExpiry(profile.remainingMs, profile.expiresAt),
+      };
+      if (params.externalCliProfileIds.has(profile.profileId)) {
+        result.externallyManaged = true;
+      }
+      if (params.includeProfileDetails) {
+        if (metadata.displayName) {
+          result.displayName = metadata.displayName;
+        }
+        if (metadata.email) {
+          result.email = metadata.email;
+        }
+        if (lastUsedAt) {
+          result.lastUsedAt = lastUsedAt;
+        }
+        if (profileUsage) {
+          result.usage = profileUsage;
+        }
+        if (params.pendingUsageProfileIds.has(profile.profileId)) {
+          result.usageRefreshPending = true;
+        }
+      }
+      if (
         (profile.type === "oauth" || profile.type === "token") &&
-          params.logoutProfileIds.has(profile.profileId) &&
-          !params.configBoundProfileIds.has(profile.profileId)
-          ? { logoutSupported: true as const }
-          : {},
-      );
+        params.logoutProfileIds.has(profile.profileId) &&
+        !params.configBoundProfileIds.has(profile.profileId)
+      ) {
+        result.logoutSupported = true;
+      }
+      return result;
     }),
     ...(profileOrder.order !== undefined ? { profileOrder: profileOrder.order } : {}),
     ...(profileOrder.fromStore && localOrderStored ? { profileOrderStored: true } : {}),
@@ -413,53 +421,6 @@ function mapAuthStatusProvider(params: {
       : {}),
     ...(usage?.usageScope ? { usageScope: usage.usageScope } : {}),
   };
-}
-
-function resolveConfiguredProviders(
-  config: OpenClawConfig,
-  apiKeys: ReadonlyMap<string, ModelAuthStatusProvider["apiKey"]>,
-): { providers: string[]; expectsOAuth: Set<string> } {
-  const providers = new Set<string>();
-  const expectsOAuth = new Set<string>();
-  for (const [id, provider] of Object.entries(config.models?.providers ?? {})) {
-    const normalized = normalizeProviderId(id);
-    if (!normalized) {
-      continue;
-    }
-    const rawKey = typeof provider?.apiKey === "string" ? provider.apiKey.trim() : "";
-    const hasApiKey =
-      hasConfiguredSecretInput(provider?.apiKey, config.secrets?.defaults) &&
-      (rawKey === NON_ENV_SECRETREF_MARKER ||
-        !isNonSecretApiKeyMarker(rawKey, { includeEnvVarName: false }));
-    const mode = provider?.auth;
-    if (mode !== "oauth" && mode !== "token" && !hasApiKey) {
-      continue;
-    }
-    if (!apiKeys.has(normalized)) {
-      providers.add(normalized);
-      if (mode === "oauth") {
-        expectsOAuth.add(normalized);
-      }
-    }
-  }
-  for (const profile of Object.values(config.auth?.profiles ?? {})) {
-    if (
-      typeof profile?.provider !== "string" ||
-      profile.provider.length === 0 ||
-      (profile.mode !== "oauth" && profile.mode !== "token")
-    ) {
-      continue;
-    }
-    const normalized = normalizeProviderId(profile.provider);
-    if (!normalized || apiKeys.has(normalized)) {
-      continue;
-    }
-    providers.add(normalized);
-    if (profile.mode === "oauth") {
-      expectsOAuth.add(normalized);
-    }
-  }
-  return { providers: [...providers], expectsOAuth };
 }
 
 export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
