@@ -218,76 +218,24 @@ const RUNTIME_CONTEXT_PROMPT_HEADERS: readonly string[] = [
   OPENCLAW_RUNTIME_EVENT_HEADER,
 ];
 
-function collapseRuntimeContextWhitespace(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-const COLLAPSED_RUNTIME_CONTEXT_NOTICE = collapseRuntimeContextWhitespace(
-  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+const RUNTIME_CONTEXT_NOTICE_PATTERN = new RegExp(
+  OPENCLAW_RUNTIME_CONTEXT_NOTICE.split(/\s+/).map(escapeRegExp).join("\\s+"),
 );
-const COLLAPSED_RUNTIME_CONTEXT_PREFACE_MATCHES = new Set(
-  RUNTIME_CONTEXT_PROMPT_HEADERS.flatMap((header) => {
-    const preface = collapseRuntimeContextWhitespace(
-      `${header} ${OPENCLAW_RUNTIME_CONTEXT_NOTICE}`,
+const RUNTIME_CONTEXT_PREFACE_PATTERN = new RegExp(
+  `^[ \\t]*(?:${RUNTIME_CONTEXT_PROMPT_HEADERS.flatMap((header) => {
+    const sentences = header.split(". ");
+    // Echoes may start at a header sentence, but the notice alone is ordinary text.
+    return sentences.map((_, index) =>
+      sentences.slice(index).join(". ").split(/\s+/).map(escapeRegExp).join("\\s+"),
     );
-    const matches = [preface];
-    let searchFrom = 0;
-    for (;;) {
-      const cut = preface.indexOf(". ", searchFrom);
-      if (cut === -1) {
-        break;
-      }
-      const suffix = preface.slice(cut + 2);
-      // Keep the notice-only sentence: that is ordinary text unless a known header
-      // precedes it. Models wrap and echo a sentence-aligned suffix of the preface.
-      if (suffix.length > COLLAPSED_RUNTIME_CONTEXT_NOTICE.length) {
-        matches.push(suffix);
-      }
-      searchFrom = cut + 2;
-    }
-    return matches;
-  }),
+  }).join("|")})\\s+${RUNTIME_CONTEXT_NOTICE_PATTERN.source}[ \\t]*(?:\\r?\\n|$)`,
+  "gm",
 );
-
-function isCollapsedRuntimeContextPreface(collapsed: string): boolean {
-  return Boolean(collapsed) && COLLAPSED_RUNTIME_CONTEXT_PREFACE_MATCHES.has(collapsed);
-}
 
 function stripRuntimeContextPromptPreface(text: string): string {
-  const lines = text.split(/\r?\n/);
-  let changed = false;
-  const output: string[] = [];
-
-  for (let index = 0; index < lines.length; index += 1) {
-    let matchEnd = -1;
-    const run: string[] = [];
-    for (let cursor = index; cursor < lines.length; cursor += 1) {
-      const line = lines[cursor] ?? "";
-      if (line.trim() === "") {
-        break;
-      }
-      run.push(line.trim());
-      if (isCollapsedRuntimeContextPreface(collapseRuntimeContextWhitespace(run.join(" ")))) {
-        matchEnd = cursor;
-      }
-    }
-    if (matchEnd !== -1) {
-      changed = true;
-      index = matchEnd;
-      while (index + 1 < lines.length && (lines[index + 1] ?? "").trim() === "") {
-        index += 1;
-      }
-      continue;
-    }
-    output.push(lines[index] ?? "");
-  }
-
-  return changed
-    ? output
-        .join("\n")
-        .replace(/\n{3,}/g, "\n\n")
-        .trim()
-    : text;
+  // Each alternative has a fixed word count; unrelated lines never grow a candidate scan.
+  const stripped = text.replace(RUNTIME_CONTEXT_PREFACE_PATTERN, "");
+  return stripped === text ? text : stripped.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /** Remove protected and legacy runtime-context blocks from text. */
@@ -295,12 +243,12 @@ export function stripInternalRuntimeContext(
   text: string,
   options: { preserveSurroundingWhitespace?: boolean; separator?: string } = {},
 ): string {
-  // All removable formats contain a delimiter or the exact runtime notice.
+  // All removable formats contain a delimiter or the whitespace-tolerant runtime notice.
   // Skip delimiter scans and line parsing for ordinary display text.
   if (
     !text.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN) &&
     !text.includes(INTERNAL_RUNTIME_CONTEXT_END) &&
-    !text.includes(OPENCLAW_RUNTIME_CONTEXT_NOTICE)
+    !RUNTIME_CONTEXT_NOTICE_PATTERN.test(text)
   ) {
     return text;
   }

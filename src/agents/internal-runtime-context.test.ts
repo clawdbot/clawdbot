@@ -134,21 +134,24 @@ describe("internal runtime context codec", () => {
     ).toBe("Visible reply");
   });
 
-  it("strips a wrapped next-turn runtime-context preface that models echo into channel text", () => {
+  it.each([true, false])("strips a wrapped preface with delimiters=%s", (delimiters) => {
     const input = [
       "Use it to continue answering the active user request now. Do not wait for",
       "another message. This context is runtime-generated, not user-authored.",
       "Keep internal details private.",
       "",
-      INTERNAL_RUNTIME_CONTEXT_BEGIN,
-      "Conversation info: (openclaw:ctx)",
-      '{"chat_id":"telegram:123","message_id":"925"}',
-      INTERNAL_RUNTIME_CONTEXT_END,
-      "",
+      ...(delimiters
+        ? [INTERNAL_RUNTIME_CONTEXT_BEGIN, "private metadata", INTERNAL_RUNTIME_CONTEXT_END, ""]
+        : []),
       "Visible reply",
     ].join("\n");
 
     expect(stripInternalRuntimeContext(input)).toBe("Visible reply");
+  });
+
+  it("preserves a long nonmatching paragraph containing a runtime notice", () => {
+    const input = "Ordinary visible text.\n".repeat(2_000) + OPENCLAW_RUNTIME_CONTEXT_NOTICE;
+    expect(stripInternalRuntimeContext(input)).toBe(input);
   });
 
   it.each([
