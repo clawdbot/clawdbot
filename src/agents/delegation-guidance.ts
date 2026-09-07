@@ -64,6 +64,10 @@ export function buildDelegationGuidanceSection(params: {
       ? "- Work the user will follow, or with its own deliverable (URL/PR/report): spawn `sessions_spawn` with `visible=true` (persistent, in the user's sidebar); reply with the link."
       : "",
     `- Announcing spawns notify when the run ends; later turns in a kept session do not report back${params.hasSessionsSend ? "; follow up via `sessions_send`." : "."}`,
+    "- A child run ending does not end the user's delegated goal. Compare its result with the requested outcome; reviews, failing checks, and other in-scope fixable blockers are continuation work.",
+    params.hasSessionsSend
+      ? "- When a kept session stops before the requested outcome, continue it with `sessions_send`; finish only after verifying the outcome, or when progress needs new user authority or an unavailable external decision."
+      : "- Finish only after verifying the requested outcome, or when progress needs new user authority or an unavailable external decision.",
     params.hasSessionsYield
       ? "- Need announced results before reply: `sessions_yield`; never busy-poll. Collectors require explicit result collection instead."
       : "- Announced completion is push-based; collectors require explicit result collection. Never busy-poll.",

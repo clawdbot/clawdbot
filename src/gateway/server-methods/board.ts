@@ -253,14 +253,18 @@ export function createBoardHandlers(
           );
           if (boardParams.ops.length > 0) {
             emitSessionsChanged(context, {
-              sessionKey: snapshot.sessionKey,
+              sessionKey: boardSession.sessionKey,
               agentId: boardSession.agentId,
               reason: "board",
             });
-            context.broadcast("board.changed", {
-              sessionKey: snapshot.sessionKey,
-              revision: snapshot.revision,
-            });
+            context.broadcast(
+              "board.changed",
+              {
+                sessionKey: snapshot.sessionKey,
+                revision: snapshot.revision,
+              },
+              { sessionKeys: [boardSession.sessionKey], agentId: boardSession.agentId },
+            );
           }
           respond(true, snapshot);
         } catch (error) {
@@ -452,15 +456,19 @@ export function createBoardHandlers(
           }
           snapshot = projectBoardSnapshot(snapshot, boardSession.agentId);
           emitSessionsChanged(context, {
-            sessionKey: snapshot.sessionKey,
+            sessionKey: boardSession.sessionKey,
             agentId: boardSession.agentId,
             reason: "board",
           });
-          context.broadcast("board.changed", {
-            sessionKey: snapshot.sessionKey,
-            revision: snapshot.revision,
-            widget: snapshot.resolvedWidgetName,
-          });
+          context.broadcast(
+            "board.changed",
+            {
+              sessionKey: snapshot.sessionKey,
+              revision: snapshot.revision,
+              widget: snapshot.resolvedWidgetName,
+            },
+            { sessionKeys: [boardSession.sessionKey], agentId: boardSession.agentId },
+          );
           respond(true, snapshot);
         } catch (error) {
           respondBoardError(error, respond);
@@ -489,10 +497,14 @@ export function createBoardHandlers(
             ),
             boardSession.agentId,
           );
-          context.broadcast("board.changed", {
-            sessionKey: snapshot.sessionKey,
-            revision: snapshot.revision,
-          });
+          context.broadcast(
+            "board.changed",
+            {
+              sessionKey: snapshot.sessionKey,
+              revision: snapshot.revision,
+            },
+            { sessionKeys: [boardSession.sessionKey], agentId: boardSession.agentId },
+          );
           respond(true, snapshot);
         } catch (error) {
           respondBoardError(error, respond);

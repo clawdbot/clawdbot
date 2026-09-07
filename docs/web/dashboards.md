@@ -7,9 +7,11 @@ title: "Session Dashboards"
 ---
 
 Every thread in the Control UI can own a **dashboard** — a grid of live widgets
-your agent builds for you. A thread with no widgets is just chat. When its first
-widget is pinned, the dashboard opens beside the conversation in a resizable
-side panel. Use the task toolbar's **Swap** button to exchange the dashboard and
+your agent builds for you. Choose **Dashboard** in the side panel to open the
+current task's board, even before it has widgets. This leaves your chat draft
+unchanged. When its first widget is pinned, the dashboard opens beside the
+conversation in a resizable side panel, unless you have already chosen a layout
+for that task. Use the task toolbar's **Swap** button to exchange the dashboard and
 chat, or its **Layout** menu to move the side panel left, right, or below the
 main area. Later widget updates leave your current panel layout unchanged.
 Closing and reopening the panel does not restart loaded widgets or discard their
@@ -48,7 +50,7 @@ Terminal, Files, and Review use the same layout controls:
 - **Layout** in the task toolbar moves the side panel left, right, or below the
   main area. Drag the divider to resize it. Narrow panes use a bottom panel
   until there is room for a side-by-side layout again.
-- **Focus** in the main pane header gives that view the full task area.
+- **Focus** in the task toolbar gives the main view the full task area.
   **Restore split** brings back the side panel with its previous placement and
   size.
 
@@ -56,8 +58,18 @@ Swapping, moving, and focusing preserve the live views, including chat drafts
 and widget interactions. Closing the whole side panel hides its tabs and leaves
 the main view in place. Closing the Dashboard tab removes that view from the
 layout; it does not delete the board. Reopen it from the panel's **+** menu.
+An empty dashboard stays open so you can add its first widget without changing
+your chosen layout. The task toolbar sits above the main pane, aligned with the
+side-panel tabs when the panes are side by side. In a stacked layout, each
+header stays above its own pane. Side-panel tabs appear only when there are
+views to switch between.
 
 ## Build a dashboard by asking
+
+For a pinned data summary, ask for a **native report** with text, metrics, tables,
+charts, or links. Reports render directly on the dashboard without an iframe or
+inline preview. The agent updates the report's data when you ask; use an HTML
+widget when you need custom interactivity. See [Native dashboard reports](/tools/show-widget#native-dashboard-reports).
 
 Watch Patrick Erichsen build an OpenClaw 2.0 release dashboard from one prompt:
 
@@ -76,15 +88,15 @@ Ask your agent for what you want to see:
 > revenue. Add "Bars" and "Trend" buttons that switch views. Pin it to my
 > dashboard.
 
-The agent renders the widget inline in the chat first, so you can look at it
-before it goes anywhere. From there:
+For this interactive HTML widget, the agent renders an inline chat preview first.
+From there:
 
 - **You pin it**: hover an inline widget and choose **Pin to dashboard**.
 - **Or the agent pins it** directly when you ask, and updates it later by
   name — widgets have stable names, so "update revenue-graph with June's
   numbers" replaces the content in place while the board stays put.
 
-The first dashboard created for the current thread opens in the side panel once.
+The first dashboard created for an unarranged thread opens in the side panel once.
 Updates after that do not reopen the panel or take focus from your current work.
 
 Widgets are self-contained little apps (HTML/JS/SVG in a hard sandbox). Buttons
@@ -111,8 +123,9 @@ never needs the agent.
   plugin widgets, moves, resizes, and removes widgets, manages tabs, switches
   the visible tab, and requests a split or expanded dashboard with
   `set_presentation` and `presentation: "split"` or `"expanded"`. The `show_widget` tool
-  creates or refreshes custom HTML and registered-source widgets; updating an
-  existing widget uses `pin: true`, the same `name`, and new `widget_code`.
+  creates or refreshes native reports, custom HTML, and registered-source widgets.
+  An update uses `pin: true`, the same `name`, and new `widget_code` for HTML or
+  registered source, or a new `report` object for a native report.
   Board snapshots identify each widget's `contentOwner` and, when applicable,
   `registeredContentKind`; remove a widget before replacing its content owner
   or registered source kind.

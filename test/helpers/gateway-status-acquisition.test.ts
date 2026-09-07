@@ -30,6 +30,7 @@ async function withStatusPeer(
     firstStop: ReturnType<typeof createDeferred<void>>;
     secondClient: ReturnType<typeof createDeferred<void>>;
     releaseStop: ReturnType<typeof createDeferred<void>>;
+    statusReplies: readonly [Promise<void>, Promise<void>, Promise<void>];
     requests: ReturnType<typeof parseMinimalGatewayRequestFrame>[];
     errors: unknown[];
   }) => Promise<void>,
@@ -38,6 +39,8 @@ async function withStatusPeer(
   const firstStop = createDeferred();
   const secondClient = createDeferred();
   const releaseStop = createDeferred();
+  const statusReplies = [createDeferred(), createDeferred(), createDeferred()] as const;
+  let statusReplyCount = 0;
   const stopping: Promise<void>[] = [];
   const errors: unknown[] = [];
   vi.doMock("../../src/gateway/client.js", async (importOriginal) => {
@@ -76,7 +79,12 @@ async function withStatusPeer(
         const request = this.request.bind(this);
         this.request = async <T>(...args: Parameters<GatewayClient["request"]>): Promise<T> => {
           try {
-            return await request<T>(...args);
+            const reply = await request<T>(...args);
+            if (args[0] === "node.list") {
+              statusReplies[statusReplyCount]?.resolve();
+              statusReplyCount += 1;
+            }
+            return reply;
           } catch (error) {
             errors.push(error);
             throw error;
@@ -131,7 +139,16 @@ async function withStatusPeer(
     }
     instance = await createOpenClawTestInstance({ name: "status-acquisition", port: address.port });
     instance.state.applyEnv();
-    await body({ instance, clients, firstStop, secondClient, releaseStop, requests, errors });
+    await body({
+      instance,
+      clients,
+      firstStop,
+      secondClient,
+      releaseStop,
+      statusReplies: [statusReplies[0].promise, statusReplies[1].promise, statusReplies[2].promise],
+      requests,
+      errors,
+    });
   } finally {
     releaseStop.resolve();
     // Drain even clients the broken helper never adopted; bypass only the observer.
@@ -149,6 +166,9 @@ describe("Gateway status helper acquisition ownership", () => {
       await withStatusPeer(mode, undefined, async (fixture) => {
         const { connectGatewayStatusClient, waitForNodeStatus } =
           await import("./gateway-e2e-harness.js");
+        const startedAt = Date.now();
+        const clock =
+          mode === "deadline" ? vi.spyOn(Date, "now").mockReturnValue(startedAt) : undefined;
         let settled = false;
         const operation =
           mode === "connect failure"
@@ -164,6 +184,32 @@ describe("Gateway status helper acquisition ownership", () => {
             return outcome;
           });
         try {
+          if (clock) {
+            // Keep native socket timers running; advance the polling clock only after real replies.
+            for (const [elapsed, reply] of [
+              [0, fixture.statusReplies[0]],
+              [14_999, fixture.statusReplies[1]],
+            ] as const) {
+              clock.mockReturnValue(startedAt + elapsed);
+              expect(
+                await Promise.race([
+                  reply.then(() => "reply"),
+                  fixture.firstStop.promise.then(() => "stopping"),
+                  result.then(() => "settled"),
+                ]),
+                `polling must remain active at ${elapsed}ms`,
+              ).toBe("reply");
+            }
+            clock.mockReturnValue(startedAt + 15_000);
+            expect(
+              await Promise.race([
+                fixture.firstStop.promise.then(() => "stopping"),
+                fixture.statusReplies[2].then(() => "extra reply"),
+                result.then(() => "settled"),
+              ]),
+              "the default deadline must stop polling at 15000ms",
+            ).toBe("stopping");
+          }
           await Promise.race([result, fixture.firstStop.promise, fixture.secondClient.promise]);
           await setImmediate();
           const settledBeforeStop = settled;
@@ -197,8 +243,14 @@ describe("Gateway status helper acquisition ownership", () => {
             },
           });
         } finally {
+          // Finish an admitted poll even when a boundary assertion fails, then restore wall time.
+          clock?.mockReturnValue(startedAt + 30_000);
           fixture.releaseStop.resolve();
-          await result;
+          try {
+            await result;
+          } finally {
+            clock?.mockRestore();
+          }
         }
       });
     },

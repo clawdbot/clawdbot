@@ -17,6 +17,7 @@ import {
   retainGatewayRootWorkAdmissionContinuationScope,
   type GatewayRootWorkAdmissionContinuationScope,
 } from "../process/gateway-work-admission.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 
 /** Grace period for late question.waitAnswer and question.get calls. */
 const QUESTION_RESOLVED_ENTRY_GRACE_MS = 15_000;
@@ -55,11 +56,7 @@ type QuestionManagerRequest = {
   registerHumanInputWait?: (isPending: () => boolean) => ((resolved: boolean) => void) | undefined;
 };
 
-type Waiter = {
-  resolve: (result: QuestionWaitAnswerResult) => void;
-  timer: ReturnType<typeof setTimeout> | null;
-  includeResolutionId: boolean;
-};
+type Waiter = () => void;
 
 type QuestionEntry = {
   record: QuestionRecord;
@@ -110,8 +107,12 @@ function resolvedEvent(record: QuestionRecord): QuestionResolvedEvent | null {
 /** Process-local lifecycle owner for pending questions. */
 export class QuestionManager {
   private readonly entries = new Map<string, QuestionEntry>();
+  private closed = false;
 
   request(params: QuestionManagerRequest): QuestionRecord {
+    if (this.closed) {
+      throw new Error("Question manager is closed");
+    }
     if (params.isRequesterActive && !params.isRequesterActive()) {
       throw new QuestionManagerError(
         QuestionManagerErrorCodes.REQUESTER_INACTIVE,
@@ -216,18 +217,28 @@ export class QuestionManager {
     if (entry.record.status !== "pending") {
       return Promise.resolve(waitResult(entry, includeResolutionId));
     }
+    const signal = getAsyncWorkSignal();
     return new Promise<QuestionWaitAnswerResult>((resolve) => {
-      const waiter: Waiter = { resolve, timer: null, includeResolutionId };
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const waiter: Waiter = () => {
+        if (!entry.waiters.delete(waiter)) {
+          return;
+        }
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", waiter);
+        // finish() may close this observer after recording an answer. Read that
+        // fact directly; get() could expire/cancel the question during retirement.
+        resolve(waitResult(entry, includeResolutionId));
+      };
       entry.waiters.add(waiter);
+      if (signal?.aborted) {
+        waiter();
+        return;
+      }
+      signal?.addEventListener("abort", waiter, { once: true });
       if (timeoutMs !== undefined) {
-        waiter.timer = setTimeout(
-          () => {
-            entry.waiters.delete(waiter);
-            resolve({ status: "pending" });
-          },
-          resolveTimerTimeoutMs(timeoutMs, 1),
-        );
-        unrefTimer(waiter.timer);
+        timer = setTimeout(waiter, resolveTimerTimeoutMs(timeoutMs, 1));
+        unrefTimer(timer);
       }
     });
   }
@@ -269,23 +280,30 @@ export class QuestionManager {
     return { status: "cancelled" };
   }
 
-  /** Clears all manager-owned timers and releases waiters. */
+  /** Retires this Gateway's owner only after received mutations have joined. */
+  close(): void {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    this.reset();
+  }
+
+  /** Reusable on open owners (v2026.8.1 SDK context); never reopens a closed owner. */
   reset(): void {
     for (const entry of this.entries.values()) {
       clearTimeout(entry.expiryTimer);
-      entry.releaseHumanInputWait?.(false);
+      const releaseHumanInputWait = entry.releaseHumanInputWait;
+      entry.releaseHumanInputWait = undefined;
+      releaseHumanInputWait?.(false);
       entry.admissionContinuation?.release();
       entry.admissionContinuation = null;
       if (entry.cleanupTimer) {
         clearTimeout(entry.cleanupTimer);
       }
       for (const waiter of entry.waiters) {
-        if (waiter.timer) {
-          clearTimeout(waiter.timer);
-        }
-        waiter.resolve(waitResult(entry, waiter.includeResolutionId));
+        waiter();
       }
-      entry.waiters.clear();
     }
     this.entries.clear();
   }
@@ -381,18 +399,15 @@ export class QuestionManager {
   private finish(entry: QuestionEntry): void {
     clearTimeout(entry.expiryTimer);
     // Requester-scope loss must not refresh the still-live run's recovery clock.
-    entry.releaseHumanInputWait?.(entry.isRequesterActive?.() !== false);
+    const releaseHumanInputWait = entry.releaseHumanInputWait;
     entry.releaseHumanInputWait = undefined;
+    releaseHumanInputWait?.(entry.isRequesterActive?.() !== false);
     entry.isRequesterActive = undefined;
     entry.admissionContinuation?.release();
     entry.admissionContinuation = null;
     for (const waiter of entry.waiters) {
-      if (waiter.timer) {
-        clearTimeout(waiter.timer);
-      }
-      waiter.resolve(waitResult(entry, waiter.includeResolutionId));
+      waiter();
     }
-    entry.waiters.clear();
     const event = resolvedEvent(entry.record);
     if (event) {
       try {
@@ -400,6 +415,11 @@ export class QuestionManager {
       } catch {
         // Broadcast fanout is observational and must not change question truth.
       }
+    }
+    // A resolution callback can reset/close the owner synchronously; it must
+    // not recreate a retention timer after that entry has been retired.
+    if (this.entries.get(entry.record.id) !== entry) {
+      return;
     }
     const cleanupTimer = setTimeout(() => {
       if (entry.cleanupTimer === cleanupTimer && this.entries.get(entry.record.id) === entry) {

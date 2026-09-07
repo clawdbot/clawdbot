@@ -20,7 +20,7 @@ import {
   isPersistentSystemAgentOperation,
 } from "./operations.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
-import { installSystemAgentPluginMetadataTestSnapshot } from "./system-agent.test-helpers.js";
+import { createSystemAgentPluginMetadataTestSnapshot } from "./system-agent.test-helpers.js";
 
 type TestConfig = Record<string, unknown>;
 
@@ -364,17 +364,15 @@ describe("system agent operations", () => {
       },
     };
     mockConfig.setConfig(config);
-    const pluginMetadata = installSystemAgentPluginMetadataTestSnapshot(config);
+    const pluginMetadata = createSystemAgentPluginMetadataTestSnapshot(config);
     const { runtime, lines } = createSystemAgentTestRuntime();
 
-    try {
+    await pluginMetadata.run(async () => {
       await executeSystemAgentOperation(
         { kind: "config-get", path: "plugins.entries.codex.config.appServer" },
         runtime,
       );
-    } finally {
-      pluginMetadata.restore();
-    }
+    });
 
     expect(lines.join("\n")).toContain('"headers": "<redacted>"');
     expect(lines.join("\n")).not.toContain(authorization);
@@ -396,35 +394,36 @@ describe("system agent operations", () => {
     };
     mockConfig.setConfig(config);
     setRuntimeConfigSnapshot(config, config);
-    const pluginMetadata = installSystemAgentPluginMetadataTestSnapshot(config);
+    const pluginMetadata = createSystemAgentPluginMetadataTestSnapshot(config);
     const { runtime, lines } = createSystemAgentTestRuntime();
 
     try {
-      await executeSystemAgentOperation(
-        { kind: "config-get", path: "channels.synology-chat" },
-        runtime,
-      );
+      await pluginMetadata.run(async () => {
+        await executeSystemAgentOperation(
+          { kind: "config-get", path: "channels.synology-chat" },
+          runtime,
+        );
 
-      expect(lines.join("\n")).toContain('"webhookUrl": "<redacted>"');
-      expect(lines.join("\n")).toContain('"incomingUrl": "<redacted>"');
-      expect(lines.join("\n")).not.toContain("callback-secret");
-      expect(lines.join("\n")).not.toContain("incoming-secret");
-      expect(
-        describeSystemAgentPersistentOperation({
-          kind: "config-set",
-          path: "channels.synology-chat.accounts.work.webhookUrl",
-          value: callbackUrl,
-        }),
-      ).toBe("set config channels.synology-chat.accounts.work.webhookUrl to <redacted>");
-      expect(
-        describeSystemAgentPersistentOperation({
-          kind: "config-set",
-          path: "channels.synology-chat",
-          value: `{ webhookUrl: "${callbackUrl}" }`,
-        }),
-      ).toBe("set config channels.synology-chat to <redacted>");
+        expect(lines.join("\n")).toContain('"webhookUrl": "<redacted>"');
+        expect(lines.join("\n")).toContain('"incomingUrl": "<redacted>"');
+        expect(lines.join("\n")).not.toContain("callback-secret");
+        expect(lines.join("\n")).not.toContain("incoming-secret");
+        expect(
+          describeSystemAgentPersistentOperation({
+            kind: "config-set",
+            path: "channels.synology-chat.accounts.work.webhookUrl",
+            value: callbackUrl,
+          }),
+        ).toBe("set config channels.synology-chat.accounts.work.webhookUrl to <redacted>");
+        expect(
+          describeSystemAgentPersistentOperation({
+            kind: "config-set",
+            path: "channels.synology-chat",
+            value: `{ webhookUrl: "${callbackUrl}" }`,
+          }),
+        ).toBe("set config channels.synology-chat to <redacted>");
+      });
     } finally {
-      pluginMetadata.restore();
       clearRuntimeConfigSnapshot();
     }
   });

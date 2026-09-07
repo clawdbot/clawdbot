@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
-import { chromium, type BrowserContext } from "playwright";
+import { chromium } from "playwright";
 import type { QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import { runQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { createHotReloadExternalBrowser } from "./gateway-config-hot-reload-external-browser.js";
 import { waitForHotReloadFact } from "./gateway-config-hot-reload-fixtures.js";
 
 type BrowserStatus = { profile: string; pid: number | null; cdpUrl: string; cdpPort: number };
@@ -64,7 +65,7 @@ export async function proveHotReloadBrowserLaunch({
     `#!/bin/sh\nprintf 'started' > ${shellQuote(launcherMarker)}\nexec ${shellQuote(executablePath)} "$@"\n`,
     { mode: 0o700 },
   );
-  let external: BrowserContext | undefined;
+  const externalOwner = createHotReloadExternalBrowser(root);
   const request = <T>(route: string, method = "GET", profile?: string) =>
     rpc<T>("browser.request", {
       target: "host",
@@ -78,46 +79,12 @@ export async function proveHotReloadBrowserLaunch({
   await runQaGatewayFixture(
     async () => {
       assert(
-        gateway.runtimeEnv.DISPLAY,
+        process.platform !== "linux" || gateway.runtimeEnv.DISPLAY,
         "Headed Chrome proof requires Gateway DISPLAY from xvfb-run",
       );
-      external = await chromium.launchPersistentContext(path.join(root, "external-profile"), {
-        executablePath,
-        headless: true,
-        args: ["--remote-debugging-port=0"],
-      });
-      const externalBrowser = external.browser();
-      assert(externalBrowser);
-      const externalPage = await external.newPage();
-      await externalPage.setContent(
-        "<title>Retained external Chrome</title><p>External browser stays alive</p>",
-      );
-      const externalCdp = await externalBrowser.newBrowserCDPSession();
-      const originalProcesses = await externalCdp.send("SystemInfo.getProcessInfo");
-      const externalPid = originalProcesses.processInfo.find(
-        (entry) => entry.type === "browser",
-      )?.id;
-      assert(externalPid);
-      const portFile = path.join(root, "external-profile", "DevToolsActivePort");
-      const portText = await waitForHotReloadFact("external Chrome CDP listener", async () => {
-        try {
-          return await fs.readFile(portFile, "utf8");
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-            return undefined;
-          }
-          throw error;
-        }
-      });
-      const externalUrl = `http://127.0.0.1:${Number(portText.split("\n")[0])}`;
+      const external = await externalOwner.start();
       const checkExternal = async () => {
-        assert.equal(await externalPage.title(), "Retained external Chrome");
-        const processes = await externalCdp.send("SystemInfo.getProcessInfo");
-        assert(
-          processes.processInfo.some(
-            (entry) => entry.type === "browser" && entry.id === externalPid,
-          ),
-        );
+        await external.verifyAlive();
         const tabs = await request<Tabs>("/tabs", "GET", "retained");
         assert(tabs.running && tabs.tabs.some((tab) => tab.title === "Retained external Chrome"));
       };
@@ -130,7 +97,7 @@ export async function proveHotReloadBrowserLaunch({
           cdpUrl: null,
           noSandbox: true,
           extraArgs: ["--enable-automation"],
-          profiles: { openclaw: null, retained: { cdpUrl: externalUrl, attachOnly: true } },
+          profiles: { openclaw: null, retained: { cdpUrl: external.cdpUrl, attachOnly: true } },
         });
       };
       const inspect = async () => {
@@ -162,7 +129,7 @@ export async function proveHotReloadBrowserLaunch({
         await checkExternal();
         await verifyContinuity(
           prefix,
-          `${observation}; external Chrome PID ${externalPid} and its page/CDP session survived`,
+          `${observation}; external Chrome PID ${external.pid} and its page/CDP session survived`,
         );
       };
 
@@ -296,7 +263,9 @@ export async function proveHotReloadBrowserLaunch({
       await reset();
     },
     () => request("/stop", "POST", "openclaw"),
-    () => external?.close(),
-    () => fs.rm(root, { recursive: true, force: true }),
+    async () => {
+      await externalOwner.close();
+      await fs.rm(root, { recursive: true, force: true });
+    },
   );
 }

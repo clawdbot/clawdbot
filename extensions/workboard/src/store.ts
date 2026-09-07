@@ -639,11 +639,6 @@ export class WorkboardStore extends WorkboardNotificationStore {
 
   static openSqlite() {
     const stores = createWorkboardSqliteStores();
-    return new WorkboardStore(stores.cards, {
-      boards: stores.boards,
-      subscriptions: stores.subscriptions,
-      attachments: stores.attachments,
-      dataVersion: stores.dataVersion,
-    });
+    return new WorkboardStore(stores.cards, stores);
   }
 }

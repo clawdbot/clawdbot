@@ -130,6 +130,7 @@ export async function buildOpencodeGoLiveProviderConfig(
     // Keep the trusted offline seed usable when upstream metadata is unavailable.
   }
   return await buildLiveModelProviderConfig({
+    discoveryMode: "strict",
     providerId: PROVIDER_ID,
     endpoint: OPENCODE_GO_MODELS_ENDPOINT,
     providerConfig: {

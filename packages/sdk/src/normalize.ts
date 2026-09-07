@@ -1,68 +1,8 @@
-// OpenClaw SDK helper module supports normalize behavior.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { resolveSdkLifecycleEventType } from "./run-terminal.js";
 import type { GatewayEvent, JsonObject, OpenClawEvent, OpenClawEventType } from "./types.js";
-
-function readLowerString(value: unknown): string | undefined {
-  return readNonEmptyString(value)?.toLowerCase();
-}
-
-function hasHardTimeoutMetadata(data: JsonObject, statusAlreadyTimeoutAttributed = false): boolean {
-  const timeoutPhase = readLowerString(data.timeoutPhase);
-  return (
-    (statusAlreadyTimeoutAttributed && data.providerStarted === true) ||
-    timeoutPhase === "preflight" ||
-    timeoutPhase === "provider" ||
-    timeoutPhase === "post_turn"
-  );
-}
-
-function isLifecycleCancellation(data: JsonObject): boolean {
-  const status = readLowerString(data.status);
-  const stopReason = readLowerString(data.stopReason);
-  return (
-    status === "aborted" ||
-    status === "cancelled" ||
-    status === "canceled" ||
-    status === "killed" ||
-    stopReason === "aborted" ||
-    stopReason === "cancelled" ||
-    stopReason === "canceled" ||
-    stopReason === "killed" ||
-    stopReason === "auth-revoked" ||
-    stopReason === "restart" ||
-    stopReason === "rpc" ||
-    stopReason === "user" ||
-    (data.aborted === true && stopReason === "stop")
-  );
-}
-
-function normalizeLifecycleEndEventType(data: JsonObject): OpenClawEventType {
-  const status = readLowerString(data.status);
-  const stopReason = readLowerString(data.stopReason);
-  const statusAlreadyTimeoutAttributed =
-    stopReason !== "restart" &&
-    (status === "timeout" || status === "timed_out" || data.aborted === true);
-  if (hasHardTimeoutMetadata(data, statusAlreadyTimeoutAttributed)) {
-    return "run.timed_out";
-  }
-  if (isLifecycleCancellation(data)) {
-    return "run.cancelled";
-  }
-  if (
-    status === "timeout" ||
-    status === "timed_out" ||
-    stopReason === "timeout" ||
-    stopReason === "timed_out"
-  ) {
-    return "run.timed_out";
-  }
-  if (data.aborted === true) {
-    return "run.timed_out";
-  }
-  return "run.completed";
-}
 
 function normalizeAgentEventType(payload: JsonObject): OpenClawEventType {
   const stream = readNonEmptyString(payload.stream);
@@ -82,17 +22,8 @@ function normalizeAgentEventType(payload: JsonObject): OpenClawEventType {
     if (phase === "start") {
       return "run.started";
     }
-    if (phase === "end") {
-      return normalizeLifecycleEndEventType(data);
-    }
-    if (phase === "error") {
-      if (hasHardTimeoutMetadata(data, false)) {
-        return "run.timed_out";
-      }
-      if (isLifecycleCancellation(data)) {
-        return "run.cancelled";
-      }
-      return "run.failed";
+    if (phase === "end" || phase === "error") {
+      return resolveSdkLifecycleEventType(data, phase);
     }
   }
   if (stream === "tool" || stream === "item" || stream === "command_output") {
@@ -118,9 +49,6 @@ function normalizeAgentEventType(payload: JsonObject): OpenClawEventType {
   }
   if (stream === "patch") {
     return "artifact.updated";
-  }
-  if (stream === "error") {
-    return "run.failed";
   }
   return "raw";
 }

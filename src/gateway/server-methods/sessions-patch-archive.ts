@@ -351,11 +351,10 @@ export async function prepareSessionPatchWorktreeTransition(params: {
       scope: params.scope,
       commitGuard,
     });
-  if (!params.archived) {
-    await synchronize(params.entry);
-  }
+  // Carry the exact restored binding through the later metadata commit.
+  const assertCommitAllowed = params.archived ? commitGuard : await synchronize(params.entry);
   return {
-    assertCommitAllowed: commitGuard,
+    assertCommitAllowed,
     afterCommit: params.archived
       ? async (entry) => {
           try {

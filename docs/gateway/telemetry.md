@@ -198,7 +198,7 @@ feature statistics, and no update notice, even when `update.auto.enabled` is
 requests and applies. Explicit update commands remain available when you choose
 to run them.
 
-See [Configuration reference](/gateway/configuration-reference#telemetry) for
+See [Configuration reference](/gateway/config-observability#telemetry) for
 the full `telemetry` configuration and
-[Update configuration](/gateway/configuration-reference#update) for the
+[Update configuration](/gateway/config-runtime#update) for the
 automatic update-check controls.

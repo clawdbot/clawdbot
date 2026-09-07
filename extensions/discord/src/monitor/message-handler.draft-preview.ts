@@ -81,7 +81,7 @@ export function createDiscordDraftPreviewController(params: {
   const draftChunker = draftChunking ? new EmbeddedBlockChunker(draftChunking) : undefined;
   let lastPartialText = "";
   let draftText = "";
-  let hasStreamedMessage = false;
+  let hasStreamedAssistantText = false;
   let finalizedViaPreviewMessage = false;
   let finalReplyError: boolean | undefined;
   // Final delivery can cancel the gate before Discord consumes collapse
@@ -101,12 +101,12 @@ export function createDiscordDraftPreviewController(params: {
     resolveChannelStreamingPreviewCommandText(params.discordConfig) === "status";
   const progressSeed = `${params.accountId}:${params.deliverChannelId}`;
   const progressDraft = createChannelProgressDraftCompositor({
-    presentation: discordStreamMode === "progress" ? "summary" : undefined,
     entry: params.discordConfig,
     mode: discordStreamMode,
     active: Boolean(draftStream),
     seed: progressSeed,
     reasoningLinePrefix: "🧠 ",
+    commentaryLinePrefix: "💬 ",
     commentaryItalics: false,
     update: async (previewText, options) => {
       if (!draftStream) {
@@ -114,9 +114,8 @@ export function createDiscordDraftPreviewController(params: {
       }
       lastPartialText = previewText;
       draftText = previewText;
-      hasStreamedMessage = true;
       draftChunker?.reset();
-      draftStream.update(previewText);
+      draftStream.update(previewText, { complete: true });
       if (options?.flush) {
         await draftStream.flush();
       }
@@ -126,10 +125,8 @@ export function createDiscordDraftPreviewController(params: {
     deleteCurrent: async () => {
       lastPartialText = "";
       draftText = "";
-      hasStreamedMessage = false;
-      if (draftStream?.messageId()) {
-        await draftStream.deleteCurrentMessage();
-      }
+      hasStreamedAssistantText = false;
+      await draftStream?.deleteCurrentMessage();
     },
     isEmptyLine: isEmptyDiscordProgressLine,
     shouldStartNow: shouldStartDiscordProgressDraftNow,
@@ -138,12 +135,12 @@ export function createDiscordDraftPreviewController(params: {
   const resetProgressState = () => {
     lastPartialText = "";
     draftText = "";
+    hasStreamedAssistantText = false;
     draftChunker?.reset();
-    progressDraft.reset();
   };
 
   const forceNewMessageIfNeeded = () => {
-    if (shouldSplitPreviewMessages && hasStreamedMessage) {
+    if (shouldSplitPreviewMessages && hasStreamedAssistantText) {
       params.log("discord: calling forceNewMessage() for draft stream");
       draftStream?.forceNewMessage();
     }
@@ -152,6 +149,9 @@ export function createDiscordDraftPreviewController(params: {
 
   const beginNewProgressTurn = (options?: { force?: boolean }) => {
     const beganNewTurn = progressDraft.beginNewTurn(options);
+    if (!beganNewTurn) {
+      progressDraft.beginAssistantMessage();
+    }
     if (beganNewTurn) {
       progressDraftCollapsed = false;
       progressDraftStartedBeforeFinal = false;
@@ -302,8 +302,8 @@ export function createDiscordDraftPreviewController(params: {
       if (discordStreamMode === "progress") {
         return;
       }
-      progressDraft.suppress();
-      hasStreamedMessage = true;
+      progressDraft.resetActivity({ suppressed: true });
+      hasStreamedAssistantText = true;
       if (discordStreamMode === "partial") {
         if (
           lastPartialText &&
@@ -346,6 +346,7 @@ export function createDiscordDraftPreviewController(params: {
       // Queued/followup turns need a fresh progress draft after the primary final.
       return beginNewProgressTurn();
     },
+    resetReasoningProgress: progressDraft.resetReasoningProgress,
     handleQueuedFollowupAdmitted() {
       return beginNewProgressTurn({ force: true });
     },

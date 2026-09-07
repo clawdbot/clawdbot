@@ -18,6 +18,7 @@ import {
   setRuntimeAuthProfileStoreSnapshot,
   clearRuntimeAuthProfileStoreSnapshots,
 } from "../src/agents/auth-profiles/runtime-snapshots.js";
+import { log as embeddedAgentLog } from "../src/agents/embedded-agent-runner/logger.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../src/agents/harness/hook-helpers.js";
 import { createAgentHarnessHostCapabilities } from "../src/agents/harness/host-capability.js";
 import { listRegisteredAgentHarnesses } from "../src/agents/harness/registry.js";
@@ -40,6 +41,7 @@ import {
   createPluginStateSyncKeyedStore,
   type OpenKeyedStoreOptions,
 } from "../src/plugin-state/plugin-state-store.js";
+import { resolvePluginCapabilityCatalogContext } from "../src/plugins/loader-runtime-load.js";
 import { resolvePluginMetadataSnapshot } from "../src/plugins/plugin-metadata-snapshot.js";
 import {
   markPluginRegistryActive,
@@ -115,6 +117,7 @@ async function withFixture(
     codexPlugins?: Parameters<typeof createCanonicalForkFixtureForTest>[0]["codexPlugins"];
     desktopGenerationFingerprint?: string;
     senderIsOwner?: boolean;
+    transcript?: { display?: false; excludeFromContext?: true };
     mcpResolver?: OpenClawPluginMcpServerConnectionResolver;
   } = {},
 ) {
@@ -165,6 +168,7 @@ async function withFixture(
         const target = { agentId: "main", sessionId, sessionKey, storePath };
         const recorder = createUserTurnTranscriptRecorder({
           input: {
+            ...options.transcript,
             text: prompt,
             timestamp: 123,
             idempotencyKey: buildRunUserTurnIdempotencyKey(runId),
@@ -303,140 +307,149 @@ async function withFixture(
         };
       },
     });
-    config.plugins = {
-      allow: ["codex", "openai"],
-      entries: {
-        codex: { enabled: true, config: fixture.pluginConfig },
-        openai: { enabled: true },
-      },
-    };
-    const { registry, createApi } = createPluginRegistry({
-      runtime,
-      logger: { info() {}, warn() {}, error() {} },
-      activateGlobalSideEffects: false,
-    });
-    const metadataSnapshot = resolvePluginMetadataSnapshot({
-      config,
-      workspaceDir: state.workspaceDir,
-      preferPersisted: false,
-    });
-    for (const plugin of [codexPlugin, openaiPlugin]) {
-      const rootDir = fileURLToPath(new URL(`../extensions/${plugin.id}/`, import.meta.url));
-      const record = createPluginRecord({
-        id: plugin.id,
-        contracts: expectDefined(metadataSnapshot.byPluginId.get(plugin.id), "plugin manifest")
-          .contracts,
-        origin: "bundled",
-        rootDir,
-        source: `${rootDir}index.ts`,
-      });
-      registry.plugins.push(record);
-      plugin.register(
-        createApi(record, {
-          config,
-          pluginConfig: config.plugins.entries?.[plugin.id]?.config,
-        }),
-      );
-    }
-    if (options.mcpResolver) {
-      const record = createPluginRecord({ id: "canonical-requester-mcp" });
-      registry.plugins.push(record);
-      createApi(record, { config }).registerMcpServerConnectionResolver(options.mcpResolver);
-    }
-    expect(registry.diagnostics.filter((entry) => entry.level === "error")).toEqual([]);
-    markPluginRegistryActive(registry);
-    setPluginRuntimeLoadContext(
-      registry,
-      resolvePluginRuntimeLoadContext({
-        config,
-        workspaceDir: state.workspaceDir,
-        metadataSnapshot,
-      }),
-    );
-    const fork = async (sessionKey: string, entryId: string) => {
-      expect(
-        listRegisteredAgentHarnesses().map((entry) => entry.harness.sessionFork?.upstreamKinds),
-      ).toEqual([["codex-app-server"]]);
-      let result: { ok: boolean; key?: string; message?: string } | undefined;
-      const request = { sessionKey, entryId };
-      await expectDefined(
-        sessionRewindHandlers["sessions.fork"],
-        "fork handler",
-      )({
-        req: { type: "req", id: "canonical-descendant", method: "sessions.fork", params: request },
-        params: request,
-        client: null,
-        isWebchatConnect: () => false,
-        // SAFETY: these are the complete Gateway collaborators used by the real fork handler.
-        context: {
-          getRuntimeConfig: () => config,
-          chatAbortControllers: new Map(),
-          getSessionEventSubscriberConnIds: () => new Set(),
-          broadcastToConnIds: () => {},
-        } as unknown as GatewayRequestContext,
-        respond: (ok, payload, error) => {
-          const key =
-            payload &&
-            typeof payload === "object" &&
-            "sessionKey" in payload &&
-            typeof payload.sessionKey === "string"
-              ? payload.sessionKey
-              : undefined;
-          result = { ok, key, ...(error ? { message: error.message } : {}) };
-        },
-      });
-      return expectDefined(result, "fork response");
-    };
     try {
-      await withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry: registry }, () =>
-        run(
-          fixture,
-          fork,
-          (target, sourceKey) => {
-            if (target === "registry") {
-              markPluginRegistryRetired(registry);
-              return;
-            }
-            const key =
-              target === "source"
-                ? sourceKey
-                : expectDefined(
-                    listSessionEntriesCore({
-                      agentId: "main",
-                      storePath: fixture.storePath,
-                    }).find(({ entry }) => entry.initializationPending === true)?.sessionKey,
-                    "pending child",
-                  );
-            const entry = expectDefined(
-              loadSessionEntry({ sessionKey: key, storePath: fixture.storePath }),
-              "revoked owner",
-            );
-            runOpenClawAgentWriteTransaction(
-              (database) =>
-                writeSessionEntry(database, key, {
-                  ...entry,
-                  lifecycleRevision: "successor-generation",
-                }),
-              { agentId: "main" },
-            );
-          },
-          admissions,
-          runtime,
-        ),
-      );
-    } finally {
-      if (options.mcpResolver) {
-        for (const { entry } of listSessionEntriesCore({
-          agentId: "main",
-          storePath: fixture.storePath,
-        })) {
-          await retireSessionMcpRuntime({
-            sessionId: entry.sessionId,
-            reason: "canonical requester fixture complete",
+      config.plugins = {
+        allow: ["codex", "openai"],
+        entries: {
+          codex: { enabled: true, config: fixture.pluginConfig },
+          openai: { enabled: true },
+        },
+      };
+      const { registry, createApi } = createPluginRegistry({
+        runtime,
+        logger: { info() {}, warn() {}, error() {} },
+        resolveCapabilityCatalogContext: resolvePluginCapabilityCatalogContext,
+        activateGlobalSideEffects: false,
+      });
+      try {
+        const metadataSnapshot = resolvePluginMetadataSnapshot({
+          config,
+          workspaceDir: state.workspaceDir,
+          preferPersisted: false,
+        });
+        for (const plugin of [codexPlugin, openaiPlugin]) {
+          const rootDir = fileURLToPath(new URL(`../extensions/${plugin.id}/`, import.meta.url));
+          const record = createPluginRecord({
+            id: plugin.id,
+            contracts: expectDefined(metadataSnapshot.byPluginId.get(plugin.id), "plugin manifest")
+              .contracts,
+            origin: "bundled",
+            rootDir,
+            source: `${rootDir}index.ts`,
           });
+          registry.plugins.push(record);
+          plugin.register(
+            createApi(record, {
+              config,
+              pluginConfig: config.plugins.entries?.[plugin.id]?.config,
+            }),
+          );
         }
+        if (options.mcpResolver) {
+          const record = createPluginRecord({ id: "canonical-requester-mcp" });
+          registry.plugins.push(record);
+          createApi(record, { config }).registerMcpServerConnectionResolver(options.mcpResolver);
+        }
+        expect(registry.diagnostics.filter((entry) => entry.level === "error")).toEqual([]);
+        markPluginRegistryActive(registry);
+        setPluginRuntimeLoadContext(
+          registry,
+          resolvePluginRuntimeLoadContext({
+            config,
+            workspaceDir: state.workspaceDir,
+            metadataSnapshot,
+          }),
+        );
+        const fork = async (sessionKey: string, entryId: string) => {
+          expect(
+            listRegisteredAgentHarnesses().map((entry) => entry.harness.sessionFork?.upstreamKinds),
+          ).toEqual([["codex-app-server"]]);
+          let result: { ok: boolean; key?: string; message?: string } | undefined;
+          const request = { sessionKey, entryId };
+          await expectDefined(
+            sessionRewindHandlers["sessions.fork"],
+            "fork handler",
+          )({
+            req: {
+              type: "req",
+              id: "canonical-descendant",
+              method: "sessions.fork",
+              params: request,
+            },
+            params: request,
+            client: null,
+            isWebchatConnect: () => false,
+            // SAFETY: these are the complete Gateway collaborators used by the real fork handler.
+            context: {
+              getRuntimeConfig: () => config,
+              chatAbortControllers: new Map(),
+              getSessionEventSubscriberConnIds: () => new Set(),
+              broadcastToConnIds: () => {},
+            } as unknown as GatewayRequestContext,
+            respond: (ok, payload, error) => {
+              const key =
+                payload &&
+                typeof payload === "object" &&
+                "sessionKey" in payload &&
+                typeof payload.sessionKey === "string"
+                  ? payload.sessionKey
+                  : undefined;
+              result = { ok, key, ...(error ? { message: error.message } : {}) };
+            },
+          });
+          return expectDefined(result, "fork response");
+        };
+        await withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry: registry }, () =>
+          run(
+            fixture,
+            fork,
+            (target, sourceKey) => {
+              if (target === "registry") {
+                markPluginRegistryRetired(registry);
+                return;
+              }
+              const key =
+                target === "source"
+                  ? sourceKey
+                  : expectDefined(
+                      listSessionEntriesCore({
+                        agentId: "main",
+                        storePath: fixture.storePath,
+                      }).find(({ entry }) => entry.initializationPending === true)?.sessionKey,
+                      "pending child",
+                    );
+              const entry = expectDefined(
+                loadSessionEntry({ sessionKey: key, storePath: fixture.storePath }),
+                "revoked owner",
+              );
+              runOpenClawAgentWriteTransaction(
+                (database) =>
+                  writeSessionEntry(database, key, {
+                    ...entry,
+                    lifecycleRevision: "successor-generation",
+                  }),
+                { agentId: "main" },
+              );
+            },
+            admissions,
+            runtime,
+          ),
+        );
+      } finally {
+        if (options.mcpResolver) {
+          for (const { entry } of listSessionEntriesCore({
+            agentId: "main",
+            storePath: fixture.storePath,
+          })) {
+            await retireSessionMcpRuntime({
+              sessionId: entry.sessionId,
+              reason: "canonical requester fixture complete",
+            });
+          }
+        }
+        markPluginRegistryRetired(registry);
       }
-      markPluginRegistryRetired(registry);
+    } finally {
       await fixture.dispose();
     }
   });
@@ -786,6 +799,33 @@ describe("canonical descendant lifecycle through real owners", () => {
       );
       expect(await loadTranscriptEvents(target)).toEqual(before);
     });
+  }, 180_000);
+
+  it("preserves hidden admitted consult prompts without requesting visible-row annotation", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    await withFixture(
+      async (fixture, _fork, _revoke, admissions) => {
+        const source = await fixture.adopt();
+        await fixture.turn(source.sessionKey, "Hidden voice consultation");
+        const { recorder, before } = admissions.at(-1)!;
+        expect(recorder.getAdmissionReceipt()).toBeDefined();
+        expect(recorder.getPersistedMessage?.()).toMatchObject({
+          display: false,
+          excludeFromContext: true,
+        });
+        const target = {
+          ...fixture.identity(source.sessionKey),
+          sessionKey: source.sessionKey,
+          storePath: fixture.storePath,
+        };
+        expect(await loadTranscriptEvents(target)).toEqual(before);
+        expect(warn).not.toHaveBeenCalledWith(
+          "failed to mirror codex app-server prompt at turn start",
+          expect.anything(),
+        );
+      },
+      { transcript: { display: false, excludeFromContext: true } },
+    );
   }, 180_000);
 
   it("annotates the pre-admitted Gateway user without replacing its event or read fence", async () => {

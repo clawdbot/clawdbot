@@ -1064,7 +1064,7 @@ describe("compileMemoryWikiVault", () => {
           err.errno = -11;
           throw err;
         }
-        return await realReadFile(target, options as never);
+        return await realReadFile(target, options);
       });
 
     try {

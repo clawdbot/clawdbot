@@ -48,6 +48,7 @@ export interface CellContainerProfile {
   diskSize?: string;
   pidsLimit: number;
   environment: Readonly<Record<string, string>>;
+  userEnvironmentKeys: readonly string[];
   containerUser?:
     | { mode: "numeric"; uid: number; gid: number }
     | { mode: "podman-keep-id"; uid: number; gid: number };
@@ -160,6 +161,7 @@ export function buildCellEnvironment(
     OPENCLAW_CONFIG_PATH: `${FLEET_CONTAINER_STATE_DIR}/openclaw.json`,
     OPENCLAW_WORKSPACE_DIR: `${FLEET_CONTAINER_STATE_DIR}/workspace`,
     OPENCLAW_GATEWAY_TOKEN: token,
+    XDG_CACHE_HOME: `${FLEET_CONTAINER_STATE_DIR}/cache`,
     ...userEnv,
   };
 }
@@ -260,9 +262,9 @@ function buildCellContainerArgs(
         `${profile.containerUser.uid}:${profile.containerUser.gid}`,
       ]
     : [];
-  const userEnvironmentKeys = Object.keys(profile.environment)
-    .filter((key) => !RESERVED_ENV_KEYS.has(key))
-    .toSorted();
+  // Explicit origin cannot be inferred from final values: a user override may
+  // equal today's default and still need to survive a later default change.
+  const userEnvironmentKeys = profile.userEnvironmentKeys.toSorted();
   const mountSuffix = profile.selinuxRelabel ? ":Z" : "";
 
   return [

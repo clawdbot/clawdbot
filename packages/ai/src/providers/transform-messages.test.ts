@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
 import type { ProviderMessage, ProviderModel } from "../provider-types.js";
 import type { Message, Model, ToolResultMessage } from "../types.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import { transformMessages } from "./transform-messages.js";
 
 const model: Model<"openai-completions"> = {
@@ -27,14 +28,7 @@ describe("transformMessages", () => {
         api: model.api,
         provider: model.provider,
         model: model.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createZeroUsage(),
         stopReason: "stop",
         timestamp: 2,
       },
@@ -139,75 +133,59 @@ describe("transformMessages", () => {
     expect(projected[2]).toBe(metadata);
   });
 
-  it("pairs trimmed replay tool call and result ids without synthesizing an error", () => {
-    const messages = [
-      {
+  it.each([
+    ["synchronous call", false, " call_1 ", "call_1"],
+    ["synchronous result", false, "call_1", " call_1 "],
+    ["asynchronous call", true, " call_1 ", "call_1"],
+    ["asynchronous result", true, "call_1", " call_1 "],
+  ] as const)(
+    "pairs padded %s ids without synthesizing an error",
+    (_name, async, id, toolCallId) => {
+      const assistant: Extract<Message, { role: "assistant" }> = {
         role: "assistant",
-        content: [{ type: "toolCall", id: " call_1 ", name: "lookup", arguments: {} }],
+        content: [
+          { type: "toolCall", id, name: "lookup", arguments: {}, ...(async ? { async } : {}) },
+        ],
         api: model.api,
         provider: model.provider,
-        model: model.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        model: async ? "source-model" : model.id,
+        usage: createZeroUsage(),
         stopReason: "toolUse",
         timestamp: 1,
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "lookup",
-        content: [{ type: "text", text: "actual result" }],
-        isError: false,
-        timestamp: 2,
-      },
-    ] as Message[];
-
-    const transformed = transformMessages(messages, model);
-
-    expect(transformed).toHaveLength(2);
-    expect(transformed[0]?.content).toEqual([
-      { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
-    ]);
-    expect(transformed[1]).toMatchObject({ role: "toolResult", toolCallId: "call_1" });
-
-    const transformedPaddedResult = transformMessages(
-      [
-        {
-          role: "assistant",
-          content: [{ type: "toolCall", id: "call_2", name: "lookup", arguments: {} }],
-          api: model.api,
-          provider: model.provider,
-          model: model.id,
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-          stopReason: "toolUse",
-          timestamp: 3,
-        },
+      };
+      const messages: Message[] = [
+        assistant,
+        ...(async
+          ? [{ ...assistant, content: [{ type: "text" as const, text: "later answer" }] }]
+          : []),
         {
           role: "toolResult",
-          toolCallId: " call_2 ",
+          toolCallId,
           toolName: "lookup",
           content: [{ type: "text", text: "actual result" }],
           isError: false,
-          timestamp: 4,
+          timestamp: 2,
         },
-      ] as Message[],
-      model,
-    );
+      ];
+      const original = structuredClone(messages);
 
-    expect(transformedPaddedResult).toHaveLength(2);
-    expect(transformedPaddedResult[1]).toMatchObject({ role: "toolResult", toolCallId: "call_2" });
-  });
+      const transformed = transformMessages(messages, model);
+
+      expect(transformed.map((message) => message.role)).toEqual([
+        "assistant",
+        "toolResult",
+        ...(async ? ["assistant"] : []),
+      ]);
+      expect(transformed[0]?.content).toEqual([
+        { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
+      ]);
+      expect(transformed[1]).toMatchObject({
+        role: "toolResult",
+        toolCallId: "call_1",
+        isError: false,
+        content: [{ type: "text", text: "actual result" }],
+      });
+      expect(messages).toEqual(original);
+    },
+  );
 });

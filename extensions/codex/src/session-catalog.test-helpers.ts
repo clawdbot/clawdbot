@@ -41,16 +41,22 @@ import {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
 } from "./app-server/auth-start-options.js";
-import { resolveCodexAppServerUserHomeDir } from "./app-server/config.js";
+import {
+  resolveCodexAppServerUserHomeDir,
+  resolveCodexSupervisionAppServerRuntimeOptions,
+} from "./app-server/config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./app-server/plugin-app-cache-key.js";
-import type { CodexThread } from "./app-server/protocol.js";
+import type { CodexThread, CodexThreadItem } from "./app-server/protocol.js";
 import { sessionBindingIdentity } from "./app-server/session-binding.js";
 import {
   createCodexTestBindingStore,
   type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.test-helpers.js";
-import { createCodexCatalogHomeResolver, type CodexCatalogHome } from "./session-catalog-homes.js";
+import {
+  createCodexCatalogHomeResolver as createCodexCatalogHomeResolverRuntime,
+  type CodexCatalogHome,
+} from "./session-catalog-homes.js";
 import { listPairedNode } from "./session-catalog-node-continue.js";
 import { catalogError, parseCatalogPage } from "./session-catalog-parsing.js";
 import {
@@ -65,13 +71,14 @@ import type {
 import {
   CODEX_LOCAL_SESSION_HOST_ID,
   codexSessionCatalogRuntime,
-  createCodexSessionCatalogControl as createCodexSessionCatalogControlFactory,
+  createCodexSessionCatalogControl as createCodexSessionCatalogControlRuntime,
   createCodexSessionCatalogNodeHostCommands as createCodexSessionCatalogNodeHostCommandsRuntime,
   createCodexSessionCatalogNodeInvokePolicies,
 } from "./session-catalog.js";
 
 export const CODEX_APP_SERVER_THREADS_LIST_COMMAND = "codex.appServer.threads.list.v1";
 export const CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND = "codex.appServer.thread.turns.list.v1";
+export const CODEX_CATALOG_TRANSCRIPT_READ_COMMAND = "codex.sessionCatalog.transcript.read.v1";
 export const CODEX_CLI_SESSION_RESUME_COMMAND = "codex.cli.session.resume";
 export const CODEX_NODE_CONTINUE_COMMANDS = [
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
@@ -113,6 +120,30 @@ const continueLocalCodexSessionRuntime = codexSessionCatalogRuntime.continueLoca
 const listCodexSessionCatalogRuntime = codexSessionCatalogRuntime.list;
 const readCodexSessionTranscriptRuntime = codexSessionCatalogRuntime.readTranscript;
 const registerCodexSessionCatalogRuntime = codexSessionCatalogRuntime.register;
+
+function createCodexSessionCatalogControlFactory(
+  params: Omit<
+    Parameters<typeof createCodexSessionCatalogControlRuntime>[0],
+    "resolveRuntimeOptions"
+  >,
+) {
+  return createCodexSessionCatalogControlRuntime({
+    ...params,
+    resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
+  });
+}
+
+function createCodexCatalogHomeResolver(
+  params: Omit<
+    Parameters<typeof createCodexCatalogHomeResolverRuntime>[0],
+    "resolveRuntimeOptions"
+  >,
+) {
+  return createCodexCatalogHomeResolverRuntime({
+    ...params,
+    resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
+  });
+}
 
 export function createCodexSessionCatalogControl(
   params: Parameters<typeof createCodexSessionCatalogControlFactory>[0],
@@ -198,7 +229,7 @@ export function readCodexSessionTranscript(
 export function registerCodexSessionCatalog(
   params: Omit<
     Parameters<typeof registerCodexSessionCatalogRuntime>[0],
-    "control" | "getPluginConfig"
+    "control" | "getPluginConfig" | "resolveRuntimeOptions"
   > & {
     control:
       | CodexSessionCatalogControl
@@ -225,6 +256,7 @@ export function registerCodexSessionCatalog(
         })();
   return registerCodexSessionCatalogRuntime({
     ...params,
+    resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
     control,
     getPluginConfig,
   });
@@ -235,7 +267,7 @@ export function createCodexSessionCatalogNodeHostCommands(
     | CodexSessionCatalogControl
     | CodexSessionCatalogControlFactory
     | CodexSessionCatalogControlFactoryStub,
-  configSources: CodexTerminalConfigSources = {
+  configSources: Omit<CodexTerminalConfigSources, "resolveRuntimeOptions"> = {
     getPluginConfig: () => undefined,
     getRuntimeConfig: () => config,
   },
@@ -243,7 +275,7 @@ export function createCodexSessionCatalogNodeHostCommands(
 ) {
   return createCodexSessionCatalogNodeHostCommandsRuntime(
     asControlFactory(control),
-    configSources,
+    { ...configSources, resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions },
     bindingStore,
   );
 }
@@ -353,6 +385,28 @@ export function idleThread(overrides: Partial<CodexThread> = {}): CodexThread {
   };
 }
 
+export function catalogThreadItem(
+  id: string,
+  overrides: Partial<CodexThreadItem> = {},
+): CodexThreadItem {
+  return {
+    id,
+    type: "agentMessage",
+    title: null,
+    status: null,
+    name: null,
+    tool: null,
+    server: null,
+    command: null,
+    cwd: null,
+    query: null,
+    aggregatedOutput: null,
+    text: "",
+    changes: [],
+    ...overrides,
+  };
+}
+
 export function createControl(overrides: Partial<CodexSessionCatalogControl> = {}) {
   const withPinnedConnection = vi.fn(
     async (run: (value: CodexSessionCatalogControl) => Promise<unknown>) => await run(control),
@@ -364,6 +418,7 @@ export function createControl(overrides: Partial<CodexSessionCatalogControl> = {
     listPage: vi.fn(async () => ({ sessions: [] })),
     listDescendantPage: vi.fn(async () => ({ data: [] })),
     listTurnPage: vi.fn(async () => ({ data: [] })),
+    listItemPage: vi.fn(async () => ({ data: [] })),
     readThread: vi.fn(async (threadId: string) => idleThread({ id: threadId })),
     archiveThread: vi.fn(async () => undefined),
     ...overrides,
@@ -480,7 +535,8 @@ export function createRuntime(
   } = {},
 ) {
   const entries = params.entries ?? [];
-  const session = createCapturedPluginRegistration({ id: "codex" }).api.runtime.agent.session;
+  const capturedRuntime = createCapturedPluginRegistration({ id: "codex" }).api.runtime;
+  const session = capturedRuntime.agent.session;
   const createSessionEntry = vi.fn(async (createParams: CreateSessionEntryParams) => {
     const agentId = createParams.agentId ?? "main";
     const storePath = resolveStorePath(createParams.cfg.session?.store, { agentId });
@@ -549,6 +605,7 @@ export function createRuntime(
     return next;
   });
   const runtime = {
+    modelConfig: capturedRuntime.modelConfig,
     nodes: {
       list: vi.fn(async () => ({ nodes: params.nodes ?? [] })),
       invoke: params.invoke ?? vi.fn(async () => ({})),

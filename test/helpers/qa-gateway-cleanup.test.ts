@@ -350,12 +350,14 @@ describe("QA gateway fixture error composition", () => {
       }),
   );
 
-  it("completes a successful body and all cleanup phases", async () => {
+  it("returns the body value after completing all cleanup phases", async () => {
+    const value = { fixture: "result" };
     const cleaned: string[] = [];
     await expect(
       runQaGatewayFixture(
         async () => {
           cleaned.push("body");
+          return value;
         },
         () => {
           cleaned.push("gateway");
@@ -364,7 +366,7 @@ describe("QA gateway fixture error composition", () => {
           cleaned.push("provider");
         },
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(value);
     expect(cleaned).toEqual(["body", "gateway", "provider"]);
   });
 

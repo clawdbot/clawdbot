@@ -15,9 +15,9 @@ title: "macOS signing"
 - Reads `SIGN_IDENTITY` from the environment (e.g. `export SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"`, or a Developer ID Application cert). Without it, `codesign-mac-app.sh` auto-selects an identity in this order: Developer ID Application, Apple Distribution, Apple Development, then the first valid codesigning identity found.
 - `SIGN_IDENTITY` also accepts a certificate SHA-1 hash to distinguish certificates with the same common name.
 - `CODESIGN_TIMESTAMP=auto` (default) enables trusted timestamps for Developer ID Application signatures selected by name or certificate hash. Set `on`/`off` to force either way.
-- Stamps Info.plist with `OpenClawBuildTimestamp` (ISO8601 UTC) and `OpenClawGitCommit` (full 40-character hexadecimal commit, or `unknown` for local builds when unavailable) so the About tab can show build, git, and debug/release channel.
+- Stamps Info.plist with `OpenClawBuildTimestamp` (ISO8601 UTC) and `OpenClawGitCommit` (full 40-character hexadecimal commit, or `unknown` for local builds when unavailable) so the standard About panel can show the build timestamp and git commit.
 - Audits native-signature format and Team IDs after signing. Metadata failures, non-native signatures, missing Team IDs, and mismatched Team IDs fail by default. `SKIP_TEAM_ID_CHECK=1` skips only the Team ID comparison; native-signature format checks still run.
-- Signs the private worker's native code before sealing the app. Only the worker's `bin/node` and the Claude Agent SDK's packaged `claude` runtime executables receive JIT memory entitlements; other native helpers and libraries are plain-signed, with library validation retained and the app's signing identity required. Packaging verifies each requested architecture's native capabilities and worker readiness in temporary state before and after signing.
+- Signs the private worker's native code before sealing the app. Only the worker's `bin/node` and Claude Agent SDK `claude` executables included by an explicitly bundled plugin receive JIT memory entitlements; other native helpers and libraries are plain-signed, with library validation retained and the app's signing identity required. The bundled Anthropic plugin uses the separately installed Claude Code executable. Packaging verifies each requested architecture's native capabilities and worker readiness in temporary state before and after signing.
 
 Signing uses `/usr/bin/python3` to scan file headers and batches candidates through `/usr/bin/file`. Apple's `/usr/bin/otool` then checks native headers for every architecture, including fat64 containers that `file` reports as data. Mixed signing categories and malformed native headers stop signing. Java classes, static archives, and Mach-O linker, debug, and core artifacts are resource-sealed rather than directly signed. Discovery opens directories without following symlinks and classifies opened file descriptors rather than redirectable paths. It does not run the bundled Node to sign itself. Before publishing, the scan validates every observed input, including directory namespaces and resources omitted from the native list. It rejects incomplete traversal and observed changes; this is not an atomic filesystem snapshot.
 
@@ -44,7 +44,7 @@ DISABLE_LIBRARY_VALIDATION=1 scripts/package-mac-app.sh                         
 
 ## Build metadata for About
 
-The About tab reads `OpenClawBuildTimestamp` and `OpenClawGitCommit` from Info.plist to show version, build date, git commit, and whether the build is DEBUG (via `#if DEBUG`). Re-run the packager after code changes to refresh these values.
+Choose **About OpenClaw** to open the standard macOS About panel. It shows the app version and build, with the build timestamp and git commit from Info.plist in its credits. Missing or invalid timestamp and commit values display as unavailable. Re-run the packager after code changes to refresh these values. App update controls live under **Dashboard → Settings → Updates → This Mac**.
 
 ## Related
 

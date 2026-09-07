@@ -7,6 +7,7 @@ import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { isMissingPathError, formatErrorMessage } from "../../infra/errors.js";
 import { root as fsRoot } from "../../infra/fs-safe.js";
+import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -261,12 +262,14 @@ async function resolveRepositoryFromRealPath(
     }
     throw new WorktreeRepositoryError(`not a git checkout: ${requestedLabel}`);
   }
-  const sourceRoot = await fs.realpath(rootResult.stdout.trim());
+  const sourceRoot = await fs.realpath(normalizeGitPathForFilesystem(rootResult.stdout.trim()));
   const headResult = await runGit(sourceRoot, ["rev-parse", "--verify", "HEAD^{commit}"]);
   if (headResult.code !== 0) {
     throw new WorktreeRepositoryError(`git checkout has no commits: ${requestedLabel}`);
   }
-  const commonRaw = await requireGit(sourceRoot, ["rev-parse", "--git-common-dir"]);
+  const commonRaw = normalizeGitPathForFilesystem(
+    await requireGit(sourceRoot, ["rev-parse", "--git-common-dir"]),
+  );
   const commonDir = await fs.realpath(
     path.isAbsolute(commonRaw) ? commonRaw : path.resolve(sourceRoot, commonRaw),
   );
@@ -457,7 +460,7 @@ async function containsSnapshotGitMarker(
   checkoutRoot: string,
   snapshotPaths?: Iterable<Buffer>,
 ): Promise<boolean> {
-  const visiblePaths = snapshotPaths ? [...snapshotPaths] : [];
+  let visiblePaths = snapshotPaths ? [...snapshotPaths] : [];
   if (!snapshotPaths) {
     const indexEntries = splitNullBuffer(
       await requireGitBuffer(checkoutRoot, ["ls-files", "--stage", "-z"]),
@@ -466,7 +469,8 @@ async function containsSnapshotGitMarker(
       return true;
     }
     const visibleGitPaths = ["ls-files", "-z", "--cached", "--others", "--exclude-standard"];
-    visiblePaths.push(...splitNullBuffer(await requireGitBuffer(checkoutRoot, visibleGitPaths)));
+    // Large checkouts exceed V8's argument limit when paths are spread into push().
+    visiblePaths = splitNullBuffer(await requireGitBuffer(checkoutRoot, visibleGitPaths));
   }
   const checked = new Set<string>();
   const ignoredPaths = splitNullBuffer(
@@ -725,7 +729,9 @@ async function prepareSnapshotIndex(
       }
     }
   }
-  const commonDir = await requireGit(record.repoRoot, ["rev-parse", "--git-common-dir"]);
+  const commonDir = normalizeGitPathForFilesystem(
+    await requireGit(record.repoRoot, ["rev-parse", "--git-common-dir"]),
+  );
   requireWorktreeDiskSpace(
     [
       { path: path.resolve(record.repoRoot, commonDir), bytes: 2 * gitBytes + metadataBytes },
@@ -899,7 +905,16 @@ export class ManagedWorktreeService {
     params.commitGuard?.();
     this.requireAllocationSpace(worktreePath, repository);
     params.commitGuard?.();
-    const base = await resolveWorktreeBase(repository.repoRoot, params.baseRef, params.signal);
+    if (params.checkoutCommit && !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(params.checkoutCommit)) {
+      throw new Error("Worktree checkout commit is invalid");
+    }
+    const base = params.checkoutCommit
+      ? {
+          gitOperand: params.checkoutCommit,
+          recordRef: params.baseRef ?? params.checkoutCommit,
+          remote: false,
+        }
+      : await resolveWorktreeBase(repository.repoRoot, params.baseRef, params.signal);
     const gitBytes = Math.max(
       await estimateWorktreeGitBytes(repository.repoRoot, base.gitOperand),
       base.remote ? await estimateWorktreeGitBytes(repository.repoRoot, "HEAD") : 0,
@@ -1483,7 +1498,7 @@ export class ManagedWorktreeService {
 
   async gc(params: ManagedWorktreeGcParams = {}): Promise<ManagedWorktreeGcResult> {
     const now = this.now();
-    const removed: string[] = [];
+    let removed: string[] = [];
     const records = listRegistryWorktrees(this.env);
     for (const record of records) {
       try {
@@ -1515,7 +1530,7 @@ export class ManagedWorktreeService {
         log.warn(`idle cleanup failed for ${record.id}: ${String(error)}`);
       }
     }
-    removed.push(...(await this.enforceCleanupLimits(params)));
+    removed = removed.concat(await this.enforceCleanupLimits(params));
     const orphansDeleted = await this.reconcileOrphans(records);
     let snapshotsPruned = 0;
     for (const record of listRegistryWorktrees(this.env)) {

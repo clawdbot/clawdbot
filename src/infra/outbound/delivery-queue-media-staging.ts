@@ -1,9 +1,11 @@
 // Coordinates queue-media filesystem staging with durable SQLite ownership.
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
   deleteDeliveryQueueEntry,
   expireStagingAndLoadDeliveryQueueEntries,
   upsertDeliveryQueueEntry,
+  upsertDeliveryQueueEntryInDatabase,
   type DeliveryQueueEntryState,
 } from "../delivery-queue-sqlite.js";
 import { generateSecureUuid } from "../secure-random.js";
@@ -36,6 +38,7 @@ export function createDeliveryQueueMediaRetention(
   artifacts: readonly string[],
   entryKind: "outbound-media-stage" | "outbound-media-recovery-lease",
   stateDir?: string,
+  database?: OpenClawStateDatabase,
 ): string {
   const id = generateSecureUuid();
   const entry: MediaStageEntry = {
@@ -44,13 +47,15 @@ export function createDeliveryQueueMediaRetention(
     retryCount: 0,
     artifacts: [...artifacts],
   };
-  const inserted = upsertDeliveryQueueEntry({
+  const insert = {
     queueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
     entry,
     metadata: { entryKind },
-    stateDir,
     insertOnly: true,
-  });
+  };
+  const inserted = database
+    ? upsertDeliveryQueueEntryInDatabase(insert, database)
+    : upsertDeliveryQueueEntry({ ...insert, stateDir });
   if (!inserted) {
     throw new Error(`Delivery queue media stage already exists: ${id}`);
   }

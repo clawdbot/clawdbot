@@ -1,6 +1,9 @@
 /** Model-facing child task, runtime rules, and requester receipt for one resolved spawn. */
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../../config/agent-limits.js";
+import {
+  DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
+  isSubagentSpawnDepthAllowed,
+} from "../../../config/agent-limits.js";
 import { isCronSessionKey } from "../../../routing/session-key.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 
@@ -31,7 +34,7 @@ export function buildSubagentSpawnEnvelope(params: {
 }) {
   const childDepth = params.childDepth ?? 1;
   const maxSpawnDepth = params.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
-  const canSpawn = childDepth < maxSpawnDepth;
+  const canSpawn = isSubagentSpawnDepthAllowed(childDepth, maxSpawnDepth);
   const parentLabel = childDepth >= 2 ? "parent orchestrator" : "main agent";
   const completionNote = COMPLETION_NOTES[params.completionMode];
   const persistentNote =
