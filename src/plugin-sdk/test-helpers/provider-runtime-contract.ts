@@ -259,6 +259,7 @@ export function describeAnthropicProviderRuntimeContract(
       ).resolves.toEqual({
         provider: "anthropic",
         displayName: "Claude",
+        usageScope: "account",
         windows: [
           { label: "5h", usedPercent: 20, resetAt: Date.parse("2026-01-07T01:00:00Z") },
           { label: "Week", usedPercent: 35, resetAt: Date.parse("2026-01-09T01:00:00Z") },
@@ -825,6 +826,7 @@ export function describeOpenAIProviderRuntimeContract(
       ).resolves.toEqual({
         provider: "openai",
         displayName: "OpenAI",
+        usageScope: "account",
         windows: [{ label: "3h", usedPercent: 12, resetAt: 1_705_000_000 }],
         plan: "Plus",
       });
