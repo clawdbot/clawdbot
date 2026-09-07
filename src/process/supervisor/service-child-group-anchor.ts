@@ -359,6 +359,12 @@ export function runServiceChildGroupAnchor(): void {
       rootResultDelivery = send({ type: "root-result", code, signal });
       rootExited.resolve();
       void settleRoot();
+      // Lineage EOF may have happened while the root was still alive. In that case the
+      // EOF observer intentionally leaves cleanup alone so valid roots can survive
+      // closefrom(); resume the existing bounded cleanup path once the root exits.
+      if (lineageClosed && state === "active") {
+        void requestCleanup("lineage-lost");
+      }
     });
   };
 
