@@ -36,13 +36,17 @@ private actor StringCapture {
     }
 }
 
-/// Delivers a pong asynchronously, well before the deadline, so a cancelled deadline
-/// task racing the gate would surface as a spurious timeout.
-private final class DelayedPongWebSocketTask: WebSocketTasking, @unchecked Sendable {
-    private let delay: Duration
+private final class PingWebSocketTask: WebSocketTasking, @unchecked Sendable {
+    enum Behavior {
+        case delayed(Duration)
+        case omitted
+        case callbacks([Error?])
+    }
 
-    init(delay: Duration) {
-        self.delay = delay
+    private let behavior: Behavior
+
+    init(_ behavior: Behavior) {
+        self.behavior = behavior
     }
 
     var state: URLSessionTask.State {
@@ -60,80 +64,18 @@ private final class DelayedPongWebSocketTask: WebSocketTasking, @unchecked Senda
     }
 
     func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
-        let delay = self.delay
-        Task {
-            try? await Task.sleep(for: delay)
-            pongReceiveHandler(nil)
-        }
-    }
-
-    func receive() async throws -> URLSessionWebSocketTask.Message {
-        throw URLError(.badServerResponse)
-    }
-
-    func receive(
-        completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
-    {
-        completionHandler(.failure(URLError(.badServerResponse)))
-    }
-}
-
-/// Mirrors URLSession dropping a pong handler outright when the task is cancelled or
-/// closed mid-flight: the ping is accepted and no callback ever arrives.
-private final class SilentPingWebSocketTask: WebSocketTasking, @unchecked Sendable {
-    var state: URLSessionTask.State {
-        .running
-    }
-
-    func resume() {}
-
-    func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-        _ = (closeCode, reason)
-    }
-
-    func send(_ message: URLSessionWebSocketTask.Message) async throws {
-        _ = message
-    }
-
-    func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
-        _ = pongReceiveHandler
-    }
-
-    func receive() async throws -> URLSessionWebSocketTask.Message {
-        throw URLError(.badServerResponse)
-    }
-
-    func receive(
-        completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
-    {
-        completionHandler(.failure(URLError(.badServerResponse)))
-    }
-}
-
-private final class DoubleCallbackPingWebSocketTask: WebSocketTasking, @unchecked Sendable {
-    private let callbacks: [Error?]
-
-    init(callbacks: [Error?]) {
-        self.callbacks = callbacks
-    }
-
-    var state: URLSessionTask.State {
-        .running
-    }
-
-    func resume() {}
-
-    func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-        _ = (closeCode, reason)
-    }
-
-    func send(_ message: URLSessionWebSocketTask.Message) async throws {
-        _ = message
-    }
-
-    func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
-        for callback in self.callbacks {
-            pongReceiveHandler(callback)
+        switch self.behavior {
+        case let .delayed(delay):
+            Task {
+                try? await Task.sleep(for: delay)
+                pongReceiveHandler(nil)
+            }
+        case .omitted:
+            _ = pongReceiveHandler
+        case let .callbacks(callbacks):
+            for callback in callbacks {
+                pongReceiveHandler(callback)
+            }
         }
     }
 
@@ -1241,7 +1183,7 @@ struct GatewayNodeSessionTests {
     func `websocket ping times out when no pong callback ever arrives`() async throws {
         // Without the deadline this await never returns: the checked continuation is
         // orphaned, Swift logs CONTINUATION MISUSE, and the keepalive loop wedges forever.
-        let task = SilentPingWebSocketTask()
+        let task = PingWebSocketTask(.omitted)
 
         do {
             try await WebSocketTaskBox(task: task).sendPing(timeout: .milliseconds(50))
@@ -1256,7 +1198,7 @@ struct GatewayNodeSessionTests {
         // Cancelling the deadline makes Task.sleep throw; if that cancellation were
         // swallowed the deadline task would fall through and race the pong callback,
         // reporting a healthy ping as timed out.
-        let task = DelayedPongWebSocketTask(delay: .milliseconds(20))
+        let task = PingWebSocketTask(.delayed(.milliseconds(20)))
 
         for _ in 0..<20 {
             try await WebSocketTaskBox(task: task).sendPing(timeout: .seconds(5))
@@ -1265,14 +1207,14 @@ struct GatewayNodeSessionTests {
 
     @Test
     func `websocket ping ignores duplicate success callbacks`() async throws {
-        let task = DoubleCallbackPingWebSocketTask(callbacks: [nil, nil])
+        let task = PingWebSocketTask(.callbacks([nil, nil]))
         try await WebSocketTaskBox(task: task).sendPing()
     }
 
     @Test
     func `websocket ping ignores duplicate callbacks after first error`() async throws {
         let firstError = URLError(.networkConnectionLost)
-        let task = DoubleCallbackPingWebSocketTask(callbacks: [firstError, nil])
+        let task = PingWebSocketTask(.callbacks([firstError, nil]))
 
         do {
             try await WebSocketTaskBox(task: task).sendPing()
