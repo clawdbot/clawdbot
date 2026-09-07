@@ -547,3 +547,102 @@ describe("handleFileWrite — size cap", () => {
     expectFailure(r, "FILE_TOO_LARGE");
   });
 });
+
+describe("handleFileWrite — bound overwrite rollback", () => {
+  function failBoundWrites(
+    filePath: string,
+    shouldFail: (position: number) => { fail: boolean; partial?: boolean },
+  ) {
+    const realOpen = fs.open.bind(fs);
+    return vi.spyOn(fs, "open").mockImplementation(async (target, flags, mode) => {
+      const handle = await realOpen(target, flags as never, mode as never);
+      if (String(target) === filePath && flags === "r+") {
+        const realWrite = handle.write.bind(handle);
+        handle.write = (async (
+          buffer: Buffer,
+          offset: number,
+          length: number,
+          position: number,
+        ) => {
+          const decision = shouldFail(position);
+          if (decision.fail) {
+            if (decision.partial) {
+              await realWrite(buffer, offset, Math.max(1, Math.floor(length / 2)), position);
+            }
+            throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+          }
+          return realWrite(buffer, offset, length, position);
+        }) as typeof handle.write;
+      }
+      return handle;
+    });
+  }
+
+  async function preflightBinding(target: string, payload: Buffer) {
+    const preflight = await handleFileWrite({
+      path: target,
+      contentBase64: payload.toString("base64"),
+      overwrite: true,
+      preflightOnly: true,
+    });
+    if (!preflight.ok) {
+      throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
+    }
+    return preflight;
+  }
+
+  it("restores the original file when the tail extension runs out of space", async () => {
+    const target = path.join(tmpRoot, "victim.bin");
+    const original = Buffer.alloc(4096, 0x61);
+    await fs.writeFile(target, original);
+    const payload = Buffer.alloc(8192, 0x62);
+    const preflight = await preflightBinding(target, payload);
+
+    // The overwrite must extend beyond the original size first; fail there.
+    const spy = failBoundWrites(target, (position) => ({
+      fail: position >= original.length,
+    }));
+    await expect(
+      handleFileWrite({
+        path: target,
+        contentBase64: payload.toString("base64"),
+        overwrite: true,
+        expectedCanonicalPath: preflight.path,
+        expectedBinding: preflight.binding,
+      }),
+    ).rejects.toMatchObject({ code: "ENOSPC" });
+    spy.mockRestore();
+
+    expect(await fs.readFile(target)).toEqual(original);
+  });
+
+  it("restores the original prefix when a shrinking overwrite fails mid-write", async () => {
+    const target = path.join(tmpRoot, "victim.bin");
+    const original = Buffer.alloc(8192, 0x61);
+    await fs.writeFile(target, original);
+    const payload = Buffer.alloc(4096, 0x62);
+    const preflight = await preflightBinding(target, payload);
+
+    // Fail the prefix overwrite after half of it landed on disk.
+    let failed = false;
+    const spy = failBoundWrites(target, (position) => {
+      if (failed || position >= payload.length) {
+        return { fail: false };
+      }
+      failed = true;
+      return { fail: true, partial: true };
+    });
+    await expect(
+      handleFileWrite({
+        path: target,
+        contentBase64: payload.toString("base64"),
+        overwrite: true,
+        expectedCanonicalPath: preflight.path,
+        expectedBinding: preflight.binding,
+      }),
+    ).rejects.toMatchObject({ code: "ENOSPC" });
+    spy.mockRestore();
+
+    expect(await fs.readFile(target)).toEqual(original);
+  });
+});
