@@ -1123,15 +1123,25 @@ export async function runSessionCompactionIfNeeded(params: {
                     },
                   }
                 : {}),
-              onHostCompactionCommitted: async (commit) => {
-                await recordCompactionAccounting(
-                  commit.entry,
-                  commit.tokensAfter,
-                  commit.compactionKind,
-                  hostAccountingCommitted ? 0 : 1,
-                );
-                hostAccountingCommitted = true;
-              },
+            }
+          : {}),
+        // The queued compactor still holds the session lane here. Accounting after it returns
+        // races the next run's writer claim, which is that run's first lane write; the rejected
+        // write would leave the committed compaction unaccounted while the row keeps its
+        // pre-compaction fresh total and re-triggers preflight on the next turn.
+        onHostCompactionCommitted: async (commit) => {
+          await recordCompactionAccounting(
+            commit.entry,
+            commit.tokensAfter,
+            commit.compactionKind,
+            hostAccountingCommitted ? 0 : 1,
+          );
+          hostAccountingCommitted = true;
+        },
+        ...(compactionTrigger === "transcript_bytes"
+          ? {
+              // Maintenance can shrink the transcript after the commit; measure the byte latch
+              // from the settled transcript, as the after-return accounting did.
               onHostCompactionTranscriptSettled: async (commit) => {
                 await recordCompactionAccounting(commit.entry, undefined, undefined, 0);
               },
