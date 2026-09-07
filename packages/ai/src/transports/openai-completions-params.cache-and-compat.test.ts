@@ -59,6 +59,80 @@ describe("openai completions params", () => {
     expect(params.stream_options?.include_usage).toBe(true);
   });
 
+  it.each([
+    ["qwen", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"],
+    ["dashscope", "https://dashscope.aliyuncs.com/compatible-mode/v1"],
+    ["modelstudio", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"],
+    // Token Plan regions are the other two documented /compatible-mode/v1 endpoints.
+    // Driven through provider "qwen" because the unit fixture's endpoint-class map
+    // only knows dashscope.aliyuncs.com; in production the plugin manifest lists all
+    // six URLs under modelstudio-native. Either way the path gate is what decides.
+    ["qwen", "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"],
+    ["qwen", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"],
+    // Three more Alibaba compatible-mode regions the repository already names —
+    // extensions/alibaba, extensions/qwen and the external provider catalog —
+    // none of which appear in MODELSTUDIO_NATIVE_BASE_URLS. A fixed URL list
+    // would leave all three on the wrong field; matching the host does not.
+    ["qwen", "https://cn-hongkong.dashscope.aliyuncs.com/compatible-mode/v1"],
+    ["qwen", "https://dashscope-us.aliyuncs.com/compatible-mode/v1"],
+    ["qwen", "https://workspace.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"],
+  ])("sends max_tokens on Model Studio compatible-mode provider %s", (provider, baseUrl) => {
+    // Model Studio's OpenAI-compatibility reference documents `max_tokens` and
+    // does not list `max_completion_tokens`.
+    const params = buildOpenAICompletionsParams(
+      makeCompletionsModel({ id: "qwen3.5-plus", name: "Qwen 3.5 Plus", provider, baseUrl }),
+      emptyContext(),
+      undefined,
+    ) as Record<string, unknown>;
+
+    expect(params).toHaveProperty("max_tokens");
+    expect(params).not.toHaveProperty("max_completion_tokens");
+  });
+
+  it.each([
+    // A Qwen-family provider accepts an arbitrary custom `baseUrl`. A proxy that
+    // happens to serve the same path is not an Alibaba endpoint, and Alibaba's
+    // compatibility reference says nothing about what it accepts.
+    ["a custom proxy route", "https://proxy.example/compatible-mode/v1"],
+    // Suffix, not substring: this host sits under evil.example, not aliyuncs.com.
+    ["a look-alike host", "https://dashscope.aliyuncs.com.evil.example/compatible-mode/v1"],
+    // Ends with the string "aliyuncs.com" without being inside that domain.
+    ["a host merely ending in the domain text", "https://notaliyuncs.com/compatible-mode/v1"],
+    // The gate reads a path segment, not a prefix of one.
+    ["a look-alike path", "https://dashscope.aliyuncs.com/compatible-mode-preview/v1"],
+  ])("keeps max_completion_tokens on %s", (_label, baseUrl) => {
+    const params = buildOpenAICompletionsParams(
+      makeCompletionsModel({
+        id: "qwen3.5-plus",
+        name: "Qwen 3.5 Plus",
+        provider: "qwen",
+        baseUrl,
+      }),
+      emptyContext(),
+      undefined,
+    ) as Record<string, unknown>;
+
+    expect(params).toHaveProperty("max_completion_tokens");
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
+  it("still sends max_completion_tokens on the OpenAI endpoint", () => {
+    // Guards the change above from widening: OpenAI itself deprecated max_tokens.
+    const params = buildOpenAICompletionsParams(
+      makeCompletionsModel({
+        id: "gpt-5",
+        name: "GPT-5",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+      emptyContext(),
+      undefined,
+    ) as Record<string, unknown>;
+
+    expect(params).toHaveProperty("max_completion_tokens");
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
   it("enables streaming usage compat for generic providers on native DashScope endpoints", () => {
     const params = buildOpenAICompletionsParams(
       makeCompletionsModel({
@@ -450,6 +524,27 @@ describe("openai completions params", () => {
     expect(params.max_completion_tokens).toBe(65_536);
     expect(params).not.toHaveProperty("max_tokens");
   });
+
+  // The `modelstudio-native` endpoint class also covers the two Coding Plan base
+  // URLs, which are plain `/v1` and are NOT in Alibaba's OpenAI-compatibility
+  // reference. They keep `max_completion_tokens` until a Coding Plan key can
+  // confirm otherwise — the citation behind this change does not reach them.
+  it.each([
+    ["qwen", "https://coding.dashscope.aliyuncs.com/v1"],
+    ["qwen", "https://coding-intl.dashscope.aliyuncs.com/v1"],
+  ])(
+    "leaves Coding Plan %s on max_completion_tokens (undocumented surface)",
+    (provider, baseUrl) => {
+      const params = buildOpenAICompletionsParams(
+        makeCompletionsModel({ id: "qwen3.5-plus", name: "Qwen 3.5 Plus", provider, baseUrl }),
+        { systemPrompt: "system", messages: [], tools: [] } as never,
+        undefined,
+      );
+
+      expect(params.max_completion_tokens).toBeDefined();
+      expect(params).not.toHaveProperty("max_tokens");
+    },
+  );
 
   it("omits output-token fields when the resolved model has no known cap", () => {
     const params = buildOpenAICompletionsParams(

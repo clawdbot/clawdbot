@@ -30,8 +30,10 @@ describe("openai completions params", () => {
       undefined,
     );
 
-    expect(params.max_completion_tokens).toBe(64_000);
-    expect(params).not.toHaveProperty("max_tokens");
+    // dashscope is a Model Studio provider, so the cap ships as `max_tokens`;
+    // what this test pins is that the model-level params value wins.
+    expect(params.max_tokens).toBe(64_000);
+    expect(params).not.toHaveProperty("max_completion_tokens");
   });
 
   it("keeps runtime maxTokens ahead of model params max_completion_tokens for OpenAI completions", () => {
@@ -55,8 +57,8 @@ describe("openai completions params", () => {
       { maxTokens: 16_000 } as never,
     );
 
-    expect(params.max_completion_tokens).toBe(16_000);
-    expect(params).not.toHaveProperty("max_tokens");
+    expect(params.max_tokens).toBe(16_000);
+    expect(params).not.toHaveProperty("max_completion_tokens");
   });
 
   it("clamps runtime maxTokens to the OpenAI completions model output cap", () => {
@@ -97,8 +99,8 @@ describe("openai completions params", () => {
       { maxTokens: 0 } as never,
     );
 
-    expect(params.max_completion_tokens).toBe(64_000);
-    expect(params).not.toHaveProperty("max_tokens");
+    expect(params.max_tokens).toBe(64_000);
+    expect(params).not.toHaveProperty("max_completion_tokens");
   });
 
   it("uses model maxTokens with max_tokens completions compat when runtime maxTokens is omitted", () => {
@@ -170,7 +172,7 @@ describe("openai completions params", () => {
     );
 
     // 4,000 CJK chars count as 16,000 adjusted chars, then chars/4 * 1.25.
-    expect(params.max_completion_tokens).toBe(10_000 - 5_000 - 1);
+    expect(params.max_tokens).toBe(10_000 - 5_000 - 1);
   });
 
   it("rounds proxy-like completions input estimates after summing message content", () => {

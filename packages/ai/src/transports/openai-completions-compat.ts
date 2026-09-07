@@ -61,6 +61,35 @@ function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) 
   return provider !== undefined && ids.includes(provider);
 }
 
+/**
+ * True when `baseUrl` is an Alibaba-owned Model Studio endpoint on the
+ * `/compatible-mode` surface, which is the surface Alibaba's OpenAI-compatibility
+ * reference covers.
+ *
+ * The host shapes mirror `resolveDashscopeAigcApiBaseUrl` in
+ * `extensions/qwen/video-generation-provider.ts`: the
+ * `dashscope[-region].aliyuncs.com` family and the Token Plan
+ * `*.maas.aliyuncs.com` regions.
+ */
+function isAlibabaCompatibleModeBaseUrl(baseUrl: string | undefined): boolean {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return false;
+  }
+  const hostname = url.hostname.toLowerCase().replace(/\.+$/u, "");
+  const isAlibabaHost =
+    /(?:^|\.)dashscope(?:-[^.]+)?\.aliyuncs\.com$/u.test(hostname) ||
+    hostname.endsWith(".maas.aliyuncs.com");
+  // Trailing slash so `/compatible-mode` matches and `/compatible-mode-x` does not.
+  return isAlibabaHost && `${url.pathname}/`.startsWith("/compatible-mode/");
+}
+
 /** Resolves default request flags for an OpenAI-compatible completions endpoint. */
 function resolveOpenAICompletionsCompatDefaults(
   input: OpenAICompletionsCompatDefaultsInput,
@@ -84,6 +113,22 @@ function resolveOpenAICompletionsCompatDefaults(
     knownProviderFamily === "modelstudio" ||
     endpointClass === "modelstudio-native" ||
     (isDefaultRoute && isDefaultRouteProvider(provider, "dashscope", "modelstudio", "qwen"));
+  // The `modelstudio-native` endpoint class covers six base URLs, and they are not
+  // one surface. Alibaba's OpenAI-compatibility reference documents `max_tokens`
+  // for the four `/compatible-mode/v1` endpoints (dashscope, dashscope-intl, and
+  // both token-plan regions). The two Coding Plan endpoints
+  // (coding[-intl].dashscope.aliyuncs.com) are plain `/v1` and are not covered by
+  // that reference, so they keep the existing field until someone with a Coding
+  // Plan key can check.
+  //
+  // The gate is the host together with the path, not the path alone. A Qwen-family
+  // provider accepts an arbitrary custom `baseUrl`, so a bare path test would hand
+  // `max_tokens` to any proxy that happens to serve `/compatible-mode/` — a route
+  // Alibaba does not own and the reference does not describe. Matching the host
+  // shapes still lets a future Alibaba region into the documented surface, which a
+  // fixed URL list would not.
+  const isModelStudioCompatibleMode =
+    isModelStudioLike && isAlibabaCompatibleModeBaseUrl(input.baseUrl);
   const isZai =
     endpointClass === "zai-native" ||
     (isDefaultRoute && isDefaultRouteProvider(input.provider, "zai"));
@@ -120,6 +165,10 @@ function resolveOpenAICompletionsCompatDefaults(
     endpointClass === "mistral-public" ||
     knownProviderFamily === "mistral" ||
     isMoonshot ||
+    // Model Studio's OpenAI-compatible reference documents `max_tokens` and does
+    // not list `max_completion_tokens` — but only for the `/compatible-mode/v1`
+    // surface, hence the narrower predicate.
+    isModelStudioCompatibleMode ||
     isCloudflareAiGateway ||
     isZai ||
     isTogether ||
