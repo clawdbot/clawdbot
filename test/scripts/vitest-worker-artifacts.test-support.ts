@@ -256,7 +256,8 @@ export function workerProbe(
             if (!sourceMode) expect(fileURLToPath(url).startsWith(fileURLToPath(new URL('../', generation)))).toBe(true);
           }
           const sourceLoader = sourceMode && !process.versions.bun;
-          expect(args.includes('tsx')).toBe(sourceLoader);
+          expect(args.includes('--import')).toBe(sourceLoader);
+          if (sourceLoader) expect(args[1].startsWith('file:')).toBe(true);
           expect(args[sourceLoader ? 2 : 0]).toMatch(sourceMode ? /\\.ts$/ : /\\.js$/);
           fs.appendFileSync(${JSON.stringify(path.join(directory, "observations.jsonl"))}, JSON.stringify({args, tuiUrls, setupUrls, value, configValue:inject('configValue'), knn:resolveRuntimeWorkerUrl(vectorKnnProcessEntrypoint).href})+'\\n');
           fs.appendFileSync(${JSON.stringify(path.join(directory, "generations.jsonl"))}, JSON.stringify(generation)+'\\n');

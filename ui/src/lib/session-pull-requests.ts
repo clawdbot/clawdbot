@@ -12,7 +12,7 @@ import {
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
-import { createGatewayRetryOwner } from "./gateway-retry.ts";
+import { createGatewaySetSyncLifecycle } from "./gateway-set-sync-lifecycle.ts";
 import { readSessionChangedEvent } from "./sessions/reconcile.ts";
 import { uiSessionEventMatches } from "./sessions/session-key.ts";
 
@@ -85,17 +85,10 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     Set<(snapshot: ControlUiSessionPullRequestSnapshot | undefined) => void>
   >();
   const pendingRefreshKeys = new Set<string>();
-  const retry = createGatewayRetryOwner();
   const connection = createGatewayConnectionLifecycle(gateway.snapshot);
   let lastHello: object | null = null;
   let lastSignature: string | null = null;
   let syncRequestGeneration = 0;
-  let syncScheduled = false;
-  let syncScheduleGeneration = 0;
-  let attached = false;
-  let stopGatewaySnapshots: (() => void) | null = null;
-  let stopGatewayEvents: (() => void) | null = null;
-  let visibilityDocument: Document | null = null;
 
   const notify = () => {
     for (const listener of Array.from(listeners)) {
@@ -172,7 +165,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     }
     if (changed || snapshot.hello !== lastHello) {
       retry.reset();
-      scheduleSync();
+      lifecycle.schedule();
     }
   };
 
@@ -206,7 +199,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       if (removed) {
         notify();
       }
-      scheduleSync();
+      lifecycle.schedule();
       return;
     }
     if (event.event !== CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT) {
@@ -242,56 +235,27 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     notify();
   };
 
-  const handleVisibilityChange = () => {
-    retry.reset();
-    scheduleSync();
-  };
-
-  const attachExternalRegistrations = () => {
-    if (attached) {
-      return;
-    }
-    attached = true;
-    if (connection.transition(gateway.snapshot)) {
-      retireConnection();
-    }
-    lastHello = null;
-    lastSignature = null;
-    // Active consumers own these registrations: isolate:false workers share document, so an
-    // always-on visibility listener would root every per-gateway store and fake gateway.
-    stopGatewaySnapshots = gateway.subscribe(handleGatewaySnapshot);
-    stopGatewayEvents = gateway.subscribeEvents(handleGatewayEvent);
-    if (typeof document !== "undefined") {
-      document.addEventListener("visibilitychange", handleVisibilityChange);
-      visibilityDocument = document;
-    }
-  };
-
-  const detachExternalRegistrations = () => {
-    if (!attached) {
-      return;
-    }
-    attached = false;
-    stopGatewaySnapshots?.();
-    stopGatewaySnapshots = null;
-    stopGatewayEvents?.();
-    stopGatewayEvents = null;
-    visibilityDocument?.removeEventListener("visibilitychange", handleVisibilityChange);
-    visibilityDocument = null;
-    retry.reset();
-    syncRequestGeneration += 1;
-    syncScheduleGeneration += 1;
-    syncScheduled = false;
-    lastHello = null;
-    lastSignature = null;
-    snapshots.clear();
-  };
+  const lifecycle = createGatewaySetSyncLifecycle(gateway, {
+    sync,
+    onSnapshot: handleGatewaySnapshot,
+    onEvent: handleGatewayEvent,
+    onAttach: () => {
+      if (connection.transition(gateway.snapshot)) {
+        retireConnection();
+      }
+      lastHello = null;
+      lastSignature = null;
+    },
+    onDetach: () => {
+      syncRequestGeneration += 1;
+      lastHello = null;
+      lastSignature = null;
+      snapshots.clear();
+    },
+  });
+  const { retry } = lifecycle;
 
   function sync() {
-    syncScheduled = false;
-    if (!attached) {
-      return;
-    }
     const snapshot = gateway.snapshot;
     const client = snapshot.client;
     const available =
@@ -306,7 +270,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
         settle(key);
       }
       if (!isActive()) {
-        detachExternalRegistrations();
+        lifecycle.detach();
       }
       return;
     }
@@ -321,7 +285,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       refreshSessionKeys.length === 0
     ) {
       if (!isActive()) {
-        detachExternalRegistrations();
+        lifecycle.detach();
       }
       return;
     }
@@ -329,7 +293,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     lastSignature = signature;
     const requestGeneration = ++syncRequestGeneration;
     const isCurrentRequest = () =>
-      attached &&
+      lifecycle.attached &&
       isActive() &&
       requestGeneration === syncRequestGeneration &&
       snapshot.hello === lastHello &&
@@ -340,7 +304,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       ...(refreshSessionKeys.length > 0 ? { refreshSessionKeys } : {}),
     });
     if (!isActive()) {
-      detachExternalRegistrations();
+      lifecycle.detach();
     }
     void request
       .then(() => {
@@ -355,8 +319,8 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
         if (isCurrentRequest()) {
           lastSignature = null;
           retry.schedule(() => {
-            if (attached && isActive()) {
-              scheduleSync();
+            if (lifecycle.attached && isActive()) {
+              lifecycle.schedule();
             }
           });
           for (const key of sessionKeys) {
@@ -364,19 +328,6 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
           }
         }
       });
-  }
-
-  function scheduleSync() {
-    if (!attached || syncScheduled) {
-      return;
-    }
-    syncScheduled = true;
-    const generation = syncScheduleGeneration;
-    globalThis.queueMicrotask(() => {
-      if (generation === syncScheduleGeneration) {
-        sync();
-      }
-    });
   }
 
   const watch = (
@@ -408,10 +359,10 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
         lastHello = null;
         lastSignature = null;
       }
-      attachExternalRegistrations();
-      scheduleSync();
-    } else if (attached) {
-      sync();
+      lifecycle.attach();
+      lifecycle.schedule();
+    } else if (lifecycle.attached) {
+      lifecycle.sync();
     }
   };
 
@@ -447,7 +398,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
           const pending = waiters.get(key) ?? new Set();
           pending.add(resolve);
           waiters.set(key, pending);
-          scheduleSync();
+          lifecycle.schedule();
         });
       } finally {
         const currentWatch = watchedByOwner.get(owner);
@@ -468,7 +419,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       }
       pendingRefreshKeys.add(key);
       retry.reset();
-      scheduleSync();
+      lifecycle.schedule();
       return true;
     },
     get: (sessionKey) => snapshots.get(sessionKey),
@@ -479,13 +430,13 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
         lastHello = null;
         lastSignature = null;
       }
-      attachExternalRegistrations();
+      lifecycle.attach();
       return () => {
         if (listeners.delete(listener)) {
           if (isActive()) {
-            scheduleSync();
-          } else if (attached) {
-            sync();
+            lifecycle.schedule();
+          } else if (lifecycle.attached) {
+            lifecycle.sync();
           }
         }
       };

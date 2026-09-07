@@ -86,6 +86,14 @@ export async function prepareGatewayServerBootstrap(input: {
   const startupElapsedMs =
     typeof traceOriginAt === "number" ? Math.max(0, Date.now() - traceOriginAt) : 0;
   const startupTrace = createGatewayStartupTrace(log, performance.now() - startupElapsedMs);
+  using startupTraceOwner = {
+    transferred: false,
+    [Symbol.dispose]() {
+      if (!this.transferred) {
+        startupTrace.close();
+      }
+    },
+  };
   if (startupElapsedMs > 0) {
     startupTrace.mark("process.bootstrap");
   }
@@ -561,6 +569,7 @@ export async function prepareGatewayServerBootstrap(input: {
     ]);
   }
 
+  startupTraceOwner.transferred = true;
   return {
     opts,
     minimalTestGateway,

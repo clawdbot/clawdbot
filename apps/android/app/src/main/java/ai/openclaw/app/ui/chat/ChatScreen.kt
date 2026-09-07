@@ -56,6 +56,7 @@ import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.operatorScopesAllowAdmin
 import ai.openclaw.app.operatorScopesAllowWrite
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
+import ai.openclaw.app.ui.TabletopPaneBounds
 import ai.openclaw.app.ui.copyGatewayDiagnosticsReport
 import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawListItem
@@ -195,23 +196,29 @@ import androidx.compose.ui.input.key.onPreInterceptKeyBeforeSoftKeyboard
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.window.layout.DisplayFeature
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -222,6 +229,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
@@ -292,7 +300,7 @@ internal fun shouldUseUserMessageDisclosure(
 
 /** Full chat surface that wires MainViewModel state to messages, attachments, voice, and composer actions. */
 @Composable
-fun ChatScreen(
+internal fun ChatScreen(
   viewModel: MainViewModel,
   talkActive: Boolean,
   showSidebarButton: Boolean,
@@ -301,6 +309,8 @@ fun ChatScreen(
   onOpenDashboard: (String) -> Unit,
   onOpenGatewaySettings: () -> Unit,
   onOpenProvidersModels: () -> Unit = onOpenGatewaySettings,
+  tabletopPanes: TabletopPaneBounds? = null,
+  features: List<DisplayFeature> = emptyList(),
 ) {
   val messages by viewModel.chatMessages.collectAsState()
   val transcriptAnchor by viewModel.chatTranscriptAnchor.collectAsState()
@@ -450,6 +460,7 @@ fun ChatScreen(
   var showModelPicker by rememberSaveable { mutableStateOf(false) }
   var showBackgroundTasks by rememberSaveable { mutableStateOf(false) }
   var showBranchSwitcher by rememberSaveable { mutableStateOf(false) }
+  var detailsExpanded by rememberSaveable { mutableStateOf(false) }
   var sendMessageTooLong by rememberSaveable(composerOwner) { mutableStateOf(false) }
   var sendCheckpointFull by rememberSaveable(composerOwner) { mutableStateOf(false) }
 
@@ -722,134 +733,158 @@ fun ChatScreen(
     }
   }
 
-  Column(
-    modifier =
-      Modifier
-        .fillMaxSize()
-        .padding(vertical = 10.dp),
-    verticalArrangement = Arrangement.spacedBy(8.dp),
-  ) {
-    ChatMessageList(
-      sessionKey = sessionKey,
-      fullMessageOwner = composerOwner,
-      selectionGeneration = selectionGeneration,
-      gatewayCatalogRevision = gatewayCatalogRevision,
-      prepareFullMessageRead = { message -> viewModel.prepareFullMessageRead(composerOwner, selectionGeneration, gatewayCatalogRevision, message) },
-      session = activeSession,
-      messages = messages,
-      transcriptAnchor = transcriptAnchor,
-      historyLoading = historyLoading,
-      activeRunCount = selectedActiveRun.count,
-      activeRunId = selectedActiveRun.runId,
-      activeRunClockKey = selectedActiveRun.clockKey,
-      activeRunOutputTokens = selectedActiveRun.outputTokens,
-      pendingToolCalls = pendingToolCalls,
-      subagentActivities = subagentActivities,
-      questions = questionsForSession(questions, sessionKey, mainSessionKey, activeAgentId),
-      streamingAssistantText = streamingAssistantText,
+  val headerContent: @Composable ((() -> Unit)?, () -> Unit) -> Unit = { onJumpToLatest, dismissDetails ->
+    ChatHeader(
+      activeAgent = activeAgent,
+      projectLabel = activeProjectLabel,
+      sessionTitle = activeSessionTitle,
+      sessionColor = activeSession?.color,
+      showSidebarButton = showSidebarButton,
+      onOpenSidebar = {
+        dismissDetails()
+        onOpenSidebar()
+      },
+      onJumpToLatest =
+        onJumpToLatest?.let { jump ->
+          {
+            dismissDetails()
+            jump()
+          }
+        },
       healthOk = healthOk,
-      gatewayOffline = gatewayOffline,
-      outboxItems = currentSessionOutboxItems,
-      recoveryOutboxItems =
-        outboxItemsForRecovery(
-          items = outboxItems,
-        ),
-      onRetryOutbox = viewModel::retryChatOutboxCommand,
-      onDeleteOutbox = viewModel::deleteChatOutboxCommand,
-      onResolveQuestion = viewModel::resolveChatQuestion,
-      onQuestionDraftChanged = viewModel::updateChatQuestionDraft,
-      onSkipQuestion = viewModel::skipChatQuestion,
-      onStarterPrompt = { prompt -> inputDrafts[composerOwner] = prompt },
-      onReplyMessage = { value -> viewModel.setChatReplyDraft(value, composerOwner) },
-      sessionActionsEnabled =
-        pendingRunCount == 0 &&
-          !sessionBranchSwitching &&
-          outboxPresentationRestored &&
-          currentSessionOutboxItems.none { it.status != ChatOutboxStatus.Failed },
-      onRewindMessage = { entryId ->
-        val expectedInput = inputDrafts[composerOwner].orEmpty()
-        scope.launch {
-          val result = viewModel.rewindChatAtEntry(entryId) ?: return@launch
-          viewModel.setChatDraft(
-            ChatDraft(
-              text = result.editorText.orEmpty(),
-              placement = ChatDraftPlacement.Replace,
-              owner = composerOwner,
-              expectedExistingText = expectedInput,
-              acceptsEmptyText = true,
-              attachments = result.editorAttachments.toPendingAttachments(),
-            ),
-          )
-        }
+      pendingRunCount = pendingRunCount,
+      sessionCreating = sessionCreating,
+      newChatEnabled = newChatEnabled,
+      workspaceGit = workspaceGit,
+      branches = sessionBranches,
+      branchesLoading = sessionBranchesLoading,
+      branchSwitchEnabled =
+        outboxPresentationRestored && pendingRunCount == 0 && !sessionBranchSwitching && currentSessionOutboxItems.isEmpty(),
+      onNewChatInWorktree = {
+        dismissDetails()
+        startNewChat(true)
       },
-      onForkMessage = { entryId ->
-        scope.launch {
-          val result = viewModel.forkChatAtEntry(entryId) ?: return@launch
-          val newOwner = composerOwner.copy(sessionKey = result.sessionKey)
-          val expectedInput = inputDrafts[newOwner].orEmpty()
-          viewModel.switchChatSession(result.sessionKey, composerOwner.agentId)
-          viewModel.setChatDraft(
-            ChatDraft(
-              text = result.editorText.orEmpty(),
-              placement = ChatDraftPlacement.Replace,
-              owner = newOwner,
-              expectedExistingText = expectedInput,
-              acceptsEmptyText = true,
-              attachments = result.editorAttachments.toPendingAttachments(),
-            ),
-          )
-        }
+      onRefresh = {
+        viewModel.refreshChat()
+        viewModel.refreshChatSessions(limit = 100)
       },
-      speechState = messageSpeechState,
-      onToggleListen = viewModel::toggleChatMessageSpeech,
-      inlineMediaPlaybackBlocked = inlineMediaPlaybackBlocked,
-      resolveInlineWidgetResource = viewModel::resolveInlineWidgetResource,
-      loadImageArtifact = viewModel::loadChatImageArtifact,
-      loadMediaArtifact = viewModel::loadChatMediaArtifact,
-      modifier = Modifier.weight(1f),
-      header = { onJumpToLatest ->
-        ChatHeader(
-          activeAgent = activeAgent,
-          projectLabel = activeProjectLabel,
-          sessionTitle = activeSessionTitle,
-          sessionColor = activeSession?.color,
-          showSidebarButton = showSidebarButton,
-          onOpenSidebar = onOpenSidebar,
-          onJumpToLatest = onJumpToLatest,
-          healthOk = healthOk,
-          pendingRunCount = pendingRunCount,
-          sessionCreating = sessionCreating,
-          newChatEnabled = newChatEnabled,
-          workspaceGit = workspaceGit,
-          branches = sessionBranches,
-          branchesLoading = sessionBranchesLoading,
-          branchSwitchEnabled =
-            outboxPresentationRestored && pendingRunCount == 0 && !sessionBranchSwitching && currentSessionOutboxItems.isEmpty(),
-          onNewChatInWorktree = { startNewChat(true) },
-          onRefresh = {
-            viewModel.refreshChat()
-            viewModel.refreshChatSessions(limit = 100)
-          },
-          onOpenDashboard = { onOpenDashboard(sessionKey) },
-          onOpenBackgroundTasks = { showBackgroundTasks = true },
-          onOpenBranchSwitcher = {
-            showBranchSwitcher = true
-            scope.launch { viewModel.refreshChatSessionBranches() }
-          },
-        )
-
-        errorText?.takeIf { it.isNotBlank() }?.let { error ->
-          ChatNotice(
-            title = nativeString("Chat needs attention"),
-            body = userFacingChatError(error = error, gatewayConnected = gatewayConnectionDisplay.isConnected),
-          )
-        }
+      onOpenDashboard = {
+        dismissDetails()
+        onOpenDashboard(sessionKey)
+      },
+      onOpenBackgroundTasks = {
+        dismissDetails()
+        showBackgroundTasks = true
+      },
+      onOpenBranchSwitcher = {
+        dismissDetails()
+        showBranchSwitcher = true
+        scope.launch { viewModel.refreshChatSessionBranches() }
       },
     )
-
+  }
+  val conversationStatus: @Composable () -> Unit = {
+    errorText?.takeIf { it.isNotBlank() }?.let { error ->
+      ChatNotice(
+        title = nativeString("Chat needs attention"),
+        body = userFacingChatError(error = error, gatewayConnected = gatewayConnectionDisplay.isConnected),
+      )
+    }
     ChatSwarmProgress(groups = swarmGroups)
-
+  }
+  ChatMessageList(
+    sessionKey = sessionKey,
+    fullMessageOwner = composerOwner,
+    selectionGeneration = selectionGeneration,
+    gatewayCatalogRevision = gatewayCatalogRevision,
+    prepareFullMessageRead = { message -> viewModel.prepareFullMessageRead(composerOwner, selectionGeneration, gatewayCatalogRevision, message) },
+    session = activeSession,
+    messages = messages,
+    transcriptAnchor = transcriptAnchor,
+    historyLoading = historyLoading,
+    activeRunCount = selectedActiveRun.count,
+    activeRunId = selectedActiveRun.runId,
+    activeRunClockKey = selectedActiveRun.clockKey,
+    activeRunOutputTokens = selectedActiveRun.outputTokens,
+    pendingToolCalls = pendingToolCalls,
+    subagentActivities = subagentActivities,
+    questions = questionsForSession(questions, sessionKey, mainSessionKey, activeAgentId),
+    streamingAssistantText = streamingAssistantText,
+    healthOk = healthOk,
+    gatewayOffline = gatewayOffline,
+    outboxItems = currentSessionOutboxItems,
+    recoveryOutboxItems =
+      outboxItemsForRecovery(
+        items = outboxItems,
+      ),
+    onRetryOutbox = viewModel::retryChatOutboxCommand,
+    onDeleteOutbox = viewModel::deleteChatOutboxCommand,
+    onResolveQuestion = viewModel::resolveChatQuestion,
+    onQuestionDraftChanged = viewModel::updateChatQuestionDraft,
+    onSkipQuestion = viewModel::skipChatQuestion,
+    onStarterPrompt = { prompt -> inputDrafts[composerOwner] = prompt },
+    onReplyMessage = { value -> viewModel.setChatReplyDraft(value, composerOwner) },
+    sessionActionsEnabled =
+      pendingRunCount == 0 &&
+        !sessionBranchSwitching &&
+        outboxPresentationRestored &&
+        currentSessionOutboxItems.none { it.status != ChatOutboxStatus.Failed },
+    onRewindMessage = { entryId ->
+      val expectedInput = inputDrafts[composerOwner].orEmpty()
+      scope.launch {
+        val result = viewModel.rewindChatAtEntry(entryId) ?: return@launch
+        viewModel.setChatDraft(
+          ChatDraft(
+            text = result.editorText.orEmpty(),
+            placement = ChatDraftPlacement.Replace,
+            owner = composerOwner,
+            expectedExistingText = expectedInput,
+            acceptsEmptyText = true,
+            attachments = result.editorAttachments.toPendingAttachments(),
+          ),
+        )
+      }
+    },
+    onForkMessage = { entryId ->
+      scope.launch {
+        val result = viewModel.forkChatAtEntry(entryId) ?: return@launch
+        val newOwner = composerOwner.copy(sessionKey = result.sessionKey)
+        val expectedInput = inputDrafts[newOwner].orEmpty()
+        viewModel.switchChatSession(result.sessionKey, composerOwner.agentId)
+        viewModel.setChatDraft(
+          ChatDraft(
+            text = result.editorText.orEmpty(),
+            placement = ChatDraftPlacement.Replace,
+            owner = newOwner,
+            expectedExistingText = expectedInput,
+            acceptsEmptyText = true,
+            attachments = result.editorAttachments.toPendingAttachments(),
+          ),
+        )
+      }
+    },
+    speechState = messageSpeechState,
+    onToggleListen = viewModel::toggleChatMessageSpeech,
+    inlineMediaPlaybackBlocked = inlineMediaPlaybackBlocked,
+    resolveInlineWidgetResource = viewModel::resolveInlineWidgetResource,
+    loadImageArtifact = viewModel::loadChatImageArtifact,
+    loadMediaArtifact = viewModel::loadChatMediaArtifact,
+    modifier = Modifier.fillMaxSize().imePadding(),
+    tabletopPanes = tabletopPanes,
+    features = features,
+    conversationStatus = conversationStatus,
+    header = { onJumpToLatest, compactHeight, tabletop ->
+      if ((!compactHeight || tabletop) && !detailsExpanded) headerContent(onJumpToLatest) { detailsExpanded = false }
+    },
+  ) { onJumpToLatest, compactHeight, tabletop ->
     ChatComposer(
+      compactHeight = compactHeight,
+      detailsExpanded = detailsExpanded,
+      onDetailsExpandedChange = { detailsExpanded = it },
+      conversationHeader = { dismissDetails -> headerContent(onJumpToLatest, dismissDetails) },
+      conversationStatus = {
+        if (!tabletop) conversationStatus()
+      },
       progressCard = progressCard,
       value = input,
       onValueChange = {
@@ -1207,7 +1242,7 @@ private fun ChatHeader(
         projectLabel?.let { project ->
           Text(
             text = project,
-            style = ClawTheme.type.caption.copy(fontSize = 11.sp, lineHeight = 13.sp, fontWeight = FontWeight.Normal),
+            style = chatProjectStyle(),
             color = ClawTheme.colors.textMuted,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -1219,7 +1254,7 @@ private fun ChatHeader(
         ) {
           Text(
             text = sessionTitle,
-            style = ClawTheme.type.title.copy(fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium),
+            style = chatTitleStyle(),
             color = ClawTheme.colors.text,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -1361,7 +1396,11 @@ private fun ChatMessageList(
   loadImageArtifact: suspend (String) -> GatewayLoadedImage?,
   loadMediaArtifact: suspend (String, GatewayMediaKind, Boolean) -> GatewayLoadedMedia?,
   modifier: Modifier = Modifier,
-  header: @Composable ((() -> Unit)?) -> Unit,
+  tabletopPanes: TabletopPaneBounds?,
+  features: List<DisplayFeature>,
+  conversationStatus: @Composable () -> Unit,
+  header: @Composable ((() -> Unit)?, Boolean, Boolean) -> Unit,
+  composer: @Composable ((() -> Unit)?, Boolean, Boolean) -> Unit,
 ) {
   val baseTimeline =
     remember(messages, activeRunCount, pendingToolCalls, subagentActivities, questions, streamingAssistantText, outboxItems, recoveryOutboxItems) {
@@ -1411,156 +1450,180 @@ private fun ChatMessageList(
     onDispose { turnRecapResolver.abandonActiveWatch(sessionKey) }
   }
 
-  // The header stays outside the weighted transcript so composer panels cannot collapse it.
-  header(readerScroll.jumpToLatest.takeIf { readerScroll.showJumpToLatest })
-  CompositionLocalProvider(LocalChatReaderNavigation provides readerScroll.onManualNavigation) {
-    ChatMessageDisclosure(
-      messages = messages,
-      owner = fullMessageOwner,
-      selectionGeneration = selectionGeneration,
-      catalogRevision = gatewayCatalogRevision,
-      prepareRead = prepareFullMessageRead,
-    ) { visibleContent, disclosure ->
-      Box(modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-        LazyColumn(
-          modifier = Modifier.fillMaxSize().nestedScroll(readerScroll.nestedScrollConnection),
-          state = readerScroll.listState,
-          reverseLayout = true,
-          verticalArrangement = Arrangement.spacedBy(12.dp),
-          contentPadding = PaddingValues(top = 6.dp, bottom = 3.dp),
-        ) {
-          itemsIndexed(items = timeline.items, key = { _, item -> chatTimelineItemKey(item) }) { _, item ->
-            when (item) {
-              is ChatTimelineItem.Message -> {
-                ChatBubble(
-                  messageId = item.message.id,
-                  entryId = item.message.entryId,
-                  role = item.message.role,
-                  live = false,
-                  content = visibleContent(item.message),
-                  timestampMs = item.message.timestampMs,
-                  onReplyMessage = onReplyMessage,
-                  sessionActionsEnabled = sessionActionsEnabled,
-                  onRewindMessage = onRewindMessage,
-                  onForkMessage = onForkMessage,
-                  speechState = speechState,
-                  onToggleListen = onToggleListen,
-                  inlineMediaPlaybackBlocked = inlineMediaPlaybackBlocked,
-                  inlineWidgetResolverReady = healthOk,
-                  resolveInlineWidgetResource = resolveInlineWidgetResource,
-                  loadImageArtifact = loadImageArtifact,
-                  loadMediaArtifact = loadMediaArtifact,
-                  senderLabel = item.message.senderLabel,
-                  disclosure = { disclosure(item.message) },
-                )
-              }
+  val onJumpToLatest = readerScroll.jumpToLatest.takeIf { readerScroll.showJumpToLatest }
+  val density = LocalDensity.current
+  val headerTextHeight = minimumChatLineHeight(chatProjectStyle()) + minimumChatLineHeight(chatTitleStyle())
+  val readerLineHeight = minimumChatLineHeight(ClawTheme.type.body)
+  val minimumHeaderHeight =
+    with(density) {
+      maxOf(ClawTheme.spacing.touchTarget.roundToPx(), headerTextHeight).toDp()
+    }
+  val minimumReaderHeight =
+    with(density) {
+      maxOf(ClawTheme.spacing.touchTarget.roundToPx(), readerLineHeight).toDp()
+    }
+  ChatPaneLayout(
+    tabletopPanes = tabletopPanes,
+    features = features,
+    minimumInputHeight = minimumChatInputHeight(),
+    minimumHeaderHeight = minimumHeaderHeight,
+    minimumReaderHeight = minimumReaderHeight,
+    touchTarget = ClawTheme.spacing.touchTarget,
+    modifier = modifier,
+    header = { compact, tabletop -> header(onJumpToLatest, compact, tabletop) },
+    status = conversationStatus,
+    composer = { compact, tabletop -> composer(onJumpToLatest, compact, tabletop) },
+    transcript = {
+      CompositionLocalProvider(LocalChatReaderNavigation provides readerScroll.onManualNavigation) {
+        ChatMessageDisclosure(
+          messages = messages,
+          owner = fullMessageOwner,
+          selectionGeneration = selectionGeneration,
+          catalogRevision = gatewayCatalogRevision,
+          prepareRead = prepareFullMessageRead,
+        ) { visibleContent, disclosure ->
+          Box(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+            LazyColumn(
+              modifier = Modifier.fillMaxSize().nestedScroll(readerScroll.nestedScrollConnection),
+              state = readerScroll.listState,
+              reverseLayout = true,
+              verticalArrangement = Arrangement.spacedBy(12.dp),
+              contentPadding = PaddingValues(top = 6.dp, bottom = 3.dp),
+            ) {
+              itemsIndexed(items = timeline.items, key = { _, item -> chatTimelineItemKey(item) }) { _, item ->
+                when (item) {
+                  is ChatTimelineItem.Message -> {
+                    ChatBubble(
+                      messageId = item.message.id,
+                      entryId = item.message.entryId,
+                      role = item.message.role,
+                      live = false,
+                      content = visibleContent(item.message),
+                      timestampMs = item.message.timestampMs,
+                      onReplyMessage = onReplyMessage,
+                      sessionActionsEnabled = sessionActionsEnabled,
+                      onRewindMessage = onRewindMessage,
+                      onForkMessage = onForkMessage,
+                      speechState = speechState,
+                      onToggleListen = onToggleListen,
+                      inlineMediaPlaybackBlocked = inlineMediaPlaybackBlocked,
+                      inlineWidgetResolverReady = healthOk,
+                      resolveInlineWidgetResource = resolveInlineWidgetResource,
+                      loadImageArtifact = loadImageArtifact,
+                      loadMediaArtifact = loadMediaArtifact,
+                      senderLabel = item.message.senderLabel,
+                      disclosure = { disclosure(item.message) },
+                    )
+                  }
 
-              is ChatTimelineItem.OutboxCommand -> {
-                ChatOutboxBubble(
-                  item = item.item,
-                  onRetry = { onRetryOutbox(item.item.id) },
-                  onDelete = { onDeleteOutbox(item.item.id) },
-                )
-              }
+                  is ChatTimelineItem.OutboxCommand -> {
+                    ChatOutboxBubble(
+                      item = item.item,
+                      onRetry = { onRetryOutbox(item.item.id) },
+                      onDelete = { onDeleteOutbox(item.item.id) },
+                    )
+                  }
 
-              is ChatTimelineItem.RecoveryOutboxCommand -> {
-                ChatOutboxBubble(
-                  item = item.item,
-                  retryEnabled = false,
-                  onRetry = { onRetryOutbox(item.item.id) },
-                  onDelete = { onDeleteOutbox(item.item.id) },
-                )
-              }
+                  is ChatTimelineItem.RecoveryOutboxCommand -> {
+                    ChatOutboxBubble(
+                      item = item.item,
+                      retryEnabled = false,
+                      onRetry = { onRetryOutbox(item.item.id) },
+                      onDelete = { onDeleteOutbox(item.item.id) },
+                    )
+                  }
 
-              is ChatTimelineItem.OutboxRecoveryHeader -> {
-                ChatNotice(
-                  title = nativeString("Messages to recover"),
-                  body =
-                    nativeString(
-                      "\${item.count} message(s) need recovery. Re-enter anything you want to keep, then delete these rows.",
-                      item.count,
-                    ),
-                )
-              }
+                  is ChatTimelineItem.OutboxRecoveryHeader -> {
+                    ChatNotice(
+                      title = nativeString("Messages to recover"),
+                      body =
+                        nativeString(
+                          "\${item.count} message(s) need recovery. Re-enter anything you want to keep, then delete these rows.",
+                          item.count,
+                        ),
+                    )
+                  }
 
-              is ChatTimelineItem.PendingTools -> {
-                ToolBubble(toolCalls = item.toolCalls)
-              }
+                  is ChatTimelineItem.PendingTools -> {
+                    ToolBubble(toolCalls = item.toolCalls)
+                  }
 
-              is ChatTimelineItem.SubagentActivity -> {
-                SubagentActivityRows(
-                  activities = item.activities,
-                  moreWorkingCount = item.moreWorkingCount,
-                )
-              }
+                  is ChatTimelineItem.SubagentActivity -> {
+                    SubagentActivityRows(
+                      activities = item.activities,
+                      moreWorkingCount = item.moreWorkingCount,
+                    )
+                  }
 
-              is ChatTimelineItem.QuestionPrompt -> {
-                ChatQuestionCard(prompt = item.prompt, onDraftChanged = onQuestionDraftChanged, onSubmit = onResolveQuestion, onSkip = onSkipQuestion)
-              }
+                  is ChatTimelineItem.QuestionPrompt -> {
+                    ChatQuestionCard(prompt = item.prompt, onDraftChanged = onQuestionDraftChanged, onSubmit = onResolveQuestion, onSkip = onSkipQuestion)
+                  }
 
-              is ChatTimelineItem.TurnRecapSummary -> {
-                ChatTurnRecapRow(item.recap)
-              }
+                  is ChatTimelineItem.TurnRecapSummary -> {
+                    ChatTurnRecapRow(item.recap)
+                  }
 
-              is ChatTimelineItem.SystemNotice -> {
-                ChatSystemNoticeRow(item)
-              }
+                  is ChatTimelineItem.SystemNotice -> {
+                    ChatSystemNoticeRow(item)
+                  }
 
-              is ChatTimelineItem.SystemDivider -> {
-                ChatSystemDividerRow(item)
-              }
+                  is ChatTimelineItem.SystemDivider -> {
+                    ChatSystemDividerRow(item)
+                  }
 
-              is ChatTimelineItem.StreamingAssistant -> {
-                ChatBubble(
-                  messageId = null,
-                  entryId = null,
-                  role = "assistant",
-                  live = true,
-                  content = listOf(ChatMessageContent(text = item.text)),
-                  timestampMs = null,
-                  onReplyMessage = onReplyMessage,
-                  sessionActionsEnabled = false,
-                  onRewindMessage = onRewindMessage,
-                  onForkMessage = onForkMessage,
-                  speechState = null,
-                  onToggleListen = onToggleListen,
-                  inlineMediaPlaybackBlocked = inlineMediaPlaybackBlocked,
-                  inlineWidgetResolverReady = healthOk,
-                  resolveInlineWidgetResource = resolveInlineWidgetResource,
-                  loadImageArtifact = loadImageArtifact,
-                  loadMediaArtifact = loadMediaArtifact,
-                )
-              }
+                  is ChatTimelineItem.StreamingAssistant -> {
+                    ChatBubble(
+                      messageId = null,
+                      entryId = null,
+                      role = "assistant",
+                      live = true,
+                      content = listOf(ChatMessageContent(text = item.text)),
+                      timestampMs = null,
+                      onReplyMessage = onReplyMessage,
+                      sessionActionsEnabled = false,
+                      onRewindMessage = onRewindMessage,
+                      onForkMessage = onForkMessage,
+                      speechState = null,
+                      onToggleListen = onToggleListen,
+                      inlineMediaPlaybackBlocked = inlineMediaPlaybackBlocked,
+                      inlineWidgetResolverReady = healthOk,
+                      resolveInlineWidgetResource = resolveInlineWidgetResource,
+                      loadImageArtifact = loadImageArtifact,
+                      loadMediaArtifact = loadMediaArtifact,
+                    )
+                  }
 
-              ChatTimelineItem.Thinking -> {
-                val run = workingRun
-                if (run != null) {
-                  ChatTypingIndicatorBubble(
-                    runKey = run.clockKey,
-                    observedAtElapsedMs = run.observedAtElapsedMs,
-                    outputTokens = run.outputTokens,
-                  )
+                  ChatTimelineItem.Thinking -> {
+                    val run = workingRun
+                    if (run != null) {
+                      ChatTypingIndicatorBubble(
+                        runKey = run.clockKey,
+                        observedAtElapsedMs = run.observedAtElapsedMs,
+                        outputTokens = run.outputTokens,
+                      )
+                    }
+                  }
                 }
+              }
+            }
+
+            if (timeline.items.isEmpty()) {
+              if (showChatLoadingPlaceholder(historyLoading = historyLoading, healthOk = healthOk, gatewayOffline = gatewayOffline)) {
+                ClawLoadingState(title = nativeString("Loading thread"), modifier = Modifier.align(Alignment.Center))
+              } else {
+                EmptyChatHint(
+                  healthOk = healthOk,
+                  gatewayOffline = gatewayOffline,
+                  onStarterPrompt = onStarterPrompt,
+                  modifier = Modifier.align(Alignment.Center),
+                )
               }
             }
           }
         }
-
-        if (timeline.items.isEmpty()) {
-          if (showChatLoadingPlaceholder(historyLoading = historyLoading, healthOk = healthOk, gatewayOffline = gatewayOffline)) {
-            ClawLoadingState(title = nativeString("Loading thread"), modifier = Modifier.align(Alignment.Center))
-          } else {
-            EmptyChatHint(
-              healthOk = healthOk,
-              gatewayOffline = gatewayOffline,
-              onStarterPrompt = onStarterPrompt,
-              modifier = Modifier.align(Alignment.Center),
-            )
-          }
-        }
       }
-    }
-  }
+    },
+  )
 }
 
 internal data class ChatWorkingRun(
@@ -2397,7 +2460,40 @@ private fun PlanStepMarker(status: ChatPlanStepStatus) {
 }
 
 @Composable
+private fun chatDraftStyle(): TextStyle = ClawTheme.type.body.copy(fontSize = 16.sp, lineHeight = 22.sp)
+
+@Composable
+private fun chatProjectStyle(): TextStyle = ClawTheme.type.caption.copy(fontSize = 11.sp, lineHeight = 13.sp, fontWeight = FontWeight.Normal)
+
+@Composable
+private fun chatTitleStyle(): TextStyle = ClawTheme.type.title.copy(fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium)
+
+@Composable
+private fun minimumChatLineHeight(style: TextStyle): Int {
+  // Android's nonlinear scaling resolves line height relative to the rendered font size.
+  val measured = rememberTextMeasurer().measure("H", style = style, maxLines = 1, softWrap = false).size.height
+  return maxOf(measured, with(LocalDensity.current) { ceil(style.lineHeight.toPx()).toInt() })
+}
+
+@Composable
+private fun minimumChatInputHeight(): Dp {
+  val lineHeight = minimumChatLineHeight(chatDraftStyle())
+  return with(LocalDensity.current) {
+    // Match each separately rounded editor/action padding and the text's full pixel line.
+    (
+      maxOf(ClawTheme.spacing.touchTarget.roundToPx(), lineHeight + 8.dp.roundToPx() + 4.dp.roundToPx()) +
+        ClawTheme.spacing.touchTarget.roundToPx() + 4.dp.roundToPx() * 2
+    ).toDp()
+  }
+}
+
+@Composable
 private fun ChatComposer(
+  compactHeight: Boolean,
+  detailsExpanded: Boolean,
+  onDetailsExpandedChange: (Boolean) -> Unit,
+  conversationHeader: @Composable (() -> Unit) -> Unit,
+  conversationStatus: @Composable () -> Unit,
   progressCard: ChatProgressCard?,
   value: String,
   onValueChange: (String) -> Unit,
@@ -2466,7 +2562,9 @@ private fun ChatComposer(
       modelUnavailable = modelUnavailableMessage != null,
     )
 
-  Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp).imePadding(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+  val attachedProgress = progressCard != null && voiceNoteState !is VoiceNoteRecorderState.Recording && voiceNoteState !is VoiceNoteRecorderState.Preparing
+  val auxiliaryContent: @Composable (Dp) -> Unit = { availableHeight ->
+    conversationStatus()
     if (shareImportNotice != null) {
       Row(
         modifier = Modifier.fillMaxWidth(),
@@ -2508,16 +2606,53 @@ private fun ChatComposer(
     if (shouldShowSlashCommandMenu(value)) {
       SlashCommandPanel(
         commands = slashCommands,
-        onSelect = { command -> onValueChange(slashCommandCompletion(command)) },
-        // Reserve the editor and run controls before measuring suggestions.
-        modifier = Modifier.weight(1f, fill = false),
+        onSelect = { command ->
+          onDetailsExpandedChange(false)
+          onValueChange(slashCommandCompletion(command))
+        },
+        modifier = Modifier.heightIn(max = minOf(240.dp, availableHeight)),
       )
     }
 
-    val attachedProgress = progressCard != null && voiceNoteState !is VoiceNoteRecorderState.Recording && voiceNoteState !is VoiceNoteRecorderState.Preparing
-    Column(verticalArrangement = Arrangement.spacedBy(if (attachedProgress) (-18).dp else 4.dp)) {
-      progressCard?.let { card -> ProgressCardPill(card, pendingRunCount > 0, Modifier.weight(1f, fill = false), attachedProgress) }
-      Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    VoiceNoteRecorderError(voiceNoteState)
+    ChatDictationError(dictationState)
+    if (recordVoiceNoteEnabled && (dictationState as? ChatDictationState.Failure)?.reason == ChatDictationFailure.Unavailable) {
+      TextButton(onClick = onStartVoiceNote) { Text(voiceNoteRecordLabel()) }
+    }
+    if (!healthOk && gatewayOffline) {
+      ChatOfflineNotice(
+        status = offlineStatus,
+        onFixConnection = onFixConnection,
+        onCopyDiagnostics = onCopyDiagnostics,
+      )
+    }
+    progressCard?.let { card ->
+      ProgressCardPill(card, pendingRunCount > 0, Modifier.fillMaxWidth().heightIn(max = availableHeight), attachedProgress && !detailsExpanded)
+    }
+  }
+
+  BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+    val inputHeightLimit = if (compactHeight) maxHeight else maxOf(minimumChatInputHeight(), maxHeight - ClawTheme.spacing.touchTarget)
+    Column(
+      modifier = if (detailsExpanded) Modifier.clearAndSetSemantics {} else Modifier,
+      verticalArrangement = Arrangement.spacedBy(if (attachedProgress && !compactHeight && !detailsExpanded) (-18).dp else 4.dp),
+    ) {
+      if (!compactHeight && !detailsExpanded) {
+        BoxWithConstraints(Modifier.weight(1f, fill = false)) {
+          val auxiliaryHeight = maxHeight
+          Column(
+            modifier = Modifier.verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+          ) {
+            auxiliaryContent(auxiliaryHeight)
+          }
+        }
+      }
+      Row(
+        modifier = Modifier.fillMaxWidth().heightIn(max = inputHeightLimit),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
         if (voiceNoteState is VoiceNoteRecorderState.Recording) {
           VoiceNoteRecordingControls(
             elapsedMs = voiceNoteElapsedMs,
@@ -2530,6 +2665,8 @@ private fun ChatComposer(
           VoiceNotePreparing(modifier = Modifier.weight(1f))
         } else {
           ChatInputPill(
+            inputEnabled = !detailsExpanded,
+            onOpenDetails = if (compactHeight) ({ onDetailsExpandedChange(true) }) else null,
             value = value,
             onValueChange = onValueChange,
             onPickImages = onPickImages,
@@ -2564,19 +2701,34 @@ private fun ChatComposer(
         }
       }
     }
-
-    VoiceNoteRecorderError(voiceNoteState)
-    ChatDictationError(dictationState)
-    if (recordVoiceNoteEnabled && (dictationState as? ChatDictationState.Failure)?.reason == ChatDictationFailure.Unavailable) {
-      TextButton(onClick = onStartVoiceNote) { Text(voiceNoteRecordLabel()) }
-    }
-
-    if (!healthOk && gatewayOffline) {
-      ChatOfflineNotice(
-        status = offlineStatus,
-        onFixConnection = onFixConnection,
-        onCopyDiagnostics = onCopyDiagnostics,
-      )
+    if (detailsExpanded) {
+      BackHandler { onDetailsExpandedChange(false) }
+      val detailsTitle = nativeString("Details")
+      // Stay inside the current pane and IME constraints; a dialog would escape them.
+      Surface(
+        modifier = Modifier.fillMaxSize().semantics { paneTitle = detailsTitle },
+        color = ClawTheme.colors.surface,
+        contentColor = ClawTheme.colors.text,
+      ) {
+        Column {
+          Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(detailsTitle, style = ClawTheme.type.label, modifier = Modifier.weight(1f))
+            IconButton(onClick = { onDetailsExpandedChange(false) }, modifier = Modifier.size(ClawTheme.spacing.touchTarget)) {
+              Icon(Icons.Default.Close, contentDescription = nativeString("Close"))
+            }
+          }
+          BoxWithConstraints(Modifier.weight(1f)) {
+            val auxiliaryHeight = maxHeight
+            Column(
+              modifier = Modifier.verticalScroll(rememberScrollState()),
+              verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              conversationHeader { onDetailsExpandedChange(false) }
+              auxiliaryContent(auxiliaryHeight)
+            }
+          }
+        }
+      }
     }
   }
 }
@@ -3399,6 +3551,8 @@ internal fun canSelectChatPermissionMode(
 
 @Composable
 private fun ChatInputPill(
+  inputEnabled: Boolean,
+  onOpenDetails: (() -> Unit)?,
   value: String,
   onValueChange: (String) -> Unit,
   onPickImages: () -> Unit,
@@ -3432,7 +3586,7 @@ private fun ChatInputPill(
 ) {
   val hardwareEnterHandler = remember { PhysicalChatSendKeyHandler() }
   var attachmentMenuExpanded by rememberSaveable { mutableStateOf(false) }
-  val draftStyle = ClawTheme.type.body.copy(fontSize = 16.sp, lineHeight = 22.sp)
+  val draftStyle = chatDraftStyle()
 
   Surface(
     modifier = modifier.testTag("chat-composer-surface"),
@@ -3450,7 +3604,9 @@ private fun ChatInputPill(
       ) { textFieldValue, updateTextFieldValue ->
         BasicTextField(
           value = textFieldValue,
-          onValueChange = updateTextFieldValue,
+          enabled = inputEnabled,
+          // A pending IME callback must not edit the draft behind Details.
+          onValueChange = { if (inputEnabled) updateTextFieldValue(it) },
           textStyle = draftStyle.copy(color = ClawTheme.colors.text),
           cursorBrush = SolidColor(ClawTheme.colors.primary),
           minLines = 1,
@@ -3463,13 +3619,14 @@ private fun ChatInputPill(
               .heightIn(min = ClawTheme.spacing.touchTarget)
               .padding(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 4.dp)
               .onPreInterceptKeyBeforeSoftKeyboard { event ->
-                hardwareEnterHandler.handle(
-                  event = event,
-                  sendEnabled = sendEnabled,
-                  textEmpty = textFieldValue.text.isEmpty(),
-                  compositionActive = textFieldValue.composition != null,
-                  onSend = onSend,
-                )
+                inputEnabled &&
+                  hardwareEnterHandler.handle(
+                    event = event,
+                    sendEnabled = sendEnabled,
+                    textEmpty = textFieldValue.text.isEmpty(),
+                    compositionActive = textFieldValue.composition != null,
+                    onSend = onSend,
+                  )
               },
           decorationBox = { innerTextField ->
             Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
@@ -3486,6 +3643,11 @@ private fun ChatInputPill(
         modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
+        if (onOpenDetails != null) {
+          IconButton(onClick = onOpenDetails, modifier = Modifier.size(ClawTheme.spacing.touchTarget)) {
+            Icon(Icons.Default.MoreVert, contentDescription = nativeString("Details"))
+          }
+        }
         Box {
           Surface(onClick = { attachmentMenuExpanded = true }, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.textMuted) {
             Box(contentAlignment = Alignment.Center) {
@@ -3540,7 +3702,7 @@ private fun ChatInputPill(
           )
         }
         when (resolveChatComposerPrimaryAction(talkActive = talkActive, runActive = runActive, hasContent = hasContent)) {
-          ChatComposerPrimaryAction.Send -> SendButton(enabled = sendEnabled, onClick = onSend)
+          ChatComposerPrimaryAction.Send -> SendButton(enabled = inputEnabled && sendEnabled, onClick = onSend)
           ChatComposerPrimaryAction.StartTalk -> LiveTalkButton(active = false, onClick = onToggleTalk)
           ChatComposerPrimaryAction.Stop -> StopButton(onClick = onAbort)
           ChatComposerPrimaryAction.None -> Unit

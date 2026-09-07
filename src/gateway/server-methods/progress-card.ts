@@ -99,7 +99,13 @@ export function createProgressCardHandlers(
       try {
         const result = store.put(
           session.sessionKey,
-          { ...input, expectedRevision: params.expectedRevision },
+          {
+            ...input,
+            expectedRevision: params.expectedRevision,
+            ...(sessionMutationAuthorization
+              ? { assertCurrent: sessionMutationAuthorization.assertCurrent }
+              : {}),
+          },
           session.agentId,
         );
         if (params.expectedRevision === undefined || result.card === null) {

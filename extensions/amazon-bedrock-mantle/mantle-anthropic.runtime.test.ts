@@ -1,3 +1,4 @@
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import type { Model } from "openclaw/plugin-sdk/llm";
 // Amazon Bedrock Mantle tests cover mantle anthropic plugin behavior.
 import {
@@ -58,6 +59,57 @@ function firstStreamOptions(deps: ReturnType<typeof createTestDeps>): Record<str
 }
 
 describe("createMantleAnthropicStreamFn", () => {
+  it.each(["short", "long", "none"] as const)(
+    "keeps the stable system prefix independently cacheable across suffix changes (%s)",
+    async (cacheRetention) => {
+      const systems: unknown[] = [];
+      for (const suffix of ["Today: Monday", "Today: Tuesday"]) {
+        let payload: unknown;
+        const events = await createMantleAnthropicStreamFn()(
+          createTestModel(),
+          {
+            systemPrompt: `Stable workspace${SYSTEM_PROMPT_CACHE_BOUNDARY}${suffix}`,
+            messages: [{ role: "user", content: "Hello", timestamp: 0 }],
+          },
+          {
+            apiKey: "synthetic-test-key",
+            cacheRetention,
+            onPayload: (request) => {
+              payload = request;
+              throw new Error("payload captured before network");
+            },
+          },
+        );
+        await events.result();
+        const request = requireRecord(payload, "Mantle payload");
+        systems.push(request.system);
+        expect(JSON.stringify(request)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
+        if (cacheRetention === "none") {
+          expect(request.system).toEqual([{ type: "text", text: `Stable workspace\n${suffix}` }]);
+          expect(JSON.stringify(request)).not.toContain("cache_control");
+        } else {
+          expect(request.system).toEqual([
+            {
+              type: "text",
+              text: "Stable workspace",
+              cache_control: {
+                type: "ephemeral",
+                ...(cacheRetention === "long" ? { ttl: "1h" } : {}),
+              },
+            },
+            { type: "text", text: suffix },
+          ]);
+          expect(JSON.stringify(request).match(/"cache_control"/g)?.length).toBeLessThanOrEqual(4);
+        }
+      }
+      if (cacheRetention !== "none") {
+        expect(Array.isArray(systems[0]) && systems[0][0]).toEqual(
+          Array.isArray(systems[1]) && systems[1][0],
+        );
+      }
+    },
+  );
+
   it("uses authToken bearer auth for Mantle Anthropic requests", async () => {
     const stream = { kind: "anthropic-stream" };
     const model = createTestModel();

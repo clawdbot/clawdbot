@@ -806,6 +806,14 @@ catalog, API-key auth, and dynamic model resolution.
       </Tab>
     </Tabs>
 
+    Set `supportsSystemPromptCacheBoundary: true` on a provider registration
+    only when its `createStreamFn` transport understands the stable/dynamic
+    system-prompt boundary. Use `splitSystemPromptCacheBoundary` from
+    `openclaw/plugin-sdk/provider-transport-runtime` to checkpoint the stable
+    prefix separately, and consume the marker before sending any payload.
+    Use `stripSystemPromptCacheBoundary` when caching is disabled. By default,
+    OpenClaw strips the marker before invoking a custom transport.
+
     For custom `createStreamFn` transports that accumulate JSON tool arguments,
     use `createToolArgumentPreviewSchedule()` from `openclaw/plugin-sdk/llm`.
     Create one schedule per tool call and pass the accumulated raw string's

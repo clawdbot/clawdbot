@@ -8,6 +8,7 @@ import {
   utf8JsonByteLength,
 } from "./attempt-diagnostics.js";
 import { assertCodexSessionRuntimeOwnership } from "./binding-connection.js";
+import { prepareCodexWorkspaceReferences } from "./client-runtime.js";
 import { isCodexAppServerIndeterminateRequestCancellationError } from "./client.js";
 import { resolveCodexExplicitSkillInputs } from "./explicit-skill-input.js";
 import { assertCodexTurnStartResponse } from "./protocol-validators.js";
@@ -18,8 +19,10 @@ import {
   withCodexAppServerFastModeServiceTier,
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import { joinPresentSections } from "./run-attempt-state.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { buildTurnStartParams } from "./thread-lifecycle.js";
+import { recordCodexTrajectoryContext } from "./trajectory.js";
 import { buildCodexUserPromptMessage } from "./transcript-mirror.js";
 
 export async function prepareCodexAttemptTurnRequest(
@@ -98,6 +101,15 @@ export async function prepareCodexAttemptTurnRequest(
     error.name = "AbortError";
     throw error;
   };
+  const prepareWorkspaceReferences = () => {
+    const references = prepareCodexWorkspaceReferences(
+      resourceState.client,
+      resourceState.thread.threadId,
+      workspaceBootstrapContext.promptContext,
+    );
+    prompt.refreshWorkspaceReferences(references.include);
+    return references;
+  };
   const startCodexTurn = async (): Promise<CodexTurnStartResponse> => {
     const activeTurnRoute = (await ensureCurrentThreadRoute()) as {
       armTurn(): void;
@@ -114,6 +126,7 @@ export async function prepareCodexAttemptTurnRequest(
       runtimeParams,
     );
     connection.mutable.pluginAppServer = turnAppServer;
+    const references = prepareWorkspaceReferences();
     const turnStartParams = buildTurnStartParams(
       {
         ...runtimeParams,
@@ -146,6 +159,16 @@ export async function prepareCodexAttemptTurnRequest(
       },
     );
     codexModelCallDiagnostics.setRequestPayloadBytes(utf8JsonByteLength(turnStartParams));
+    recordCodexTrajectoryContext(resources.trajectoryRecorder, {
+      attempt: params,
+      cwd: connection.effectiveCwd,
+      developerInstructions: joinPresentSections(
+        buildRenderedCodexDeveloperInstructions(),
+        attemptTools.configuredMcp?.diagnosticNotice,
+      ),
+      prompt: turnState.codexTurnPromptText,
+      tools: toolBridge.availableSpecs,
+    });
     state.latestStartupErrorNotification = undefined;
     state.rateLimitsRevisionBeforeLastTurnStart = readCodexRateLimitsRevision(resourceState.client);
     activeTurnRoute.armTurn();
@@ -171,6 +194,7 @@ export async function prepareCodexAttemptTurnRequest(
       );
       acceptedTurnId = startedTurn.turn.id;
       connection.assertCurrent();
+      references.accepted();
       throwIfTurnStartAcceptedAfterAbort();
       return startedTurn;
     } catch (error) {
@@ -219,6 +243,7 @@ export async function prepareCodexAttemptTurnRequest(
       );
     }
   }
+  prepareWorkspaceReferences();
   const buildLlmInputEvent = () => ({
     runId: params.runId,
     sessionId: params.sessionId,

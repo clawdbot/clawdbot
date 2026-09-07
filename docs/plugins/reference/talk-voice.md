@@ -2,10 +2,13 @@
 summary: "Manage Talk voice selection (list/set)."
 read_when:
   - You are installing, configuring, or auditing the talk-voice plugin
-title: "Talk Voice plugin"
+title: "Talk Voice plugin reference"
 ---
 
-# Talk Voice plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
 Manage Talk voice selection (list/set).
 
@@ -16,7 +19,7 @@ Manage Talk voice selection (list/set).
 
 ## Surface
 
-slash commands: `/voice`
+- Slash commands: `/voice`
 
 <!-- openclaw-plugin-reference:manual-start -->
 

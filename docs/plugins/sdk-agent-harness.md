@@ -837,6 +837,18 @@ hidden only by a session denial in `sessionDeniedTools`. Core still applies the
 final OpenClaw tool policy and schema compatibility checks before exposing the
 rows.
 
+`SessionMcpRuntime` implementations used by materialized tool views should
+provide `joinCleanup()`. It waits for cleanup already requested from that exact
+runtime, including unpublished or retiring servers, and rejects if any owned
+cleanup failed or could not be confirmed. It must preserve that failure for
+later callers without closing transports still leased by another run. A fulfilled
+best-effort `dispose()` alone is not cleanup evidence.
+
+The method is optional for existing SDK implementations; automatic one-shot
+recovery treats a missing method as uncertain cleanup. A native facade that owns
+no transport may resolve immediately when its enclosing runtime separately owns
+and verifies the process lifetime.
+
 Harnesses that forward embedded attempt params should pass
 `skillWorkshopProposalOnly` through. Proposal-only skill-workshop runs are
 deliberately narrow single-tool runs, and the runtime keeps them on the raw

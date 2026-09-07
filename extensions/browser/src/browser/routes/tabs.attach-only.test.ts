@@ -70,6 +70,7 @@ describe("browser tab routes attachOnly loopback profiles", () => {
       state.resolved.remoteCdpTimeoutMs,
       state.resolved.remoteCdpHandshakeTimeoutMs,
       undefined,
+      { onDiagnostic: expect.any(Function) },
     );
     expect(response.statusCode).toBe(200);
     expect(response.body).toEqual({

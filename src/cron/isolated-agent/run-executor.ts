@@ -25,6 +25,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { ModelFallbackClassifiedResult } from "../../agents/model-fallback-attempt.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
+import { rootedAgentRunParams } from "../../agents/rooted-run-params.js";
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
@@ -809,12 +810,7 @@ function createCronPromptExecutor(
           messageThreadId: params.resolvedDelivery.threadId,
           currentChannelId,
           agentDir: params.agentDir,
-          workspaceDir: params.executionRoot ?? params.workspaceDir,
-          bootstrapWorkspaceDir: params.workspaceDir,
-          cwd: params.executionRoot,
-          sessionRoot: params.executionRoot,
-          requireWritableSandbox: params.executionRoot ? true : undefined,
-          requireWorkspaceOnly: params.executionRoot ? true : undefined,
+          ...rootedAgentRunParams(params.workspaceDir, params.executionRoot),
           config: params.cfgWithAgentDefaults,
           skillsSnapshot: params.skillsSnapshot,
           prompt: promptText,

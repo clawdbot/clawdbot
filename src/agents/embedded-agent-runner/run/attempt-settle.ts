@@ -382,13 +382,16 @@ export async function runEmbeddedAttemptSettledPhase(
         throw new Error("accepted continuation children were not durably registered");
       }
     } else {
-      settleRequesterAfterSessionSpawns({
+      const settled = settleRequesterAfterSessionSpawns({
         requesterSessionKey: attempt.sessionKey,
         requesterAgentId: input.setup.sessionAgentId,
         requesterTurnRunId: attempt.runId,
         requesterYielded: result.yieldDetected === true,
         acceptedSessionSpawns: result.acceptedSessionSpawns,
       });
+      if (result.yieldDetected === true && settled) {
+        result.requesterContinuationSettled = true;
+      }
     }
   }
   return result;

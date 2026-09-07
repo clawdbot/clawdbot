@@ -10,10 +10,10 @@ import { resolveCliName } from "../cli-name.js";
 import {
   applyCliExecutionStartupPresentation,
   ensureCliExecutionBootstrap,
-  resolveCliExecutionStartupContext,
 } from "../command-execution-startup.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { resolveCliCommandPathPolicy } from "../command-path-policy.js";
+import { resolveCliStartupPolicy } from "../command-startup-policy.js";
 import { applyResolvedCommandOutputMode } from "../json-output-mode.js";
 import { isModelsPlainMachineOutput } from "../models-output-mode.js";
 import {
@@ -155,9 +155,10 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     const jsonOutputMode = isCommandJsonOutputMode(actionCommand, argv);
     const machineOutputMode = jsonOutputMode || isModelsPlainMachineOutput(argv, actionCommand);
     applyResolvedCommandOutputMode(jsonOutputMode, machineOutputMode);
-    const { commandPath, startupPolicy } = resolveCliExecutionStartupContext({
+    const commandPath = getCommanderCommandPath(actionCommand);
+    const startupPolicy = resolveCliStartupPolicy({
       argv,
-      commandPath: getCommanderCommandPath(actionCommand),
+      commandPath,
       jsonOutputMode,
       machineOutputMode,
       env: process.env,

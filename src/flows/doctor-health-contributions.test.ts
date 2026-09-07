@@ -1363,6 +1363,78 @@ describe("doctor health contributions", () => {
     expect(mocks.runLegacyStateMigrations).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "one authored target",
+      includeTargets: ["./browser.json"],
+      expected: "Repair browser in the included file ./browser.json by hand",
+    },
+    {
+      name: "an include array",
+      includeTargets: ["./a.json", "./b.json"],
+      expected: "Repair browser in the included files ./a.json, ./b.json by hand",
+    },
+    {
+      name: "no root-authored target",
+      includeTargets: undefined,
+      expected: "Repair browser in its included file by hand",
+    },
+  ])(
+    "defers every config write after an include-ownership refusal with $name",
+    async ({ includeTargets, expected }) => {
+      const laterRun = vi.fn(async () => undefined);
+      const cfg = {
+        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      } as OpenClawConfig;
+      const ctx = createDoctorContext({
+        cfg,
+        cfgForPersistence: structuredClone(cfg),
+        configResult: { cfg, shouldWriteConfig: true },
+        shouldRepair: true,
+        options: { repair: true },
+        env: {},
+      });
+      mocks.detectLegacyStateMigrations.mockResolvedValue({
+        preview: ["- Workspace setup and attestations: legacy files → shared SQLite state"],
+        warnings: [],
+        notices: [],
+      });
+      mocks.replaceConfigFile.mockRejectedValueOnce(
+        Object.assign(
+          new Error(
+            "Config write would flatten $include-owned config at browser; edit that include file directly or remove the $include first.",
+          ),
+          {
+            code: "CONFIG_INCLUDE_OWNERSHIP",
+            ownedConfigPath: "browser",
+            ...(includeTargets ? { includeTargets } : {}),
+          },
+        ),
+      );
+
+      await runDoctorHealthContributionList(ctx, [
+        requireDoctorContribution("doctor:write-config-migrations"),
+        createDoctorHealthContribution({
+          id: "doctor:test-later",
+          label: "Test later",
+          run: laterRun,
+        }),
+      ]);
+
+      expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
+      expect(laterRun).not.toHaveBeenCalled();
+      expect(ctx.configResultWriteCommitted).not.toBe(true);
+      expect(ctx.configWriteRefusal).toBe("include-ownership");
+      expect(ctx.cfgForPersistence).toEqual(cfg);
+      expect(mocks.note).toHaveBeenCalledWith(expect.stringContaining(expected), "Doctor warnings");
+      expect(mocks.note).toHaveBeenCalledWith(
+        expect.stringContaining("Repair the include boundary named above by hand"),
+        "Legacy state deferred",
+      );
+      expect(mocks.note).not.toHaveBeenCalledWith(expect.anything(), "Doctor changes");
+    },
+  );
+
   it("defers gateway probes while Doctor owns offline maintenance", async () => {
     const contribution = requireDoctorContribution(DOCTOR_GATEWAY_HEALTH_ID);
     const ctx = createDoctorContext({
