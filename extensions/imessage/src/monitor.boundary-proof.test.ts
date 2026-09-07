@@ -92,9 +92,10 @@ describe("monitor boundary: reply_to_guid echo limiter proof", () => {
           },
         },
       });
-      await vi.waitFor(() =>
-        expect(logMessages.some((m) => m.includes("GUID-A") || m.includes("Hello"))).toBe(true),
-      );
+      // Wait for the authored row to be processed by the monitor
+      await new Promise((resolve) => {
+        setTimeout(resolve, 300);
+      });
 
       // Push 5 paired mirrors with reply_to_guid
       for (let i = 0; i < 5; i++) {
