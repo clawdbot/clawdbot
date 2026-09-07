@@ -621,11 +621,12 @@
   color: inherit;
 }
 
-/* Avatar Styles */
+/* Avatar Styles. Identity avatars are circles everywhere (sidebar, pickers,
+   profile, native apps); square tiles expose opaque avatar corners. */
 .chat-avatar {
   width: 36px;
   height: 36px;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-full);
   background: var(--panel-strong);
   display: grid;
   place-items: center;

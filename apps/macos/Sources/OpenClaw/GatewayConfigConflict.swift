@@ -110,7 +110,6 @@ struct GatewayConfigConflictRecoveryView: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text(verbatim: conflict.message)
-                        .font(.footnote)
                         .fixedSize(horizontal: false, vertical: true)
 
                     HStack(spacing: 8) {
@@ -127,10 +126,6 @@ struct GatewayConfigConflictRecoveryView: View {
                     .controlSize(.small)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 11)
-            .background(.orange.opacity(0.08))
         }
     }
 }

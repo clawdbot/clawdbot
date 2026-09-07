@@ -676,6 +676,7 @@ export function createSessionsSpawnTool(
               inheritedToolAllowlist: opts?.inheritedToolAllowlist,
               inheritedToolDenylist: opts?.inheritedToolDenylist,
               requesterRunId: opts?.requesterRunId,
+              sandboxed: opts?.sandboxed,
               assertActive,
               onSpawnEffectsStart,
             },

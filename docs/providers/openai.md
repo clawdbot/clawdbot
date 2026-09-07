@@ -78,6 +78,12 @@ Astra uses the Responses API for agent tool calls. It supports text and image
 input, a 1,050,000-token context window, and up to 128,000 output tokens.
 OpenClaw retains its ordinary 272,000-token active input budget by default.
 The supported reasoning efforts are `low`, `medium`, `high`, `xhigh`, and `max`.
+OpenClaw defaults Astra to `low` on both the OpenClaw and Codex runtimes to
+limit reasoning cost and subscription-budget consumption on ordinary prompts.
+The OpenAI provider owns this default, so model selection, Control UI, and
+Codex turn requests share it. Explicit agent, model, global, and session
+thinking settings still take precedence; switching models does not clear an
+existing `high` override. Use `/think default` to clear a session override.
 An existing `minimal` setting maps to `low`. Astra cannot disable reasoning;
 `off` never sends the unsupported `none` effort.
 Temperature and `top_p` are not sent.
@@ -1724,6 +1730,11 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     - Accept `params.chat_template_kwargs` for OpenAI-compatible Completions
       proxies such as vLLM
     - Do not force strict tool schemas or native-only headers
+
+    If a usable tool schema is incompatible with requested strict mode, the request uses
+    `strict: false`. Debug logs report the downgrade under `openai-transport`,
+    with a bounded sample of incompatible tools. Built-in and managed Responses
+    requests share duplicate suppression for the same model and schemas.
 
   </Accordion>
 </AccordionGroup>

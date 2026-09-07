@@ -490,6 +490,14 @@ metadata. Replacing either starts fresh target metadata, so a new session cannot
 inherit the previous plugin owner, agent, or label. Keep conversation transport
 details and explicit lifecycle settings separate from target metadata.
 
+Use `resolveThreadBindingLifecycle(...)` from
+`openclaw/plugin-sdk/thread-bindings-session-runtime` for standard idle and
+maximum-age expiration. Plugins with a different legacy timestamp contract can
+pass prepared `inactivityExpiresAt` and `maxAgeExpiresAt` values to
+`resolveThreadBindingExpiry(...)` on the same subpath. It selects the earlier
+deadline and its reason, preferring idle expiration on ties; omitted deadlines
+are disabled. The plugin still owns timestamp validation and duration defaults.
+
 Preserve opaque plugin ownership metadata when projecting binding records.
 Plugin-owned targets do not require an OpenClaw agent id; use
 `isPluginOwnedSessionBindingRecord(...)` from

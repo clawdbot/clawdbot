@@ -13,6 +13,7 @@ import {
   createNodeTestShards,
   createVitestCacheWarmGroups,
   isExclusiveCompactShardName,
+  isPolicyTestOwnedPath,
   resolvePolicyTestTargets,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
@@ -412,6 +413,16 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "ui/src/styles/cursor-policy.node.test.ts",
     ]);
     expect(resolvePolicyTestTargets(["docs/web/control-ui.md"])).toEqual([]);
+  });
+
+  it("matches policy owners only for exact changed paths", () => {
+    const changedPath = "ui/src/styles/base.css";
+    expect(isPolicyTestOwnedPath(changedPath)).toBe(true);
+    expect(resolvePolicyTestTargets([changedPath])).not.toEqual([]);
+    for (const lookalike of [` ${changedPath}`, String.raw`ui\src\pages\chat\view.ts`]) {
+      expect(isPolicyTestOwnedPath(lookalike), lookalike).toBe(false);
+      expect(resolvePolicyTestTargets([lookalike]), lookalike).toEqual([]);
+    }
   });
 
   it("projects cache-warm groups from the owned node test plan", () => {
@@ -3065,7 +3076,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       includeReleaseOnlyPluginShards: false,
       changedPaths: [
         ...STORE_ALIAS_CHANGED_PATHS.toReversed(),
-        "./src/plugins/tools.optional.test.ts",
+        " src/plugins/tools.optional.test.ts",
+        String.raw`src\plugins\tools.optional.test.ts`,
+        "src/plugins/tools.optional.test.ts",
         PLUGIN_PRERELEASE_NPM_SPEC_TEST,
         "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
         "src/plugins/loader.test.ts",

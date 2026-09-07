@@ -6109,8 +6109,15 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
     );
     expect(packageRunner.match(/verify-fs-safe-native\.mjs[^\n]+--mode require/gu)).toHaveLength(3);
     expect(packageRunner).toContain("bash scripts/e2e/bun-global-install-smoke.sh");
+    expect(packageRunner.match(/-e OPENCLAW_FS_SAFE_NATIVE_CONTRACT/g)).toHaveLength(4);
+    expectTextToIncludeAll(packageRunner, [
+      'MUSL_FS_SAFE_NATIVE_OUTCOME="passed"',
+      'MUSL_FS_SAFE_NATIVE_OUTCOME="not-applicable"',
+      '--detail "musl:fsSafeNative=$MUSL_FS_SAFE_NATIVE_OUTCOME"',
+    ]);
     expect(updateRunner).toContain('mv "$platform_package" "$platform_package.omitted"');
     expect(updateRunner).toContain("--mode fallback");
+    expect(updateRunner).toContain("-e OPENCLAW_FS_SAFE_NATIVE_CONTRACT");
   });
 
   it("verifies fs-safe through a pnpm-style linked package root", () => {

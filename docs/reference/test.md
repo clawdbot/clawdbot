@@ -473,8 +473,10 @@ package manifests. Local pnpm links remain supported when their targets stay
 inside the checkout. The tsgo wrapper does not create or reuse a shared external
 install; invocations from subdirectories still use the containing checkout as
 the ownership boundary. Declared checkout junctions and platform path aliases map
-to the same native root for validation and actual snapshot reads. Native resolution
-itself is not sandboxed: an ancestor install can still enter a successful compiler
+to the same native root for validation and actual snapshot reads. Local declaration
+preparation also aligns the compiler's `PWD` with its working directory so shell
+aliases do not change emitted inventory paths. Native resolution itself is not
+sandboxed: an ancestor install can still enter a successful compiler
 receipt. Resolution can read an ancestor's candidate `package.json` while searching
 for declarations, then resolve the import to checkout-local JavaScript. This can
 happen with a complete local frozen install and no external source files in the

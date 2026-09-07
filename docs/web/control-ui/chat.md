@@ -60,7 +60,7 @@ unchanged; click a title to rename it.
 
 Collapsed tool rows keep the tool label visible and truncate long summaries with an ellipsis. Tool and subagent activity rows use the same text size and weight. Running subagents show **Subagent** beside an animated indicator; terminal rows show **Subagent finished**, **Subagent failed**, or **Subagent cancelled**.
 
-A turn that fails before producing any reply leaves a durable notice in the thread.
+A turn that fails before producing any reply leaves a durable notice in the thread. Failed and timed-out turns also show the available failure reason in the sidebar's compact summary and run-error tooltip, including while a session refresh is still catching up.
 
 Chat error banners, including cloud runner failures, show short messages in full. Use **Copy error** beside **Details** in the header to copy the complete diagnostic received by the UI, even while collapsed. **Details** appears only when the complete diagnostic adds information beyond the preview, such as additional lines or text shortened for the preview; repeated lines and whitespace-only differences do not add details. Open it to read and select the complete diagnostic. The disclosure works with Enter or Space; the expanded text wraps long lines and can be scrolled with the keyboard. Copying does not open or close the details, and neither copying nor expanding an error retries the failed operation. Retry and other recovery actions remain separate from the disclosure.
 

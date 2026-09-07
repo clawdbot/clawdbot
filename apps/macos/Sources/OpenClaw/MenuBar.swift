@@ -34,7 +34,7 @@ enum OpenClawProcessEntrypoint {
 struct OpenClawApp: App {
     // periphery:ignore - SwiftUI installs the application delegate through this property wrapper.
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
     @State private var state: AppState
     private static let logger = Logger(subsystem: "ai.openclaw", category: "app")
     private var tailscaleService: TailscaleService {
@@ -71,19 +71,16 @@ struct OpenClawApp: App {
 
     var body: some Scene {
         // Register before any window is opened, including connection recovery from the dashboard.
-        let openWindow = self.openWindow
+        let openSettings = self.openSettings
         ConnectionWindowOpener.shared.register {
-            openWindow(id: ConnectionWindowOpener.windowID)
+            openSettings()
         }
-        return Window("OpenClaw Connection", id: ConnectionWindowOpener.windowID) {
+        // The native Connection window is a standard macOS Settings window: toolbar tabs, fixed width,
+        // content-sized height per tab. Cmd-, still opens Dashboard settings via the replaced command.
+        return Settings {
             ConnectionWindow(state: self.state)
                 .environment(self.tailscaleService)
         }
-        .defaultLaunchBehavior(.suppressed)
-        .restorationBehavior(.disabled)
-        // Keep this a preferred size so the content can fit smaller displays.
-        .defaultSize(width: ConnectionWindow.width, height: ConnectionWindow.height)
-        .windowResizability(.contentSize)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Gateway Window…") {

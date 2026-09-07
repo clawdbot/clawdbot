@@ -332,10 +332,14 @@ describe("node worker Git transfers", () => {
           changed ? "changed on gateway\n" : "tracked from gateway\n",
         );
         if (process.platform !== "win32") {
+          // Git checkout applies the umask; downloaded replacements are explicitly chmod'ed.
+          const checkoutUmask = process.umask();
           expect((await fs.stat(path.join(workspaceDir, "tracked.txt"))).mode & 0o777).toBe(
-            changed ? 0o755 : 0o644,
+            changed ? 0o755 : 0o666 & ~checkoutUmask,
           );
-          expect((await fs.stat(path.join(workspaceDir, "script.sh"))).mode & 0o777).toBe(0o755);
+          expect((await fs.stat(path.join(workspaceDir, "script.sh"))).mode & 0o777).toBe(
+            0o777 & ~checkoutUmask,
+          );
         }
         await expect(fs.readlink(path.join(workspaceDir, "tracked-link"))).resolves.toBe(
           changed ? "script.sh" : "tracked.txt",
