@@ -72,6 +72,7 @@ type NativeOfflineCase = {
   loaded: boolean;
   offline: boolean;
   enabled?: boolean;
+  phase?: "inspect" | "prepare";
   state?: number | string;
 };
 
@@ -110,6 +111,15 @@ const nativeOfflineCases: NativeOfflineCase[] = [
   },
   {
     platform: "darwin",
+    label: "loaded disabled preparation",
+    runtime: "stopped",
+    loaded: true,
+    enabled: false,
+    offline: true,
+    phase: "prepare",
+  },
+  {
+    platform: "darwin",
     label: "enabled unknown",
     runtime: "stopped",
     loaded: true,
@@ -139,6 +149,12 @@ it.each(nativeOfflineCases)(
     withServiceHome(async (home) => {
       mockProcessPlatform(scenario.platform);
       mocks.taskState = scenario.state ?? 3;
+      const isEnabled = vi.fn<NonNullable<GatewayService["isEnabled"]>>(async () => {
+        if (scenario.enabled === undefined) {
+          throw new Error("enabled state unavailable");
+        }
+        return scenario.enabled;
+      });
       const service = createMockGatewayService({
         readCommand: async () => ({
           programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
@@ -149,25 +165,24 @@ it.each(nativeOfflineCases)(
             ? readScheduledTaskRuntime
             : async () => ({ status: scenario.runtime }),
         isLoaded: async () => scenario.loaded,
-        isEnabled: async () => {
-          if (scenario.enabled === undefined) {
-            throw new Error("enabled state unavailable");
-          }
-          return scenario.enabled;
-        },
+        isEnabled,
       });
       mocks.service.mockReturnValue(service);
       const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
         root: process.cwd(),
         updateInstallKind: "package",
         shouldRestart: true,
-        phase: "inspect",
+        phase: scenario.phase ?? "inspect",
         jsonMode: true,
+        timeoutMs: 200,
       });
       expect(inspected.serviceUpdateVerdict?.kind).toBe(
         scenario.runtime === "unknown" ? "unavailable" : "owned",
       );
       expect(inspected.offline).toBe(scenario.offline);
+      for (const [args] of isEnabled.mock.calls) {
+        expect(args.timeoutMs).toBe(200);
+      }
       expect(service.stop).not.toHaveBeenCalled();
       expect(service.start).not.toHaveBeenCalled();
       expect(service.restart).not.toHaveBeenCalled();

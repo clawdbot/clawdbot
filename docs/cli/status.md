@@ -91,6 +91,8 @@ and `openclaw memory status --deep`.
 
 - Overview includes Gateway + node host service install/runtime status when
   available, plus compact Gateway process uptime and host system uptime.
+- On Linux, a readable installed node service remains listed when the service
+  manager is unavailable; its runtime status stays unknown.
 - Overview includes update channel + git SHA (for source checkouts).
 - Update info surfaces in the Overview; if an update is available, status
   prints a hint to run `openclaw update` (see [Updating](/install/updating)).
