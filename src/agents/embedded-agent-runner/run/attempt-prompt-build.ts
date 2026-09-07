@@ -474,7 +474,7 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   const escapedProjection = !input.isRawModelRun && usesEscapedRuntimeContext(input.sessionVersion);
   const eventFragments: RuntimeContextFragment[] = [
     ...buildAgentInternalEventContext(attempt.internalEvents, !escapedProjection),
-    ...(escapedProjection ? (attempt.runtimeContextFragments ?? []) : []),
+    ...(attempt.runtimeContextFragments ?? []),
     ...(input.prompt.originContext
       ? escapedProjection
         ? input.prompt.originContext.fragments

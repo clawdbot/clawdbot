@@ -416,42 +416,47 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(hoisted.warn).not.toHaveBeenCalled();
   });
 
-  it("keeps runtime-only events in system context while carrying current facts", () => {
-    const fixture = createInput({
-      attempt: createAttempt({
-        currentInboundContext: {
-          text: "Room conversation data",
-        },
-        runtimeContextFragments: [{ kind: "runtime-instruction", text: "Runtime room event" }],
-        currentInboundEventKind: "room_event",
-      }),
-      prompt: createPrompt({
-        effectivePrompt: "",
-        effectiveTranscriptPrompt: "",
-      }),
-    });
+  it.each([3, 4])(
+    "keeps version %s runtime-only events in system context with current facts",
+    (sessionVersion) => {
+      const fixture = createInput({
+        attempt: createAttempt({
+          currentInboundContext: {
+            text: "Room conversation data",
+          },
+          runtimeContextFragments: [{ kind: "runtime-instruction", text: "Runtime room event" }],
+          currentInboundEventKind: "room_event",
+        }),
+        prompt: createPrompt({
+          effectivePrompt: "",
+          effectiveTranscriptPrompt: "",
+        }),
+      });
 
-    fixture.input.capabilityToolNames.add("process");
-    const result = prepareEmbeddedAttemptPromptContext({ ...fixture.input, sessionVersion: 4 });
+      fixture.input.capabilityToolNames.add("process");
+      const result = prepareEmbeddedAttemptPromptContext({ ...fixture.input, sessionVersion });
 
-    expect(result.systemPromptForHook).toContain("OpenClaw runtime event.");
-    expect(result.promptSubmission.runtimeOnly).toBe(true);
-    expect(result.promptForSession).toBe(
-      "Room conversation data\n\nContinue the OpenClaw runtime event.",
-    );
-    expect(result.promptForModel).toBe(result.promptForSession);
-    expect(result.systemPromptForHook).not.toContain("Room conversation data");
-    expect(result.runtimeContextMessageForCurrentTurn?.content).toContain(
-      "Active exec sessions:\nnone",
-    );
-    expect(result.runtimeContextMessageForCurrentTurn?.content).not.toContain("Runtime room event");
-    expect(result.systemPromptForHook).toContain("Runtime room event");
-    expect(fixture.setActiveSessionSystemPrompt).toHaveBeenCalledWith(
-      expect.stringContaining("Runtime room event"),
-    );
-    expect(fixture.report.currentTurn?.kind).toBe("room_event");
-    expect(fixture.report.currentTurn?.runtimeContextChars).toBeGreaterThan(0);
-  });
+      expect(result.systemPromptForHook).toContain("OpenClaw runtime event.");
+      expect(result.promptSubmission.runtimeOnly).toBe(true);
+      expect(result.promptForSession).toBe(
+        "Room conversation data\n\nContinue the OpenClaw runtime event.",
+      );
+      expect(result.promptForModel).toBe(result.promptForSession);
+      expect(result.systemPromptForHook).not.toContain("Room conversation data");
+      expect(result.runtimeContextMessageForCurrentTurn?.content).toContain(
+        "Active exec sessions:\nnone",
+      );
+      expect(result.runtimeContextMessageForCurrentTurn?.content).not.toContain(
+        "Runtime room event",
+      );
+      expect(result.systemPromptForHook).toContain("Runtime room event");
+      expect(fixture.setActiveSessionSystemPrompt).toHaveBeenCalledWith(
+        expect.stringContaining("Runtime room event"),
+      );
+      expect(fixture.report.currentTurn?.kind).toBe("room_event");
+      expect(fixture.report.currentTurn?.runtimeContextChars).toBeGreaterThan(0);
+    },
+  );
 
   it("keeps a pure heartbeat task active while persisting only the poll marker", () => {
     const taskPrompt = "Check the deployment and report any failures.";
