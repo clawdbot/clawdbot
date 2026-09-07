@@ -43,23 +43,22 @@ export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): voi
     return;
   }
 
-  const useGroupKill =
-    opts?.detached === true || (opts?.detached !== false && isProcessGroupLeader(pid));
+  // A selected group remains the only target after its leader exits; its positive
+  // PID may already identify an unrelated process when signaling or grace expires.
+  const target =
+    opts?.detached === true || (opts?.detached !== false && isProcessGroupLeader(pid)) ? -pid : pid;
   if (opts?.force === true) {
-    signalProcessTreeUnix(pid, "SIGKILL", useGroupKill);
+    signalUnixTarget(target, "SIGKILL");
     return;
   }
 
   const graceMs = normalizeGraceMs(opts?.graceMs);
-  signalProcessTreeUnix(pid, "SIGTERM", useGroupKill);
+  signalUnixTarget(target, "SIGTERM");
   setTimeout(() => {
-    const stillAlive = useGroupKill
-      ? isProcessAlive(-pid) || isProcessAlive(pid)
-      : isProcessAlive(pid);
-    if (!stillAlive) {
+    if (!isProcessAlive(target)) {
       return;
     }
-    signalProcessTreeUnix(pid, "SIGKILL", useGroupKill);
+    signalUnixTarget(target, "SIGKILL");
   }, graceMs).unref();
 }
 
@@ -78,9 +77,9 @@ export function signalProcessTree(
     return;
   }
 
-  const useGroupKill =
-    opts?.detached === true || (opts?.detached !== false && isProcessGroupLeader(pid));
-  signalProcessTreeUnix(pid, signal, useGroupKill);
+  const target =
+    opts?.detached === true || (opts?.detached !== false && isProcessGroupLeader(pid)) ? -pid : pid;
+  signalUnixTarget(target, signal);
   opts?.onComplete?.();
 }
 
@@ -95,12 +94,12 @@ export function signalPtySessionTree(pid: number, signal: "SIGTERM" | "SIGKILL")
   }
   const darwinTty = process.platform === "darwin" ? readDarwinPtyTty(pid) : undefined;
   if (process.platform === "darwin" && !darwinTty) {
-    signalProcessTreeUnix(pid, signal, true);
+    signalUnixTarget(-pid, signal);
     return;
   }
   const members = readProcessSessionMembers(pid, darwinTty);
   if (!members) {
-    signalProcessTreeUnix(pid, signal, true);
+    signalUnixTarget(-pid, signal);
     return;
   }
   const signalMembers = (snapshot: Array<{ pid: number; pgid: number }>) => {
@@ -236,27 +235,6 @@ function isProcessGroupLeader(pid: number): boolean {
   const procPgid = process.platform === "linux" ? readProcessGroupIdFromProc(pid) : undefined;
   const pgid = procPgid ?? readProcessGroupIdFromPs(pid);
   return pgid === pid;
-}
-
-function signalProcessTreeUnix(
-  pid: number,
-  signal: "SIGTERM" | "SIGKILL",
-  useGroupKill: boolean,
-): void {
-  if (useGroupKill) {
-    try {
-      process.kill(-pid, signal);
-      return;
-    } catch {
-      // Process group does not exist or we lack permission; try direct pid.
-    }
-  }
-
-  try {
-    process.kill(pid, signal);
-  } catch {
-    // Already gone.
-  }
 }
 
 function signalUnixTarget(pid: number, signal: "SIGTERM" | "SIGKILL"): void {

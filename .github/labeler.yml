@@ -94,6 +94,12 @@
           - "extensions/workboard/**"
           - "docs/plugins/workboard.md"
           - "docs/plugins/reference/workboard.md"
+"plugin: team-reports":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/team-reports/**"
+          - "docs/plugins/team-reports.md"
+          - "docs/plugins/reference/team-reports.md"
 "plugin: beam":
   - changed-files:
       - any-glob-to-any-file:

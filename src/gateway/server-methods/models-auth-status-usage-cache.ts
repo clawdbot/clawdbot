@@ -66,36 +66,24 @@ export function clearModelAuthStatusUsageCache(): void {
   clearProviderUsageRuntimeSnapshot();
 }
 
-function providerUsageCacheKey(providerIds: readonly UsageProviderId[]): string {
-  return providerIds.toSorted().join("\0");
-}
-
 function scopeProviderUsageCredentialKey(
   credentialKey: string,
   providerIds: readonly UsageProviderId[],
 ): string {
-  // Scope the prepared credential evidence to this fetch set so unrelated
-  // provider credentials do not invalidate its snapshot.
-  try {
-    // Prepared by the provider-usage runtime as an object with a `direct` array.
-    // SAFETY: the runtime producer guarantees this shape, and `direct` is re-checked.
-    const parsed = JSON.parse(credentialKey) as {
-      direct?: Array<[string, string | null]>;
-      [key: string]: unknown;
-    };
-    if (!Array.isArray(parsed.direct)) {
-      return credentialKey;
-    }
-    const providers = new Set(providerIds);
-    return JSON.stringify({
-      ...parsed,
-      direct: parsed.direct.filter(
-        ([provider, fingerprint]) => providers.has(provider) && fingerprint !== null,
-      ),
-    });
-  } catch {
-    return credentialKey;
-  }
+  // Scope prepared credential evidence to this fetch set so unrelated provider
+  // credentials do not invalidate its snapshot.
+  // SAFETY: the provider-usage runtime always serializes this shape.
+  const parsed = JSON.parse(credentialKey) as {
+    direct: Array<[string, string | null]>;
+    [key: string]: unknown;
+  };
+  const providers = new Set(providerIds);
+  return JSON.stringify({
+    ...parsed,
+    direct: parsed.direct.filter(
+      ([provider, fingerprint]) => providers.has(provider) && fingerprint !== null,
+    ),
+  });
 }
 
 function mapProviderUsage(usage: Awaited<ReturnType<typeof loadProviderUsageSummary>>) {
@@ -257,7 +245,7 @@ type ProviderUsageCacheParams = {
 function resolveProviderUsageCacheRead(params: ProviderUsageCacheParams) {
   const cacheOwnerKey = params.cacheOwnerKey ?? params.agentId;
   const providerIds = params.providerIds.toSorted();
-  const providerKey = providerUsageCacheKey(providerIds);
+  const providerKey = providerIds.join("\0");
   const credentialKey = params.authProfile
     ? params.credentialKey
     : scopeProviderUsageCredentialKey(params.credentialKey, providerIds);
@@ -377,11 +365,24 @@ export function readProfileUsageStaleWhileRevalidate(params: {
   };
 }
 
-/** Returns cached provider usage while network refreshes run in the background for capable clients. */
-async function loadProviderUsageSummaryStaleWhileRevalidate(
-  params: ProviderUsageCacheParams,
-): Promise<UsageSummary> {
-  const cacheOwnerKey = params.cacheOwnerKey ?? params.agentId;
+/** Shares the models.authStatus cache contract with the unscoped usage.status RPC. */
+export async function loadUsageStatusStaleWhileRevalidate(options: {
+  config: OpenClawConfig;
+  coldRead?: "refresh-marker";
+  now?: number;
+}): Promise<UsageSummary> {
+  const snapshot = getProviderUsageRuntimeSnapshot({ config: options.config });
+  const params: ProviderUsageCacheParams = {
+    agentId: snapshot.agentId,
+    agentDir: snapshot.agentDir,
+    authStore: snapshot.store,
+    configRef: snapshot.configRef,
+    credentialKey: snapshot.credentialKey,
+    providerIds: snapshot.providerIds,
+    coldRead: options.coldRead,
+    now: options.now ?? Date.now(),
+  };
+  const cacheOwnerKey = params.agentId;
   if (params.providerIds.length === 0) {
     usageCacheByAgentId.delete(cacheOwnerKey);
     return { updatedAt: params.now, providers: [] };
@@ -412,23 +413,4 @@ async function loadProviderUsageSummaryStaleWhileRevalidate(
   }
   void refresh.catch(() => {});
   return { updatedAt: params.now, providers: [], refreshing: true };
-}
-
-/** Uses the shared cache machinery for the unscoped usage.status RPC. */
-export async function loadUsageStatusStaleWhileRevalidate(params: {
-  config: OpenClawConfig;
-  coldRead?: "refresh-marker";
-  now?: number;
-}): Promise<UsageSummary> {
-  const snapshot = getProviderUsageRuntimeSnapshot({ config: params.config });
-  return await loadProviderUsageSummaryStaleWhileRevalidate({
-    agentId: snapshot.agentId,
-    agentDir: snapshot.agentDir,
-    authStore: snapshot.store,
-    configRef: snapshot.configRef,
-    credentialKey: snapshot.credentialKey,
-    providerIds: snapshot.providerIds,
-    coldRead: params.coldRead,
-    now: params.now ?? Date.now(),
-  });
 }

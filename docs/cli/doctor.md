@@ -58,6 +58,13 @@ macOS job between respawns is not offline: Doctor stops it before repair and
 resumes it afterward. Run repair from a shell outside the Gateway process tree. For externally supervised or unmatched installations, stop
 and start the Gateway through its owning supervisor.
 
+During [automatic triage](/cli/triage#automatic-failure-handoff), repair can run
+against an offline target when schema and maintenance locks permit it. If repair
+needs to stop the managed Gateway, Doctor refuses inside its automatic fixing
+subtree because that stop would cancel recovery. Use read-only diagnosis or safe
+offline artifact repair followed by an atomic `openclaw gateway restart`, or ask
+an independent operator to run Doctor from a shell outside triage.
+
 This maintenance window also applies when repair ultimately finds no changes.
 Runs without `--fix`, `--repair`, or `--yes` do not enter maintenance.
 Custom state directories remain runtime-only and do not adopt a native service.
@@ -90,8 +97,19 @@ service through its owner. Once the native manager confirms it is offline,
 Doctor can repair its selected state without changing or starting that service.
 
 If migration or config repair cannot finish, Doctor leaves the stopped service
-stopped and reports an incomplete repair. Resolve the reported blocker, rerun
-`openclaw doctor --fix`, then start the service through its owner.
+stopped and reports an incomplete repair with exit code 1. When state requires
+manual recovery, the diagnosis names its path and the next action:
+
+- **Unsupported canonical workspace version:** use an OpenClaw build that supports
+  that version. Preserve the shared database unchanged.
+- **Unreadable or conflicting exec policy:** stop the Gateway and node hosts,
+  then reconcile the named legacy file or interrupted claim with a verified copy
+  of the intended policy. Preserve the existing SQLite policy.
+
+Doctor does not quarantine unsupported workspace state, discard future-version
+rows, or infer execution policy. Repeating the same repair invocation cannot
+resolve these conditions. After manual recovery, verify readiness before starting
+the service through its owner.
 
 ## Gateway service recovery
 
@@ -260,6 +278,13 @@ Bare `openclaw doctor --json` exits `0` once it emits a findings payload, includ
 `--all` controls which checks are selected before severity filtering. The default lint run excludes checks that are deep, historical, or more likely to surface repairable legacy residue; use `--all` for the complete inventory. `--only <id>` is the most precise selector and can run any registered check by id.
 
 `core/doctor/local-audio-acceleration` reports the auto-selected local STT command, separate capable/requested/observed backend evidence, and fallback order without loading a speech model. It emits an informational finding, so include `--severity-min info` to display it.
+
+`core/doctor/skill-workshop-relocation` distinguishes pending legacy collection
+backup roots from roots preserved for review. Eligible proposals or backup roots
+receive `openclaw doctor --fix` guidance, not a guarantee that every backup will
+be retired. Preserved roots require manual review of workspace ownership, backup
+manifests, and workspace migration blockers. If both kinds remain, Doctor reports
+both next steps. Do not delete preserved backups to clear the warning.
 
 ## Structured health checks
 
@@ -593,8 +618,10 @@ restore fail closed so restore cannot silently replace or hide recoverable data.
 After verifying the migration and current history, use
 `openclaw update cleanup --dry-run` to inspect retained recovery data without
 stopping the Gateway. Apply with `openclaw update cleanup` or
-`openclaw update cleanup --yes --json` only after stopping the Gateway and other
-SQLite maintenance for the same profile/state directory. This permanently
+`openclaw update cleanup --yes --json` only after stopping the Gateway, other
+SQLite maintenance, and database readers for the same profile/state directory.
+Keep session-listing watchers stopped until cleanup exits: even read-only
+connections can change WAL/SHM sidecars and invalidate verification. This permanently
 retires eligible rollback originals; it does not remove current SQLite history
 or operator backups. Manifests remain while retained or pending artifacts need
 them, so interrupted cleanup can be resumed. Restore distinguishes intentional

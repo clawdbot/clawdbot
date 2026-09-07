@@ -1,8 +1,11 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.GatewayModelUnavailableReason
+import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
+import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.ui.chat.ChatComposerTextDraftStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -1976,6 +1979,7 @@ class ChatControllerModelSelectionTest {
 
       pendingRefresh.completeExceptionally(IllegalStateException("transport failed"))
       advanceUntilIdle()
+      assertFalse("The current metadata failure needs a visible explanation", controller.errorText.value.isNullOrBlank())
       assertEquals(
         false,
         controller.modelCatalog.value
@@ -1985,6 +1989,7 @@ class ChatControllerModelSelectionTest {
 
       controller.handleGatewayEvent("chat.metadata.changed", "{}")
       advanceUntilIdle()
+      assertNull("An accepted metadata refresh clears its failure", controller.errorText.value)
       assertEquals(
         false,
         controller.modelCatalog.value
@@ -2004,6 +2009,303 @@ class ChatControllerModelSelectionTest {
       assertEquals(messages, controller.messages.value)
       assertEquals(historyRequests, requests.count { it.first == "chat.history" })
       assertEquals(sessionRequests, requests.count { it.first == "sessions.list" })
+    }
+
+  @Test
+  fun metadataFailureAndRecoveryPreservePendingModelPatch() =
+    runTest {
+      val patchResponse = CompletableDeferred<String>()
+      var metadataFails = false
+      var serverModel = "before"
+      val metadata =
+        """{"commands":[],"models":[{"id":"before","provider":"fixture","available":true},{"id":"after","provider":"fixture","available":true}]}"""
+      val controller =
+        createScriptedChatController {
+          gatewayAdvertisesCapability = { it == "session-scoped-chat-metadata" }
+          respond("chat.metadata") {
+            if (metadataFails) error("metadata read failed")
+            metadata
+          }
+          respond("chat.history") {
+            """{"sessionId":"session-main","messages":[],"sessionInfo":{"key":"main","modelProvider":"fixture","model":"$serverModel"}}"""
+          }
+          respond("sessions.list") {
+            """{"sessions":[{"key":"main","modelProvider":"fixture","model":"$serverModel"}]}"""
+          }
+          respond("sessions.patch") {
+            val response = patchResponse.await()
+            serverModel = "after"
+            response
+          }
+        }
+      controller.load("main")
+      advanceUntilIdle()
+      val acceptedChoices = controller.modelCatalog.value
+      assertEquals("fixture/before", controller.selectedModelRef.value)
+
+      val pendingPatch = async { controller.setSessionModelAwait("main", "fixture/after") }
+      runCurrent()
+      assertFalse(pendingPatch.isCompleted)
+      assertEquals(setOf("main"), controller.pendingSessionSettingsKeys.value)
+
+      metadataFails = true
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      runCurrent()
+      assertFalse(controller.errorText.value.isNullOrBlank())
+      assertEquals(acceptedChoices, controller.modelCatalog.value)
+      assertEquals("fixture/before", controller.selectedModelRef.value)
+      assertFalse(pendingPatch.isCompleted)
+      assertEquals(setOf("main"), controller.pendingSessionSettingsKeys.value)
+
+      metadataFails = false
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      runCurrent()
+      assertNull(controller.errorText.value)
+      assertEquals("fixture/before", controller.selectedModelRef.value)
+      assertFalse(pendingPatch.isCompleted)
+      assertEquals(setOf("main"), controller.pendingSessionSettingsKeys.value)
+
+      patchResponse.complete("""{"key":"main","resolved":{"modelProvider":"fixture","model":"after"}}""")
+      assertTrue(pendingPatch.await())
+      advanceUntilIdle()
+      assertEquals("fixture/after", controller.selectedModelRef.value)
+      assertEquals(acceptedChoices, controller.modelCatalog.value)
+      assertTrue(controller.pendingSessionSettingsKeys.value.isEmpty())
+    }
+
+  @Test
+  fun oldSessionMetadataFailureAndCurrentRecoveryPreserveSettingsError() =
+    runTest {
+      val oldRefresh = CompletableDeferred<String>()
+      var metadataRequests = 0
+      var currentMetadataFails = false
+      val controller =
+        createScriptedChatController {
+          gatewayAdvertisesCapability = { it == "session-scoped-chat-metadata" }
+          respond("chat.metadata") {
+            metadataRequests += 1
+            when {
+              metadataRequests == 2 -> oldRefresh.await()
+              currentMetadataFails -> error("current metadata failure")
+              else -> availabilityMetadata(true)
+            }
+          }
+          respond("chat.history") { paramsJson ->
+            val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+            val sessionKey = (params["sessionKey"] as JsonPrimitive).content
+            """{"sessionId":"current-session","messages":[],"sessionInfo":{"key":"$sessionKey","sessionId":"current-session","thinkingLevel":"off"}}"""
+          }
+          respond("sessions.patch") { error("current settings failure") }
+        }
+      controller.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      runCurrent()
+
+      controller.switchSession("agent:ops:current")
+      runCurrent()
+      val currentChoices = controller.modelCatalog.value
+      controller.setThinkingLevel("high")
+      runCurrent()
+      assertEquals("current settings failure", controller.errorText.value)
+
+      oldRefresh.completeExceptionally(IllegalStateException("old metadata failure"))
+      advanceUntilIdle()
+      assertEquals("current settings failure", controller.errorText.value)
+      assertEquals(currentChoices, controller.modelCatalog.value)
+
+      currentMetadataFails = true
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+      assertEquals("current settings failure", controller.errorText.value)
+      assertEquals(currentChoices, controller.modelCatalog.value)
+
+      currentMetadataFails = false
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+      assertEquals("current settings failure", controller.errorText.value)
+      assertEquals(currentChoices, controller.modelCatalog.value)
+      assertEquals("agent:ops:current", controller.sessionKey.value)
+    }
+
+  @Test
+  fun metadataRecoveryPreservesNewerSettingsError() =
+    runTest {
+      var metadataFails = false
+      val controller =
+        createScriptedChatController {
+          respond("chat.metadata") {
+            if (metadataFails) error("metadata read failed")
+            availabilityMetadata(true)
+          }
+          respond("chat.history", """{"sessionId":"session-main","messages":[],"sessionInfo":{"key":"main","sessionId":"session-main","thinkingLevel":"off"}}""")
+          respond("sessions.patch") { error("newer settings failure") }
+        }
+      controller.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      metadataFails = true
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      runCurrent()
+      assertFalse(controller.errorText.value.isNullOrBlank())
+
+      controller.setThinkingLevel("high")
+      runCurrent()
+      assertEquals("newer settings failure", controller.errorText.value)
+      metadataFails = false
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+      assertEquals("newer settings failure", controller.errorText.value)
+    }
+
+  @Test
+  fun legacyMetadataFailureCannotCrossVisualSessionSelection() =
+    runTest {
+      for (returnToOriginal in listOf(false, true)) {
+        val oldRefresh = CompletableDeferred<String>()
+        var metadataRequests = 0
+        val (controller, requests) =
+          chatControllerTestSetup {
+            gatewayAdvertisesCapability = { false }
+            respond("chat.history", historyResponse("session-current", emptyList()))
+            respond("chat.metadata") {
+              metadataRequests += 1
+              if (metadataRequests == 2) oldRefresh.await() else availabilityMetadata(true)
+            }
+          }
+        controller.load("agent:main:first")
+        advanceUntilIdle()
+        val acceptedChoices = controller.modelCatalog.value
+        controller.handleGatewayEvent("chat.metadata.changed", "{}")
+        runCurrent()
+        assertEquals(2, metadataRequests)
+
+        controller.switchSession("agent:main:second")
+        runCurrent()
+        if (returnToOriginal) {
+          controller.switchSession("agent:main:first")
+          runCurrent()
+        }
+        assertEquals("Same-agent selection keeps the warm legacy catalog", 2, metadataRequests)
+        oldRefresh.completeExceptionally(IllegalStateException("previous visual selection failed"))
+        advanceUntilIdle()
+        assertNull("A shared catalog scope does not own a later visible selection", controller.errorText.value)
+        assertEquals(acceptedChoices, controller.modelCatalog.value)
+        for ((_, paramsJson) in requests.filter { it.first == "chat.metadata" }) {
+          val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+          assertEquals(setOf("agentId"), params.keys)
+        }
+      }
+    }
+
+  @Test
+  fun olderMetadataSuccessCannotClearNewerFailure() =
+    runTest {
+      val oldRefresh = CompletableDeferred<String>()
+      var metadataRequests = 0
+      val controller =
+        createScriptedChatController {
+          respond("chat.metadata") {
+            when (++metadataRequests) {
+              1 -> availabilityMetadata(false)
+              2 -> oldRefresh.await()
+              3 -> throw GatewayRequestOutcomeUnknown("request timeout")
+              else -> availabilityMetadata(true)
+            }
+          }
+        }
+      controller.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      val acceptedChoices = controller.modelCatalog.value
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      runCurrent()
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      runCurrent()
+      val currentFailure = controller.errorText.value
+      assertFalse(currentFailure.isNullOrBlank())
+
+      oldRefresh.complete(availabilityMetadata(true))
+      advanceUntilIdle()
+      assertEquals(currentFailure, controller.errorText.value)
+      assertEquals(acceptedChoices, controller.modelCatalog.value)
+
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+      assertNull(controller.errorText.value)
+      assertEquals(
+        true,
+        controller.modelCatalog.value
+          .single()
+          .available,
+      )
+    }
+
+  @Test
+  fun metadataCancellationIsNotARequestTimeoutOrRejection() =
+    runTest {
+      val failures =
+        listOf(
+          CancellationException("caller cancelled"),
+          GatewayRequestOutcomeUnknown("request timeout"),
+          GatewayRequestRejected(GatewaySession.ErrorShape("UNAVAILABLE", "metadata unavailable")),
+        )
+      for (failure in failures) {
+        var nextFailure: Throwable? = null
+        val controller =
+          createScriptedChatController {
+            respond("chat.metadata") {
+              nextFailure?.let { throw it }
+              availabilityMetadata(true)
+            }
+          }
+        controller.handleGatewayEvent("health", null)
+        advanceUntilIdle()
+        val acceptedChoices = controller.modelCatalog.value
+        nextFailure = failure
+        controller.handleGatewayEvent("chat.metadata.changed", "{}")
+        runCurrent()
+        if (failure is CancellationException) {
+          assertNull(controller.errorText.value)
+        } else {
+          assertFalse("A real failed request needs a visible diagnostic", controller.errorText.value.isNullOrBlank())
+        }
+        assertEquals(acceptedChoices, controller.modelCatalog.value)
+      }
+    }
+
+  @Test
+  fun explicitRefreshRetriesFailedMetadataBeforeClearingItsNotice() =
+    runTest {
+      val retryResponse = CompletableDeferred<String>()
+      var metadataRequests = 0
+      val controller =
+        createScriptedChatController {
+          respond("chat.history", historyResponse("session-main", emptyList()))
+          respond("chat.metadata") {
+            when (++metadataRequests) {
+              1 -> availabilityMetadata(true)
+              2 -> throw GatewayRequestOutcomeUnknown("request timeout")
+              else -> retryResponse.await()
+            }
+          }
+        }
+      controller.load("main")
+      advanceUntilIdle()
+      val acceptedChoices = controller.modelCatalog.value
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      runCurrent()
+      val refreshNotice = controller.errorText.value
+      assertFalse(refreshNotice.isNullOrBlank())
+
+      controller.refresh()
+      runCurrent()
+      assertEquals("The existing Refresh action must retry metadata, not just history", 3, metadataRequests)
+      assertEquals(refreshNotice, controller.errorText.value)
+      assertEquals(acceptedChoices, controller.modelCatalog.value)
+
+      retryResponse.complete(availabilityMetadata(true))
+      advanceUntilIdle()
+      assertNull(controller.errorText.value)
+      assertEquals(acceptedChoices, controller.modelCatalog.value)
     }
 
   @Test
@@ -2082,6 +2384,7 @@ class ChatControllerModelSelectionTest {
           }
           runCurrent()
           assertEquals("$event refreshes at the event boundary", 3, metadataRequests)
+          assertNull("$event fences a queued stale error", controller.errorText.value)
           assertEquals(
             "$event fences a queued stale completion",
             false,
@@ -2202,6 +2505,7 @@ class ChatControllerModelSelectionTest {
 
       assertEquals(2, metadataRequests)
       assertTrue(controller.modelCatalog.value.isEmpty())
+      assertNull("An accepted empty catalog is not a failed read", controller.errorText.value)
     }
 
   @Test

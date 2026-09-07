@@ -30,12 +30,11 @@ import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachment
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
-  buildAssistantDisplayContentFromReplyPayloads,
+  buildAssistantReplyContent,
   combineNonStreamingReplyParts,
   extractAssistantDisplayTextFromContent,
   hasAssistantDisplayMediaContent,
   isMediaBearingPayload,
-  replaceAssistantContentTextBlocks,
   sanitizeAssistantDisplayText,
 } from "./chat-assistant-content.js";
 import { isBtwReplyPayload, isSourceReplyTranscriptMirrorPayload } from "./chat-broadcast.js";
@@ -228,26 +227,23 @@ export function createChatSendReplyDispatch(params: {
       getAgentScopedMediaLocalRoots(cfg, agentId),
       latestStorePath ? [latestStorePath] : undefined,
     );
-    const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
-      sessionKey,
-      agentId,
-      payloads: [transcriptPayload],
-      managedMediaLocalRoots: mediaLocalRoots,
-      includeSensitiveMedia: transcriptPayload.sensitiveMedia !== true,
-      onManagedMediaPrepareError: (message) => {
-        logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
-      },
-    });
     const mediaMessage = await buildWebchatAssistantMessageFromReplyPayloads([transcriptPayload], {
       localRoots: mediaLocalRoots,
       onLocalAudioAccessDenied: (err) => {
         logGateway.warn(`webchat audio embedding denied local path: ${formatForLog(err)}`);
       },
     });
-    const persistedAssistantContent = replaceAssistantContentTextBlocks(
-      assistantContent,
-      mediaMessage,
-    );
+    const { assistantContent, persistedAssistantContent } = await buildAssistantReplyContent({
+      sessionKey,
+      agentId,
+      payloads: [transcriptPayload],
+      transcriptMediaMessage: mediaMessage,
+      managedMediaLocalRoots: mediaLocalRoots,
+      includeSensitiveMedia: transcriptPayload.sensitiveMedia !== true,
+      onManagedMediaPrepareError: (message) => {
+        logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
+      },
+    });
     const transcriptPayloadMetadata = getReplyPayloadMetadata(transcriptPayload);
     const mediaFailures = transcriptPayloadMetadata?.assistantMediaFailures ?? [];
     const mediaNormalizationFailed = mediaFailures.length > 0;
@@ -262,9 +258,6 @@ export function createChatSendReplyDispatch(params: {
       mediaMessage?.transcriptText ??
       extractAssistantDisplayTextFromContent(assistantContent) ??
       buildTranscriptReplyText([transcriptPayload]);
-    if (!transcriptReply && !persistedAssistantContent?.length && !assistantContent?.length) {
-      return;
-    }
     const payloadMetadata = getReplyPayloadMetadata(payload);
     const sourceMediaUrls = Array.from(
       new Set(
@@ -383,7 +376,7 @@ export function createChatSendReplyDispatch(params: {
     const appended = await appendAssistantTranscriptMessage({
       sessionKey,
       message: transcriptReply,
-      ...(persistedContentForAppend.length ? { content: persistedContentForAppend } : {}),
+      content: persistedContentForAppend,
       sessionId,
       storePath: latestStorePath,
       agentId,
@@ -461,25 +454,17 @@ export function createChatSendReplyDispatch(params: {
   };
   const finalizeAgentMediaTranscript = async () => {
     const latestPayloadByKey = new Map<string, ReplyPayload>();
-    const orderedKeys: string[] = [];
     for (const { payload } of deliveredReplies) {
       if (!needsAgentMediaTranscriptFinalization(payload)) {
         continue;
       }
-      const key = agentMediaTranscriptKey(payload);
-      if (!latestPayloadByKey.has(key)) {
-        orderedKeys.push(key);
-      }
-      latestPayloadByKey.set(key, payload);
+      latestPayloadByKey.set(agentMediaTranscriptKey(payload), payload);
     }
-    for (const key of orderedKeys) {
-      const payload = latestPayloadByKey.get(key);
-      if (payload) {
-        try {
-          await appendWebchatAgentMediaTranscriptIfNeeded(payload);
-        } catch (error) {
-          logGateway.warn(`webchat media finalization failed: ${formatForLog(error)}`);
-        }
+    for (const payload of latestPayloadByKey.values()) {
+      try {
+        await appendWebchatAgentMediaTranscriptIfNeeded(payload);
+      } catch (error) {
+        logGateway.warn(`webchat media finalization failed: ${formatForLog(error)}`);
       }
     }
   };

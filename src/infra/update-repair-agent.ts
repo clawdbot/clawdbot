@@ -1,6 +1,8 @@
 import { z } from "zod";
+import { createAgentCleanupScope } from "../agents/run-cleanup-timeout.js";
 import { renderTriagePrompt } from "../commands/triage-prompt.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { truncateUtf8Prefix, truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 import {
   updateRepairBudgetSchema,
@@ -85,26 +87,22 @@ async function validateRepair(
   signal: AbortSignal,
 ): Promise<UpdateRepairValidation> {
   signal.throwIfAborted();
-  let abort: (() => void) | undefined;
   const pending = params.validate(signal);
+  const cancelled = createDeferredCore<never>();
+  const abort = () =>
+    cancelled.reject(
+      signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason)),
+    );
   try {
-    const value = await Promise.race([
-      pending,
-      new Promise<never>((_resolve, reject) => {
-        abort = () =>
-          reject(signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason)));
-        signal.addEventListener("abort", abort, { once: true });
-        if (signal.aborted) {
-          abort();
-        }
-      }),
-    ]);
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) {
+      abort();
+    }
+    const value = await Promise.race([pending, cancelled.promise]);
     const parsed = updateRepairValidationSchema.parse(value);
     return { ...parsed, summary: repairSummary(parsed.summary, params) };
   } finally {
-    if (abort) {
-      signal.removeEventListener("abort", abort);
-    }
+    signal.removeEventListener("abort", abort);
   }
 }
 
@@ -142,6 +140,7 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
       throw new Error("Repair no longer owns the update attempt.");
     }
   };
+  const cleanup = createAgentCleanupScope();
   repairActive = true;
   try {
     const runtime = await import("./update-repair-agent.runtime.js");
@@ -194,20 +193,22 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
       const turnSignal = AbortSignal.any([signal, turnController.signal]);
       let outcome;
       try {
-        outcome = await runtime.withUpdateRepairEnvironment(params.target, () =>
-          runtime.runUpdateRepairTurn({
-            target: params.target,
-            route,
-            modelFallbacks,
-            prompt: repairPrompt(params, finalValidation),
-            timeoutMs,
-            maxToolCalls: remainingToolCalls,
-            signal: turnSignal,
-            isCurrent: () => {
-              assertCurrent();
-              return true;
-            },
-          }),
+        outcome = await cleanup.run(() =>
+          runtime.withUpdateRepairEnvironment(params.target, () =>
+            runtime.runUpdateRepairTurn({
+              target: params.target,
+              route,
+              modelFallbacks,
+              prompt: repairPrompt(params, finalValidation),
+              timeoutMs,
+              maxToolCalls: remainingToolCalls,
+              signal: turnSignal,
+              isCurrent: () => {
+                assertCurrent();
+                return true;
+              },
+            }),
+          ),
         );
       } finally {
         clearTimeout(turnTimer);
@@ -238,6 +239,11 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
       // runner has drained; never infer repair from its self-reported result.
       try {
         assertCurrent();
+        if (cleanup.outcome === "uncertain") {
+          throw new Error(
+            "Repair cleanup is unconfirmed; further repair is blocked in this process.",
+          );
+        }
         finalValidation = await validateRepair(params, signal);
         attempt.validation = finalValidation;
         params.onEvent?.({ type: "validation", turn, validation: finalValidation });
@@ -285,11 +291,11 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
     );
   } finally {
     clearTimeout(timer);
-    repairActive = false;
+    // Failed cleanup retains the process-local owner; Doctor cannot prove resource closure.
+    repairActive = cleanup.outcome === "uncertain";
   }
 }
 
-/** Unattended updater entry; shares execution and results with interactive triage. */
 export async function prepareUnattendedUpdateRepair(
   params: UpdateRepairParams,
 ): Promise<UpdateRepairResult> {

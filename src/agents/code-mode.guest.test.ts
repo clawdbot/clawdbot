@@ -28,6 +28,43 @@ describe("Code Mode guest execution", () => {
     resetCodeModeTestState();
   });
 
+  it("preserves text encoding primitives across explicit suspension", async () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    applyCodeModeCatalog({ tools, config, catalogRef });
+    const details = await runUntilCompleted({
+      execTool: expectDefined(tools[0], "Code Mode exec"),
+      waitTool: expectDefined(tools[1], "Code Mode wait"),
+      code: `
+        const encoder = new TextEncoder();
+        const decoder = new TextDecoder("utf-8", { fatal: true });
+        const bytes = encoder.encode("hello 🦞");
+        await yield_control("restore encoding");
+        const destination = new Uint8Array(4);
+        return {
+          decoded: decoder.decode(bytes),
+          bytes: Array.from(bytes),
+          into: encoder.encodeInto("🦞", destination),
+          destination: Array.from(destination),
+          encoding: encoder.encoding,
+          network: typeof fetch,
+          modules: typeof require,
+        };
+      `,
+    });
+    expect(details, JSON.stringify(details)).toMatchObject({
+      status: "completed",
+      value: {
+        decoded: "hello 🦞",
+        bytes: [104, 101, 108, 108, 111, 32, 240, 159, 166, 158],
+        into: { read: 2, written: 4 },
+        destination: [240, 159, 166, 158],
+        encoding: "utf-8",
+        network: "undefined",
+        modules: "undefined",
+      },
+    });
+  });
+
   it("runs JavaScript through QuickJS-WASI and resumes nested tool calls with wait", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const ticket = pluginTool("fake_create_ticket", "Create a fake ticket");
@@ -231,6 +268,8 @@ describe("Code Mode guest execution", () => {
       pluginTool("llm-task", "Run an LLM task"),
       pluginTool("llm_task", "Run the exact-name task"),
       pluginTool("catalog", "Collide with discovery"),
+      pluginTool("TextEncoder", "Collide with text encoding"),
+      pluginTool("TextDecoder", "Collide with text decoding"),
       pluginTool("class", "Use a reserved word"),
       pluginTool("9patch", "Start with a digit"),
       pluginTool("__openclawResult", "Collide with a private lifecycle hook"),
@@ -256,6 +295,7 @@ describe("Code Mode guest execution", () => {
           names: handles.map((handle) => handle.callableName),
           results,
           catalogSearch: typeof catalog.search,
+          encoding: new TextDecoder().decode(new TextEncoder().encode("still works")),
         };
       `,
     });
@@ -269,6 +309,8 @@ describe("Code Mode guest execution", () => {
       expect.arrayContaining([
         expect.stringMatching(/^llm_task_[a-f0-9]{8}$/u),
         expect.stringMatching(/^catalog_[a-f0-9]{8}$/u),
+        expect.stringMatching(/^TextEncoder_[a-f0-9]{8}$/u),
+        expect.stringMatching(/^TextDecoder_[a-f0-9]{8}$/u),
         expect.stringMatching(/^class_[a-f0-9]{8}$/u),
         expect.stringMatching(/^tool___openclawResult_[a-f0-9]{8}$/u),
       ]),
@@ -277,7 +319,10 @@ describe("Code Mode guest execution", () => {
       expect(name.startsWith("__openclaw")).toBe(false);
       expect(compacted.tools[0]?.description).toContain(`- ${name} `);
     }
+    expect(details).toMatchObject({ value: { encoding: "still works" } });
     expect(value.results).toMatchObject({
+      TextEncoder: { name: "TextEncoder", input: { ok: true } },
+      TextDecoder: { name: "TextDecoder", input: { ok: true } },
       "llm-task": { name: "llm-task", input: { ok: true } },
       llm_task: { name: "llm_task", input: { ok: true } },
       catalog: { name: "catalog", input: { ok: true } },

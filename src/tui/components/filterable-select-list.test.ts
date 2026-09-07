@@ -1,6 +1,7 @@
 // Filterable select list tests cover keyboard filtering and cursor behavior.
 import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
+import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { FilterableSelectList, type FilterableSelectItem } from "./filterable-select-list.js";
 
 type FilterableSelectListTheme = ConstructorParameters<typeof FilterableSelectList>[2];
@@ -92,7 +93,7 @@ describe("FilterableSelectList", () => {
 
     list.handleInput(query);
 
-    expect(list.getFilterText()).toBe(query);
+    expect(stripAnsi(list.render(80)[0] ?? "").trimEnd()).toBe(`>Filter: <> ${query}`);
     expect(list.getSelectedItem()?.value).toBe(expectedValue);
   });
 
@@ -125,13 +126,13 @@ describe("FilterableSelectList", () => {
     };
 
     typeInput(list, "beta");
-    expect(list.getFilterText()).toBe("beta");
+    expect(stripAnsi(list.render(80)[0] ?? "").trimEnd()).toBe(">Filter: <> beta");
     expect(list.getSelectedItem()?.value).toBe("session-2");
 
     list.handleInput(key);
 
     expect(cancelled).toBe(false);
-    expect(list.getFilterText()).toBe("");
+    expect(stripAnsi(list.render(80)[0] ?? "").trimEnd()).toBe(">Filter: <>");
     expect(list.getSelectedItem()?.value).toBe("session-1");
     expect(list.render(80).join("\n")).toContain("first session");
     expect(list.render(80).join("\n")).toContain("second session");
@@ -193,7 +194,26 @@ describe("FilterableSelectList", () => {
     }
     expect(rendered).not.toContain("fv-end\r\nمرحبا\tשלום");
 
+    // Text removed from display remains part of the original search fields.
+    list.handleInput("\x1b");
+    typeInput(list, "filter-title");
+    expect(list.getSelectedItem()).toMatchObject({ searchText: "raw-filter-target" });
     list.handleInput("\r");
     expect(selectedValue).toBe(rawValue);
+  });
+
+  it("reads changed row fields when the picker is reopened", () => {
+    const item = { value: "session", label: "Before", searchText: "old-name" };
+    const first = new FilterableSelectList([item], 5, mockTheme);
+    typeInput(first, "old-name");
+    expect(first.getSelectedItem()?.value).toBe("session");
+
+    item.label = "After";
+    item.searchText = "new-name";
+    const reopened = new FilterableSelectList([item], 5, mockTheme);
+    typeInput(reopened, "new-name");
+
+    expect(reopened.getSelectedItem()).toMatchObject(item);
+    expect(reopened.render(80).join("\n")).toContain("After");
   });
 });

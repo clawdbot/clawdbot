@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BASE_GATEWAY_BENCH_CONFIG,
   createGatewayBenchEnv,
+  formatMb,
+  formatStats,
   writeGatewayBenchConfig,
 } from "../../scripts/lib/gateway-bench-runtime.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
@@ -25,6 +27,32 @@ vi.mock("../../src/infra/widearea-dns.js", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+describe("benchmark statistic units", () => {
+  const stats = { p50: 1.5, avg: 1.5, min: 1, max: 2, p95: 2 };
+  it.each([
+    {
+      name: "default duration",
+      format: undefined,
+      expected: "p50=1.5ms avg=1.5ms min=1.0ms max=2.0ms",
+    },
+    { name: "fractional counts", format: String, expected: "p50=1.5 avg=1.5 min=1 max=2" },
+    { name: "memory", format: formatMb, expected: "p50=1.5MB avg=1.5MB min=1.0MB max=2.0MB" },
+    {
+      name: "ratios",
+      format: (value: number) => value.toFixed(3),
+      expected: "p50=1.500 avg=1.500 min=1.000 max=2.000",
+    },
+  ])("formats $name", ({ format, expected }) => {
+    expect(format === undefined ? formatStats(stats) : formatStats(stats, format)).toBe(expected);
+  });
+
+  it.each([null, undefined])("keeps missing statistics %s unavailable", (missingStats) => {
+    const format = vi.fn(() => "unexpected");
+    expect(formatStats(missingStats, format)).toBe("n/a");
+    expect(format).not.toHaveBeenCalled();
+  });
+});
 
 afterEach(() => {
   vi.unstubAllEnvs();

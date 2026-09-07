@@ -68,6 +68,17 @@ lookups.
 
 Reopening an occupancy-driven capture clears `stopped_at` without changing the
 primary key, so the same meeting retains its utterances.
+New transcript admissions record `sessionIdOrigin` (`generated` or `supplied`)
+in `metadata_json`. The store preserves that value, including its absence or
+invalidity in legacy rows, on later writes to the same primary key. Occupancy
+reopening requires an explicitly generated origin; an unknown origin starts a
+fresh capture and leaves the old record intact. The existing newest-candidate
+query and ten-minute window are unchanged.
+
+This adds no schema, index, version, or backfill. Doctor metadata restoration
+preserves an explicitly recorded origin and leaves unknown origins unknown.
+Older runtimes do not enforce this rule, so downgrading also removes the fixed-ID
+history protection. See the [accepted ID-origin decision](https://github.com/openclaw/openclaw/pull/130860).
 
 #### `meeting_transcript_utterances`
 
@@ -225,6 +236,31 @@ original result and a keyed request fingerprint, not a second raw request.
 There is no backfill or configuration switch. Downgrading preserves the table
 but disables the new structured controls; upgrading can read retained receipts.
 
+### Schema bumps and older updaters
+
+Update-time Doctor checks the shared database and registered agent databases
+before CLI debug capture, maintenance, config rewrites, or migration ledger writes.
+If a database would advance `user_version` and a running `update_runs` row identifies
+the driving updater as the 2026.9.2 release line, Doctor reports
+`update-schema-bump-unfenced` and a nonzero exit. The
+refusal includes on-disk and target schema versions, the active update run's
+`before.version`, and manual update commands. Doctor leaves the databases and
+config unchanged.
+
+OpenClaw 2026.9.2 introduced the update ledger and reopens it with the previous
+build after the target's Doctor. That release cannot safely drive a schema bump.
+Earlier updaters, including 2026.9.1, never reopen shared state after Doctor and
+continue to work. A missing ledger table or no running row does not trigger this
+guard, including when a database schema is indeterminate. Builds from 2026.9.3
+onward, including prereleases, use transactional updates that suspend old-process
+ledger access and let candidate code finish after migration. The version check
+includes 2026.9.2 rebuilds and requires a valid semantic version; it adds no
+environment override. Same-schema repairs and ordinary Doctor runs remain available.
+
+Use the [manual update sequence](/install/updating#updating-from-2026.9.2-across-a-schema-bump)
+after the old updater restores the previous package. Package rollback cannot
+reverse a migration that already happened.
+
 ### Profile-owned skill library
 
 [Personal and team skills](/tools/skills#personal-skills-on-a-shared-gateway) use four first-use tables in the shared state database without changing its schema version: `skill_library_entries`, `skill_library_revisions`, `skill_library_events`, and `skill_library_uploads`. Ordinary workspace skills and unused-library discovery do not create these tables. Ownership, sharing, the current revision pointer, portable file manifests, and publication events are canonical SQLite data. Session selections remain in the existing per-agent session store; inherited cron selections remain in the existing private job record.
@@ -378,6 +414,10 @@ Only admission is retried; transaction callbacks and mutations are never replaye
 The original lock-admission deadline is retained. After granting approval,
 the parent synchronously joins transaction settlement before allowing owner retirement;
 that mandatory join cannot be abandoned at the append deadline.
+
+Periodic incremental vacuum uses the same write-admission boundary, so it can
+service reclamation approval before taking the writer lock. Its 512-page limit
+is unchanged; passive checkpoints remain outside the write transaction.
 
 Reclamation page maintenance uses a PASSIVE checkpoint and at most 512 pages of
 incremental vacuum per pass. PASSIVE does not wait for readers, but does not cap
@@ -613,6 +653,8 @@ Background verification errors retain the original name and message and append b
 Agent database maintenance fences other writers with a 60-second lease in the shared state database. A dedicated worker renews that lease during synchronous integrity scans and migration phases. Maintenance still checks the exact persisted owner before mutations and commit, and stops if the heartbeat fails or ownership expires or changes. Finishing or cancelling maintenance stops renewal before releasing the lease; process death leaves at most the remaining lease duration.
 
 Maintenance schema admission runs its initial full-file integrity check in a read-only Worker when that check is outside a write transaction. The connection and maintenance lease remain held until the Worker exits. Schema changes, index repairs, and compaction retain their synchronous phases.
+
+Startup errors containing `state lease heartbeat did not become ready` include `phase=startup`, the settlement trigger (`timeout` or `message`), and the status observed before the parent marks failure. `status=starting` distinguishes readiness still pending from `status=lost`, where loss was already recorded. `elapsedMs` measures monotonic time since heartbeat startup began; `timeoutMs` is the startup wait budget, capped at five seconds or the remaining initial lease lifetime. These fields do not establish why startup stalled or ownership was lost.
 
 The heartbeat proves ownership, not migration progress. A live but stuck maintenance process can keep its lease; stop that process before retrying Doctor.
 

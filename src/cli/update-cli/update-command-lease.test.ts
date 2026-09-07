@@ -133,6 +133,7 @@ async function invoke(lane: Lane): Promise<void> {
     });
   }
   await finishUpdate({
+    mutationStarted: true,
     result: {
       status: "ok",
       mode: "npm",
@@ -398,6 +399,7 @@ describe("update orchestration lifecycle ownership", () => {
       channel: "beta",
       restart: false,
       phaseTimings: [
+        "preflight",
         "targetConfigValidation",
         "configSnapshot",
         "doctor",

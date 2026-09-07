@@ -220,7 +220,6 @@ describe("update run report", () => {
           booted: true,
           versionMatch: false,
           channelsReady: false,
-          inferenceProbe: "failed",
           pluginErrors: ["Activation failed"],
         },
         repair: [
@@ -232,7 +231,7 @@ describe("update run report", () => {
     expect(report.markdown).not.toContain("openclaw doctor");
     expect(report.markdown).not.toContain("Run the update manually");
     expect(report.markdown).toContain(
-      "version mismatch; channels not ready; inference failed; 1 plugin activation error(s)",
+      "version mismatch; channels not ready; 1 plugin activation error(s)",
     );
     expect(report.markdown).toContain("Repair 1: failed — Plugin still unavailable");
     expect(report.markdown).not.toContain("The gateway is running");

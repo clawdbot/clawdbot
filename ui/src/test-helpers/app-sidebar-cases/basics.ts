@@ -541,5 +541,14 @@ describe("AppSidebar agent chip", () => {
     expect(promoted).not.toBeNull();
     expect(promoted?.classList.contains("sidebar-recent-session--child")).toBe(false);
     expect(promoted?.textContent).toContain("Spawned thread");
+    expect(promoted?.querySelector("[data-sidebar-session-pin]")).toBeNull();
+    promoted?.querySelector<HTMLButtonElement>("[data-session-menu]")?.click();
+    await sidebar.updateComplete;
+    const menu = sidebar.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "openclaw-session-menu",
+    );
+    expect(menu).not.toBeNull();
+    await menu?.updateComplete;
+    expect(menu?.querySelector('[value="toggle-pin"]')).toBeNull();
   });
 });

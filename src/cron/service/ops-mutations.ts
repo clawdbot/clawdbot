@@ -509,7 +509,7 @@ async function updateLoadedJob(params: {
   await precondition?.(structuredClone(job), now);
   const nextJob = structuredClone(job);
   applyJobPatch(nextJob, patch, {
-    defaultAgentId: state.deps.defaultAgentId,
+    defaultAgentId: resolveCurrentDefaultAgentId(state),
     scheduleValidationNowMs: now,
     cronConfig: state.deps.cronConfig,
     scheduledToolPolicy: opts?.scheduledToolPolicy,
@@ -664,8 +664,11 @@ export async function remove(
           sessionStorePath,
         });
       }
+      return undefined;
     } catch (error) {
-      state.deps.log.warn({ jobId: id, err: String(error) }, "cron: session cleanup failed");
+      const message = `Cron job ${id} was removed, but session cleanup failed: ${String(error)}. Use openclaw sessions list --json, then openclaw sessions delete to retry.`;
+      state.deps.log.warn({ jobId: id, err: message }, "cron: session cleanup failed");
+      return message;
     } finally {
       release();
       finish();
@@ -673,9 +676,12 @@ export async function remove(
   };
   if (activeMarker) {
     onCronJobInactive(activeMarker, () => void cleanup());
-    return result;
+    return { ...result, sessionCleanup: "pending" as const };
   }
-  await cleanup();
+  const cleanupError = await cleanup();
+  if (cleanupError) {
+    throw new Error(cleanupError);
+  }
   return result;
 }
 

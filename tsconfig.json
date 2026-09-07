@@ -34,6 +34,9 @@
       "@openclaw/ai/types": ["./packages/ai/src/types.ts"],
       "@openclaw/ai/validation": ["./packages/ai/src/validation.ts"],
       "@openclaw/ai/internal/anthropic": ["./packages/ai/src/internal/anthropic.ts"],
+      "@openclaw/ai/internal/google-model-family": [
+        "./packages/ai/src/internal/google-model-family.ts"
+      ],
       "@openclaw/ai/internal/openai": ["./packages/ai/src/internal/openai.ts"],
       "@openclaw/ai/internal/openai-responses-payload-policy": [
         "./packages/ai/src/internal/openai-responses-payload-policy.ts"
@@ -166,6 +169,9 @@
       ],
       "@openclaw/normalization-core/cjk-chars": [
         "./packages/normalization-core/src/cjk-chars.ts"
+      ],
+      "@openclaw/normalization-core/code-points": [
+        "./packages/normalization-core/src/code-points.ts"
       ],
       "@openclaw/normalization-core/error-coercion": [
         "./packages/normalization-core/src/error-coercion.ts"

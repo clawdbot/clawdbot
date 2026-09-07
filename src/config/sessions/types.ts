@@ -620,6 +620,8 @@ export interface SessionEntry extends SessionEntryCore {}
 
 /** Internal durable fields excluded from public/plugin session projections. */
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Transcript-wide account provenance; native binding replacement must not replace it. */
+  cliHistoryBoundary?: import("./cli-history-boundary.js").CliHistoryBoundary;
   /** Explicit world-readable publication, bound to one transcript generation. */
   publicShare?: { id: string; sessionId: string; createdAt: number };
   /** Run that owns the current non-terminal Gateway lifecycle projection. */

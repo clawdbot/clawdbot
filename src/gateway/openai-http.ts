@@ -80,9 +80,9 @@ import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
 import { resolveOpenAiCompatError, validateOpenAiSamplingParams } from "./openai-compat-errors.js";
 import {
+  applyToolChoice,
   isToolChoiceConstraintSatisfied,
   resolveUnsatisfiedToolChoiceMessage,
-  toolChoiceConstraintPrompt,
   type ToolChoiceConstraint,
 } from "./openai-tool-choice.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
@@ -240,24 +240,15 @@ function extractClientToolsFromChatRequest(tools: unknown): ClientToolDefinition
   return clientTools;
 }
 
-function applyChatToolChoice(params: { tools: ClientToolDefinition[]; toolChoice: unknown }): {
-  tools: ClientToolDefinition[];
-  extraSystemPrompt?: string;
-  constraint?: ToolChoiceConstraint;
-} {
-  const { tools, toolChoice } = params;
+function resolveChatToolChoice(toolChoice: unknown): ToolChoiceConstraint | "none" | undefined {
   if (toolChoice == null || toolChoice === "auto") {
-    return { tools };
+    return undefined;
   }
   if (toolChoice === "none") {
-    return { tools: [] };
+    return "none";
   }
   if (toolChoice === "required") {
-    if (tools.length === 0) {
-      throw new Error("tool_choice=required but no tools were provided");
-    }
-    const constraint: ToolChoiceConstraint = { type: "required" };
-    return { tools, extraSystemPrompt: toolChoiceConstraintPrompt(constraint), constraint };
+    return { type: "required" };
   }
   if (typeof toolChoice !== "object" || Array.isArray(toolChoice)) {
     throw new Error("tool_choice must be a string or object");
@@ -270,16 +261,7 @@ function applyChatToolChoice(params: { tools: ClientToolDefinition[]; toolChoice
     if (!targetName) {
       throw new Error("tool_choice.function.name is required");
     }
-    const matched = tools.filter((tool) => tool.function?.name === targetName);
-    if (matched.length === 0) {
-      throw new Error(`tool_choice requested unknown tool: ${targetName}`);
-    }
-    const constraint: ToolChoiceConstraint = { type: "function", name: targetName };
-    return {
-      tools: matched,
-      extraSystemPrompt: toolChoiceConstraintPrompt(constraint),
-      constraint,
-    };
+    return { type: "function", name: targetName };
   }
   if (typeof choiceType !== "string") {
     throw new Error("unsupported tool_choice type");
@@ -983,10 +965,10 @@ export async function handleOpenAiHttpRequest(
   let toolChoiceConstraint: ToolChoiceConstraint | undefined;
   try {
     const parsedClientTools = extractClientToolsFromChatRequest(payload.tools);
-    const toolChoiceResult = applyChatToolChoice({
-      tools: parsedClientTools,
-      toolChoice: payload.tool_choice,
-    });
+    const toolChoiceResult = applyToolChoice(
+      parsedClientTools,
+      resolveChatToolChoice(payload.tool_choice),
+    );
     resolvedClientTools = toolChoiceResult.tools;
     toolChoicePrompt = toolChoiceResult.extraSystemPrompt;
     toolChoiceConstraint = toolChoiceResult.constraint;

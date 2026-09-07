@@ -88,6 +88,52 @@ class ClawComponentsTest {
   val composeRule = createComposeRule()
 
   @Test
+  fun avatarMarksKeepBothGlyphsInsideTheirCircleAtLargeFont() {
+    val fontScale = mutableStateOf(1f)
+    val marks = listOf("OC", "WW")
+    val evidence = File("build/outputs/avatar-monogram", UUID.randomUUID().toString())
+    assertTrue(evidence.mkdirs())
+    composeRule.setContent {
+      DeviceConfigurationOverride(DeviceConfigurationOverride.FontScale(fontScale.value)) {
+        ClawDesignTheme {
+          Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            marks.forEach { ClawAvatarMark(text = it.lowercase(), modifier = Modifier.testTag("avatar-$it")) }
+          }
+        }
+      }
+    }
+    val failures = mutableListOf<String>()
+    for (scale in listOf(1f, 2f)) {
+      composeRule.runOnIdle { fontScale.value = scale }
+      for (mark in marks) {
+        val container = composeRule.onNodeWithTag("avatar-$mark")
+        val text = composeRule.onNodeWithText(mark, useUnmergedTree = true)
+        val layouts = mutableListOf<TextLayoutResult>()
+        text.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
+        val layout = layouts.single()
+        val node = text.fetchSemanticsNode()
+        val circle = container.fetchSemanticsNode().boundsInRoot
+        val glyphs = mark.indices.map { layout.getBoundingBox(it).translate(node.positionInRoot) }
+        println("AVATAR_MONOGRAM scale=$scale text=$mark lines=${layout.lineCount} layout=${layout.size} paragraph=${layout.multiParagraph.height} circle=$circle glyphs=$glyphs")
+        File(evidence, "$scale-$mark.png").outputStream().use {
+          assertTrue(container.captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it))
+        }
+        try {
+          text.assertCompleteText(mark)
+          assertEquals("Initials must remain one line", 1, layout.lineCount)
+          for (glyph in glyphs) {
+            assertTrue("Each initial needs positive glyph geometry", glyph.width > 0 && glyph.height > 0)
+            assertTrue("Both initials must fit inside the avatar bounds", glyph.left >= circle.left && glyph.top >= circle.top && glyph.right <= circle.right && glyph.bottom <= circle.bottom)
+          }
+        } catch (error: AssertionError) {
+          failures += "$scale: $mark: ${error.message}"
+        }
+      }
+    }
+    assertTrue("Avatar marks must retain their complete initials:\n${failures.joinToString("\n")}", failures.isEmpty())
+  }
+
+  @Test
   fun detailRowKeepsInstallOnlyTrustWarningVisible() {
     val results =
       parseClawHubSearchResults(
@@ -335,19 +381,7 @@ class ClawComponentsTest {
           }
           val labels = listOfNotNull(row.title, row.subtitle, row.metadata, "Oublier".takeIf { row.slots == ListRowSlots.Gateway }, "Setup".takeIf { row.slots == ListRowSlots.Skill })
           for (label in labels) {
-            val layouts = mutableListOf<TextLayoutResult>()
-            composeRule
-              .onNodeWithText(label, useUnmergedTree = true)
-              .performScrollTo()
-              .assertIsDisplayed()
-              .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action -> assertTrue(action(layouts)) }
-            val layout = layouts.single()
-            // Paragraph width can exceed a tight Text node even when every glyph fits.
-            assertFalse("${row.slots}/$rowWidth/$scale: $label must retain every line", layout.multiParagraph.didExceedMaxLines)
-            assertTrue("$label must fit vertically", layout.multiParagraph.height <= layout.size.height + 1f)
-            assertTrue("${row.slots}/$rowWidth/$scale: $label must fit horizontally", (0 until layout.lineCount).all { layout.getLineLeft(it) >= -1f && layout.getLineRight(it) <= layout.size.width + 1f })
-            assertTrue("$label must not be ellipsized", (0 until layout.lineCount).none(layout::isLineEllipsized))
-            assertEquals(label.length, layout.getLineEnd(layout.lineCount - 1, visibleEnd = true))
+            composeRule.onNodeWithText(label, useUnmergedTree = true).assertCompleteText(label)
           }
           if (row.slots == ListRowSlots.Skill) {
             assertEquals(
@@ -549,6 +583,74 @@ class ClawComponentsTest {
   }
 
   @Test
+  fun longActionLabelsWrapWithoutLosingTheirClickOrDisabledState() {
+    val enabled = mutableStateOf(true)
+    var primaryClicks = 0
+    var secondaryClicks = 0
+    val primary = "Reconnecter"
+    val secondary = "Déconnecter"
+    composeRule.setContent {
+      DeviceConfigurationOverride(DeviceConfigurationOverride.FontScale(2f)) {
+        ClawDesignTheme {
+          LazyColumn(Modifier.width(280.dp)) {
+            item {
+              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ClawPrimaryButton(primary, { primaryClicks++ }, Modifier.weight(1f), enabled.value, Icons.Default.Cloud)
+                ClawSecondaryButton(secondary, { secondaryClicks++ }, Modifier.weight(1f), enabled.value)
+              }
+            }
+          }
+        }
+      }
+    }
+    for (label in listOf(primary, secondary)) {
+      composeRule.onNodeWithText(label, useUnmergedTree = true).assertCompleteText(label)
+      composeRule.onNodeWithText(label).performScrollTo().performClick()
+    }
+    composeRule.runOnIdle {
+      assertEquals(1, primaryClicks)
+      assertEquals(1, secondaryClicks)
+      enabled.value = false
+    }
+    for (label in listOf(primary, secondary)) {
+      composeRule
+        .onNodeWithText(label)
+        .assertIsNotEnabled()
+        .performScrollTo()
+        .performClick()
+      composeRule.onNodeWithText(label, useUnmergedTree = true).assertCompleteText(label)
+    }
+    composeRule.runOnIdle {
+      assertEquals(1, primaryClicks)
+      assertEquals(1, secondaryClicks)
+    }
+  }
+
+  @Test
+  fun securityLabelsWrapInsideTheirSegmentsWithoutRegrouping() {
+    val options = listOf("Non chiffré", "Sécurisé (TLS)")
+    val selected = mutableStateOf(options.first())
+    composeRule.setContent {
+      DeviceConfigurationOverride(DeviceConfigurationOverride.FontScale(2f)) {
+        ClawDesignTheme {
+          LazyColumn(Modifier.width(280.dp)) {
+            item {
+              ClawSegmentedControl(options, selected.value, { selected.value = it })
+            }
+          }
+        }
+      }
+    }
+    for (label in options) composeRule.onNodeWithText(label, useUnmergedTree = true).assertCompleteText(label)
+    val first = composeRule.onNodeWithText(options.first()).fetchSemanticsNode().boundsInRoot
+    val second = composeRule.onNodeWithText(options.last()).fetchSemanticsNode().boundsInRoot
+    assertTrue("Segments stay beside one another; their labels gain height", first.right <= second.left && first.top == second.top)
+    composeRule.onNodeWithText(options.first()).assertIsSelected()
+    composeRule.onNodeWithText(options.last()).performClick().assertIsSelected()
+    composeRule.onNodeWithText(options.first()).assertIsNotSelected()
+  }
+
+  @Test
   fun filterPillsExposeAndUpdateTheirSelection() {
     val selected = mutableStateOf("All")
     composeRule.setContent {
@@ -609,6 +711,19 @@ class ClawComponentsTest {
     assertEquals(listOf(4, 3, 3), rows.map { it.size })
     assertEquals((1..10).map(Int::toString), rows.flatten())
   }
+}
+
+internal fun SemanticsNodeInteraction.assertCompleteText(label: String) {
+  val layouts = mutableListOf<TextLayoutResult>()
+  performScrollTo().assertIsDisplayed().performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
+  val layout = layouts.single()
+  assertEquals(label, layout.layoutInput.text.text)
+  assertFalse("$label must retain every line", layout.multiParagraph.didExceedMaxLines)
+  assertTrue("$label must fit vertically", layout.multiParagraph.height <= layout.size.height + 1f)
+  // Paragraph width can exceed a tight Text node even when every glyph fits.
+  assertTrue("$label must fit horizontally", (0 until layout.lineCount).all { layout.getLineLeft(it) >= -1f && layout.getLineRight(it) <= layout.size.width + 1f })
+  assertTrue("$label must not be ellipsized", (0 until layout.lineCount).none(layout::isLineEllipsized))
+  assertEquals("$label must display its final character", label.length, layout.getLineEnd(layout.lineCount - 1, visibleEnd = true))
 }
 
 internal data class ContrastThemeCase(

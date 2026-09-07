@@ -1,9 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { GATEWAY_SERVICE_SELECTOR_ENV_KEYS } from "../../daemon/constants.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
 import {
   createUpdateRun,
@@ -13,7 +11,7 @@ import {
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { captureEnv } from "../../test-utils/env.js";
+import { createManagedServiceIdentityFixture } from "./update-command-post-update.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const mocks = vi.hoisted(() => ({
@@ -193,32 +191,6 @@ const successfulPluginUpdate = {
   integrityDrifts: [],
   warnings: [],
 };
-
-function createManagedServiceIdentityFixture() {
-  const home = tempDirs.make("openclaw-post-update-service-home-");
-  const keys = [
-    "HOME",
-    "USERPROFILE",
-    "OPENCLAW_HOME",
-    "OPENCLAW_SUPERVISOR_MODE",
-    ...GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
-  ];
-  const env = captureEnv(keys);
-  // A private HOME does not change the OS account home checked by the real service guard.
-  const userInfo = vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: home });
-  for (const key of keys) {
-    delete process.env[key];
-  }
-  process.env.HOME = home;
-  process.env.USERPROFILE = home;
-  return {
-    home,
-    restore: () => {
-      userInfo.mockRestore();
-      env.restore();
-    },
-  };
-}
 
 async function finishSuccessfulPackageSwitch(
   params: {
@@ -487,7 +459,7 @@ describe("successful update finalization ordering", () => {
   it.each([
     { name: "retires the wrapper before persisting and printing success", denied: false },
     {
-      name: "marks and prints an error without persisting success when retirement fails",
+      name: "recovers and retains the package before reporting failed wrapper retirement",
       denied: true,
     },
   ])("$name", async ({ denied }) => {
@@ -505,13 +477,34 @@ describe("successful update finalization ordering", () => {
     if (denied) {
       unlink.mockRejectedValueOnce(new Error("unlink denied"));
     }
-    const finishing = finishSuccessfulPackageSwitch({
-      previousRoot,
-      packageRoot: path.join(home, "package"),
-    });
+    const rollback = vi
+      .spyOn(rollbackModule, "rollbackFailedUpdate")
+      .mockImplementationOnce(async ({ result }) => ({ result, rolledBack: false }));
+    const retained = {
+      name: "package backup retained",
+      command: "openclaw update",
+      cwd: previousRoot,
+      durationMs: 0,
+      exitCode: 0,
+      stderrTail: "Retained previous package for recovery.",
+    };
+    const complete = vi.fn<NonNullable<FinishUpdateParams["packageTransaction"]>["complete"]>(
+      async ({ activationVerified }) => (activationVerified ? undefined : retained),
+    );
+    const finishing = finishSuccessfulPackageSwitch(
+      { previousRoot, packageRoot: path.join(home, "package") },
+      { packageTransaction: { backupRoot: previousRoot, rollback: vi.fn(), complete } },
+    );
     if (denied) {
       await expectUpdateFailure(finishing, "wrapper-retirement-failed", {
         detail: expect.stringContaining("unlink denied"),
+      });
+      expect(rollback).toHaveBeenCalledOnce();
+      expect(complete).toHaveBeenCalledExactlyOnceWith({ activationVerified: false });
+      expect(mocks.printResult).toHaveBeenCalledOnce();
+      expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({
+        status: "error",
+        steps: expect.arrayContaining([retained]),
       });
       expect(mocks.writeSentinel).toHaveBeenCalledOnce();
       expectFailureReport("wrapper-retirement-failed");
@@ -582,7 +575,9 @@ describe("successful update finalization ordering", () => {
   });
 
   it("removes operator overrides and process identity from the managed install environment", async () => {
-    const identity = createManagedServiceIdentityFixture();
+    const identity = createManagedServiceIdentityFixture(
+      tempDirs.make("openclaw-post-update-service-home-"),
+    );
     const managedEnvironment = {
       ANTHROPIC_API_KEY: "managed-provider",
       MANAGED_VALUE: "base",
@@ -662,7 +657,9 @@ describe("successful update finalization ordering", () => {
   describe("managed service finalization", () => {
     let identity: ReturnType<typeof createManagedServiceIdentityFixture>;
     beforeEach(() => {
-      identity = createManagedServiceIdentityFixture();
+      identity = createManagedServiceIdentityFixture(
+        tempDirs.make("openclaw-post-update-service-home-"),
+      );
     });
     afterEach(() => {
       vi.unstubAllEnvs();

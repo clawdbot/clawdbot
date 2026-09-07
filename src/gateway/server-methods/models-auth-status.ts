@@ -51,6 +51,7 @@ import type {
   ModelProviderCapability,
 } from "./models-auth-status.types.js";
 import { getProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
+import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 export type {
@@ -205,7 +206,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selection.message));
       return;
     }
-    try {
+    await respondUnavailableOnThrow(respond, async () => {
       const cfg = context.getRuntimeConfig();
       const scope = resolveModelAuthAgentScope(cfg, params.agentId);
       if (!scope.ok) {
@@ -299,9 +300,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         abortedRunIds,
       };
       respond(true, result, undefined);
-    } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    }
+    });
   },
   "models.authStatus": async ({ params, respond, context, client }) => {
     const now = Date.now();
@@ -315,7 +314,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           ? tryResolveAmbientOwnerAgentId(cfg)
           : params.agentId,
       );
-    try {
+    await respondUnavailableOnThrow(respond, async () => {
       let cfg = context.getRuntimeConfig();
       let scope = resolveScope(cfg);
       if (!scope.ok) {
@@ -529,8 +528,6 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           : {}),
       };
       respond(true, result, undefined);
-    } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    }
+    });
   },
 };

@@ -8,6 +8,7 @@ import {
   validateUsersGitHubDisconnectParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSystemGitHubIdentityStatus } from "../../agents/github-tool-identity.js";
+import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import type { PersonalGitHubAction } from "../github-personal-oauth.js";
 import { preparePersonalGitHubAction } from "./github-personal-authorization.js";
 import type {
@@ -61,6 +62,7 @@ export const usersGitHubHandlers: GatewayRequestHandlers = {
         const config = options.context.getRuntimeConfig();
         const system = await resolveSystemGitHubIdentityStatus({
           config,
+          sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? config,
         });
         const personal = await service.status(action);
         return { personal, system };

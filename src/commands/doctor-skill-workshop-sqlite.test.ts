@@ -101,6 +101,7 @@ describe("doctor Skill Workshop SQLite migration", () => {
       externalProposalCount: 1,
       externalProposalCountsByAgent: { main: 1 },
       legacyBackupRootCount: 0,
+      preservedLegacyBackupRootCount: 0,
     });
     const first = await migrateLegacySkillWorkshopProposals({
       config: {},
@@ -120,6 +121,7 @@ describe("doctor Skill Workshop SQLite migration", () => {
       externalProposalCount: 0,
       externalProposalCountsByAgent: {},
       legacyBackupRootCount: 0,
+      preservedLegacyBackupRootCount: 0,
     });
     await expect(
       migrateLegacySkillWorkshopProposals({ config: {}, env: testState.env }),

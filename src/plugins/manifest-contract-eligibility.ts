@@ -76,12 +76,17 @@ export function isManifestPluginAvailableForControlPlane(params: {
   allowRestrictiveAllowlistBypass?: boolean;
   allowBundledProviderCompat?: boolean;
   env?: NodeJS.ProcessEnv;
+  /** Batch callers prepare installed enablement for this same config and operation. */
+  isInstalledPluginEnabled?: (pluginId: string) => boolean;
 }): boolean {
   if (!isManifestPluginOwnerAllowedByControlPlanePolicy(params)) {
     return false;
   }
   if (params.plugin.origin === "bundled") {
     return true;
+  }
+  if (params.isInstalledPluginEnabled) {
+    return params.isInstalledPluginEnabled(params.plugin.id);
   }
   return isInstalledPluginEnabled(
     params.snapshot.index,

@@ -20,6 +20,7 @@ import { modelAuthAgentScopeError, resolveModelAuthAgentScope } from "./model-au
 import { resolveConfigBoundProfileIds } from "./models-auth-status-config.js";
 import type { ModelAuthOrderSetResult } from "./models-auth-status.types.js";
 import { clearProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
+import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -36,7 +37,7 @@ export const modelsAuthOrderHandlers: GatewayRequestHandlers = {
     const profileIds = params.profileIds ?? null;
     const rejectInvalidOrder = (message: string) =>
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
-    try {
+    await respondUnavailableOnThrow(respond, async () => {
       const cfg = context.getRuntimeConfig();
       const scope = resolveModelAuthAgentScope(cfg, params.agentId);
       if (!scope.ok) {
@@ -139,8 +140,6 @@ export const modelsAuthOrderHandlers: GatewayRequestHandlers = {
       void warmCurrentProviderAuthStateOffMainThread(cfg).catch((err: unknown) => {
         log.warn(`provider auth state refresh after reorder failed: ${formatForLog(err)}`);
       });
-    } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
-    }
+    });
   },
 };

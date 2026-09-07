@@ -1,13 +1,6 @@
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createTranscriptsTool } from "../agents/tools/transcripts-tool.js";
-import {
-  getRuntimeConfigSnapshot,
-  resetConfigRuntimeState,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
+import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { diffGatewayReloadPaths } from "../gateway/config-diff.js";
 import {
@@ -16,87 +9,19 @@ import {
   listConfigReloadRefinementPrefixes,
 } from "../gateway/config-reload-plan.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import {
-  captureActivePluginRegistrySnapshot,
-  restoreActivePluginRegistrySnapshot,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTranscriptsAutoStartService } from "./auto-start.js";
 import { activeSessions, readTranscriptCaptureSnapshot, startTranscripts } from "./capture.js";
 import * as providerRegistry from "./provider-registry.js";
-import type {
-  TranscriptOccupancyWatchRequest,
-  TranscriptSourceProvider,
-  TranscriptStartRequest,
-} from "./provider-types.js";
+import type { TranscriptOccupancyWatchRequest, TranscriptStartRequest } from "./provider-types.js";
 import { readTranscriptLibraryStatus } from "./status.js";
+import {
+  transcriptStatusRoom as room,
+  useTranscriptStatusFixture,
+} from "./status.producer.test-harness.js";
 import { transcriptSessionSelector, TranscriptsStore } from "./store.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-let previousRegistry: ReturnType<typeof captureActivePluginRegistrySnapshot>;
-beforeEach(() => {
-  previousRegistry = captureActivePluginRegistrySnapshot();
-});
-afterEach(() => {
-  activeSessions.clear();
-  resetConfigRuntimeState();
-  closeOpenClawStateDatabaseForTest();
-  restoreActivePluginRegistrySnapshot(previousRegistry);
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-});
-
-const room = {
-  providerId: "fixture-voice",
-  accountId: "work",
-  guildId: "guild",
-  channelId: "room",
-};
-
-function fixture(config: OpenClawConfig = { transcripts: { autoStart: [room] } }) {
-  const stateDir = tempDirs.make("transcript-status-producer-");
-  const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  });
-  const provider: TranscriptSourceProvider = {
-    id: room.providerId,
-    aliases: ["voice-alias"],
-    name: "Fixture voice",
-    sourceKinds: ["live-audio"],
-    accessControl: {
-      channelId: "discord",
-      resolveAccountId: ({ source }) => ({ ok: true, value: source.accountId ?? "default" }),
-      authorize: async ({ caller }) =>
-        caller.kind === "operator"
-          ? { ok: true, value: undefined }
-          : { ok: false, error: "operator required" },
-    },
-    start: async ({ session }) => ({ ok: true, session }),
-    stop: async ({ sessionId }) => ({ ok: true, sessionId }),
-  };
-  vi.spyOn(providerRegistry, "getTranscriptSourceProvider").mockReturnValue(provider);
-  vi.spyOn(providerRegistry, "listTranscriptSourceProviders").mockReturnValue([provider]);
-  const registry = createEmptyPluginRegistry();
-  registry.transcriptSourceProviders.push({ pluginId: "fixture", source: "fixture", provider });
-  setActivePluginRegistry(registry);
-  const ctx = { config, stateDir, agentId: "main", logger: { warn: vi.fn() } };
-  const tool = createTranscriptsTool({ ...ctx, caller: { kind: "operator", source: "local" } });
-  return {
-    ctx,
-    store,
-    provider,
-    tool,
-    read: () => readTranscriptLibraryStatus(store, config),
-    start: (rawParams: Record<string, unknown>, configuredLifecycle?: true) =>
-      startTranscripts({
-        ctx: { ...ctx, caller: { kind: "operator", source: "local" } },
-        store,
-        rawParams,
-        configuredLifecycle,
-      }),
-  };
-}
+const fixture = useTranscriptStatusFixture();
 
 describe("configured transcript source provenance", () => {
   it.each([

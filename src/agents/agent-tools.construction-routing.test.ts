@@ -177,28 +177,42 @@ describe("createOpenClawCodingTools exec notification routing", () => {
     expect(approvalScope?.aborted).toBe(true);
   });
 
-  it("routes detached completions to the live session without changing process scope", () => {
-    const liveSessionKey = "agent:main:channel:group:example:thread:25";
-    const policySessionKey = "agent:main:runtime-policy";
+  it.each([undefined, "agent:main:runtime-policy"])(
+    "keeps live process ownership when the policy session is %s",
+    (policySessionKey) => {
+      const liveSessionKey = "agent:main:channel:group:example:thread:25";
 
+      createOpenClawCodingTools({
+        sessionKey: policySessionKey ?? liveSessionKey,
+        runSessionKey: liveSessionKey,
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: true,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: false,
+        },
+      });
+
+      expect(createLazyExecToolMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          scopeKey: liveSessionKey,
+          sessionKey: policySessionKey ?? liveSessionKey,
+          notifySessionKey: liveSessionKey,
+        }),
+      );
+    },
+  );
+
+  it("preserves an explicit process scope override", () => {
     createOpenClawCodingTools({
-      sessionKey: policySessionKey,
-      runSessionKey: liveSessionKey,
-      toolConstructionPlan: {
-        includeBaseCodingTools: false,
-        includeShellTools: true,
-        includeChannelTools: false,
-        includeOpenClawTools: false,
-        includePluginTools: false,
-      },
+      sessionKey: "agent:main:policy",
+      runSessionKey: "agent:worker:live",
+      exec: { scopeKey: "explicit-process-owner" },
     });
 
-    expect(createLazyExecToolMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        scopeKey: policySessionKey,
-        sessionKey: policySessionKey,
-        notifySessionKey: liveSessionKey,
-      }),
+    expect(createLazyExecToolMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ scopeKey: "explicit-process-owner" }),
     );
   });
 });

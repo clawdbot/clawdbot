@@ -78,6 +78,8 @@ describe("worker environment node enrollment store", () => {
     expect(pending.nodeDeviceId).toBeNull();
     expect(store.ensureNodeEnrollment("worker-enrollment").nodeSetupId).toBe(setupId);
     expect(store.hasPendingNodeEnrollmentSetup(setupId, "cloud-device-1")).toBe(true);
+    expect(store.hasNodeEnrollmentOwner("cloud-device-1")).toBe(false);
+    const inventoryVersion = store.inventoryVersion();
 
     const issued = await ensureDevicePairSetupBootstrapToken({
       baseDir: root,
@@ -108,6 +110,9 @@ describe("worker environment node enrollment store", () => {
     });
     expect(store.hasPendingNodeEnrollmentSetup(setupId, "cloud-device-1")).toBe(true);
     expect(store.hasPendingNodeEnrollmentSetup(setupId, "different-cloud-device")).toBe(false);
+    expect(store.inventoryVersion()).toBe(inventoryVersion);
+    expect(store.hasNodeEnrollmentOwner("cloud-device-1")).toBe(true);
+    expect(store.hasNodeEnrollmentOwner("different-cloud-device")).toBe(false);
   });
 
   it("rejects a destroy-requested provisioning setup", async () => {
@@ -158,6 +163,7 @@ describe("worker environment node enrollment store", () => {
       const setupId = seedEnrollmentState(state, "cloud-device-bound");
 
       expect(store.hasPendingNodeEnrollmentSetup(setupId, "cloud-device-bound")).toBe(true);
+      expect(store.hasNodeEnrollmentOwner("cloud-device-bound")).toBe(true);
       expect(store.hasPendingNodeEnrollmentSetup(setupId, "different-cloud-device")).toBe(false);
       expect(store.hasPendingNodeEnrollmentSetup("missing-setup", "cloud-device-bound")).toBe(
         false,
@@ -182,6 +188,9 @@ describe("worker environment node enrollment store", () => {
       const setupId = seedEnrollmentState(state, "cloud-device-bound");
 
       expect(store.hasPendingNodeEnrollmentSetup(setupId, "cloud-device-bound")).toBe(false);
+      expect(store.hasNodeEnrollmentOwner("cloud-device-bound")).toBe(
+        state === "requested" || state === "draining" || state === "destroying",
+      );
     },
   );
 
@@ -223,6 +232,7 @@ describe("worker environment node enrollment store", () => {
       sharedHost: true,
       ownerEpoch: 1,
     });
+    expect(store.hasNodeEnrollmentOwner("device-1")).toBe(false);
     expect(
       database.db
         .prepare(

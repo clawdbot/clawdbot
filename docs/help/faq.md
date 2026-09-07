@@ -119,6 +119,21 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
   </Accordion>
 
+  <Accordion title="Is OpenClaw owned by OpenAI?">
+    No. OpenClaw is stewarded by the [OpenClaw Foundation](https://openclaw.org), an independent 501(c)(3). OpenAI is one of several donors, and its creator works there. Donors do not own, control, or direct the project. Codex is one [agent harness](/concepts/agent-runtimes) plugin among several, and no lab's model is privileged in the code.
+
+  </Accordion>
+
+  <Accordion title="What does OpenClaw send to the Foundation?">
+    By default, a daily update check carrying the OpenClaw version, OS, Node version, and CPU architecture: the same information any package registry sees. Optional anonymous feature statistics are off by default and carry no identifier. No prompts, messages, model names, keys, paths, or machine identifiers are ever sent to the Foundation. Set `update.checkOnStart: false` to send nothing at all. Traffic to the model providers and chat platforms you configure is separate and goes to them, as always; see "Is all data used with OpenClaw saved locally?" below. Details: [Usage telemetry and update checks](/gateway/telemetry).
+
+  </Accordion>
+
+  <Accordion title="How is OpenClaw funded, and how does that compare?">
+    The Foundation is funded by donations and has no product to sell: no paid tier, no hosted service, no token. It is not venture-backed. Some other self-hosted agents are built by venture-funded companies that sell a subscription their agent offers during setup. That is a difference in incentives, not a judgment of their engineering; see the [governance comparison](/start/why-openclaw#governance).
+
+  </Accordion>
+
   <Accordion title="What are the advantages vs Claude Code for web development?">
     OpenClaw is an **assistant and coordination layer**, not an IDE replacement. Use Claude Code or Codex for the fastest direct coding loop inside a repo. Use OpenClaw for durable memory, cross-device access, and tool orchestration.
 
