@@ -458,13 +458,11 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       dmEnabled,
       dmPolicy,
       readStoreAllowFrom: async () =>
-        await core.channel.pairing
-          .readAllowFromStore({
-            channel: "matrix",
-            env: process.env,
-            accountId: effectiveAccountId,
-          })
-          .catch(() => []),
+        await core.channel.pairing.readAllowFromStore({
+          channel: "matrix",
+          env: process.env,
+          accountId: effectiveAccountId,
+        }),
       directTracker,
       groupPolicy,
       roomsConfig,

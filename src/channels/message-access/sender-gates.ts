@@ -114,6 +114,11 @@ export function senderGateForDirect(params: {
       allowlistSource: pairingStore,
     });
   }
+  if (params.policy.dmPolicy === "pairing" && params.state.pairingStoreReadFailed) {
+    // The read failed rather than resolving empty: unlike a genuinely unpaired sender,
+    // this outcome is transient and must not be reported as a pairing requirement.
+    return block("dm_policy_pairing_store_unavailable");
+  }
   if (params.policy.dmPolicy === "pairing" && params.state.event.mayPair) {
     return block("dm_policy_pairing_required");
   }

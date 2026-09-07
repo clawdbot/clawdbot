@@ -58,7 +58,10 @@ function resolveMatrixGroupIngress(params: {
 
 export async function resolveMatrixMonitorAccessState(params: {
   allowFrom: Array<string | number>;
-  storeAllowFrom: Array<string | number>;
+  /** Resolved entries for callers that already hold them; ignored when `readStoreAllowFrom` is set. */
+  storeAllowFrom?: Array<string | number>;
+  /** Pairing-store reader; a rejection is classified by the shared ingress resolver. */
+  readStoreAllowFrom?: () => Promise<Array<string | number>>;
   dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
   groupPolicy?: "open" | "allowlist" | "disabled";
   groupAllowFrom: Array<string | number>;
@@ -84,7 +87,7 @@ export async function resolveMatrixMonitorAccessState(params: {
     channelId: "matrix",
     accountId,
     identity: matrixIngressIdentity,
-    readStoreAllowFrom: async () => params.storeAllowFrom,
+    readStoreAllowFrom: params.readStoreAllowFrom ?? (async () => params.storeAllowFrom ?? []),
   });
   const resolveMessageIngress = async (
     contextBinding?: ChannelIngressContextBinding,

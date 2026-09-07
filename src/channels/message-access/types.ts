@@ -252,6 +252,8 @@ export type ChannelIngressStateInput = {
   routeFacts?: RouteGateFacts[];
   mentionFacts?: InboundMentionFacts;
   event: ChannelIngressEventInput;
+  /** True when the pairing-store read threw instead of resolving (distinct from a legitimately empty store). */
+  pairingStoreReadFailed?: boolean;
   allowlists: {
     dm?: Array<string | number>;
     group?: Array<string | number>;
@@ -318,6 +320,13 @@ export type IngressReasonCode =
   | "dm_policy_open"
   | "dm_policy_allowlisted"
   | "dm_policy_pairing_required"
+  /**
+   * The pairing store could not be read, so pairing state is unknown. Fails
+   * closed: the sender is denied without a pairing challenge, and statically
+   * configured access is unaffected. Additive - existing reason codes keep
+   * their meaning, and consumers that do not know this code see a plain block.
+   */
+  | "dm_policy_pairing_store_unavailable"
   | "dm_policy_not_allowlisted"
   | "group_policy_disabled"
   | "group_policy_open"
@@ -409,6 +418,8 @@ export type NormalizedIngressState = Omit<ChannelIngressState, "allowlists" | "r
       senderAllowlist?: NormalizedIngressAllowlist;
     }
   >;
+  /** True when the pairing-store read threw instead of resolving (distinct from a legitimately empty store). */
+  pairingStoreReadFailed: boolean;
 };
 
 /** Final runtime admission action for the inbound event. */

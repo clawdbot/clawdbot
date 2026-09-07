@@ -504,10 +504,11 @@ export function createSlackCommandHandler(params: {
         return false;
       }
 
-      const effectiveAllowFromLower = await resolveSlackEffectiveAllowFrom(ctx, {
-        includePairingStore: isDirectMessage,
-        eventScope,
-      });
+      const { allowFrom: effectiveAllowFromLower, storeReadFailed } =
+        await resolveSlackEffectiveAllowFrom(ctx, {
+          includePairingStore: isDirectMessage,
+          eventScope,
+        });
 
       // Privileged command surface: compute CommandAuthorized, don't assume true.
       // Keep this aligned with the Slack message path (message-handler/prepare.ts).
@@ -520,6 +521,7 @@ export function createSlackCommandHandler(params: {
           senderId: command.user_id,
           eventScope,
           allowFromLower: effectiveAllowFromLower,
+          storeReadFailed,
           resolveSenderName: (userId) => ctx.resolveUserName(userId, eventScope),
           sendPairingReply: async (text) => {
             await respond({

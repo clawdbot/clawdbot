@@ -502,7 +502,10 @@ async function authorizeZaloMessage(
     return undefined;
   }
   if (!isGroup && senderAccess.decision !== "allow") {
-    if (dmPolicy === "pairing") {
+    // Gate on the resolved decision, not the raw dmPolicy: a pairing-store read
+    // failure keeps dmPolicy === "pairing" but resolves to "block" (fail-closed),
+    // and must not be indistinguishable from a genuine pairing requirement.
+    if (senderAccess.decision === "pairing") {
       await pairing.issueChallenge({
         senderId,
         senderIdLine: `Your Zalo user id: ${senderId}`,

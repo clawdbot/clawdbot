@@ -255,6 +255,29 @@ describe("agent components", () => {
     expect(readAllowFromStoreMock).toHaveBeenCalledWith("discord", "default");
   });
 
+  it("fails closed instead of prompting to pair when the pairing store read fails", async () => {
+    readAllowFromStoreMock.mockRejectedValueOnce(new Error("pairing store unavailable"));
+    const button = createAgentComponentButton({
+      cfg: createCfg(),
+      accountId: "default",
+      dmPolicy: "pairing",
+    });
+    const { interaction, defer, reply } = createDmButtonInteraction();
+
+    await button.run(interaction, { componentId: "hello" } as ComponentData);
+
+    // A read failure must not look like "never paired": it must not issue a
+    // pairing challenge to a sender who may already be paired.
+    expect(defer).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith({
+      content: "You are not authorized to use this button.",
+      ephemeral: true,
+    });
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+    expect(peekSystemEvents(defaultDmSessionKey)).toStrictEqual([]);
+    expect(readAllowFromStoreMock).toHaveBeenCalledWith("discord", "default");
+  });
+
   it("blocks DM interactions in allowlist mode when sender is not in configured allowFrom", async () => {
     const button = createAgentComponentButton({
       cfg: createCfg(),

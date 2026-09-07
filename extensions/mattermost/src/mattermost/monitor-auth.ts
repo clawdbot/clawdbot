@@ -11,7 +11,7 @@ import { mattermostIngressIdentity, normalizeMattermostAllowEntry } from "./ingr
 import type { ChatType, OpenClawConfig } from "./runtime-api.js";
 import { isDangerousNameMatchingEnabled, resolveAllowlistMatchSimple } from "./runtime-api.js";
 
-export function normalizeMattermostAllowList(entries: Array<string | number>): string[] {
+function normalizeMattermostAllowList(entries: Array<string | number>): string[] {
   const normalized = entries
     .map((entry) => normalizeMattermostAllowEntry(String(entry)))
     .filter(Boolean);

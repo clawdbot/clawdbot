@@ -1,6 +1,7 @@
 // Message access tests cover channel message visibility and permission helpers.
 import { describe, expect, it } from "vitest";
 import { decideChannelIngress } from "./decision.js";
+import { resolveStableChannelMessageIngress } from "./runtime.js";
 import { resolveChannelIngressState } from "./state.js";
 import type {
   ChannelIngressPolicyInput,
@@ -130,6 +131,57 @@ describe("channel message access ingress", () => {
     const state = await resolveChannelIngressState(input);
     expectRecordFields(decideChannelIngress(state, policyLocal), expected);
     expectRecordFields(decideChannelIngress(state, secondPolicy), secondExpected);
+  });
+
+  it("distinguishes a pairing-store read failure from a legitimately empty store", async () => {
+    const readFailureState = await resolveChannelIngressState(
+      baseInput({
+        subject: subject("paired-sender"),
+        allowlists: { pairingStore: [] },
+        pairingStoreReadFailed: true,
+      }),
+    );
+    expectRecordFields(decideChannelIngress(readFailureState, policy), {
+      admission: "drop",
+      decision: "block",
+      reasonCode: "dm_policy_pairing_store_unavailable",
+    });
+
+    // Known-bad control: an empty store that did not fail to read still gets the
+    // existing pairing-challenge outcome, unchanged by this distinction.
+    const legitimatelyEmptyState = await resolveChannelIngressState(
+      baseInput({
+        subject: subject("paired-sender"),
+        allowlists: { pairingStore: [] },
+      }),
+    );
+    expectRecordFields(decideChannelIngress(legitimatelyEmptyState, policy), {
+      admission: "pairing-required",
+      decision: "pairing",
+      reasonCode: "dm_policy_pairing_required",
+    });
+  });
+
+  it("surfaces a throwing readStoreAllowFrom callback through the real production entry", async () => {
+    const resolved = await resolveStableChannelMessageIngress({
+      channelId: "test",
+      accountId: "default",
+      subject: { stableId: "paired-sender" },
+      conversation: { kind: "direct", id: "dm-1" },
+      dmPolicy: "pairing",
+      readStoreAllowFrom: async () => {
+        throw new Error("pairing store unavailable");
+      },
+    });
+    expectRecordFields(resolved.senderAccess, {
+      allowed: false,
+      reasonCode: "dm_policy_pairing_store_unavailable",
+    });
+    expectRecordFields(resolved.ingress, {
+      admission: "drop",
+      decision: "block",
+      reasonCode: "dm_policy_pairing_store_unavailable",
+    });
   });
 
   it("applies route sender allowlists without retaining raw sender values", async () => {

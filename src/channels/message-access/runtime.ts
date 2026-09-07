@@ -40,7 +40,7 @@ import type {
   ResolvedChannelMessageIngress,
 } from "./runtime-types.js";
 import { resolveChannelIngressState } from "./state.js";
-import { readChannelIngressStoreAllowFromForDmPolicy } from "./store-allow-from.js";
+import { readChannelIngressDefaultPairingStore } from "./store-allow-from.js";
 import type {
   AccessGraphGate,
   ChannelIngressChannelId,
@@ -76,31 +76,40 @@ function shouldReadStore(params: {
 
 async function readStoreAllowFrom(
   params: ResolveChannelMessageIngressParams & { channelId: ChannelIngressChannelId },
-): Promise<Array<string | number>> {
+): Promise<{ entries: Array<string | number>; readFailed: boolean }> {
   if (
     !shouldReadStore({
       conversationKind: params.conversation.kind,
       dmPolicy: params.policy.dmPolicy,
     })
   ) {
-    return [];
+    return { entries: [], readFailed: false };
   }
-  const entries = params.readStoreAllowFrom
-    ? await params
-        .readStoreAllowFrom({
+  const read = params.readStoreAllowFrom
+    ? async () =>
+        await params.readStoreAllowFrom?.({
           channelId: params.channelId,
           accountId: params.accountId,
           dmPolicy: params.policy.dmPolicy,
         })
-        .catch(() => [])
     : params.useDefaultPairingStore
-      ? await readChannelIngressStoreAllowFromForDmPolicy({
-          provider: params.channelId as PairingChannel,
-          accountId: params.accountId,
-          dmPolicy: params.policy.dmPolicy,
-        })
-      : [];
-  return [...(entries ?? [])];
+      ? async () =>
+          await readChannelIngressDefaultPairingStore({
+            provider: params.channelId as PairingChannel,
+            accountId: params.accountId,
+          })
+      : undefined;
+  if (!read) {
+    return { entries: [], readFailed: false };
+  }
+  try {
+    return { entries: [...((await read()) ?? [])], readFailed: false };
+  } catch {
+    // The store rejected rather than resolving empty. Record that here, in the
+    // ingress owner, so every reader contract - default, scoped or plugin
+    // supplied - reports an unavailable store the same way.
+    return { entries: [], readFailed: true };
+  }
 }
 
 function commandRequested(policy: ChannelIngressPolicyInput): boolean {
@@ -566,7 +575,10 @@ export async function resolveChannelMessageIngress(
   const adapter = createIdentityAdapter(params.identity);
   const subject = createIdentitySubject(params.identity, params.subject);
   const routeFacts = [...routeFactsFromDescriptors(params.route), ...(params.routeFacts ?? [])];
-  const storeAllowFrom = await readStoreAllowFrom({ ...params, channelId });
+  const { entries: storeAllowFrom, readFailed: pairingStoreReadFailed } = await readStoreAllowFrom({
+    ...params,
+    channelId,
+  });
   const rawAllowFrom = normalizeStringEntries(params.allowFrom ?? []);
   const rawStoreAllowFrom = normalizeStringEntries(storeAllowFrom);
   const rawGroupAllowFrom = normalizeStringEntries(params.groupAllowFrom ?? []);
@@ -632,6 +644,7 @@ export async function resolveChannelMessageIngress(
     routeFacts,
     mentionFacts: params.mentionFacts,
     event: params.event,
+    pairingStoreReadFailed,
     allowlists: {
       dm: rawAllowFrom,
       group: rawEffective.effectiveGroupAllowFrom,

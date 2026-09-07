@@ -175,15 +175,13 @@ export async function resolveMatrixIngressAccess(config: {
     senderNamePromise ??= getMemberDisplayName(roomId, senderId).catch(() => senderId);
     return await senderNamePromise;
   };
-  const storeAllowFrom =
-    isDirectMessage && dmPolicy !== "allowlist" && dmPolicy !== "open"
-      ? await readStoreAllowFrom()
-      : [];
   const roomUsers = roomConfig?.users ?? [];
   const { liveCfg, liveDmAllowFrom, liveGroupAllowFrom } = await resolveLiveAccountAllowlists();
   const accessState = await resolveMatrixMonitorAccessState({
     allowFrom: liveDmAllowFrom,
-    storeAllowFrom,
+    // Hand over the reader rather than a resolved list: the shared resolver
+    // gates the read on the DM policy and classifies a rejection itself.
+    readStoreAllowFrom,
     dmPolicy,
     groupPolicy,
     groupAllowFrom: liveGroupAllowFrom,
@@ -247,7 +245,12 @@ export async function resolveMatrixIngressAccess(config: {
           await commitInboundEventIfClaimedAndDiscardReserved();
         }
       }
-      if (isReactionEvent || dmPolicy !== "pairing") {
+      // The pairing-required branch above already logs and commits its own
+      // outcome. Every other non-allow admission (reactions, a static
+      // allowlist mismatch, or a pairing-store read failure reported as
+      // `dm_policy_pairing_store_unavailable`) must still end in a visible,
+      // committed outcome instead of silently dropping the event.
+      if (ingressDecision.admission !== "pairing-required") {
         logVerboseMessage(
           `matrix: blocked ${isReactionEvent ? "reaction" : "dm"} sender ${senderId} (dmPolicy=${dmPolicy}, reason=${senderReason})`,
         );

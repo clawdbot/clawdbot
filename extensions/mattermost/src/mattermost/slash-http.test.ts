@@ -2,8 +2,9 @@
 import { createServer, IncomingMessage, type ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, RuntimeEnv } from "../../runtime-api.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
+import { setMattermostRuntime } from "../runtime.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import type { MattermostClient } from "./client.js";
 const clientMocks = vi.hoisted(() => ({
@@ -253,6 +254,13 @@ describe("slash-http", () => {
     accountFixture.accountId = slashTestAccountId;
     clientMocks.createMattermostClient.mockReset();
     clientMocks.fetchMattermostChannel.mockClear();
+  });
+
+  afterEach(() => {
+    // Every other test in this file relies on the Mattermost runtime being
+    // uninitialized (it asserts on the "not initialized" error); reset it so
+    // a test that does initialize it (below) cannot leak state forward.
+    setMattermostRuntime(null as unknown as PluginRuntime);
   });
 
   it("rejects non-POST methods", async () => {
@@ -679,5 +687,60 @@ describe("slash-http", () => {
     expect(firstLogMessage(log)).toBe(
       `mattermost: slash command registration check failed for /oc_status: ${"e".repeat(299)}; command lookup: primary failure`,
     );
+  });
+
+  it("fails closed instead of issuing a pairing challenge when the pairing store read fails", async () => {
+    const registeredCommand = createRegisteredCommand({ token: "valid-token" });
+    const client = createCommandLookupClient({ command: createCurrentCommand() });
+    clientMocks.createMattermostClient.mockReturnValue(client);
+    clientMocks.fetchMattermostChannel.mockResolvedValueOnce({
+      type: "D",
+      name: "alice",
+      display_name: "Alice",
+    } as never);
+
+    const upsertPairingRequest = vi.fn(async () => ({ code: "ABCDEFGH", created: false }));
+    setMattermostRuntime({
+      channel: {
+        commands: { shouldHandleTextCommands: () => true },
+        text: { hasControlCommand: () => false },
+        pairing: {
+          readAllowFromStore: async () => {
+            throw new Error("store unavailable");
+          },
+          upsertPairingRequest,
+          buildPairingReply: () => "pairing reply text",
+        },
+      },
+    } as unknown as PluginRuntime);
+
+    const handler = createSlashCommandHttpHandler({
+      account: accountFixture,
+      cfg: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+      registeredCommands: [registeredCommand],
+    });
+    const req = createRequest({
+      body: new URLSearchParams({
+        token: "valid-token",
+        team_id: "t1",
+        channel_id: "c1",
+        user_id: "u1",
+        command: "/oc_status",
+        text: "",
+      }).toString(),
+    });
+    const response = createResponse();
+    await handler(req, response.res);
+
+    // A read failure must not be indistinguishable from a legitimately empty
+    // store: it must not trigger a pairing challenge to an already-paired sender...
+    expect(upsertPairingRequest).not.toHaveBeenCalled();
+    expect(response.getBody()).not.toContain("pairing reply text");
+    // ...and it must still end in a visible, generic-denied outcome rather than a silent drop.
+    expect(JSON.parse(response.getBody())).toEqual({
+      response_type: "ephemeral",
+      text: "Unauthorized.",
+    });
   });
 });

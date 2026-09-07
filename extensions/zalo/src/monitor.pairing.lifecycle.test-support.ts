@@ -198,4 +198,45 @@ describe("Zalo pairing lifecycle", () => {
       await monitor.stop();
     }
   });
+
+  it("fails closed instead of prompting to pair when the pairing store read fails", async () => {
+    readAllowFromStoreMock.mockRejectedValueOnce(new Error("store unavailable"));
+
+    const monitor = await startWebhookLifecycleMonitor({
+      ...createPairingMonitorSetup(),
+      cacheKey: "zalo-pairing-lifecycle",
+    });
+
+    try {
+      await withServer(
+        (req, res) => {
+          void monitor.route.handler(req, res);
+        },
+        async (baseUrl) => {
+          const { first, replay } = await postWebhookReplay({
+            baseUrl,
+            path: "/hooks/zalo",
+            secret: "supersecret",
+            payload: createTextUpdate({
+              messageId: `zalo-pairing-store-unavailable-${Date.now()}`,
+              userId: "user-unauthorized",
+              userName: "Unauthorized User",
+              chatId: "dm-pairing-1",
+            }),
+          });
+
+          expect(first.status).toBe(200);
+          expect(replay.status).toBe(200);
+          await settleAsyncWork();
+        },
+      );
+
+      // A read failure must not be indistinguishable from a legitimately empty
+      // store: it must not trigger a pairing challenge to an already-paired sender.
+      expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+      expect(sendMessageMock).not.toHaveBeenCalled();
+    } finally {
+      await monitor.stop();
+    }
+  });
 });

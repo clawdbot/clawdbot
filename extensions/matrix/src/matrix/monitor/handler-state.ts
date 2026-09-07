@@ -108,13 +108,14 @@ export function createMatrixHandlerState(config: {
       return cachedStoreAllowFrom.value;
     }
     cachedStoreAllowFrom = null;
-    const value = await core.channel.pairing
-      .readAllowFromStore({
-        channel: "matrix",
-        env: process.env,
-        accountId,
-      })
-      .catch(() => []);
+    // Let a store failure reject: the shared ingress resolver classifies it, and
+    // the cache below is skipped so the next read retries the real store instead
+    // of serving a cached empty list.
+    const value = await core.channel.pairing.readAllowFromStore({
+      channel: "matrix",
+      env: process.env,
+      accountId,
+    });
     const expiresAtMs = resolveExpiresAtMsFromDurationMs(ALLOW_FROM_STORE_CACHE_TTL_MS, {
       nowMs: now,
     });

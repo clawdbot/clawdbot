@@ -78,25 +78,19 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
     },
   };
 });
-async function readChannelIngressStoreAllowFromForDmPolicy(params: {
-  provider: string;
-  accountId: string;
-  dmPolicy?: string | null;
-  shouldRead?: boolean | null;
-}) {
-  if (
-    params.shouldRead === false ||
-    params.dmPolicy === "allowlist" ||
-    params.dmPolicy === "open"
-  ) {
-    return [];
-  }
-  return await readAllowFromStoreMock(params.provider, params.accountId);
+// Mirrors the real reader's contract (pairing-store.ts): a failing store read
+// rejects, and the shared ingress resolver is what classifies that rejection.
+async function readChannelAllowFromStore(
+  channel: string,
+  _env: NodeJS.ProcessEnv,
+  accountId?: string,
+) {
+  return await readAllowFromStoreMock(channel, accountId);
 }
 
 vi.mock("../monitor/agent-components-helpers.runtime.js", () => {
   return {
-    readChannelIngressStoreAllowFromForDmPolicy,
+    readChannelAllowFromStore,
     resolvePinnedMainDmOwnerFromAllowlist,
     upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
   };

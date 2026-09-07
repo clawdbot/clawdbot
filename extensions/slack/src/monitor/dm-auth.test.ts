@@ -99,6 +99,23 @@ describe("authorizeSlackDirectMessage", () => {
     expect(params.onUnauthorized).not.toHaveBeenCalled();
   });
 
+  it("fails closed instead of prompting to pair when the pairing store read failed", async () => {
+    const params = makeParams("pairing");
+    params.storeReadFailed = true;
+
+    await expect(authorizeSlackDirectMessage(params)).resolves.toBe(false);
+
+    // A read failure must not be indistinguishable from a legitimately empty
+    // store: it must not trigger a pairing challenge to an already-paired sender...
+    expect(upsertChannelPairingRequestMock).not.toHaveBeenCalled();
+    expect(params.sendPairingReply).not.toHaveBeenCalled();
+    // ...and it must still end in a visible, logged outcome rather than a silent drop.
+    expect(params.onUnauthorized).toHaveBeenCalledWith({
+      allowMatchMeta: "matchKey=none matchSource=none",
+      senderName: "Alice",
+    });
+  });
+
   it("creates independent pairing requests for the same user in two Grid workspaces", async () => {
     const pendingCodes = new Map<string, string>();
     upsertChannelPairingRequestMock.mockImplementation(
