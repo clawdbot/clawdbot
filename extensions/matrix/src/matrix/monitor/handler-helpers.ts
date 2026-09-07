@@ -220,3 +220,56 @@ export function formatMatrixToolProgressMarkdownCode(text: string): string {
   const safe = clipped.replaceAll("`", "'");
   return `\`${safe}\``;
 }
+
+const SELF_TRIGGER_CONTENT_KEY = "com.openclaw.self_trigger";
+const SELF_TRIGGER_KIND = "self_cross_session";
+const SELF_TRIGGER_ALLOWED_TYPES = new Set(["project_requested"]);
+
+/**
+ * Reads and validates a self-trigger marker from a Matrix event.
+ *
+ * Self-trigger markers allow an agent to intentionally wake up its own session
+ * in another Matrix room. Without this marker, self-authored messages are
+ * unconditionally dropped in the ingress prefix to prevent self-reply loops.
+ *
+ * This function validates:
+ * - The marker is a well-formed object under the `com.openclaw.self_trigger` key
+ * - `kind` is `"self_cross_session"` (the only supported kind)
+ * - `type` is in the allowlist (initially just `"project_requested"`)
+ * - `targetRoomId` or `targetSession` matches the current `roomId`
+ *
+ * Returns the validated marker dict, or `null` if the event has no valid marker.
+ */
+export function readSelfTriggerMarker(
+  event: MatrixRawEvent,
+  roomId: string,
+): Record<string, unknown> | null {
+  const content = event.content;
+  if (!content || typeof content !== "object") {
+    return null;
+  }
+  const marker = content[SELF_TRIGGER_CONTENT_KEY];
+  if (!marker || typeof marker !== "object") {
+    return null;
+  }
+  const trigger = marker as Record<string, unknown>;
+  if (trigger.kind !== SELF_TRIGGER_KIND) {
+    return null;
+  }
+  const type = typeof trigger.type === "string" ? trigger.type : "";
+  if (!SELF_TRIGGER_ALLOWED_TYPES.has(type)) {
+    return null;
+  }
+  const targetRoomId = typeof trigger.targetRoomId === "string" ? trigger.targetRoomId.trim() : "";
+  let targetSession = typeof trigger.targetSession === "string" ? trigger.targetSession.trim() : "";
+  if (targetSession.startsWith("matrix:")) {
+    targetSession = targetSession.slice("matrix:".length);
+  }
+  if (targetSession.startsWith("room:")) {
+    targetSession = targetSession.slice("room:".length);
+  }
+  if (roomId !== targetRoomId && roomId !== targetSession) {
+    return null;
+  }
+  return trigger;
+}

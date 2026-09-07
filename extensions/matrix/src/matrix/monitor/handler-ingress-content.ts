@@ -8,6 +8,7 @@ import { fetchMatrixPollSnapshot, type MatrixPollSnapshot } from "../poll-summar
 import { resolveMatrixMonitorCommandAccess } from "./access-state.js";
 import {
   isMatrixAudioMediaEnabled,
+  readSelfTriggerMarker,
   resolveMatrixInboundBodyText,
   resolveMatrixInboundMediaContent,
   resolveMatrixMentionPrecheckText,
@@ -286,14 +287,20 @@ export async function resolveMatrixIngressContent(config: {
     await commitInboundEventIfClaimedAndDiscardReserved();
     return undefined;
   }
+  // Self-trigger messages bypass the mention requirement: they are intentional
+  // cross-session wake-ups, not casual messages that need @mention to justify a
+  // response. The marker was already validated in the ingress prefix stage.
+  const selfTriggerMarker = readSelfTriggerMarker(event, roomId);
   const shouldRequireMention = isRoom
-    ? roomConfig?.autoReply === true
+    ? selfTriggerMarker
       ? false
-      : roomConfig?.autoReply === false
-        ? true
-        : typeof roomConfig?.requireMention === "boolean"
-          ? roomConfig?.requireMention
-          : true
+      : roomConfig?.autoReply === true
+        ? false
+        : roomConfig?.autoReply === false
+          ? true
+          : typeof roomConfig?.requireMention === "boolean"
+            ? roomConfig?.requireMention
+            : true
     : false;
   const mentionDecision = resolveInboundMentionDecision({
     facts: {
