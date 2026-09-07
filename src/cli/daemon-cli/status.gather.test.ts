@@ -1,15 +1,28 @@
 // Daemon status gather tests cover service status collection from platform state.
+import { X509Certificate } from "node:crypto";
 import fs from "node:fs/promises";
+import { createServer } from "node:https";
+import type { Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { WebSocketServer } from "ws";
+import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../test/helpers/tls-fixture.js";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { gatewayEdgeAuthValueForTarget } from "../../gateway/edge-auth.js";
+import {
+  buildMinimalGatewayHelloOkPayload,
+  closeMinimalGatewayServer,
+  parseMinimalGatewayRequestFrame,
+  sendMinimalGatewayConnectChallenge,
+  sendMinimalGatewayResponse,
+} from "../../gateway/minimal-gateway.test-helpers.js";
 import type { PortListener, PortUsageStatus } from "../../infra/ports-types.js";
 import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
+import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
 import { defaultRuntime } from "../../runtime.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { VERSION } from "../../version.js";
@@ -22,19 +35,20 @@ import { printDaemonStatus } from "./status.print.js";
 type PortConnections = Awaited<
   ReturnType<typeof import("../../infra/ports-inspect.js").inspectPortConnections>
 >;
+type GatewayStatusProbeOptions = Parameters<typeof import("./probe.js").probeGatewayStatus>[0];
 
 const readFile = fs.readFile.bind(fs);
 let readFileSpy: ReturnType<typeof vi.spyOn>;
 
 const callGatewayStatusProbe = vi.fn<
-  (opts?: unknown) => Promise<{
+  (opts: GatewayStatusProbeOptions) => Promise<{
     ok: boolean;
     url?: string;
     error?: string | null;
     server?: { version?: string | null; buildId?: string | null; connId?: string | null };
     version?: string | null;
   }>
->(async (_opts?: unknown) => ({
+>(async (_opts: GatewayStatusProbeOptions) => ({
   ok: true,
   url: "ws://127.0.0.1:19001",
   error: null,
@@ -269,7 +283,8 @@ vi.mock("../../daemon/service.js", async (importOriginal) => ({
     }),
 }));
 
-vi.mock("../../gateway/net.js", () => ({
+vi.mock("../../gateway/net.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../gateway/net.js")>()),
   resolveGatewayBindHost: (bindMode: string, customBindHost?: string) =>
     resolveGatewayBindHost(bindMode, customBindHost),
   resolveGatewayRequiredListenHosts: (bindHost: string) =>
@@ -337,7 +352,7 @@ vi.mock("../../infra/update-check-package-target.js", async (importOriginal) => 
 }));
 
 vi.mock("./probe.js", () => ({
-  probeGatewayStatus: (opts: unknown) => callGatewayStatusProbe(opts),
+  probeGatewayStatus: (opts: GatewayStatusProbeOptions) => callGatewayStatusProbe(opts),
 }));
 
 vi.mock("../../plugins/installed-plugin-index-record-reader.js", () => ({
@@ -638,7 +653,11 @@ describe("gatherDaemonStatus", () => {
         remoteUrl === "wss://127.0.0.1:19001" ? edgeAuth : undefined,
       );
       expect(input.config.gateway?.mode).toBe("local");
-      expect(input.config.gateway?.remote).toEqual({ url: remoteUrl, edgeAuth });
+      expect(input.config.gateway?.remote).toEqual({
+        url: remoteUrl,
+        edgeAuth,
+        tlsFingerprint: "sha256:99:88:77:66",
+      });
       expect(input.config.gateway?.auth).toEqual({ mode: auth === "none" ? "none" : "token" });
       expect(input.config.gateway?.tls).toBeUndefined();
       expect(status.rpc?.url).toBe(input.url);
@@ -698,7 +717,11 @@ describe("gatherDaemonStatus", () => {
         remoteUrl === input.url ? edgeAuth : undefined,
       );
       expect(input.config.gateway?.mode).toBe("local");
-      expect(input.config.gateway?.remote).toEqual({ url: remoteUrl, edgeAuth });
+      expect(input.config.gateway?.remote).toEqual({
+        url: remoteUrl,
+        edgeAuth,
+        tlsFingerprint: "sha256:99:88:77:66",
+      });
       expect(input.config.gateway?.auth).toBeUndefined();
       expect(input.config.gateway?.tls).toBeUndefined();
       expect(inspectGatewayTlsCertificate).not.toHaveBeenCalled();
@@ -706,6 +729,139 @@ describe("gatherDaemonStatus", () => {
       expect(daemonLoadedConfig).toEqual(originalConfig);
     },
   );
+
+  it.each([
+    { name: "matching", pinMatches: true },
+    { name: "mismatched", pinMatches: false },
+  ])("enforces a $name saved TLS pin before explicit status traffic", async ({ pinMatches }) => {
+    const actualProbe = await vi.importActual<typeof import("./probe.js")>("./probe.js");
+    const originalProbe = callGatewayStatusProbe.getMockImplementation();
+    assert(originalProbe);
+    const server = createServer({ key: TEST_TLS_KEY_PEM, cert: TEST_TLS_CERT_PEM });
+    const wss = new WebSocketServer({ noServer: true });
+    const sockets = new Set<Socket>();
+    const closedSockets: Promise<void>[] = [];
+    const edgeAuthHeaders: unknown[] = [];
+    const connectTokens: Array<string | undefined> = [];
+    const edgeAuthValue = "synthetic-status-edge-auth";
+    const explicitToken = "synthetic-explicit-status-token";
+    let receivedBytes = 0;
+    let upgrades = 0;
+    server.on("connection", (socket) => {
+      sockets.add(socket);
+      closedSockets.push(
+        new Promise<void>((resolve) => {
+          socket.once("close", () => {
+            sockets.delete(socket);
+            resolve();
+          });
+        }),
+      );
+    });
+    server.on("secureConnection", (socket) => {
+      socket.on("data", (chunk: Buffer) => {
+        receivedBytes += chunk.byteLength;
+      });
+    });
+    server.on("upgrade", (request, socket, head) => {
+      upgrades += 1;
+      edgeAuthHeaders.push(request.headers["x-test-edge-auth"]);
+      if (request.headers["x-test-edge-auth"] !== edgeAuthValue) {
+        socket.destroy();
+        return;
+      }
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit("connection", ws, request);
+      });
+    });
+    wss.on("connection", (ws) => {
+      sendMinimalGatewayConnectChallenge(ws);
+      ws.on("message", (raw) => {
+        const frame = parseMinimalGatewayRequestFrame(raw);
+        if (frame.type !== "req" || frame.method !== "connect" || !frame.id) {
+          return;
+        }
+        connectTokens.push(frame.params?.auth?.token);
+        sendMinimalGatewayResponse(
+          ws,
+          frame.id,
+          buildMinimalGatewayHelloOkPayload({
+            auth: { role: "operator", scopes: ["operator.read"] },
+          }),
+        );
+      });
+    });
+    callGatewayStatusProbe.mockImplementation(actualProbe.probeGatewayStatus);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      assert(address && typeof address !== "string");
+      const url = `wss://127.0.0.1:${address.port}/gateway`;
+      const savedPin = pinMatches
+        ? new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256
+        : "00".repeat(32);
+      await withStatusConfig(
+        JSON.stringify({
+          gateway: {
+            mode: "remote",
+            tls: { enabled: true },
+            auth: { mode: "token", token: "unrelated-service-token" },
+            remote: {
+              url,
+              token: "unrelated-remote-token",
+              password: "unrelated-remote-password",
+              tlsFingerprint: savedPin,
+              edgeAuth: { "X-Test-Edge-Auth": edgeAuthValue },
+            },
+          },
+        }),
+        async () => {
+          const status = await gatherStatus({
+            rpc: { url, token: explicitToken, json: true, timeout: "2000" },
+            requireRpc: false,
+          });
+          await Promise.all(closedSockets);
+          const input = callGatewayStatusProbe.mock.calls[0]?.[0];
+          assert(input);
+          expect(input.tlsFingerprint).toBeUndefined();
+          expect(input.config?.gateway?.remote).toEqual({
+            url,
+            edgeAuth: { "X-Test-Edge-Auth": edgeAuthValue },
+            tlsFingerprint: savedPin,
+          });
+          expect(input.config?.gateway?.tls).toBeUndefined();
+          expect(inspectGatewayTlsCertificate).not.toHaveBeenCalled();
+          expect(status.rpc?.ok, status.rpc?.error).toBe(pinMatches);
+          if (pinMatches) {
+            expect(receivedBytes).toBeGreaterThan(0);
+            expect(upgrades).toBe(1);
+            expect(edgeAuthHeaders).toEqual([edgeAuthValue]);
+            expect(connectTokens).toEqual([explicitToken]);
+          } else {
+            expect(status.rpc?.error).toMatch(/fingerprint mismatch/i);
+            expect(receivedBytes).toBe(0);
+            expect(upgrades).toBe(0);
+            expect(edgeAuthHeaders).toEqual([]);
+            expect(connectTokens).toEqual([]);
+          }
+        },
+        true,
+      );
+    } finally {
+      callGatewayStatusProbe.mockImplementation(originalProbe);
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await closeMinimalGatewayServer(wss);
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+      resetSecretRedactionRegistryForTest();
+    }
+  });
 
   it.each(
     [

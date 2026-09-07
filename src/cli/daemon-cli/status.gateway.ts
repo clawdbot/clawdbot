@@ -61,15 +61,19 @@ export function resolveGatewayStatusProbeConfig(params: {
   hasUrlOverride: boolean;
 }): OpenClawConfig {
   const { config, hasUrlOverride } = params;
-  // Target auth and TLS are already resolved for this command. The generic client
-  // must not reinterpret service diagnostics as a configured remote connection.
+  // Freeze the resolved target and Gateway credentials while preserving
+  // endpoint-scoped transport policy for the existing client selectors.
   return {
     ...config,
     gateway: {
       ...config.gateway,
       mode: "local",
       remote: config.gateway?.remote
-        ? { url: config.gateway.remote.url, edgeAuth: config.gateway.remote.edgeAuth }
+        ? {
+            url: config.gateway.remote.url,
+            edgeAuth: config.gateway.remote.edgeAuth,
+            tlsFingerprint: config.gateway.remote.tlsFingerprint,
+          }
         : undefined,
       auth:
         !hasUrlOverride && config.gateway?.auth?.mode
