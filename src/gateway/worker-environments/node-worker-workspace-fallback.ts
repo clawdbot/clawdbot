@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS } from "../../worker/node-workspace-protocol.js";
 import {
   createNodeWorkerRepositoryPreparation,
   WORKER_REPOSITORY_GIT_ARGS,
@@ -18,7 +19,6 @@ import {
   validateWorkspaceSyncRequest,
 } from "./workspace-sync-helpers.js";
 
-const GIT_TIMEOUT_MS = 60_000;
 const COMMIT_PATTERN = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u;
 const workspaceSyncLog = createSubsystemLogger("gateway/worker-workspace");
 
@@ -76,7 +76,7 @@ async function localGit(root: string, args: string[]): Promise<string> {
       ...args,
     ],
     {
-      timeoutMs: GIT_TIMEOUT_MS,
+      timeoutMs: NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS,
       maxOutputBytes: 256 * 1024,
       maxCombinedOutputBytes: 512 * 1024,
       outputCapture: "head",
@@ -201,7 +201,10 @@ export function createNodeWorkerWorkspaceFallback(exec: NodeWorkerRepositoryExec
         return result;
       }
       const author = await resolveWorkerWorkspaceGitAuthor(request, async (argv) =>
-        runCommandWithTimeout(argv, { timeoutMs: GIT_TIMEOUT_MS, maxOutputBytes: 1024 }),
+        runCommandWithTimeout(argv, {
+          timeoutMs: NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS,
+          maxOutputBytes: 1024,
+        }),
       );
       await repository.configureAuthor(result.remoteWorkspaceDir, author);
       return result;
