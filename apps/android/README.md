@@ -32,9 +32,15 @@ Equal regions prefer the top, then the reading-direction start side. Opening the
 keyboard does not select a different region. Without an intersecting separator,
 the app keeps its full-window layout.
 
+Gateway trust, QR scan-error, Replace gateway setup, and Forget gateway prompts
+also stay within one safe region. Their complete contents and actions scroll when
+space is limited; opening the keyboard does not move them to another region.
+If the keyboard covers that region entirely, dismiss the keyboard to reach the
+prompt again.
+
 This is an initial hinge-safety fallback, not a complete foldable layout. The
 other region is temporarily unused. Book-mode companion panes, a tabletop
-transcript/composer split, and separate-window dialogs are not adapted yet.
+transcript/composer split, other dialogs, sheets, and menus are not adapted yet.
 
 ## Wear OS companion
 

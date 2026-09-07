@@ -1731,6 +1731,11 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
       proxies such as vLLM
     - Do not force strict tool schemas or native-only headers
 
+    If a usable tool schema is incompatible with requested strict mode, the request uses
+    `strict: false`. Debug logs report the downgrade under `openai-transport`,
+    with a bounded sample of incompatible tools. Built-in and managed Responses
+    requests share duplicate suppression for the same model and schemas.
+
   </Accordion>
 </AccordionGroup>
 

@@ -290,20 +290,19 @@ describe("installHooksFromPath archives", () => {
       name: "zip",
       fileName: "traversal.zip",
       contents: zipTraversalBuffer,
-      expectedDetail: "archive entry",
     },
     {
       name: "tar",
       fileName: "traversal.tar",
       contents: tarTraversalBuffer,
-      expectedDetail: "escapes destination",
     },
   ])("rejects $name archives with traversal entries", async (tc) => {
-    const { result } = await installArchiveFixture({
+    const { fixture, result } = await installArchiveFixture({
       fileName: tc.fileName,
       contents: tc.contents,
     });
-    expectInstallFailureContains(result, ["failed to extract archive", tc.expectedDetail]);
+    expectInstallFailureContains(result, ["failed to extract archive", "ArchiveSecurityError"]);
+    expect(fs.existsSync(fixture.hooksDir)).toBe(false);
   });
 
   it.each([

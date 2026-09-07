@@ -12,8 +12,11 @@ import {
   supportsOpenAITemperature,
   type OpenAIApiReasoningEffort,
 } from "../providers/openai-reasoning-effort.js";
-import { convertResponsesToolPayload } from "../providers/openai-responses-tools.js";
-import { reconcileOpenAIResponsesToolChoice } from "../providers/openai-tool-projection.js";
+import { convertProjectedResponsesTools } from "../providers/openai-responses-tools.js";
+import {
+  projectOpenAITools,
+  reconcileOpenAIResponsesToolChoice,
+} from "../providers/openai-tool-projection.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { resolveOpenAIStrictToolSetting } from "./host-policy.js";
 import type { OpenAIResponsesReplayMode } from "./openai-responses-compaction-replay.js";
@@ -31,11 +34,7 @@ import {
   buildResponsesInputMessage,
   convertResponsesMessages,
 } from "./openai-responses-replay-internal.js";
-import {
-  getCompat,
-  resolveOpenAIStrictToolFlagWithDiagnostics,
-  usesNativeOpenAICodexResponsesBackend,
-} from "./openai-transport-params.js";
+import { getCompat, usesNativeOpenAICodexResponsesBackend } from "./openai-transport-params.js";
 import { resolvePromptCacheKey, type OpenAIModeModel } from "./openai-transport-shared.js";
 import { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
@@ -300,31 +299,20 @@ export function buildOpenAIResponsesParams(
     params.service_tier = options.serviceTier;
   }
   if (context.tools) {
-    const converted = convertResponsesToolPayload(
-      context.tools,
-      {
-        model,
-        strict: resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
-          transport: "stream",
-        }),
-      },
-      (projection, setting) =>
-        resolveOpenAIStrictToolFlagWithDiagnostics(projection, setting, {
-          transport: "responses",
-          model: model as OpenAIModeModel,
-        }),
-    );
+    const tools = context.tools;
+    const strict = resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
+      transport: "stream",
+    });
+    const projection = projectOpenAITools(tools);
+    const converted = convertProjectedResponsesTools(projection, strict, model);
     if (
-      converted.tools.length > 0 ||
-      (converted.projection.inputToolCount === 0 && converted.projection.diagnostics.length === 0)
+      converted.length > 0 ||
+      (projection.inputToolCount === 0 && projection.diagnostics.length === 0)
     ) {
-      params.tools = converted.tools;
+      params.tools = converted;
     }
     if (options?.toolChoice) {
-      const toolChoice = reconcileOpenAIResponsesToolChoice(
-        options.toolChoice,
-        converted.projection,
-      );
+      const toolChoice = reconcileOpenAIResponsesToolChoice(options.toolChoice, projection);
       if (toolChoice !== undefined) {
         params.tool_choice = toolChoice;
       }
