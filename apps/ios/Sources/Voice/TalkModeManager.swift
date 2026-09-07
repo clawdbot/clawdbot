@@ -4255,7 +4255,7 @@ extension TalkModeManager {
                 defaultModelIdFallback: Self.defaultModelIdFallback,
                 defaultRealtimeModelIdFallback: Self.defaultRealtimeModelIdFallback,
                 defaultSilenceTimeoutMs: Self.defaultSilenceTimeoutMs)
-            if parsed.missingResolvedPayload {
+            if parsed.snapshot.missingResolvedPayload {
                 GatewayDiagnostics.log(
                     "talk config ignored: normalized payload missing talk.resolved")
             }
@@ -4312,14 +4312,14 @@ extension TalkModeManager {
         let routing = TalkModeRoutingResolver.resolve(
             parsed: parsed,
             defaultProvider: Self.defaultTalkProvider)
-        let realtimeVoiceId = parsed.realtimeVoiceId
+        let realtimeVoiceId = parsed.snapshot.realtime.voice
         self.executionMode = routing.executionMode
         self.runtimeRoute = routing.route
         self.realtimeProvider = routing.realtimeProvider
         self.realtimeModelId = routing.realtimeModelId
         self.realtimeVoiceId = realtimeVoiceId
         self.defaultVoiceId = parsed.defaultVoiceId
-        self.voiceAliases = parsed.voiceAliases
+        self.voiceAliases = parsed.snapshot.voiceAliases
         if !self.voiceOverrideActive {
             self.currentVoiceId = self.defaultVoiceId
         }
@@ -4348,14 +4348,14 @@ extension TalkModeManager {
             redactedFallbackMissingScope: redactedFallbackMissingScope,
             gatewayOwnedVoiceProvider: gatewayOwnedVoiceProvider)
 
-        if let interrupt = parsed.interruptOnSpeech {
+        if let interrupt = parsed.snapshot.interruptOnSpeech {
             self.interruptOnSpeech = interrupt
         }
-        self.gatewaySpeechLocaleID = parsed.speechLocaleID
-        self.silenceWindow = TimeInterval(parsed.silenceTimeoutMs) / 1000
-        if parsed.normalizedPayload || parsed.defaultVoiceId != nil || parsed.rawConfigApiKey != nil {
+        self.gatewaySpeechLocaleID = parsed.snapshot.speechLocaleID
+        self.silenceWindow = TimeInterval(parsed.snapshot.silenceTimeoutMs) / 1000
+        if parsed.snapshot.normalizedPayload || parsed.defaultVoiceId != nil || parsed.rawConfigApiKey != nil {
             GatewayDiagnostics.log(
-                "talk config provider=\(routing.activeProvider) silenceTimeoutMs=\(parsed.silenceTimeoutMs)")
+                "talk config provider=\(routing.activeProvider) silenceTimeoutMs=\(parsed.snapshot.silenceTimeoutMs)")
         }
     }
 
