@@ -1999,7 +1999,7 @@
     "tslog": "4.10.2",
     "typebox": "1.1.39",
     "typescript": "6.0.3",
-    "undici": "8.9.0",
+    "undici": "8.10.2",
     "web-push": "3.6.7",
     "web-tree-sitter": "0.26.9",
     "ws": "8.21.0",

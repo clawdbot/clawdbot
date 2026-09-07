@@ -12,7 +12,7 @@
     "discord-api-types": "0.38.48",
     "libopus-wasm": "0.2.0",
     "typebox": "1.1.39",
-    "undici": "8.9.0",
+    "undici": "8.10.2",
     "ws": "8.21.0"
   },
   "devDependencies": {

@@ -344,6 +344,23 @@ describe("matchesNoProxy", () => {
 
 describe("shouldUseEnvHttpProxyForUrl", () => {
   it.each([
+    ["https://api.example./v1", "example", false],
+    ["https://api.example/v1", "example.", false],
+    ["https://api.example.:8443/v1", "*.example.:8443", false],
+    ["https://api.example.:8443/v1", "*.example.:443", true],
+    ["https://notexample./v1", "example.", true],
+    ["https://api.example../v1", "example", true],
+    ["https://api.example./v1", ".", true],
+  ])("keeps proxy-bypass DNS-dot routing aligned for %s and %s", (url, noProxy, expected) => {
+    expect(
+      shouldUseEnvHttpProxyForUrl(url, {
+        https_proxy: "http://proxy.test:8080",
+        no_proxy: noProxy,
+      }),
+    ).toBe(expected);
+  });
+
+  it.each([
     {
       name: "uses HTTPS_PROXY for https URLs",
       url: "https://api.example.com/v1",
