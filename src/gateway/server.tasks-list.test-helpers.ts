@@ -101,6 +101,7 @@ export function createTaskSnapshot(): Map<string, TaskRecord> {
 }
 
 export async function withAuthenticatedTaskGateway(
+  initializeTasks: () => void,
   fn: (clients: {
     admin: Awaited<ReturnType<typeof openWs>>;
     viewer: Awaited<ReturnType<typeof openWs>>;
@@ -170,6 +171,7 @@ export async function withAuthenticatedTaskGateway(
           visibility: "shared",
         },
       );
+      initializeTasks();
       const stateDir = process.env.OPENCLAW_STATE_DIR;
       if (!stateDir) {
         throw new Error("OPENCLAW_STATE_DIR is required for the Gateway proof");

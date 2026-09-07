@@ -43,9 +43,9 @@ describe("tasks.list Gateway performance", () => {
       throw new Error("expected selected and unselected owned task fixtures");
     }
 
-    await withAuthenticatedTaskGateway(async ({ admin, viewer }) => {
+    let onSnapshotLoad: (() => void) | undefined;
+    const initializeTasks = () => {
       resetTaskRegistryForTests({ persist: false });
-      let onSnapshotLoad: (() => void) | undefined;
       configureTaskRegistryRuntime({
         store: {
           loadSnapshot: () => {
@@ -55,7 +55,8 @@ describe("tasks.list Gateway performance", () => {
           saveSnapshot: () => {},
         },
       });
-
+    };
+    await withAuthenticatedTaskGateway(initializeTasks, async ({ admin, viewer }) => {
       const sortedInputLengths: number[] = [];
       const originalToSorted = Array.prototype.toSorted;
       const sortSpy = vi.spyOn(Array.prototype, "toSorted").mockImplementation(function <T>(

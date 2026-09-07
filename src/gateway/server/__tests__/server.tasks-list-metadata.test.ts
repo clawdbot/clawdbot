@@ -24,7 +24,7 @@ afterAll(() => {
 });
 
 test("preserves task pagination during metadata patches but invalidates new requester access", async () => {
-  await withAuthenticatedTaskGateway(async ({ admin, viewer }) => {
+  const initializeTasks = () => {
     resetTaskRegistryForTests({ persist: false });
     configureTaskRegistryRuntime({
       store: {
@@ -35,6 +35,8 @@ test("preserves task pagination during metadata patches but invalidates new requ
         saveSnapshot: () => {},
       },
     });
+  };
+  await withAuthenticatedTaskGateway(initializeTasks, async ({ admin, viewer }) => {
     const metadataPage = await sendRpc<TasksListResult>(
       viewer,
       "tasks-before-label",
