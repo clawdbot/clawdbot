@@ -1,8 +1,13 @@
+import { fork } from "node:child_process";
 import fs from "node:fs";
-import { Worker } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { sameFileIdentity, type FileIdentityStat } from "./fs-safe-advanced.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
+import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
+import {
+  SQLITE_INSPECTION_TIMEOUT_MS,
+  sqliteInspectionTimeoutError,
+} from "./sqlite-readonly-worker.js";
 
 export type SqliteIntegrityWorkerInput = {
   pathname: string;
@@ -34,7 +39,7 @@ export function readSqliteIntegrityFileIdentity(
   return { dev: current.dev, ino: current.ino };
 }
 
-/** The caller retains its owning lease until the read-only Worker exits. */
+/** The caller retains its owning lease until the read-only child closes. */
 export function assertSqliteIntegrityInWorker(
   pathname: string,
   busyTimeoutMs: number,
@@ -45,20 +50,23 @@ export function assertSqliteIntegrityInWorker(
   // detects observed path swaps; it is not native descriptor authority.
   const identity = readSqliteIntegrityFileIdentity(pathname);
   const entry = resolveRuntimeProcessEntrypointUrl("sqliteIntegrity");
-  const worker = new Worker(entry, {
-    workerData: { pathname, identity, busyTimeoutMs } satisfies SqliteIntegrityWorkerInput,
-    execArgv: entry.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined,
+  const worker = fork(entry, [], {
+    execArgv: resolveRuntimeWorkerArgv(entry).slice(0, -1),
+    serialization: "advanced",
+    stdio: ["ignore", "ignore", "ignore", "ipc"],
   });
   return new Promise((resolve, reject) => {
     let result: SqliteIntegrityWorkerResult | undefined;
     let failure: Error | undefined;
+    // Kill the process to interrupt native SQLite; join close before releasing
+    // the caller's lease, including on cancellation and timeout.
     const abort = () => {
-      // A termination request cannot interrupt SQLite's native call. Exit owns
-      // completion, so the caller cannot release its lease while a scan remains.
-      void worker.terminate().catch((error: unknown) => {
-        failure = toStringifiedError(error);
-      });
+      worker.kill("SIGKILL");
     };
+    const timeout = setTimeout(() => {
+      failure = sqliteInspectionTimeoutError("integrity check", pathname);
+      abort();
+    }, SQLITE_INSPECTION_TIMEOUT_MS);
     signal.addEventListener("abort", abort, { once: true });
     worker.on("message", (message: SqliteIntegrityWorkerResult) => {
       result = message;
@@ -66,7 +74,8 @@ export function assertSqliteIntegrityInWorker(
     worker.on("error", (error) => {
       failure = toStringifiedError(error);
     });
-    worker.once("exit", (code) => {
+    worker.once("close", (code) => {
+      clearTimeout(timeout);
       signal.removeEventListener("abort", abort);
       try {
         signal.throwIfAborted();
@@ -94,6 +103,16 @@ export function assertSqliteIntegrityInWorker(
     });
     if (signal.aborted) {
       abort();
+    } else {
+      worker.send(
+        { pathname, identity, busyTimeoutMs } satisfies SqliteIntegrityWorkerInput,
+        (error) => {
+          if (error) {
+            failure = error;
+            abort();
+          }
+        },
+      );
     }
   });
 }

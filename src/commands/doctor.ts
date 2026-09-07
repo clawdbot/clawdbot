@@ -1,23 +1,26 @@
 /** Top-level doctor command wrapper, including post-upgrade probe mode. */
 import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import { resolveSessionStoreTargets } from "../config/sessions/targets.js";
-import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { runPostUpgradeProbes } from "./doctor-post-upgrade.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import type { DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
-import {
-  isDestructiveDoctorSessionSqliteMode,
-  withDoctorSqliteMaintenanceLock,
-  type DoctorSqliteMaintenanceAuthority,
-} from "./doctor-sqlite-maintenance-lock.js";
+import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
 
-function resolveExplicitSessionSqliteMaintenancePaths(options: DoctorOptions): string[] {
+async function resolveExplicitSessionSqliteMaintenancePaths(
+  options: DoctorOptions,
+): Promise<string[]> {
   if (!options.sessionSqliteStore) {
     return [];
   }
+  const [
+    { resolveSessionStoreTargets },
+    { resolveSqliteTargetFromSessionStorePath },
+    { resolveSqliteDatabaseFilePaths },
+  ] = await Promise.all([
+    import("../config/sessions/targets.js"),
+    import("../config/sessions/session-sqlite-target.js"),
+    import("../infra/sqlite-files.js"),
+  ]);
   const requestedAgentId = normalizeAgentId(options.sessionSqliteAgent ?? LEGACY_IMPLICIT_AGENT_ID);
   // Explicit path mode intentionally bypasses runtime config. Resolve through
   // the same selector as the migration so ownership checks cover exact targets.
@@ -68,6 +71,8 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
   }
   if (options?.sessionSqlite) {
     const sessionSqliteMode = options.sessionSqlite;
+    const { isDestructiveDoctorSessionSqliteMode, withDoctorSqliteMaintenanceLock } =
+      await import("./doctor-sqlite-maintenance-lock.js");
     const { runDoctorSessionSqlite, reconcileDoctorSessionSqlitePublication } =
       await import("./doctor-session-sqlite.js");
     const sessionSqliteOptions = {
@@ -84,7 +89,7 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
           env: process.env,
           operation: `session SQLite ${sessionSqliteMode}`,
           ...(options.sessionSqliteStore
-            ? { protectedPaths: resolveExplicitSessionSqliteMaintenancePaths(options) }
+            ? { protectedPaths: await resolveExplicitSessionSqliteMaintenancePaths(options) }
             : {}),
           ...(sessionSqliteMode !== "compact" ? { reconcileHardlink } : {}),
           run: runSessionSqlite,
@@ -141,6 +146,7 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
     exitCliAfterOutput(outputRuntime, report.totals.issues > 0 ? 1 : 0);
   }
   if (options?.postUpgrade) {
+    const { runPostUpgradeProbes } = await import("./doctor-post-upgrade.js");
     const report = await runPostUpgradeProbes({});
     if (options.json) {
       writeRuntimeJson(outputRuntime, report);
@@ -308,6 +314,7 @@ async function withSessionSqliteGithubIssueReceipt<T>(
   manifestPath: string,
   run: (authority: DoctorSqliteMaintenanceAuthority) => Promise<T> | T,
 ): Promise<T> {
+  const { withDoctorSqliteMaintenanceLock } = await import("./doctor-sqlite-maintenance-lock.js");
   return await withDoctorSqliteMaintenanceLock({
     env: process.env,
     operation: "session SQLite GitHub issue receipt",

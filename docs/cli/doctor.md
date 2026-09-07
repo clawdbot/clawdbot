@@ -58,8 +58,9 @@ manual allowlist rules unchanged. Rerun affected workflows and choose
 **Always allow here** to renew trust for the intended directory. The normal
 `openclaw update` finalization runs this safe repair automatically.
 
-Explicit repair stops the matching managed Gateway before inspecting plugins or
-mutable state, excludes other processes during repair, verifies readiness,
+Explicit repair stops the matching managed Gateway and checks Gateway, state,
+and agent-database ownership before taking read-only schema snapshots. It
+excludes other processes during repair, verifies readiness,
 and restarts the same service once. It preserves the service definition and does
 not activate a service confirmed offline before maintenance. A loaded, enabled
 macOS job between respawns is not offline: Doctor stops it before repair and
@@ -72,6 +73,18 @@ needs to stop the managed Gateway, Doctor refuses inside its automatic fixing
 subtree because that stop would cancel recovery. Use read-only diagnosis or safe
 offline artifact repair followed by an atomic `openclaw gateway restart`, or ask
 an independent operator to run Doctor from a shell outside triage.
+
+Read-only database snapshots and initial integrity scans have a 30-second
+execution limit per database. A timeout names the database and asks you to stop
+its Gateway service and other OpenClaw processes before retrying. If all writers
+are stopped, inspect storage performance and the reported database; a timeout
+does not prove corruption.
+
+`openclaw doctor --fix --non-interactive` applies the supported migrations that
+block Gateway startup without prompting, including shared-state audit schema,
+legacy workspace setup, legacy session stores, and exec approvals. Malformed or
+conflicting input is retained and requires the manual action in the diagnostic.
+The updater uses this repair path before accepting the installed target.
 
 This maintenance window also applies when repair ultimately finds no changes.
 Runs without `--fix`, `--repair`, or `--yes` do not enter maintenance.
@@ -638,28 +651,17 @@ disposal, pending cleanup, and unexpected missing files. See
 
 ### Downgrading After Session SQLite Migration
 
-With the Gateway stopped, use the current CLI to restore archived legacy
-transcript artifacts before starting an older file-backed OpenClaw version:
+Follow [Downgrade](/install/updating#downgrade) before starting an older release.
+With writers stopped, `openclaw doctor --session-sqlite restore
+--session-sqlite-all-agents` restores manifest-recorded legacy transcript
+artifacts to their original paths. This supports recovery from retained originals;
+it does not reverse SQLite schema migrations or replace a pre-update backup.
 
-```bash
-openclaw doctor --session-sqlite restore --session-sqlite-all-agents
-```
-
-Older versions read `sessions.json` entries and the `sessionFile` paths recorded
-in those entries. After the SQLite migration, successful imports move hot JSONL
-transcripts into `session-sqlite-import-archive/`, so the older runtime cannot
-see that history until restore moves those manifest-recorded artifacts back to
-their original paths.
-
-If `openclaw update cleanup` already disposed of the originals, restore reports
-that outcome and cannot recreate them. You need an independent backup containing
-those legacy files; see [Pre-update backups](/install/updating#before-updating-create-a-verified-backup)
-for portable-archive exclusions.
-
-Restore does not delete SQLite data. Sessions created after the SQLite flip
-exist only in SQLite and will not appear to the older runtime. If you later
-upgrade again, run the normal migration validation sequence above so OpenClaw can
-compare restored legacy artifacts with the SQLite rows before importing.
+Run recovery before `openclaw update cleanup` retires those originals. After
+cleanup, restore reports intentional disposal and cannot recreate them. Sessions
+created only in SQLite will not appear to an older file-backed runtime. If you
+upgrade again, use the normal migration validation sequence above to compare
+restored artifacts with SQLite rows before importing.
 
 ## Notes
 

@@ -60,6 +60,11 @@ openclaw doctor
     Run without prompts, applying only safe migrations (config normalization +
     on-disk state moves). Skips restart/service/sandbox actions that need human
     confirmation. Legacy state migrations still run automatically when detected.
+    Add `--fix` for all supported startup-blocking repairs without prompts,
+    including workspace setup, session stores, exec approvals, and audit schema
+    migrations. Explicit repair checks ownership before database snapshots;
+    another live owner must stop before repair can proceed. Malformed or
+    conflicting retained files require the manual recovery named in the error.
 
   </Tab>
   <Tab title="--deep">

@@ -607,9 +607,7 @@ export async function prepareSqliteReadOnlyLocation(
     options.signal?.throwIfAborted();
     // A stopped worker may never publish its random snapshot path. Allocate its
     // private parent first so cancellation can join the child and remove all copies.
-    if (options.signal) {
-      stagingRoot = await createSqliteSnapshotStagingDirectory();
-    }
+    stagingRoot = await createSqliteSnapshotStagingDirectory();
     options.signal?.throwIfAborted();
     const location = await runSqliteReadOnlyWorker(pathname, {
       mode: options.preserveSourceArtifacts ? "sync" : "async",
@@ -632,7 +630,20 @@ export async function prepareSqliteReadOnlyLocation(
 export function prepareSqliteReadOnlyLocationSync(
   pathname: string,
 ): PreparedSqliteReadOnlyLocation {
-  return adoptPreparedLocation(runSqliteReadOnlyWorkerSync(pathname));
+  const stagingRoot = createPrivateSqliteTempDirectorySync(
+    resolvePrivateSqliteSnapshotStagingRoot(),
+    SQLITE_SNAPSHOT_STAGING_PREFIX,
+  );
+  try {
+    return adoptPreparedLocation(runSqliteReadOnlyWorkerSync(pathname, stagingRoot), stagingRoot);
+  } catch (error) {
+    if (!removeTempDirectory(stagingRoot)) {
+      throw new Error(`SQLite read-only worker snapshot cleanup failed: ${stagingRoot}`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
 }
 
 async function prepareSqliteSnapshotSource(

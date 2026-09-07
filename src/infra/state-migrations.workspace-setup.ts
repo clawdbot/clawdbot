@@ -42,6 +42,7 @@ import type {
   LegacyWorkspaceStateDetection,
   LegacyWorkspaceStateSource,
 } from "./state-migrations.workspace-setup.types.js";
+import { formatDoctorStateRepairFailure } from "./state-repair-message.js";
 
 const SETUP_MAX_BYTES = 64 * 1024;
 const CLAIM_SUFFIX = WORKSPACE_DOCTOR_CLAIM_SUFFIX;
@@ -359,7 +360,10 @@ function formatLegacyWorkspaceReadWarning(
   source: LegacyWorkspaceStateSource,
   error: unknown,
 ): string {
-  return `Failed reading legacy workspace state at ${source.sourcePath}: ${formatErrorMessage(error)}`;
+  return formatDoctorStateRepairFailure(
+    `Failed reading legacy workspace state at ${source.sourcePath}: ${formatErrorMessage(error)}`,
+    "Stop the Gateway. Restore this source or its .doctor-importing claim from a verified backup, or rename the unreadable source or claim with a .rejected-<timestamp> suffix to retain its bytes if its setup/attestation history can be discarded. Then rerun openclaw doctor --fix against the same state/config.",
+  );
 }
 
 function assertConfiguredWorkspaceIdentity(source: LegacyWorkspaceStateSource): void {
@@ -541,7 +545,7 @@ async function migrateOneSource(params: {
     return { changes: [], warnings: [] };
   }
 
-  let operation = `reading legacy workspace state at ${params.source.sourcePath}`;
+  let operation: string | undefined;
   let claimAttempted = false;
   let imported: ReturnType<typeof importAndRecordReceipt> | undefined;
   let archivePath: string | undefined;
@@ -614,7 +618,9 @@ async function migrateOneSource(params: {
     return {
       changes: [],
       warnings: [
-        `Failed ${operation}: ${formatErrorMessage(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
+        operation
+          ? `Failed ${operation}: ${formatErrorMessage(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`
+          : formatLegacyWorkspaceReadWarning(params.source, error),
       ],
     };
   }
