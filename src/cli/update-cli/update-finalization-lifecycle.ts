@@ -13,6 +13,7 @@ import { getPendingCliDisposers } from "../runtime-cleanup.js";
 // Local metadata/backup/completion work gets 30s; Doctor gets 2m for migrations,
 // registry installs get 10m, and convergence gets 3m for Doctor + validation.
 const PHASE_BUDGET_MS = {
+  preflight: 30_000,
   targetConfigValidation: 30_000,
   configSnapshot: 30_000,
   doctor: 120_000,

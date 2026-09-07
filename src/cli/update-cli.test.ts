@@ -11792,6 +11792,7 @@ describe("update-cli", () => {
         expect(output?.postUpdate?.doctor?.status).toBe("ok");
         expect(output?.postUpdate?.plugins?.status).toBe("ok");
         expect(output?.phaseTimings?.map((timing) => timing.phase)).toEqual([
+          "preflight",
           "targetConfigValidation",
           "configSnapshot",
           "doctor",
@@ -11804,6 +11805,7 @@ describe("update-cli", () => {
           expect(timing.durationMs).toEqual(expect.any(Number));
         }
         expect(output?.phaseTimings?.map((timing) => timing.outcome)).toEqual([
+          "completed",
           "completed",
           "completed",
           "completed",

@@ -19,7 +19,6 @@ import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
-import { exitCliAfterOutput } from "../one-shot-exit.js";
 import {
   parseTimeoutMsOrExit,
   resolveUpdateRoot,
@@ -68,26 +67,38 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
   await withCommandProcessScope(async (stopChildren) => {
     const lifecycle = new UpdateFinalizationLifecycle(Boolean(opts.json), timeoutMs, stopChildren);
     try {
-      const prepared = await withUpdateInProgressEnv(invocationCwd, () =>
-        lifecycle.run("targetConfigValidation", () =>
-          prepareUpdateFinalization(opts, requestedChannel, lifecycle),
-        ),
+      const root = await withUpdateInProgressEnv(invocationCwd, () =>
+        lifecycle.run("preflight", async () => {
+          // Refused invocations cannot create a ledger or write failure-triage artifacts.
+          assertConfigWriteAllowedInCurrentMode();
+          await assertOpenClawStateWriteAllowedAtPath({
+            databasePath: resolveOpenClawStateSqlitePath(process.env),
+            recoverOrphanedSidecars: false,
+          });
+          lifecycle.attachLedger();
+          return await resolveUpdateRoot();
+        }),
       );
-      if (!prepared) {
-        return;
-      }
-      const { root } = prepared;
+      lifecycle.root = root;
       const target = { root, env: resolveServiceRefreshEnv(process.env, invocationCwd) };
       await withUpdateFailureTriage({ ...opts, invocationCwd }, target, () =>
-        withUpdateInProgressEnv(invocationCwd, () =>
-          updateFinalizeCommandInternal(opts, prepared, lifecycle),
-        ),
+        withUpdateInProgressEnv(invocationCwd, async () => {
+          try {
+            const prepared = await lifecycle.run("targetConfigValidation", () =>
+              prepareUpdateFinalization(opts, root, requestedChannel),
+            );
+            if (prepared) {
+              await updateFinalizeCommandInternal(opts, prepared, lifecycle);
+            }
+          } catch (error) {
+            if (error instanceof UpdateCommandFailure) {
+              lifecycle.complete(error.exitCode);
+            }
+            throw error;
+          }
+        }),
       );
     } catch (error) {
-      if (error instanceof UpdateCommandFailure) {
-        lifecycle.complete(error.exitCode);
-        exitCliAfterOutput(defaultRuntime, error.exitCode);
-      }
       if (!lifecycle.completed) {
         lifecycle.fail();
       }
@@ -98,17 +109,9 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
 
 async function prepareUpdateFinalization(
   opts: UpdateFinalizeOptions,
+  root: string,
   requestedChannel: UpdateChannel | null,
-  lifecycle: UpdateFinalizationLifecycle,
 ) {
-  assertConfigWriteAllowedInCurrentMode();
-  await assertOpenClawStateWriteAllowedAtPath({
-    databasePath: resolveOpenClawStateSqlitePath(process.env),
-    recoverOrphanedSidecars: false,
-  });
-  lifecycle.attachLedger();
-  const root = await resolveUpdateRoot();
-  lifecycle.root = root;
   await assertOpenClawStateWriteAllowedAtPath({
     databasePath: resolveOpenClawStateSqlitePath(process.env),
   });

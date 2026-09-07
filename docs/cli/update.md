@@ -304,7 +304,7 @@ plugin finalization steps still exit non-zero.
 
 Finalization (including the supervisor-facing `update finalize` command) records
 phase starts and finishes immediately on stderr and in the update run ledger.
-The defaults are 30 seconds for config validation, config backup, and completion
+The defaults are 30 seconds for preflight admission, config validation, config backup, and completion
 cache work; 120 seconds for Doctor migrations; 600 seconds for plugin registry
 and installation work; and 180 seconds for post-plugin Doctor and validation.
 `--timeout` overrides each phase budget.
