@@ -453,4 +453,24 @@ describe("anonymous public session HTTP boundary", () => {
     }
     await Promise.all(held);
   });
+
+  it("truncates titles and messages without splitting UTF-16 surrogate pairs", async () => {
+    const server = createPublicGateway();
+    reader.mockResolvedValueOnce({
+      title: `${"a".repeat(199)}😀 trailing`,
+      messages: [{ role: "user" as const, content: `${"b".repeat(32_767)}😀 UNIQUE_TAIL_MARKER` }],
+      totalMessages: 1,
+      truncated: false,
+    });
+    const response = await send(server);
+    expect(response.res.statusCode).toBe(200);
+    const html = response.getBody();
+    expect(html).toContain(`<title>${"a".repeat(199)} · OpenClaw</title>`);
+    expect(html).toContain(`property="og:title" content="${"a".repeat(199)}"`);
+    expect(html).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+    expect(html).toContain("Message shortened for this public view.");
+    expect(html).toContain("b".repeat(32_767));
+    expect(html).not.toContain("UNIQUE_TAIL_MARKER");
+    expect(html).not.toContain("😀");
+  });
 });
