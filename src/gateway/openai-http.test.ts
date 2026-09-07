@@ -224,7 +224,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
       const continueAgent = createDeferred();
       agentCommandMock.mockClear();
-      agentCommandMock.mockImplementationOnce(async (opts: unknown) => {
+      agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
         if (stream) {
           const runId = (opts as { runId: string }).runId;
           emitAgentEvent({ runId, stream: "assistant", data: { delta: partialText } });
@@ -232,7 +232,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           await continueAgent.promise;
         }
         return recordAgentRunTerminalOutcome(resolved.result, "completed");
-      });
+      }) as never);
 
       try {
         const response = await postChatCompletions(enabledPort, {
