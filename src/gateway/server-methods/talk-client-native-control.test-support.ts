@@ -14,6 +14,10 @@ import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs
 import { withPreparedEmbeddedRunToolAuthority } from "../../agents/harness/tool-authority.runtime.js";
 import type { AgentSession } from "../../agents/sessions/agent-session.js";
 import { AuthStorage } from "../../agents/sessions/auth-storage.js";
+import {
+  createAdmittedGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../../agents/tools/gateway-caller-context.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TalkRealtimeConfig } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -137,16 +141,33 @@ export function requireString(record: Record<string, unknown>, key: string): str
 }
 
 export async function withRegisteredNativeEmbeddedRun<T>(
-  params: Pick<RunEmbeddedAgentParams, "runId" | "sessionId" | "sessionKey">,
+  params: Pick<
+    RunEmbeddedAgentParams,
+    "agentId" | "preparedRunAdmission" | "runId" | "sessionId" | "sessionKey"
+  >,
   run: () => Promise<T> | T,
 ): Promise<T> {
-  const handle = createEmbeddedRunHandle({ runId: params.runId });
-  setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
-  try {
-    return await run();
-  } finally {
-    clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+  const { agentId, preparedRunAdmission, sessionKey } = params;
+  if (!agentId || !preparedRunAdmission || !sessionKey) {
+    throw new Error("Expected real Talk admission");
   }
+  const admittedRunContext = await preparedRunAdmission.admit("embedded", "native-test-backend");
+  return await withGatewayToolCallerIdentity(
+    createAdmittedGatewayToolCallerIdentity({
+      admittedRunContext,
+      agentId,
+      sessionKey,
+    }),
+    async () => {
+      const handle = createEmbeddedRunHandle({ runId: params.runId });
+      setActiveEmbeddedRun(params.sessionId, handle, sessionKey);
+      try {
+        return await run();
+      } finally {
+        clearActiveEmbeddedRun(params.sessionId, handle, sessionKey);
+      }
+    },
+  );
 }
 
 function requireSuccessfulReply(respond: ReturnType<typeof vi.fn<RespondFn>>) {

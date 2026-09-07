@@ -195,6 +195,25 @@ describe("Talk client agent consult admission", () => {
     expect(createRunner().runPrompt).not.toHaveProperty("steer");
   });
 
+  it.each(["success", "failure"] as const)(
+    "keeps the released provider callback reusable after %s",
+    async (outcome) => {
+      if (outcome === "failure") {
+        mocks.consultRealtimeVoiceAgent.mockRejectedValueOnce(new Error("consult failed"));
+      }
+      const runner = createRunner();
+      const first = runner.runPrompt({ prompt: "first task" });
+      if (outcome === "failure") {
+        await expect(first).rejects.toThrow("consult failed");
+      } else {
+        await expect(first).resolves.toEqual({ text: "done" });
+      }
+      await expect(runner.runPrompt({ prompt: "second task" })).resolves.toEqual({
+        text: "done",
+      });
+    },
+  );
+
   it.each(["runOwnedArgs", "runPrompt"] as const)(
     "steers and claims only the exact registered consult owner through %s",
     async (entrypoint) => {
@@ -242,6 +261,9 @@ describe("Talk client agent consult admission", () => {
       });
 
       const lifecycleRunner = runner[entrypoint];
+      if (entrypoint === "runPrompt") {
+        runner.runPrompt.adoptCompletionClaims();
+      }
       const run =
         entrypoint === "runOwnedArgs"
           ? runner.runOwnedArgs({ question: "first task" }, new AbortController().signal)
@@ -328,6 +350,7 @@ describe("Talk client agent consult admission", () => {
       registerRun: vi.fn(),
       isRunCurrent: () => true,
     });
+    runner.runPrompt.adoptCompletionClaims();
     const run = runner.runPrompt({ prompt: "first task" });
     await announced.promise;
     const steer = runner.runPrompt.steer;
@@ -452,6 +475,7 @@ describe("Talk client agent consult admission", () => {
       registerRun: vi.fn(),
       isRunCurrent: () => true,
     });
+    runner.runPrompt.adoptCompletionClaims();
     const run = runner.runPrompt({ prompt: "first task" });
     await secondPublished.promise;
 
@@ -530,6 +554,7 @@ describe("Talk client agent consult admission", () => {
       registerRun: vi.fn(),
       isRunCurrent: () => true,
     });
+    runner.runPrompt.adoptCompletionClaims();
     const run = runner.runPrompt({ prompt: "first task" });
     await secondPublished.promise;
 
@@ -584,6 +609,7 @@ describe("Talk client agent consult admission", () => {
       registerRun: vi.fn(),
       isRunCurrent: () => true,
     });
+    runner.runPrompt.adoptCompletionClaims();
     const first = runner.runPrompt({ prompt: "first task" });
     await firstAnnounced.promise;
     expect(runner.runPrompt.claimFailureAppend()).toBe(true);
@@ -683,6 +709,7 @@ describe("Talk client agent consult admission", () => {
       registerRun,
       isRunCurrent: () => true,
     });
+    runner.runPrompt.adoptCompletionClaims();
     const first = runner.runPrompt({ prompt: "first task" });
     await firstWaiting.promise;
     expect(runner.runPrompt.claimFailureAppend()).toBe(true);

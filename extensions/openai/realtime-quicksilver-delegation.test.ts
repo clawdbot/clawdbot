@@ -14,6 +14,7 @@ type ConsultRunner = ((params: {
   prompt: string;
   signal?: AbortSignal;
 }) => Promise<{ text: string }>) & {
+  adoptCompletionClaims?: () => void;
   claimAppend?: () => boolean;
   claimFailureAppend?: () => boolean;
   steer?: (params: { prompt: string; signal?: AbortSignal }) => Promise<{ text: string }>;
@@ -80,6 +81,20 @@ function delegate(
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+});
+
+it("adopts delayed completion claims before accepting delegations", () => {
+  const adoptCompletionClaims = vi.fn();
+  const runAgentConsult = Object.assign(
+    vi.fn(async () => ({ text: "Done" })),
+    {
+      adoptCompletionClaims,
+    },
+  );
+
+  createDelegationHarness({ runAgentConsult });
+
+  expect(adoptCompletionClaims).toHaveBeenCalledOnce();
 });
 
 describe("GPT-Live sideband protocol", () => {

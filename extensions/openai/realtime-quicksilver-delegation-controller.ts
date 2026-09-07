@@ -41,6 +41,7 @@ interface LifecycleBoundAgentConsultRunner {
   (
     ...args: Parameters<RealtimeVoiceAgentConsultRunner>
   ): ReturnType<RealtimeVoiceAgentConsultRunner>;
+  adoptCompletionClaims?: () => void;
   claimAppend?: () => boolean;
   claimFailureAppend?: () => boolean;
   steer?: RealtimeVoiceAgentConsultRunner;
@@ -103,6 +104,7 @@ export class OpenAIQuicksilverDelegationController {
     private readonly options: OpenAIQuicksilverDelegationControllerOptions,
     private readonly formatErrorMessage: OpenAIRealtimeHost["formatErrorMessage"],
   ) {
+    options.runAgentConsult.adoptCompletionClaims?.();
     if (options.signal.aborted) {
       this.onSessionAbort();
     } else {

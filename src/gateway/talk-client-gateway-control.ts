@@ -58,6 +58,7 @@ type GatewayControlCommands = Parameters<
 >[0];
 
 type TalkAgentConsultLifecycleMethods = {
+  adoptCompletionClaims?: () => void;
   claimAppend?: () => boolean;
   claimFailureAppend?: () => boolean;
   steer?: RealtimeVoiceAgentConsultRunner;
@@ -423,6 +424,7 @@ export function createTalkClientGatewayControlOwner(params: {
     },
     warn,
   });
+  let completionClaimsAdopted = false;
   const runAgentConsult = Object.assign(
     async ({
       prompt,
@@ -436,14 +438,23 @@ export function createTalkClientGatewayControlOwner(params: {
       // leaves accepted provider work under its own cancellation owner.
       consultControllers.set(consultId, { controller, closeDisposition: "detach" });
       try {
-        return await params.runAgentConsult({ question: prompt }, delegatedSignal, () =>
-          awaitProviderConsultReadiness(delegatedSignal),
-        );
+        if (completionClaimsAdopted) {
+          return await params.runAgentConsult({ question: prompt }, delegatedSignal, () =>
+            awaitProviderConsultReadiness(delegatedSignal),
+          );
+        }
+        await awaitProviderConsultReadiness(delegatedSignal);
+        return await params.runToolAgentConsult({ question: prompt }, delegatedSignal);
       } finally {
         consultControllers.delete(consultId);
       }
     },
     {
+      // Completion ownership extends beyond the released callback promise, so
+      // only controllers that consume the matching claims may opt into it.
+      adoptCompletionClaims: () => {
+        completionClaimsAdopted = true;
+      },
       claimAppend: () => {
         let current = true;
         try {

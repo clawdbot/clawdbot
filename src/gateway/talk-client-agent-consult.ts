@@ -477,10 +477,21 @@ export function createTalkClientAgentConsultRunner(params: {
     ? { claimAppend, claimFailureAppend, steer }
     : { claimAppend, claimFailureAppend };
   const lifecycleBoundRunArgs = Object.assign(runOwnedArgs, lifecycleMethods);
+  let completionClaimsAdopted = false;
   const runPrompt = Object.assign(
     async ({ prompt, signal }: { prompt: string; signal?: AbortSignal }) =>
-      await lifecycleBoundRunArgs({ question: prompt }, signal),
-    lifecycleMethods,
+      await (completionClaimsAdopted ? lifecycleBoundRunArgs : runArgs)(
+        { question: prompt },
+        signal,
+      ),
+    {
+      ...lifecycleMethods,
+      // The released provider callback is reusable. Providers must explicitly
+      // adopt delayed completion claims before the host retains an owner past settlement.
+      adoptCompletionClaims: () => {
+        completionClaimsAdopted = true;
+      },
+    },
   );
   return {
     getToolAuthorityOverlay: (currentAuthority = authority, source?: "reply" | "attempt") =>

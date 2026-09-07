@@ -15,6 +15,57 @@ import {
 import { cleanupTalkConnection } from "./talk-session-registry.js";
 
 describe("Talk client Gateway control owner", () => {
+  it.each(["success", "failure"] as const)(
+    "keeps an unadopted provider callback reusable after %s",
+    async (outcome) => {
+      const runToolAgentConsult = vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          if (outcome === "failure") {
+            throw new Error("consult failed");
+          }
+          return { text: "first result" };
+        })
+        .mockResolvedValueOnce({ text: "second result" });
+      const runAgentConsult = Object.assign(
+        vi.fn(async () => ({ text: "owned result" })),
+        {
+          claimAppend: vi.fn(() => true),
+          claimFailureAppend: vi.fn(() => true),
+        },
+      );
+      const owner = createTalkClientGatewayControlOwner({
+        voiceSessionId: `voice-provider-repeat-${outcome}`,
+        sessionTarget,
+        connId: `conn-provider-repeat-${outcome}`,
+        context: controlContext(),
+        runToolAgentConsult,
+        runAgentConsult,
+        appendTranscript: vi.fn(async () => undefined),
+        flushTranscript: vi.fn(async () => undefined),
+        closeLogicalSession: vi.fn(async () => undefined),
+      });
+      await owner.adoptProvider(vi.fn(async () => undefined));
+      owner.activate();
+
+      try {
+        const first = owner.runAgentConsult({ prompt: "first question" });
+        if (outcome === "failure") {
+          await expect(first).rejects.toThrow("consult failed");
+        } else {
+          await expect(first).resolves.toEqual({ text: "first result" });
+        }
+        await expect(owner.runAgentConsult({ prompt: "second question" })).resolves.toEqual({
+          text: "second result",
+        });
+        expect(runToolAgentConsult).toHaveBeenCalledTimes(2);
+        expect(runAgentConsult).not.toHaveBeenCalled();
+      } finally {
+        await owner.close();
+      }
+    },
+  );
+
   it("uses the non-owning runner for successive provider tool consultations", async () => {
     const bridge = controlBridge();
     const runToolAgentConsult = vi
@@ -635,6 +686,7 @@ describe("Talk client Gateway control owner", () => {
     });
     await owner.adoptProvider(vi.fn(async () => undefined));
     owner.activate();
+    owner.runAgentConsult.adoptCompletionClaims?.();
 
     const first = owner.runAgentConsult({ prompt: "first task" });
     await vi.waitFor(() => expect(flushTranscript).toHaveBeenCalledOnce());
