@@ -39,7 +39,10 @@ import {
   type BrowserScreenshotOptions,
 } from "./browser-tool.screenshot.js";
 import { appendNavigatedPageState, executeSnapshotAction } from "./browser-tool.snapshot.js";
-import { resolveBrowserNavigationTimeoutMs } from "./browser/act-policy.js";
+import {
+  BROWSER_ACTION_TRANSPORT_SLACK_MS,
+  resolveBrowserNavigationTimeoutMs,
+} from "./browser/act-policy.js";
 import { parseBrowserNavigationUrl } from "./browser/navigation-guard.js";
 
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
@@ -235,10 +238,7 @@ export async function executeBrowserTabAction(context: {
     case "navigate": {
       const targetUrl = readTargetUrlParam(params);
       const targetId = readStringParam(params, "targetId");
-      const timeoutMs =
-        requestedTimeoutMs === undefined
-          ? undefined
-          : resolveBrowserNavigationTimeoutMs(requestedTimeoutMs);
+      const timeoutMs = resolveBrowserNavigationTimeoutMs(requestedTimeoutMs);
       const result = proxyRequest
         ? await proxyRequest({
             method: "POST",
@@ -249,7 +249,7 @@ export async function executeBrowserTabAction(context: {
               targetId,
               timeoutMs,
             },
-            timeoutMs,
+            timeoutMs: timeoutMs + BROWSER_ACTION_TRANSPORT_SLACK_MS,
           })
         : await browserNavigate(baseUrl, {
             url: targetUrl,

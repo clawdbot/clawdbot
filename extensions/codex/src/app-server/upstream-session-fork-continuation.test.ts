@@ -10,6 +10,7 @@ import { createCodexCatalogHomeResolver } from "../session-catalog-homes.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
+import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config-runtime.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import {
   buildCodexAppServerConnectionFingerprint,
@@ -90,6 +91,12 @@ describe("persistent upstream fork continuation", () => {
     const clients: ReturnType<typeof createFakeCodexAppServerClient>[] = [];
     const createClient = (home: "secondary" | "ordinary") => {
       const client = createFakeCodexAppServerClient(async (method, requestParams) => {
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
+        }
+        if (method === "configRequirements/read") {
+          return { requirements: null };
+        }
         if (method === "skills/list") {
           return { data: [] };
         }
@@ -177,6 +184,7 @@ describe("persistent upstream fork continuation", () => {
         [agentDir, secondaryHome, env.CODEX_HOME].map((dir) => fs.mkdir(dir, { recursive: true })),
       );
       const sourceHome = createCodexCatalogHomeResolver({
+        resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
         config,
         getRuntimeConfig: () => config,
         getPluginConfig: () => pluginConfig,
@@ -269,7 +277,7 @@ describe("persistent upstream fork continuation", () => {
       const developerInstructions = "Follow the child agent's current instructions.";
       const continueFork = async (store: CodexAppServerBindingStore, nativeClient = native) => {
         const connection = resolveCodexBindingAppServerConnection({
-          binding: await store.read(identity),
+          binding: store.read(identity),
           pluginConfig,
           config,
           agentDir,

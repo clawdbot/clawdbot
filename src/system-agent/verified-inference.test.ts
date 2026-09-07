@@ -10,19 +10,23 @@ import {
   fingerprintResolvedProviderAuth,
 } from "../agents/execution-auth-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
-import { resolvePersistentApplyInference } from "./setup-inference.js";
+import { resolveSystemAgentConfiguredRouteFromConfig as resolveSystemAgentConfiguredRouteFromConfigImpl } from "./inference-route.js";
+import { resolvePersistentApplyInference as resolvePersistentApplyInferenceImpl } from "./setup-inference.js";
 import {
   installSystemAgentClaudeCliBackendTestFixture,
-  installSystemAgentPluginMetadataTestSnapshot,
+  createSystemAgentPluginMetadataTestSnapshot,
   type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
 import {
-  createSystemAgentVerifiedInferenceBinding,
-  resolveSystemAgentVerifiedInferenceRoute,
+  createSystemAgentVerifiedInferenceBinding as createSystemAgentVerifiedInferenceBindingImpl,
+  resolveSystemAgentVerifiedInferenceRoute as resolveSystemAgentVerifiedInferenceRouteImpl,
   type SystemAgentVerifiedInferenceDeps,
 } from "./verified-inference.js";
 import {
+  config,
+  profileAuth,
+  profileStore,
+  requireFingerprint,
   cliRuntimeArtifactAuth,
   cliRuntimeArtifactDeps,
   codexRuntimeArtifactAuth,
@@ -88,20 +92,36 @@ const profile = {
 
 const runtime = { log: () => {}, error: () => {}, exit: () => {} } as never;
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
+
+const resolveSystemAgentConfiguredRouteFromConfig: typeof resolveSystemAgentConfiguredRouteFromConfigImpl =
+  (...args) =>
+    pluginMetadataSnapshot!.run(
+      () => resolveSystemAgentConfiguredRouteFromConfigImpl(...args),
+      args[0],
+    );
+
+const resolvePersistentApplyInference: typeof resolvePersistentApplyInferenceImpl = (...args) =>
+  pluginMetadataSnapshot!.run(() => resolvePersistentApplyInferenceImpl(...args));
+
+const createSystemAgentVerifiedInferenceBinding: typeof createSystemAgentVerifiedInferenceBindingImpl =
+  (...args) =>
+    pluginMetadataSnapshot!.run(() => createSystemAgentVerifiedInferenceBindingImpl(...args));
+
+const resolveSystemAgentVerifiedInferenceRoute: typeof resolveSystemAgentVerifiedInferenceRouteImpl =
+  (...args) =>
+    pluginMetadataSnapshot!.run(() => resolveSystemAgentVerifiedInferenceRouteImpl(...args));
 let restoreCliBackendFixture: (() => void) | undefined;
 
 beforeAll(() => {
-  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot(config());
+  pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot(config());
   restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
 });
 
 afterAll(() => {
   restoreCliBackendFixture?.();
-  pluginMetadataSnapshot?.restore();
 });
 
 beforeEach(() => {
-  pluginMetadataSnapshot?.rebindForCurrentEnv();
   pluginRegistryState.providerOwnerIds = ["provider-owner"];
   pluginRegistryState.records = [pluginRecord("provider-owner"), pluginRecord("codex")];
   harnessRuntimeArtifactState.id = "codex-app-server";
@@ -132,32 +152,6 @@ function authDeps(apiKey = "verified-key") {
       },
     ),
   };
-}
-
-function config(model = "openai/gpt-5.5@openai:verified"): OpenClawConfig {
-  return {
-    agents: { defaults: { model } },
-    auth: {
-      profiles: {
-        "openai:verified": { provider: "openai", mode: "api_key" },
-      },
-    },
-  };
-}
-
-function profileAuth(profileId: string, apiKey: string) {
-  return { apiKey, profileId, source: `profile:${profileId}`, mode: "api-key" as const };
-}
-
-function profileStore(profileId: string, credential: object) {
-  return vi.fn(() => ({ version: 1, profiles: { [profileId]: credential } })) as never;
-}
-
-function requireFingerprint(value: string | undefined): string {
-  if (!value) {
-    throw new Error("missing test auth fingerprint");
-  }
-  return value;
 }
 
 async function bindingFor(

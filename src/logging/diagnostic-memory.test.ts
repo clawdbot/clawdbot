@@ -10,7 +10,7 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { emitDiagnosticMemorySample, resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
 import {
   readLatestDiagnosticStabilityBundleSync,
-  resetDiagnosticStabilityBundleForTest,
+  uninstallDiagnosticStabilityFatalHook,
 } from "./diagnostic-stability-bundle.js";
 import {
   resetDiagnosticStabilityRecorderForTest,
@@ -40,7 +40,7 @@ describe("diagnostic memory", () => {
     vi.setSystemTime(new Date("2026-04-22T12:00:00.000Z"));
     resetDiagnosticEventsForTest();
     resetDiagnosticMemoryForTest();
-    resetDiagnosticStabilityBundleForTest();
+    uninstallDiagnosticStabilityFatalHook();
     resetDiagnosticStabilityRecorderForTest();
     resetLogger();
   });
@@ -50,7 +50,7 @@ describe("diagnostic memory", () => {
     vi.useRealTimers();
     resetDiagnosticEventsForTest();
     resetDiagnosticMemoryForTest();
-    resetDiagnosticStabilityBundleForTest();
+    uninstallDiagnosticStabilityFatalHook();
     resetDiagnosticStabilityRecorderForTest();
     setLoggerOverride(null);
     resetLogger();

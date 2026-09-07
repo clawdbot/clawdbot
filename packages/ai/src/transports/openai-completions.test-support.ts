@@ -7,6 +7,7 @@ import {
   type AiProviderRequestPolicyInput,
 } from "../host.js";
 import type { Model } from "../types.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
 import type { processCompletionsStream } from "./openai-completions-stream.js";
 
@@ -208,14 +209,7 @@ export function createAssistantOutput(model: Model<"openai-completions">): OpenA
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsage(),
     stopReason: "stop",
     timestamp: Date.now(),
   };

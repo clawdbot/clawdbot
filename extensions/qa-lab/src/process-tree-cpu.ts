@@ -1,6 +1,11 @@
 // Qa Lab plugin module implements process tree cpu behavior.
 import { spawnSync } from "node:child_process";
-import { parseStrictFiniteNumber, parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  asNonNegativeFiniteNumber,
+  parseStrictFiniteNumber,
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveQaWindowsPowerShellExePath } from "./windows-system-tools.js";
 
@@ -11,30 +16,6 @@ type ProcessTreeSnapshot = {
 };
 
 const PROCESS_TREE_SNAPSHOT_TIMEOUT_MS = 5_000;
-
-function parsePositiveInteger(value: unknown): number | null {
-  const parsed = parseStrictInteger(value);
-  if (parsed === undefined || parsed <= 0) {
-    return null;
-  }
-  return parsed;
-}
-
-function parseNonNegativeInteger(value: unknown): number | null {
-  const parsed = parseStrictInteger(value);
-  if (parsed === undefined || parsed < 0) {
-    return null;
-  }
-  return parsed;
-}
-
-function parseNonNegativeNumber(value: unknown): number | null {
-  const parsed = parseStrictFiniteNumber(value);
-  if (parsed === undefined || parsed < 0) {
-    return null;
-  }
-  return parsed;
-}
 
 function parsePsCpuTimeMs(raw: string): number | null {
   const match = raw.trim().match(/^(?:(\d+)-)?(\d+):(\d{2}(?:\.\d+)?)(?::(\d{2}(?:\.\d+)?))?$/u);
@@ -84,17 +65,17 @@ function parseWindowsProcessCpuTimeMs(params: {
   kernelModeTime: unknown;
   userModeTime: unknown;
 }): number | null {
-  const kernelModeTime = parseNonNegativeNumber(params.kernelModeTime);
-  const userModeTime = parseNonNegativeNumber(params.userModeTime);
-  if (kernelModeTime === null || userModeTime === null) {
+  const kernelModeTime = asNonNegativeFiniteNumber(parseStrictFiniteNumber(params.kernelModeTime));
+  const userModeTime = asNonNegativeFiniteNumber(parseStrictFiniteNumber(params.userModeTime));
+  if (kernelModeTime === undefined || userModeTime === undefined) {
     return null;
   }
   return Math.round((kernelModeTime + userModeTime) / 10_000);
 }
 
 function parseWindowsWorkingSetBytes(raw: unknown): number | null {
-  const parsed = parseNonNegativeNumber(raw);
-  return parsed === null ? null : Math.round(parsed);
+  const parsed = asNonNegativeFiniteNumber(parseStrictFiniteNumber(raw));
+  return parsed === undefined ? null : Math.round(parsed);
 }
 
 function parseWindowsProcessTreeSnapshot(raw: string): ProcessTreeSnapshot | null {
@@ -116,9 +97,9 @@ function parseWindowsProcessTreeSnapshot(raw: string): ProcessTreeSnapshot | nul
     if (!isPlainObject(entry)) {
       continue;
     }
-    const pid = parsePositiveInteger(entry.ProcessId);
-    const ppid = parseNonNegativeInteger(entry.ParentProcessId);
-    if (pid === null || ppid === null) {
+    const pid = parseStrictPositiveInteger(entry.ProcessId);
+    const ppid = parseStrictNonNegativeInteger(entry.ParentProcessId);
+    if (pid === undefined || ppid === undefined) {
       continue;
     }
 

@@ -67,15 +67,14 @@ export type SidebarRecentSession = {
   createdActor?: SessionCreatedActor;
   owner?: SessionOwner;
   participants?: SessionParticipant[];
+  expandedParticipants?: SessionParticipant[];
   participantCount?: number;
   archivedBy?: SessionCreatedActor;
   label: string;
-  /**
-   * Stored user label, undecorated. `label` above is the resolved display name
-   * and can carry a derived account or channel; rename edits this one so a
-   * derived string never lands back in persisted state.
-   */
+  /** Stored user label, separate from generated titles and display decoration. */
   userLabel?: string;
+  /** Editable session name prepared before the display name gains decoration. */
+  renameValue: string;
   /** Compact repo/branch/node line for work sessions. */
   subtitle?: string;
   workContext?: SessionWorkContext;
@@ -149,8 +148,10 @@ export type SidebarSessionHovercardRow = Pick<
   | "color"
   | "endedAt"
   | "hasAutomation"
+  | "hasActiveRun"
   | "label"
   | "lastMessagePreview"
+  | "expandedParticipants"
   | "participantCount"
   | "participants"
   | "placementProviderId"

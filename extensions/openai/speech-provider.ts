@@ -1,5 +1,4 @@
 // Openai provider module implements model/runtime integration.
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -7,7 +6,7 @@ import type {
   SpeechProviderOverrides,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
-import { parseSpeechDirectiveNumberOverride } from "openclaw/plugin-sdk/speech-core";
+import { parseSpeechDirectiveNumberOverride } from "openclaw/plugin-sdk/speech-provider";
 import {
   asFiniteNumber,
   asOptionalRecord,
@@ -297,6 +296,8 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
         req.target,
         config.responseFormat,
       );
+      const { resolveGeneratedMediaMaxBytes } =
+        await import("openclaw/plugin-sdk/media-generation-runtime");
       const audioBuffer = await openaiTTS({
         text: req.text,
         apiKey,
@@ -330,6 +331,8 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
       }
       const outputFormat = "pcm";
       const sampleRate = 24_000;
+      const { resolveGeneratedMediaMaxBytes } =
+        await import("openclaw/plugin-sdk/media-generation-runtime");
       const audioBuffer = await openaiTTS({
         text: req.text,
         apiKey,

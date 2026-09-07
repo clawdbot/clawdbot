@@ -13,6 +13,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   }),
 }));
 
+import { buildKilocodeProvider, buildKilocodeProviderWithDiscovery } from "./api.js";
 import {
   discoverKilocodeModels,
   KILOCODE_DEFAULT_COST,
@@ -22,18 +23,6 @@ import {
 type MockKilocodeFetch = ((url: string, init?: RequestInit) => Promise<Response>) & {
   mock: { calls: unknown[][] };
 };
-
-const EXPECTED_STATIC_KILOCODE_MODELS = [
-  {
-    id: "kilo-auto/balanced",
-    name: "Auto Balanced",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: { input: 0.325, output: 1.95, cacheRead: 0.0325, cacheWrite: 0.40625 },
-    contextWindow: 1000000,
-    maxTokens: 65536,
-  },
-];
 
 function requireModelById(
   models: Awaited<ReturnType<typeof discoverKilocodeModels>>,
@@ -145,6 +134,20 @@ afterAll(() => {
 });
 
 describe("discoverKilocodeModels (fetch path)", () => {
+  it.each([503, 200])(
+    "preserves the public advisory builder for HTTP %s with no rows",
+    async (status) => {
+      await withFetchPathTest(
+        vi.fn(async () => jsonResponse({ data: [] }, { status })),
+        async () => {
+          await expect(buildKilocodeProviderWithDiscovery()).resolves.toEqual(
+            buildKilocodeProvider(),
+          );
+        },
+      );
+    },
+  );
+
   it("parses gateway models with correct pricing conversion", async () => {
     const mockFetch = vi.fn().mockResolvedValue(
       jsonResponse({
@@ -255,37 +258,50 @@ describe("discoverKilocodeModels (fetch path)", () => {
     },
   );
 
-  it("falls back to static catalog on network error", async () => {
+  it("propagates network errors", async () => {
     const mockFetch = vi.fn().mockRejectedValue(new Error("network error"));
     await withFetchPathTest(mockFetch, async () => {
-      const models = await discoverKilocodeModels();
-      expect(models).toStrictEqual(EXPECTED_STATIC_KILOCODE_MODELS);
+      await expect(discoverKilocodeModels({ discoveryMode: "strict" })).rejects.toThrow(
+        "network error",
+      );
     });
   });
 
-  it("falls back to static catalog on HTTP error", async () => {
+  it("releases the response before propagating an HTTP error", async () => {
     const response = new Response("temporary failure", { status: 500 });
     const cancelSpy = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
     const mockFetch = vi.fn().mockResolvedValue(response);
 
     const release = await withFetchPathTest(mockFetch, async () => {
-      const models = await discoverKilocodeModels();
-      expect(models).toStrictEqual(EXPECTED_STATIC_KILOCODE_MODELS);
+      await expect(discoverKilocodeModels({ discoveryMode: "strict" })).rejects.toMatchObject({
+        status: 500,
+      });
     });
 
     expect(cancelSpy).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("falls back to static catalog for malformed successful model list payloads", async () => {
-    for (const payload of [[], { data: {} }, { data: [null] }]) {
+  it("rejects malformed model list envelopes", async () => {
+    for (const payload of [[], { data: {} }]) {
       const mockFetch = vi.fn().mockResolvedValue(jsonResponse(payload));
       await withFetchPathTest(mockFetch, async () => {
-        const models = await discoverKilocodeModels();
-        expect(models).toStrictEqual(EXPECTED_STATIC_KILOCODE_MODELS);
+        await expect(discoverKilocodeModels({ discoveryMode: "strict" })).rejects.toThrow(
+          "Kilocode model list: malformed JSON response",
+        );
       });
     }
   });
+
+  it.each([{ data: [] }, { data: [null] }])(
+    "does not restore seed models when no usable live rows remain: %j",
+    async (payload) => {
+      const mockFetch = vi.fn().mockResolvedValue(jsonResponse(payload));
+      await withFetchPathTest(mockFetch, async () => {
+        await expect(discoverKilocodeModels({ discoveryMode: "strict" })).resolves.toEqual([]);
+      });
+    },
+  );
 
   it("falls back from malformed live token metadata", async () => {
     const mockFetch = vi.fn().mockResolvedValue(

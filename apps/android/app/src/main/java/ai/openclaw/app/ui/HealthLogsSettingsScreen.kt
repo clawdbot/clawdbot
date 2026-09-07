@@ -56,7 +56,6 @@ internal fun HealthLogsSettingsScreen(
   val talkAwaitingAgent by viewModel.talkAwaitingAgent.collectAsState()
   val talkStatus by viewModel.talkModeStatusText.collectAsState()
   val logsState by viewModel.healthLogsState.collectAsState()
-  val logsSummary = logsState.summary
   var selectedLogEntry by remember { mutableStateOf<GatewayLogEntry?>(null) }
 
   LaunchedEffect(isConnected) {
@@ -84,7 +83,13 @@ internal fun HealthLogsSettingsScreen(
           SettingsMetric(nativeString("Gateway"), if (isConnected) nativeString("Online") else nativeString("Offline")),
           SettingsMetric(nativeString("Node"), if (isNodeConnected) nativeString("Online") else nativeString("Waiting")),
           SettingsMetric(nativeString("Models"), modelCount.size.toString()),
-          SettingsMetric(nativeString("Logs"), logsSummary.entries.size.toString()),
+          SettingsMetric(
+            nativeString("Logs"),
+            logsState.summary
+              ?.entries
+              ?.size
+              ?.toString() ?: "—",
+          ),
         ),
     )
     HealthStatusPanel(
@@ -108,7 +113,9 @@ internal fun HealthLogsSettingsScreen(
         ),
     )
     SettingsRefreshControls(isConnected, logsState.refreshing, logsState.errorText, viewModel::refreshHealthLogs, label = nativeString("Refresh Logs"))
-    GatewayLogsPanel(isConnected = isConnected, summary = logsSummary, onLogClick = { selectedLogEntry = it })
+    SettingsSummaryContent(logsState, isConnected, nativeString("Connect the gateway to load recent logs.")) { summary ->
+      GatewayLogsPanel(summary = summary, onLogClick = { selectedLogEntry = it })
+    }
   }
 }
 
@@ -197,7 +204,6 @@ private fun HealthStatusPanel(
 
 @Composable
 private fun GatewayLogsPanel(
-  isConnected: Boolean,
   summary: GatewayHealthLogsSummary,
   onLogClick: (GatewayLogEntry) -> Unit,
 ) {
@@ -208,28 +214,18 @@ private fun GatewayLogsPanel(
         Text(text = fileName, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
     }
-    when {
-      !isConnected -> {
-        ClawPanel {
-          Text(text = nativeString("Connect the gateway to load recent logs."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        }
+    if (summary.entries.isEmpty()) {
+      ClawPanel {
+        Text(text = nativeString("No recent log entries."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
       }
-
-      summary.entries.isEmpty() -> {
-        ClawPanel {
-          Text(text = nativeString("No recent log entries."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        }
-      }
-
-      else -> {
-        ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
-          val entries = summary.entries.takeLast(12)
-          Column {
-            entries.forEachIndexed { index, entry ->
-              GatewayLogRow(entry = entry, onClick = { onLogClick(entry) })
-              if (index != entries.lastIndex) {
-                HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-              }
+    } else {
+      ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
+        val entries = summary.entries.takeLast(12)
+        Column {
+          entries.forEachIndexed { index, entry ->
+            GatewayLogRow(entry = entry, onClick = { onLogClick(entry) })
+            if (index != entries.lastIndex) {
+              HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
             }
           }
         }

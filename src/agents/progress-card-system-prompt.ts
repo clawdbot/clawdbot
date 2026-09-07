@@ -46,8 +46,7 @@ export async function appendProgressCardSystemPrompt(params: {
   sessionKey?: string;
   toolsAllow?: string[];
 }): Promise<string | undefined> {
-  // This boundary covers kill-switch, global/provider/agent/profile policy, and runtime allow.
-  // Group, sender, sandbox, subagent, inherited, and plugin deny layers resolve during assembly.
+  // Registration includes subagent policy; group, sender, sandbox, and inherited layers resolve later.
   const progressCardToolAvailable = shouldIncludeProgressCardToolForOpenClawTools({
     agentId: params.agentId,
     agentSessionKey: params.sessionKey,

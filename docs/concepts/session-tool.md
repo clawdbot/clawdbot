@@ -83,9 +83,41 @@ The owner-gated `sessions` tool exposes bounded self-service surfaces:
 - `action: "reset"` resets another visible session selected by `sessionKey`.
 - `action: "delete"` first archives and then deletes the exact same generation of another visible session selected by `sessionKey`. By default its transcript is retained as a deleted archive; pass `deleteTranscript: false` to leave the transcript state untouched. Resetting or deleting the session currently running the tool is rejected.
 - `action: "assign_owner"` hands session responsibility to a person or agent. Pass `ownerType` (`"human"` or `"agent"`) and `ownerId`; the target is the current session by default, or another visible session via `sessionKey`. Agent owner ids must name a configured agent. The assignment records who reassigned it and when, and the Control UI reflects the new owner immediately. Ownership is display and responsibility, not access control; see [Multi-user mode](/concepts/multi-user).
-- `group_list`, `group_set`, `group_rename`, and `group_delete` manage the global ordered session-group catalog. `group_set` (`names`) declaratively replaces the catalog: array order becomes sidebar order, new names are created, and existing empty groups left out of the list are deleted — reorder by passing the complete current list in the new order, and prefer `group_delete` to remove a single group. Catalog actions never move sessions; use `action: "patch"` with `group` for membership. `group_set` rejects dropping a group that still has member sessions; use `group_delete` first.
+- `group_list`, `group_set`, `group_rename`, and `group_delete` manage the global ordered session-group catalog. `group_set` (`names`) declaratively replaces the catalog: array order becomes sidebar order, new names are created, and existing empty groups left out of the list are deleted — reorder by passing the complete current list in the new order, and prefer `group_delete` to remove a single group. `group_set` never moves sessions; use `action: "patch"` with `group` for selected memberships. `group_rename` updates all member categories, and `group_delete` clears them. `group_set` rejects dropping a group that still has member sessions; use `group_delete` first.
+
+Interrupted group rename/delete operations retain groups needed by remaining
+members. A rename can leave both source and destination groups visible; retry
+the operation to finish moving the remaining members.
+
+To apply the same patch to several sessions, pass `targets` with 1–100
+`{ sessionKey, expectedSessionId? }` objects instead of top-level `sessionKey`
+and `expectedSessionId`. For example:
+
+```json
+{
+  "action": "patch",
+  "targets": [
+    { "sessionKey": "agent:main:dashboard:review-api" },
+    { "sessionKey": "agent:main:dashboard:review-ui" }
+  ],
+  "group": "Reviews"
+}
+```
+
+Each target uses the same visibility rules as a single patch. Supply its
+`sessions_list` `sessionId` as `expectedSessionId` to reject a stale selection;
+archive and restore require this identity for every target. Valid targets can
+succeed when another target fails. The result's `succeeded` and `failed` arrays
+contain zero-based indexes into `targets`; bounded `errors` explain failures.
+An explicit warning identifies omitted error details. Retry those failed targets
+individually when more detail is needed. Duplicate targets that pass these checks
+reject the batch before mutation. To archive an eligible current session, use a single patch;
+its archive is deferred until the run finishes, while a batch reports that
+current-session target as failed and continues with the others.
 
 Use `sessions_spawn` with `visible: true` to create a persistent dashboard session. Pass `group` to place it in a sidebar group atomically; omit `group` or pass an empty string to leave it ungrouped. This keeps session creation on the controlled spawn path, which enforces the parent's tool policy, sandbox, concurrency limits, and run timeout.
+
+If startup or registration fails, cleanup removes only the child created by that spawn. A session reset or replaced meanwhile is preserved. When cleanup cannot be confirmed, the error includes the child session key for inspection before retrying.
 
 An agent-selected model patch stays reversible until that selection completes a successful run. If the selected model is definitively unusable because of authentication, billing, or model-not-found failure, OpenClaw restores the previous model and writes a visible system note. Transient rate-limit, overload, timeout, network, and server failures do not undo the selection.
 
@@ -113,7 +145,12 @@ An accepted result keeps target admission separate from announcement delivery.
 `delivery.status` describes only the later announcement as `pending` or `skipped`.
 Neither field is a target-completion receipt.
 
-A waited send that finishes without visible assistant text returns `status: "no_reply"`. That is a terminal, intentional non-outcome: no announcement remains pending. Continue without waiting, or send a new message if a response is required.
+Replies come from the completed run's terminal result. When a same-session
+target has already delivered its final reply to the source conversation through
+`message`, OpenClaw skips the duplicate channel announcement. Progress messages
+and replies stored only in the internal UI do not count as external delivery.
+
+A waited send that finishes without visible assistant text returns `status: "no_reply"`; no announcement remains pending. If the target delivered its final reply directly, the result says so and tells the caller not to resend. Otherwise, continue without waiting or send a new message if a response is required.
 
 Thread-scoped chat sessions, such as keys ending in `:thread:<id>`, are not valid `sessions_send` targets. Use the parent channel session key for inter-agent coordination so tool-routed messages do not appear inside an active human-facing thread.
 
@@ -159,7 +196,7 @@ Key options:
 - `context: "fork"` when the child needs the current requester transcript; this requires `runtime: "subagent"` and the same agent as the requester, whether the child is hidden or visible. Use `context: "isolated"` explicitly for a clean child. Omission means isolated context for non-thread spawns; thread-bound native sub-agents follow `threadBindings.defaultSpawnContext`, which defaults to `fork`.
 - `visible: true` to create a persistent dashboard session instead of a hidden sub-agent session. Visible spawns support an explicit sidebar `group`, model, working directory, same-agent transcript fork, and an optional [managed worktree](/concepts/managed-worktrees); see [Sub-agents](/tools/subagents#tool-parameters) for the exact compatibility limits. The accepted result is a receipt: it includes the child session key, run id, a Control UI `sessionUrl` (omitted when the Control UI is disabled), and an `owner` record naming the requesting agent. When acknowledging the spawn in a channel, put the session URL on the first line and `Owner: <label>` on the second. The spawned session is attributed to the requesting agent in the sidebar; see [Multi-user mode](/concepts/multi-user#agent-spawned-sessions).
 
-Default leaf sub-agents do not get session tools. When `maxSpawnDepth >= 2`, depth-1 orchestrator sub-agents additionally receive `sessions_spawn`, `subagents`, `sessions_list`, and `sessions_history` so they can manage their own children. Leaf runs still do not get recursive orchestration tools.
+Sub-agents below the default depth limit of `5` receive `sessions_spawn`, `subagents`, `sessions_list`, and `sessions_history` so they can manage their own children. Set a lower `maxSpawnDepth` to turn sessions at that depth into leaves sooner.
 
 Ordinary announcing runs return a completion event to the requester. Follow the accepted receipt for other completion modes: collectors require explicit collection, directly routed thread sessions reply in the bound thread, and quiet runs send no completion notification. Announce delivery preserves bound thread/topic routing when available, and if the completion origin only identifies a channel, OpenClaw can still reuse the requester session's stored route (`lastChannel` / `lastTo`) for direct delivery.
 
@@ -174,18 +211,21 @@ Session tools are scoped to limit what the agent can see:
 | `self`  | Only the current session                                          |
 | `tree`  | Current + spawned; when called from main, all same-agent sessions |
 | `agent` | All sessions for this agent                                       |
-| `all`   | All sessions (cross-agent if configured)                          |
+| `all`   | All sessions (cross-agent access is on by default)                |
 
-Default is `agent`: unsandboxed sessions, including retained cron sessions, can
-list, read, search, message, and manage other sessions of the same agent. This
-can include other users sharing that agent. Set `tree` explicitly for current
-plus spawned scope; its canonical main-session exception still covers all
-same-agent sessions. Set `self` for strict current-session access, including main.
+Default is `all`: unsandboxed sessions, including retained cron sessions, can
+list, read, search, message, and inspect status across agents on the Gateway.
+This can include other users' transcripts. Cross-agent access is on by default
+and governed by `tools.agentToAgent`; set `enabled: false` to block ordinary
+cross-agent access or use `allow` to restrict permitted agent pairs; requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all` either way. Set `agent` for same-agent-only
+access, or `tree` for current plus spawned scope; its canonical main-session
+exception still covers all same-agent sessions. Set `self` for strict
+current-session access, including main.
 
-The existing `agent` scope does not include children owned by another agent.
+The `agent` scope does not include children owned by another agent.
 Keep explicit `tree` when relying on its owned native/ACP child exception, or
-use `all` with the appropriate `tools.agentToAgent` policy. Ordinary cross-agent
-access remains gated. A sandboxed caller under the default spawned-only session
+use the default `all` with the appropriate `tools.agentToAgent` policy. A sandboxed
+caller under the default spawned-only session
 tool clamp stays limited to its spawn subtree. Incognito sessions remain hidden
 from every cross-session tool. Ambient group watches still add activity notices
 and prompt hints; they do not grant access.

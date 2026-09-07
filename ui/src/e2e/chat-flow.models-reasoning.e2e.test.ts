@@ -1,5 +1,9 @@
+import { writeFile } from "node:fs/promises";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -9,16 +13,36 @@ import {
   requireRecord,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const rosterMatch = { includeGlobal: true };
+
+async function createReasoningProofPage(scope: string) {
+  const parent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+  const artifactDir = parent ? createControlUiE2eArtifactDir(scope, parent) : undefined;
+  const viewport = { height: 900, width: 1280 };
+  const context = await suite.newBrowserContext({
+    locale: "en-US",
+    serviceWorkers: "block",
+    viewport,
+    ...(artifactDir ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
+  });
+  const page = await context.newPage();
+  const capture = async (fileName: string, surface: Locator, content: Locator) => {
+    if (artifactDir) {
+      await writeFile(
+        `${artifactDir}/${fileName}.png`,
+        await takeControlUiViewportScreenshot(page, surface, [content]),
+      );
+    }
+  };
+  return { context, page, capture };
+}
 
 suite.define(() => {
   it("patches a selectable Claude CLI context window", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const sessionKey = "agent:main:session-a";
     const contextWindows = [
@@ -86,11 +110,7 @@ suite.define(() => {
   });
 
   it("settles permission patches before reflecting changes and observes remote updates", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const session = {
       key: "agent:main:session-a",
@@ -123,8 +143,8 @@ suite.define(() => {
         ),
       ).toBe(false);
 
-      const firstListCount = (await gateway.getRequests("sessions.list")).length;
-      await gateway.deferNext("sessions.list");
+      const firstListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
+      await gateway.deferNext("sessions.list", rosterMatch);
       await trigger.click();
       const firstOption = pane.locator('[data-chat-permission-option="default"]');
       await firstOption.waitFor({ state: "visible" });
@@ -147,7 +167,7 @@ suite.define(() => {
         key: session.key,
         permissionMode: "workspace",
       });
-      await waitForRequests(gateway, "sessions.list", firstListCount + 1);
+      await waitForRequests(gateway, "sessions.list", firstListCount + 1, rosterMatch);
 
       await gateway.emitGatewayEvent("sessions.changed", {
         ...session,
@@ -164,8 +184,8 @@ suite.define(() => {
       await expect.poll(() => trigger.isEnabled()).toBe(true);
       expect(await trigger.textContent()).toContain("Workspace");
 
-      const secondListCount = (await gateway.getRequests("sessions.list")).length;
-      await gateway.deferNext("sessions.list");
+      const secondListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
+      await gateway.deferNext("sessions.list", rosterMatch);
       await trigger.click();
       await pane.locator('[data-chat-permission-option="default"]').click();
       const patchRequests = await waitForRequests(gateway, "sessions.patch", 2);
@@ -173,7 +193,7 @@ suite.define(() => {
         key: session.key,
         permissionMode: null,
       });
-      await waitForRequests(gateway, "sessions.list", secondListCount + 1);
+      await waitForRequests(gateway, "sessions.list", secondListCount + 1, rosterMatch);
 
       await gateway.emitGatewayEvent("sessions.changed", {
         ...session,
@@ -222,11 +242,7 @@ suite.define(() => {
   });
 
   it("keeps picker menus in the viewport while preferring the space above", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       models: Array.from({ length: 12 }, (_, index) => ({
@@ -308,11 +324,7 @@ suite.define(() => {
   });
 
   it("routes runtime-aware model commands through the server directive path", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       sessionKey: "agent:main:main",
@@ -337,11 +349,7 @@ suite.define(() => {
   });
 
   it("keeps high-velocity model scrolling inside the picker", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const models = [
       { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
@@ -379,7 +387,8 @@ suite.define(() => {
       await modelScroller.evaluate((element) => {
         element.scrollTop = 0;
       });
-      await modelScroller.hover();
+      // The wheel owns this scroll assertion; Playwright must not scroll ancestors first.
+      await modelScroller.hover({ scroll: "none" });
       expect(await page.evaluate(() => window.scrollY)).toBe(300);
       await page.mouse.wheel(0, -5_000);
       await page.waitForTimeout(100);
@@ -496,11 +505,7 @@ suite.define(() => {
   });
 
   it("keeps a session model override selected after switching away and back", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: {
@@ -517,22 +522,16 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
 
       const main = page.getByRole("main");
-      const openModelSelect = async () => {
-        const trigger = main.locator(
-          'openclaw-chat-pane[aria-hidden="false"] [data-chat-model-select="true"]',
-        );
-        await trigger.waitFor({ state: "visible", timeout: 10_000 });
-        return trigger;
-      };
+      const activePane = main.locator('openclaw-chat-pane[aria-hidden="false"]');
+      const modelSelect = activePane.locator('[data-chat-model-select="true"]');
       const selectModel = async (value: string) => {
-        const activePane = main.locator('openclaw-chat-pane[aria-hidden="false"]');
         await activePane.locator('[data-chat-model-select="true"]').click();
         const option = activePane.locator(`[data-chat-model-option="${value}"]`);
         await option.waitFor({ state: "visible", timeout: 10_000 });
         await option.click();
       };
 
-      let modelSelect = await openModelSelect();
+      await modelSelect.waitFor({ state: "visible", timeout: 10_000 });
       expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
 
       await selectModel("bedrock/claude-opus-4.5");
@@ -553,7 +552,10 @@ suite.define(() => {
       await page.locator(".sidebar-recent-session--active").getByText("Session B").waitFor({
         timeout: 10_000,
       });
-      modelSelect = await openModelSelect();
+      await expect
+        .poll(() => activePane.evaluate((pane) => (pane as ChatPaneElement).sessionKey))
+        .toBe("agent:main:session-b");
+      await modelSelect.waitFor({ state: "visible", timeout: 10_000 });
       expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
 
       await page
@@ -564,8 +566,11 @@ suite.define(() => {
       await page.locator(".sidebar-recent-session--active").getByText("Session A").waitFor({
         timeout: 10_000,
       });
+      await expect
+        .poll(() => activePane.evaluate((pane) => (pane as ChatPaneElement).sessionKey))
+        .toBe("agent:main:session-a");
 
-      modelSelect = await openModelSelect();
+      await modelSelect.waitFor({ state: "visible", timeout: 10_000 });
       expect(await modelSelect.getAttribute("data-chat-select-value")).toBe(
         "bedrock/claude-opus-4.5",
       );
@@ -575,11 +580,7 @@ suite.define(() => {
   });
 
   it("restores the selected agent model after clearing a session override", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const agentsList = {
       agents: [
@@ -681,19 +682,7 @@ suite.define(() => {
   });
 
   it("shows one canonical default model with matching inherited reasoning", async () => {
-    const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactDirParent
-      ? createControlUiE2eArtifactDir("chat-flow.models-reasoning", artifactDirParent)
-      : undefined;
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-      ...(artifactDir
-        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
-        : {}),
-    });
-    const page = await context.newPage();
+    const { context, page, capture } = await createReasoningProofPage("chat-flow.models-reasoning");
     const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].map(
       (id) => ({ id, label: id }),
     );
@@ -766,6 +755,8 @@ suite.define(() => {
       const main = page.getByRole("main");
       const activePane = main.locator('openclaw-chat-pane[aria-hidden="false"]');
       const modelSelect = activePane.locator('[data-chat-model-select="true"]');
+      const modelPopup = activePane.locator('.chat-controls__model-picker wa-popup [part="popup"]');
+      const modelOption = activePane.locator('[data-chat-model-option="openai/gpt-5.6-sol"]');
       const effortSelect = activePane.locator('[data-chat-thinking-select="true"]');
       const thinkingSlider = activePane.locator('[data-chat-thinking-slider="true"]');
       const expectedThinkingValues = thinkingLevels.map((level) => level.id).join(",");
@@ -774,9 +765,7 @@ suite.define(() => {
       expect(await modelSelect.textContent()).toContain("GPT-5.6 Sol");
       expect(await modelSelect.textContent()).not.toContain("@openai:");
       await modelSelect.click();
-      await expect
-        .poll(() => activePane.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').count())
-        .toBe(1);
+      await expect.poll(() => modelOption.count()).toBe(1);
       expect(
         (await main.locator("[data-chat-model-option]").allTextContents()).join(" "),
       ).not.toContain("@openai:");
@@ -784,9 +773,7 @@ suite.define(() => {
         .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
         .toBe(expectedThinkingValues);
       const defaultThinkingValue = await effortSelect.getAttribute("data-chat-thinking-value");
-      if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/default-sol.png`, fullPage: true });
-      }
+      await capture("default-sol", modelPopup, modelOption);
 
       await page.keyboard.press("Escape");
       await page
@@ -797,19 +784,18 @@ suite.define(() => {
       await page.locator(".sidebar-recent-session--active").getByText("Explicit Sol").waitFor({
         timeout: 10_000,
       });
-      await modelSelect.click();
       await expect
-        .poll(() => activePane.locator('[data-chat-model-option="openai/gpt-5.6-sol"]').count())
-        .toBe(1);
+        .poll(() => activePane.evaluate((pane) => (pane as ChatPaneElement).sessionKey))
+        .toBe("agent:main:session-explicit");
+      await modelSelect.click();
+      await expect.poll(() => modelOption.count()).toBe(1);
       await expect
         .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
         .toBe(expectedThinkingValues);
       expect(await effortSelect.getAttribute("data-chat-thinking-value")).toBe(
         defaultThinkingValue,
       );
-      if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/explicit-sol.png`, fullPage: true });
-      }
+      await capture("explicit-sol", modelPopup, modelOption);
 
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
     } finally {
@@ -818,19 +804,9 @@ suite.define(() => {
   });
 
   it("does not reuse catalog reasoning for a different session runtime", async () => {
-    const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactDirParent
-      ? createControlUiE2eArtifactDir("chat-flow.runtime-reasoning", artifactDirParent)
-      : undefined;
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-      ...(artifactDir
-        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
-        : {}),
-    });
-    const page = await context.newPage();
+    const { context, page, capture } = await createReasoningProofPage(
+      "chat-flow.runtime-reasoning",
+    );
     const sessionKey = "agent:main:codex-luna";
     await installMockGateway(page, {
       models: [
@@ -865,9 +841,11 @@ suite.define(() => {
       await effortSelect.click();
       const thinkingSlider = pane.locator('[data-chat-thinking-slider="true"]');
       await thinkingSlider.waitFor({ state: "visible" });
-      if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/codex-luna-reasoning.png`, fullPage: true });
-      }
+      await capture(
+        "codex-luna-reasoning",
+        pane.locator('.chat-controls__effort-picker wa-popup [part="popup"]'),
+        thinkingSlider,
+      );
 
       expect(await thinkingSlider.getAttribute("data-chat-thinking-values")).not.toContain("ultra");
       expect(await effortSelect.getAttribute("data-chat-thinking-value")).not.toBe("ultra");
@@ -890,11 +868,7 @@ suite.define(() => {
       patch: { permissionMode: "full" },
     },
   ])("shows a pending send while a $label update is still pending", async (setting) => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.patch"],
@@ -953,11 +927,7 @@ suite.define(() => {
   });
 
   it("previews reasoning and provider choices before committing them", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const sessionKey = "agent:main:session-a";
     const session = {
@@ -968,13 +938,7 @@ suite.define(() => {
       modelProvider: "openai",
       thinkingDefault: "high",
       thinkingLevel: "high",
-      thinkingLevels: [
-        { id: "off", label: "off" },
-        { id: "low", label: "low" },
-        { id: "medium", label: "medium" },
-        { id: "high", label: "high" },
-        { id: "ultra", label: "ultra" },
-      ],
+      thinkingLevels: ["off", "low", "medium", "high", "ultra"].map((id) => ({ id, label: id })),
       updatedAt: 2,
     };
     const gateway = await installMockGateway(page, {

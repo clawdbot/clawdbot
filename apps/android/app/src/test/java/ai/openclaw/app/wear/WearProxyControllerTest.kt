@@ -148,15 +148,21 @@ class WearProxyControllerTest {
     }
 
   @Test
-  fun agentsAndGatewayControlsStayOnThePhoneRuntimeBoundary() =
+  fun gatewayCommandsStayOnPhoneRelayWithoutInventingReadiness() =
     runTest {
       var gatewayRequests = 0
+      var gatewayConnects = 0
+      val requestedMethods = mutableListOf<String>()
       var connected = true
       var selectedAgent = "main"
       val controller =
         WearProxyController(
-          requestGateway = { _, _ ->
+          requestGateway = { method, _ ->
             gatewayRequests += 1
+            requestedMethods += method
+            if (!connected) {
+              throw WearProxyGatewayException("unavailable", "Phone gateway is offline")
+            }
             buildJsonObject {}
           },
           isGatewayConnected = { connected },
@@ -174,7 +180,7 @@ class WearProxyControllerTest {
             selectedAgent = agentId
             true
           },
-          connectGateway = { connected = true },
+          connectGateway = { gatewayConnects += 1 },
           disconnectGateway = { connected = false },
         )
 
@@ -189,6 +195,8 @@ class WearProxyControllerTest {
         )
       val selectedStatus = controller.handle(request(WearRpcMethod.ProxyStatus))
       val disconnected = controller.handle(request(WearRpcMethod.GatewayDisconnect))
+      assertEquals(0, gatewayRequests)
+      val offlineSessions = controller.handle(request(WearRpcMethod.SessionsList))
       val reconnected = controller.handle(request(WearRpcMethod.GatewayConnect))
 
       val statusResult = checkNotNull(status.result).jsonObject
@@ -212,13 +220,17 @@ class WearProxyControllerTest {
           .jsonPrimitive.content
           .toBoolean(),
       )
-      assertTrue(
+      assertFalse(
         reconnectedResult
           .getValue("connected")
           .jsonPrimitive.content
           .toBoolean(),
       )
-      assertEquals(0, gatewayRequests)
+      assertFalse(offlineSessions.ok)
+      assertEquals("unavailable", offlineSessions.error?.code)
+      assertEquals(1, gatewayConnects)
+      assertEquals(1, gatewayRequests)
+      assertEquals(listOf("sessions.list"), requestedMethods)
     }
 
   @Test

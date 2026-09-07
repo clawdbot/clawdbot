@@ -28,11 +28,6 @@ type BoardGridCell = {
 
 export type BoardGridDirection = "left" | "right" | "up" | "down";
 
-type BoardGridPreview = {
-  items: BoardGridItem[];
-  rects: BoardGridRect[];
-};
-
 function clampInteger(value: number, minimum: number, maximum: number): number {
   const integer = Number.isFinite(value) ? Math.round(value) : minimum;
   return Math.min(maximum, Math.max(minimum, integer));
@@ -96,9 +91,13 @@ export function layout(
   items: readonly BoardGridItem[],
   maxItemHeight = BOARD_GRID_MAX_HEIGHT,
 ): BoardGridRect[] {
+  return layoutCanonicalItems(canonicalItems(items, maxItemHeight));
+}
+
+function layoutCanonicalItems(items: readonly BoardGridItem[]): BoardGridRect[] {
   const occupied: boolean[][] = [];
   const rects: BoardGridRect[] = [];
-  for (const item of canonicalItems(items, maxItemHeight)) {
+  for (const item of items) {
     const placed = firstFit(occupied, item);
     occupy(occupied, placed);
     rects.push(placed);
@@ -113,34 +112,35 @@ function contains(rect: BoardGridRect, cell: BoardGridCell): boolean {
 }
 
 /**
- * Reorders one item around the target cell, then fully reflows the board.
- * Occupied targets insert before their occupant: that item and its followers
- * are pushed aside by the normal first-fit pass.
+ * Reorders against a named current rectangle or the fallback grid cell.
+ * Resolve targets before removing the moving item so responsive card stacking
+ * and successive previews keep the same logical target through pointerup.
  */
 export function previewDrag(
   items: readonly BoardGridItem[],
   name: string,
-  targetCell: BoardGridCell,
-): BoardGridPreview {
+  target: BoardGridCell & { name: string | undefined },
+): BoardGridItem[] {
   const canonical = canonicalItems(items);
   const movingIndex = canonical.findIndex((item) => item.name === name);
   if (movingIndex < 0) {
-    return { items: canonical, rects: layout(canonical) };
+    return canonical;
   }
 
-  const currentRects = layout(canonical);
+  const currentRects = layoutCanonicalItems(canonical);
+  const targetCell = currentRects.find((rect) => rect.name === target.name) ?? target;
   const cell = {
     x: clampInteger(targetCell.x, 0, BOARD_GRID_COLUMNS - 1),
     y: Math.max(0, Number.isFinite(targetCell.y) ? Math.floor(targetCell.y) : 0),
   };
   const currentRect = currentRects.find((rect) => rect.name === name);
   if (currentRect && contains(currentRect, cell)) {
-    return { items: canonical, rects: currentRects };
+    return canonical;
   }
 
   const [moving] = canonical.splice(movingIndex, 1);
   if (!moving) {
-    return { items: canonical, rects: layout(canonical) };
+    return canonical;
   }
   const occupiedTarget = currentRects.find((rect) => rect.name !== name && contains(rect, cell));
   const nextRect =
@@ -155,8 +155,7 @@ export function previewDrag(
     ? canonical.findIndex((item) => item.name === nextRect.name)
     : canonical.length;
   canonical.splice(Math.max(0, insertionIndex), 0, moving);
-  const reordered = canonical.map(withOrder);
-  return { items: reordered, rects: layout(reordered) };
+  return canonical.map(withOrder);
 }
 
 /** Returns a new canonical item list with one clamped size change. */
@@ -207,6 +206,9 @@ export function toCssPlacement(rect: BoardGridRect): string {
 
 // Keep this numeric inset aligned with the app-level --widget-frame-inset token.
 const BOARD_WIDGET_FRAME_INSET = 12;
+// board.css keeps a 1px border even when frameless. Reserve both edges so
+// viewport-sized content does not lose 2px on every resize report.
+const BOARD_WIDGET_BORDER_PX = 1;
 const BOARD_WIDGET_AUTO_MIN_ROWS = 2;
 const BOARD_WIDGET_AUTO_MAX_ROWS = 20;
 // Mirrors the 38px header grid row in board.css: coarse-pointer layouts keep
@@ -242,6 +244,7 @@ function autoBoardWidgetHeightPx(
   }
   return (
     contentHeightPx +
+    BOARD_WIDGET_BORDER_PX * 2 +
     chromeRowPx +
     ((widget.presentation ?? "card") === "card" ? BOARD_WIDGET_FRAME_INSET * 2 : 0)
   );

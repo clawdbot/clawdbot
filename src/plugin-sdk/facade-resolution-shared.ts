@@ -2,7 +2,10 @@
  * Shared resolver for bundled plugin facade module paths and registry fallbacks.
  */
 import path from "node:path";
-import { areBundledPluginsDisabled } from "../plugins/bundled-dir.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { parsePluginCacheJson, readPluginCacheFile } from "../plugins/plugin-cache-files.js";
 import {
   normalizeBundledPluginArtifactSubpath,
   resolveBundledPluginPublicSurfacePath,
@@ -21,6 +24,94 @@ type FacadeRegistryRecordLike = {
   rootDir: string;
   channels: readonly string[];
 };
+
+/** Minimal manifest shape shared by facade identity tracking and activation checks. */
+export type FacadePluginManifestLike = Pick<
+  PluginManifestRecord,
+  "id" | "origin" | "enabledByDefault" | "enabledByDefaultOnPlatforms" | "rootDir" | "channels"
+>;
+
+function readBundledPluginManifestRecordFromDir(params: {
+  pluginsRoot: string;
+  resolvedDirName: string;
+}): FacadePluginManifestLike | null {
+  const file = readPluginCacheFile({
+    rootDir: path.join(params.pluginsRoot, params.resolvedDirName),
+    relativePath: "openclaw.plugin.json",
+    rejectHardlinks: false,
+  });
+  if (!file.ok) {
+    return null;
+  }
+  try {
+    const parsed = parsePluginCacheJson(file, { json5: true });
+    if (!parsed.ok || !isRecord(parsed.value)) {
+      return null;
+    }
+    const raw = parsed.value;
+    if (typeof raw.id !== "string" || raw.id.trim().length === 0) {
+      return null;
+    }
+    return {
+      id: raw.id,
+      origin: "bundled",
+      enabledByDefault: raw.enabledByDefault === true,
+      rootDir: path.join(params.pluginsRoot, params.resolvedDirName),
+      channels: Array.isArray(raw.channels)
+        ? raw.channels.filter((entry): entry is string => typeof entry === "string")
+        : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Resolve bundled facade metadata without importing activation or registry runtime. */
+export function resolveBundledMetadataManifestRecord(params: {
+  dirName: string;
+  artifactBasename: string;
+  location: FacadeModuleLocationLike | null;
+  sourceExtensionsRoot: string;
+  env?: NodeJS.ProcessEnv;
+}): FacadePluginManifestLike | null {
+  if (!params.location) {
+    return null;
+  }
+  if (params.location.modulePath.startsWith(`${params.sourceExtensionsRoot}${path.sep}`)) {
+    const relativeToExtensions = path.relative(
+      params.sourceExtensionsRoot,
+      params.location.modulePath,
+    );
+    const resolvedDirName = relativeToExtensions.split(path.sep)[0];
+    if (!resolvedDirName) {
+      return null;
+    }
+    return readBundledPluginManifestRecordFromDir({
+      pluginsRoot: params.sourceExtensionsRoot,
+      resolvedDirName,
+    });
+  }
+  const bundledPluginsDir = resolveBundledPluginsDir(params.env ?? process.env);
+  if (!bundledPluginsDir) {
+    return null;
+  }
+  const normalizedBundledPluginsDir = path.resolve(bundledPluginsDir);
+  if (!params.location.modulePath.startsWith(`${normalizedBundledPluginsDir}${path.sep}`)) {
+    return null;
+  }
+  const relativeToBundledDir = path.relative(
+    normalizedBundledPluginsDir,
+    params.location.modulePath,
+  );
+  const resolvedDirName = relativeToBundledDir.split(path.sep)[0];
+  if (!resolvedDirName) {
+    return null;
+  }
+  return readBundledPluginManifestRecordFromDir({
+    pluginsRoot: normalizedBundledPluginsDir,
+    resolvedDirName,
+  });
+}
 
 /** Builds the cache key for one facade lookup under the current bundled-plugin mode. */
 export function createFacadeResolutionKey(params: {

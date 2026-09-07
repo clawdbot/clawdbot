@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
+import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import type { CronJob } from "../api/types.ts";
+import {
+  buildScopeUpgradeInboxEntry,
+  buildSidebarInboxEntries,
+  buildUpdateInboxEntry,
+  sidebarInboxTabCounts,
+} from "./sidebar-attention-entries.ts";
 import { buildSidebarAttentionEntries } from "./sidebar-attention-items.ts";
 
 function cronJob(id: string): CronJob {
@@ -14,6 +21,20 @@ function cronJob(id: string): CronJob {
     wakeMode: "now",
     payload: { kind: "agentTurn", message: "test" },
     state: { lastRunStatus: "error" },
+  };
+}
+
+function mentionItem(id: string, createdAt = 1_000): MentionInboxItem {
+  return {
+    id,
+    senderProfileId: "alice",
+    senderLabel: "Alice",
+    sessionKey: "agent:writer:review",
+    agentId: "writer",
+    sessionTitle: "Review",
+    messageId: `message-${id}`,
+    createdAt,
+    expiresAt: 10_000,
   };
 }
 
@@ -109,5 +130,86 @@ describe("automation attention", () => {
       "overdue",
       "older-overdue",
     ]);
+  });
+});
+
+describe("sidebar Inbox projection", () => {
+  it("derives every tab count and dismiss control from one entry list", () => {
+    const attention = buildSidebarAttentionEntries({
+      cronJobs: [cronJob("failed-job")],
+      cronSchedulerEnabled: true,
+      modelAuthStatus: null,
+      now: 0,
+    });
+    const scopeUpgrade = buildScopeUpgradeInboxEntry({
+      scopes: ["operator.read"],
+      state: { phase: "available" },
+    });
+    const update = buildUpdateInboxEntry({
+      canDismiss: true,
+      dismissal: { kind: "updateAvailable", signature: '["2026.8.3","boot-a"]' },
+      forced: true,
+      requiresAction: true,
+      severity: "warning",
+      visible: true,
+    });
+    const entries = buildSidebarInboxEntries({
+      approvals: [
+        {
+          id: "approval-1",
+          kind: "exec",
+          request: { command: "pwd" },
+          createdAtMs: 1,
+          expiresAtMs: 60_000,
+        },
+      ],
+      attention,
+      mentions: [mentionItem("older", 1_000), mentionItem("newer", 2_000)],
+      scopeUpgrade,
+      update,
+    });
+
+    expect(sidebarInboxTabCounts(entries)).toEqual({
+      all: 6,
+      approvals: 1,
+      mentions: 2,
+      automations: 1,
+      system: 2,
+    });
+    expect(entries.filter((entry) => entry.dismissal).map((entry) => entry.type)).toEqual([
+      "scopeUpgrade",
+      "attention",
+    ]);
+    expect(entries.slice(-2).map((entry) => entry.type === "mention" && entry.mention.id)).toEqual([
+      "newer",
+      "older",
+    ]);
+  });
+
+  it("keeps informational updates visible without adding them to attention counts", () => {
+    const update = buildUpdateInboxEntry({
+      canDismiss: false,
+      dismissal: { kind: "updateAvailable", signature: '["2026.8.3","boot-a"]' },
+      forced: false,
+      requiresAction: false,
+      severity: "warning",
+      visible: true,
+    });
+    const entries = buildSidebarInboxEntries({
+      approvals: [],
+      attention: [],
+      mentions: [],
+      scopeUpgrade: null,
+      update,
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(sidebarInboxTabCounts(entries)).toEqual({
+      all: 0,
+      approvals: 0,
+      mentions: 0,
+      automations: 0,
+      system: 0,
+    });
   });
 });

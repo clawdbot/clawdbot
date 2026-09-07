@@ -4,25 +4,17 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   asNullableRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { parseBrowserMajorVersion, readBrowserVersion } from "./browser/chrome.executable-probe.js";
 import {
-  parseBrowserMajorVersion,
-  readBrowserVersion,
   resolveBrowserExecutableForPlatform,
   resolveGoogleChromeExecutableForPlatform,
 } from "./browser/chrome.executables.js";
 import { DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME, resolveBrowserConfig } from "./browser/config.js";
-import {
-  browserExtensionStatus,
-  FOUNDATION_CHROME_WEB_STORE_URL,
-  repairOwnedChromeExtensionNativeHosts,
-} from "./browser/extension-install.js";
-import { listSystemProfiles } from "./browser/system-profiles.js";
 import { movePathToTrash } from "./browser/trash.js";
 import type { OpenClawConfig } from "./config/config.js";
 import { formatCliCommand, note } from "./sdk-setup-tools.js";
@@ -35,11 +27,6 @@ const REMOTE_DEBUGGING_PAGES = [
   "brave://inspect/#remote-debugging",
   "edge://inspect/#remote-debugging",
 ].join(", ");
-const BROWSER_MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
-const BROWSER_PLUGIN_ROOT = fs.existsSync(path.join(BROWSER_MODULE_DIR, "package.json"))
-  ? BROWSER_MODULE_DIR
-  : path.dirname(BROWSER_MODULE_DIR);
-const BUNDLED_CHROME_EXTENSION_DIR = path.join(BROWSER_PLUGIN_ROOT, "chrome-extension");
 
 type ExistingSessionProfile = {
   name: string;
@@ -222,7 +209,6 @@ export async function noteChromeMcpBrowserReadiness(
     readVersion?: (executablePath: string) => string | null;
     configDir?: string;
     pathExists?: (targetPath: string) => boolean;
-    homeDir?: string;
   },
 ) {
   const noteFn = deps?.noteFn ?? note;
@@ -249,34 +235,15 @@ export async function noteChromeMcpBrowserReadiness(
   }
   const extensionStateDir = deps?.configDir ?? CONFIG_DIR;
   const extensionCopyPath = path.join(extensionStateDir, "browser", "chrome-extension");
-  try {
-    const extension = fs.existsSync(extensionCopyPath)
-      ? await browserExtensionStatus({
-          bundledDir: BUNDLED_CHROME_EXTENSION_DIR,
-          deps: {
-            stateDir: extensionStateDir,
-            platform,
-            env,
-            homeDir: deps?.homeDir,
-          },
-        })
-      : null;
-    if (extension && (extension.installedCopy.present || extension.discovered.length > 0)) {
-      if (extension.manualSetupRequired) {
-        noteFn(
-          [
-            "- The Chrome extension native bootstrap is not fully registered.",
-            `- Run ${formatCliCommand("openclaw browser extension status --json")} for the redacted registration report.`,
-            `- Run ${formatCliCommand("openclaw browser extension install")} before adding OpenClaw from ${FOUNDATION_CHROME_WEB_STORE_URL}.`,
-            "- Load unpacked from the printed stable path only as a development fallback.",
-          ].join("\n"),
-          "Browser extension bootstrap",
-        );
-      }
-    }
-  } catch (error) {
+  // General Doctor also runs unattended inside the Gateway. Profile discovery can
+  // block on OS permission prompts, so leave it to explicit browser commands.
+  if (fs.existsSync(extensionCopyPath)) {
     noteFn(
-      `- Chrome extension bootstrap status could not be inspected: ${error instanceof Error ? error.message : String(error)}`,
+      [
+        "- Chrome extension native bootstrap was not inspected; registration status is unavailable in Doctor.",
+        `- Run ${formatCliCommand("openclaw browser extension status --json")} to inspect it explicitly; this may request browser profile access.`,
+        `- Run ${formatCliCommand("openclaw browser extension install")} if setup or repair is needed.`,
+      ].join("\n"),
       "Browser extension bootstrap",
     );
   }
@@ -289,18 +256,10 @@ export async function noteChromeMcpBrowserReadiness(
   }
   if (platform === "darwin") {
     const importEnabled = cfg.browser?.allowSystemProfileImport !== false;
-    const systemProfileCount = (["chrome", "brave", "edge", "chromium"] as const).reduce(
-      (count, browser) =>
-        count +
-        listSystemProfiles(browser, { homeDir: deps?.homeDir }).filter(
-          (profile) => profile.hasCookies,
-        ).length,
-      0,
-    );
     noteFn(
       [
         `- System browser profile cookie import is ${importEnabled ? "enabled" : "disabled"} (browser.allowSystemProfileImport).`,
-        `- Importable Chrome-family profile cookie databases found: ${systemProfileCount}.`,
+        "- System browser profile discovery skipped by Doctor; importable cookie database count is unavailable.",
         "- Doctor does not access the macOS Keychain; importing asks for consent separately.",
       ].join("\n"),
       "Browser",
@@ -423,15 +382,21 @@ export async function noteChromeMcpBrowserReadiness(
   noteFn(lines.join("\n"), "Browser");
 }
 
-/** Repair only an already-owned native-host registration during doctor --fix. */
+/** Leave discovery-dependent native-host repair to explicit extension setup. */
 export async function maybeRepairOwnedChromeExtensionNativeHosts(): Promise<{
+  status: "skipped";
+  reason: string;
   changes: string[];
   warnings: string[];
 }> {
-  return await repairOwnedChromeExtensionNativeHosts({
-    bundledDir: BUNDLED_CHROME_EXTENSION_DIR,
-    pluginRoot: BROWSER_PLUGIN_ROOT,
-  });
+  return {
+    status: "skipped",
+    reason: "Doctor does not inspect personal browser profiles",
+    changes: [],
+    warnings: [
+      `Chrome extension native-host repair skipped: Doctor does not inspect personal browser profiles. Run ${formatCliCommand("openclaw browser extension install")} to repair explicitly.`,
+    ],
+  };
 }
 
 /** Archives legacy clawd browser profile residue when doctor --fix is requested. */

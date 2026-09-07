@@ -1,4 +1,3 @@
-// Discord plugin module implements shared behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
@@ -91,7 +90,10 @@ export const discordConfigAdapter = createScopedChannelConfigAdapter<
   defaultAccountId: resolveDefaultDiscordAccountId,
   clearBaseFields: ["token", "name"],
   resolveAllowFrom: (account) => account.allowFrom,
-  formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
+  formatAllowFrom: (allowFrom) =>
+    formatAllowFromLowercase({ allowFrom, stripPrefixRe: /^(discord|user|pk):/i }).map((entry) =>
+      entry.replace(/^<@!?(\d+)>$/, "$1"),
+    ),
   resolveDefaultTo: (account) => account.defaultTo,
 });
 
@@ -143,7 +145,10 @@ export function createDiscordPluginBase(params: {
     streaming: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
-    reload: { configPrefixes: ["channels.discord"] },
+    reload: {
+      configPrefixes: ["channels.discord"],
+      noopPrefixes: ["messages.inbound", "messages.ackReactionScope"],
+    },
     configSchema: DiscordChannelConfigSchema,
     config: {
       ...discordConfigAdapter,

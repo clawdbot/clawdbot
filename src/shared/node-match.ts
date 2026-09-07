@@ -41,10 +41,6 @@ function normalizeNodeKey(value: string) {
     .replace(/-+$/, "");
 }
 
-function compactNormalizedNodeKey(value: string) {
-  return value.replace(/-/g, "");
-}
-
 function listKnownNodes(nodes: NodeMatchCandidate[]): string {
   return nodes
     .map((n) => n.displayName || n.remoteIp || n.nodeId)
@@ -92,7 +88,7 @@ function resolveMatchScore(
   node: NodeMatchCandidate,
   query: string,
   queryNormalized: string,
-  allowCompactDisplayName: boolean,
+  queryCompact: string | undefined,
 ): number {
   // Match class outranks selection heuristics: exact ids beat IPs, names, and id prefixes.
   if (node.nodeId === query) {
@@ -107,9 +103,9 @@ function resolveMatchScore(
     return 2_000;
   }
   if (
-    allowCompactDisplayName &&
+    queryCompact !== undefined &&
     nameNormalized &&
-    compactNormalizedNodeKey(nameNormalized) === compactNormalizedNodeKey(queryNormalized)
+    nameNormalized.replace(/-/g, "") === queryCompact
   ) {
     return 1_900;
   }
@@ -131,21 +127,23 @@ export function resolveNodeIdFromCandidates(
   }
 
   const normalized = normalizeNodeKey(q);
-  const scoredMatches = nodes
-    .map((node) => ({
-      node,
-      matchScore: resolveMatchScore(node, q, normalized, allowCompactDisplayName),
-    }))
-    .filter((match) => match.matchScore > 0);
-  if (scoredMatches.length === 0) {
+  const compact = allowCompactDisplayName ? normalized.replace(/-/g, "") : undefined;
+  let topMatchScore = 0;
+  const strongestMatches: NodeMatchCandidate[] = [];
+  nodes.forEach((node) => {
+    const score = resolveMatchScore(node, q, normalized, compact);
+    if (score > topMatchScore) {
+      topMatchScore = score;
+      strongestMatches.length = 0;
+    }
+    if (score > 0 && score === topMatchScore) {
+      strongestMatches.push(node);
+    }
+  });
+  if (strongestMatches.length === 0) {
     const known = listKnownNodes(nodes);
     throw new Error(`unknown node: ${q}${known ? ` (known: ${known})` : ""}`);
   }
-
-  const topMatchScore = Math.max(...scoredMatches.map((match) => match.matchScore));
-  const strongestMatches = scoredMatches
-    .filter((match) => match.matchScore === topMatchScore)
-    .map((match) => match.node);
 
   // Connected state only breaks ties within the strongest match class. Client
   // identity may disambiguate known legacy migrations, never other current nodes.

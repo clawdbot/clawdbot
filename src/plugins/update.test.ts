@@ -1456,7 +1456,7 @@ describe("updateNpmInstalledPlugins", () => {
       channel: "beta" as const,
       configuredChannel: undefined,
       registryVersion: "2026.5.3-beta.1",
-      expectedSpec: "@openclaw/codex@beta",
+      expectedSpec: "@openclaw/codex@2026.5.3-beta.1",
     },
     {
       name: "inferred stable",
@@ -1483,6 +1483,9 @@ describe("updateNpmInstalledPlugins", () => {
         installerVersion: registryVersion,
         installerResolvedSpec: `@openclaw/codex@${registryVersion}`,
       });
+      if (channel === "beta" && !configuredChannel) {
+        mockNpmViewMetadata({ name: "@openclaw/codex", version: "2026.5.2" });
+      }
 
       const result = await updatePlugin(config, "codex", {
         officialPluginUpdateChannel: channel,
@@ -1498,27 +1501,22 @@ describe("updateNpmInstalledPlugins", () => {
   );
 
   it.each([undefined, "2026.8.1-beta.3"])(
-    "retains the visible fallback for a targeted official beta update (core=%s)",
+    "selects latest before installing a targeted official update with a stale beta tag (core=%s)",
     async (coreVersion) => {
-      const requestedSpec = `@openclaw/codex@${coreVersion ?? "beta"}`;
-      installPluginFromNpmSpecMock
-        .mockResolvedValueOnce({
-          ok: false,
-          code: "npm_package_not_found",
-          error: `No matching version found for ${requestedSpec}`,
-        })
-        .mockResolvedValueOnce(
-          createSuccessfulNpmUpdateResult({
-            pluginId: "codex",
-            targetDir: "/tmp/codex",
-            version: "2026.5.3",
-            npmResolution: {
-              name: "@openclaw/codex",
-              version: "2026.5.3",
-              resolvedSpec: "@openclaw/codex@2026.5.3",
-            },
-          }),
-        );
+      mockNpmViewMetadata({ name: "@openclaw/codex", version: "2026.9.1-beta.1" });
+      mockNpmViewMetadata({ name: "@openclaw/codex", version: "2026.9.2" });
+      installPluginFromNpmSpecMock.mockResolvedValue(
+        createSuccessfulNpmUpdateResult({
+          pluginId: "codex",
+          targetDir: "/tmp/codex",
+          version: "2026.9.2",
+          npmResolution: {
+            name: "@openclaw/codex",
+            version: "2026.9.2",
+            resolvedSpec: "@openclaw/codex@2026.9.2",
+          },
+        }),
+      );
       const config = createNpmInstallConfig({
         pluginId: "codex",
         spec: "@openclaw/codex",
@@ -1531,14 +1529,10 @@ describe("updateNpmInstalledPlugins", () => {
         coreVersion,
       });
 
-      expect(npmInstallCall(0)?.spec).toBe(requestedSpec);
-      expect(result.outcomes[0]?.channelFallback).toMatchObject({
-        requestedSpec,
-        usedSpec: "@openclaw/codex",
-        reason: "unavailable",
-      });
-      expect(npmInstallCall(1)?.spec).toBe("@openclaw/codex");
+      expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+      expect(npmInstallCall()?.spec).toBe("@openclaw/codex@2026.9.2");
       expect(result.config.plugins?.installs?.codex?.spec).toBe("@openclaw/codex");
+      expect(result.config.plugins?.installs?.codex?.resolvedSpec).toBe("@openclaw/codex@2026.9.2");
     },
   );
 
@@ -1562,6 +1556,62 @@ describe("updateNpmInstalledPlugins", () => {
     expect(result.config.plugins?.installs?.acpx?.resolvedAt).toBe("2026-05-01T00:00:01.000Z");
     expect(npmInstallCall()).toBeUndefined();
   });
+
+  it.each(["@openclaw/codex", "@openclaw/codex@beta"])(
+    "converges after one beta-channel update when latest is newer and preserves %s",
+    async (spec) => {
+      const packageName = "@openclaw/codex";
+      const { config, installPath } = createNpmUpdateFixture({
+        pluginId: "codex",
+        packageName,
+        spec,
+        installedVersion: "2026.9.1-beta.1",
+      });
+      installPluginFromNpmSpecMock.mockImplementation(async () => {
+        createInstalledPackageDir({
+          name: packageName,
+          version: "2026.9.2",
+          installPath,
+        });
+        return createSuccessfulNpmUpdateResult({
+          pluginId: "codex",
+          targetDir: installPath,
+          version: "2026.9.2",
+          npmResolution: {
+            name: packageName,
+            version: "2026.9.2",
+            resolvedSpec: `${packageName}@2026.9.2`,
+          },
+        });
+      });
+      const updateOptions = {
+        updateChannel: "beta" as const,
+        syncOfficialPluginInstalls: true,
+        coreVersion: "2026.9.2",
+      };
+      mockNpmViewMetadata({ name: packageName, version: "2026.9.1-beta.1" });
+      mockNpmViewMetadata({ name: packageName, version: "2026.9.2" });
+
+      const updated = await updatePlugin(config, "codex", updateOptions);
+
+      expect(updated.outcomes[0]?.status).toBe("updated");
+      expect(npmInstallCall()?.spec).toBe(`${packageName}@2026.9.2`);
+      expect(updated.config.plugins?.installs?.codex?.spec).toBe(spec);
+      mockNpmViewMetadata({ name: packageName, version: "2026.9.1-beta.1" });
+      mockNpmViewMetadata({ name: packageName, version: "2026.9.2" });
+
+      const repeated = await updatePlugin(updated.config, "codex", updateOptions);
+
+      expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+      expect(repeated.changed).toBe(false);
+      expect(repeated.config).toBe(updated.config);
+      expect(repeated.outcomes[0]).toMatchObject({
+        status: "unchanged",
+        currentVersion: "2026.9.2",
+        nextVersion: "2026.9.2",
+      });
+    },
+  );
 
   it.each(["stable", "beta", "extended-stable"] as const)(
     "preserves official exact pins and integrity during %s bulk sync",
@@ -1730,47 +1780,72 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
-  it.each([
-    {
-      name: "latest",
-      updateChannel: undefined,
-      registrySpec: "@acme/demo",
-      registryVersion: "1.2.4",
-      overrideSpec: "@acme/demo@latest",
-    },
-    {
-      name: "beta",
-      updateChannel: "beta" as const,
-      registrySpec: "@acme/demo@beta",
-      registryVersion: "1.3.0-beta.1",
-      overrideSpec: "@acme/demo@beta",
-    },
-  ])(
-    "reports newer $name releases for exact-pinned installed records instead of claiming up to date",
-    async ({ updateChannel, registrySpec, registryVersion, overrideSpec }) => {
-      const { config } = createNpmUpdateFixture({
+  it.each(
+    [
+      {
+        name: "latest",
+        updateChannel: undefined,
+        registryVersion: "1.2.4",
+      },
+      {
+        name: "beta",
+        updateChannel: "beta" as const,
+        registryVersion: "1.3.0-beta.1",
+      },
+    ].flatMap((release) => [
+      {
+        ...release,
         pluginId: "demo",
         packageName: "@acme/demo",
+        syncOfficialPluginInstalls: false,
+      },
+      {
+        ...release,
+        pluginId: "acpx",
+        packageName: "@openclaw/acpx",
+        syncOfficialPluginInstalls: true,
+      },
+    ]),
+  )(
+    "reports newer $name releases for exact-pinned $pluginId records (official sync=$syncOfficialPluginInstalls)",
+    async ({
+      updateChannel,
+      registryVersion,
+      pluginId,
+      packageName,
+      syncOfficialPluginInstalls,
+    }) => {
+      const registrySpec = updateChannel === "beta" ? `${packageName}@beta` : packageName;
+      const overrideSpec = `${packageName}@${updateChannel === "beta" ? "beta" : "latest"}`;
+      const { config } = createNpmUpdateFixture({
+        pluginId,
+        packageName,
         installedVersion: "1.2.3",
         registryVersion: "1.2.3",
         registryIntegrity: "sha512-same",
         registryShasum: "same",
-        spec: "@acme/demo@1.2.3",
+        spec: `${packageName}@1.2.3`,
         integrity: "sha512-same",
         shasum: "same",
         installedAt: "2026-07-01T00:00:00.000Z",
         resolvedAt: "2026-07-01T00:00:01.000Z",
       });
       mockNpmViewMetadata({
-        name: "@acme/demo",
+        name: packageName,
         version: registryVersion,
       });
+      if (updateChannel === "beta") {
+        mockNpmViewMetadata({ name: packageName, version: "1.2.4" });
+      }
       installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
 
-      const result = await updatePlugin(config, "demo", updateChannel ? { updateChannel } : {});
+      const result = await updatePlugin(config, pluginId, {
+        updateChannel,
+        syncOfficialPluginInstalls,
+      });
 
       expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
-      expect(runCommandWithTimeoutMock.mock.calls).toHaveLength(2);
+      expect(runCommandWithTimeoutMock.mock.calls).toHaveLength(updateChannel === "beta" ? 3 : 2);
       expect(runCommandWithTimeoutMock.mock.calls[1]?.[0]).toEqual([
         "npm",
         "view",
@@ -1786,32 +1861,20 @@ describe("updateNpmInstalledPlugins", () => {
       expect(result.config).toBe(config);
       expect(result.outcomes).toEqual([
         {
-          pluginId: "demo",
+          pluginId,
           status: "unchanged",
           currentVersion: "1.2.3",
           nextVersion: registryVersion,
           message:
-            `demo is pinned to @acme/demo@1.2.3 (installed 1.2.3); ` +
+            `${pluginId} is pinned to ${packageName}@1.2.3 (installed 1.2.3); ` +
             `registry ${updateChannel === "beta" ? "beta" : "latest"} resolves to ${registryVersion}. ` +
-            `Pass \`openclaw plugins update ${overrideSpec}\` to follow that registry line.`,
+            `Pass \`openclaw plugins update ${overrideSpec}\` to replace this version pin.`,
         },
       ]);
     },
   );
 
   it.each([
-    {
-      updateChannel: "beta" as const,
-      coreVersion: "2026.8.1-beta.3",
-      newerVersion: "2026.8.1-beta.4",
-      dryRun: false,
-    },
-    {
-      updateChannel: "beta" as const,
-      coreVersion: "2026.8.1-beta.3",
-      newerVersion: "2026.8.1-beta.4",
-      dryRun: true,
-    },
     {
       updateChannel: "extended-stable" as const,
       coreVersion: "2026.7.33",
@@ -1893,7 +1956,7 @@ describe("updateNpmInstalledPlugins", () => {
     expect(runCommandWithTimeoutMock.mock.calls[2]?.[0]).toEqual([
       "npm",
       "view",
-      "@acme/demo",
+      "@acme/demo@latest",
       "name",
       "version",
       "dist.integrity",
@@ -1909,7 +1972,7 @@ describe("updateNpmInstalledPlugins", () => {
         nextVersion: "1.2.4",
         message:
           "demo is pinned to @acme/demo@1.2.3 (installed 1.2.3); registry latest resolves to 1.2.4. " +
-          "Pass `openclaw plugins update @acme/demo@latest` to follow that registry line.",
+          "Pass `openclaw plugins update @acme/demo@latest` to replace this version pin.",
       },
     ]);
   });
@@ -3217,25 +3280,39 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
-  it.each(["@acme/demo@1.2.3", "@acme/demo@v1.2.3"])(
-    "reports newer registry default releases for exact pinned npm dry-runs from %s",
-    async (spec) => {
+  it.each(
+    ["1.2.3", "v1.2.3"].flatMap((version) => [
+      { version, pluginId: "demo", packageName: "@acme/demo", syncOfficialPluginInstalls: false },
+      {
+        version,
+        pluginId: "acpx",
+        packageName: "@openclaw/acpx",
+        syncOfficialPluginInstalls: true,
+      },
+    ]),
+  )(
+    "reports newer registry default releases for exact pinned $pluginId@$version dry-runs (official sync=$syncOfficialPluginInstalls)",
+    async ({ version, pluginId, packageName, syncOfficialPluginInstalls }) => {
+      const spec = `${packageName}@${version}`;
       const { config } = createNpmUpdateFixture({
-        pluginId: "demo",
-        packageName: "@acme/demo",
+        pluginId,
+        packageName,
         installedVersion: "1.2.3",
         registryVersion: "1.2.4",
         spec,
         installerVersion: "1.2.3",
         installerResolvedSpec: spec,
       });
-      const result = await updatePlugin(config, "demo", { dryRun: true });
+      const result = await updatePlugin(config, pluginId, {
+        dryRun: true,
+        syncOfficialPluginInstalls,
+      });
 
       expect(npmInstallCall()?.spec).toBe(spec);
       expect(npmViewCall()?.[0]).toEqual([
         "npm",
         "view",
-        "@acme/demo",
+        packageName,
         "name",
         "version",
         "dist.integrity",
@@ -3244,11 +3321,11 @@ describe("updateNpmInstalledPlugins", () => {
         "--json",
       ]);
       expectRecordFields(result.outcomes[0], {
-        pluginId: "demo",
+        pluginId,
         status: "unchanged",
         currentVersion: "1.2.3",
         nextVersion: "1.2.4",
-        message: `demo is pinned to ${spec} (installed 1.2.3); registry latest resolves to 1.2.4. Pass \`openclaw plugins update @acme/demo@latest\` to follow that registry line.`,
+        message: `${pluginId} is pinned to ${spec} (installed 1.2.3); registry latest resolves to 1.2.4. Pass \`openclaw plugins update ${packageName}@latest\` to replace this version pin.`,
       });
     },
   );
@@ -3751,8 +3828,10 @@ describe("updateNpmInstalledPlugins", () => {
   });
 
   it.each(["openclaw-codex-app-server", "openclaw-codex-app-server@latest"])(
-    "tries npm beta and preserves recorded intent %s",
+    "selects a newer npm beta release and preserves recorded intent %s",
     async (spec) => {
+      mockNpmViewMetadata({ name: "openclaw-codex-app-server", version: "0.2.0-beta.4" });
+      mockNpmViewMetadata({ name: "openclaw-codex-app-server", version: "0.1.9" });
       installPluginFromNpmSpecMock.mockResolvedValue(
         createSuccessfulNpmUpdateResult({
           pluginId: "openclaw-codex-app-server",
@@ -3775,7 +3854,7 @@ describe("updateNpmInstalledPlugins", () => {
       });
 
       expectNpmUpdateCall({
-        spec: "openclaw-codex-app-server@beta",
+        spec: "openclaw-codex-app-server@0.2.0-beta.4",
         expectedPluginId: "openclaw-codex-app-server",
       });
       expectCodexAppServerInstallState({
@@ -3789,23 +3868,39 @@ describe("updateNpmInstalledPlugins", () => {
 
   it.each(
     [
-      { channel: "extended-stable" as const, coreVersion: "2026.7.33" },
-      { channel: "beta" as const, coreVersion: "2026.8.1-beta.3" },
-    ].flatMap(({ channel, coreVersion }) =>
-      ["@openclaw/acpx", "@openclaw/acpx@latest"].map((spec) => ({ channel, coreVersion, spec })),
+      {
+        channel: "extended-stable" as const,
+        coreVersion: "2026.7.33",
+        selectedVersion: "2026.7.33",
+      },
+      {
+        channel: "beta" as const,
+        coreVersion: "2026.8.1-beta.3",
+        selectedVersion: "2026.8.1-beta.4",
+      },
+    ].flatMap(({ channel, coreVersion, selectedVersion }) =>
+      ["@openclaw/acpx", "@openclaw/acpx@latest"].map((spec) => ({
+        channel,
+        coreVersion,
+        selectedVersion,
+        spec,
+      })),
     ),
   )(
-    "targets the installed core for official $channel updates and preserves $spec",
-    async ({ channel, coreVersion, spec }) => {
+    "selects the official $channel release policy and preserves $spec",
+    async ({ channel, coreVersion, selectedVersion, spec }) => {
       const { config } = createNpmUpdateFixture({
         pluginId: "acpx",
         packageName: "@openclaw/acpx",
         spec,
         installedVersion: "2026.7.21",
-        registryVersion: coreVersion,
-        installerVersion: coreVersion,
-        installerResolvedSpec: `@openclaw/acpx@${coreVersion}`,
+        registryVersion: selectedVersion,
+        installerVersion: selectedVersion,
+        installerResolvedSpec: `@openclaw/acpx@${selectedVersion}`,
       });
+      if (channel === "beta") {
+        mockNpmViewMetadata({ name: "@openclaw/acpx", version: "2026.8.0" });
+      }
       const result = await updatePlugin(config, "acpx", {
         syncOfficialPluginInstalls: true,
         officialPluginUpdateChannel: channel,
@@ -3813,13 +3908,13 @@ describe("updateNpmInstalledPlugins", () => {
       });
 
       expectNpmUpdateCall({
-        spec: `@openclaw/acpx@${coreVersion}`,
+        spec: `@openclaw/acpx@${selectedVersion}`,
         expectedPluginId: "acpx",
       });
       expectRecordFields(result.config.plugins?.installs?.acpx, {
         spec,
-        version: coreVersion,
-        resolvedSpec: `@openclaw/acpx@${coreVersion}`,
+        version: selectedVersion,
+        resolvedSpec: `@openclaw/acpx@${selectedVersion}`,
       });
     },
   );
@@ -3873,14 +3968,16 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
-  it("falls back to the default npm spec when a beta tag is unavailable", async () => {
-    installPluginFromNpmSpecMock
-      .mockResolvedValueOnce({
-        ok: false,
-        code: "npm_package_not_found",
-        error: "Package not found on npm: openclaw-codex-app-server@beta.",
-      })
-      .mockResolvedValueOnce(
+  it.each([false, true])(
+    "selects latest before install when the beta tag is unavailable (dryRun=%s)",
+    async (dryRun) => {
+      runCommandWithTimeoutMock.mockResolvedValueOnce({
+        code: 1,
+        stdout: "",
+        stderr: "npm error code E404",
+      });
+      mockNpmViewMetadata({ name: "openclaw-codex-app-server", version: "0.2.6" });
+      installPluginFromNpmSpecMock.mockResolvedValue(
         createSuccessfulNpmUpdateResult({
           pluginId: "openclaw-codex-app-server",
           targetDir: "/tmp/openclaw-codex-app-server",
@@ -3892,78 +3989,33 @@ describe("updateNpmInstalledPlugins", () => {
           },
         }),
       );
-
-    const config = createCodexAppServerInstallConfig({
-      spec: "openclaw-codex-app-server",
-    });
-    const warnMessages: string[] = [];
-    const result = await updatePlugin(config, "openclaw-codex-app-server", {
-      updateChannel: "beta",
-      logger: { warn: (msg) => warnMessages.push(msg) },
-    });
-
-    expect(npmInstallCall(0)?.spec).toBe("openclaw-codex-app-server@beta");
-    expect(npmInstallCall(1)?.spec).toBe("openclaw-codex-app-server");
-    expect(npmInstallCall(1)?.config).toBe(config);
-    expect(warnMessages).toEqual([
-      'Plugin "openclaw-codex-app-server" has no beta npm release for openclaw-codex-app-server@beta; using openclaw-codex-app-server instead. Core update can still complete.',
-    ]);
-    expectCodexAppServerInstallState({
-      result,
-      spec: "openclaw-codex-app-server",
-      version: "0.2.6",
-      resolvedSpec: "openclaw-codex-app-server@0.2.6",
-    });
-    expect(result.outcomes[0]?.message).toBe(
-      "Updated openclaw-codex-app-server: unknown -> 0.2.6. (warning: beta channel fallback used openclaw-codex-app-server because openclaw-codex-app-server@beta could not be used).",
-    );
-    expect(result.outcomes[0]?.channelFallback).toEqual({
-      requestedSpec: "openclaw-codex-app-server@beta",
-      usedSpec: "openclaw-codex-app-server",
-      requestedLabel: "@beta",
-      usedLabel: "@latest",
-      reason: "unavailable",
-      message:
-        "plugin channel fallback: openclaw-codex-app-server used @latest because @beta was unavailable",
-    });
-  });
-
-  it("reports npm beta fallback as tentative during dry-run checks", async () => {
-    installPluginFromNpmSpecMock
-      .mockResolvedValueOnce({
-        ok: false,
-        code: "npm_package_not_found",
-        error: "Package not found on npm: openclaw-codex-app-server@beta.",
-      })
-      .mockResolvedValueOnce(
-        createSuccessfulNpmUpdateResult({
-          pluginId: "openclaw-codex-app-server",
-          targetDir: "/tmp/openclaw-codex-app-server",
-          version: "0.2.6",
-          npmResolution: {
-            name: "openclaw-codex-app-server",
-            version: "0.2.6",
-            resolvedSpec: "openclaw-codex-app-server@0.2.6",
-          },
-        }),
-      );
-
-    const result = await updateNpmInstalledPlugins({
-      config: createCodexAppServerInstallConfig({
+      const config = createCodexAppServerInstallConfig({
         spec: "openclaw-codex-app-server",
-      }),
-      pluginIds: ["openclaw-codex-app-server"],
-      updateChannel: "beta",
-      dryRun: true,
-    });
+      });
+      const result = await updatePlugin(config, "openclaw-codex-app-server", {
+        updateChannel: "beta",
+        dryRun,
+      });
 
-    expect(result.outcomes[0]?.message).toBe(
-      "Would update openclaw-codex-app-server: unknown -> 0.2.6. (warning: beta channel fallback would use openclaw-codex-app-server because openclaw-codex-app-server@beta could not be used).",
-    );
-    expect(result.outcomes[0]?.channelFallback?.message).toBe(
-      "plugin channel fallback: openclaw-codex-app-server would use @latest because @beta was unavailable",
-    );
-  });
+      expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+      expect(npmInstallCall()?.spec).toBe("openclaw-codex-app-server@0.2.6");
+      expect(npmInstallCall()?.config).toBe(config);
+      expect(result.outcomes[0]?.message).toBe(
+        `${dryRun ? "Would update" : "Updated"} openclaw-codex-app-server: unknown -> 0.2.6.`,
+      );
+      if (dryRun) {
+        expect(result.config).toBe(config);
+        expect(result.changed).toBe(false);
+      } else {
+        expectCodexAppServerInstallState({
+          result,
+          spec: "openclaw-codex-app-server",
+          version: "0.2.6",
+          resolvedSpec: "openclaw-codex-app-server@0.2.6",
+        });
+      }
+    },
+  );
 
   it.each([
     { code: "incompatible_plugin_api", error: "Incompatible artifact" },
@@ -3972,6 +4024,8 @@ describe("updateNpmInstalledPlugins", () => {
     { error: "Integrity mismatch" },
     { code: "incompatible_host_version", error: "ETARGET in untrusted validation text" },
   ])("does not retry a refused beta artifact ($error)", async (failure) => {
+    mockNpmViewMetadata({ name: "openclaw-codex-app-server", version: "0.2.0-beta.4" });
+    mockNpmViewMetadata({ name: "openclaw-codex-app-server", version: "0.1.9" });
     installPluginFromNpmSpecMock.mockResolvedValue({ ok: false, ...failure });
     const result = await updatePlugin(
       createCodexAppServerInstallConfig({ spec: "openclaw-codex-app-server" }),
@@ -4532,7 +4586,7 @@ describe("updateNpmInstalledPlugins", () => {
     {
       name: "beta",
       params: { officialPluginUpdateChannel: "beta" as const },
-      expectedInstallSpec: "@openclaw/fish-audio-speech@beta",
+      expectedInstallSpec: "@openclaw/fish-audio-speech@2026.8.1",
       expectedRecordSpec: "@openclaw/fish-audio-speech",
     },
     {
@@ -4562,6 +4616,10 @@ describe("updateNpmInstalledPlugins", () => {
   ])(
     "selects the $name package line when migrating a manifest-declared legacy id",
     async ({ params, expectedInstallSpec, expectedRecordSpec }) => {
+      if (params.officialPluginUpdateChannel === "beta" && !params.specOverrides) {
+        mockNpmViewMetadata({ name: "@openclaw/fish-audio-speech", version: "2026.8.1-beta.1" });
+        mockNpmViewMetadata({ name: "@openclaw/fish-audio-speech", version: "2026.8.1" });
+      }
       installPluginFromNpmSpecMock.mockResolvedValue({
         ok: true,
         pluginId: "fish-audio-speech",
@@ -5457,6 +5515,7 @@ describe("syncPluginsForUpdateChannel", () => {
     installPluginFromClawHubMock.mockReset();
     installPluginFromGitSpecMock.mockReset();
     resolveBundledPluginSourcesMock.mockReset();
+    runCommandWithTimeoutMock.mockReset();
   });
 
   it.each([
@@ -5725,19 +5784,23 @@ describe("syncPluginsForUpdateChannel", () => {
   });
 
   it.each(["npm", "clawhub", "source-fallback"] as const)(
-    "retries the declared default after a missing beta during %s externalization",
+    "selects npm releases before install and retains ClawHub fallback during %s externalization",
     async (source) => {
       resolveBundledPluginSourcesMock.mockReturnValue(new Map());
       const pluginId = "diagnostics-otel";
       const npmSpec = "@openclaw/diagnostics-otel";
       const clawhubSpec = `clawhub:${npmSpec}`;
       const coreVersion = "2026.8.1-beta.3";
-      const clawhubBetaSpec = `${clawhubSpec}@${source === "source-fallback" ? coreVersion : "beta"}`;
+      const clawhubBetaSpec = `${clawhubSpec}@beta`;
+      if (source !== "clawhub") {
+        mockNpmViewMetadata({ name: npmSpec, version: "2026.7.1-beta.1" });
+        mockNpmViewMetadata({ name: npmSpec, version: "2026.8.0" });
+      }
       const attempts: Array<{ spec: string; expectedIntegrity?: string }> = [];
       installPluginFromNpmSpecMock.mockImplementation(
         async ({ spec, expectedIntegrity }: { spec: string; expectedIntegrity?: string }) => {
           attempts.push({ spec, expectedIntegrity });
-          return source === "source-fallback" || spec !== npmSpec
+          return source === "source-fallback"
             ? { ok: false, code: "npm_package_not_found", error: "target unavailable" }
             : createSuccessfulNpmUpdateResult({
                 pluginId,
@@ -5775,10 +5838,7 @@ describe("syncPluginsForUpdateChannel", () => {
       expect(attempts).toEqual([
         ...(source === "clawhub"
           ? []
-          : [
-              { spec: `${npmSpec}@${coreVersion}`, expectedIntegrity: undefined },
-              { spec: npmSpec, expectedIntegrity: "sha512-catalog-default" },
-            ]),
+          : [{ spec: `${npmSpec}@2026.8.0`, expectedIntegrity: undefined }]),
         ...(source === "npm" ? [] : [{ spec: clawhubBetaSpec }, { spec: clawhubSpec }]),
       ]);
       expect(result.config.plugins?.installs?.[pluginId]).toMatchObject({
@@ -5787,9 +5847,11 @@ describe("syncPluginsForUpdateChannel", () => {
         version: "2026.8.0",
       });
       expect(result.config.plugins?.load?.paths).toEqual([]);
-      expect(result.summary.warnings.join("\n")).toContain(
-        source === "npm" ? `${npmSpec}@${coreVersion}` : clawhubBetaSpec,
-      );
+      if (source === "npm") {
+        expect(result.summary.warnings).toEqual([]);
+      } else {
+        expect(result.summary.warnings.join("\n")).toContain(clawhubBetaSpec);
+      }
     },
   );
 

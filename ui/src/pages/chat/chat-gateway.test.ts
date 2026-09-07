@@ -9,6 +9,7 @@ import { extractText } from "../../lib/chat/message-extract.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { activeChatRunStartupStatus, chatStartupStatusLabel } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import {
@@ -2120,8 +2121,10 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatRunError).toEqual({ summary: "Error: raw gateway error", runId: "run-1" });
   });
 
-  it("keeps error emoji in live run state for the WebUI presentation owner", () => {
-    const diagnostic = "⚠️ 🛠️ Exec failed (exit 1): command failed.";
+  it.each([
+    "⚠️ 🛠️ Exec failed (exit 1): command failed.",
+    "⚠️ Agent run failed: the Gateway state database was busy (SQLite: database is locked). Retry; if it repeats, check Gateway storage health.",
+  ])("preserves actionable server guidance in live run state: %s", (diagnostic) => {
     const state = createState({ sessionKey: "main", chatRunId: "run-1" });
 
     expect(
@@ -2380,6 +2383,153 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatMessages).toHaveLength(1);
     expectTextChatMessage(state.chatMessages[0], "assistant", "Delayed authoritative reply.");
     expect(state.chatRunId).toBeNull();
+  });
+
+  it.each(["delta", "final", "error", "aborted"] as const)(
+    "replaces retry progress and clears it on %s",
+    (terminalState) => {
+      const state = createState({ sessionKey: "main", chatRunId: "run-retry" });
+      const envelope = { sessionKey: "main", runId: "run-retry" };
+      handleChatGatewayEvent(state, { ...envelope, state: "delta", deltaText: "" });
+      for (const attempt of [2, 3]) {
+        handleChatGatewayEvent(state, {
+          ...envelope,
+          state: "status",
+          seq: attempt,
+          retry: { attempt, maxAttempts: 10, reason: "rate_limit" },
+        });
+        expect(chatStartupStatusLabel(activeChatRunStartupStatus(state.chatRunStartup), null)).toBe(
+          `Retrying… ${attempt}/10`,
+        );
+        expect(state.chatMessages).toEqual([]);
+        expect(state.chatRunError).toBeFalsy();
+      }
+      handleChatGatewayEvent(state, { ...envelope, state: terminalState });
+      expect(activeChatRunStartupStatus(state.chatRunStartup)).toBeNull();
+    },
+  );
+
+  it.each([
+    { name: "empty content", content: [] },
+    {
+      name: "fallback placeholder",
+      content: [{ type: "text", text: "[assistant turn failed before producing content]" }],
+    },
+    {
+      name: "error projection",
+      content: [{ type: "text", text: "⚠️ Error: provider rate limit" }],
+    },
+    {
+      name: "multi-block error projection",
+      content: [
+        { type: "text", text: "⚠️ Error: provider" },
+        { type: "text", text: "rate limit" },
+      ],
+    },
+    {
+      name: "normalized assistant role",
+      role: " Assistant ",
+      content: [{ type: "text", text: "⚠️ Error: provider rate limit" }],
+    },
+    {
+      name: "generic Gateway fallback",
+      content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+    },
+  ])(
+    "keeps resumed deltas in one reply after repeated $name errors",
+    ({ content, role = "assistant" }) => {
+      const state = createState({ sessionKey: "main", chatRunId: "run-retry" });
+      const envelope = { sessionKey: "main", runId: "run-retry" };
+      for (let attempt = 0; attempt < 4; attempt++) {
+        handleChatGatewayEvent(state, {
+          ...envelope,
+          state: "error",
+          seq: attempt + 1,
+          errorMessage: "provider rate limit",
+          message: { role, content, stopReason: "error" },
+        });
+      }
+      const terminalMessages = [...state.chatMessages];
+      expect(
+        handleChatGatewayEvent(state, {
+          ...envelope,
+          state: "delta",
+          seq: 3,
+          deltaText: "stale output",
+        }),
+      ).toBeNull();
+      expect(state.chatRunId).toBeNull();
+      expect(state.chatStream).toBeNull();
+      expect(state.chatMessages).toEqual(terminalMessages);
+      expect(state.chatRunError).not.toBeNull();
+      let seq = 5;
+      for (const text of ["I", "I agree", "I agree with that product direction."]) {
+        handleChatGatewayEvent(state, {
+          ...envelope,
+          state: "delta",
+          seq: seq++,
+          ...(text === "I"
+            ? { deltaText: text }
+            : { message: createTextChatMessage("assistant", text) }),
+        });
+        expect(state.chatStream).toBe(text);
+        expect(state.chatRunId).toBe(envelope.runId);
+        expect(state.chatMessages).toEqual([]);
+        expect(state.chatRunError).toBeNull();
+      }
+      handleChatGatewayEvent(state, {
+        ...envelope,
+        state: "final",
+        seq,
+        message: createTextChatMessage("assistant", "I agree with that product direction."),
+      });
+      expect(state.chatMessages).toHaveLength(1);
+      expectTextChatMessage(
+        state.chatMessages[0],
+        "assistant",
+        "I agree with that product direction.",
+      );
+      expect(state.chatStreamSegments ?? []).toEqual([]);
+      expect(state.chatRunId).toBeNull();
+    },
+  );
+
+  it.each([
+    "[assistant turn failed before producing content]",
+    "The agent run failed before producing a reply.",
+  ])("retires the same-run history error projection when streaming resumes: %s", (text) => {
+    const useful = {
+      ...createTextChatMessage("assistant", "Useful earlier commentary."),
+      __openclaw: { runId: "run-retry" },
+    };
+    const placeholder = {
+      role: "assistant",
+      stopReason: "error",
+      __openclaw: { runId: "run-retry" },
+      content: [{ type: "text", text }],
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-retry",
+      chatMessages: [useful, placeholder],
+    });
+    handleChatGatewayEvent(state, {
+      sessionKey: "main",
+      runId: "run-retry",
+      state: "error",
+      seq: 1,
+      errorMessage: "provider rate limit",
+      message: placeholder,
+    });
+    handleChatGatewayEvent(state, {
+      sessionKey: "main",
+      runId: "run-retry",
+      state: "delta",
+      seq: 2,
+      message: createTextChatMessage("assistant", "Recovered reply."),
+    });
+    expect(state.chatStream).toBe("Recovered reply.");
+    expect(state.chatMessages).toEqual([useful]);
   });
 
   it("ignores a stale assistant delta after its run has completed", () => {
@@ -2887,7 +3037,8 @@ describe("loadChatHistory filtering", () => {
     expect(request).toHaveBeenCalledWith("chat.startup", {
       agentId: "research",
       sessionKey: "global",
-      limit: 800,
+      limit: 80,
+      maxBytes: 256 * 1024,
     });
     expect(state.chatMessages).toEqual([
       { role: "assistant", content: [{ type: "text", text: "ready" }] },
@@ -2970,11 +3121,13 @@ describe("loadChatHistory filtering", () => {
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenCalledWith("chat.startup", {
       sessionKey: "agent:main:first",
-      limit: 800,
+      limit: 80,
+      maxBytes: 256 * 1024,
     });
     expect(request).toHaveBeenCalledWith("chat.startup", {
       sessionKey: "agent:main:second",
-      limit: 800,
+      limit: 80,
+      maxBytes: 256 * 1024,
     });
   });
 
@@ -3024,7 +3177,8 @@ describe("loadChatHistory filtering", () => {
 
     expect(request).toHaveBeenCalledWith("chat.startup", {
       sessionKey: "main",
-      limit: 800,
+      limit: 80,
+      maxBytes: 256 * 1024,
     });
   });
 });
@@ -3057,7 +3211,8 @@ describe("loadChatHistory retry handling", () => {
 
     expect(request).toHaveBeenNthCalledWith(1, "chat.startup", {
       sessionKey: "main",
-      limit: 800,
+      limit: 80,
+      maxBytes: 256 * 1024,
     });
     expect(request).toHaveBeenCalledTimes(1);
     expect(getChatHistoryLoadState(state)).toMatchObject({
@@ -3167,7 +3322,8 @@ describe("loadChatHistory retry handling", () => {
 
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "main",
-      limit: 800,
+      limit: 80,
+      maxBytes: 256 * 1024,
     });
     expect(state.chatMessages).toEqual([
       { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
@@ -3338,7 +3494,8 @@ describe("loadChatHistory retry handling", () => {
 
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "main",
-      limit: 800,
+      limit: 80,
+      maxBytes: 256 * 1024,
       ...(inputRunIds ? { inputRunIds } : {}),
     });
     expect(state.chatMessages).toEqual(expected);
@@ -4004,10 +4161,15 @@ describe("loadChatHistory retry handling", () => {
     const thirdLoad = loadChatHistory(state);
 
     expect(request.mock.calls).toEqual([
-      ["chat.history", { sessionKey: "main", limit: 800 }],
+      ["chat.history", { sessionKey: "main", limit: 80, maxBytes: 256 * 1024 }],
       [
         "chat.history",
-        { sessionKey: "main", limit: 800, inputRunIds: ["same-session-pending-run"] },
+        {
+          sessionKey: "main",
+          limit: 80,
+          maxBytes: 256 * 1024,
+          inputRunIds: ["same-session-pending-run"],
+        },
       ],
     ]);
     expect(state.chatMessages).toEqual([pending]);

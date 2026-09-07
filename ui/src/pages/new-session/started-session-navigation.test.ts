@@ -10,6 +10,39 @@ afterEach(() => {
 });
 
 describe("confirmed session navigation", () => {
+  it("hands off the confirmed session without waiting for speculative preloading", async () => {
+    const { context, flow } = createDraftFixture();
+    const sessionKey = "agent:main:dashboard:0f403cb8-3920-4cf1-8eb7-79f2f00ce488";
+    vi.mocked(context.sessions.createResult).mockResolvedValue({
+      key: sessionKey,
+      initialRun: { status: "idle" },
+    });
+    let releasePreload!: () => void;
+    vi.mocked(context.preload).mockReturnValue(
+      new Promise<void>((resolve) => {
+        releasePreload = resolve;
+      }),
+    );
+    vi.mocked(context.navigateAndWait).mockImplementation(async (_routeId, options) => {
+      expect(options?.pathname).toBe("/chat/main/0f403cb8");
+      expect(consumeSessionNavigationHandoff(context.gateway, "/chat/main/0f403cb8")).toBe(
+        sessionKey,
+      );
+      queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
+    });
+    flow.setMessage("start this task");
+    const submission = flow.submit();
+    try {
+      await vi.waitFor(() => expect(context.navigateAndWait).toHaveBeenCalledOnce());
+      await submission;
+      expect(context.sessions.createResult).toHaveBeenCalledOnce();
+      expect(flow.error).toBeNull();
+    } finally {
+      releasePreload();
+      await submission;
+    }
+  });
+
   it("surfaces navigation failure after a session has already been created", async () => {
     const { context, flow } = createDraftFixture();
     vi.mocked(context.sessions.createResult).mockResolvedValue({
@@ -71,7 +104,7 @@ describe("confirmed session navigation", () => {
       retire: ({ flow }: ReturnType<typeof createDraftFixture>) => flow.invalidate(),
     },
   ])(
-    "retires a confirmed session handoff when $scenario during route preparation",
+    "retires a confirmed session handoff when $scenario during session selection",
     async ({ retire }) => {
       const fixture = createDraftFixture();
       const { context, flow } = fixture;
@@ -80,42 +113,21 @@ describe("confirmed session navigation", () => {
         key: sessionKey,
         initialRun: { status: "idle" },
       });
-      let releasePreload!: () => void;
-      vi.mocked(context.preload).mockReturnValueOnce(
-        new Promise<void>((resolve) => {
-          releasePreload = resolve;
-        }),
-      );
-      vi.mocked(context.navigateAndWait).mockImplementation(async () => {
-        queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
+      // Selection publishes synchronously; a subscriber may retire the flow
+      // before navigation has claimed the confirmed key.
+      vi.mocked(context.gateway.setSessionKey).mockImplementation((key) => {
+        context.gateway.snapshot.sessionKey = key;
+        retire(fixture);
       });
       flow.setMessage("keep this task on its original connection");
-      let settled = false;
-      const submission = flow.submit().finally(() => {
-        settled = true;
-      });
-      let pathname: string | undefined;
-      try {
-        await vi.waitFor(() => expect(context.preload).toHaveBeenCalledOnce());
-        pathname = vi.mocked(context.preload).mock.calls[0]?.[1]?.pathname;
-        if (!pathname) {
-          throw new Error("The created session did not prepare a route");
-        }
-        retire(fixture);
-        releasePreload();
 
-        await vi.waitFor(() => expect(settled).toBe(true));
-        expect(consumeSessionNavigationHandoff(context.gateway, pathname)).toBeUndefined();
-        expect(context.navigateAndWait).not.toHaveBeenCalled();
-        expect(context.sessions.createResult).toHaveBeenCalledOnce();
-      } finally {
-        releasePreload();
-        document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT));
-        await submission;
-        if (pathname) {
-          consumeSessionNavigationHandoff(context.gateway, pathname);
-        }
-      }
+      await flow.submit();
+
+      expect(
+        consumeSessionNavigationHandoff(context.gateway, "/chat/main/0f403cb8"),
+      ).toBeUndefined();
+      expect(context.navigateAndWait).not.toHaveBeenCalled();
+      expect(context.sessions.createResult).toHaveBeenCalledOnce();
     },
   );
 

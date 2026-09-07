@@ -35,7 +35,7 @@ import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "../daem
 import {
   createCliStatusTextStyles,
   createDaemonInstallActionContext,
-  failIfNixDaemonInstallMode,
+  resolveDaemonInstallBlockMessage,
   filterDaemonEnv,
   formatRuntimeStatus,
   resolveRuntimeStatusColor,
@@ -67,7 +67,7 @@ type NodeDaemonStatusOptions = {
 
 function renderNodeServiceStartHints(): string[] {
   return buildPlatformServiceStartHints({
-    installCommand: formatCliCommand("openclaw node install"),
+    installHint: formatCliCommand("openclaw node install"),
     startCommand: formatCliCommand("openclaw node start"),
     launchAgentPlistPath: `~/Library/LaunchAgents/${resolveNodeLaunchAgentLabel()}.plist`,
     systemdServiceName: resolveNodeSystemdServiceName(),
@@ -111,7 +111,9 @@ async function warnIfSystemdUserLingerDisabled(warn: (message: string) => void):
 
 export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
-  if (failIfNixDaemonInstallMode(fail)) {
+  const installBlock = resolveDaemonInstallBlockMessage("node");
+  if (installBlock) {
+    fail(installBlock);
     return;
   }
 
@@ -281,12 +283,10 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   }
   const [command, runtime] = await Promise.all([
     service.readCommand(process.env).catch(() => null),
-    service.readRuntime(process.env).catch(
-      (err: unknown): GatewayServiceRuntime => ({
-        status: "unknown",
-        detail: formatErrorMessage(err),
-      }),
-    ),
+    service.readRuntime(process.env).catch((err: unknown): GatewayServiceRuntime => ({
+      status: "unknown",
+      detail: formatErrorMessage(err),
+    })),
   ]);
 
   const payload = {

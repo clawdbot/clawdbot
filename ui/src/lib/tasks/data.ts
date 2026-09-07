@@ -148,11 +148,23 @@ export function partitionTasks(tasks: readonly TaskSummary[]): {
   active: TaskSummary[];
   recent: TaskSummary[];
 } {
-  const sorted = sortTasks(tasks);
+  const byId = (left: TaskSummary, right: TaskSummary) =>
+    left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
   return {
-    active: sorted.filter((task) => task.status === "queued" || task.status === "running"),
-    recent: sorted
+    // Creation is immutable, so progress and queued-to-running transitions cannot move active rows.
+    active: tasks
+      .filter((task) => task.status === "queued" || task.status === "running")
+      .toSorted(
+        (left, right) =>
+          taskTimestampMs(left.createdAt) - taskTimestampMs(right.createdAt) || byId(left, right),
+      ),
+    recent: tasks
       .filter((task) => task.status !== "queued" && task.status !== "running")
+      .toSorted(
+        (left, right) =>
+          taskTimestampMs(right.endedAt ?? right.updatedAt ?? right.createdAt) -
+            taskTimestampMs(left.endedAt ?? left.updatedAt ?? left.createdAt) || byId(left, right),
+      )
       .slice(0, 50),
   };
 }

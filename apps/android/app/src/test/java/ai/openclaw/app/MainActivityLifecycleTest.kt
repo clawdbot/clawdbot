@@ -271,7 +271,7 @@ class MainActivityLifecycleTest {
 
     try {
       NodeForegroundService.stop(app)
-      assertEquals("ai.openclaw.app.action.STOP", appShadow.nextStartedService.action)
+      assertEquals(NodeForegroundService::class.java.name, appShadow.nextStoppedService.component?.className)
 
       repeat(2) {
         MainActivityRuntimeUiStarter().onRuntimeInitialized(

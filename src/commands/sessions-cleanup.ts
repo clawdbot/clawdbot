@@ -55,7 +55,7 @@ function formatCleanupActionCell(
   if (action === "keep") {
     return theme.muted(action);
   }
-  if (action === "archive-dashboard") {
+  if (action === "archive-dashboard" || action === "archive-cap" || action === "archive-age") {
     return theme.warn(action);
   }
   if (action === "prune-missing") {
@@ -81,6 +81,8 @@ function buildActionRows(params: {
   missingKeys: Set<string>;
   modelRunPrunedKeys: Set<string>;
   archivedKeys?: Set<string>;
+  capArchivedKeys?: Set<string>;
+  ageArchivedKeys?: Set<string>;
   staleKeys: Set<string>;
   cappedKeys: Set<string>;
   dmScopeRetiredKeys: Set<string>;
@@ -95,6 +97,8 @@ function buildActionRows(params: {
         missingKeys: params.missingKeys,
         modelRunPrunedKeys: params.modelRunPrunedKeys,
         archivedKeys: params.archivedKeys,
+        capArchivedKeys: params.capArchivedKeys,
+        ageArchivedKeys: params.ageArchivedKeys,
         staleKeys: params.staleKeys,
         cappedKeys: params.cappedKeys,
         dmScopeRetiredKeys: params.dmScopeRetiredKeys,
@@ -113,7 +117,12 @@ function buildLabelSummaries(actionRows: SessionCleanupActionRow[]): SessionClea
       summary = { label, kept: 0, pruned: 0 };
       summaryByLabel.set(label, summary);
     }
-    if (actionRow.action === "keep" || actionRow.action === "archive-dashboard") {
+    if (
+      actionRow.action === "keep" ||
+      actionRow.action === "archive-dashboard" ||
+      actionRow.action === "archive-cap" ||
+      actionRow.action === "archive-age"
+    ) {
       summary.kept += 1;
     } else {
       summary.pruned += 1;
@@ -175,7 +184,8 @@ function renderStoreDryRunPlan(params: {
   params.runtime.log(`Would prune missing transcripts: ${params.summary.missing}`);
   params.runtime.log(`Would retire stale direct DM sessions: ${params.summary.dmScopeRetired}`);
   params.runtime.log(`Would prune stale model-run probes: ${params.summary.modelRunPruned}`);
-  params.runtime.log(`Would archive inactive dashboard sessions: ${params.summary.archived ?? 0}`);
+  params.runtime.log(`Would archive inactive sessions: ${params.summary.archived ?? 0}`);
+  params.runtime.log(`Would archive cap overflow: ${params.summary.capArchived ?? 0}`);
   params.runtime.log(`Would prune stale: ${params.summary.pruned}`);
   params.runtime.log(`Would cap overflow: ${params.summary.capped}`);
   if (params.summary.unreferencedArtifacts?.scannedFiles) {

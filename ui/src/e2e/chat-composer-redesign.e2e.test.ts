@@ -1,6 +1,11 @@
 // Control UI E2E tests cover the redesigned chat composer.
+import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import {
+  takeControlUiElementScreenshot,
+  takeControlUiViewportScreenshot,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -381,15 +386,18 @@ suite.define(() => {
       const mobileDictation = page.getByRole("button", { name: "Dictation" });
       const microphonePicker = page.getByRole("button", { name: "Microphone input" });
       const microphonePickerShell = page.locator(".chat-talk-input-picker");
-      const captureMobileState = async (fileName: string) => {
+      const captureMobileState = async (
+        fileName: string,
+        surface = page.locator(".shell"),
+        content = [textarea],
+      ) => {
         if (!artifactDir) {
           return;
         }
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: `${artifactDir}/${fileName}`,
-        });
+        await writeFile(
+          `${artifactDir}/${fileName}`,
+          await takeControlUiViewportScreenshot(page, surface, content),
+        );
       };
       const permissionIconCenterError = async () => {
         const [triggerBox, iconBox] = await Promise.all([
@@ -589,7 +597,9 @@ suite.define(() => {
         .toBe(1);
       await page.keyboard.press("Escape");
       await model.click();
-      const providerHeadings = composer.locator("[data-chat-model-provider]");
+      const providerHeadings = composer.locator(
+        "[data-chat-model-provider] .chat-controls__provider-label",
+      );
       await expect
         .poll(async () => (await providerHeadings.allTextContents()).map((label) => label.trim()))
         .toEqual(["OpenAI", "Anthropic"]);
@@ -866,7 +876,11 @@ suite.define(() => {
       await expect
         .poll(() => composer.locator(".chat-controls__permission-option").first().isVisible())
         .toBe(true);
-      await captureMobileState("mobile-composer-permissions-open.png");
+      await captureMobileState(
+        "mobile-composer-permissions-open.png",
+        composer.locator('.chat-controls__permission-picker [part="menu"]'),
+        [composer.locator(".chat-controls__permission-option").first()],
+      );
       await page.keyboard.press("Escape");
       const [
         mobileAttachBox,
@@ -953,7 +967,11 @@ suite.define(() => {
       await expect
         .poll(() => composer.locator(".chat-controls__model-menu").isVisible())
         .toBe(true);
-      await captureMobileState("mobile-composer-model-open.png");
+      await captureMobileState(
+        "mobile-composer-model-open.png",
+        composer.locator('.chat-controls__model-picker wa-popup [part="popup"]'),
+        [composer.locator('[data-chat-model-option="openai/gpt-5.5"]')],
+      );
       const mobilePickerBox = await composer.locator(".chat-controls__model-menu").boundingBox();
       expect(mobilePickerBox).not.toBeNull();
       if (!mobilePickerBox) {
@@ -972,7 +990,11 @@ suite.define(() => {
       await expect
         .poll(() => composer.locator(".chat-controls__effort-menu").isVisible())
         .toBe(true);
-      await captureMobileState("mobile-composer-effort-open.png");
+      await captureMobileState(
+        "mobile-composer-effort-open.png",
+        composer.locator('.chat-controls__effort-picker wa-popup [part="popup"]'),
+        [thinkingSlider],
+      );
       await page.keyboard.press("Escape");
       await settings.click();
       await expect.poll(() => viewMenu.isVisible()).toBe(true);
@@ -992,10 +1014,10 @@ suite.define(() => {
         .poll(() => microphonePicker.evaluate((node) => getComputedStyle(node).borderLeftWidth))
         .toBe("0px");
       if (artifactDir) {
-        await composerShell.screenshot({
-          animations: "disabled",
-          path: `${artifactDir}/voice-picker-disabled-background.png`,
-        });
+        await writeFile(
+          `${artifactDir}/voice-picker-disabled-background.png`,
+          await takeControlUiElementScreenshot(page, composerShell, [voice]),
+        );
       }
       await page.mouse.move(0, 0);
       await expect.poll(() => page.locator("wa-tooltip[open]").count()).toBe(0);

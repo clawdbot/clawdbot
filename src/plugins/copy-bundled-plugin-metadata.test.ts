@@ -99,6 +99,8 @@ describe("copyBundledPluginMetadata", () => {
       "# ACP Router\n",
       "utf8",
     );
+    fs.mkdirSync(path.join(pluginDir, "assets"), { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, "assets", "icon.png"), Buffer.from("package icon"));
 
     copyBundledPluginMetadata({ repoRoot });
 
@@ -112,8 +114,27 @@ describe("copyBundledPluginMetadata", () => {
       ),
     ).toContain("ACP Router");
     expectBundledSkills(repoRoot, "acpx", ["./skills"]);
+    expect(
+      fs.readFileSync(path.join(repoRoot, "dist", "extensions", "acpx", "assets", "icon.png")),
+    ).toEqual(Buffer.from("package icon"));
     const packageJson = readBundledPackageJson(repoRoot, "acpx");
     expect(packageJson.openclaw?.extensions).toEqual(["./index.js"]);
+  });
+
+  it("ignores a non-file package icon and removes stale output", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-invalid-icon-");
+    const pluginDir = createPlugin(repoRoot, {
+      id: "acpx",
+      packageName: "@openclaw/acpx",
+      packageOpenClaw: { extensions: ["./index.ts"] },
+    });
+    fs.mkdirSync(path.join(pluginDir, "assets", "icon.png"), { recursive: true });
+    const staleIconPath = path.join(repoRoot, "dist", "extensions", "acpx", "assets", "icon.png");
+    fs.mkdirSync(path.dirname(staleIconPath), { recursive: true });
+    fs.writeFileSync(staleIconPath, "stale");
+
+    expect(() => copyBundledPluginMetadata({ repoRoot })).not.toThrow();
+    expect(fs.existsSync(staleIconPath)).toBe(false);
   });
 
   it("copies generated bundled channel config schemas into dist manifests", () => {

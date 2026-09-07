@@ -88,7 +88,6 @@ async function chooseCustomFolder(page: Page, gateway: MockGateway) {
   await expect
     .poll(async () => (await gateway.getRequests("worktrees.branches")).at(-1)?.params)
     .toEqual({ repoRoot: TARGET_REPO, includeRepositoryStatus: true });
-  return { place, trigger };
 }
 
 async function reconnectForBranchRediscovery(page: Page, gateway: MockGateway) {
@@ -126,10 +125,12 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("worktrees.branches");
-      const trigger = page.locator("#new-session-detail-trigger");
-      const place = page.locator("wa-popover.new-session-page__detail-popover");
+      const trigger = page.locator("#new-session-checkout-trigger");
+      const place = page.locator("wa-popover.new-session-page__checkout-popover");
       await trigger.click();
-      await place.getByRole("button", { name: "Worktree" }).click();
+      await place
+        .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
+        .click();
       await page.keyboard.press("Escape");
       await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
 
@@ -149,9 +150,12 @@ suite.define(() => {
 
       await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
       await trigger.click();
-      const worktree = place.getByRole("button", { name: "Worktree" });
+      const worktree = place.getByRole("button", {
+        name: "New worktree Isolated copy of the repo",
+        exact: true,
+      });
       await expect.poll(() => worktree.getAttribute("aria-pressed")).toBe("true");
-      expect(await worktree.isEnabled()).toBe(true);
+      expect(await worktree.isDisabled()).toBe(true);
       await page.keyboard.press("Escape");
 
       await page.locator(".new-session-page__message").fill("keep this task isolated");
@@ -159,7 +163,7 @@ suite.define(() => {
       await expect.poll(() => start.isDisabled()).toBe(true);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       await trigger.click();
-      await worktree.click();
+      await place.getByRole("button", { name: "Current checkout" }).click();
       await expect.poll(() => trigger.count()).toBe(0);
       await page.keyboard.press("Escape");
       await start.click();
@@ -185,10 +189,12 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new`);
       await chooseCustomFolder(page, gateway);
-      const trigger = page.locator("#new-session-detail-trigger");
-      const place = page.locator("wa-popover.new-session-page__detail-popover");
+      const trigger = page.locator("#new-session-checkout-trigger");
+      const place = page.locator("wa-popover.new-session-page__checkout-popover");
       await trigger.click();
-      await place.getByRole("button", { name: "Worktree" }).click();
+      await place
+        .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
+        .click();
       await page.keyboard.press("Escape");
       await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
 
@@ -232,10 +238,12 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new`);
       await chooseCustomFolder(page, gateway);
-      const trigger = page.locator("#new-session-detail-trigger");
-      const place = page.locator("wa-popover.new-session-page__detail-popover");
+      const trigger = page.locator("#new-session-checkout-trigger");
+      const place = page.locator("wa-popover.new-session-page__checkout-popover");
       await trigger.click();
-      await place.getByRole("button", { name: "Worktree" }).click();
+      await place
+        .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
+        .click();
       await page.keyboard.press("Escape");
       await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
 
@@ -250,12 +258,15 @@ suite.define(() => {
       const start = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => start.isDisabled()).toBe(true);
       await trigger.click();
-      const worktree = place.getByRole("button", { name: "Worktree" });
-      expect(await worktree.isEnabled()).toBe(true);
+      const worktree = place.getByRole("button", {
+        name: "New worktree Isolated copy of the repo",
+        exact: true,
+      });
+      expect(await worktree.isDisabled()).toBe(true);
       await expect
         .poll(() => tooltipTitleText(worktree))
         .toBe("Couldn't verify Git for this folder. Choose it again to retry.");
-      await worktree.click();
+      await place.getByRole("button", { name: "Current checkout" }).click();
       await expect.poll(() => trigger.count()).toBe(0);
       await expect.poll(() => start.isEnabled()).toBe(true);
       await page.keyboard.press("Escape");
@@ -287,14 +298,14 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      const { place: project, trigger: projectTrigger } = await chooseCustomFolder(page, gateway);
+      await chooseCustomFolder(page, gateway);
       const whereTrigger = page.locator("#new-session-where-trigger");
       const where = page.locator("wa-popover.new-session-page__where-popover");
-      const detailTrigger = page.locator("#new-session-detail-trigger");
+      const checkoutTrigger = page.locator("#new-session-checkout-trigger");
       await whereTrigger.click();
       await where.getByRole("button", { name: "Cloud · aws" }).click();
       await expect.poll(() => whereTrigger.getAttribute("data-cloud-profile")).toBe("aws");
-      expect(await detailTrigger.count()).toBe(0);
+      await expect.poll(() => checkoutTrigger.getAttribute("data-worktree")).toBe("true");
 
       await gateway.setMethodResponse("worktrees.branches", {
         branches: [],
@@ -303,7 +314,7 @@ suite.define(() => {
       await reconnectForBranchRediscovery(page, gateway);
 
       await expect.poll(() => whereTrigger.getAttribute("data-cloud-profile")).toBe("aws");
-      expect(await detailTrigger.count()).toBe(0);
+      await expect.poll(() => checkoutTrigger.getAttribute("data-worktree")).toBe("true");
       await page.locator(".new-session-page__message").fill("do not run directly");
       const start = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => start.isDisabled()).toBe(true);
@@ -314,10 +325,11 @@ suite.define(() => {
         .poll(() => tooltipTitleText(cloud))
         .toBe("Couldn't verify Git for this folder. Choose it again to retry.");
       await page.keyboard.press("Escape");
-      await projectTrigger.click();
-      await project.getByText("Advanced", { exact: true }).click();
-      await project.getByLabel("Base branch").waitFor();
-      await project.getByLabel("Checkout name").waitFor();
+      await checkoutTrigger.click();
+      const checkout = page.locator("wa-popover.new-session-page__checkout-popover");
+      expect(await checkout.locator('[data-value="checkout"]').isDisabled()).toBe(true);
+      await checkout.getByLabel("From").waitFor();
+      await checkout.getByLabel("Name", { exact: true }).waitFor();
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
     });
   });
@@ -401,10 +413,9 @@ suite.define(() => {
       await whereSelect.getByRole("button", { name: "New device" }).waitFor();
       expect(await whereSelect.getByRole("button", { name: "Old device" }).count()).toBe(0);
       await page.keyboard.press("Escape");
-      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
-      await projectTrigger.click();
-      await projectSelect.getByText("Advanced", { exact: true }).click();
-      await expect.poll(() => projectSelect.getByLabel("Base branch").inputValue()).toBe("beta");
+      await page.locator("#new-session-checkout-trigger").click();
+      const checkout = page.locator("wa-popover.new-session-page__checkout-popover");
+      await expect.poll(() => checkout.getByLabel("From").inputValue()).toBe("beta");
       await page.keyboard.press("Escape");
 
       await gateway.resolveDeferred("fs.listDir", {

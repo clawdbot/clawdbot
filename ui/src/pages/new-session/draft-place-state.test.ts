@@ -265,26 +265,35 @@ describe("DraftPlaceState repository selection", () => {
     },
   );
 
-  it("offers remote-project worktrees locally without resetting the typed base branch on toggle", () => {
-    const { state } = createRepositoryFixture();
+  it("selects a checkout explicitly without resetting the typed base branch", () => {
+    const { state, persistPreference, requestUpdate, request } = createRepositoryFixture();
     state.selectRemoteProject(REMOTE_PROJECT);
 
     expect(state.repository).toEqual({ kind: "pending-clone", cloneUrl: REMOTE_PROJECT.cloneUrl });
     expect(state.worktreeAvailable()).toBe(true);
     expect(state.worktree).toBe(false);
-    state.toggleWorktree();
+    state.selectWorktree(true);
     expect(state.worktree).toBe(true);
     state.setBaseRef("release");
-    state.toggleWorktree();
-    state.toggleWorktree();
+    state.selectWorktree(false);
+    expect(state.worktree).toBe(false);
+    state.selectWorktree(true);
     expect(state.worktree).toBe(true);
     expect(state.baseRef).toBe("release");
+    persistPreference.mockClear();
+    requestUpdate.mockClear();
+    request.mockClear();
+    state.selectWorktree(true);
+    expect(state.worktree).toBe(true);
+    expect(persistPreference).not.toHaveBeenCalled();
+    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
   });
 
   it.each(["device", "cloud"] as const)(
-    "preserves a remote project and enables worktree when switching to %s placement",
+    "preserves a remote project and base ref without a Gateway worktree when switching to %s placement",
     (placement) => {
-      const { state, browser } = createRepositoryFixture();
+      const { state, browser, persistPreference, requestUpdate } = createRepositoryFixture();
       state.selectRemoteProject(REMOTE_PROJECT);
       state.setBaseRef("release");
       if (placement === "device") {
@@ -295,8 +304,15 @@ describe("DraftPlaceState repository selection", () => {
         expect(state.cloudProfileId).toBe("aws");
       }
       expect(browser.remoteProject).toEqual(REMOTE_PROJECT);
-      expect(state.worktree).toBe(true);
+      expect(state.worktree).toBe(false);
+      expect(state.remoteRepository).toEqual({ url: REMOTE_PROJECT.cloneUrl, ref: "release" });
       expect(state.baseRef).toBe("release");
+      persistPreference.mockClear();
+      requestUpdate.mockClear();
+      state.selectWorktree(false);
+      expect(state.worktree).toBe(false);
+      expect(persistPreference).not.toHaveBeenCalled();
+      expect(requestUpdate).not.toHaveBeenCalled();
     },
   );
 
@@ -310,7 +326,7 @@ describe("DraftPlaceState repository selection", () => {
       persistPreference.mockClear();
       requestUpdate.mockClear();
 
-      state.toggleWorktree();
+      state.selectWorktree(true);
 
       await vi.waitFor(() => expect(state.worktree).toBe(false));
       expect(state.worktreeAvailable()).toBe(false);

@@ -225,7 +225,7 @@ async function registerAllBuiltInCommands(): Promise<Command> {
   const argv = ["node", "openclaw", "completion"];
 
   for (const name of getCoreCliCommandNames()) {
-    await registerCoreCliByName(program, ctx, name, argv);
+    await registerCoreCliByName(program, ctx, name);
   }
   for (const entry of getSubCliEntriesCore()) {
     await registerSubCliByName(program, entry.name, argv, { purpose: "completion" });

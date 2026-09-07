@@ -1,9 +1,9 @@
 // Runs the full live Vitest suite with live-test env and heartbeat output.
 import { terminateManagedChild } from "./lib/managed-child-process.mts";
 import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
+import { resolveVitestNoOutputTimeoutMs } from "./lib/vitest-process-env.mts";
 import { spawnOwnedVitestProcess } from "./lib/vitest-process.mts";
 import { createPnpmRunnerSpawnSpec, type PnpmRunnerParams } from "./pnpm-runner.mts";
-import { resolveVitestNoOutputTimeoutMs } from "./run-vitest.mts";
 import {
   installVitestProcessGroupCleanup,
   shouldUseDetachedVitestProcessGroup,

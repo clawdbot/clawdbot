@@ -1,7 +1,8 @@
 // Elevenlabs tests cover speech provider plugin behavior.
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { isValidElevenLabsVoiceId } from "./shared.js";
-import { buildElevenLabsSpeechProvider } from "./speech-provider.js";
+import { buildElevenLabsSpeechProvider } from "./speech-provider-factory.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
@@ -72,7 +73,7 @@ describe("elevenlabs speech provider", () => {
   });
 
   it("exposes the current ElevenLabs TTS model catalog", () => {
-    const provider = buildElevenLabsSpeechProvider();
+    const provider = buildElevenLabsSpeechProvider({ formatErrorMessage });
 
     expect(provider.models).toEqual([
       "eleven_v3",
@@ -104,7 +105,7 @@ describe("elevenlabs speech provider", () => {
     (key, value, expected, allowed?: boolean) => {
       const currentOverrides = { voiceId: "existing-voice", voiceSettings: { style: 0.25 } };
       const allowVoiceSettings = allowed ?? true;
-      const parsed = buildElevenLabsSpeechProvider().parseDirectiveToken?.({
+      const parsed = buildElevenLabsSpeechProvider({ formatErrorMessage }).parseDirectiveToken?.({
         key,
         value,
         policy: { ...DIRECTIVE_POLICY, allowVoiceSettings },
@@ -129,7 +130,7 @@ describe("elevenlabs speech provider", () => {
 
   it("forwards the core-resolved voice-list timeout", async () => {
     globalThis.fetch = vi.fn(async () => Response.json({ voices: [] })) as unknown as typeof fetch;
-    const provider = buildElevenLabsSpeechProvider();
+    const provider = buildElevenLabsSpeechProvider({ formatErrorMessage });
 
     await provider.listVoices?.({
       providerConfig: { apiKey: "xi-test" },
@@ -144,7 +145,7 @@ describe("elevenlabs speech provider", () => {
   it("rejects blank credentials across discovery and synthesis before requests", async () => {
     vi.stubEnv("ELEVENLABS_API_KEY", "   ");
     vi.stubEnv("XI_API_KEY", "   ");
-    const provider = buildElevenLabsSpeechProvider();
+    const provider = buildElevenLabsSpeechProvider({ formatErrorMessage });
     const providerConfig = { apiKey: "   " };
 
     expect(provider.isConfigured({ providerConfig, timeoutMs: 1_000 })).toBe(false);
@@ -171,7 +172,7 @@ describe("elevenlabs speech provider", () => {
   });
 
   it("keeps non-equivalent deprecated ElevenLabs TTS model IDs", async () => {
-    const provider = buildElevenLabsSpeechProvider();
+    const provider = buildElevenLabsSpeechProvider({ formatErrorMessage });
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       const body = parseRequestBody(init);
       expect(body.model_id).toBe("eleven_monolingual_v1");
@@ -193,7 +194,7 @@ describe("elevenlabs speech provider", () => {
   });
 
   it("maps deprecated ElevenLabs TTS model IDs in overrides", async () => {
-    const provider = buildElevenLabsSpeechProvider();
+    const provider = buildElevenLabsSpeechProvider({ formatErrorMessage });
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       const body = parseRequestBody(init);
       expect(body.model_id).toBe("eleven_flash_v2_5");
@@ -241,7 +242,7 @@ describe("elevenlabs speech provider", () => {
   });
 
   it("applies provider overrides to telephony synthesis", async () => {
-    const provider = buildElevenLabsSpeechProvider();
+    const provider = buildElevenLabsSpeechProvider({ formatErrorMessage });
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       expect(url).toContain("/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM");
       expect(url).toContain("output_format=pcm_22050");
@@ -290,7 +291,7 @@ describe("elevenlabs speech provider", () => {
   });
 
   it("drops out-of-range voice settings before synthesis", async () => {
-    const provider = buildElevenLabsSpeechProvider();
+    const provider = buildElevenLabsSpeechProvider({ formatErrorMessage });
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       const body = parseRequestBody(init);
       expect(body.voice_settings).toEqual({
@@ -328,7 +329,7 @@ describe("elevenlabs speech provider", () => {
   });
 
   it("drops malformed seed values before synthesis", async () => {
-    const provider = buildElevenLabsSpeechProvider();
+    const provider = buildElevenLabsSpeechProvider({ formatErrorMessage });
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       const body = parseRequestBody(init);
       expect(body).not.toHaveProperty("seed");
@@ -353,7 +354,7 @@ describe("elevenlabs speech provider", () => {
   });
 
   it("drops malformed latency tier overrides before synthesis", async () => {
-    const provider = buildElevenLabsSpeechProvider();
+    const provider = buildElevenLabsSpeechProvider({ formatErrorMessage });
     const fetchMock = vi.fn(async (url: string) => {
       expect(new URL(url).searchParams.has("optimize_streaming_latency")).toBe(false);
       return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
@@ -387,7 +388,7 @@ describe("elevenlabs speech provider", () => {
       });
       globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-      const result = await buildElevenLabsSpeechProvider().synthesize({
+      const result = await buildElevenLabsSpeechProvider({ formatErrorMessage }).synthesize({
         text: "hello",
         target: "voice-note",
         cfg: {} as never,
@@ -422,7 +423,7 @@ describe("elevenlabs speech provider", () => {
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    const result = await buildElevenLabsSpeechProvider().streamSynthesize?.({
+    const result = await buildElevenLabsSpeechProvider({ formatErrorMessage }).streamSynthesize?.({
       text: "hello",
       target: "voice-note",
       cfg: {} as never,

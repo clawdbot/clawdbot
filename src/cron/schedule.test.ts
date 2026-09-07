@@ -477,9 +477,7 @@ describe("cron schedule", () => {
       { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
       nowMs,
     );
-    if (previous !== undefined) {
-      expect(previous).toBeLessThan(nowMs);
-    }
+    expect(previous).toBe(Date.parse("2026-02-28T00:00:00.000Z"));
   });
 
   it("reuses compiled cron evaluators for the same expression/timezone", () => {

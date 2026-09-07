@@ -31,9 +31,10 @@ scenario:
     - src/agents/tools/sessions-send-tool.ts
     - src/agents/tools/sessions-send-tool.a2a.ts
     - src/agents/run-wait.ts
-    - src/shared/transcript-only-openclaw-assistant.ts
+    - src/agents/agent-run-terminal-receipt.ts
   execution:
     kind: flow
+    retryCount: 0
     channel: qa-channel
     summary: Run a real QA Gateway/qa-channel A2A source-reply turn and assert the message-tool delivery mirror is not announced again.
     config:
@@ -110,6 +111,31 @@ flow:
             - expr: liveTurnTimeoutMs(env, 90000)
             - sinceIndex:
                 ref: startIndex
+        - assert:
+            expr: "Boolean(sourceSessionsSendRequest.plannedToolCallId)"
+            message: the source send must have a tool-call ID for result correlation
+        - call: waitForCondition
+          saveAs: sourceFollowup
+          args:
+            - lambda:
+                async: true
+                params: []
+                expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${sourceSessionsSendRequest.cursor}`)).find((request) => request.toolOutputCallId === sourceSessionsSendRequest.plannedToolCallId && Boolean(request.toolOutput))"
+            - 60000
+            - 500
+        - set: sendResult
+          value:
+            expr: "JSON.parse(sourceFollowup.toolOutput)"
+        - assert:
+            expr: "sendResult.status === 'accepted' && sendResult.sessionKey === targetSessionKey && Boolean(sendResult.runId)"
+            message: the source must identify the accepted target run
+        - set: targetWait
+          value:
+            expr: "await env.gateway.call('agent.wait', { runId: sendResult.runId, timeoutMs: 60000 }, { timeoutMs: 65000 })"
+        - assert:
+            expr: "targetWait.status === 'ok' && targetWait.terminalReceipt?.runId === sendResult.runId && targetWait.terminalReceipt?.sourceReplyDelivered === true"
+            message:
+              expr: "`the target run must record final source delivery on its terminal receipt: ${JSON.stringify(targetWait).slice(0, 1600)}`"
         - call: sleep
           args:
             - expr: config.duplicateWindowMs
@@ -134,4 +160,4 @@ flow:
             expr: "!env.mock || scenarioRequests.filter((request) => request.plannedToolName === 'message' && request.plannedToolArgs?.action === 'send' && request.plannedToolArgs?.message === config.expectedMarker).length === 1"
             message:
               expr: "`expected exactly one target message(action=send) plan for the marker; requests=${JSON.stringify(scenarioRequests)}`"
-      detailsExpr: "`outbound=${outbound.conversation.kind}:${outbound.conversation.id}:${outbound.text}; sourceTool=${JSON.stringify(sourceSessionsSendRequest?.plannedToolArgs ?? {})}; targetTool=${JSON.stringify(targetMessageToolRequest?.plannedToolArgs ?? {})}; duplicateWindowMs=${config.duplicateWindowMs}`"
+      detailsExpr: "`outbound=${outbound.conversation.kind}:${outbound.conversation.id}:${outbound.text}; sourceTool=${JSON.stringify(sourceSessionsSendRequest?.plannedToolArgs ?? {})}; targetTool=${JSON.stringify(targetMessageToolRequest?.plannedToolArgs ?? {})}; targetRunId=${sendResult.runId}; sourceReplyDelivered=${targetWait.terminalReceipt.sourceReplyDelivered}; terminalReplyDisposition=${targetWait.terminalReply?.disposition}; duplicateWindowMs=${config.duplicateWindowMs}`"

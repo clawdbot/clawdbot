@@ -3,6 +3,7 @@ import {
   createStartAccountContext,
   installChannelDmPolicyContractSuite,
 } from "openclaw/plugin-sdk/channel-test-helpers";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
@@ -10,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
+import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "../api.js";
 import { linePlugin } from "./channel.js";
@@ -131,12 +133,17 @@ describe("linePlugin status.probeAccount", () => {
 });
 
 function createRuntime() {
+  const providerStarted = createDeferred<void>();
   const monitorLineProvider = vi.fn(
-    async (_opts: { accountId?: string; channelAccessToken: string; channelSecret: string }) => ({
-      account: { accountId: "default" },
-      handleWebhook: async () => {},
-      stop: () => {},
-    }),
+    async (opts: Parameters<typeof import("./monitor.js").monitorLineProvider>[0]) => {
+      providerStarted.resolve();
+      await waitForAbortSignal(opts.abortSignal);
+      return {
+        account: { accountId: "default" },
+        handleWebhook: async () => {},
+        stop: async () => {},
+      };
+    },
   );
 
   const runtime = {
@@ -150,7 +157,7 @@ function createRuntime() {
     },
   } as unknown as PluginRuntime;
 
-  return { runtime, monitorLineProvider };
+  return { runtime, monitorLineProvider, providerStarted: providerStarted.promise };
 }
 
 function createAccount(params: { token: string; secret: string }): ResolvedLineAccount {
@@ -165,11 +172,12 @@ function createAccount(params: { token: string; secret: string }): ResolvedLineA
 }
 
 function startLineAccount(params: { account: ResolvedLineAccount; abortSignal?: AbortSignal }) {
-  const { runtime, monitorLineProvider } = createRuntime();
+  const { runtime, monitorLineProvider, providerStarted } = createRuntime();
   const statusEvents: unknown[] = [];
   setLineRuntime(runtime);
   return {
     monitorLineProvider,
+    providerStarted,
     statusEvents,
     task: lineGatewayAdapter.startAccount!(
       createStartAccountContext({
@@ -205,27 +213,37 @@ describe("linePlugin gateway.startAccount", () => {
   });
 
   it("starts provider when token and secret are present", async () => {
+    // Startup probes before entering the monitor; keep that HTTP boundary local to this test.
+    stubLineApiFetch(
+      Response.json({ displayName: "OpenClaw", userId: "U123" }),
+      Response.json({ type: "none" }),
+    );
     const abort = new AbortController();
-    const { monitorLineProvider, statusEvents, task } = startLineAccount({
+    const { monitorLineProvider, providerStarted, statusEvents, task } = startLineAccount({
       account: createAccount({ token: "token", secret: "secret" }),
       abortSignal: abort.signal,
     });
 
-    await vi.waitFor(() => {
+    try {
+      await Promise.race([
+        providerStarted,
+        task.then(() => {
+          throw new Error("LINE account exited before the provider started");
+        }),
+      ]);
       expect(monitorLineProvider).toHaveBeenCalledTimes(1);
-    });
-    const startupParams = (monitorLineProvider.mock.calls as unknown[][])[0]?.[0] as
-      | { accountId?: string; channelAccessToken?: string; channelSecret?: string }
-      | undefined;
-    expect(startupParams?.channelAccessToken).toBe("token");
-    expect(startupParams?.channelSecret).toBe("secret");
-    expect(startupParams?.accountId).toBe("default");
-    expect(statusEvents).toContainEqual(
-      expect.objectContaining({ accountId: "default", lifecycle: "starting" }),
-    );
-    expect(startupParams).toEqual(expect.objectContaining({ statusSink: expect.any(Function) }));
-
-    abort.abort();
-    await task;
+      const startupParams = monitorLineProvider.mock.calls[0]?.[0];
+      expect(startupParams?.channelAccessToken).toBe("token");
+      expect(startupParams?.channelSecret).toBe("secret");
+      expect(startupParams?.accountId).toBe("default");
+      expect(startupParams?.abortSignal).toBe(abort.signal);
+      expect(statusEvents).toContainEqual(
+        expect.objectContaining({ accountId: "default", lifecycle: "starting" }),
+      );
+      expect(startupParams).toEqual(expect.objectContaining({ statusSink: expect.any(Function) }));
+    } finally {
+      abort.abort();
+      await task;
+    }
   });
 });

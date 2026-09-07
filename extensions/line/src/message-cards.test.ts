@@ -1,7 +1,7 @@
 // Line tests cover message cards plugin behavior.
-import { createServer } from "node:http";
 import { messagingApi } from "@line/bot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import {
   datetimePickerAction,
@@ -123,45 +123,34 @@ async function withLineProvider(
   run: (client: messagingApi.MessagingApiClient, requests: LineProviderRequest[]) => Promise<void>,
 ): Promise<void> {
   const requests: LineProviderRequest[] = [];
-  const server = createServer((request, response) => {
-    const chunks: Buffer[] = [];
-    request.on("data", (chunk: Buffer) => {
-      chunks.push(chunk);
-    });
-    request.once("end", () => {
-      const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
-        messages: Array<{ type: string; altText: string }>;
-      };
-      requests.push({
-        path: request.url ?? "",
-        authenticated: request.headers.authorization === "Bearer isolated-test-token",
-        type: payload.messages[0]?.type ?? "",
-        altText: payload.messages[0]?.altText ?? "",
+  await withServer(
+    (request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => {
+        chunks.push(chunk);
       });
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ sentMessages: [{ id: `card-${requests.length}` }] }));
-    });
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  try {
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("LINE card provider did not bind a TCP port");
-    }
-    const client = new messagingApi.MessagingApiClient({
-      channelAccessToken: "isolated-test-token",
-      baseURL: `http://127.0.0.1:${address.port}`,
-    });
-    await run(client, requests);
-  } finally {
-    server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
+      request.once("end", () => {
+        const payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+          messages: Array<{ type: string; altText: string }>;
+        };
+        requests.push({
+          path: request.url ?? "",
+          authenticated: request.headers.authorization === "Bearer isolated-test-token",
+          type: payload.messages[0]?.type ?? "",
+          altText: payload.messages[0]?.altText ?? "",
+        });
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ sentMessages: [{ id: `card-${requests.length}` }] }));
+      });
+    },
+    async (baseUrl) => {
+      const client = new messagingApi.MessagingApiClient({
+        channelAccessToken: "isolated-test-token",
+        baseURL: baseUrl,
+      });
+      await run(client, requests);
+    },
+  );
 }
 
 describe("createConfirmTemplate", () => {

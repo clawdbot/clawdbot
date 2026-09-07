@@ -3,6 +3,7 @@ import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protoc
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
+import { StaleWorkerBuildError } from "./admission.js";
 import type { WorkerPlacementDiskSpaceReader } from "./placement-projector.js";
 import type {
   WorkerSessionPlacementRecord,
@@ -36,8 +37,10 @@ type DiskSpaceObservation = {
   snapshot: SessionPlacementDiskSpace;
 };
 
+type PlacementBinding = Omit<DiskSpaceObservation, "snapshot">;
+
 function hasExactBinding(
-  observation: DiskSpaceObservation,
+  observation: PlacementBinding,
   placement: WorkerSessionPlacementRecord | undefined,
 ): placement is ActivePlacement {
   return (
@@ -109,6 +112,7 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
   now?: () => number;
 }) {
   const observations = new Map<string, DiskSpaceObservation>();
+  const staleBindings = new Map<string, PlacementBinding>();
   const now = params.now ?? Date.now;
   let observationVersion = 0;
 
@@ -120,6 +124,11 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
   };
 
   const probe = async (placement: ActivePlacement): Promise<void> => {
+    // A stale worker build cannot recover until its placement binding changes.
+    const stale = staleBindings.get(placement.sessionId);
+    if (stale && hasExactBinding(stale, placement)) {
+      return;
+    }
     const tunnel = await params.environments.startTunnel({
       environmentId: placement.environmentId,
       ownerEpoch: placement.activeOwnerEpoch,
@@ -179,12 +188,20 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
         observationVersion += 1;
       }
     }
+    for (const [sessionId, binding] of staleBindings) {
+      if (!hasExactBinding(binding, params.placements.get(sessionId))) {
+        staleBindings.delete(sessionId);
+      }
+    }
     const tasks = active.map((placement) => () => probe(placement));
     await runTasksWithConcurrency({
       tasks,
       limit: DISK_SPACE_PROBE_CONCURRENCY,
       onTaskError: (error, index) => {
         const placement = active[index];
+        if (placement && error instanceof StaleWorkerBuildError) {
+          staleBindings.set(placement.sessionId, { ...placement });
+        }
         params.warn(
           `Worker disk-space probe failed${placement ? ` (${placement.sessionId})` : ""}: ${formatErrorMessage(error)}`,
         );

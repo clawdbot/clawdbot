@@ -44,6 +44,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/infra/exec-host.native.test-support.ts!",
   // The Windows CLI lifetime test launches this isolated probe by path.
   "test/helpers/openclaw-test-instance.cli.test-support.mjs!",
+  // The public QA Gateway child launches this transport proxy by path.
+  "test/fixtures/qa-gateway-rpc-proxy.mjs!",
   // Vitest loads these by configuration or module alias rather than imports.
   "test/setup*.ts!",
   "test/non-isolated-runner.ts!",
@@ -58,6 +60,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts!",
   // The Gateway/node MCP parity tests spawn this transport fixture by path.
   "test/e2e/qa-lab/runtime/gateway-node-mcp.fixture.mjs!",
+  // The hot-reload scenario passes this isolated upstream preload to the Gateway CLI.
+  "test/e2e/qa-lab/runtime/gateway-config-hot-reload-upstream.mjs!",
   // The identity scenario spawns this process-isolated repeated-turn driver by path.
   "test/e2e/qa-lab/runtime/agent-run-identity-repeated-turn-child.ts!",
   // Invoked directly by the Docker image-auth scenario.

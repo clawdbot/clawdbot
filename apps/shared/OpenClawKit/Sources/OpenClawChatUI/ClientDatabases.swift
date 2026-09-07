@@ -40,6 +40,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
     let cacheQueue: DatabaseQueue
     let stateQueue: DatabaseQueue
     let outboxChangeHub = OutboxChangeHub()
+    public let watchMessages: OpenClawWatchMessageJournal
     private let legacyDirectoryURLs: [URL]
 
     public init(
@@ -53,6 +54,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
 
         let stateURL = directoryURL.appendingPathComponent(Self.clientStateFilename, isDirectory: false)
         self.stateQueue = try Self.openStateDatabase(at: stateURL)
+        self.watchMessages = OpenClawWatchMessageJournal(queue: self.stateQueue)
         self.cacheQueue = try Self.openRepairableCacheDatabase(
             at: directoryURL.appendingPathComponent(Self.gatewayCacheFilename, isDirectory: false))
         let exactRegisteredGatewayIDs = registeredGatewayIDs.map(RegisteredGatewayIDs.init)
@@ -438,6 +440,7 @@ extension OpenClawClientDatabases {
         var migrator = DatabaseMigrator()
         self.registerClientStateMigrationsV1ThroughV5(&migrator)
         self.registerClientStateMigrationsV6ThroughV8(&migrator)
+        self.registerWatchMessageJournalMigration(&migrator)
         try migrator.migrate(queue)
         return queue
     }

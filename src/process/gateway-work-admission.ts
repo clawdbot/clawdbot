@@ -1,7 +1,9 @@
 // Coordinates process-wide root work admission with reversible host suspension.
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { GatewaySuspension } from "../../packages/gateway-protocol/src/schema/gateway-suspend.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type GatewaySuspendAdmissionPhase = GatewaySuspension["phase"];
@@ -361,7 +363,7 @@ export function tryBeginGatewayPreparedRestartRootWorkAdmission(): GatewayRootWo
 }
 
 /** Independent detached work counts separately even when launched by an admitted parent. */
-function tryBeginGatewayIndependentRootWorkAdmission(
+export function tryBeginGatewayIndependentRootWorkAdmission(
   origin = "independent",
 ): GatewayRootWorkAdmissionLease | null {
   if (
@@ -372,6 +374,16 @@ function tryBeginGatewayIndependentRootWorkAdmission(
     return null;
   }
   return createGatewayRootWorkAdmission(origin);
+}
+
+async function waitForGatewayWorkAdmissionChange(signal?: AbortSignal): Promise<void> {
+  const wake = createDeferredCore();
+  GATEWAY_WORK_ADMISSION_STATE.suspendOpenWaiters.add(wake.resolve);
+  try {
+    await racePromiseWithAbortSignal(wake.promise, signal);
+  } finally {
+    GATEWAY_WORK_ADMISSION_STATE.suspendOpenWaiters.delete(wake.resolve);
+  }
 }
 
 /** Waits through a prepared lease, then joins the root-work set atomically. */
@@ -386,17 +398,18 @@ export async function beginGatewayRootWorkAdmissionWhenOpen(
     if (admission) {
       return admission;
     }
-    await new Promise<void>((resolve) => {
-      GATEWAY_WORK_ADMISSION_STATE.suspendOpenWaiters.add(resolve);
-    });
+    await waitForGatewayWorkAdmissionChange();
   }
 }
 
 export async function runWithGatewayIndependentRootWorkAdmission<T>(
   run: () => Promise<T>,
   origin?: string,
+  signal?: AbortSignal,
 ): Promise<T> {
   while (true) {
+    // Cancellation retires admission only; an admitted operation still owns its full completion.
+    signal?.throwIfAborted();
     if (GATEWAY_WORK_ADMISSION_STATE.restartDraining) {
       throw new GatewayDrainingError("gateway is draining for restart");
     }
@@ -408,9 +421,7 @@ export async function runWithGatewayIndependentRootWorkAdmission<T>(
         admission.release();
       }
     }
-    await new Promise<void>((resolve) => {
-      GATEWAY_WORK_ADMISSION_STATE.suspendOpenWaiters.add(resolve);
-    });
+    await waitForGatewayWorkAdmissionChange(signal);
   }
 }
 
@@ -492,6 +503,16 @@ export function retainGatewayRootWorkAdmissionContinuationScope(): GatewayRootWo
 /** Transfers an admitted request root to work that intentionally outlives its handler. */
 export function retainGatewayRootWorkAdmissionContinuation(): (() => void) | null {
   return retainGatewayRootWorkAdmissionContinuationScope()?.release ?? null;
+}
+
+/** Retains an existing root for started effects without admitting or parking unrooted work. */
+export async function runWithRetainedGatewayRootWork<T>(run: () => T | Promise<T>): Promise<T> {
+  const release = retainGatewayRootWorkAdmissionContinuation();
+  try {
+    return await run();
+  } finally {
+    release?.();
+  }
 }
 
 /** Starts process-lifetime work without inheriting the request root that created it. */
@@ -578,6 +599,9 @@ export function tryBeginGatewaySuspendAdmission(
 export function resetGatewayWorkAdmission(): void {
   // SIGUSR1 can abandon old async chains before their finally blocks run.
   // Retire their ALS records so surviving chains must re-enter admission.
+  GATEWAY_WORK_ADMISSION_STATE.restartDrainController.abort(
+    new GatewayDrainingError("gateway runtime reset"),
+  );
   for (const admission of GATEWAY_WORK_ADMISSION_STATE.activeRootWork) {
     admission.references = 0;
     admission.retiredByReset = true;

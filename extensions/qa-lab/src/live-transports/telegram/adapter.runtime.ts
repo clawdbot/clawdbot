@@ -138,7 +138,7 @@ export async function createTelegramQaTransportAdapter(
     }
     const outbound = await context.messages.addOutboundMessage({
       accountId,
-      to: `${logicalConversationKind}:${logicalConversationId}`,
+      to: `${logicalConversationKind === "direct" ? "dm" : logicalConversationKind}:${logicalConversationId}`,
       senderId: String(update.senderId),
       senderName: update.senderUsername,
       text: update.text,

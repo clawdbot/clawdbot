@@ -38,6 +38,7 @@ internal fun gatewayStatusLabel(
     status == "connected (node offline)" -> nativeString("Connected (node offline)")
     status == "connected (operator offline)" -> nativeString("Connected (operator offline)")
     isConnected -> nativeString("Ready")
+    status == "offline" -> nativeString("Offline")
     status.contains("connecting") || status.contains("reconnecting") -> nativeString("Connecting...")
     status.contains("pair") -> nativeString("Pairing needed")
     status.contains("auth") || status.contains("device identity") -> gatewayAuthRecoveryLabel(gatewayConnectionProblem) ?: nativeString("Authentication needed")
@@ -45,7 +46,6 @@ internal fun gatewayStatusLabel(
     status.contains("no tls endpoint") -> nativeString("No TLS endpoint")
     status.contains("certificate") || status.contains("tls") -> nativeString("Certificate review needed")
     status.contains("failed") || status.contains("error") || status.contains("offline") || status.contains("not connected") -> nativeString("Cannot reach gateway")
-    status.isBlank() -> nativeString("Not connected")
     else -> nativeString("Not connected")
   }
 }

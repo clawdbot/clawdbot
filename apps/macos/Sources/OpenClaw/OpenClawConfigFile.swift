@@ -1,5 +1,6 @@
 import CoreFoundation
 import CryptoKit
+import Darwin
 import Foundation
 import OpenClawProtocol
 
@@ -86,7 +87,28 @@ enum OpenClawConfigFile {
                 return false
             }
             let url = self.url()
-            let previousData = try? Data(contentsOf: url)
+            var pathInfo = stat()
+            let configMissing: Bool
+            if lstat(url.path, &pathInfo) == 0 {
+                configMissing = false
+            } else {
+                guard errno == ENOENT else {
+                    self.logger.error("Cannot inspect configuration before saving")
+                    return false
+                }
+                configMissing = true
+            }
+            let previousData: Data?
+            if configMissing {
+                previousData = nil
+            } else {
+                do {
+                    previousData = try Data(contentsOf: url)
+                } catch {
+                    self.logger.error("Cannot read existing configuration before saving")
+                    return false
+                }
+            }
             let previousRoot = previousData.flatMap { self.parseConfigData($0) }
             let previousBytes = previousData?.count
             let previousAttributes = try? FileManager().attributesOfItem(atPath: url.path)
@@ -102,6 +124,10 @@ enum OpenClawConfigFile {
                 previousRoot: previousRoot,
                 output: &output,
                 allowGatewayAuthMutation: allowGatewayAuthMutation)
+            // Existing files retain their authored or legacy catalog preferences.
+            if configMissing {
+                guard self.initializeNativeSessionCatalogPreferences(&output) else { return false }
+            }
             self.stampMeta(&output)
 
             do {
@@ -384,8 +410,7 @@ extension OpenClawConfigFile {
         self.logger.debug("browser control updated enabled=\(enabled)")
     }
 
-    static func gatewayPort() -> Int? {
-        let root = self.loadDict()
+    static func gatewayPort(root: [String: Any] = OpenClawConfigFile.loadDict()) -> Int? {
         guard let gateway = root["gateway"] as? [String: Any] else { return nil }
         if let port = gateway["port"] as? Int, port > 0 {
             return port
@@ -464,6 +489,44 @@ extension OpenClawConfigFile {
             return decoded.mapValues { $0.foundationValue }
         }
         return nil
+    }
+
+    private struct NativeSessionCatalog: Decodable {
+        let pluginId: String
+    }
+
+    private static func initializeNativeSessionCatalogPreferences(_ root: inout [String: Any]) -> Bool {
+        let bundle: Bundle? = if Bundle.main.bundleURL.pathExtension == "app" {
+            Bundle.main.resourceURL
+                .map { $0.appendingPathComponent("OpenClaw_OpenClaw.bundle") }
+                .flatMap(Bundle.init(url:))
+        } else {
+            Bundle.module
+        }
+        guard let url = bundle?.url(forResource: "NativeSessionCatalogs", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let catalogs = try? JSONDecoder().decode([NativeSessionCatalog].self, from: data),
+              catalogs.allSatisfy({ !$0.pluginId.isEmpty })
+        else {
+            self.logger.error("Cannot create configuration: native conversation privacy defaults are missing")
+            return false
+        }
+        var plugins = root["plugins"] as? [String: Any] ?? [:]
+        var entries = plugins["entries"] as? [String: Any] ?? [:]
+        for catalog in catalogs {
+            var entry = entries[catalog.pluginId] as? [String: Any] ?? [:]
+            var config = entry["config"] as? [String: Any] ?? [:]
+            var sessionCatalog = config["sessionCatalog"] as? [String: Any] ?? [:]
+            if sessionCatalog["enabled"] == nil {
+                sessionCatalog["enabled"] = false
+                config["sessionCatalog"] = sessionCatalog
+                entry["config"] = config
+                entries[catalog.pluginId] = entry
+            }
+        }
+        plugins["entries"] = entries
+        root["plugins"] = plugins
+        return true
     }
 
     private static func stampMeta(_ root: inout [String: Any]) {

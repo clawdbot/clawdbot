@@ -56,13 +56,7 @@ const facadeMockHelpers = vi.hoisted(() => {
         },
       },
     ) as T;
-  const createLazyFacadeArrayValue = <T extends readonly unknown[]>(load: () => T): T =>
-    new Proxy([], {
-      get(_target, property, receiver) {
-        return Reflect.get(load(), property, receiver);
-      },
-    }) as unknown as T;
-  return { createLazyFacadeArrayValue, createLazyFacadeObjectValue };
+  return { createLazyFacadeObjectValue };
 });
 
 vi.mock("./plugins/plugin-registry.js", () => ({
@@ -97,7 +91,6 @@ vi.mock("./plugin-sdk/facade-loader.js", () => ({
 vi.mock("./plugin-sdk/facade-runtime.js", () => ({
   ...facadeMockHelpers,
   testing: {},
-  canLoadActivatedBundledPluginPublicSurface: () => true,
   listImportedBundledPluginFacadeIds: () => [],
   loadActivatedBundledPluginPublicSurfaceModuleSync: loadBundledPluginPublicSurfaceModuleSyncCore,
   loadBundledPluginPublicSurfaceModuleSyncCore,

@@ -19,7 +19,7 @@ import {
 import { resolveOwnerPromptNumbers } from "../../agents/owner-display.js";
 import { resolveManualCompactionCliTarget } from "../../agents/session-runtime-compat.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
-import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
@@ -343,7 +343,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       model: params.model,
       authProfileId:
         compactionCliTarget.cliSessionBinding?.authProfileId ?? expectedSession.authProfileOverride,
-      authProfileIdSource: resolveSessionAuthProfileOverrideSource(expectedSession),
+      authProfileIdSource: resolveCollapsedSessionAuthPinSource(expectedSession),
       contextTokenBudget,
       agentHarnessId: compactionCliTarget.agentHarnessId,
       cliSessionId: compactionCliTarget.cliSessionId,

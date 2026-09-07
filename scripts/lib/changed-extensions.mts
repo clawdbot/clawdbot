@@ -19,10 +19,6 @@ function runGit(args: string[]) {
   });
 }
 
-function normalizeRelative(inputPath: string) {
-  return inputPath.split(path.sep).join("/");
-}
-
 function hasGitCommit(ref: string | undefined) {
   if (!ref || /^0+$/.test(ref)) {
     return false;
@@ -69,21 +65,18 @@ function listChangedPaths(base: string, head = "HEAD") {
     throw new Error("A git base revision is required to list changed extensions.");
   }
 
-  return runGit(["diff", "--name-only", base, head])
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+  return runGit(["diff", "--name-only", "-z", base, head]).split("\0").filter(Boolean);
 }
 
 function listAvailableExtensionIdsFromGit() {
   const packageFiles = runGit([
     "ls-files",
+    "-z",
     "--",
     `:(glob)${BUNDLED_PLUGIN_PATH_PREFIX}*/package.json`,
   ])
-    .split("\n")
-    .map((line) => normalizeRelative(line.trim()))
-    .filter((line) => line.length > 0);
+    .split("\0")
+    .filter(Boolean);
   return packageFiles
     .flatMap((file) => {
       const match = file.match(new RegExp(`^${BUNDLED_PLUGIN_PATH_PREFIX}([^/]+)/package\\.json$`));
@@ -122,8 +115,7 @@ export function detectChangedExtensionIds(changedPaths: string[]) {
   const availableExtensionIds = new Set(listAvailableExtensionIds());
   const extensionIds = new Set<string>();
 
-  for (const rawPath of changedPaths) {
-    const relativePath = normalizeRelative(rawPath.trim());
+  for (const relativePath of changedPaths) {
     if (!relativePath) {
       continue;
     }
