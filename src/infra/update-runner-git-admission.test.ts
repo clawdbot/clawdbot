@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { gitConfigNullPath } from "./git-exec.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import { buildUpdateCommandRunner } from "./update-runner-command.js";
 import { updateGitCheckout } from "./update-runner-git.js";
@@ -418,4 +419,34 @@ process.exit(result.status ?? 93);
       expect(fs.existsSync(mirror!)).toBe(false);
     },
   );
+
+  it("isolates update inspection git from host config with a Git-readable null path", async () => {
+    const state = fixture();
+    const inspectionGlobals: string[] = [];
+    const runCommand: CommandRunner = async (argv, options) => {
+      if (
+        options.env?.GIT_CONFIG_COUNT === "0" &&
+        typeof options.env.GIT_CONFIG_GLOBAL === "string"
+      ) {
+        inspectionGlobals.push(options.env.GIT_CONFIG_GLOBAL);
+      }
+      return state.runCommand(argv, options);
+    };
+    const result = await state.run({ channel: "stable" }, runCommand);
+    expect(result.status, JSON.stringify(result)).toBe("ok");
+    expect(inspectionGlobals.length).toBeGreaterThan(0);
+    expect(new Set(inspectionGlobals)).toEqual(new Set([gitConfigNullPath()]));
+    expect(inspectionGlobals.includes(state.globalConfig)).toBe(false);
+    expect(gitConfigNullPath("win32")).toBe("NUL");
+    const windowsDevNull = spawnSync("git", ["config", "--global", "--list"], {
+      encoding: "utf8",
+      env: { ...process.env, GIT_CONFIG_GLOBAL: "\\\\.\\nul", GIT_CONFIG_NOSYSTEM: "1" },
+    });
+    expect(windowsDevNull.status, windowsDevNull.stderr).not.toBe(0);
+    const isolated = spawnSync("git", ["config", "--global", "--list"], {
+      encoding: "utf8",
+      env: { ...process.env, GIT_CONFIG_GLOBAL: gitConfigNullPath(), GIT_CONFIG_NOSYSTEM: "1" },
+    });
+    expect(isolated.status, isolated.stderr).toBe(0);
+  });
 });

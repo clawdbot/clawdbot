@@ -6,6 +6,7 @@ import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   createGitCommandError,
   executeGitCommand,
+  gitConfigNullPath,
   normalizeGitPathForFilesystem,
   requireGitCommand,
   requireGitCommandBuffer,
@@ -37,6 +38,17 @@ describe("Git filesystem paths", () => {
       expect(normalizeGitPathForFilesystem(input, "linux")).toBe(input);
     },
   );
+});
+
+describe("Git config null path", () => {
+  it("uses NUL on Windows so Git can open the isolated config file", () => {
+    expect(gitConfigNullPath("win32")).toBe("NUL");
+  });
+
+  it("uses /dev/null on POSIX hosts", () => {
+    expect(gitConfigNullPath("darwin")).toBe("/dev/null");
+    expect(gitConfigNullPath("linux")).toBe("/dev/null");
+  });
 });
 
 const progress = Array.from({ length: 1000 }, (_, i) => `Updating files: ${i}/1000`).join("\r");

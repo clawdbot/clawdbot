@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ProjectCloneFailureCause } from "../../packages/gateway-protocol/src/index.js";
+import { gitConfigNullPath } from "../infra/git-exec.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 
 const PROJECT_CLONE_TIMEOUT_MS = 10 * 60_000;
@@ -27,7 +28,7 @@ function cloneCommandEnv(token: string | undefined, env: NodeJS.ProcessEnv): Nod
     ...env,
     GIT_TERMINAL_PROMPT: "0",
     GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: os.devNull,
+    GIT_CONFIG_GLOBAL: gitConfigNullPath(),
     GIT_TEMPLATE_DIR: "",
     GIT_EDITOR: "",
     GIT_SEQUENCE_EDITOR: "",
