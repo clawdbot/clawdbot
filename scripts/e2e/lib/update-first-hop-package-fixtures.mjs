@@ -73,7 +73,7 @@ export function markFutureUpdateFixture(packageRoot, sequence = 0) {
   const buildInfo = readJson(paths.buildInfo);
   packageJson.version = version;
   buildInfo.version = version;
-  buildInfo.buildId = `${version}-${buildInfo.commit}-future-fixture`;
+  // The unchanged compiled UI still carries the prepared artifact's opaque build ID.
   writeJson(paths.packageJson, packageJson);
   writeJson(paths.buildInfo, buildInfo);
 }

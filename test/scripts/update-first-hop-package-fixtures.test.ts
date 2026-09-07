@@ -11,6 +11,7 @@ import {
   packFutureUpdateFixture,
   removeLegacyUpdateCompatChunks,
 } from "../../scripts/e2e/lib/update-first-hop-package-fixtures.mjs";
+import { inspectControlUiRootAssets } from "../../src/infra/control-ui-assets.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -72,7 +73,7 @@ describe("first-hop package fixtures", () => {
     expect(packageJson.version).toBe(FUTURE_FIXTURE_VERSION);
     expect(packageJson.dependencies).toEqual({ "@openclaw/ai": "2026.8.1" });
     expect(buildInfo.version).toBe(FUTURE_FIXTURE_VERSION);
-    expect(buildInfo.buildId).toContain("future-fixture");
+    expect(buildInfo.buildId).toBe("old-build");
     const inventory = JSON.parse(
       fs.readFileSync(path.join(root, "dist", "postinstall-inventory.json"), "utf8"),
     ) as string[];
@@ -85,6 +86,16 @@ describe("first-hop package fixtures", () => {
   it("packs distinct self-update targets without changing the candidate artifact", () => {
     const root = tempDirs.make("openclaw-same-schema-fixtures-");
     fs.cpSync(makePackageFixture(), path.join(root, "package"), { recursive: true });
+    const uiFiles = {
+      "index.html": `<html data-openclaw-control-ui-build-id="old-build-${"a".repeat(64)}"><script src="./assets/startup.js"></script></html>`,
+      "assets/startup.js": 'globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO = { buildId: "old-build" };',
+      "sw.js": 'const EMBEDDED_CACHE_VERSION = "old-build";',
+    };
+    for (const [relative, contents] of Object.entries(uiFiles)) {
+      const file = path.join(root, "package", "dist", "control-ui", relative);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, contents);
+    }
     const candidate = path.join(root, "candidate.tgz");
     execFileSync("tar", ["-czf", candidate, "-C", root, "package"]);
     const original = fs.readFileSync(candidate);
@@ -100,6 +111,20 @@ describe("first-hop package fixtures", () => {
         execFileSync("tar", ["-xOf", output, "package/dist/index.js"], { encoding: "utf8" }),
       ).toBe("export {};\n");
       expect(receipt.sourceVersion).toBe("2026.8.1");
+      const unpacked = path.join(root, `unpacked-${sequence}`);
+      fs.mkdirSync(unpacked);
+      execFileSync("tar", ["-xzf", output, "-C", unpacked]);
+      const buildInfo = JSON.parse(
+        fs.readFileSync(path.join(unpacked, "package", "dist", "build-info.json"), "utf8"),
+      );
+      expect(buildInfo.version).toBe(receipt.targetVersion);
+      const uiRoot = path.join(unpacked, "package", "dist", "control-ui");
+      expect(inspectControlUiRootAssets(uiRoot, buildInfo.buildId)).toMatchObject({
+        kind: "ready",
+      });
+      for (const [relative, contents] of Object.entries(uiFiles)) {
+        expect(fs.readFileSync(path.join(uiRoot, relative), "utf8")).toBe(contents);
+      }
       return receipt;
     });
     expect(receipts.map((receipt) => receipt.targetVersion)).toEqual([
