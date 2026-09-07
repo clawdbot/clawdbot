@@ -41,6 +41,17 @@ import type {
   ThinkingLevelChangeEntry,
 } from "./session-manager-types.js";
 
+function isSqliteTranscriptMutationConflict(error: unknown): boolean {
+  let current = error;
+  for (let depth = 0; depth < 3 && current instanceof Error; depth += 1) {
+    if (current.name === "SqliteTranscriptMutationConflictError") {
+      return true;
+    }
+    current = current.cause;
+  }
+  return false;
+}
+
 export class SessionManagerEntries extends SessionManagerPersistence {
   protected appendEntry<T extends SessionEntry>(
     entry: T,
@@ -100,8 +111,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       const retryableExplicitParentAppend = deliberateBranchAppend || sideBranchAppend;
       if (
         (!activeBranchAppend && !retryableExplicitParentAppend) ||
-        !(error instanceof Error) ||
-        error.name !== "SqliteTranscriptMutationConflictError"
+        !isSqliteTranscriptMutationConflict(error)
       ) {
         throw error;
       }

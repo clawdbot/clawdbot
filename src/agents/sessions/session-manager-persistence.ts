@@ -61,19 +61,20 @@ export class SessionManagerPersistence extends SessionManagerCore {
     predicate: (entry: SessionEntry) => boolean,
     options?: { preserveTrailing?: (entry: SessionEntry) => boolean },
   ): number {
-    let candidatePreservedStart = this.fileEntries.length;
-    while (candidatePreservedStart > 1) {
-      const entry = this.fileEntries[candidatePreservedStart - 1];
-      if (!isIndexedSessionEntry(entry) || !options?.preserveTrailing?.(entry)) {
+    const activeBranch = this.getBranch();
+    let candidatePreservedStart = activeBranch.length;
+    while (candidatePreservedStart > 0) {
+      const entry = activeBranch[candidatePreservedStart - 1];
+      if (!entry || !options?.preserveTrailing?.(entry)) {
         break;
       }
       candidatePreservedStart -= 1;
     }
     const removableEntryIds = new Set<string>();
     let candidateRemoveStart = candidatePreservedStart;
-    while (candidateRemoveStart > 1) {
-      const entry = this.fileEntries[candidateRemoveStart - 1];
-      if (!isIndexedSessionEntry(entry) || !predicate(entry)) {
+    while (candidateRemoveStart > 0) {
+      const entry = activeBranch[candidateRemoveStart - 1];
+      if (!entry || !predicate(entry)) {
         break;
       }
       removableEntryIds.add(entry.id);
@@ -84,7 +85,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
     }
     if (
       this.boundedContextIncomplete &&
-      candidateRemoveStart === 1 &&
+      candidateRemoveStart === 0 &&
       this.persistenceTarget &&
       this.persistedSuffixStartSeq !== undefined
     ) {
@@ -112,7 +113,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
         );
       }
     }
-    const candidate = this.fileEntries[candidateRemoveStart];
+    const candidate = activeBranch[candidateRemoveStart];
     const candidateSeq =
       this.persistenceTarget && isIndexedSessionEntry(candidate)
         ? readTranscriptIdentityByEventId(
@@ -197,16 +198,15 @@ export class SessionManagerPersistence extends SessionManagerCore {
       preservedStart -= 1;
     }
 
-    let removeStart = preservedStart;
-    while (removeStart > 1) {
-      const entry = prepared.fileEntries[removeStart - 1];
-      if (!isIndexedSessionEntry(entry) || !removableEntryIds.has(entry.id)) {
-        break;
+    const removableIndexes: number[] = [];
+    for (let index = 1; index < prepared.fileEntries.length; index += 1) {
+      const entry = prepared.fileEntries[index];
+      if (isIndexedSessionEntry(entry) && removableEntryIds.has(entry.id)) {
+        removableIndexes.push(index);
       }
-      removeStart -= 1;
     }
-    if (removeStart === preservedStart) {
-      return 0;
+    if (removableIndexes.length !== removableEntryIds.size) {
+      throw new Error(`SQLite session changed before trimming ${this.sessionId}`);
     }
 
     const shiftOpaqueIndexesAfterRemoval = (start: number, count: number): void => {
@@ -215,31 +215,38 @@ export class SessionManagerPersistence extends SessionManagerCore {
         opaqueEntry.index -= removedBeforeOpaque;
       }
     };
-    const removedCount = preservedStart - removeStart;
+    const removeStart = removableIndexes[0];
+    if (removeStart === undefined) {
+      return 0;
+    }
     const localPersistedPrefixLength =
       removeStart + prepared.opaqueFileEntries.filter((entry) => entry.index < removeStart).length;
     const preparedSuffixOffset = retainedContextPrefix.length;
     const persistedPrefixLength = useFullTranscriptFallback
       ? 0
       : (persistedSuffixStartSeq ?? Math.max(0, localPersistedPrefixLength - preparedSuffixOffset));
-    shiftOpaqueIndexesAfterRemoval(removeStart, removedCount);
-    const removedEntries = prepared.fileEntries.splice(removeStart, removedCount) as SessionEntry[];
+    const removedEntries = removableIndexes.map(
+      (index) => prepared.fileEntries[index] as SessionEntry,
+    );
     const removedParentById = new Map(
       removedEntries.map((entry) => [entry.id, entry.parentId] as const),
     );
-    for (let index = removeStart; index < prepared.fileEntries.length;) {
+    for (let index = prepared.fileEntries.length - 1; index >= removeStart; index -= 1) {
       const entry = prepared.fileEntries[index];
-      if (
-        isIndexedSessionEntry(entry) &&
-        entry.type === "label" &&
-        removedParentById.has(entry.targetId)
-      ) {
-        removedParentById.set(entry.id, entry.parentId);
-        shiftOpaqueIndexesAfterRemoval(index, 1);
-        prepared.fileEntries.splice(index, 1);
+      if (!isIndexedSessionEntry(entry)) {
         continue;
       }
-      index += 1;
+      const removeEntry =
+        removableEntryIds.has(entry.id) ||
+        (entry.type === "label" && removedParentById.has(entry.targetId));
+      if (!removeEntry) {
+        continue;
+      }
+      if (entry.type === "label") {
+        removedParentById.set(entry.id, entry.parentId);
+      }
+      shiftOpaqueIndexesAfterRemoval(index, 1);
+      prepared.fileEntries.splice(index, 1);
     }
 
     const resolveRetainedParentId = (parentId: string | null): string | null => {

@@ -205,6 +205,73 @@ describe("SessionManager persistence compatibility", () => {
     });
   });
 
+  it("removes an active tail followed by a later inactive raw row", async () => {
+    const dir = tempDirs.make("openclaw-session-manager-later-inactive-row-");
+    const scope = {
+      agentId: "main",
+      sessionId: "later-inactive-row-session",
+      sessionKey: "agent:main:later-inactive-row-session",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    expect(
+      replaceTranscriptEventsSync(scope, [
+        {
+          type: "session",
+          version: 3,
+          id: scope.sessionId,
+          timestamp: new Date(0).toISOString(),
+          cwd: dir,
+        },
+        {
+          type: "message",
+          id: "root",
+          parentId: null,
+          timestamp: new Date(1).toISOString(),
+          message: { role: "user", content: "root" },
+        },
+        {
+          type: "message",
+          id: "active",
+          parentId: "root",
+          timestamp: new Date(2).toISOString(),
+          message: buildAssistantMessage("active"),
+        },
+        {
+          type: "message",
+          id: "inactive",
+          parentId: "root",
+          timestamp: new Date(3).toISOString(),
+          appendMode: "side",
+          message: buildAssistantMessage("inactive"),
+        },
+        {
+          type: "leaf",
+          id: "active-leaf",
+          parentId: "inactive",
+          timestamp: new Date(4).toISOString(),
+          targetId: "active",
+          appendParentId: "active",
+        },
+      ]),
+    ).toBe(true);
+    await waitForSessionTranscriptIndexReconcile({
+      agentId: scope.agentId,
+      path: path.join(dir, "openclaw-agent.sqlite"),
+    });
+
+    const manager = SessionManager.open(scope, dir);
+    expect(manager.removeTrailingEntries((entry) => entry.id === "active")).toBe(1);
+
+    const events = await loadTranscriptEvents(scope);
+    expect(events).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: "active" })]));
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "inactive", parentId: "root", appendMode: "side" }),
+      ]),
+    );
+  });
+
   it("preserves and rebases trailing metadata, labels, and leaf controls", async () => {
     const dir = tempDirs.make("openclaw-session-manager-controls-");
     const scope = {
