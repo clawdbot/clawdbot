@@ -1105,7 +1105,7 @@ extensions/slack/src/blocks-render.ts	1
 extensions/slack/src/channel-actions.ts	1
 extensions/slack/src/channel-type.ts	1
 extensions/slack/src/channel.ts	7
-extensions/slack/src/client-delivery.ts	5
+extensions/slack/src/client-delivery.ts	4
 extensions/slack/src/client-options.ts	5
 extensions/slack/src/directory-live.ts	2
 extensions/slack/src/doctor.ts	1
