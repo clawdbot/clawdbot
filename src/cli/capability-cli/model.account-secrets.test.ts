@@ -85,7 +85,7 @@ describe("local model run account secret activation", () => {
     vi.clearAllMocks();
   });
 
-  it("activates a selected-agent auth snapshot before preparing model auth", async () => {
+  it("activates an isolated selected-agent auth snapshot before preparing model auth", async () => {
     const capability = new Command();
     registerModelCapabilityCommands(capability);
 
@@ -98,6 +98,7 @@ describe("local model run account secret activation", () => {
       config: mocks.cfg,
       agentDirs: ["/tmp/agent-ops"],
       includeConfigRefs: false,
+      allowUnavailableSecretOwners: true,
     });
     expect(mocks.activateSecretsRuntimeSnapshot).toHaveBeenCalledWith(mocks.snapshot);
     expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledTimes(1);
