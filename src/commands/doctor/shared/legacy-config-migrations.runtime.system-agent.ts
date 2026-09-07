@@ -51,13 +51,17 @@ function resolveMissingLegacySystemAgent(raw: Record<string, unknown>) {
   return { agentId: selected.id, heartbeatUnresolved };
 }
 
-// Missing optional ownership is repairable by Doctor, but must not invalidate runtime reads.
-export const LEGACY_SYSTEM_AGENT_OWNER_RULE: LegacyConfigRule = {
-  path: ["agents"],
-  message:
-    'Legacy ambient operations have no system-agent owner; run "openclaw doctor --fix" to set agents.defaults.systemAgent.agentId from the default agent.',
-  match: (_value, root) => resolveMissingLegacySystemAgent(root) !== undefined,
-};
+// Missing optional ownership is Doctor advice, not a runtime validation issue.
+export function findLegacySystemAgentOwnerIssue(raw: unknown) {
+  const root = getRecord(raw);
+  return root && resolveMissingLegacySystemAgent(root)
+    ? {
+        path: "agents",
+        message:
+          'Legacy ambient operations have no system-agent owner; run "openclaw doctor --fix" to set agents.defaults.systemAgent.agentId from the default agent.',
+      }
+    : undefined;
+}
 
 const LEGACY_SYSTEM_AGENT_CONFIG_RULE: LegacyConfigRule = {
   path: ["crestodian"],
@@ -81,7 +85,19 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SYSTEM_AGENT: LegacyConfigMigratio
   defineLegacyConfigMigration({
     id: "runtime.legacy-system-agent-owner",
     describe: "Restore the legacy default agent for ambient operations",
-    apply: (raw, changes) => {
+    apply: (raw, changes, context) => {
+      if (context?.sourceConfigBeforeMigrations !== undefined) {
+        const sourceAgents = getRecord(getRecord(context.sourceConfigBeforeMigrations)?.agents);
+        const sourceRoster = sourceAgents?.entries ?? sourceAgents?.list;
+        // The reader synthesizes main for an absent/empty roster; that is not a legacy owner.
+        if (
+          !sourceRoster ||
+          typeof sourceRoster !== "object" ||
+          Object.keys(sourceRoster).length === 0
+        ) {
+          return;
+        }
+      }
       const owner = resolveMissingLegacySystemAgent(raw);
       if (!owner) {
         return;

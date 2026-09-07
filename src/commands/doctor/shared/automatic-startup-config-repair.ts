@@ -65,6 +65,7 @@ export function planAutomaticConfigRepair(
   const { next: config, changes } = applyLegacyDoctorMigrations(snapshot.sourceConfig, {
     authoredRaw: snapshot.parsed,
     resolvedRaw: snapshot.sourceConfig,
+    sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
   });
   if (
     !config ||
@@ -94,7 +95,11 @@ function planStartupConfigRepairPreview(
 
   const { next: config, changes } = applyLegacyDoctorMigrations(
     snapshot.sourceConfig,
-    { authoredRaw: snapshot.parsed, resolvedRaw: snapshot.sourceConfig },
+    {
+      authoredRaw: snapshot.parsed,
+      resolvedRaw: snapshot.sourceConfig,
+      sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
+    },
     { pluginContracts: false },
   );
   if (

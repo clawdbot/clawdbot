@@ -15,6 +15,8 @@ export type LegacyConfigMigrationContext = {
   authoredRaw: unknown;
   /** Configuration after include and environment resolution. */
   resolvedRaw: unknown;
+  /** Resolved source before read-time roster/default normalization, when available. */
+  sourceConfigBeforeMigrations?: unknown;
 };
 
 type LegacyConfigMigration = {

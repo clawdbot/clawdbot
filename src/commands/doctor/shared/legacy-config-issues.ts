@@ -14,7 +14,7 @@ import {
 } from "../../../plugins/doctor-contract-registry.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
-import { LEGACY_SYSTEM_AGENT_OWNER_RULE } from "./legacy-config-migrations.runtime.system-agent.js";
+import { findLegacySystemAgentOwnerIssue } from "./legacy-config-migrations.runtime.system-agent.js";
 
 function collectConfiguredChannelIds(raw: unknown): ReadonlySet<string> {
   return new Set(listDoctorConfiguredChannelIds(raw, { configEntryPolicy: "raw" }));
@@ -44,7 +44,6 @@ export function findDoctorLegacyConfigIssues(
     raw,
     sourceRaw,
     [
-      LEGACY_SYSTEM_AGENT_OWNER_RULE,
       ...collectChannelLegacyConfigRules(raw, touchedPaths),
       ...collectPluginLegacyConfigRules(raw, touchedPaths),
     ],
@@ -63,6 +62,12 @@ export function addDoctorLegacyIssues(
   const collect = () => {
     const sourceRaw = snapshot.parsed ?? resolvedRaw;
     const legacyIssues = findDoctorLegacyConfigIssues(resolvedRaw, sourceRaw);
+    const ownerIssue = findLegacySystemAgentOwnerIssue(
+      snapshot.sourceConfigBeforeMigrations ?? resolvedRaw,
+    );
+    if (ownerIssue) {
+      legacyIssues.push(ownerIssue);
+    }
     return legacyIssues.length === 0 ? snapshot : { ...snapshot, legacyIssues };
   };
   return pluginMetadataSnapshot

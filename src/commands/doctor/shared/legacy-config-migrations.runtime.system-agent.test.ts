@@ -9,7 +9,6 @@ import type {
 } from "../../../config/types.js";
 import { resolveHeartbeatAgents } from "../../../infra/heartbeat-config.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
-import { findDoctorLegacyConfigIssues } from "./legacy-config-issues.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_SYSTEM_AGENT } from "./legacy-config-migrations.runtime.system-agent.js";
 
@@ -61,13 +60,6 @@ describe("legacy ambient owner migration", () => {
       expect(findLegacyConfigIssues(raw)).not.toContainEqual(
         expect.objectContaining({ path: "agents" }),
       );
-      expect(findDoctorLegacyConfigIssues(raw)).toContainEqual(
-        expect.objectContaining({
-          path: "agents",
-          message: expect.stringContaining("systemAgent.agentId"),
-        }),
-      );
-
       const result = migrateLegacyConfig(raw);
       expect(result.config).not.toBeNull();
       const migrated = result.config!;

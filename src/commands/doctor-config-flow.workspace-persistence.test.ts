@@ -222,7 +222,8 @@ describe("Doctor workspace persistence", () => {
             expect(saved.valid).toBe(true);
             expect(saved.config.agents?.ownership).toBe("explicit");
             expect(saved.config.agents?.entries?.main?.workspace).toBe(workspace);
-            expect(saved.config.agents?.defaults?.systemAgent).toBeUndefined();
+            expect(saved.config.agents?.defaults?.systemAgent).toEqual({ agentId: "main" });
+            expect(saved.config.agents?.defaults?.heartbeat).toEqual({ agentId: "main" });
             expect(saved.config.bindings).toBeUndefined();
             expect(resolveAgentWorkspaceDir(saved.config, "main")).toBe(workspace);
             for (const [name, content] of Object.entries(originals)) {
