@@ -14,7 +14,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const owner = resolve("scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh");
 
-function fixture(customPaths = true, registry?: string) {
+function fixture(customPaths = true, registry?: string, managerSetup = "") {
   const home = tempDirs.make("survivor-manager-");
   const artifacts = join(home, customPaths ? "artifacts ' \" $ `" : "bin");
   mkdirSync(artifacts, { recursive: true });
@@ -45,7 +45,7 @@ function fixture(customPaths = true, registry?: string) {
         timeout: 40_000,
       },
     );
-  const installed = shell("install_update_restart_systemctl_shim");
+  const installed = shell(`${managerSetup}\ninstall_update_restart_systemctl_shim`);
   expect(installed.status, installed.stderr).toBe(0);
   const systemctl = (...args: string[]) =>
     spawnSync(join(home, "bin/systemctl"), ["--user", ...args], {
@@ -59,6 +59,36 @@ function fixture(customPaths = true, registry?: string) {
 }
 
 describe.skipIf(process.platform === "win32")("survivor manager fixture", () => {
+  it("keeps self-upgrade target channels enabled despite historical source suppression", async () => {
+    const lane = readFileSync(
+      resolve("scripts/e2e/lib/upgrade-survivor/update-run-package-self-upgrade.sh"),
+      "utf8",
+    );
+    const setup = lane.slice(lane.indexOf("export CI=true"), lane.indexOf("SOURCE_VERSION="));
+    const { home, systemctl, unit } = fixture(true, undefined, setup);
+    const record = join(home, "target-env.json");
+    const program = join(home, "target.mjs");
+    writeFileSync(
+      program,
+      `import fs from "node:fs";
+fs.writeFileSync(${JSON.stringify(record)}, JSON.stringify({providers:process.env.OPENCLAW_SKIP_PROVIDERS ?? null, channels:process.env.OPENCLAW_SKIP_CHANNELS ?? null}));
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+    );
+    writeFileSync(
+      unit,
+      buildSystemdUnit({ programArguments: [process.execPath, program], workingDirectory: home }),
+    );
+    try {
+      expect(systemctl("start", "openclaw-gateway.service").status).toBe(0);
+      await expect.poll(() => existsSync(record)).toBe(true);
+      expect(JSON.parse(readFileSync(record, "utf8"))).toEqual({ providers: null, channels: null });
+    } finally {
+      expect(systemctl("stop", "openclaw-gateway.service").status).toBe(0);
+    }
+  });
+
   it("distinguishes confirmed absence from unsupported inspection and reads the generated service", async () => {
     const { home, env, systemctl, unit } = fixture();
     // First install must reach the same effective reader used by the guarded writer.

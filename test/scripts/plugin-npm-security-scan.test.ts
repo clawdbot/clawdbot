@@ -174,6 +174,25 @@ function frozenReviewedFindings(): string[] {
   ];
 }
 
+// Recorded by the inert package scan for candidate 292991c9d814 in
+// https://github.com/openclaw/openclaw/actions/runs/33807502201/job/100821685649.
+function frozen2026_7_33ReviewedFindings(): string[] {
+  return [
+    ...frozenReviewedFindings(),
+    ...Array.from(
+      { length: 3 },
+      () => "@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.test.ts",
+    ),
+    "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server.http.test.ts",
+    "@openclaw/google-meet:dangerous-exec:src/realtime.process.test.ts",
+    "@openclaw/openshell-sandbox:dangerous-exec:src/backend.e2e.test.ts",
+    ...Array.from(
+      { length: 2 },
+      () => "@openclaw/openshell-sandbox:dangerous-exec:src/openshell-core.test.ts",
+    ),
+  ];
+}
+
 function syntheticResultsForFindings(findings: readonly string[]): ScanPackageResult[] {
   const findingsByPackage = new Map<string, string[]>();
   for (const finding of findings) {
@@ -224,6 +243,9 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     expect(resolveReviewedSourceLayout(frozenLegacy, "extended-stable/2026.6.33")?.id).toBe(
       "extended-stable-2026.6.33",
     );
+    expect(resolveReviewedSourceLayout(frozenLegacy, "extended-stable/2026.7.33")?.id).toBe(
+      "extended-stable-2026.7.33",
+    );
     expect(
       resolveReviewedSourceLayout(frozenLegacy.slice(0, -1), "extended-stable/2026.6.33"),
     ).toBeUndefined();
@@ -261,6 +283,44 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     ).toMatchObject({ layout: null, status: "fail" });
   });
 
+  it("matches the recorded 2026.7.33 inert package scan inventory exactly", () => {
+    const packageResults = syntheticResultsForFindings(frozen2026_7_33ReviewedFindings()).map(
+      (result) => ({
+        ...result,
+        expectedReviewedCriticalFindings: result.reviewedCriticalFindings.filter((finding) =>
+          finding.includes(".test.ts"),
+        ),
+      }),
+    );
+    const frozen = buildPluginNpmSecurityScanReport({
+      candidateSha: CANDIDATE_SHA,
+      packageResults,
+      targetContextRef: "extended-stable/2026.7.33",
+      toolingSha: TOOLING_SHA,
+    });
+
+    expect(frozen).toMatchObject({
+      candidateSha: CANDIDATE_SHA,
+      errors: [],
+      layout: "extended-stable-2026.7.33",
+      status: "pass",
+    });
+    const legacyPackageResults = packageResults.map((result) => ({
+      ...result,
+      expectedReviewedCriticalFindings:
+        result.packageName === "@openclaw/acpx"
+          ? result.expectedReviewedCriticalFindings.slice(0, 1)
+          : result.expectedReviewedCriticalFindings,
+    }));
+    expect(
+      buildPluginNpmSecurityScanReport({
+        candidateSha: CANDIDATE_SHA,
+        packageResults: legacyPackageResults,
+        targetContextRef: "extended-stable/2026.6.33",
+        toolingSha: TOOLING_SHA,
+      }).status,
+    ).toBe("fail");
+  });
   it.each([0, 1, 2])(
     "preserves frozen doctor counts while shrinking current policy: %s",
     async (count) => {

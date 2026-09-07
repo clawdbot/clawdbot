@@ -12,6 +12,7 @@ import {
 } from "../src/shared/worker-bundle-hash.js";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { readGatewayRunChunks } from "./lib/gateway-run-chunk-metadata.mts";
+import { isUnstagedWorkerDeployRuntimeArtifact } from "./lib/worker-deploy-build-plugin.mts";
 
 const DEFAULT_ENTRYPOINTS = ["dist/entry.js", "dist/cli/run-main.js"];
 const DEFAULT_NATIVE_HOOK_RELAY_ENTRYPOINT = "dist/native-hook-relay/entry.js";
@@ -483,7 +484,7 @@ export function collectWorkerDeployArtifactErrors(params: CliBootstrapCheckParam
         );
       } else if (entry.name === "node_modules") {
         errors.push("Worker deploy artifact must not contain materialized dependencies.");
-      } else if (/\.(?:mjs|node|wasm)$/u.test(entry.name)) {
+      } else if (isUnstagedWorkerDeployRuntimeArtifact(entry.name, artifactNames)) {
         errors.push(
           `Worker deploy artifact emits unstaged runtime asset ${path.relative(
             rootDir,

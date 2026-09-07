@@ -3,7 +3,10 @@ import { IMAGE_BLOCK_TOKENS } from "openclaw/plugin-sdk/agent-core";
  * Projects OpenClaw context-engine assemblies into Codex prompt text while
  * preserving safety boundaries and redacting tool payloads.
  */
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  isOpenClawRuntimeContextCustomMessage,
+  type AgentMessage,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ImageContent } from "openclaw/plugin-sdk/llm";
 import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -60,6 +63,15 @@ export function neutralizeCodexExplicitMentionSigils(text: string): string {
     .replace(/\[@(?=[A-Za-z0-9_:-]+\]\()/gu, "[＠");
 }
 
+/** Hidden durable notes are context; transient runtime carriers are current-turn only. */
+export function isCodexDurableCustomMessage(message: AgentMessage): boolean {
+  return (
+    message.role === "custom" &&
+    message.excludeFromContext !== true &&
+    !isOpenClawRuntimeContextCustomMessage(message)
+  );
+}
+
 /** Projects assembled OpenClaw context-engine messages into Codex prompt inputs. */
 export async function projectContextEngineAssemblyForCodex(params: {
   assembledMessages: AgentMessage[];
@@ -73,13 +85,18 @@ export async function projectContextEngineAssemblyForCodex(params: {
 }): Promise<CodexContextProjection> {
   const prompt = params.prompt.trim();
   const maxRenderedContextChars = normalizeRenderedContextMaxChars(params.maxRenderedContextChars);
-  const context = await renderMessagesForCodexContext(params.assembledMessages, {
-    maxTextPartChars: resolveTextPartMaxChars(maxRenderedContextChars),
-    toolPayloadMode: params.toolPayloadMode ?? "elide",
-    maxRenderedContextChars,
-    prepareFileContext: params.prepareFileContext,
-    currentUserTurnIdempotencyKey: params.currentUserTurnIdempotencyKey,
-  });
+  const context = await renderMessagesForCodexContext(
+    params.assembledMessages.filter(
+      (message) => message.role !== "custom" || isCodexDurableCustomMessage(message),
+    ),
+    {
+      maxTextPartChars: resolveTextPartMaxChars(maxRenderedContextChars),
+      toolPayloadMode: params.toolPayloadMode ?? "elide",
+      maxRenderedContextChars,
+      prepareFileContext: params.prepareFileContext,
+      currentUserTurnIdempotencyKey: params.currentUserTurnIdempotencyKey,
+    },
+  );
   const boundedContext = context.text;
   const promptPrefix = boundedContext
     ? [CONTEXT_HEADER, CONTEXT_SAFETY_NOTE, "", CONTEXT_OPEN].join("\n") + "\n"

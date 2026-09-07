@@ -172,9 +172,9 @@ function resolveVisibleActiveWaitMs(operation: ReplyOperation | undefined): numb
 }
 
 type ReplyTurnAdmissionParams = {
+  agentId?: string;
   sessionKey: string;
   sessionId: string;
-  agentId?: string;
   expectedSessionId?: string;
   expectedActiveOperation?: ReplyOperation;
   storePath?: string;
@@ -323,6 +323,7 @@ export async function admitReplyTurn(
               assertAllowed: () => {
                 assertDatabaseOwnerCurrent();
                 const current = loadSessionEntryWithDatabase({
+                  agentId: params.agentId,
                   storePath,
                   sessionKey: params.sessionKey,
                   readConsistency: "latest",
@@ -430,7 +431,7 @@ export async function admitReplyTurn(
             const ownerClaim = await claimMainSessionRecoveryOwner({
               lifecycleGeneration: getAgentEventLifecycleGeneration(),
               sessionId,
-              target: { sessionKey: params.sessionKey, storePath },
+              target: { agentId: params.agentId, sessionKey: params.sessionKey, storePath },
             });
             if (ownerClaim.kind === "invalidated") {
               rejectLifecycleInvalidatedWork({

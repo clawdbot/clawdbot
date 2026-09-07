@@ -19,7 +19,6 @@ import {
 } from "./browser/control-auth.js";
 import { listenBrowserHttpServer } from "./browser/http-listen.js";
 import { registerBrowserRoutes } from "./browser/routes/index.js";
-import type { BrowserRouteRegistrar } from "./browser/routes/types.js";
 import type { BrowserServerState } from "./browser/server-context.js";
 import {
   installBrowserAuthMiddleware,
@@ -82,7 +81,7 @@ async function startBrowserControlServerUnlocked(): Promise<BrowserServerState |
   installBrowserAuthMiddleware(app, browserAuth);
 
   const ctx = createBrowserControlContext();
-  registerBrowserRoutes(app as unknown as BrowserRouteRegistrar, ctx);
+  registerBrowserRoutes(app, ctx);
 
   const port = resolved.controlPort;
   const server = await listenBrowserHttpServer(app, port, "127.0.0.1").catch((err: unknown) => {

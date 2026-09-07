@@ -1,10 +1,9 @@
 // Synthetic canonical admission ordering and lifecycle proof; checks use real native SQLite.
+import { fork } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { Worker } from "node:worker_threads";
-import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sqlite from "../infra/node-sqlite.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
@@ -206,14 +205,12 @@ describe("physical-open admission ordering", () => {
 });
 
 describe("asynchronous canonical admission", () => {
-  it("observes an independent WAL commit between the Worker's integrity and FK checks", async () => {
+  it("observes an independent WAL commit between the child's integrity and FK checks", async () => {
     const { pathname, writer } = seed();
-    const control = new SharedArrayBuffer(4);
-    const worker = new Worker(
-      new URL(
-        `data:text/javascript,${encodeURIComponent(`
+    expect(writer.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
+    const commitBetweenChecks = `
+        import { execFileSync } from "node:child_process";
         import { DatabaseSync } from "node:sqlite";
-        import { parentPort, workerData } from "node:worker_threads";
         const prepare = DatabaseSync.prototype.prepare;
         DatabaseSync.prototype.prepare = function (sql) {
           const statement = prepare.call(this, sql);
@@ -221,29 +218,37 @@ describe("asynchronous canonical admission", () => {
             const all = statement.all.bind(statement);
             statement.all = () => {
               const rows = all();
-              parentPort.postMessage({ phase: "after-integrity" });
-              if (Atomics.wait(new Int32Array(workerData.control), 0, 0, 30000) === "timed-out") {
-                throw new Error("fixture did not commit between integrity and FK checks");
-              }
+              // A separate process commits before the real FK check begins.
+              execFileSync(process.execPath, ["-e", ${JSON.stringify(`
+                const { DatabaseSync } = require("node:sqlite");
+                const writer = new DatabaseSync(process.argv[1]);
+                writer.exec("PRAGMA foreign_keys=OFF; DELETE FROM memory_index_chunks WHERE id='synthetic-parent';");
+                writer.close();
+              `)}, process.argv[2]], { timeout: 5000 });
+              process.send({ phase: "external-commit" });
               return rows;
             };
           }
           return statement;
         };
-        await import(workerData.entry);
-      `)}`,
-      ),
+      `;
+    const worker = fork(
+      new URL("../infra/sqlite-integrity.worker.ts", import.meta.url),
+      [pathname],
       {
-        workerData: {
-          pathname,
-          identity: integrityWorker.readSqliteIntegrityFileIdentity(pathname),
-          busyTimeoutMs: 5000,
-          control,
-          entry: new URL("../infra/sqlite-integrity.worker.ts", import.meta.url).href,
-        },
-        execArgv: ["--import", "tsx"],
+        execArgv: [
+          "--import",
+          "tsx",
+          "--import",
+          `data:text/javascript,${encodeURIComponent(commitBetweenChecks)}`,
+        ],
+        serialization: "advanced",
+        stdio: ["ignore", "ignore", "ignore", "ipc"],
       },
     );
+    const closed = new Promise<void>((resolve) => {
+      worker.once("close", () => resolve());
+    });
     let committed = false;
     const completed = new Promise<integrityWorker.SqliteIntegrityWorkerResult>(
       (resolve, reject) => {
@@ -252,30 +257,32 @@ describe("asynchronous canonical admission", () => {
           "message",
           (message: integrityWorker.SqliteIntegrityWorkerResult | { phase: string }) => {
             if ("phase" in message) {
-              try {
-                // The independent fixture writer disables FK enforcement deliberately;
-                // this pins check visibility, not an ordinary writer corruption claim.
-                corruptForeignKey(writer);
-                committed = true;
-              } catch (error) {
-                reject(toStringifiedError(error));
-              } finally {
-                Atomics.store(new Int32Array(control), 0, 1);
-                Atomics.notify(new Int32Array(control), 0);
-              }
+              committed = message.phase === "external-commit";
             } else {
               result = message;
             }
           },
         );
         worker.once("error", reject);
-        worker.once("exit", (code) => {
+        worker.once("close", (code) => {
           if (code === 0 && result) {
             resolve(result);
           } else {
             reject(new Error(`integrity fixture exited ${code} without its result`));
           }
         });
+        worker.send(
+          {
+            pathname,
+            identity: integrityWorker.readSqliteIntegrityFileIdentity(pathname),
+            busyTimeoutMs: 5000,
+          } satisfies integrityWorker.SqliteIntegrityWorkerInput,
+          (error) => {
+            if (error) {
+              reject(error);
+            }
+          },
+        );
       },
     );
     try {
@@ -285,7 +292,10 @@ describe("asynchronous canonical admission", () => {
       });
       expect(committed).toBe(true);
     } finally {
-      await worker.terminate();
+      if (worker.exitCode === null && worker.signalCode === null) {
+        worker.kill("SIGKILL");
+      }
+      await closed;
     }
   });
 

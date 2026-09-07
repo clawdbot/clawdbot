@@ -37,6 +37,11 @@ import {
 import type { SkillInstallOption, SkillStatusEntry, SkillStatusReport } from "./status.types.js";
 export type { SkillStatusEntry, SkillStatusReport } from "./status.types.js";
 
+/** Missing prerequisites exclude intentional disablement and are independent of agent exposure. */
+export function hasMissingSkillRequirements(skill: SkillStatusEntry): boolean {
+  return !skill.eligible && !skill.disabled && !skill.blockedByAllowlist;
+}
+
 const skillsLogger = createSubsystemLogger("skills");
 let hasWarnedMissingBundledDir = false;
 
