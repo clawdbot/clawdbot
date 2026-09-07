@@ -154,4 +154,66 @@ describe("pnpm image archive consumer", () => {
       hydration.find((step: { run?: string }) => step.run?.includes("install_args=")).run,
     ).toContain("--frozen-lockfile");
   });
+
+  it.each([
+    ["hydrate", true],
+    ["hydrate", false],
+    ["hydrate-github", true],
+    ["hydrate-github", false],
+  ] as const)("restores %s Corepack state in a fresh shell (configured=%s)", (job, configured) => {
+    const workflow = parse(readFileSync(".github/workflows/crabbox-hydrate.yml", "utf8"));
+    const ready = workflow.jobs[job].steps.find(
+      (step: { name?: string }) => step.name === "Mark Crabbox ready",
+    );
+    const home = mkdtempSync(join(tmpdir(), "crabbox-session-"));
+    roots.push(home);
+    const corepackHome = join(
+      home,
+      "corepack cache ' \" $HOME $(touch injected) `touch injected` ;",
+    );
+    mkdirSync(corepackHome);
+    writeFileSync(join(corepackHome, "ready.txt"), "prepared cache fixture\n");
+    const env = {
+      HOME: home,
+      PATH: "/usr/bin:/bin",
+      CRABBOX_ID: "image-cache",
+      CRABBOX_JOB: job,
+      GITHUB_WORKSPACE: home,
+      GITHUB_RUN_ID: "123",
+    };
+    const marked = spawnSync(
+      "/bin/bash",
+      ["--noprofile", "--norc", "-c", `docker() { :; }\n${ready.run}`],
+      {
+        cwd: home,
+        encoding: "utf8",
+        env: { ...env, ...(configured ? { COREPACK_HOME: corepackHome } : {}) },
+      },
+    );
+    expect(marked.status, marked.stderr).toBe(0);
+    const restored = spawnSync(
+      "/bin/bash",
+      [
+        "--noprofile",
+        "--norc",
+        "-c",
+        `set -euo pipefail
+source "$1"
+if [ "\${COREPACK_HOME+x}" = x ]; then
+  printf '%s\\n' "$COREPACK_HOME"
+  cat "$COREPACK_HOME/ready.txt"
+else
+  printf 'unset\\n'
+fi`,
+        "saved-session",
+        join(home, ".crabbox", "actions", "image-cache.env.sh"),
+      ],
+      { cwd: home, encoding: "utf8", env },
+    );
+    expect(restored.status, restored.stderr).toBe(0);
+    expect(restored.stdout).toBe(
+      configured ? `${corepackHome}\nprepared cache fixture\n` : "unset\n",
+    );
+    expect(existsSync(join(home, "injected"))).toBe(false);
+  });
 });
