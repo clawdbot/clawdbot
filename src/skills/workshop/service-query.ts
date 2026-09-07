@@ -198,7 +198,6 @@ async function reconcilePendingCreateProposal(
         record: current.record,
         reason: "Target skill was created after proposal creation.",
         input: {
-          workspaceDir: workshopDir,
           agentId: options.agentId,
           config: options.config,
           eventActor: { type: "system" },
