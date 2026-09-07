@@ -1,7 +1,10 @@
+import path from "node:path";
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { Agent } from "../../../agent-core/src/agent.js";
 
 type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
@@ -80,6 +83,7 @@ import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 
 const initialHost = getAiTransportHost();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const model = {
   id: "gpt-5.6-luna",
   name: "GPT-5.6 Luna",
@@ -336,6 +340,108 @@ describe("native OpenAI Responses SSE continuation", () => {
       if (transport === "sse" && Array.isArray(input)) {
         expect(input.slice(0, 4)).toEqual(sseState.requests[1]?.input);
       }
+    },
+  );
+
+  it.each(["current", "legacy without reasoning", "legacy without replay", "model", "session"])(
+    "round-trips %s reasoning state through the SQLite session transcript",
+    async (variant) => {
+      const { SessionManager } = await import("../../../../src/agents/sessions/session-manager.js");
+      const { upsertSessionEntryCore } =
+        await import("../../../../src/config/sessions/session-accessor.js");
+      configureAiTransportHost({
+        ...initialHost,
+        plugin: { ...initialHost.plugin, resolveTransportTurnState: () => undefined },
+      });
+      sseState.outcomes.push(
+        sdkCompletion("resp_1", "first answer"),
+        sdkCompletion("resp_2", "second answer"),
+        sdkCompletion("resp_warm", "third answer"),
+        sdkCompletion("resp_reloaded", "third answer"),
+      );
+      const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: false });
+      const messages: Context["messages"] = [userMessage("first question", 1)];
+      messages.push(
+        await run({ messages }, { onPayload }, astra),
+        userMessage("second question", 2),
+      );
+      messages.push(
+        await run({ messages }, { onPayload, reasoningEffort: "high" }, astra),
+        userMessage("third question", 3),
+      );
+      expect(sseState.requests[1]?.input).toContainEqual({
+        type: "configuration_update",
+        reasoning: { effort: "high" },
+      });
+      if (variant.startsWith("legacy")) {
+        for (const message of messages) {
+          if ("openclawResponsesInputReplay" in message) {
+            if (variant === "legacy without replay") {
+              delete message.openclawResponsesInputReplay;
+            } else if (isRecord(message.openclawResponsesInputReplay)) {
+              delete message.openclawResponsesInputReplay.reasoning;
+            }
+          }
+        }
+      }
+      const requestModel = variant === "model" ? model : astra;
+      const options = {
+        onPayload,
+        reasoningEffort: "medium" as const,
+        sessionId: variant === "session" ? "session-2" : "session-1",
+      };
+      // Legacy transcripts have no durable controls; compare their existing cold-request behavior.
+      if (variant !== "current") {
+        cleanupSessionResources();
+      }
+      expect((await run({ messages }, options, requestModel)).stopReason).toBe("stop");
+      const expectedRequest = sseState.requests.at(-1);
+      expect(expectedRequest).toMatchObject({
+        reasoning: { effort: variant === "current" ? "low" : "medium" },
+      });
+      if (variant === "current") {
+        expect(expectedRequest?.input).toEqual([
+          expect.objectContaining({ role: "user" }),
+          expect.objectContaining({ role: "assistant" }),
+          { type: "configuration_update", reasoning: { effort: "high" } },
+          expect.objectContaining({ role: "user" }),
+          expect.objectContaining({ role: "assistant" }),
+          { type: "configuration_update", reasoning: { effort: "medium" } },
+          expect.objectContaining({ role: "user" }),
+        ]);
+      } else {
+        expect(expectedRequest?.input).not.toContainEqual(
+          expect.objectContaining({ type: "configuration_update" }),
+        );
+      }
+
+      const dir = tempDirs.make("openclaw-responses-transcript-");
+      const scope = {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:responses-reasoning",
+        storePath: path.join(dir, "sessions.json"),
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const manager = SessionManager.open(scope, dir);
+      for (const message of messages) {
+        // This append traverses the production transcript redactor and SQLite store.
+        manager.appendMessage(message);
+      }
+      cleanupSessionResources();
+      const reloaded = SessionManager.open(scope, dir).buildSessionContext().messages;
+      expect(reloaded).toEqual(messages);
+      const requestMessages = reloaded.map((message) => {
+        if (message.role !== "user" && message.role !== "assistant") {
+          throw new Error(`Unexpected persisted message role: ${message.role}`);
+        }
+        return message;
+      });
+      expect((await run({ messages: requestMessages }, options, requestModel)).stopReason).toBe(
+        "stop",
+      );
+      expect(sseState.requests.at(-1)).toEqual(expectedRequest);
+      expect(sseState.requests.at(-1)).not.toHaveProperty("previous_response_id");
     },
   );
 
