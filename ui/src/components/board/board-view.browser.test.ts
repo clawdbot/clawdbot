@@ -42,6 +42,21 @@ const source: BoardSnapshot = {
   ],
 };
 
+// Chrome must stay revealed while focus is anywhere inside the cell (menu
+// close restores focus to its trigger), so hiding is proven by moving focus
+// to an outside sink rather than blur(), which leaves focus placement to the
+// platform and flakes on Linux.
+async function focusSink(): Promise<HTMLButtonElement> {
+  const sink = document.createElement("button");
+  sink.type = "button";
+  sink.style.cssText = "position: fixed; right: 0; bottom: 0; z-index: 2147483647";
+  document.body.append(sink);
+  // A prior browser case can leave the real pointer over the next widget.
+  const { page } = await import("vitest/browser");
+  await page.elementLocator(sink).hover();
+  return sink;
+}
+
 async function mount(applyOps = vi.fn(async () => undefined)): Promise<OpenClawBoardView> {
   const view = document.createElement("openclaw-board-view");
   view.snapshot = structuredClone(source);
@@ -53,6 +68,7 @@ async function mount(applyOps = vi.fn(async () => undefined)): Promise<OpenClawB
   await Promise.all(
     [...view.querySelectorAll("openclaw-board-widget-cell")].map((cell) => cell.updateComplete),
   );
+  await focusSink();
   return view;
 }
 
@@ -149,17 +165,6 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     expect(getComputedStyle(handle!).visibility).toBe("hidden");
   });
 
-  // Chrome must stay revealed while focus is anywhere inside the cell (menu
-  // close restores focus to its trigger), so hiding is proven by moving focus
-  // to an outside sink rather than blur(), which leaves focus placement to the
-  // platform and flakes on Linux.
-  function focusSink(): HTMLButtonElement {
-    const sink = document.createElement("button");
-    sink.type = "button";
-    document.body.append(sink);
-    return sink;
-  }
-
   function finishDocumentAnimations(): void {
     for (const animation of document.getAnimations()) {
       animation.finish();
@@ -184,7 +189,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
   it("reveals widget chrome while the widget has focus", async () => {
     const view = await mount();
     view.style.width = "1200px";
-    const sink = focusSink();
+    const sink = await focusSink();
     const widget = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
     const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
 
@@ -282,10 +287,13 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
 
   it("keeps widget chrome visible while its menu is open", async () => {
     const view = await mount();
-    const sink = focusSink();
     const widget = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
     const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
     const menu = widget!.querySelector<HTMLElement & { open: boolean }>(".board-widget__menu");
+    const { page } = await import("vitest/browser");
+    await page.elementLocator(widget!).hover();
+    const sink = await focusSink();
+    expect(widget!.matches(":hover")).toBe(false);
 
     menu!.open = true;
     await vi.waitFor(() => expect(getComputedStyle(bar!).visibility).toBe("visible"));

@@ -1,16 +1,18 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentsListResult } from "../api/types.ts";
+import { fnv1aUtf16 } from "../lib/fnv1a.ts";
 import type { SessionGroupSettings } from "../lib/sessions/custom-groups.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
-import { scheduleBootRecord } from "./boot-record.runtime.ts";
 
-export const BOOT_RECORD_PREFIX = "openclaw.control.bootRecord.v1:";
-export const BOOT_RECORD_MAX_BYTES = 64 * 1024;
+const BOOT_RECORD_PREFIX = "openclaw.control.bootRecord.v1:";
+const BOOT_RECORD_MAX_BYTES = 64 * 1024;
 const BOOT_RECORD_MAX_AGE = 30 * 24 * 60 * 60 * 1000;
-export let bootRecordGeneration = 0;
+let bootRecordGeneration = 0;
 
 export type BootRecord = {
-  version: 1;
+  version: 2;
+  authMethod: string;
+  credential: string;
   savedAt: number;
   scope: string;
   profileId: string | null;
@@ -19,13 +21,32 @@ export type BootRecord = {
   sectionOrder: string[];
 };
 
+function credentialFingerprint(credential: string | null | undefined): string | null {
+  const value = credential?.trim();
+  return value ? fnv1aUtf16(value).toString(16) : null;
+}
+
+export function resolveBootRecordAuth(
+  auth: { method?: string; deviceToken?: string } | undefined,
+  token?: string,
+): Pick<BootRecord, "authMethod" | "credential"> | null {
+  const method = auth?.method;
+  if (method !== "token" && method !== "device-token") {
+    return null;
+  }
+  const credential = credentialFingerprint(method === "token" ? token : auth?.deviceToken);
+  return credential ? { authMethod: method, credential } : null;
+}
+
 function isBootRecord(value: unknown): value is BootRecord {
   if (!isRecord(value) || !isRecord(value.agents)) {
     return false;
   }
   const agents = value.agents;
   return (
-    value.version === 1 &&
+    value.version === 2 &&
+    (value.authMethod === "token" || value.authMethod === "device-token") &&
+    typeof value.credential === "string" &&
     typeof value.savedAt === "number" &&
     Number.isFinite(value.savedAt) &&
     value.savedAt >= 0 &&
@@ -48,7 +69,10 @@ function isBootRecord(value: unknown): value is BootRecord {
   );
 }
 
-export function readBootRecord(scope: string): BootRecord | null {
+export function readBootRecord(
+  scope: string,
+  credentialForMethod: (method: string) => string | null | undefined,
+): BootRecord | null {
   const storage = getSafeLocalStorage();
   const key = BOOT_RECORD_PREFIX + scope;
   try {
@@ -61,6 +85,7 @@ export function readBootRecord(scope: string): BootRecord | null {
       if (
         isBootRecord(record) &&
         record.scope === scope &&
+        record.credential === credentialFingerprint(credentialForMethod(record.authMethod)) &&
         Date.now() - record.savedAt <= BOOT_RECORD_MAX_AGE
       ) {
         return record;
@@ -75,15 +100,15 @@ export function readBootRecord(scope: string): BootRecord | null {
   return null;
 }
 
-export function persistBootRecord(record: BootRecord): void {
-  scheduleBootRecord(record);
-}
-
-export function clearBootRecords(): void {
+export function clearBootRecords(scope?: string): void {
   bootRecordGeneration += 1;
   try {
     const storage = getSafeLocalStorage();
     if (!storage) {
+      return;
+    }
+    if (scope !== undefined) {
+      storage.removeItem(BOOT_RECORD_PREFIX + scope);
       return;
     }
     for (let index = storage.length - 1; index >= 0; index -= 1) {
@@ -93,4 +118,63 @@ export function clearBootRecords(): void {
       }
     }
   } catch {}
+}
+
+let timer: ReturnType<typeof setTimeout> | undefined;
+let pending: { record: BootRecord; generation: number } | undefined;
+
+function flushBootRecord(): void {
+  clearTimeout(timer);
+  timer = undefined;
+  const write = pending;
+  pending = undefined;
+  if (!write || write.generation !== bootRecordGeneration) {
+    return;
+  }
+  const { record } = write;
+  const storage = getSafeLocalStorage();
+  const key = BOOT_RECORD_PREFIX + record.scope;
+  try {
+    const agents = {
+      ...record.agents,
+      agents: record.agents.agents.map((agent) => {
+        const identity = agent.identity ? { ...agent.identity } : undefined;
+        if (identity) {
+          delete identity.avatar;
+          delete identity.avatarUrl;
+        }
+        return { ...agent, identity };
+      }),
+    };
+    const json = JSON.stringify({ ...record, agents });
+    if (new TextEncoder().encode(json).length > BOOT_RECORD_MAX_BYTES) {
+      storage?.removeItem(key);
+    } else {
+      storage?.setItem(key, json);
+    }
+  } catch {
+    try {
+      storage?.removeItem(key);
+    } catch {}
+  }
+}
+
+export function persistBootRecord(record: BootRecord): void {
+  clearTimeout(timer);
+  pending = { record, generation: bootRecordGeneration };
+  timer = setTimeout(flushBootRecord, 500);
+}
+
+if (
+  typeof window !== "undefined" &&
+  typeof window.addEventListener === "function" &&
+  typeof document !== "undefined" &&
+  typeof document.addEventListener === "function"
+) {
+  window.addEventListener("pagehide", flushBootRecord);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      flushBootRecord();
+    }
+  });
 }

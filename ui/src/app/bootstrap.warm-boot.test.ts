@@ -1,12 +1,15 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearCachedBootState } from "../lib/sessions/session-roster-cache.runtime.ts";
 import * as snapshots from "../pages/chat/session-snapshot-invalidation.runtime.ts";
-import { BOOT_RECORD_PREFIX, clearBootRecords, type BootRecord } from "./boot-record.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
+import { clearBootRecords, type BootRecord } from "./boot-record.ts";
 import { bootstrapApplication } from "./bootstrap.ts";
 import * as gatewayStore from "./gateway-store.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
-import { loadSettings } from "./settings.ts";
+import { loadSettings, saveSettings } from "./settings.ts";
+
+const BOOT_RECORD_PREFIX = "openclaw.control.bootRecord.v1:";
 
 vi.mock("../lib/sessions/session-roster-cache.runtime.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/sessions/session-roster-cache.runtime.ts")>()),
@@ -14,10 +17,16 @@ vi.mock("../lib/sessions/session-roster-cache.runtime.ts", async (importOriginal
 }));
 
 describe("warm boot profile validation", () => {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    saveSettings({ ...loadSettings(), token: "test-token" });
+  });
   afterEach(() => {
     clearBootRecords();
     vi.restoreAllMocks();
     vi.clearAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it.each([
@@ -44,7 +53,9 @@ describe("warm boot profile validation", () => {
       window.history.replaceState({}, "", pathname);
       const scope = gatewayCredentialScope(loadSettings().gatewayUrl);
       const record: BootRecord = {
-        version: 1,
+        version: 2,
+        authMethod: "token",
+        credential: "9d17676d",
         scope,
         savedAt: Date.now(),
         profileId: cachedProfileId,
@@ -75,7 +86,15 @@ describe("warm boot profile validation", () => {
       const runtime = bootstrapApplication();
       const publish = (phase: ApplicationGatewaySnapshot["phase"]) => {
         const snapshot = runtime.context.gateway.snapshot;
-        Object.assign(snapshot, { phase, selfUser: profileId === null ? null : { id: profileId } });
+        Object.assign(snapshot, {
+          phase,
+          hello: {
+            type: "hello-ok",
+            protocol: 1,
+            auth: { method: "token", role: "operator", scopes: [] },
+          },
+          selfUser: profileId === null ? null : { id: profileId },
+        });
         for (const listener of listeners) {
           listener(snapshot);
         }

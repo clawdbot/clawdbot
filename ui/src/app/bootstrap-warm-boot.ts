@@ -1,6 +1,8 @@
+import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { clearStoredChatSnapshots } from "../pages/chat/session-snapshot-invalidation.runtime.ts";
 import { markPrewarmedChatSnapshotReady } from "../pages/chat/session-snapshot-prewarm.ts";
-import { clearBootRecords } from "./boot-record.ts";
+import { clearBootRecords, persistBootRecord, resolveBootRecordAuth } from "./boot-record.ts";
+import type { ApplicationContext } from "./context.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 
 export function clearWarmBootState(): void {
@@ -36,4 +38,39 @@ export function subscribeWarmBootConnection(
       clearWarmBootState();
     }
   });
+}
+
+export function subscribeBootRecordPersistence({
+  gateway,
+  agents,
+  sessions,
+}: Pick<ApplicationContext, "gateway" | "agents" | "sessions">): () => void {
+  const persistLiveBootRecord = () => {
+    if (gateway.snapshot.phase !== "connected") {
+      return;
+    }
+    const scope = gatewayCredentialScope(gateway.connection.gatewayUrl);
+    const auth = resolveBootRecordAuth(gateway.snapshot.hello?.auth, gateway.connection.token);
+    if (!auth) {
+      clearBootRecords(scope);
+      return;
+    }
+    const agentsList = agents.state.agentsList;
+    if (agentsList && !agents.state.agentsListCached && sessions.groupsStatus() === "ready") {
+      persistBootRecord({
+        version: 2,
+        ...auth,
+        savedAt: Date.now(),
+        scope,
+        profileId: gateway.snapshot.selfUser?.id ?? null,
+        agents: agentsList,
+        groups: [...sessions.state.groupSettings],
+        sectionOrder: [...sessions.state.sectionOrder],
+      });
+    }
+  };
+  const stops = [gateway, agents, sessions].map((capability) =>
+    capability.subscribe(persistLiveBootRecord),
+  );
+  return () => stops.forEach((stop) => stop());
 }

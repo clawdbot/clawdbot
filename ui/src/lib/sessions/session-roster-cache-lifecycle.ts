@@ -1,4 +1,5 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
+import { resolveBootRecordAuth } from "../../app/boot-record.ts";
 import type { SessionGateway, SessionListOptions, SessionState } from "./session-capability.ts";
 import { sessionRosterCache, type SessionRosterCacheOptions } from "./session-roster-cache.ts";
 
@@ -14,71 +15,40 @@ export function createSessionRosterCacheLifecycle(
   },
 ) {
   const cache = options.rosterCache ?? sessionRosterCache;
-  const startupAgentId = agentSelection.state.selectedId ?? null;
   const currentScope = () =>
     gateway.connection
       ? gatewayCredentialScope(gateway.connection.gatewayUrl)
       : options.bootRecord?.scope;
-  const startupScope = currentScope();
-  const startupConnectionRevision = gateway.connectionRevision;
-  let cachedScope = startupScope;
-  let cachedConnectionRevision = startupConnectionRevision;
-  const expected = { agentId: startupAgentId, profileId: options.bootRecord?.profileId, query: {} };
-  let retired = gateway.snapshot.phase === "connected";
+  let cachedScope = currentScope();
+  let cachedConnectionRevision = gateway.connectionRevision;
   let cachedProfileId = options.bootRecord?.profileId;
-  let disposed = false;
-  // A slow or stuck IndexedDB read must not hold the route once the Gateway can
-  // resolve it live: readiness (or disposal) releases every settle waiter.
-  let releaseSettled: () => void = () => undefined;
-  const released = new Promise<void>((resolve) => {
-    releaseSettled = resolve;
+  const retirement = new AbortController();
+  const initial = {
+    scope: cachedScope,
+    connectionRevision: cachedConnectionRevision,
+    agentId: agentSelection.state.selectedId,
+    profileId: cachedProfileId,
+    query: {},
+  };
+  // Connection readiness releases waiters even if the lazy module or IndexedDB stalls.
+  const settled = new Promise<void>((resolve) => {
+    if (!options.bootRecord || gateway.snapshot.phase === "connected") {
+      resolve();
+      return;
+    }
+    retirement.signal.addEventListener("abort", () => resolve(), { once: true });
+    void import("./session-roster-cache.reader.ts")
+      .then(({ hydrateSessionRoster }) =>
+        hydrateSessionRoster(gateway, agentSelection, cache, host, initial, retirement.signal),
+      )
+      .then(resolve, resolve);
   });
-  const hydrated =
-    options.bootRecord && startupScope && !retired && host.readState().result === null
-      ? Promise.allSettled([
-          import("./session-roster-cache.reader.ts"),
-          cache.read(startupScope, expected),
-        ])
-          .then(([reader, cached]) => {
-            if (reader.status !== "fulfilled" || cached.status !== "fulfilled") {
-              return;
-            }
-            const { rosterRecordMatches } = reader.value;
-            const record = cached.value;
-            if (
-              !record ||
-              disposed ||
-              retired ||
-              host.readState().result !== null ||
-              gateway.snapshot.phase === "connected" ||
-              agentSelection.state.selectedId !== startupAgentId ||
-              currentScope() !== startupScope ||
-              gateway.connectionRevision !== startupConnectionRevision ||
-              !rosterRecordMatches(record, expected)
-            ) {
-              return;
-            }
-            cachedProfileId = record.profileId;
-            host.publish({
-              ...host.readState(),
-              result: record.result,
-              agentId: record.agentId,
-              groups: record.groups,
-              groupSettings: record.groupSettings,
-              sectionOrder: record.sectionOrder,
-              resultCached: true,
-            });
-          })
-          .catch(() => undefined)
-      : Promise.resolve();
-  const settled = Promise.race([hydrated, released]);
 
   return {
     settled,
     synchronize(snapshot: SessionGateway["snapshot"]): void {
       if (snapshot.phase === "connected") {
-        retired = true;
-        releaseSettled();
+        retirement.abort();
       }
       if (
         currentScope() !== cachedScope ||
@@ -90,7 +60,7 @@ export function createSessionRosterCacheLifecycle(
         cachedProfileId = undefined;
         cachedScope = currentScope();
         cachedConnectionRevision = gateway.connectionRevision;
-        retired = true;
+        retirement.abort();
         host.publish({
           ...host.readState(),
           result: null,
@@ -103,7 +73,13 @@ export function createSessionRosterCacheLifecycle(
       }
     },
     persist(state: SessionState) {
-      if (!state.result || state.resultCached || !host.connected() || !gateway.connection) {
+      if (
+        !state.result ||
+        state.resultCached ||
+        !host.connected() ||
+        !gateway.connection ||
+        !resolveBootRecordAuth(gateway.snapshot.hello?.auth, gateway.connection.token)
+      ) {
         return;
       }
       cachedProfileId = undefined;
@@ -121,8 +97,7 @@ export function createSessionRosterCacheLifecycle(
       });
     },
     dispose() {
-      disposed = true;
-      releaseSettled();
+      retirement.abort();
     },
   };
 }

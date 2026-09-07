@@ -1,6 +1,7 @@
+import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type { SessionListOptions } from "./session-capability.ts";
+import type { SessionGateway, SessionListOptions, SessionState } from "./session-capability.ts";
 import { isPrimarySessionListQuery } from "./session-list-query.ts";
 import { normalizeManagedSessionListQuery } from "./session-requests.ts";
 import {
@@ -10,6 +11,7 @@ import {
   SESSION_ROSTER_MAX_BYTES,
   sessionRosterCacheGeneration,
   type RosterExpectation,
+  type SessionRosterCache,
   type SessionRosterRecord,
 } from "./session-roster-cache.ts";
 
@@ -247,4 +249,45 @@ export async function readSessionRoster(
   } finally {
     database.close();
   }
+}
+
+export async function hydrateSessionRoster(
+  gateway: SessionGateway,
+  agentSelection: { readonly state: { readonly selectedId: string | null } },
+  cache: SessionRosterCache,
+  host: { readState: () => SessionState; publish: (state: SessionState) => void },
+  initial: RosterExpectation & {
+    scope: string | undefined;
+    connectionRevision: number | undefined;
+  },
+  signal: AbortSignal,
+): Promise<void> {
+  if (!initial.scope || signal.aborted || host.readState().result !== null) {
+    return;
+  }
+  const record = await cache.read(initial.scope, initial);
+  const scope = gateway.connection
+    ? gatewayCredentialScope(gateway.connection.gatewayUrl)
+    : initial.scope;
+  if (
+    !record ||
+    signal.aborted ||
+    host.readState().result !== null ||
+    gateway.snapshot.phase === "connected" ||
+    agentSelection.state.selectedId !== initial.agentId ||
+    scope !== initial.scope ||
+    gateway.connectionRevision !== initial.connectionRevision ||
+    !rosterRecordMatches(record, initial)
+  ) {
+    return;
+  }
+  host.publish({
+    ...host.readState(),
+    result: record.result,
+    agentId: record.agentId,
+    groups: record.groups,
+    groupSettings: record.groupSettings,
+    sectionOrder: record.sectionOrder,
+    resultCached: true,
+  });
 }

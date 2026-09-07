@@ -82,7 +82,9 @@ describe("sidebar warm roster publication", () => {
         { state: { selectedId: "main" }, subscribe: () => () => undefined },
         {
           bootRecord: {
-            version: 1,
+            version: 2,
+            authMethod: "token",
+            credential: "9d17676d",
             scope: gatewayCredentialScope(gateway.gateway.connection.gatewayUrl),
             savedAt: Date.now(),
             profileId: null,

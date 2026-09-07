@@ -2,7 +2,6 @@
 import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { BOOT_RECORD_PREFIX } from "../../app/boot-record.ts";
 import {
   clearCachedBootState,
   flushSessionRosters,
@@ -16,6 +15,8 @@ import {
   sessionRosterCache,
   type SessionRosterRecord,
 } from "./session-roster-cache.ts";
+
+const BOOT_RECORD_PREFIX = "openclaw.control.bootRecord.v1:";
 
 const expected = { agentId: "main", profileId: "profile-one", query: {} };
 function record(

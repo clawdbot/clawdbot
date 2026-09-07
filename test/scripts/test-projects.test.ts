@@ -3502,7 +3502,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it.each([
     ["ui/config/control-ui-chunking.ts", "ui/src/app/control-ui-chunking.test.ts"],
-    ["ui/config/control-ui-locales.ts", "ui/src/app/vite-config.node.test.ts"],
+    ["ui/config/control-ui-locales.ts", "ui/src/app/vite-config.test.ts"],
   ])("routes changed ui build helper %s to its owner test", (changedPath, testPath) => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       changedPath,

@@ -125,7 +125,7 @@ export type SessionResetOptions = {
 export type SessionResetResult = "completed" | "not-started" | "uncertain";
 
 export type SessionGateway = {
-  readonly connection?: { readonly gatewayUrl: string };
+  readonly connection?: { readonly gatewayUrl: string; readonly token?: string };
   readonly connectionRevision?: number;
   readonly snapshot: {
     client: GatewayBrowserClient | null;

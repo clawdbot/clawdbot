@@ -1,4 +1,5 @@
 // @vitest-environment node
+// The per-file cleanup lane lets builtin mocks replace modules preloaded by Vite build tests.
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";

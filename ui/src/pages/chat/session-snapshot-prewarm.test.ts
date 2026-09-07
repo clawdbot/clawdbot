@@ -48,6 +48,7 @@ describe("routed transcript prewarm", () => {
     await seed();
     const open = vi.spyOn(indexedDB, "open");
     prewarmChatSnapshot(key);
+    await vi.dynamicImportSettled();
     expect(open).toHaveBeenCalledOnce();
     const reader = new snapshots.SessionSnapshotStore();
     expect(await reader.read(key)).toEqual(stored);
@@ -103,6 +104,7 @@ describe("routed transcript prewarm", () => {
       await seed();
       const open = vi.spyOn(indexedDB, "open");
       prewarmChatSnapshot(key);
+      await vi.dynamicImportSettled();
       await (scope === "clear"
         ? clearStoredChatSnapshots()
         : publishSnapshotInvalidation(scope === "session" ? { sessionKey: key } : {}));

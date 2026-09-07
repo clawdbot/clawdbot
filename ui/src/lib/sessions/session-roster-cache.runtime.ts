@@ -101,6 +101,9 @@ async function writeRecords(records: SessionRosterRecord[], generation: number):
 }
 
 export function persistSessionRoster(record: SessionRosterRecord): void {
+  if (!globalThis.indexedDB) {
+    return;
+  }
   pending.set(record.scope, record);
   if (timer !== null) {
     clearTimeout(timer);
@@ -134,7 +137,13 @@ export async function clearCachedBootState(): Promise<void> {
   await resetSessionRosterDatabase();
 }
 
-if (typeof window !== "undefined") {
+if (
+  globalThis.indexedDB &&
+  typeof window !== "undefined" &&
+  typeof window.addEventListener === "function" &&
+  typeof document !== "undefined" &&
+  typeof document.addEventListener === "function"
+) {
   window.addEventListener("pagehide", () => void flushSessionRosters());
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {

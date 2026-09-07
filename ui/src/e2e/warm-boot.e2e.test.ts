@@ -16,7 +16,7 @@ const suite = createControlUiE2eSuite({
 const sessionKey = "agent:main:main";
 const transcriptText = "This conversation is ready before the Gateway reconnects.";
 
-async function waitForPersistedWarmState(page: Page): Promise<void> {
+async function waitForPersistedWarmState(page: Page, eligible = true): Promise<void> {
   await expect
     .poll(() =>
       page.evaluate(async () => {
@@ -85,11 +85,11 @@ async function waitForPersistedWarmState(page: Page): Promise<void> {
         };
       }),
     )
-    .toEqual({ bootRecord: true, roster: true, transcript: true });
+    .toEqual({ bootRecord: eligible, roster: eligible, transcript: true });
 }
 
 suite.define(() => {
-  it.each(["matching", "different"])(
+  it.each(["matching", "different", "device-token", "trusted-proxy"])(
     "reconciles the cached shell, roster, and transcript with a %s profile",
     async (profile) => {
       await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
@@ -104,6 +104,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           // The typed hold applies again after reload and releases the normal hello payload.
           heldMethods: ["connect"],
+          authMethod: profile === "trusted-proxy" || profile === "device-token" ? profile : "token",
           presenceUsers: [{ id: "profile-a", self: true }],
           sessions: [
             currentRow,
@@ -132,7 +133,10 @@ suite.define(() => {
             },
           },
         });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        await page.goto(
+          controlUiSessionUrl(suite.server.baseUrl, sessionKey) +
+            (profile === "device-token" ? "" : "#token=test-token"),
+        );
         await gateway.waitForRequest("connect");
         await page.locator(".connect-splash").waitFor();
         await page.screenshot({ path: path.join(suite.artifactDir, "cold-connecting.png") });
@@ -141,7 +145,7 @@ suite.define(() => {
         const transcript = page.locator(".chat-thread-inner");
         await sidebar.getByText("Cached only session", { exact: true }).waitFor();
         await transcript.getByText(transcriptText, { exact: true }).waitFor();
-        await waitForPersistedWarmState(page);
+        await waitForPersistedWarmState(page, profile !== "trusted-proxy");
         const hello = await page.evaluate(() => {
           const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
             "openclaw-app",
@@ -155,6 +159,20 @@ suite.define(() => {
 
         await page.reload();
         const connect = await gateway.waitForRequest("connect");
+        if (profile === "trusted-proxy") {
+          await page.locator(".connect-splash").waitFor();
+          expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+          expect(await sidebar.getByText("Cached only session", { exact: true }).count()).toBe(0);
+          expect(await transcript.getByText(transcriptText, { exact: true }).count()).toBe(0);
+          expect(await gateway.getRequests("sessions.list")).toEqual([]);
+          expect(await gateway.getRequests("chat.startup")).toEqual([]);
+          await waitForPersistedWarmState(page, false);
+          await page.screenshot({ path: path.join(suite.artifactDir, "proxy-before-hello.png") });
+          await gateway.resolveDeferred("connect");
+          await transcript.getByText(transcriptText, { exact: true }).waitFor();
+          await waitForPersistedWarmState(page, false);
+          return;
+        }
         await sidebar.locator(".nav-item--home").waitFor();
         await sidebar.getByText("Cached only session", { exact: true }).waitFor();
         await transcript.getByText(transcriptText, { exact: true }).waitFor();

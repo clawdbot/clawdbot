@@ -1,4 +1,3 @@
-import { readStoredChatSnapshotRecord } from "./session-snapshot-database.ts";
 import {
   snapshotStoreGeneration,
   subscribeSnapshotInvalidation,
@@ -26,7 +25,8 @@ export function prewarmChatSnapshot(cacheKey: string): void {
   const entry: PrewarmedSnapshot = {
     cacheKey,
     cancelled: false,
-    promise: readStoredChatSnapshotRecord(cacheKey)
+    promise: import("./session-snapshot-database.ts")
+      .then(({ readStoredChatSnapshotRecord }) => readStoredChatSnapshotRecord(cacheKey))
       .then((record) =>
         entry.cancelled || generation !== snapshotStoreGeneration ? undefined : record,
       )

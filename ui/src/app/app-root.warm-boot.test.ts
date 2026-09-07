@@ -7,9 +7,11 @@ import { i18n } from "../i18n/index.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import "./app-host.ts";
 import type { OpenClawApp } from "./app-root.ts";
-import { BOOT_RECORD_PREFIX, type BootRecord } from "./boot-record.ts";
+import type { BootRecord } from "./boot-record.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
-import { loadSettings } from "./settings.ts";
+import { loadSettings, saveSettings } from "./settings.ts";
+
+const BOOT_RECORD_PREFIX = "openclaw.control.bootRecord.v1:";
 
 let runtime: ApplicationRuntime | undefined;
 let previousUrl: string;
@@ -17,6 +19,7 @@ let previousUrl: string;
 beforeEach(async () => {
   vi.stubGlobal("localStorage", createStorageMock());
   vi.stubGlobal("sessionStorage", createStorageMock());
+  saveSettings({ ...loadSettings(), token: "test-token" });
   previousUrl = window.location.href;
   window.history.replaceState({}, "", "/chat/main");
   await i18n.setLocale("en");
@@ -33,7 +36,9 @@ function createWarmSurface(warm = true) {
   if (warm) {
     const scope = gatewayCredentialScope(loadSettings().gatewayUrl);
     const record: BootRecord = {
-      version: 1,
+      version: 2,
+      authMethod: "token",
+      credential: "9d17676d",
       savedAt: Date.now(),
       scope,
       profileId: null,

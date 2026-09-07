@@ -25,6 +25,7 @@ import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
+import { loadCurrentDeviceAuthToken } from "../lib/nodes/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { createLiveActivity } from "../pages/activity/live-activity.ts";
@@ -40,10 +41,13 @@ import { ControlUiPluginRuntime } from "../plugins/control-ui-runtime.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import { resolveControlUiDocumentMode, type ControlUiDocumentMode } from "./approval-deep-link.ts";
-import { persistBootRecord, readBootRecord } from "./boot-record.ts";
+import { readBootRecord } from "./boot-record.ts";
 import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
-import { subscribeWarmBootConnection } from "./bootstrap-warm-boot.ts";
+import {
+  subscribeBootRecordPersistence,
+  subscribeWarmBootConnection,
+} from "./bootstrap-warm-boot.ts";
 import { createBrowserHistory, resolveControlUiPaths } from "./browser.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import { createChatSubmissions } from "./chat-submissions.ts";
@@ -219,7 +223,17 @@ export function bootstrapApplication(): ApplicationRuntime {
   );
   const liveActivity = createLiveActivity(gateway);
   const connectionBootstrap = createConnectionBootstrapCoordinator();
-  const bootRecord = readBootRecord(gatewayCredentialScope(settings.gatewayUrl));
+  const bootRecord = readBootRecord(gatewayCredentialScope(settings.gatewayUrl), (method) => {
+    if (startup.pendingBootstrapToken || startup.password) {
+      return null;
+    }
+    // An explicit token takes precedence over paired-device auth on the next connect.
+    return method === "token"
+      ? settings.token
+      : settings.token.trim()
+        ? null
+        : loadCurrentDeviceAuthToken(settings.gatewayUrl);
+  });
   const warmBoot = bootRecord !== null && startsApplicationRouter && !hasPendingGateway;
   if (warmBoot && parseAgentSessionKey(settings.sessionKey)) {
     prewarmChatSnapshot(
@@ -292,28 +306,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     }),
   });
   const sessions = createSessionCapability(gateway, agentSelection, { bootRecord });
-  const persistLiveBootRecord = () => {
-    const agentsList = agents.state.agentsList;
-    if (
-      gateway.snapshot.phase === "connected" &&
-      agentsList &&
-      !agents.state.agentsListCached &&
-      sessions.groupsStatus() === "ready"
-    ) {
-      persistBootRecord({
-        version: 1,
-        savedAt: Date.now(),
-        scope: gatewayCredentialScope(gateway.connection.gatewayUrl),
-        profileId: gateway.snapshot.selfUser?.id ?? null,
-        agents: agentsList,
-        groups: [...sessions.state.groupSettings],
-        sectionOrder: [...sessions.state.sectionOrder],
-      });
-    }
-  };
-  const stopBootRecordPersistence = [gateway, agents, sessions].map((capability) =>
-    capability.subscribe(persistLiveBootRecord),
-  );
+  const stopBootRecordPersistence = subscribeBootRecordPersistence({ gateway, agents, sessions });
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   const overlays = createApplicationOverlays(gateway, {
     connectionBootstrap,
@@ -699,7 +692,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     stop: () => {
       startupLifecycle.stop();
       stopWarmBootConnection();
-      stopBootRecordPersistence.forEach((stop) => stop());
+      stopBootRecordPersistence();
       stopPostConnect();
       connectionBootstrap.reset();
       agents.dispose();

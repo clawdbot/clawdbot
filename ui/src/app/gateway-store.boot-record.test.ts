@@ -1,14 +1,11 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../test-helpers/storage.ts";
-import {
-  BOOT_RECORD_PREFIX,
-  clearBootRecords,
-  persistBootRecord,
-  type BootRecord,
-} from "./boot-record.ts";
+import { clearBootRecords, persistBootRecord, type BootRecord } from "./boot-record.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
 import { loadSettings } from "./settings.ts";
+
+const BOOT_RECORD_PREFIX = "openclaw.control.bootRecord.v1:";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -31,11 +28,13 @@ describe("credential changes retire boot records synchronously", () => {
       const settings = {
         ...loadSettings(),
         gatewayUrl: "ws://gateway.example.test",
-        token: "old-token",
+        token: "test-token",
       };
       const { gateway } = createGatewayStoreTestStore({ settings });
       const record: BootRecord = {
-        version: 1,
+        version: 2,
+        authMethod: "token",
+        credential: "9d17676d",
         scope: gatewayCredentialScope(settings.gatewayUrl),
         savedAt: Date.now(),
         profileId: "previous-profile",

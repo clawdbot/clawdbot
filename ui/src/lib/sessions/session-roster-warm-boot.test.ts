@@ -13,7 +13,9 @@ import type { SessionRosterRecord } from "./session-roster-cache.ts";
 const url = "ws://gateway.example.test";
 const scope = gatewayCredentialScope(url);
 const bootRecord: BootRecord = {
-  version: 1,
+  version: 2,
+  authMethod: "token",
+  credential: "9d17676d",
   savedAt: 1,
   scope,
   profileId: "profile-one",
@@ -84,7 +86,7 @@ function harness(
   });
   const client = createTestGatewayClient(request);
   const gateway: SessionGateway = {
-    connection: { gatewayUrl: url },
+    connection: { gatewayUrl: url, token: "test-token" },
     get connectionRevision() {
       return connectionRevision;
     },
@@ -120,8 +122,28 @@ function harness(
     changeCredentials() {
       connectionRevision += 1;
     },
-    connect(profileId = "profile-one") {
-      publish({ phase: "connected", client, selfUser: { id: profileId } });
+    connect(
+      profileId = "profile-one",
+      method:
+        | "token"
+        | "device-token"
+        | "trusted-proxy"
+        | "password"
+        | "tailscale"
+        | "bootstrap-token"
+        | "none"
+        | undefined = "token",
+    ) {
+      publish({
+        phase: "connected",
+        client,
+        selfUser: { id: profileId },
+        hello: {
+          type: "hello-ok",
+          protocol: 1,
+          auth: { method, deviceToken: "test-token", role: "operator", scopes: ["operator.read"] },
+        },
+      });
     },
   };
 }
@@ -195,6 +217,18 @@ describe("session capability warm roster", () => {
     );
   });
 
+  it.each(["trusted-proxy", "password", "tailscale", "bootstrap-token", "none"] as const)(
+    "does not persist live rows for %s authentication",
+    async (method) => {
+      const h = harness({ withBootRecord: false });
+      h.connect("profile-one", method);
+      const live = sessionsResult([{ key: "agent:main:private", kind: "direct" }], 2);
+      h.live.resolve(live);
+      await vi.waitFor(() => expect(h.sessions.state.result).toEqual(live));
+      expect(h.write).not.toHaveBeenCalled();
+    },
+  );
+
   it("drops a mismatched profile before bootstrap asks for its live rows", async () => {
     const h = harness();
     await h.sessions.whenCachedRosterSettled();
@@ -267,7 +301,9 @@ describe("session capability warm roster", () => {
       expect(h.sessions.state.result?.sessions).toHaveLength(2);
       const nextUrl = change === "gateway" ? "ws://other.example.test" : url;
       if (change === "gateway") {
-        Object.defineProperty(h.gateway, "connection", { value: { gatewayUrl: nextUrl } });
+        Object.defineProperty(h.gateway, "connection", {
+          value: { gatewayUrl: nextUrl, token: "test-token" },
+        });
       } else {
         h.changeCredentials();
       }

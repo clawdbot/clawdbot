@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import { createServer as createNetServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { HelloOk } from "@openclaw/gateway-protocol";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { ConsoleMessage, Frame, Locator, Page, Request } from "playwright";
@@ -401,6 +402,7 @@ export type ControlUiMockGatewayScenario = {
   controlUiBuildSource?: "bundled" | "configured";
   serverVersion?: string;
   deviceToken?: string;
+  authMethod?: HelloOk["auth"]["method"];
   featureMethods?: string[];
   /** Simulate a legacy Gateway that predates the advertised method catalog. */
   omitFeatureMethods?: boolean;
@@ -1046,6 +1048,7 @@ function normalizeScenario(
     controlUiBuildSource: scenario.controlUiBuildSource ?? "bundled",
     serverVersion: scenario.serverVersion?.trim() || "e2e",
     deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
+    authMethod: scenario.authMethod ?? "token",
     // Baseline scenarios represent a current Gateway. Tests for unsupported or
     // mixed-version methods provide an explicit narrower catalog.
     featureMethods: scenario.featureMethods ?? [...defaultControlUiFeatureMethods],
@@ -2099,6 +2102,7 @@ function installControlUiMockGateway(
             : {
                 auth: {
                   deviceToken: connectedDeviceToken,
+                  method: scenario.authMethod,
                   recoveryMigrationAllowed: true as const,
                   recoveryScope: "e2e-recovery-scope",
                   role: "operator",
