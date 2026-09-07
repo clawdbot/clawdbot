@@ -235,7 +235,7 @@ describe("anonymous telemetry", () => {
       if (source === "provider map") {
         expect(Object.keys(config.models?.providers ?? {})).toEqual([provider]);
       } else if (source === "auth profile") {
-        expect(config.auth?.profiles?.configured.provider).toBe(provider);
+        expect(config.auth?.profiles?.configured?.provider).toBe(provider);
       }
       expect(
         buildTelemetryPayload(config, { surface: "gateway" }).features.providerFamilies,
@@ -247,8 +247,8 @@ describe("anonymous telemetry", () => {
     const config: OpenClawConfig = {
       models: {
         providers: {
-          OpenAI: { models: [] },
-          " openai ": { models: [] },
+          OpenAI: { baseUrl: "https://provider.example.invalid/v1", models: [] },
+          " openai ": { baseUrl: "https://provider.example.invalid/v1", models: [] },
         },
       },
       auth: { profiles: { configured: { provider: " OPENAI ", mode: "api_key" } } },
