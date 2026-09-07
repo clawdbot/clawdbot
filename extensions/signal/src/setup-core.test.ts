@@ -837,7 +837,7 @@ describe("signalSetupAdapter", () => {
     ).toBe(doctorPointer);
   });
 
-  it("sends a named add to doctor when promotion would write a named alias", () => {
+  it("sends a named add to doctor when promotion would land beside a named alias", () => {
     const cfg: OpenClawConfig = {
       channels: {
         signal: {

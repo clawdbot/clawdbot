@@ -158,8 +158,9 @@ export function findSignalAccountKeySetupBlock(params: {
       return id ? [id] : [];
     });
   // Default numbers and transports are written at the channel root, so a default entry reaches the
-  // map only through a display name (src/channels/plugins/setup-helpers.ts:48-61). The root-name
-  // migration a named add runs (:65-86) follows the promotion, which has already moved that name.
+  // map only through the account-map name write in applyAccountNameToChannelSection. The root-name
+  // migration a named add runs in migrateBaseNameToDefaultAccount follows the promotion, which has
+  // already moved that name.
   const writesDefaultEntry = !namedAccount && writesName;
   const writtenIds = [
     ...promotedIds,
