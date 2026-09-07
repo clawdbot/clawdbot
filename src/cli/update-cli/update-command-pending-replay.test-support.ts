@@ -17,14 +17,14 @@ import { restoreUpdateCommandFailure } from "./update-command-restore.js";
 import { UpdateCommandFinalizedRecoveryFailure } from "./update-command-result.js";
 import { updateCommand } from "./update-command.js";
 
-export function useShortRealReplayLeases() {
+export function useShortRealReplayLeases(leaseMs = 30_000) {
   const plugin = pluginLease.withPluginLifecycleLease;
   const agent = agentLease.withAgentDatabaseMaintenanceLease;
   vi.spyOn(pluginLease, "withPluginLifecycleLease").mockImplementation((options, operation) =>
-    plugin({ ...options, leaseMs: 30_000 }, operation),
+    plugin({ ...options, leaseMs }, operation),
   );
   vi.spyOn(agentLease, "withAgentDatabaseMaintenanceLease").mockImplementation(
-    (options, operation) => agent({ ...options, leaseMs: 30_000 }, operation),
+    (options, operation) => agent({ ...options, leaseMs }, operation),
   );
 }
 

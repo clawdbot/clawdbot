@@ -155,9 +155,15 @@ export async function discoverUpdateCommandRecovery(
       const matches = all.filter((record) => record.restore?.restoreId === family.restoreId);
       const record = matches.length === 1 ? matches[0] : undefined;
       if (!record?.source || !record.checkpoint || !record.restore?.planSha256) {
-        throw new UpdateCommandRecoveryPendingError(
-          "Canonical state has an unmatched recovery family.",
-        );
+        if (await present(family.displacedPath)) {
+          throw new UpdateCommandRecoveryPendingError(
+            "Canonical state has an unmatched recovery family.",
+          );
+        }
+        // A private preparation with no displaced source is not publication
+        // evidence or an alternate owner. Preserve it untouched; only the real
+        // canonical record can select fresh preparation under reacquired locks.
+        continue;
       }
       const artifactRoot = path.join(
         path.dirname(record.source.stateDir),

@@ -5,7 +5,9 @@ import { expect, vi } from "vitest";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import * as packageFilesystem from "../../infra/package-update-filesystem.js";
+import * as checkpointRestore from "../../infra/update-checkpoint-restore.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
+import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -18,6 +20,9 @@ import { updateCommand } from "./update-command.js";
 
 export const packageGapReplayModes = [
   "replay-package-gap",
+  "replay-package-gap-slow-checkpoint",
+  "replay-package-gap-checkpoint-intent",
+  "replay-package-gap-preparing",
   "replay-package-gap-config",
   "replay-package-gap-package",
   "replay-package-gap-command",
@@ -104,20 +109,100 @@ export async function interruptPackageGapReplay(
         systemd: { ...runtime.systemd, unit: "openclaw-gateway.service", managerUid: 2999 },
       });
     }
+    if (mode === "replay-package-gap-slow-checkpoint") {
+      const prepare = checkpointRestore.prepareUpdateCheckpointRestore;
+      vi.spyOn(checkpointRestore, "prepareUpdateCheckpointRestore").mockImplementation(
+        async (input) => {
+          // Real elapsed time outlasts the short fixture lease while the real
+          // package, source locks, executor and checkpoint work remain unchanged.
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 11_000);
+          });
+          input.assertQuiescent();
+          return prepare(input);
+        },
+      );
+    }
     const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
       throw new Error(`fixture CLI exit ${code}`);
     });
     const root = vi.spyOn(updateShared, "resolveUpdateRoot").mockResolvedValue(invoker);
-    const outcome = await withEnvAsync(
-      {
-        OPENCLAW_UPDATE_RUN_ID: undefined,
-        OPENCLAW_PROFILE: mode === "replay-package-gap-profile" ? "unrelated" : undefined,
-      },
-      () => updateCommand({ json: true, yes: true }),
-    ).catch((cause: unknown) => cause);
+    const invoke = () =>
+      withEnvAsync(
+        {
+          OPENCLAW_UPDATE_RUN_ID: undefined,
+          OPENCLAW_PROFILE: mode === "replay-package-gap-profile" ? "unrelated" : undefined,
+        },
+        () => updateCommand({ json: true, yes: true }),
+      ).catch((cause: unknown) => cause);
+    const privateEvidence: { parent: string; name: string; bytes: Buffer }[] = [];
+    if (["replay-package-gap-checkpoint-intent", "replay-package-gap-preparing"].includes(mode)) {
+      const prepare = checkpointRestore.prepareUpdateCheckpointRestore;
+      vi.spyOn(checkpointRestore, "prepareUpdateCheckpointRestore").mockImplementationOnce(
+        async (input) =>
+          prepare({
+            ...input,
+            prepareSharedDatabase(databases) {
+              if (mode === "replay-package-gap-preparing") {
+                input.prepareSharedDatabase(databases);
+              }
+              throw new Error("fixture interrupted at checkpoint preparation");
+            },
+          }),
+      );
+      const preparationInterrupted = await invoke();
+      expect(formatErrorMessage(preparationInterrupted)).toContain(
+        "fixture interrupted at checkpoint preparation",
+      );
+      const retained = loadUpdateRecovery(record.runId, { env })!;
+      expect(retained.effects.at(-1)).toMatchObject({
+        kind: "checkpoint-restore",
+        state: "intent",
+      });
+      if (mode === "replay-package-gap-preparing") {
+        expect(retained.restore).toMatchObject({ phase: "preparing", planSha256: null });
+      } else {
+        expect(retained.restore).toBeFalsy();
+      }
+      const parent = path.join(env.OPENCLAW_STATE_DIR!, "state");
+      for (const name of await fs.readdir(parent)) {
+        if (name.startsWith(".openclaw-restore-") && !name.includes(".abandoned-")) {
+          privateEvidence.push({
+            parent,
+            name,
+            bytes: await fs.readFile(path.join(parent, name, "current.sqlite")),
+          });
+        }
+      }
+      expect(privateEvidence.length).toBeGreaterThan(0);
+      expect(retained.terminal).toBeFalsy();
+      const originalLive = await fs.stat(descriptor.liveRoot);
+      expect([originalLive.dev, originalLive.ino]).toEqual([previous.dev, previous.ino]);
+      expect(resolveGatewayService().start).not.toHaveBeenCalled();
+      // A real durable writer must still exclude fresh publication. Merely
+      // sharing this async task does not delegate its lease to the updater.
+      await withPluginLifecycleLease({ env, schemaPolicy: "existing" }, async () => {
+        const refused = await invoke();
+        expect(formatErrorMessage(refused)).toContain("lease still prevents publication recovery");
+        const pending = loadUpdateRecovery(record.runId, { env })!;
+        expect(pending.effects).toEqual(retained.effects);
+        expect(pending.restore).toEqual(retained.restore);
+        expect(pending.terminal).toBeFalsy();
+        expect(resolveGatewayService().start).not.toHaveBeenCalled();
+      });
+      closeOpenClawStateDatabaseForTest();
+    }
+    const outcome = await invoke();
     root.mockRestore();
     exit.mockRestore();
-    if (mode !== "replay-package-gap") {
+    if (
+      ![
+        "replay-package-gap",
+        "replay-package-gap-slow-checkpoint",
+        "replay-package-gap-checkpoint-intent",
+        "replay-package-gap-preparing",
+      ].includes(mode)
+    ) {
       expect(outcome).toBeInstanceOf(Error);
       expect(outcome).not.toBeInstanceOf(UpdateCommandFinalizedRecoveryFailure);
       await expect(fs.lstat(descriptor.liveRoot)).rejects.toMatchObject({ code: "ENOENT" });
@@ -142,6 +227,18 @@ export async function interruptPackageGapReplay(
     });
     const restored = await fs.stat(descriptor.liveRoot);
     expect([restored.dev, restored.ino]).toEqual([previous.dev, previous.ino]);
+    for (const evidence of privateEvidence) {
+      const retained =
+        mode === "replay-package-gap-preparing"
+          ? (await fs.readdir(evidence.parent)).find((name) =>
+              name.startsWith(evidence.name + ".abandoned-"),
+            )
+          : evidence.name;
+      expect(retained).toBeDefined();
+      expect(await fs.readFile(path.join(evidence.parent, retained!, "current.sqlite"))).toEqual(
+        evidence.bytes,
+      );
+    }
     const displaced = await fs.stat(`${descriptor.backupRoot}.candidate`);
     expect([displaced.dev, displaced.ino]).toEqual([candidate.dev, candidate.ino]);
   };

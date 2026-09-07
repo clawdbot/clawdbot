@@ -3,9 +3,11 @@ import { reopenPackageUpdateTransaction } from "../../infra/package-update-recov
 import { currentUpdateRecoveryNativeFacts } from "../../infra/update-run-recovery-native-schema.js";
 import { createUpdateRecoveryPackageHooks } from "../../infra/update-run-recovery-package.js";
 import {
+  assertExactUpdateRecoveryClaim,
   claimUpdateRecovery,
   recordUpdateRecoveryObservation,
 } from "../../infra/update-run-recovery.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withOpenClawStateReplayPublication } from "../../state/openclaw-state-publication.js";
 import { assertOpenClawStateReplayWritersStopped } from "../../state/openclaw-state-replay-drain.js";
 import type { UpdateCommandOptions } from "./shared.js";
@@ -18,9 +20,10 @@ import {
 import { inspectUpdateCommandSealedReplay } from "./update-command-replay-inspection.js";
 import { withUpdateCommandSourceOwnership } from "./update-command-source-ownership.js";
 
-/** Resume the original sealed intent. No canonical lease acquisition, package
- * rollback, plan regeneration or history admission may precede reconciliation. */
-export async function resumeSealedUpdateCommandRestore(
+/** Publish the original checkpoint intent under fresh physical custody after
+ * logical writers drain. A sealed plan is reconciled, never regenerated; a new
+ * plan requires the exact canonical claim. Neither path acquires writer leases. */
+export async function resumeUpdateCommandRestorePublication(
   opts: UpdateCommandOptions,
   timeoutMs?: number,
 ) {
@@ -36,11 +39,24 @@ export async function resumeSealedUpdateCommandRestore(
       "Sealed replay lacks original package and native custody.",
     );
   }
+  const sealed = Boolean(expected.restore && expected.restore.phase !== "preparing");
   return await withUpdateCommandSourceOwnership(
-    { recovery, env: run.env, replay: true },
+    {
+      recovery,
+      env: run.env,
+      ...(sealed ? { replay: true as const } : { mutation: true as const }),
+    },
     async (source) => {
       const assertCurrent = source.assertCurrent;
-      const inspect = () => inspectUpdateCommandSealedReplay(expected, run.env);
+      const inspect = async () => {
+        if (sealed) {
+          return inspectUpdateCommandSealedReplay(expected, run.env);
+        }
+        await source.verifySources();
+        assertExactUpdateRecoveryClaim(expected, { assertCurrent }, recovery.options);
+        const databasePath = resolveOpenClawStateSqlitePath(run.env);
+        return { databasePath, evidencePath: databasePath };
+      };
       const initial = await inspect();
       assertCurrent();
       const native = await readUpdateCommandNativeObservation({
@@ -111,7 +127,10 @@ export async function resumeSealedUpdateCommandRestore(
           timeoutMs,
         }),
       };
-      const result = await replayUpdateCommandRecovery({ ...opts, recovery: owned });
+      const result = await replayUpdateCommandRecovery(
+        { ...opts, recovery: owned },
+        { resumePreparing: true },
+      );
       assertCurrent();
       if (result.status !== "verified") {
         throw new UpdateCommandRecoveryPendingError("Sealed restoration remains unverified.");

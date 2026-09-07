@@ -51,7 +51,7 @@ export async function resumePendingUpdateCommand(params: {
     !found.nativeManager ||
     !updateInstallRootsMatch(root, found.from.root) ||
     (!packageGap && (await fs.realpath(root)) !== found.from.root) ||
-    (found.restore && (!found.restore.planSha256 || found.restore.phase === "preparing"))
+    (found.restore && found.restore.phase !== "preparing" && !found.restore.planSha256)
   ) {
     throw new UpdateCommandRecoveryPendingError(
       "Interrupted update lacks a sealed recoverable owner boundary.",
@@ -105,10 +105,14 @@ export async function resumePendingUpdateCommand(params: {
             ),
           );
         }
-        // A pending package restore already owns the native shutdown boundary.
+        // A pending package/checkpoint restore already owns the native shutdown boundary.
         // Do not append an unrelated native intent over it. Restoration below
         // reacquires source owners and freshly verifies that shutdown before any rename.
-        if (!packageGap) {
+        const checkpointIntent = record.effects.at(-1);
+        if (
+          !packageGap &&
+          !(checkpointIntent?.kind === "checkpoint-restore" && checkpointIntent.state === "intent")
+        ) {
           await quiesceFailedUpdateCommand({
             recovery,
             env,

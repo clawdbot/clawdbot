@@ -106,7 +106,7 @@ it.each([
     }
     const rollback = mode === "rollback" || older || interference || interrupted || replay;
     if (replay) {
-      useShortRealReplayLeases();
+      useShortRealReplayLeases(mode === "replay-package-gap-slow-checkpoint" ? 10_000 : 30_000);
     }
     const lateRollback = [
       "health-rollback",
@@ -724,7 +724,13 @@ it.each([
             expect(start).toHaveBeenCalledTimes(
               mode === "replay-conflict" ||
                 mode === "replay-shadowed" ||
-                (packageGap && mode !== "replay-package-gap")
+                (packageGap &&
+                  ![
+                    "replay-package-gap",
+                    "replay-package-gap-slow-checkpoint",
+                    "replay-package-gap-checkpoint-intent",
+                    "replay-package-gap-preparing",
+                  ].includes(mode))
                 ? 0
                 : 1,
             );

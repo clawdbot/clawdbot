@@ -79,13 +79,16 @@ export function persistUpdateCommandServingReceipt(
 /**
  * Failure-path consumer of the checkpoint adapter and sealed-plan driver.
  * Fresh preparation, sealing, publication and progress share one live window.
- * Existing preparing records remain pending for explicit owner reconciliation.
+ * Existing preparing records require explicit fresh canonical/source ownership.
  * The admitted environment,
  * never supplied database options, selects the canonical DB. Inspection occurs
  * in the driver before any writable reopen/claim, including absent canonical DB.
  * This does not settle the generic restore effect, package roles, or serving proof.
  */
-export async function replayUpdateCommandRecovery(opts: UpdateCommandOptions) {
+export async function replayUpdateCommandRecovery(
+  opts: UpdateCommandOptions,
+  preparation?: { resumePreparing: true },
+) {
   const recovery = opts.recovery;
   const run = opts.run;
   if (!recovery || !run) {
@@ -111,7 +114,12 @@ export async function replayUpdateCommandRecovery(opts: UpdateCommandOptions) {
   }
   if (
     expected.restore &&
-    (!expected.restore.planSha256 || expected.restore.phase === "preparing")
+    (!expected.restore.planSha256 || expected.restore.phase === "preparing") &&
+    !(
+      preparation?.resumePreparing &&
+      expected.restore.phase === "preparing" &&
+      expected.restore.planSha256 === null
+    )
   ) {
     return { status: "preparing" as const, record: expected };
   }
@@ -144,7 +152,7 @@ export async function replayUpdateCommandRecovery(opts: UpdateCommandOptions) {
         bindPublishedRecord,
       };
       let replayRecord = expected;
-      if (!expected.restore) {
+      if (!expected.restore || expected.restore.phase === "preparing") {
         // First-time preparation must share the window with seal, physical
         // publication and every progress write: later renewal changes frozen rows.
         const intent = expected.effects.at(-1);

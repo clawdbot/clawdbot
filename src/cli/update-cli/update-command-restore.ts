@@ -7,19 +7,15 @@ import { createUpdateRecoveryPackageHooks } from "../../infra/update-run-recover
 import {
   assertExactUpdateRecoveryClaim,
   recordUpdateRecoveryIntent,
-  recordUpdateRecoveryObservation,
 } from "../../infra/update-run-recovery.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { withAgentDatabaseMaintenanceLease } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import { createUpdateCommandCheckpointReplayAccess } from "./update-command-checkpoint-replay.js";
 import { readUpdateCommandNativeObservation } from "./update-command-native-observation.js";
-import {
-  replayUpdateCommandRecovery,
-  UpdateCommandRecoveryPendingError,
-} from "./update-command-recovery.js";
-import { resumeSealedUpdateCommandRestore } from "./update-command-replay.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { resumeUpdateCommandRestorePublication } from "./update-command-replay.js";
 import { withUpdateCommandSourceOwnership } from "./update-command-source-ownership.js";
 
 /** Restore actual package and checkpoint resources under the existing publication
@@ -54,8 +50,9 @@ export async function restoreUpdateCommandFailure(
   ) {
     return;
   }
-  if (expected.restore) {
-    await resumeSealedUpdateCommandRestore(opts, timeoutMs);
+  if (expected.restore || restored?.state === "intent") {
+    closeOpenClawStateDatabase();
+    await resumeUpdateCommandRestorePublication(opts, timeoutMs);
     return;
   }
   const pending = expected.effects.at(-1);
@@ -89,12 +86,6 @@ export async function restoreUpdateCommandFailure(
               maintenance.assertOwned();
             };
             const fence = { assertCurrent };
-            const publication = maintenance.withDatabaseFilePublication;
-            if (!publication) {
-              throw new UpdateCommandRecoveryPendingError(
-                "Restoration publication owner is unavailable.",
-              );
-            }
             assertExactUpdateRecoveryClaim(expected, fence, recovery.options);
             const native = await readUpdateCommandNativeObservation({
               record: expected,
@@ -176,40 +167,14 @@ export async function restoreUpdateCommandFailure(
                 recovery.options,
               ),
             );
-            owned.checkpointReplay = {
-              withDatabaseFilePublication: publication,
-              access: createUpdateCommandCheckpointReplayAccess({
-                databasePath,
-                artifactRoot: source.artifactRoot,
-                transaction: opened.transaction,
-                assertCurrent,
-                timeoutMs,
-              }),
-            };
-            const result = await replayUpdateCommandRecovery({ ...opts, recovery: owned });
-            assertCurrent();
-            const current = recovery.getRecord();
-            const restore = current.effects.at(-1);
-            if (
-              result.status !== "verified" ||
-              !current.restore?.planSha256 ||
-              restore?.kind !== "checkpoint-restore"
-            ) {
-              throw new UpdateCommandRecoveryPendingError(
-                "Checkpoint publication remains unverified.",
-              );
-            }
-            recovery.onRecord(
-              recordUpdateRecoveryObservation(
-                current,
-                { effectId: restore.effectId, observedIdentity: current.restore.planSha256 },
-                fence,
-                recovery.options,
-              ),
-            );
           }),
         ),
     );
+    // Package work has drained and released its logical owners. Preparation and
+    // publication use the same physically fenced replay path as a fresh process;
+    // neither frozen lease rows nor paused heartbeats authorize that interval.
+    closeOpenClawStateDatabase();
+    await resumeUpdateCommandRestorePublication(opts, timeoutMs);
   } finally {
     gateway.release();
   }
