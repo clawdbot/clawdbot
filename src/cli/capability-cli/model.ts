@@ -202,6 +202,14 @@ async function runModelRun(params: {
         ]
       : params.prompt;
   if (params.transport === "local") {
+    const secretsRuntime = await import("../../secrets/runtime.js");
+    const secretsSnapshot = await secretsRuntime.prepareSecretsRuntimeSnapshot({
+      config: cfg,
+      agentDirs: [resolveAgentDir(cfg, agentId)],
+      includeConfigRefs: false,
+    });
+    secretsRuntime.activateSecretsRuntimeSnapshot(secretsSnapshot);
+
     const prepared = await prepareSimpleCompletionModelForAgent({
       cfg,
       agentId,
