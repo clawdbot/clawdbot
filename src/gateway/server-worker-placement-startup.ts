@@ -37,8 +37,10 @@ import {
 } from "./server-worker-placement-session-target.js";
 import { recoverGatewayWorkerPlacementWorkspaces } from "./server-worker-placement-workspace-recovery.js";
 import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
-import type { NodeWorkerBundlePreparation } from "./worker-environments/node-worker-bundle-installer.js";
-import { createNodeWorkspaceRetainCoordinator } from "./worker-environments/node-workspace-retain-coordinator.js";
+import {
+  createNodeWorkspaceRetainCoordinator,
+  type NodeWorkerBundleRetention,
+} from "./worker-environments/node-workspace-retain-coordinator.js";
 import { createWorkerPlacementDiskSpaceMonitor } from "./worker-environments/placement-disk-space.js";
 import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
 import type { WorkerDevicePlacementRequirementResolver } from "./worker-environments/placement-dispatch-startup.js";
@@ -70,7 +72,7 @@ export type GatewayWorkerPlacementRuntimeParams = {
   placements: WorkerSessionPlacementStore;
   environments: WorkerEnvironmentService;
   gatewayNamespace: string;
-  nodeWorkerBundlePreparation?: NodeWorkerBundlePreparation;
+  nodeWorkerBundleRetention?: NodeWorkerBundleRetention;
   persistAbandonedPartial?: (request: {
     sessionId: string;
     sessionKey: string;
@@ -121,7 +123,7 @@ export function createGatewayWorkerPlacementRuntime(
     loadWorkerPlacementSessionRuntimeModule,
   );
   const nodeWorkspaceRetention = createNodeWorkspaceRetainCoordinator({
-    preparation: params.nodeWorkerBundlePreparation,
+    bundleRetention: params.nodeWorkerBundleRetention,
     gatewayNamespace: params.gatewayNamespace,
     placements: params.placements,
     environments: params.environments,
@@ -597,7 +599,7 @@ export function createGatewayWorkerPlacementRuntime(
         }
         if (!stopped) {
           stopped = true;
-          // Close enrollment and idle preparation; admitted recovery keeps its own bootstrap owner.
+          // Cancel enrollment; admitted recovery keeps its own bootstrap owner.
           params.environments.stopNodeEnrollmentWaits?.();
           clearInterval(placementReconcileInterval);
           placementReconcileInterval = undefined;

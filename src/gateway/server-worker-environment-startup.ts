@@ -27,10 +27,10 @@ import {
 import type { WorkerLiveEventReceiver } from "./worker-environments/live-events.js";
 import type { createNodeBootstrapArtifactProvider } from "./worker-environments/node-bootstrap-artifact.js";
 import { createWorkerNodeEnrollmentManager } from "./worker-environments/node-enrollment.js";
-import type { NodeWorkerBundlePreparation } from "./worker-environments/node-worker-bundle-installer.js";
 import type { NodeWorkerBundleTransferHttpCallback } from "./worker-environments/node-worker-bundle-transfer-http.js";
 import { nodeWorkerGatewayNamespace as resolveNodeWorkerGatewayNamespace } from "./worker-environments/node-worker-gateway-namespace.js";
 import type { NodeWorkerWorkspaceBindingResolver } from "./worker-environments/node-worker-tunnel.js";
+import type { NodeWorkerBundleRetention } from "./worker-environments/node-workspace-retain-coordinator.js";
 import type { NodeWorkspaceTransferHttpCallback } from "./worker-environments/node-workspace-transfer-http-contract.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import type { WorkerPlacementDispatchContract } from "./worker-environments/service-contract.js";
@@ -64,7 +64,7 @@ export type GatewayWorkerEnvironmentRuntime = {
   workerLiveEvents?: WorkerLiveEventReceiver;
   workerTunnelManager?: WorkerTunnelManager;
   nodeWorkerGatewayNamespace?: string;
-  nodeWorkerBundlePreparation?: NodeWorkerBundlePreparation;
+  nodeWorkerBundleRetention?: NodeWorkerBundleRetention;
   bindWorkerSessionDispatch?: (dispatch: WorkerPlacementDispatchContract["dispatch"]) => void;
   bindDeviceNodeControl?: (transport: NodeWorkerSupervisorTransport) => void;
   bindWorkerNodeDesktopControl?: (transport: NodeWorkerSupervisorTransport) => void;
@@ -299,20 +299,16 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     gatewayNamespace: nodeWorkerGatewayNamespace,
     getTransport: () => deviceRuntime.getNodeTransport(),
     transfer: nodeWorkerBundleTransfer,
-    isEnvironmentOwnedNode,
-    warn: (message) => workerEnvironmentLog.warn(message),
   });
-  const nodeWorkerBundlePreparation: NodeWorkerBundlePreparation = {
+  const nodeWorkerBundleRetention: NodeWorkerBundleRetention = {
     isEnvironmentOwnedNode,
-    currentArtifact: async () => {
+    currentBuild: async () => {
       const artifact = await prepareInstallation("bundle");
       if (artifact.install !== "bundle") {
-        throw new Error("Node worker preparation requires a bundle artifact");
+        throw new Error("Node worker retention requires a bundle artifact");
       }
       return artifact;
     },
-    prepare: nodeWorkerBundleInstaller.prepare,
-    invalidate: nodeWorkerBundleInstaller.invalidate,
   };
   const nodeEnrollment = createWorkerNodeEnrollmentManager({
     store: params.startup.store,
@@ -401,20 +397,16 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
         ? deviceRuntime.provider
         : resolveWorkerProvider(params.getPluginRegistry(), providerId),
     prepareInstallation,
-    ensureNodeWorkerBundle: nodeWorkerBundleInstaller.ensure,
+    ensureNodeWorkerBundle: nodeWorkerBundleInstaller,
     prepareNodeBootstrap: nodeEnrollment.prepare,
     prepareNodeEnrollment: nodeEnrollment.begin,
     prepareNodeRuntime: nodeEnrollment.prepareRuntime,
     closeNodeRuntime: nodeEnrollment.closeRuntime,
     closeNodeEnrollment: nodeEnrollment.close,
     retireNodeEnrollment: nodeEnrollment.retire,
-    stopNodeEnrollmentWaits: () => {
-      nodeEnrollment.stop();
-      nodeWorkerBundleInstaller.stop();
-    },
+    stopNodeEnrollmentWaits: nodeEnrollment.stop,
     closeNodeBootstrapArtifacts: async () => {
       await Promise.all([
-        nodeWorkerBundleInstaller.close(),
         ...[...bootstrapProducers.values()].map(({ producer }) => producer.close()),
         ...retiringBootstrapProducers,
       ]);
@@ -539,13 +531,12 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     workerLiveEvents,
     workerTunnelManager,
     nodeWorkerGatewayNamespace,
-    nodeWorkerBundlePreparation,
+    nodeWorkerBundleRetention,
     bindWorkerSessionDispatch: (dispatch) => {
       dispatchChild = dispatch;
     },
     bindDeviceNodeControl: (transport) => {
       deviceRuntime.bindNodeTransport(transport);
-      nodeWorkerBundleInstaller.invalidate();
       if (workerNodeDesktopStreamBroker) {
         workerNodePortalCarrier.bindRuntime({
           transport,

@@ -494,20 +494,20 @@ do not start a second CLI node for the same Mac. Its native camera, screen, and
 desktop capabilities remain on that identity. If the shared runtime cannot
 start, native capabilities remain available, but session hosting is unavailable.
 
-When a paired session host reconnects after a Gateway update, the Gateway prepares
-its current sealed worker artifact on that host. The node verifies the exact
-content hash, publishes the artifact atomically, and prewarms it when supported.
+When a session first needs the current worker build, the Gateway sends its sealed
+worker artifact to the paired host. The node verifies the exact content hash,
+publishes the artifact atomically, and prewarms it when supported by the execution mode.
 The artifact contains its complete JavaScript dependency closure; the node does
-not install packages or execute lifecycle scripts. A session started during
-preparation waits for that same operation. Cancelling the session does not cancel
-host preparation; disconnecting or revoking the host does.
+not install packages or execute lifecycle scripts. Installation belongs to the
+session request and receives its cancellation signal. Reconnect maintenance does
+not install or prewarm a worker build.
 
-Nodes retain one current prepared artifact per Gateway namespace, even with no
-sessions. Older builds remain only while a live or recoverable placement needs
-them; normal maintenance removes unreferenced builds. Each new dispatch still
-validates the installed artifact. Preparation failures are reported in Gateway
-logs; retry Start or reconnect the host. Cloud-enrolled nodes keep their own
-execution-mode-specific preparation lifecycle.
+Once installed, persistent nodes retain one current worker artifact per Gateway
+namespace, even with no sessions. Older builds remain only while a live or
+recoverable placement needs them; normal maintenance removes unreferenced builds.
+Each new dispatch still validates the installed artifact and reuses it when valid,
+avoiding another download. Cloud-enrolled nodes keep their own execution-mode-specific
+installation and retention lifecycle.
 
 You can also enroll and enable a service host in one step with
 `openclaw connect --service --session-host`. In Control UI New Session, a
@@ -520,8 +520,8 @@ the device filesystem.
 
 The Devices page shows the validated Gateway-owned worker version in the node's
 metadata. If the current artifact is missing or fails validation, Devices shows
-a **worker missing** warning; reconnect preparation or an explicit new session
-installs the current bundle. This status is observational and reconnect-scoped: launch still
+a **worker missing** warning; an explicit new session installs the current bundle.
+This status is observational and reconnect-scoped: launch still
 requires the exact durable receipt and current node authority.
 
 Node hosts must support the current private worker-supervisor dialect before

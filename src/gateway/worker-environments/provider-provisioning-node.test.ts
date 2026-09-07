@@ -51,7 +51,7 @@ describe("node worker provider provisioning", () => {
         isCurrent: (candidate) => candidate === node,
         invoke,
       };
-      const installer = createGatewayNodeWorkerBundleInstaller({
+      const ensureNodeWorkerBundle = createGatewayNodeWorkerBundleInstaller({
         gatewayNamespace: "gateway-test",
         getTransport: () => transport,
         transfer,
@@ -66,7 +66,7 @@ describe("node worker provider provisioning", () => {
           }),
         }),
         {
-          ensureNodeWorkerBundle: installer.ensure,
+          ensureNodeWorkerBundle,
         },
       );
       try {
@@ -92,7 +92,6 @@ describe("node worker provider provisioning", () => {
           expect(input).toHaveProperty("bundlePrewarm", 1);
         }
       } finally {
-        await installer.close();
         transfer.closeAll();
       }
     },

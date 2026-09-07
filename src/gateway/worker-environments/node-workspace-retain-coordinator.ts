@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { NODE_WORKER_WORKSPACE_RETAIN_COMMAND } from "../../infra/node-commands.js";
 import {
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
@@ -15,7 +16,6 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
-import type { NodeWorkerBundlePreparation } from "./node-worker-bundle-installer.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -26,11 +26,18 @@ import { listRetainedWorkerBundleHashes } from "./worker-bundle-retention.js";
 const RETAIN_COMMAND_TIMEOUT_MS = 10 * 60_000;
 const TERMINAL_ENVIRONMENT_STATES = new Set(["destroyed", "failed", "orphaned"]);
 
+export type NodeWorkerBundleRetention = {
+  currentBuild: () => Promise<
+    Readonly<Pick<WorkerAdmissionHandshake, "bundleHash" | "openclawVersion">>
+  >;
+  isEnvironmentOwnedNode: (nodeId: string) => boolean;
+};
+
 type NodeWorkspaceRetainCoordinatorOptions = {
   gatewayNamespace: string;
   placements: Pick<WorkerSessionPlacementStore, "list" | "listPendingWorkspaceResults">;
   environments: Pick<WorkerEnvironmentService, "list">;
-  preparation?: NodeWorkerBundlePreparation;
+  bundleRetention?: NodeWorkerBundleRetention;
   additionalManifestRefs?: (placement: WorkerSessionPlacementRecord) => readonly string[];
   warn: (message: string) => void;
 };
@@ -155,35 +162,20 @@ export function createNodeWorkspaceRetainCoordinator(
     node: NodeWorkerSupervisorNodeProof,
   ): Promise<void> => {
     // Environment-owned cloud nodes prepare under their enrollment/mode owner.
-    // Persistent, consented session hosts retain one current build even before a first session.
-    const preparation = options.preparation;
-    let currentArtifact =
-      preparation && !preparation.isEnvironmentOwnedNode(node.nodeId)
-        ? await preparation.currentArtifact()
+    // Persistent hosts keep the current build when installed; maintenance never installs it.
+    const bundleRetention = options.bundleRetention;
+    let currentBuild =
+      bundleRetention && !bundleRetention.isEnvironmentOwnedNode(node.nodeId)
+        ? await bundleRetention.currentBuild()
         : undefined;
-    if (preparation?.isEnvironmentOwnedNode(node.nodeId)) {
-      currentArtifact = undefined;
-    }
-    if (currentArtifact) {
-      try {
-        await preparation!.prepare({
-          node,
-          artifact: currentArtifact,
-          signal: abortController.signal,
-        });
-      } catch {
-        // The preparation attempt reports failure once. Retention/status still
-        // inspect the current build without retrying that failed generation.
-      }
-    }
-    if (preparation?.isEnvironmentOwnedNode(node.nodeId)) {
-      currentArtifact = undefined;
+    if (bundleRetention?.isEnvironmentOwnedNode(node.nodeId)) {
+      currentBuild = undefined;
     }
     const isCurrent = () =>
       !stopped &&
       transport === currentTransport &&
       currentTransport.isCurrent(node) &&
-      (!currentArtifact || !preparation!.isEnvironmentOwnedNode(node.nodeId));
+      (!currentBuild || !bundleRetention!.isEnvironmentOwnedNode(node.nodeId));
 
     if (!isCurrent()) {
       return;
@@ -191,7 +183,7 @@ export function createNodeWorkspaceRetainCoordinator(
     const retainedBundleHashes = [
       ...new Set([
         ...snapshotBundleHashesForNode(options, node.nodeId),
-        ...(currentArtifact ? [currentArtifact.bundleHash] : []),
+        ...(currentBuild ? [currentBuild.bundleHash] : []),
       ]),
     ].toSorted();
     const bundleRetentionSupported =
@@ -218,7 +210,7 @@ export function createNodeWorkspaceRetainCoordinator(
       Buffer.byteLength(JSON.stringify(retentionInput), "utf8") <=
         NODE_WORKER_RETAIN_REQUEST_MAX_BYTES;
     const bundleStatusTarget = bundleStatusSupported
-      ? (currentArtifact ?? bundleStatusTargetForNode(options, node.nodeId))
+      ? (currentBuild ?? bundleStatusTargetForNode(options, node.nodeId))
       : undefined;
     const statusInput =
       bundleStatusTarget && retainedBundleHashes.includes(bundleStatusTarget.bundleHash)
@@ -284,7 +276,7 @@ export function createNodeWorkspaceRetainCoordinator(
         const bundleStatus = retained.bundleStatus;
         const requestedBundleHash = input.bundleStatusHash;
         const currentStatusTarget = requestedBundleHash
-          ? (currentArtifact ?? bundleStatusTargetForNode(options, node.nodeId))
+          ? (currentBuild ?? bundleStatusTargetForNode(options, node.nodeId))
           : undefined;
         const statusTargetMatches =
           currentStatusTarget != null &&
@@ -311,7 +303,6 @@ export function createNodeWorkspaceRetainCoordinator(
   };
 
   const schedule = (nodeId?: string): Promise<void> => {
-    options.preparation?.invalidate(nodeId);
     if (stopped) {
       return Promise.resolve();
     }
@@ -350,7 +341,7 @@ export function createNodeWorkspaceRetainCoordinator(
             }
           } else {
             // The all-node join reports completion; each reconnect has its own
-            // coalesced operation and never queues behind another node's download.
+            // coalesced operation and never queues behind another node's maintenance.
             await Promise.all(nodes.map((node) => schedule(node.nodeId)));
           }
         } catch (error) {
