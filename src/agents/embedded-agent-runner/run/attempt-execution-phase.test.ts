@@ -219,8 +219,9 @@ async function createFixture(
   mocks.installStreamGuards.mockImplementation(() => {
     order.push("guards");
     return {
-      cacheObservabilityEnabled: true,
-      promptCacheTools: [{ name: "read" }],
+      onModelRequest: vi.fn(),
+      onModelUsage: vi.fn(),
+      getPromptCacheObservation: vi.fn(),
     };
   });
   mocks.prepareHistory.mockImplementation(async () => {
@@ -501,8 +502,8 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       expect.objectContaining({
         preparedStreamRuntime: expect.objectContaining({
           cache: {
-            observabilityEnabled: true,
-            promptTools: [{ name: "read" }],
+            onModelRequest: expect.any(Function),
+            getObservation: expect.any(Function),
           },
           history: expect.objectContaining({ contextEngineAssemblySucceeded: true }),
           isProbeSession: false,
@@ -518,6 +519,9 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     expect(abortInput.abortActiveSession).toBe(fixture.abortActiveSession);
     const streamInput = mocks.prepareStream.mock.calls[0]?.[0];
     expect(streamInput.activeSession).toBe(fixture.activeSession);
+    expect(streamInput.onModelUsage).toBe(
+      mocks.installStreamGuards.mock.results[0]?.value.onModelUsage,
+    );
     expect(streamInput.getRunState()).toEqual({
       aborted: true,
       promptError: null,

@@ -26,6 +26,7 @@ import type { PreparedProviderFailoverOwner } from "./failover/provider-patterns
 import type { AgentInternalEvent } from "./internal-events.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { AgentSession } from "./sessions/index.js";
+import type { NormalizedUsage } from "./usage.js";
 export type { BlockReplyChunking } from "./embedded-agent-subscribe.shared-types.js";
 
 type ReasoningStreamPayload = Pick<
@@ -71,6 +72,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   blockReplyChunking?: BlockReplyChunking;
   onPartialReply?: (payload: PartialReplyPayload) => boolean | void | Promise<boolean | void>;
   onAssistantMessageStart?: () => void | Promise<void>;
+  /** Exact completed model request usage, before aggregation or queued delivery. */
+  onModelUsage?: (usage: NormalizedUsage | undefined) => void;
   onExecutionPhase?: (info: {
     phase: "tool_execution_started";
     tool?: string;

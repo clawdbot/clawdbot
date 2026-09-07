@@ -22,7 +22,6 @@ import {
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
-import type { createCacheTrace } from "../../cache-trace.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { buildRuntimeFactsPrompt } from "../../runtime-facts-prompt.js";
@@ -36,13 +35,7 @@ import {
   appendModelIdentitySystemPrompt,
   buildModelIdentityPromptLine,
 } from "../../system-prompt.js";
-import { normalizeToolPolicyName } from "../../tool-policy.js";
 import { log } from "../logger.js";
-import {
-  beginPromptCacheObservation,
-  type PromptCacheChange,
-  type PromptCacheToolSnapshot,
-} from "../prompt-cache-observability.js";
 import {
   cloneToolResultPromptProjectionState,
   type ToolResultPromptProjectionState,
@@ -78,9 +71,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
  * Assembles hook, orphan-repair, steering, and cache inputs for one prompt.
  */
 type HookRunner = ReturnType<typeof getGlobalHookRunner>;
-type CacheTrace = ReturnType<typeof createCacheTrace>;
 type OrphanRepairPlan = ReturnType<typeof resolveOrphanRepairPlan>;
-type CacheRetention = Parameters<typeof beginPromptCacheObservation>[0]["cacheRetention"];
 type PromptBuildHookContext = Parameters<typeof resolvePromptBuildHookResult>[0]["hookCtx"];
 
 type EmbeddedAttemptSteeringLease = {
@@ -102,7 +93,6 @@ type EmbeddedAttemptPromptAssembly = {
   promptForRuntimeContextBeforeAnnotation: string;
   transcriptLeafId: string | null;
   heartbeatSummary?: ReturnType<typeof resolveHeartbeatSummaryForAgent>;
-  promptCacheChangesForTurn: PromptCacheChange[] | null;
   leasedSteering?: EmbeddedAttemptSteeringLease;
 };
 
@@ -121,14 +111,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   applyPromptBuildToolsAllow: (toolsAllow: string[] | undefined) => string[];
   setActiveSessionSystemPrompt: (systemPrompt: string) => void;
   setLeasedSteering: (lease: EmbeddedAttemptSteeringLease) => void;
-  cache: {
-    observabilityEnabled: boolean;
-    retention: CacheRetention;
-    streamStrategy: string;
-    transport: AgentSession["agent"]["transport"];
-    tools: readonly PromptCacheToolSnapshot[];
-    trace: CacheTrace;
-  };
 }): Promise<EmbeddedAttemptPromptAssembly> {
   const { attempt } = input;
   const isSettledTurnFinalization = attempt.operation === "settled-tool-finalization";
@@ -185,7 +167,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
           activeToolNames: promptCacheToolNames,
           assertHostActive,
         });
-  const promptCacheToolNameSet = new Set(promptCacheToolNames.map(normalizeToolPolicyName));
   const promptBeforeResolvedToolFinalization = effectivePrompt;
   effectivePrompt = applyResolvedToolPromptFinalizer({
     prompt: effectivePrompt,
@@ -196,9 +177,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     attempt.finalizePromptForResolvedTools && attempt.transcriptPrompt === undefined
       ? promptBeforeResolvedToolFinalization
       : attempt.transcriptPrompt;
-  const promptCacheTools = input.cache.tools.filter((tool) =>
-    promptCacheToolNameSet.has(normalizeToolPolicyName(tool.name)),
-  );
   const promptBeforePromptBuildHooks = effectivePrompt;
   const joinHookContext = (...values: Array<string | undefined>) =>
     values.filter((value): value is string => Boolean(value?.trim())).join("\n\n") || undefined;
@@ -250,34 +228,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
       });
   if (modelAwareSystemPrompt !== systemPromptText) {
     setSystemPrompt(modelAwareSystemPrompt);
-  }
-
-  let promptCacheChangesForTurn: PromptCacheChange[] | null = null;
-  if (input.cache.observabilityEnabled) {
-    const cacheObservation = beginPromptCacheObservation({
-      sessionId: attempt.sessionId,
-      promptCacheKey: attempt.promptCacheKey,
-      sessionKey: attempt.sessionKey,
-      provider: attempt.provider,
-      modelId: attempt.modelId,
-      modelApi: attempt.model.api,
-      cacheRetention: input.cache.retention,
-      streamStrategy: input.cache.streamStrategy,
-      transport: input.cache.transport,
-      systemPrompt: systemPromptText,
-      tools: promptCacheTools,
-    });
-    promptCacheChangesForTurn = cacheObservation.changes;
-    input.cache.trace?.recordStage("cache:state", {
-      options: {
-        snapshot: cacheObservation.snapshot,
-        previousCacheRead: cacheObservation.previousCacheRead ?? undefined,
-        changes: cacheObservation.changes?.map((change) => ({
-          code: change.code,
-          detail: change.detail,
-        })),
-      },
-    });
   }
 
   const routingSummary = describeProviderRequestRoutingSummary({
@@ -404,7 +354,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     promptForRuntimeContextBeforeAnnotation,
     transcriptLeafId,
     heartbeatSummary,
-    promptCacheChangesForTurn,
     leasedSteering,
   };
 }

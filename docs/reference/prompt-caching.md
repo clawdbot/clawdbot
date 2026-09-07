@@ -332,6 +332,8 @@ diagnostics:
 
 ### What to inspect
 
+Prompt-cache observations record `input`, `cacheRead`, and `cacheWrite` per completed foreground model request alongside its stable system-prefix/tools fingerprint, and flag cache-read drops from the previous request, including reported zero reads; billing totals remain separate. Observations and warnings require cache tracing (`diagnostics.cacheTrace.enabled` or `OPENCLAW_CACHE_TRACE=1`) or debug logging, and trace results identify each request within its attempt.
+
 - Cache trace events are JSONL with staged snapshots like `session:loaded`, `prompt:before`, `stream:context`, and `session:after`.
 - Per-turn cache token impact is visible in normal usage surfaces: `cacheRead` and `cacheWrite` show up in `/usage tokens`, `/status`, session usage summaries, and custom `messages.usageTemplate` layouts.
 - For Anthropic, expect both `cacheRead` and `cacheWrite` when caching is active.

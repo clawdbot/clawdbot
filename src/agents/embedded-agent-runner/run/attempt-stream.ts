@@ -13,7 +13,7 @@ import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import { wrapStreamFnCodeModeSource } from "../../transcript-code-mode-source.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { log } from "../logger.js";
-import { collectPromptCacheTools } from "../prompt-cache-observability.js";
+import { createPromptCacheRequestObserver } from "../prompt-cache-request-observer.js";
 import {
   repairRejectedCompactionReplayInSessionManager,
   repairRejectedThinkingReplayInSessionManager,
@@ -83,7 +83,7 @@ export function installEmbeddedAttemptStreamGuards(
 ) {
   const { attempt } = input;
   const {
-    agentSession: { activeSession: session, allCustomTools, codeModeExecToolNames },
+    agentSession: { activeSession: session, codeModeExecToolNames },
     anthropicPayloadLogger,
     cacheTrace,
     contextGuards,
@@ -91,7 +91,12 @@ export function installEmbeddedAttemptStreamGuards(
     sessionManager,
     state: { systemPromptText },
     transcriptPolicy,
-    transport: { effectiveAgentTransport, providerTextTransforms },
+    transport: {
+      effectiveAgentTransport,
+      effectivePromptCacheRetention,
+      streamStrategy,
+      providerTextTransforms,
+    },
   } = input.prepared.sessionRuntime;
   const { liveAllowedToolNames, replayAllowedToolNames } =
     input.prepared.toolCatalog.toolSearchRunPlan;
@@ -138,7 +143,35 @@ export function installEmbeddedAttemptStreamGuards(
     }
   };
   const cacheObservabilityEnabled = Boolean(cacheTrace) || log.isEnabled("debug");
-  const promptCacheTools = cacheObservabilityEnabled ? collectPromptCacheTools(allCustomTools) : [];
+  const cacheObserver = cacheObservabilityEnabled
+    ? createPromptCacheRequestObserver(
+        {
+          sessionId: attempt.sessionId,
+          sessionKey: attempt.sessionKey,
+          promptCacheKey: attempt.promptCacheKey,
+          cacheRetention: effectivePromptCacheRetention,
+          streamStrategy,
+          transport: effectiveAgentTransport,
+        },
+        (observation, snapshot) => {
+          if (observation.broke) {
+            const changes =
+              observation.changes?.map((change) => `${change.code}(${change.detail})`).join(", ") ??
+              "no tracked cache input change";
+            log.warn(
+              `[prompt-cache] cache read dropped ${observation.previousCacheRead} -> ${observation.cacheRead} ` +
+                `runId=${attempt.runId} request=${observation.requestIndex} for ${snapshot.provider}/${snapshot.modelId} via ${streamStrategy}; ${changes}`,
+            );
+          }
+          cacheTrace?.recordStage("cache:result", { options: { ...observation } });
+        },
+        (request) => {
+          cacheTrace?.recordStage("cache:state", {
+            options: { ...request, previousCacheRead: request.previousCacheRead ?? undefined },
+          });
+        },
+      )
+    : undefined;
   if (cacheTrace) {
     cacheTrace.recordStage("session:loaded", {
       messages: session.messages,
@@ -379,7 +412,8 @@ export function installEmbeddedAttemptStreamGuards(
     );
   }
   return {
-    cacheObservabilityEnabled,
-    promptCacheTools,
+    onModelRequest: cacheObserver?.onModelRequest,
+    onModelUsage: cacheObserver?.onModelUsage,
+    getPromptCacheObservation: cacheObserver?.getObservation,
   };
 }

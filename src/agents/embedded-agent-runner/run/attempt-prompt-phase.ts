@@ -47,7 +47,6 @@ export type EmbeddedAttemptPromptState = Pick<
   PromptPreflightState,
   "contextBudgetStatus" | "preflightRecovery"
 > & {
-  promptCacheChangesForTurn: PromptAssemblyResult["promptCacheChangesForTurn"];
   finalPromptText?: string;
   yieldAborted: boolean;
 };
@@ -85,7 +84,6 @@ export async function runEmbeddedAttemptPromptPhase(
     transport: {
       effectiveAgentTransport,
       effectiveExtraParams,
-      effectivePromptCacheRetention,
       streamStrategy,
       compactionReplayEnabled,
     },
@@ -165,14 +163,6 @@ export async function runEmbeddedAttemptPromptPhase(
     runtimeModel: runtimeInfo.model,
     systemPromptText,
     setActiveSessionSystemPrompt,
-    cache: {
-      observabilityEnabled: preparedStreamRuntime.cache.observabilityEnabled,
-      retention: effectivePromptCacheRetention,
-      streamStrategy,
-      transport: effectiveAgentTransport,
-      tools: preparedStreamRuntime.cache.promptTools,
-      trace: cacheTrace,
-    },
     applyPromptBuildToolsAllow: (toolsAllow) => {
       return promptToolPolicy.apply(toolsAllow).activeToolNames;
     },
@@ -188,7 +178,6 @@ export async function runEmbeddedAttemptPromptPhase(
   const { hookCtx, promptBuildPrependContext, promptBuildAppendContext, transcriptLeafId } =
     promptAssembly;
   leasedSteering = promptAssembly.leasedSteering ?? leasedSteering;
-  promptState.promptCacheChangesForTurn = promptAssembly.promptCacheChangesForTurn;
 
   try {
     const canClaimHeartbeatOutcome =
@@ -272,6 +261,17 @@ export async function runEmbeddedAttemptPromptPhase(
       });
       if (googlePromptCacheStreamFn) {
         activeSession.agent.streamFn = googlePromptCacheStreamFn;
+      }
+      const { onModelRequest } = preparedStreamRuntime.cache;
+      if (onModelRequest) {
+        const streamFn = activeSession.agent.streamFn;
+        activeSession.agent.streamFn = (model, context, options) => {
+          // Observe canonical inputs before managed caches consume system/tools.
+          if (!activeSession.isCompacting) {
+            onModelRequest(model, context);
+          }
+          return streamFn(model, context, options);
+        };
       }
     }
 
