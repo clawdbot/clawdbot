@@ -184,6 +184,31 @@ The `Linux App` CI workflow uploads the same bundles as the
 manual runs. See `apps/linux/README.md` in the repository for Linux build
 dependencies and development commands.
 
+### Raspberry Pi and low-memory hosts
+
+On Raspberry Pi-class hardware (tested on Pi 5, Debian 13 arm64, WebKitGTK 2.52 / Mesa), the
+companion WebView may render blank or frozen unless the launch environment disables the
+dma-buf renderer and compositing:
+
+```bash
+export WEBKIT_DISABLE_DMABUF_RENDERER=1
+export WEBKIT_DISABLE_COMPOSITING_MODE=1
+```
+
+On 8 GB hosts, disabling the JavaScriptCore JIT further cuts companion memory substantially
+(measured on Pi 5: main WebKitWebProcess RSS 594 MB -> 290 MB, whole-app PSS ~341 MB, with no
+visible UI impact in testing; long-session drift measurements ongoing):
+
+```bash
+export WEBKIT_DISABLE_JIT=1
+export JSC_useJIT=false JSC_useFTLJIT=false JSC_useDFGJIT=false
+```
+
+A convenient pattern is a small launcher script that exports these variables before
+`exec`-ing the companion binary, and pointing the `.desktop` entry (and the
+`openclaw://` handler) at that wrapper. These variables apply to the desktop companion
+only; the Gateway does not need them.
+
 ### Quick Chat
 
 Open Quick Chat with `Ctrl+Shift+Space` or the **Quick Chat** tray item. The agent
