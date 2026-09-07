@@ -268,6 +268,57 @@ describe("isBotMentionedFromTargets", () => {
     });
     expectMentioned(msg, { mentionRegexes: [] }, true);
   });
+
+  it("matches fallback number mentions written with parentheses or dots", () => {
+    for (const body of ["reach me at +1 (555) 123-4567", "num 1.555.123.4567 thanks"]) {
+      const msg = makeMsg({
+        body,
+        selfE164: "+15551234567",
+        selfJid: "15551234567@s.whatsapp.net",
+      });
+      expectMentioned(msg, { mentionRegexes: [] }, true);
+    }
+  });
+
+  it("does not treat digits spread across unrelated numbers as a mention", () => {
+    const msg = makeMsg({
+      body: "Meeting at 15:55, room 123, ext 4567",
+      selfE164: "+15551234567",
+      selfJid: "15551234567@s.whatsapp.net",
+    });
+    expectMentioned(msg, { mentionRegexes: [] }, false);
+  });
+
+  it("does not treat the bot number embedded in a longer number as a mention", () => {
+    const msg = makeMsg({
+      body: "invoice 9915551234567001 is overdue",
+      selfE164: "+15551234567",
+      selfJid: "15551234567@s.whatsapp.net",
+    });
+    expectMentioned(msg, { mentionRegexes: [] }, false);
+  });
+
+  it("treats line breaks as a number boundary", () => {
+    // A line break separates two numbers; joining them would recreate the
+    // digit-flattening false positive this fallback is meant to avoid.
+    for (const body of ["1555\n1234567", "1555\r\n1234567", "Booking 1555\n1234567 is the ref"]) {
+      const msg = makeMsg({
+        body,
+        selfE164: "+15551234567",
+        selfJid: "15551234567@s.whatsapp.net",
+      });
+      expectMentioned(msg, { mentionRegexes: [] }, false);
+    }
+  });
+
+  it("still matches a number on its own line", () => {
+    const msg = makeMsg({
+      body: "call me\n+1 555 123 4567\nthanks",
+      selfE164: "+15551234567",
+      selfJid: "15551234567@s.whatsapp.net",
+    });
+    expectMentioned(msg, { mentionRegexes: [] }, true);
+  });
 });
 
 describe("resolveMentionTargets with @lid mapping", () => {

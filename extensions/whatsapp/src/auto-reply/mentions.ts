@@ -89,17 +89,19 @@ function isBotMentionedFromTargets(
     return false;
   }
 
-  // Fallback: detect body containing our own number (with or without +, spacing)
+  // Fallback: detect body containing our own number written with or without
+  // "+", spaces, hyphens, parentheses, or dots. The number must appear as one
+  // contiguous token: digits from unrelated numbers elsewhere in the message
+  // must not concatenate into a match, and the number must not be matched as
+  // a substring of a longer number.
   if (targets.self.e164) {
     const selfDigits = targets.self.e164.replace(/\D/g, "");
     if (selfDigits) {
-      const bodyDigits = bodyClean.replace(/[^\d]/g, "");
-      if (bodyDigits.includes(selfDigits)) {
-        return true;
-      }
-      const bodyNoSpace = msg.payload.body.replace(/[\s-]/g, "");
-      const pattern = new RegExp(`\\+?${selfDigits}`, "i");
-      if (pattern.test(bodyNoSpace)) {
+      // Only horizontal formatting is removed. Line breaks stay in the body so
+      // numbers on separate lines keep their boundary and cannot be joined.
+      const bodyCompact = bodyClean.replace(/[^\S\r\n\u2028\u2029]|[-().]/g, "");
+      const pattern = new RegExp(`(?<!\\d)\\+?${selfDigits}(?!\\d)`);
+      if (pattern.test(bodyCompact)) {
         return true;
       }
     }
