@@ -93,11 +93,20 @@ function resolveProviderContextBoundary(
   return undefined;
 }
 
+/** Estimates token pressure from serialized tool definitions sent alongside the prompt. */
+export function estimateToolSchemaTokenPressure(tools: unknown[]): number {
+  if (!Array.isArray(tools) || tools.length === 0) {
+    return 0;
+  }
+  return Math.ceil(estimateJsonPayloadTokenPressure(tools) * SAFETY_MARGIN);
+}
+
 function estimateTranscriptBoundaryTokenPressure(params: {
   messages: AgentMessage[];
   systemPrompt?: string;
   prompt: string;
   replay?: CompactionReplayPressureContext;
+  toolSchemaTokens?: number;
 }): TranscriptBoundaryTokenPressure {
   const replay = params.replay
     ? resolveCompactionReplayPressure(params.messages, params.replay.model, params.replay, {
@@ -115,9 +124,14 @@ function estimateTranscriptBoundaryTokenPressure(params: {
     (sum, message) => sum + estimateMessageTokenPressure(message),
     estimateRenderedPromptTokens(params) + (boundary ? 0 : (replay?.prefixTokens ?? 0)),
   );
+  const toolSchemaTokens = Math.max(0, params.toolSchemaTokens ?? 0);
   return {
     estimatedPromptTokens:
-      (boundary?.totalTokens ?? 0) + Math.ceil(locallyEstimatedTokens * SAFETY_MARGIN),
+      (boundary?.totalTokens ?? 0) +
+      Math.ceil(locallyEstimatedTokens * SAFETY_MARGIN) +
+      // The provider boundary already includes tool schemas from its request;
+      // only add them when estimating from the raw transcript.
+      (boundary ? 0 : toolSchemaTokens),
     source: boundary
       ? "provider_context_usage"
       : replay
@@ -133,6 +147,7 @@ export function estimateLlmBoundaryTokenPressure(params: {
   systemPrompt?: string;
   prompt: string;
   replay?: CompactionReplayPressureContext;
+  toolSchemaTokens?: number;
 }): number {
   return estimateTranscriptBoundaryTokenPressure(params).estimatedPromptTokens;
 }
@@ -174,6 +189,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   contextTokenBudget: number;
   reserveTokens: number;
   toolResultMaxChars?: number;
+  toolSchemaTokens?: number;
   llmBoundaryTokenPressure?: LlmBoundaryTokenPressure;
   replay?: CompactionReplayPressureContext;
 }): PreemptiveCompactionDecision {
@@ -188,6 +204,9 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
           systemPrompt: params.systemPrompt,
           prompt: params.prompt,
           replay: params.replay,
+          ...(typeof params.toolSchemaTokens === "number"
+            ? { toolSchemaTokens: params.toolSchemaTokens }
+            : {}),
         });
   // The selected provider window owns its covered prefix, including when a
   // context engine supplied an estimate of the raw transcript instead.
@@ -211,6 +230,9 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
       messages: params.unwindowedMessages,
       systemPrompt: params.systemPrompt,
       prompt: params.prompt,
+      ...(typeof params.toolSchemaTokens === "number"
+        ? { toolSchemaTokens: params.toolSchemaTokens }
+        : {}),
     });
     // Unwindowed history is diagnostic: neither its checkpoints nor its larger
     // raw estimate may authorize recovery of a different outgoing window.

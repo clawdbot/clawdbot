@@ -102,6 +102,7 @@ function resolveOpenAICompletionsModelMaxTokens(model: OpenAIModeModel): number 
 
 const OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN = 1.25;
 const OPENAI_COMPLETIONS_IMAGE_CHAR_ESTIMATE = 8_000;
+const MIN_USEFUL_OUTPUT_TOKENS = 16;
 
 // Used only to bound `max_completion_tokens` below the effective context cap
 // for strict OpenAI-compatible servers (e.g. vLLM, StepFun). The CJK-aware
@@ -517,6 +518,13 @@ export function buildOpenAICompletionsRequest(
             `model=${model.id} requested=${effectiveMaxTokens} output=${clampedMaxTokens} ` +
             `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}`,
         );
+        if (remainingBudget < MIN_USEFUL_OUTPUT_TOKENS) {
+          log.warn(
+            `[completions] insufficient_output_budget provider=${model.provider} api=${model.api} ` +
+              `model=${model.id} output=${clampedMaxTokens} ` +
+              `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}`,
+          );
+        }
       }
     }
     if (policy.mode === "direct" ? options?.maxTokens : clampedMaxTokens) {

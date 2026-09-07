@@ -179,6 +179,7 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
   systemPrompt: string;
   timezone?: string;
   toolResultMaxChars: number;
+  toolSchemaTokens?: number;
   unwindowedContextEngineMessagesForPrecheck?: AgentMessage[];
 }): Promise<AttemptPromptPreflightState> {
   const { attempt } = input;
@@ -208,6 +209,9 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
         contextTokenBudget: input.contextTokenBudget,
         reserveTokens: input.reserveTokens,
         toolResultMaxChars: input.toolResultMaxChars,
+        ...(typeof input.toolSchemaTokens === "number"
+          ? { toolSchemaTokens: input.toolSchemaTokens }
+          : {}),
         replay: {
           model: attempt.model,
           sessionId: attempt.sessionId,
