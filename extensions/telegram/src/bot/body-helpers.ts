@@ -9,9 +9,10 @@ import type {
   RichText,
   User,
 } from "grammy/types";
-import type {
-  ChannelInboundMediaInput,
-  NormalizedLocation,
+import {
+  type ChannelInboundMediaInput,
+  formatLocationText,
+  type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -527,6 +528,57 @@ export function normalizeForwardedContext(msg: Message): TelegramForwardedContex
     return null;
   }
   return resolveForwardOrigin(msg.forward_origin);
+}
+
+type TelegramDiceRoll = {
+  emoji: string;
+  value: number;
+};
+
+/**
+ * Telegram dice rolls carry no text and no downloadable file, so they are
+ * neither text nor media. Extract them explicitly, the same way locations are
+ * handled, otherwise the message normalizes to an empty body and is dropped.
+ */
+function extractTelegramDice(msg: Pick<Message, "dice">): TelegramDiceRoll | null {
+  const dice = msg.dice;
+  if (!dice || typeof dice.value !== "number" || !Number.isFinite(dice.value)) {
+    return null;
+  }
+  const emoji = normalizeOptionalString(dice.emoji);
+  if (!emoji) {
+    return null;
+  }
+  return { emoji, value: dice.value };
+}
+
+/**
+ * Attribution stays out of the marker: the envelope already prefixes group bodies with the
+ * sender label, and the inbound debounce buffer keys on sender id, so a marker can never
+ * end up under someone else's name.
+ */
+function formatTelegramDiceText(dice: TelegramDiceRoll): string {
+  return `[Dice ${dice.emoji} = ${dice.value}]`;
+}
+
+/** Location counts as user text downstream and is forwarded structurally; dice is neither. */
+export type TelegramNonTextBody =
+  | { kind: "location"; text: string; location: NormalizedLocation }
+  | { kind: "dice"; text: string };
+
+/**
+ * Bodies for messages that carry neither text nor a downloadable file. Inbound
+ * normalization, the message cache, and reply-target projection all need this; each grew
+ * its own copy, which is how dice reached only the first of them and a reply to a roll
+ * arrived without it.
+ */
+export function resolveTelegramNonTextBody(msg: Message): TelegramNonTextBody | undefined {
+  const location = extractTelegramLocation(msg);
+  if (location) {
+    return { kind: "location", text: formatLocationText(location), location };
+  }
+  const dice = extractTelegramDice(msg);
+  return dice ? { kind: "dice", text: formatTelegramDiceText(dice) } : undefined;
 }
 
 export function extractTelegramLocation(msg: Message): NormalizedLocation | null {

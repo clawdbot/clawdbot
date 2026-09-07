@@ -1,6 +1,5 @@
 // Telegram helper module supports helpers behavior.
 import type { Chat, Message } from "grammy/types";
-import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import {
   resolveCommandAuthorization,
   type CommandAuthorization,
@@ -41,6 +40,7 @@ import {
   joinTelegramTextParts,
   normalizeForwardedContext,
   resolveTelegramPrimaryMedia,
+  resolveTelegramNonTextBody,
   resolveTelegramRichMessageBody,
   resolveTelegramTextContent,
   type TelegramForwardedContext,
@@ -681,10 +681,7 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
     filteredReplyText = hadUnsafeTelegramText(rawReplyText, replyBody);
     body = replyBody;
     if (!body) {
-      const locationData = extractTelegramLocation(replyLike);
-      if (locationData) {
-        body = formatLocationText(locationData);
-      }
+      body = resolveTelegramNonTextBody(replyLike)?.text ?? "";
     }
   }
   if (!body && !replyLike) {

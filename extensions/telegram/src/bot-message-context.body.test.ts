@@ -249,6 +249,31 @@ describe("resolveTelegramInboundBody", () => {
   );
 
   privateBodyTest(
+    "delivers a dice-only update instead of dropping it as an empty body",
+    { dice: { emoji: "🎲", value: 4 } },
+    (result) => {
+      expect(result?.rawBody).toBe("[Dice 🎲 = 4]");
+      expect(result?.bodyText).toBe("[Dice 🎲 = 4]");
+    },
+  );
+
+  it("keeps a mention-skipped dice roll in group history", async () => {
+    const logger = createLogger();
+    const groupHistories: BodyParams["groupHistories"] = new Map();
+    const result = await resolveGroup({
+      logger,
+      message: { dice: { emoji: "🎯", value: 3 } },
+      overrides: { groupHistories, historyLimit: 10 },
+    });
+
+    expect(logger.info).toHaveBeenCalledWith(SKIPPED_GROUP, "skipping group message");
+    expect(result).toBeNull();
+    expect([...groupHistories.values()].flat().map((entry) => entry.body)).toEqual([
+      "[Dice 🎯 = 3]",
+    ]);
+  });
+
+  privateBodyTest(
     "delivers rich-message-only updates as a sanitized placeholder",
     richMessage({ blocks: [{ type: "paragraph" }] }),
     (result) => {

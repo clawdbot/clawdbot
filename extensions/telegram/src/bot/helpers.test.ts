@@ -380,6 +380,27 @@ describe("describeReplyTarget", () => {
     expect(result?.source).toBe("reply_to_message");
   });
 
+  it("describes a replied-to dice roll when the cache did not supply a body", () => {
+    // A dice roll has neither text nor media, so before it was normalized here the whole
+    // target resolved to null and a reply to the roll reached the agent without it.
+    const result = describeReplyTarget(
+      asMalformedTelegramMessage({
+        message_id: 2,
+        date: 1000,
+        chat: { id: 1, type: "private" },
+        reply_to_message: {
+          message_id: 1,
+          date: 900,
+          chat: { id: 1, type: "private" },
+          from: { id: 42, first_name: "Alice", is_bot: false },
+          dice: { emoji: "\u{1F3AF}", value: 3 },
+        },
+      }),
+    );
+    expect(result?.body).toBe("[Dice \u{1F3AF} = 3]");
+    expect(result?.sender).toBe("Alice");
+  });
+
   it("handles non-string reply text gracefully (issue #27201)", () => {
     const result = describeReplyTarget(
       asMalformedTelegramMessage({
