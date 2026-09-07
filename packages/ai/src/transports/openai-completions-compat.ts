@@ -55,6 +55,7 @@ export type ResolvedOpenAICompletionsCompat = Omit<
   sessionAffinity: OpenAICompletionsSessionAffinity;
   visibleReasoningDetailTypes: string[];
   requiresNonEmptyUserOrAssistantMessage: boolean;
+  configuredSupportsLongCacheRetention?: boolean;
 };
 
 function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) {
@@ -161,7 +162,10 @@ function resolveOpenAICompletionsCompatDefaults(
     requiresNonEmptyUserOrAssistantMessage: isModelStudioLike,
     cacheControlFormat:
       (isModelStudioLike && endpointClass !== "custom") ||
-      (provider === "openrouter" && modelId?.startsWith("anthropic/") === true)
+      (modelId?.toLowerCase().startsWith("anthropic/") === true &&
+        (endpointClass === "openrouter" ||
+          (isDefaultRoute && provider === "openrouter") ||
+          provider === "deepinfra"))
         ? "anthropic"
         : undefined,
     sessionAffinityFormat: isOpenRouterLike ? "openrouter" : "openai",
@@ -276,6 +280,7 @@ export function resolveOpenAICompletionsCompat(
     supportsPromptCacheKey: configured?.supportsPromptCacheKey ?? false,
     supportsLongCacheRetention:
       configured?.supportsLongCacheRetention ?? defaults.supportsLongCacheRetention,
+    configuredSupportsLongCacheRetention: configured?.supportsLongCacheRetention,
     visibleReasoningDetailTypes:
       configured && "visibleReasoningDetailTypes" in configured
         ? ((configured as { visibleReasoningDetailTypes?: string[] }).visibleReasoningDetailTypes ??

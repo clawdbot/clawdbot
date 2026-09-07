@@ -203,6 +203,9 @@ plugins.
     Explicit `/export-session` paths replace existing files inside the
     workspace. Omit the path to generate a collision-safe filename.
 
+    HTML exports preserve inline Markdown formatting in list items, including
+    bold text, links, and inline code.
+
     HTML conversation cards omit messages marked hidden. The sidebar's **All**
     filter includes these records with a **[hidden]** label for debugging.
     Message counts describe the raw archive. The HTML file and its JSONL download

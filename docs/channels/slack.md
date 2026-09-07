@@ -1705,6 +1705,8 @@ In a channel with `requireMention: true`, a captionless audio clip can satisfy t
     - long file captions use the first Slack-safe text chunk as the upload comment and send remaining chunks as follow-up messages
     - outbound media cap follows `channels.slack.mediaMaxMb` when configured; otherwise channel sends use MIME-kind defaults from media pipeline
 
+    Native Block Kit sections retain all fields even when their combined accessibility text exceeds the preferred text chunk size. Slack's block limits and the 40,000-character message text hard limit still apply.
+
   </Accordion>
 
   <Accordion title="Delivery targets">

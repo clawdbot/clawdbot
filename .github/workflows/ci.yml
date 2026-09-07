@@ -5233,18 +5233,8 @@ jobs:
         id: device_screenshots
         env:
           OPENCLAW_SNAPSHOT_DEVICE_FAMILY: ${{ matrix.device_family }}
-          OPENCLAW_SNAPSHOT_SKIP_WATCH: "1"
+          OPENCLAW_SNAPSHOT_SKIP_WATCH: ${{ matrix.device_family == 'iphone' && '1' || '0' }}
         run: pnpm ios:screenshots
-
-      - name: Capture Apple Watch screenshot
-        id: watch_screenshot
-        if: matrix.device_family == 'ipad-13'
-        run: |
-          source scripts/lib/ios-fastlane.sh
-          (
-            cd apps/ios
-            run_ios_fastlane ios watch_screenshot
-          )
 
       - name: Package iOS screenshot shard evidence
         id: package_screenshot_evidence
@@ -5291,7 +5281,7 @@ jobs:
           retention-days: 14
 
       - name: Upload failed iOS screenshot attempt evidence
-        if: ${{ always() && (steps.device_screenshots.outcome == 'failure' || steps.watch_screenshot.outcome == 'failure' || steps.package_screenshot_evidence.outcome == 'failure') }}
+        if: ${{ always() && (steps.device_screenshots.outcome == 'failure' || steps.package_screenshot_evidence.outcome == 'failure') }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ios-release-screenshot-failure-${{ matrix.device_family }}-${{ needs.preflight.outputs.checkout_revision }}

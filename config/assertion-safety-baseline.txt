@@ -1102,7 +1102,7 @@ extensions/slack/src/blocks-render.ts	1
 extensions/slack/src/channel-actions.ts	1
 extensions/slack/src/channel-type.ts	1
 extensions/slack/src/channel.ts	7
-extensions/slack/src/client-delivery.ts	5
+extensions/slack/src/client-delivery.ts	4
 extensions/slack/src/client-options.ts	5
 extensions/slack/src/directory-live.ts	2
 extensions/slack/src/doctor.ts	1
@@ -1455,7 +1455,7 @@ packages/ai/src/providers/mistral.ts	6
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
 packages/ai/src/providers/openai-chatgpt-responses.ts	26
 packages/ai/src/providers/openai-completions-tool-calls.ts	5
-packages/ai/src/providers/openai-completions.ts	10
+packages/ai/src/providers/openai-completions.ts	9
 packages/ai/src/providers/openai-reasoning-effort.ts	6
 packages/ai/src/providers/openai-responses-shared.ts	6
 packages/ai/src/providers/openai-responses-tools.ts	2
@@ -2551,7 +2551,6 @@ src/config/io.write-prepare.ts	12
 src/config/io.write-safety.ts	4
 src/config/io.write.ts	6
 src/config/issue-location.ts	2
-src/config/legacy-private-network-migration.ts	1
 src/config/legacy.default-agent-roles.ts	1
 src/config/legacy.roster.ts	13
 src/config/legacy.ts	3
@@ -3323,7 +3322,7 @@ src/plugins/clawhub.ts	10
 src/plugins/cli-gateway-nodes-runtime.ts	2
 src/plugins/command-registration.ts	3
 src/plugins/computer-use-contract.ts	3
-src/plugins/config-normalization-shared.ts	19
+src/plugins/config-normalization-shared.ts	1
 src/plugins/config-schema.ts	6
 src/plugins/contracts/inventory/bundled-capability-metadata.ts	3
 src/plugins/contracts/registry.ts	1

@@ -32,11 +32,24 @@ page on the other plane. Both use the reported bounds, including off-center
 hinges. The sidebar remains visible after selecting a page or session.
 
 Book panes require at least 280 dp for the sidebar, 320 dp for the active page,
-and 320 dp of height. Otherwise, onboarding and the main app use the largest
-rectangular region clear of separating folds and fully occluding hinges. Equal
-regions prefer the top, then the reading-direction start side. Opening the
-keyboard does not select a different fallback region. Without an intersecting
-separator, the app keeps its full-window layout and modal sidebar.
+and 320 dp of height. Onboarding and layouts without a supported split use the
+largest rectangular region clear of separating folds and fully occluding hinges.
+Equal regions prefer the top, then the reading-direction start side. Opening
+the keyboard does not select a different fallback region for this outer host.
+Without an intersecting separator, the app keeps its full-window layout and
+modal sidebar.
+
+In Chat, a full-width horizontal separator can place the conversation header,
+transcript, and status above the hinge and the same composer below it. Each
+usable pane must be at least 320 dp wide. The measured space must fit the complete
+header, a transcript band with a complete text line, and status above, with a
+complete input line and controls below, accounting for the current font size
+and padding.
+
+Layout changes retain the draft, cursor, reader position, and existing local
+capture state owners. If keyboard insets or larger text leave too little space,
+Chat uses the existing one-region fallback based on the space remaining after
+insets, then restores the split when it fits.
 
 Command search and gateway trust prompts retain the single-region host.
 
@@ -46,8 +59,7 @@ space is limited; opening the keyboard does not move them to another region.
 If the keyboard covers that region entirely, dismiss the keyboard to reach the
 prompt again.
 
-A tabletop transcript/composer split, other dialogs, sheets, and menus are not
-adapted yet.
+Other dialogs, sheets, and menus are not adapted yet.
 
 ## Wear OS companion
 
