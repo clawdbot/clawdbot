@@ -33,6 +33,7 @@ export type WorkerTranscriptCommitApplication = (params: {
   identity: WorkerConnectionIdentity;
   request: WorkerTranscriptCommitParams;
   assertCurrent: () => undefined;
+  onCommitted?: (outcome: WorkerTranscriptCommitOutcome) => void;
 }) => Promise<WorkerTranscriptCommitOutcome>;
 
 type WorkerTranscriptCommitterOptions = {
@@ -324,6 +325,7 @@ function resolvePersistedCommitAcrossDag(params: {
 
 async function applyWorkerTranscriptCommit(params: {
   assertCurrent: () => undefined;
+  complete: (applied: ApplyTranscriptCommitResult) => WorkerTranscriptCommitOutcome;
   config: OpenClawConfig;
   identity: WorkerConnectionIdentity;
   messages: readonly CommittedAgentMessage[];
@@ -332,7 +334,7 @@ async function applyWorkerTranscriptCommit(params: {
   runId: string | null;
   sessionId: string;
   target: ResolvedWorkerSessionTarget;
-}): Promise<ApplyTranscriptCommitResult> {
+}): Promise<WorkerTranscriptCommitOutcome> {
   const redactedMessages = params.messages.map((message) =>
     attachSessionTranscriptRunId(
       redactTranscriptMessage(message, params.config) as CommittedAgentMessage,
@@ -343,107 +345,115 @@ async function applyWorkerTranscriptCommit(params: {
     sessionId: params.sessionId,
     lifecycleRevision: params.target.sessionEntry.lifecycleRevision,
   };
-  let applied: ApplyTranscriptCommitResult;
+  let applied: ApplyTranscriptCommitResult | undefined;
+  let outcome!: WorkerTranscriptCommitOutcome;
   try {
-    applied = await withTranscriptWriteTransaction(params.target, (transcriptTarget) => {
-      params.assertCurrent();
-      const currentEntry = loadSessionEntry(params.target);
-      if (!currentEntry || currentEntry.sessionId !== expectedState.sessionId) {
-        return { ok: false as const, reason: "session-not-attached" as const };
-      }
-      if (currentEntry.lifecycleRevision !== expectedState.lifecycleRevision) {
-        return { ok: false as const, reason: "invalid-batch" as const };
-      }
+    await withTranscriptWriteTransaction(
+      params.target,
+      (transcriptTarget) => {
+        params.assertCurrent();
+        const currentEntry = loadSessionEntry(params.target);
+        if (!currentEntry || currentEntry.sessionId !== expectedState.sessionId) {
+          return { ok: false as const, reason: "session-not-attached" as const };
+        }
+        if (currentEntry.lifecycleRevision !== expectedState.lifecycleRevision) {
+          return { ok: false as const, reason: "invalid-batch" as const };
+        }
 
-      const manager = SessionManager.open(transcriptTarget);
-      if (params.recoverPersistedBatch) {
-        // Only a pending ledger row may prove an off-branch batch: the agent DB
-        // can commit before the shared replay ledger records its terminal result.
-        const recovered = resolvePersistedCommitAcrossDag({
+        const manager = SessionManager.open(transcriptTarget);
+        if (params.recoverPersistedBatch) {
+          // Only a pending ledger row may prove an off-branch batch: the agent DB
+          // can commit before the shared replay ledger records its terminal result.
+          const recovered = resolvePersistedCommitAcrossDag({
+            baseLeafId: params.requestedBaseLeafId,
+            manager,
+            messages: redactedMessages,
+          });
+          if (recovered.kind === "found") {
+            return { ok: true as const, messages: recovered.messages };
+          }
+          if (recovered.kind === "ambiguous") {
+            return { ok: false as const, reason: "invalid-batch" as const };
+          }
+        }
+        const prefix = resolveActiveCommitPrefix({
           baseLeafId: params.requestedBaseLeafId,
           manager,
           messages: redactedMessages,
         });
-        if (recovered.kind === "found") {
-          return { ok: true as const, messages: recovered.messages };
+        if (!prefix.ok) {
+          return { ok: false as const, reason: "stale-base-leaf" as const };
         }
-        if (recovered.kind === "ambiguous") {
-          return { ok: false as const, reason: "invalid-batch" as const };
-        }
-      }
-      const prefix = resolveActiveCommitPrefix({
-        baseLeafId: params.requestedBaseLeafId,
-        manager,
-        messages: redactedMessages,
-      });
-      if (!prefix.ok) {
-        return { ok: false as const, reason: "stale-base-leaf" as const };
-      }
 
-      const messages = [...prefix.recoveredMessages];
-      let nextMessageSeq = prefix.activeVisibleEntryCount;
-      for (const message of redactedMessages.slice(prefix.recoveredMessages.length)) {
-        if (message.role === "assistant") {
-          Object.assign(message, prepareWorkerTurnTranscriptMessage(params.identity, message));
+        const messages = [...prefix.recoveredMessages];
+        let nextMessageSeq = prefix.activeVisibleEntryCount;
+        for (const message of redactedMessages.slice(prefix.recoveredMessages.length)) {
+          if (message.role === "assistant") {
+            Object.assign(message, prepareWorkerTurnTranscriptMessage(params.identity, message));
+          }
+          const messageId = manager.appendMessage(message, {
+            config: params.config,
+            // Active-path recovery owns dedupe. A global key scan could reuse an
+            // id from an abandoned branch while SessionManager advances another id.
+            idempotencyLookup: "caller-checked",
+          });
+          nextMessageSeq += 1;
+          messages.push({
+            appended: true,
+            message,
+            messageId,
+            messageSeq: nextMessageSeq,
+          });
         }
-        const messageId = manager.appendMessage(message, {
-          config: params.config,
-          // Active-path recovery owns dedupe. A global key scan could reuse an
-          // id from an abandoned branch while SessionManager advances another id.
-          idempotencyLookup: "caller-checked",
-        });
-        nextMessageSeq += 1;
-        messages.push({
-          appended: true,
-          message,
-          messageId,
-          messageSeq: nextMessageSeq,
-        });
-      }
 
-      const freshEntry = loadSessionEntry(params.target);
-      if (
-        !freshEntry ||
-        freshEntry.sessionId !== expectedState.sessionId ||
-        freshEntry.lifecycleRevision !== expectedState.lifecycleRevision
-      ) {
-        throw WORKER_TRANSCRIPT_SESSION_CONFLICT;
-      }
-      const appendedCount = messages.filter((message) => message.appended).length;
-      const nextEntry = {
-        ...freshEntry,
-        ...(appendedCount > 0
-          ? { updatedAt: Math.max(freshEntry.updatedAt ?? 0, Date.now()) }
-          : {}),
-      };
-      replaceSessionEntrySync(params.target, nextEntry);
-      // Synchronous assistant preparation can close the owner after earlier rows were appended.
-      params.assertCurrent();
-      return { ok: true as const, messages };
-    });
+        const freshEntry = loadSessionEntry(params.target);
+        if (
+          !freshEntry ||
+          freshEntry.sessionId !== expectedState.sessionId ||
+          freshEntry.lifecycleRevision !== expectedState.lifecycleRevision
+        ) {
+          throw WORKER_TRANSCRIPT_SESSION_CONFLICT;
+        }
+        const appendedCount = messages.filter((message) => message.appended).length;
+        const nextEntry = {
+          ...freshEntry,
+          ...(appendedCount > 0
+            ? { updatedAt: Math.max(freshEntry.updatedAt ?? 0, Date.now()) }
+            : {}),
+        };
+        replaceSessionEntrySync(params.target, nextEntry);
+        // Synchronous assistant preparation can close the owner after earlier rows were appended.
+        params.assertCurrent();
+        return { ok: true as const, messages };
+      },
+      (committed) => {
+        applied = committed;
+        outcome = params.complete(committed);
+      },
+    );
   } catch (error) {
     if (error === WORKER_TRANSCRIPT_SESSION_CONFLICT) {
-      return { ok: false, reason: "invalid-batch" };
+      return params.complete({ ok: false, reason: "invalid-batch" });
     }
     throw error;
-  }
-  if (!applied.ok) {
-    return applied;
-  }
-
-  for (const message of applied.messages) {
-    if (!message.appended) {
-      continue;
+  } finally {
+    // Committed messages still need publication when replay bookkeeping fails.
+    if (applied?.ok) {
+      for (const message of applied.messages) {
+        if (!message.appended) {
+          continue;
+        }
+        const runId = resolveTerminalAssistantTranscriptRunId(message.message, params.runId);
+        await publishTranscriptUpdate(params.target, {
+          message: message.message,
+          messageId: message.messageId,
+          messageSeq: message.messageSeq,
+          ...(runId ? { runId } : {}),
+        });
+      }
     }
-    const runId = resolveTerminalAssistantTranscriptRunId(message.message, params.runId);
-    await publishTranscriptUpdate(params.target, {
-      message: message.message,
-      messageId: message.messageId,
-      messageSeq: message.messageSeq,
-      ...(runId ? { runId } : {}),
-    });
   }
-  return applied;
+  return outcome;
 }
 
 /** Applies ordered, idempotent semantic worker turns to the canonical session transcript. */
@@ -470,19 +480,22 @@ export function createWorkerTranscriptCommitter(options: WorkerTranscriptCommitt
       params.assertCurrent();
       const started = store.begin(input);
       if (started.kind === "replay") {
+        params.onCommitted?.(started.outcome);
         return started.outcome;
       }
       if (started.kind === "rejected") {
         return { ok: false, reason: "invalid-batch" };
       }
 
+      const complete = (outcome: WorkerTranscriptCommitOutcome) => {
+        const committed = store.complete({ ...input, outcome });
+        params.onCommitted?.(committed);
+        return committed;
+      };
       const config = options.getConfig();
       const target = resolveWorkerSessionTarget(config, sessionId);
       if (!target) {
-        return store.complete({
-          ...input,
-          outcome: { ok: false, reason: "session-not-attached" },
-        });
+        return complete({ ok: false, reason: "session-not-attached" });
       }
       const messages = params.request.messages.map((message, index) =>
         buildCommittedMessage(
@@ -496,9 +509,20 @@ export function createWorkerTranscriptCommitter(options: WorkerTranscriptCommitt
         ),
       );
       let authorityFailure: { error: unknown } | undefined;
-      let applied: ApplyTranscriptCommitResult;
       try {
-        applied = await applyWorkerTranscriptCommit({
+        return await applyWorkerTranscriptCommit({
+          complete: (applied) => {
+            if (!applied.ok) {
+              return complete({ ok: false, reason: applied.reason });
+            }
+            const entryIds = applied.messages.map((message) => message.messageId);
+            const newLeafId = entryIds.at(-1);
+            return complete(
+              entryIds.length === params.request.messages.length && newLeafId
+                ? { ok: true, result: { entryIds, newLeafId } }
+                : { ok: false, reason: "invalid-batch" },
+            );
+          },
           assertCurrent: () => {
             try {
               params.assertCurrent();
@@ -524,21 +548,6 @@ export function createWorkerTranscriptCommitter(options: WorkerTranscriptCommitt
         }
         throw error;
       }
-      if (!applied.ok) {
-        return store.complete({ ...input, outcome: { ok: false, reason: applied.reason } });
-      }
-      const entryIds = applied.messages.map((message) => message.messageId);
-      const newLeafId = entryIds.at(-1);
-      if (entryIds.length !== params.request.messages.length || !newLeafId) {
-        return store.complete({
-          ...input,
-          outcome: { ok: false, reason: "invalid-batch" },
-        });
-      }
-      return store.complete({
-        ...input,
-        outcome: { ok: true, result: { entryIds, newLeafId } },
-      });
     });
   };
 

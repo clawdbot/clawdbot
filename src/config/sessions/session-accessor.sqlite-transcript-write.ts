@@ -652,10 +652,11 @@ export async function withTranscriptWriteLock<T>(
 export async function withTranscriptWriteTransaction<T>(
   scope: SessionTranscriptWriteScope,
   run: (context: SessionTranscriptWriteTransactionContext) => T,
+  onCommitted?: (result: T) => void,
 ): Promise<T> {
   const resolved = resolveSqliteTranscriptScope(scope);
-  return await runExclusiveSqliteSessionWrite(resolved, async () =>
-    runOpenClawAgentWriteTransaction(
+  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+    const result = runOpenClawAgentWriteTransaction(
       () =>
         run({
           agentId: resolved.agentId,
@@ -668,8 +669,11 @@ export async function withTranscriptWriteTransaction<T>(
         }),
       toDatabaseOptions(resolved),
       { operationLabel: "session.transcript.batch" },
-    ),
-  );
+    );
+    // Record committed progress before publication or teardown can close the caller.
+    onCommitted?.(result);
+    return result;
+  });
 }
 
 function isSqliteTranscriptSnapshotUnchanged(

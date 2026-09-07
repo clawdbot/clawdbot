@@ -608,6 +608,8 @@ describe("worker transcript commit application", () => {
   });
 
   it("recovers an interrupted terminal write after later transcript activity", async () => {
+    const updates: Parameters<Parameters<typeof onSessionTranscriptUpdate>[0]>[0][] = [];
+    unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
     let interruptCompletion = true;
     const interruptedStore: WorkerTranscriptCommitStore = {
       ...ledgerStore,
@@ -631,6 +633,7 @@ describe("worker transcript commit application", () => {
     const afterInterruption = SessionManager.open(sessionTarget);
     const committedEntryIds = afterInterruption.getEntries().map((entry) => entry.id);
     expect(committedEntryIds).toHaveLength(request.messages.length);
+    expect(updates.map((update) => update.messageId)).toEqual(committedEntryIds);
     const laterLeafId = afterInterruption.appendMessage({
       role: "user",
       content: [{ type: "text", text: "Later local activity" }],
@@ -649,6 +652,7 @@ describe("worker transcript commit application", () => {
     const reopened = SessionManager.open(sessionTarget);
     expect(reopened.getEntries()).toHaveLength(request.messages.length + 1);
     expect(reopened.getLeafId()).toBe(laterLeafId);
+    expect(updates.map((update) => update.messageId)).toEqual(committedEntryIds);
   });
 
   it("replays an interrupted terminal write after its branch is abandoned", async () => {

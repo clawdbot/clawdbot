@@ -165,4 +165,109 @@ describe("worker transcript claim fences", () => {
       }
     },
   );
+
+  it.each(["released", "replaced"] as const)(
+    "preserves committed progress when the claim is fenced during publication: %s",
+    async (scenario) => {
+      const identity = support.seedAttachedIdentity(
+        "worker-publication-race",
+        "session-publication-race",
+      );
+      const { claim, store } = claimWorkerPlacement({
+        environmentId: identity.environmentId,
+        ownerEpoch: identity.ownerEpoch,
+        sessionId: "session-publication-race",
+      });
+      identity.turnClaim = claim;
+      const target = {
+        agentId: "main",
+        sessionId: claim.sessionId,
+        sessionKey: `agent:main:${claim.sessionId}`,
+        storePath: path.join(support.testState.root, "openclaw-agent.sqlite"),
+      };
+      await upsertSessionEntryCore(target, {
+        sessionId: claim.sessionId,
+        lifecycleRevision: "publication-race-lifecycle",
+        updatedAt: 1,
+      });
+      const committer = createWorkerTranscriptCommitter({
+        getConfig: () => ({ session: { store: target.storePath } }),
+        store: createWorkerTranscriptCommitStore({ database: support.testState.stateDb }),
+      });
+      const workerService = support.createService(support.createProvider(), {
+        placementStore: createWorkerSessionPlacementGate(store),
+        applyTranscriptCommit: committer.commit,
+      });
+      const published = createDeferredCore();
+      const updates: unknown[] = [];
+      const unsubscribe = onSessionTranscriptUpdate((update) => {
+        if (update.sessionId === claim.sessionId) {
+          updates.push(update);
+          published.resolve();
+        }
+      });
+      let replacement: WorkerSessionTurnClaim | undefined;
+      const replace = () =>
+        store.claimTurn({
+          ...target,
+          claimId: "replacement-publication-claim",
+          runId: "replacement-publication-run",
+          owner: claim.owner,
+        });
+      try {
+        const firstRequest = support.transcriptRequest(identity, "committed before closure");
+        const committing = workerService.commitTranscript(identity, firstRequest);
+        await published.promise;
+        expect(SessionManager.open(target).getEntries()).toHaveLength(1);
+        store.releaseTurn(claim);
+        if (scenario === "replaced") {
+          replacement = replace();
+        }
+        await expect(committing).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
+        const cursorAfterCommit = store.get(claim.sessionId)?.lastTranscriptAckCursor;
+        replacement ??= replace();
+        const credential = await workerService.acquireTurnCredential(replacement);
+        expect(credential.ownerEpoch).toBe(identity.ownerEpoch);
+        expect(workerService.acknowledgeCredentialDelivery(credential)).toBe(true);
+        const admitted = await workerService.admitWorker({
+          environmentId: identity.environmentId,
+          credential: credential.credential,
+          sessionId: claim.sessionId,
+          runId: replacement.runId,
+          ownerEpoch: credential.ownerEpoch,
+          rpcSetVersion: 1,
+          handshake: support.BOOTSTRAP_RECEIPT,
+        });
+        if (!admitted.ok) {
+          throw new Error("replacement worker was not admitted");
+        }
+        const nextSeq = (store.get(claim.sessionId)?.lastTranscriptAckCursor ?? 0) + 1;
+        const replacementResult = await workerService.commitTranscript(
+          admitted.identity,
+          support.transcriptRequest(admitted.identity, "replacement progresses", {
+            seq: nextSeq,
+            baseLeafId: SessionManager.open(target).getLeafId(),
+          }),
+        );
+        expect({
+          cursorAfterCommit,
+          nextSeq,
+          replacementResult,
+          entryCount: SessionManager.open(target).getEntries().length,
+          updateCount: updates.length,
+        }).toMatchObject({
+          cursorAfterCommit: firstRequest.seq,
+          nextSeq: firstRequest.seq + 1,
+          replacementResult: { ok: true },
+          entryCount: 2,
+          updateCount: 2,
+        });
+      } finally {
+        unsubscribe();
+        if (store.validateTurnClaim(replacement ?? claim)) {
+          store.releaseTurn(replacement ?? claim);
+        }
+      }
+    },
+  );
 });

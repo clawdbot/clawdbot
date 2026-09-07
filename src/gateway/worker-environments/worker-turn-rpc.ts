@@ -387,23 +387,32 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
         if (!options.applyTranscriptCommit) {
           return { ok: false, closeReason: "gateway-unavailable" };
         }
-        const result = await options.applyTranscriptCommit({ identity, request, assertCurrent });
-        // Persistence checks this owner after its queues and before commit; ACKs
-        // also require the claim to remain live after post-commit publication.
+        const result = await options.applyTranscriptCommit({
+          identity,
+          request,
+          assertCurrent,
+          onCommitted: (committed) => {
+            assertCurrent();
+            // Record consumed progress before publication can close this claim.
+            if (committed.ok || committed.reason === "stale-base-leaf") {
+              const placement = placementClaim(identity);
+              const processTurn = processTurnBinding(identity);
+              if (!placement || !processTurn) {
+                throw new WorkerTranscriptAuthorityError({
+                  ok: false,
+                  closeReason: "placement-mismatch",
+                });
+              }
+              options.placementStore?.updateAckCursors({
+                claim: placement,
+                transcriptSeq: request.seq,
+              });
+              recordAckCursor(processTurn, { transcriptSeq: request.seq });
+            }
+          },
+        });
+        // Committed progress survives closure; the revoked claim still receives no ACK.
         assertCurrent();
-        // Stale base consumes a sequence just like success, including on replay.
-        if (result.ok || result.reason === "stale-base-leaf") {
-          const placement = placementClaim(identity);
-          const processTurn = processTurnBinding(identity);
-          if (!placement || !processTurn) {
-            return { ok: false, closeReason: "placement-mismatch" };
-          }
-          options.placementStore?.updateAckCursors({
-            claim: placement,
-            transcriptSeq: request.seq,
-          });
-          recordAckCursor(processTurn, { transcriptSeq: request.seq });
-        }
         return result;
       } catch (error) {
         if (error instanceof WorkerTranscriptAuthorityError) {
