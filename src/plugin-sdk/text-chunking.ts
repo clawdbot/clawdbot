@@ -70,6 +70,7 @@ export { convertMarkdownTables } from "../../packages/markdown-core/src/tables.j
 /** Assistant-visible text sanitizers for removing internal scaffolding before delivery. */
 export {
   sanitizeAssistantVisibleText,
+  sanitizeAssistantVisibleTextPreservingIndent,
   sanitizeAssistantVisibleTextWithOptions,
   sanitizeAssistantVisibleTextWithProfile,
   stripAssistantInternalScaffolding,

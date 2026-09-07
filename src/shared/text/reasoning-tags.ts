@@ -6,7 +6,7 @@ import {
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
 import { findFinalTagMatches } from "./final-tags.js";
 export type ReasoningTagMode = "strict" | "preserve";
-export type ReasoningTagTrim = "none" | "start" | "both";
+export type ReasoningTagTrim = "none" | "start" | "end" | "both";
 export type ReasoningTagScope = "all" | "leading";
 
 /** Detects whether a stray reasoning close tag separates two visible text regions. */
@@ -62,5 +62,8 @@ export function stripReasoningTagsFromText(
   if (trimMode === "none") {
     return stripped;
   }
-  return trimMode === "start" ? stripped.trimStart() : stripped.trim();
+  if (trimMode === "start") {
+    return stripped.trimStart();
+  }
+  return trimMode === "end" ? stripped.trimEnd() : stripped.trim();
 }

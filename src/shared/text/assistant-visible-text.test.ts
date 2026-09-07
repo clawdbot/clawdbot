@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   sanitizeAssistantFinalAnswerText,
   sanitizeAssistantVisibleText,
+  sanitizeAssistantVisibleTextPreservingIndent,
   sanitizeAssistantVisibleTextWithProfile,
   stripAssistantInternalScaffolding,
   stripDowngradedToolCallText,
@@ -1012,6 +1013,56 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
   });
 });
 
+describe("sanitizeAssistantVisibleTextPreservingIndent", () => {
+  it("preserves four-space leading indentation through the full delivery cleanup", () => {
+    const input = [
+      '<invoke name="read">payload</invoke></minimax:tool_call>',
+      '<tool_result>{"output":"hidden"}</tool_result>',
+      "<think>secret</think>",
+      "    **literal code**",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleTextPreservingIndent(input)).toBe("    **literal code**");
+    expect(sanitizeAssistantVisibleText(input)).toBe("**literal code**");
+  });
+
+  it("preserves tab leading indentation through the full delivery cleanup", () => {
+    const input = ["<think>secret</think>", "\t**tabbed code**"].join("\n");
+
+    expect(sanitizeAssistantVisibleTextPreservingIndent(input)).toBe("\t**tabbed code**");
+  });
+
+  it("still strips function responses after plural tool calls", () => {
+    const input = [
+      '<function_calls><invoke name="exec">internal</invoke></function_calls><function_response>',
+      'Searching for: "what skills matter most in the age of AI"',
+      "</function_response>",
+      "    code stays",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleTextPreservingIndent(input)).toBe("    code stays");
+  });
+
+  it("still strips internal tool trace warning lines", () => {
+    const input = [
+      "Visible intro.",
+      "⚠️ 🛠️ Exec failed (exit 1)",
+      "    code stays",
+      "Visible outro.",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleTextPreservingIndent(input)).toBe(
+      "Visible intro.\n    code stays\nVisible outro.",
+    );
+  });
+
+  it("still trims trailing whitespace and leading blank lines", () => {
+    expect(sanitizeAssistantVisibleTextPreservingIndent("\n\n    code stays  \n")).toBe(
+      "    code stays",
+    );
+  });
+});
+
 describe("stripDowngradedToolCallText", () => {
   it("preserves fenced log lines that quote [Tool Result for ID ...]", () => {
     const input = [
@@ -1076,3 +1127,4 @@ describe("stripDowngradedToolCallText", () => {
     expect(stripDowngradedToolCallText(input)).toBe("Visible answer");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

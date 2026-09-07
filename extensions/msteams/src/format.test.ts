@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import MarkdownIt from "markdown-it";
+import { sanitizeAssistantVisibleTextPreservingIndent } from "openclaw/plugin-sdk/text-chunking";
 import { describe, expect, it, vi } from "vitest";
 import { formatMSTeamsMarkdown } from "./format.js";
 
@@ -345,5 +346,41 @@ describe("formatMSTeamsMarkdown", () => {
     } finally {
       entropy.mockReset();
     }
+  });
+});
+
+describe("msteams outbound sanitize-to-format path", () => {
+  // Mirrors the channel sanitizeText hook feeding the Teams formatter.
+  const sanitizeThenFormat = (text: string) =>
+    formatMSTeamsMarkdown(sanitizeAssistantVisibleTextPreservingIndent(text), "off");
+
+  it("keeps four-space indented markdown as literal code after sanitization", () => {
+    expect(sanitizeThenFormat("    **literal code**")).toBe("```\n**literal code**\n```");
+  });
+
+  it("keeps tab-indented markdown as literal code after sanitization", () => {
+    expect(sanitizeThenFormat("\t**tabbed code**")).toBe("```\n**tabbed code**\n```");
+  });
+
+  it("strips tool-trace scaffolding without breaking indented literal code", () => {
+    const input = [
+      '<invoke name="read">payload</invoke></minimax:tool_call>',
+      '<tool_result>{"output":"hidden"}</tool_result>',
+      "<think>secret</think>",
+      "    **literal code**",
+    ].join("\n");
+
+    expect(sanitizeThenFormat(input)).toBe("```\n**literal code**\n```");
+  });
+
+  it("strips function-response leakage without breaking indented literal code", () => {
+    const input = [
+      '<function_calls><invoke name="exec">internal</invoke></function_calls><function_response>',
+      'Searching for: "what skills matter most in the age of AI"',
+      "</function_response>",
+      "    code stays",
+    ].join("\n");
+
+    expect(sanitizeThenFormat(input)).toBe("```\ncode stays\n```");
   });
 });
