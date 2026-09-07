@@ -20,6 +20,7 @@ const healthy: SourceStatus = { ok: true, warnings: [], stats: { apiCalls: 1 } }
 
 function setup(
   options: {
+    stateDir?: string;
     schedule?: Partial<TeamReportsConfig["schedule"]>;
     summaries?: boolean;
     discord?: boolean;
@@ -62,17 +63,18 @@ function setup(
       : {}),
     people: config.people ?? [],
   };
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "team-reports-scheduler-"));
+  const directory =
+    options.stateDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "team-reports-scheduler-"));
   const store = createTeamReportsStore({ stateDir: directory });
   if (options.caughtUp !== false) {
     const yesterday = describePeriod("day", Date.now() - 86_400_000);
     store.startRun({
       id: "previous-closed-day",
       kind: options.caughtUp ?? "closed-day",
-      startedAtMs: Date.now() - 3600_000,
+      startedAtMs: yesterday.untilMs,
       periods: [{ period: "day", key: yesterday.key }],
     });
-    store.finishRun("previous-closed-day", { status: "ok", finishedAtMs: Date.now() - 3500_000 });
+    store.finishRun("previous-closed-day", { status: "ok", finishedAtMs: Date.now() });
   }
   const github = {
     loadRoster: vi
@@ -232,8 +234,8 @@ describe("Team Reports scheduler lifecycle", () => {
     expect(github.collect).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["closed-day", "manual", "intraday"] as const)(
-    "skips startup catch-up when yesterday has a successful %s run before newer unrelated runs",
+  it.each(["closed-day", "manual"] as const)(
+    "skips startup catch-up when yesterday has a successful %s run started at close before newer unrelated runs",
     async (kind) => {
       const { scheduler, store, github } = setup({ caughtUp: kind });
       for (let index = 0; index < 21; index++) {
@@ -251,6 +253,43 @@ describe("Team Reports scheduler lifecycle", () => {
       await vi.advanceTimersByTimeAsync(60_000);
       expect(github.collect).not.toHaveBeenCalled();
       expect(store.listRuns(-1)).toHaveLength(22);
+    },
+  );
+
+  it.each(["intraday", "manual", "closed-day"] as const)(
+    "catches up after rollover despite a successful %s run covering today's partial window",
+    async (kind) => {
+      vi.setSystemTime(new Date("2026-08-20T11:59:00Z"));
+      const first = setup({
+        schedule: {
+          intradayEveryHours: kind === "intraday" ? 4 : 0,
+          closedDayUtc: kind === "closed-day" ? "12:00" : "23:59",
+        },
+      });
+      first.scheduler.start();
+      if (kind === "manual") {
+        first.scheduler.generate({ intraday: true });
+      }
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(first.store.listRuns()[0]).toMatchObject({
+        kind,
+        status: "ok",
+        periods: expect.arrayContaining([{ period: "day", key: "2026-08-20" }]),
+      });
+      expect(first.store.getPeriod("day", "2026-08-20")?.report.status).toBe("partial");
+      await first.scheduler.stop();
+
+      vi.setSystemTime(new Date("2026-08-21T12:00:00Z"));
+      const restarted = setup({ stateDir: first.directory, caughtUp: false });
+      restarted.scheduler.start();
+      expect(restarted.scheduler.status().nextDue.catchUp).toBe(Date.now() + 60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(restarted.github.collect).toHaveBeenCalledTimes(2);
+      expect(restarted.github.collect.mock.calls[0]?.[1]).toEqual({
+        sinceMs: Date.parse("2026-08-20T00:00:00Z"),
+        untilMs: Date.parse("2026-08-21T00:00:00Z"),
+      });
+      expect(restarted.store.getPeriod("day", "2026-08-20")?.report.status).toBe("closed");
     },
   );
 

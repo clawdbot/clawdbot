@@ -225,10 +225,15 @@ export class TeamReportsScheduler {
   }
 
   private closedDayCompleted(key: string): boolean {
+    const untilMs = describePeriod("day", key).untilMs;
     // Include older completions even when newer successful runs cover other days.
     return this.options.store
       .listRuns(-1, { status: "ok" })
-      .some((run) => run.periods.some((period) => period.period === "day" && period.key === key));
+      .some(
+        (run) =>
+          run.startedAtMs >= untilMs &&
+          run.periods.some((period) => period.period === "day" && period.key === key),
+      );
   }
 
   private begin(kind: RunKind, days: PeriodDescriptor[]): string {

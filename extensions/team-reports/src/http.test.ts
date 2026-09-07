@@ -3,13 +3,18 @@ import fs from "node:fs";
 import { createServer, request, type IncomingHttpHeaders, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTeamReportsHttpHandler } from "./http.js";
 import { describePeriod } from "./periods.js";
 import { renderMarkdown } from "./render/markdown.js";
 import { githubCounts } from "./reports.fixtures.js";
 import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
 import type { Period, ReportDocument, SummaryDocument } from "./types.js";
+
+const runtimeScopeMock = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getPluginRuntimeGatewayRequestScope: runtimeScopeMock,
+}));
 
 const maliciousTitle = '<script>alert("report")</script>';
 const counts = githubCounts(1);
@@ -69,6 +74,12 @@ let store: TeamReportsStore;
 let server: Server;
 let port: number;
 let available = true;
+const getStore = vi.fn(() => (available ? store : undefined));
+
+beforeEach(() => {
+  runtimeScopeMock.mockReturnValue({ client: { connect: { scopes: ["operator.read"] } } });
+  getStore.mockClear();
+});
 
 function fetchPath(
   url: string,
@@ -107,7 +118,7 @@ beforeAll(async () => {
   const handler = createTeamReportsHttpHandler({
     basePath: "/reports",
     displayTimezone: "UTC",
-    getStore: () => (available ? store : undefined),
+    getStore,
     status: () => ({ running: false, lastRun: "fixture-run" }),
     people: () => [
       {
@@ -137,6 +148,63 @@ afterAll(async () => {
 });
 
 describe("Team Reports HTTP responses", () => {
+  it.each([
+    { context: "missing", scopes: undefined },
+    { context: "empty", scopes: [] },
+    { context: "approvals only", scopes: ["operator.approvals"] },
+  ])(
+    "denies GET and HEAD without read authority ($context) before store access",
+    async ({ scopes }) => {
+      runtimeScopeMock.mockReturnValue(scopes ? { client: { connect: { scopes } } } : undefined);
+      for (const url of [
+        "/reports/",
+        "/reports/status",
+        "/reports/index.json",
+        "/reports/latest/",
+        "/reports/people/",
+        "/reports/people/alice/",
+        "/reports/day/2026-08-20/",
+        "/reports/day/2026-08-20/report.md",
+        "/reports/day/2026-08-20/data.json",
+      ]) {
+        for (const method of ["GET", "HEAD"]) {
+          const response = await fetchPath(url, method);
+          expect(response.status).toBe(403);
+          expect(response.body).toBe(
+            method === "HEAD" ? "" : "Forbidden: operator.read scope required.\n",
+          );
+          expect(response.headers["content-type"]).toBe("text/plain; charset=utf-8");
+          expect(Number(response.headers["content-length"])).toBe(
+            Buffer.byteLength("Forbidden: operator.read scope required.\n"),
+          );
+          expect(response.headers["cache-control"]).toBe("private, no-store");
+          expect(response.headers["content-security-policy"]).toContain("default-src 'none'");
+          expect(response.headers["content-security-policy"]).toMatch(/style-src 'nonce-[^']+'/);
+          expect(response.headers["x-content-type-options"]).toBe("nosniff");
+          expect(response.headers["referrer-policy"]).toBe("no-referrer");
+        }
+      }
+      expect(getStore).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["operator.read", "operator.write", "operator.admin"])(
+    "allows GET and HEAD with %s authority",
+    async (scope) => {
+      runtimeScopeMock.mockReturnValue({ client: { connect: { scopes: [scope] } } });
+      for (const method of ["GET", "HEAD"]) {
+        const response = await fetchPath("/reports/day/2026-08-20/", method);
+        expect(response.status).toBe(200);
+        expect(response.headers["content-type"]).toBe("text/html; charset=utf-8");
+        if (method === "HEAD") {
+          expect(response.body).toBe("");
+        } else {
+          expect(response.body).toContain("Alice");
+        }
+      }
+    },
+  );
+
   it("serves no-script escaped HTML with nonce-based CSP and safe navigation", async () => {
     const response = await fetchPath("/reports/day/2026-08-20/", "GET", {
       "x-forwarded-proto": "https",

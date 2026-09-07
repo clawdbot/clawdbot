@@ -3,7 +3,11 @@ import type { ActivityWindow } from "../../types.js";
 import { GithubClient, GithubSourceError, parse, pathWithQuery } from "./client.js";
 
 type SearchQuery =
-  | { kind: "issues"; qualifier: "created" | "closed" | "merged"; type: "issue" | "pull-request" }
+  | {
+      kind: "issues";
+      qualifier: "created" | "closed" | "merged" | "updated";
+      type: "issue" | "pull-request";
+    }
   | { kind: "commits"; qualifier: "committer-date" };
 
 export function searchPath(query: SearchQuery, org: string, start: number, end: number): string {

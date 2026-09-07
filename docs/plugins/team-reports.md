@@ -85,8 +85,10 @@ openclaw dashboard
 ```
 
 On startup, yesterday triggers a catch-up run after 60 seconds unless a
-successful run already includes that day. A completed manual run also satisfies
-catch-up, including one that finishes during the startup delay or deferred wait.
+successful run started at or after that day's closing UTC midnight and includes
+that day. A completed manual run after close also satisfies catch-up, including
+one that finishes during the startup delay or deferred wait. A successful run
+that started while the day was still open does not satisfy closed-day catch-up.
 Status shows the run, stored periods, next scheduled times, and source warnings.
 To request a report immediately, use:
 
@@ -103,6 +105,11 @@ The **Reports** tab appears for an enabled plugin and a Control UI connection
 with `operator.read`. It embeds the report page in a sandboxed frame. The
 Gateway supplies and renews a scoped authentication cookie; no Gateway token
 is added to report URLs.
+
+Every report route requires `operator.read`; `operator.write` and `operator.admin`
+also satisfy that requirement. The Control UI tab grants `operator.read` through
+its scoped cookie. The CLI's Gateway RPC methods already declare their required
+read or generation scopes.
 
 Use HTTPS, [Tailscale Serve](/gateway/tailscale), or a browser-trusted loopback
 origin. Plain HTTP on a LAN hostname cannot authenticate the frame. Browsers

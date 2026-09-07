@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { TLSSocket } from "node:tls";
+import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
 import { DAY_MS, describePeriod } from "./periods.js";
 import {
   renderIndexPage,
@@ -120,6 +121,15 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
     const notFound = () => send(404, "text/plain", "Not found\n");
     if (req.method !== "GET" && req.method !== "HEAD") {
       return send(405, "text/plain", "Method not allowed\n", { Allow: "GET, HEAD" });
+    }
+    const scopes = getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes ?? [];
+    if (
+      !scopes.some(
+        (scope) =>
+          scope === "operator.read" || scope === "operator.write" || scope === "operator.admin",
+      )
+    ) {
+      return send(403, "text/plain", "Forbidden: operator.read scope required.\n");
     }
     const route = pathSegments(req.url ?? "", options.basePath);
     if (!route) {

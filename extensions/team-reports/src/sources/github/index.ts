@@ -168,6 +168,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
       runtime.logger.info(`team-reports: GitHub repos listed: ${repos.size}`);
       const items = new Map<string, GithubItem>();
       const active = new Set<string>();
+      const updatedRepos = new Set<string>();
       const seenIssues = new Set<string>();
       const add = (item: GithubItem) => {
         checkAbort(runtime.signal, ABORT_LABEL);
@@ -297,8 +298,28 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
             }
           });
         }
+        for (const type of ["issue", "pull-request"] as const) {
+          await client.attempt(`${type} updated search for ${org}`, async () => {
+            for await (const issue of search(
+              client,
+              { kind: "issues", qualifier: "updated", type },
+              org,
+              window,
+              issueSchema,
+            )) {
+              const repoName = /\/repos\/([^/]+\/[^/]+)\/?$/
+                .exec(issue.repository_url)?.[1]
+                ?.toLowerCase();
+              if (repoName && repos.has(repoName)) {
+                updatedRepos.add(repoName);
+              }
+            }
+          });
+        }
       }
-      runtime.logger.info(`team-reports: GitHub issue searches done: ${items.size} items`);
+      runtime.logger.info(
+        `team-reports: GitHub issue searches done: ${items.size} items, ${updatedRepos.size} updated-search repos`,
+      );
       const strategies = new Set<string>();
       for (const [org, candidates] of orgCandidates) {
         if (candidates.length === 0) {
@@ -348,6 +369,9 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
       runtime.logger.info(
         `team-reports: GitHub commits done: ${status.stats.commitStrategy}, ${[...items.values()].filter((item) => item.kind === "commit").length} items`,
       );
+      for (const key of updatedRepos) {
+        active.add(key);
+      }
       for (const key of [...active].toSorted()) {
         const repo = repos.get(key);
         if (!repo) {
@@ -379,12 +403,23 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
             }
           });
         }
+      }
+      let advisoryReposScanned = 0;
+      for (const [, repo] of [...repos].toSorted(([a], [b]) => a.localeCompare(b, "en"))) {
+        advisoryReposScanned++;
         await client.attempt(`Advisories for ${repo.full_name}`, async () => {
           try {
             for await (const advisory of client.pages(
-              pathWithQuery(`${repoPath(repo.full_name)}/security-advisories`, {}),
+              pathWithQuery(`${repoPath(repo.full_name)}/security-advisories`, {
+                sort: "updated",
+                direction: "desc",
+              }),
               advisorySchema,
             )) {
+              // Newest-first updates let us stop before fetching any older pages.
+              if (advisory.updated_at && Date.parse(advisory.updated_at) < window.sinceMs) {
+                break;
+              }
               const date = inWindow(advisory.updated_at, window)
                 ? advisory.updated_at
                 : advisory.published_at;
@@ -423,7 +458,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
       }
       checkAbort(runtime.signal, ABORT_LABEL);
       runtime.logger.info(
-        `team-reports: GitHub comments/advisories scanned: ${status.stats.reposScanned} repos`,
+        `team-reports: GitHub comments scanned: ${status.stats.reposScanned} repos; advisories scanned: ${advisoryReposScanned} repos`,
       );
       if (Number(status.stats.advisoriesSkipped) > 0) {
         runtime.logger.info(
