@@ -10,18 +10,38 @@ import {
 import { registerAgentHarness } from "../../harness/registry.js";
 import type { AgentHarness } from "../../harness/types.js";
 import { registerSandboxBackend } from "../../sandbox/backend.js";
+import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
+import { installSessionPlacementAdmissionProvider } from "../../session-placement-admission.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
-import { dispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
+import { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
+
+vi.mock("../../runtime-plan/build.js", () => ({
+  buildAgentRuntimePlan: ({
+    provider,
+    modelId,
+    preparedAuthPlan,
+  }: {
+    provider: string;
+    modelId: string;
+    preparedAuthPlan: unknown;
+  }) => ({ resolvedRef: { provider, modelId }, auth: preparedAuthPlan }),
+}));
 
 afterEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 
 it.each([
-  { agentId: "main", sandboxSessionKey: undefined },
-  { agentId: "work", sandboxSessionKey: "global" },
-  { agentId: "work", sandboxSessionKey: "agent:main:policy" },
+  { agentId: "main", sandboxSessionKey: undefined, remoteSkills: false, oneShotCliRun: undefined },
+  { agentId: "work", sandboxSessionKey: "global", remoteSkills: false, oneShotCliRun: true },
+  {
+    agentId: "work",
+    sandboxSessionKey: "agent:main:policy",
+    remoteSkills: false,
+    oneShotCliRun: false,
+  },
+  { agentId: "main", sandboxSessionKey: undefined, remoteSkills: true, oneShotCliRun: true },
 ])(
-  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey",
-  async ({ agentId, sandboxSessionKey }) => {
+  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, remote skills $remoteSkills, and one-shot $oneShotCliRun",
+  async ({ agentId, sandboxSessionKey, remoteSkills, oneShotCliRun }) => {
     await withOpenClawTestState({ label: "harness-owner" }, async (state) => {
       const config = {
         agents: {
@@ -90,6 +110,7 @@ it.each([
         conversationToolPolicySupport: "exact",
         runAttempt,
       });
+      const runtimePluginToolGrant = { pluginId: "owner-tools", toolNames: ["owner_only"] };
       const params = {
         admittedRunContext,
         agentId,
@@ -100,11 +121,21 @@ it.each([
         sandboxSessionKey,
         workspaceDir: state.workspaceDir,
         sessionFile: "global",
-        prompt: "hello",
+        prompt: remoteSkills ? "Use the skill at /host/skills/demo/SKILL.md." : "hello",
+        ...(remoteSkills
+          ? {
+              explicitSkillSelections: [
+                { name: "demo", path: "/host/skills/demo/SKILL.md" },
+                { name: "native", path: "node://worker/skills/native/SKILL.md" },
+              ],
+            }
+          : {}),
         timeoutMs: 5_000,
+        oneShotCliRun,
+        runtimePluginToolGrant,
       };
       let lifecycleGeneration = getAgentEventLifecycleGeneration();
-      const { createAttemptControls } = createEmbeddedRunLaneController({
+      const laneController = createEmbeddedRunLaneController({
         getLifecycleGeneration: () => lifecycleGeneration,
         getParams: () => params,
         globalLane: "owner-dispatch-global",
@@ -115,73 +146,119 @@ it.each([
         },
         setParams: () => {},
       });
+      const authProfileStore = { version: 1, profiles: {} };
       const input = {
-        params,
-        runtime: {
-          agentId,
-          sessionId: `${agentId}-global`,
-          sessionKey: "global",
-          sessionFile: "global",
+        runInput: {
+          runParams: params,
+          provider: "fixture",
+          modelId: "fixture-model",
+          workspaceResolution: { agentId, workspaceDir: state.workspaceDir },
           workspaceDir: state.workspaceDir,
           agentDir: state.agentDir(agentId),
           isCanonicalWorkspace: true,
-          prompt: "hello",
-          provider: "fixture",
-          modelId: "fixture-model",
-          requestedModelId: "fixture-model",
-          fallbackActive: false,
-          fallbackReason: null,
-          agentHarnessId: "owner-fixture",
-          model: {
-            id: "fixture-model",
-            provider: "fixture",
-            api: "openai-responses",
-            input: ["text"],
-          },
-          authProfileIdSource: "auto",
-          initialReplayState: { replayInvalid: false, hadPotentialSideEffects: false },
-          authProfileStore: { version: 1, profiles: {} },
-          thinkLevel: "off",
-          fastMode: false,
-          toolResultFormat: "markdown",
-          skipPreparedUserTurnMessage: false,
-          apiKeyInfo: null,
-          runtimeAuthActive: false,
-          captureRuntimeArtifact: false,
-        },
-        control: {
+          resolvedSessionKey: "global",
+          resolvedToolResultFormat: "markdown",
+          startedAtMs: Date.now(),
+          startupStages: { mark: vi.fn() },
+          emitStartupStageSummary: vi.fn(),
           lifecycleGeneration,
-          pluginHarnessOwnsTransport: true,
-          createAttemptControls,
-          onToolOutcome: vi.fn(),
-          isTurnTainted: () => false,
-          allocateToolOutcomeOrdinal: () => 1,
-          onToolStreamBoundary: vi.fn(),
-          onRunProgress: vi.fn(),
-          onToolResult: vi.fn(),
-          onAgentEvent: vi.fn(),
+          laneController,
+          progressController: {
+            resolveAttemptFastModeParam: () => false,
+            maybeAnnounceFastModeAutoOff: vi.fn(),
+            notifyExecutionPhase: vi.fn(),
+            notifyRunProgress: vi.fn(),
+            notifyToolResult: vi.fn(),
+            notifyAgentEvent: vi.fn(),
+          },
+        },
+        preparedRuntime: {
+          requestedModelId: "fixture-model",
+          nativeModelOwned: true,
+          attemptAuthProfileStore: authProfileStore,
+          resolveRunAttemptAuthProfileStore: () => authProfileStore,
+          snapshot: () => ({
+            agentHarness: { id: "owner-fixture" },
+            pluginHarnessOwnsTransport: true,
+            effectiveModel: {
+              id: "fixture-model",
+              provider: "fixture",
+              api: "openai-responses",
+              input: ["text"],
+            },
+            thinkLevel: "off",
+            apiKeyInfo: null,
+            runtimeAuthState: null,
+            activePreparedAuthPlan: {
+              providerForAuth: "fixture",
+              authProfileProviderForAuth: "fixture",
+            },
+            providerRuntimeHandle: { provider: "fixture" },
+          }),
+        },
+        sessionPromptState: {
+          sessionId: `${agentId}-global`,
+          sessionFile: "global",
+          sessionTarget: { agentId, sessionId: `${agentId}-global`, sessionKey: "global" },
+          activePrompt: { persisted: false, internal: false },
           onUserMessagePersisted: vi.fn(),
-          onUserMessagePersistenceInvalidated: vi.fn(),
-          getPostCompactionAbortError: () => undefined,
-          setPostCompactionAbortController() {},
-          clearPostCompactionAbortController() {},
-        } satisfies Parameters<typeof dispatchEmbeddedRunAttempt>[0]["control"],
-        transcriptOwnership: { kind: "runtime-target" },
-        runStartedAtMs: Date.now(),
+          settleOwnedTranscriptProjection: vi.fn(),
+          suppressNextUserMessagePersistence: false,
+        },
+        terminalRetryState: { beforeFinalizeRevisionAttempts: 0 },
+        provider: "fixture",
+        modelId: "fixture-model",
+        replayState: { replayInvalid: false, hadPotentialSideEffects: false },
+        startupStagesEmitted: false,
         bootstrapPromptWarningSignaturesSeen: [],
-        suppressNextUserMessagePersistence: false,
-        beforeAgentFinalizeRevisionAttempts: 0,
-        maxBeforeAgentFinalizeRevisions: 0,
-      } as unknown as Parameters<typeof dispatchEmbeddedRunAttempt>[0];
+        resolveRuntimeFallbackReason: () => null,
+        observeToolOutcome: vi.fn(),
+        isTurnTainted: () => false,
+        allocateToolOutcomeOrdinal: () => 1,
+        getPostCompactionAbortError: () => undefined,
+        setPostCompactionAbortController() {},
+        clearPostCompactionAbortController() {},
+      } as unknown as Parameters<typeof prepareAndDispatchEmbeddedRunAttempt>[0];
+      const remoteSandbox = remoteSkills
+        ? createSandboxTestContext({
+            overrides: {
+              workspaceDir: state.workspaceDir,
+              agentWorkspaceDir: state.workspaceDir,
+              readOnlyResourceMounts: [
+                { hostPath: "/host/skills/demo", containerPath: "/remote/inbound/0" },
+              ],
+            },
+          })
+        : null;
+      const sandboxProvider = { resolveSandbox: async () => remoteSandbox };
+      const restorePlacement = installSessionPlacementAdmissionProvider({
+        assertCompactionSuccessorAllowed() {},
+        executeLocalTurn: async (_claim, runLocal) => runLocal(),
+        executeTurn: async (_claim, _params, runLocal) => runLocal(),
+        ...sandboxProvider,
+      });
       try {
-        const result = await dispatchEmbeddedRunAttempt(input);
+        const { dispatchedAttempt: result } = await prepareAndDispatchEmbeddedRunAttempt(input);
         expect(result.rawAttempt.terminal).toEqual({ kind: "ok" });
         expect(result.rawAttempt.assistantTexts).toEqual([`${agentId} answered`]);
         expect(runAttempt).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ agentId, sessionKey: "global", sandboxSessionKey }),
         );
+        expect.soft(runAttempt.mock.calls[0]?.[0].oneShotCliRun).toBe(oneShotCliRun);
+        expect
+          .soft(runAttempt.mock.calls[0]?.[0].runtimePluginToolGrant)
+          .toBe(runtimePluginToolGrant);
         const sandbox = runAttempt.mock.calls[0]?.[0].sandbox;
-        if (agentId === "work" && sandboxSessionKey === "global") {
+        if (remoteSkills) {
+          const dispatched = runAttempt.mock.calls[0]?.[0];
+          expect(dispatched?.prompt).toBe("Use the skill at /remote/inbound/0/SKILL.md.");
+          expect(dispatched?.explicitSkillSelections).toEqual([
+            { name: "demo", path: "/remote/inbound/0/SKILL.md" },
+            { name: "native", path: "node://worker/skills/native/SKILL.md" },
+          ]);
+          expect(params.explicitSkillSelections?.[0]?.path).toBe("/host/skills/demo/SKILL.md");
+          expect(sandbox).toEqual(remoteSandbox);
+        } else if (agentId === "work" && sandboxSessionKey === "global") {
           expect(provisioned).toHaveLength(1);
           expect(provisioned[0]).toMatch(/^agent:work:workspace:/);
           expect(sandbox?.runtimeId).toBe(provisioned[0]);
@@ -191,6 +268,7 @@ it.each([
           expect(sandbox).toBeNull();
         }
       } finally {
+        restorePlacement();
         admission.close();
         restoreSandbox();
       }

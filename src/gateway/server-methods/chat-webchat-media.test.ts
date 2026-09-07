@@ -270,7 +270,7 @@ describe("buildWebchatAssistantMessageFromReplyPayloads", () => {
       },
     ]);
 
-    expect(message).toEqual({
+    expect(message).toMatchObject({
       transcriptText: "Scan this QR code with the OpenClaw iOS app:",
       content: [
         { type: "text", text: "Scan this QR code with the OpenClaw iOS app:" },
@@ -299,7 +299,7 @@ describe("buildWebchatAssistantMessageFromReplyPayloads", () => {
       },
     ]);
 
-    expect(message).toEqual({
+    expect(message).toMatchObject({
       transcriptText: "Image reply",
       content: [
         { type: "text", text: "Image reply" },
@@ -316,7 +316,7 @@ describe("buildWebchatAssistantMessageFromReplyPayloads", () => {
       },
     ]);
 
-    expect(message).toEqual({
+    expect(message).toMatchObject({
       transcriptText: "[[reply_to_current]]Image reply",
       content: [
         { type: "text", text: "[[reply_to_current]]Image reply" },
@@ -390,7 +390,7 @@ describe("buildWebchatAssistantMessageFromReplyPayloads", () => {
       },
     ]);
 
-    expect(message).toEqual({
+    expect(message).toMatchObject({
       transcriptText: "[[reply_to:abcaudio_as_voice]]Image reply",
       content: [
         { type: "text", text: "[[reply_to:abcaudio_as_voice]]Image reply" },

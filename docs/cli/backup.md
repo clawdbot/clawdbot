@@ -214,6 +214,11 @@ openclaw backup git verify --repository ~/Backups/openclaw-git --ref <commit> --
 openclaw backup git verify --repository ~/Backups/openclaw-git --ref <commit> --agent main
 ```
 
+Git history output must fit within a 16 MiB read. If a log request reports an
+output-limit error, retry with a smaller `--limit`. An oversized commit subject
+can exceed the limit even with `--limit 1`; inspect that history directly with
+Git. OpenClaw reports the failure without returning partial history entries.
+
 Verification restores the selected snapshot into private scratch space, checks each table's row count and SHA-256, runs `PRAGMA integrity_check` and `PRAGMA foreign_key_check`, and removes the scratch copy. Restore writes only to a fresh target and refuses existing `-wal`, `-shm`, and `-journal` sidecars:
 
 ```bash
@@ -221,6 +226,11 @@ openclaw backup git restore --repository ~/Backups/openclaw-git --ref <commit> -
 ```
 
 Restore rebuilds content-backed FTS5 indexes after loading their content tables. It deliberately omits the derived `session_transcript_index_state` projection so Gateway startup reconciliation rebuilds transcript search. `vec0` virtual tables are not materialized because the extension is unavailable in the restore process; memory indexing recreates them and schedules a full reindex.
+
+Git backup creation, restore, and verification stream table data instead of
+retaining complete table dumps in memory. Restores still require space for the
+materialized Git files and the private SQLite staging copy; verification does
+not write a second set of table dumps.
 
 ## Schedule backups
 
@@ -308,7 +318,7 @@ The state directory's `plugin-skills/` root is a generated, OpenClaw-owned symli
 
 Agent-scoped temporary trees under `agents/<agentId>/agent/**/{tmp,.tmp}/` are also omitted and reported as regenerable. This includes temporary files directly below an agent directory and temporary trees inside agent runtime homes; durable sibling directories remain included. An explicitly configured config file, credentials directory, or workspace nested below an omitted temporary root remains included.
 
-Symbolic links are archived as link metadata and are never followed. Relative links are retained only when both the link and its lexical target remain within backup assets declared in `manifest.json`; links between declared assets and dangling links within an asset are allowed. Absolute links, links containing backslashes, and links escaping the archive root or every declared asset are rejected during both creation and verification.
+Symbolic links are archived as link metadata and are never followed. Relative links are retained only when both the link and its lexical target remain within backup assets declared in `manifest.json`; links between declared assets and dangling links within an asset are allowed. An absolute link whose real target is contained by a declared asset, such as a Nix-managed config or credentials link, is rewritten to a portable relative archive link. Other absolute links, links containing backslashes, and links escaping the archive root or every declared asset are rejected during both creation and verification.
 
 Installer-managed and rebuildable runtime roots under the state directory are
 also skipped: `dev/`, `git/`, `npm/`, legacy `npm-runtime/`, `tmp/`, and
@@ -317,7 +327,7 @@ temporary files, and downloaded runtimes rather than authoritative user state;
 reinstall or update the corresponding runtime or plugin after restore.
 Effectively activated, loadable plugins can declare additional durable or
 regenerable state- or agent-relative roots through
-[`backupResources`](/plugins/manifest#backupresources-reference). Disabled or
+[`backupResources`](/plugins/manifest/surfaces#backupresources-reference). Disabled or
 unloadable plugins cannot exclude data. Explicit config, credentials, workspace,
 agent, and plugin-included paths override exclusions, and any excluded parent
 remains traversable to reach those protected descendants. Names such as `tmp`

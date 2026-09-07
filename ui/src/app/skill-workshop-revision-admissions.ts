@@ -9,7 +9,6 @@ export type SkillWorkshopRevisionAdmissionInput = {
   proposalOriginAgentId?: string;
   proposalOriginSessionKey?: string;
   proposalSlug: string;
-  useCurrentChatForRevisions: boolean;
 };
 
 export type SkillWorkshopRevisionAdmissionBinding = {

@@ -21,9 +21,9 @@ const {
     release: vi.fn(async () => {}),
   })),
   isProviderAuthProfileConfiguredMock: vi.fn(() => false),
-  resolveApiKeyForProviderMock: vi.fn(
-    async (): Promise<{ apiKey: string | undefined }> => ({ apiKey: undefined }),
-  ),
+  resolveApiKeyForProviderMock: vi.fn(async (): Promise<{ apiKey: string | undefined }> => ({
+    apiKey: undefined,
+  })),
 }));
 
 vi.mock("./tts.js", () => ({

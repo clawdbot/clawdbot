@@ -173,6 +173,7 @@ export async function handleDynamicToolCallWithTimeout(params: {
     const terminalResolution = params.observeToolTerminal?.({
       toolCallId: params.call.callId,
       toolName: params.call.tool,
+      result: response,
       arguments:
         response.executedArguments ?? executionSnapshot?.executedArguments ?? params.call.arguments,
       ...(params.toolMeta ? { meta: params.toolMeta } : {}),
@@ -209,8 +210,9 @@ export async function handleDynamicToolCallWithTimeout(params: {
     try {
       params.onAgentToolResult?.(event);
     } catch (error) {
+      const message = formatToolExecutionErrorMessage(error, "Unknown error");
       embeddedAgentLog.warn(
-        `onAgentToolResult handler failed: tool=${params.call.tool} error=${String(error)}`,
+        `onAgentToolResult handler failed: tool=${params.call.tool} error=${message}`,
       );
     }
   };

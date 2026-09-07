@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createSqliteAcpEventLedger } from "../acp/event-ledger.js";
+import { expectAcpReplayUtf8Accounting } from "../acp/event-ledger.test-support.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -19,8 +20,8 @@ function legacyStore() {
     sessions: {
       "session-1": {
         sessionId: "session-1",
-        sessionKey: "agent:main:work",
-        cwd: "/work",
+        sessionKey: "agent:main:工作😀",
+        cwd: "/台\0😀",
         complete: true,
         createdAt: 1_000,
         updatedAt: 1_000,
@@ -30,11 +31,11 @@ function legacyStore() {
             seq: 1,
             at: 1_000,
             sessionId: "session-1",
-            sessionKey: "agent:main:work",
+            sessionKey: "agent:main:工作😀",
             runId: "run-1",
             update: {
               sessionUpdate: "agent_message_chunk",
-              content: { type: "text", text: "Answer" },
+              content: { type: "text", text: "Answer 漢😀\0\ud800" },
             },
           },
         ],
@@ -86,30 +87,16 @@ describe("legacy ACP replay doctor migration", () => {
       await expect(fs.stat(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
       const replay = await createSqliteAcpEventLedger({
         env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      }).readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" });
+      }).readReplay({ sessionId: "session-1", sessionKey: "agent:main:工作😀" });
       expect(replay.complete).toBe(true);
       expect(replay.events[0]?.update).toEqual({
         sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "Answer" },
+        content: { type: "text", text: "Answer 漢😀\0\ud800" },
       });
       const db = openOpenClawStateDatabase({
         env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
       }).db;
-      const aggregate = db
-        .prepare("SELECT estimated_bytes AS total FROM acp_replay_sessions WHERE session_id = ?")
-        .get("session-1") as { total: number | bigint };
-      const groundTruth = db
-        .prepare(
-          `SELECT length(s.session_id) + length(s.session_key) + length(s.cwd) + 32
-                + COALESCE(SUM(length(e.session_id) + length(e.session_key) + length(e.update_json)
-                    + COALESCE(length(e.run_id), 0) + 32), 0) AS total
-             FROM acp_replay_sessions s
-             LEFT JOIN acp_replay_events e ON e.session_id = s.session_id
-            WHERE s.session_id = ?
-            GROUP BY s.session_id`,
-        )
-        .get("session-1") as { total: number | bigint };
-      expect(Number(aggregate.total)).toBe(Number(groundTruth.total));
+      expectAcpReplayUtf8Accounting(db);
     });
   });
 
@@ -213,24 +200,26 @@ describe("legacy ACP replay doctor migration", () => {
       const ledger = createSqliteAcpEventLedger({ env, now: () => 1_000 });
       await ledger.startSession({
         sessionId: "session-1",
-        sessionKey: "agent:main:work",
-        cwd: "/work",
+        sessionKey: "agent:main:工作😀",
+        cwd: "/台\0😀",
         complete: true,
       });
       await ledger.recordUpdate({
         sessionId: "session-1",
-        sessionKey: "agent:main:work",
+        sessionKey: "agent:main:工作😀",
         runId: "run-1",
         update: {
           sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: "Answer" },
+          content: { type: "text", text: "Answer 漢😀\0\ud800" },
         },
       });
       const db = openOpenClawStateDatabase({ env }).db;
-      db.exec(`
-        UPDATE acp_replay_events SET estimated_bytes = 0;
-        UPDATE acp_replay_sessions SET estimated_bytes = 0;
-      `);
+      const storedJson =
+        JSON.stringify(legacyStore().sessions["session-1"].events[0]!.update, null, 2) + "  ";
+      db.prepare("UPDATE acp_replay_events SET update_json = ?, estimated_bytes = 17").run(
+        storedJson,
+      );
+      db.exec("UPDATE acp_replay_sessions SET estimated_bytes = 23");
       const sourcePath = await writeLegacyStore(stateDir);
 
       const result = await migrateLegacyAcpReplayLedger({
@@ -247,19 +236,12 @@ describe("legacy ACP replay doctor migration", () => {
       );
       await expect(fs.stat(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(ledger.readReplayBySessionId({ sessionId: "session-1" })).resolves.toMatchObject(
-        { complete: true, sessionKey: "agent:main:work" },
+        { complete: true, sessionKey: "agent:main:工作😀" },
       );
-      expect(
-        Number(
-          (
-            db
-              .prepare(
-                "SELECT estimated_bytes AS total FROM acp_replay_sessions WHERE session_id = ?",
-              )
-              .get("session-1") as { total: number | bigint }
-          ).total,
-        ),
-      ).toBeGreaterThan(0);
+      expectAcpReplayUtf8Accounting(db);
+      expect(db.prepare("SELECT update_json FROM acp_replay_events").get()?.update_json).toBe(
+        storedJson,
+      );
     });
   });
 

@@ -1,3 +1,4 @@
+import { asRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
@@ -78,14 +79,24 @@ describe("gateway update action", () => {
   });
 
   it.each([false, undefined])("requires an explicit owner identity (%s)", async (senderIsOwner) => {
-    const result = await createGatewayTool({ senderIsOwner }).execute("update", {
-      action: "update.run",
-    });
+    const result = await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:telegram:direct:123456789",
+        turnSourceChannel: "telegram",
+      },
+      () =>
+        createGatewayTool({ senderIsOwner, requesterSenderId: "123456789" }).execute("update", {
+          action: "update.run",
+          requesterSenderId: "spoofed",
+          channel: "discord",
+        }),
+    );
     expect(result.details).toEqual({
       ok: false,
       code: "owner_required",
       message:
-        "Only the OpenClaw owner can start an update from chat. Tell the user to run `openclaw update` in a terminal or use the Control UI.",
+        "Only the OpenClaw owner can start an update from chat. Ask the operator to add `telegram:123456789` to `commands.ownerAllowFrom`.",
     });
     expect(callGatewayToolMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();
@@ -242,7 +253,7 @@ describe("gateway update action", () => {
     });
     expect(result.details).toMatchObject({ handoff: { command, message } });
     expect(JSON.stringify(result.details, null, 2).length).toBeLessThan(4000);
-    expect(JSON.stringify(result.details)).toContain("exact manual instructions in handoff");
+    expect(JSON.stringify(result.details)).toContain("exact manual instructions");
   });
 
   it("preserves oversized manual instructions without throwing or truncating", async () => {
@@ -255,5 +266,81 @@ describe("gateway update action", () => {
       action: "update.run",
     });
     expect(result.details).toMatchObject({ handoff: { command: "x".repeat(4000) } });
+  });
+
+  it("preserves update diagnostic Unicode in tool results", async () => {
+    const reason = "r".repeat(239);
+    const name = "n".repeat(99);
+    const stderrTail = "s".repeat(499);
+    dispatchMock.mockResolvedValue({
+      ok: false,
+      result: {
+        status: "error",
+        reason: `${reason}🤖`,
+        before: { version: `${name}🤖` },
+        after: { version: `${name}🤖` },
+        steps: [{ name: `${name}🤖`, exitCode: 1, stderrTail: `🤖${stderrTail}` }],
+      },
+    });
+    const result = await createGatewayTool({ senderIsOwner: true }).execute("update", {
+      action: "update.run",
+    });
+    expect(dispatchMock).toHaveBeenCalledOnce();
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
+    const reasonText = readStringField(asRecord(result.details), "reason");
+    expect(reasonText?.charCodeAt(reasonText.length - 1), "UPDATE_DIAGNOSTIC_UTF16_BOUNDARY").toBe(
+      reason.charCodeAt(reason.length - 1),
+    );
+    expect(result.details).toMatchObject({
+      reason,
+      before: { version: name },
+      after: { version: name },
+      failedSteps: [{ name, exitCode: 1, stderrTail }],
+    });
+    const text = result.content.find((block) => block.type === "text");
+    expect(text?.type === "text" && JSON.parse(text.text)).toEqual(result.details);
+  });
+
+  it.each(["ASCII", "🤖"])("preserves complete %s update diagnostics", async (text) => {
+    dispatchMock.mockResolvedValue({
+      ok: false,
+      result: {
+        status: "error",
+        reason: text,
+        steps: [{ name: text, exitCode: 1, stderrTail: text }],
+      },
+    });
+    const result = await createGatewayTool({ senderIsOwner: true }).execute("update", {
+      action: "update.run",
+    });
+    expect(result.details).toMatchObject({
+      reason: text,
+      failedSteps: [{ name: text, exitCode: 1, stderrTail: text }],
+    });
+  });
+
+  it.each(["error", "skipped"])("retains the selected %s update steps in order", async (status) => {
+    dispatchMock.mockResolvedValue({
+      ok: false,
+      result: {
+        status,
+        steps: [
+          { name: "passed", exitCode: 0 },
+          { name: "missing" },
+          { name: "pending", exitCode: null },
+          { name: "failed", exitCode: 1 },
+        ],
+      },
+    });
+    const result = await createGatewayTool({ senderIsOwner: true }).execute("update", {
+      action: "update.run",
+    });
+    expect(result.details).toMatchObject({
+      failedSteps: [
+        { name: "missing", exitCode: null, stderrTail: "" },
+        ...(status === "error" ? [{ name: "pending", exitCode: null, stderrTail: "" }] : []),
+        { name: "failed", exitCode: 1, stderrTail: "" },
+      ],
+    });
   });
 });

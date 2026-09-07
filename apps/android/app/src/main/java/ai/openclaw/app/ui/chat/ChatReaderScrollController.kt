@@ -5,6 +5,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -147,7 +148,9 @@ internal fun rememberChatReaderScrollController(
     }
   }
 
-  LaunchedEffect(sessionKey, timeline, historyLoading) {
+  // Loading only changes empty-timeline transitions. A populated-history refresh
+  // must not cancel a moving scroll after its content version has been recorded.
+  LaunchedEffect(sessionKey, timeline, historyLoading && timeline.items.isEmpty()) {
     val transition =
       if (readerState.initialized) {
         readerState.onTimelineChanged(timeline, historyLoading)
@@ -176,9 +179,19 @@ internal fun rememberChatReaderScrollController(
     }
   }
 
+  // reverseLayout puts the latest tail at the viewport start. Scrolling within
+  // content padding does not hide text; this geometry must not change follow intent.
+  val latestContentHidden by
+    remember(listState) {
+      derivedStateOf {
+        val layoutInfo = listState.layoutInfo
+        val latestItem = layoutInfo.visibleItemsInfo.firstOrNull { it.index == currentTimeline.latestContentIndex }
+        latestItem?.let { it.offset < layoutInfo.viewportStartOffset } ?: listState.canScrollBackward
+      }
+    }
   return ChatReaderScrollController(
     listState = listState,
-    showJumpToLatest = readerState.hasNewerContent && timeline.items.isNotEmpty(),
+    showJumpToLatest = readerState.hasNewerContent && timeline.items.isNotEmpty() && latestContentHidden,
     jumpToLatest = {
       scope.launch {
         applyTransition(readerState.jumpToLatest(currentTimeline))
@@ -193,16 +206,13 @@ internal fun initialChatReaderTransition(
   timeline: ChatTimeline,
   ownerSessionKey: String? = null,
 ): ChatReaderTransition {
-  val initialIndex = timeline.readAnchorIndex ?: timeline.latestContentIndex
-  val followTarget = timeline.followTargetForIndex(initialIndex)
+  val initialIndex = timeline.latestContentIndex
   return ChatReaderTransition(
     state =
       ChatReaderState(
         ownerSessionKey = ownerSessionKey,
         initialized = initialIndex != null,
-        followTarget = followTarget,
-        hasNewerContent =
-          followTarget == ChatScrollFollowTarget.ReadAnchor && initialIndex != timeline.latestContentIndex,
+        followTarget = initialIndex?.let { ChatScrollFollowTarget.LatestContent },
         latestUserMessageId = timeline.latestUserMessageId,
         latestUserMessageVersion = timeline.latestUserMessageVersion,
         latestContentVersion = timeline.latestContentVersion,
@@ -246,8 +256,8 @@ internal fun ChatReaderState.onTimelineChanged(
     timeline.latestUserMessageVersion != null && timeline.latestUserMessageVersion != latestUserMessageVersion
   if (hasNewUserTurn) {
     // A live turn follows the bottom so the reply streams into view (parity with the
-    // iOS reader, #108692/#108693). ReadAnchor remains the session-restore bookmark only;
-    // re-pinning the prompt here would hide the reply below the fold behind a jump pill.
+    // iOS reader, #108692/#108693). Re-pinning the prompt here would hide the reply
+    // below the fold behind a jump pill.
     return ChatReaderTransition(
       state =
         copy(
@@ -323,15 +333,6 @@ private fun ChatTimeline.containsMessage(id: String): Boolean =
   items
     .filterIsInstance<ChatTimelineItem.Message>()
     .any { item -> item.message.id == id }
-
-private fun ChatTimeline.followTargetForIndex(index: Int?): ChatScrollFollowTarget? {
-  if (index == null) return null
-  return when {
-    latestUserMessageId != null && index == readAnchorIndex -> ChatScrollFollowTarget.ReadAnchor
-    index == latestContentIndex -> ChatScrollFollowTarget.LatestContent
-    else -> null
-  }
-}
 
 private fun isAtTarget(
   index: Int,

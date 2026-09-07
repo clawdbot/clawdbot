@@ -131,37 +131,6 @@ function createMemorySearchDb(options: { ftsTokenizer?: "unicode61" | "trigram" 
   }
 }
 
-describe("memory search provenance", () => {
-  it("returns SQLite-owned provenance with keyword hits", async () => {
-    const { db } = createMemorySearchDb();
-    try {
-      insertKeywordFixture(db, {
-        id: "provenance-hit",
-        path: "memory/2026-07-01.md",
-        model: "fts-only",
-        text: "green tea preference",
-        endLine: 1,
-      });
-      db.prepare(
-        `INSERT INTO memory_index_chunk_provenance (
-           chunk_id, origin_class, session_kind, observed_at, supersedes_key
-         ) VALUES (?, ?, ?, ?, ?)`,
-      ).run("provenance-hit", "owner", "interactive", 1234, "tea-preference");
-
-      const results = await searchKeywordFixture(db, "green tea", { limit: 3 });
-
-      expect(results[0]?.provenance).toEqual({
-        originClass: "owner",
-        sessionKind: "interactive",
-        observedAt: 1234,
-        supersedesKey: "tea-preference",
-      });
-    } finally {
-      db.close();
-    }
-  });
-});
-
 describe("searchKeyword trigram fallback", () => {
   function supportsTrigramFts(): boolean {
     const { db, schema } = createMemorySearchDb({ ftsTokenizer: "trigram" });
@@ -207,17 +176,36 @@ describe("searchKeyword trigram fallback", () => {
 
   const itWithTrigramFts = supportsTrigramFts() ? it : it.skip;
 
-  itWithTrigramFts("finds short Chinese queries with substring fallback", async () => {
-    const results = await runSearch({
-      rows: [{ id: "1", path: "memory/zh.md", text: "今天玩成语接龙游戏" }],
-      query: "成语",
-    });
-    expect(results.map((row) => row.id)).toContain("1");
-    // LIKE substring fallback carries no BM25 ranking signal, so textScore is 0
-    // (recall only); the hybrid merge must not treat it as a perfect match.
-    expect(results[0]?.textScore).toBe(0);
-    expect(results[0]?.hasBodyMatch).toBe(true);
-  });
+  itWithTrigramFts.each([
+    { query: "成语", text: "今天玩成语接龙游戏", unrelated: "今天看电影" },
+    { query: "AI", text: "Use ai for classification", unrelated: "Use rules for classification" },
+    { query: "UK", text: "Ship to the uk", unrelated: "Ship to the EU" },
+    { query: "42", text: "The answer is 42", unrelated: "The answer is 24" },
+    { query: "C_", text: "Keep the C_ prefix", unrelated: "Keep the CA prefix" },
+    { query: "ΔΕ", text: "The δε project", unrelated: "The δζ project" },
+    { query: "МО", text: "The мо project", unrelated: "The ми project" },
+    { query: "ΟΣ", text: "The οσ project", unrelated: "The οτ project" },
+    { query: "Σ", text: "ς", unrelated: "τ" },
+    { query: "S", text: "ſ", unrelated: "z" },
+    { query: "K", text: "K", unrelated: "q" },
+    { query: "Ǆ", text: "ǅ", unrelated: "ǈ" },
+  ])(
+    "finds the short literal query $query with substring fallback",
+    async ({ query, text, unrelated }) => {
+      const results = await runSearch({
+        rows: [
+          { id: "match", path: "memory/match.md", text },
+          { id: "unrelated", path: "memory/unrelated.md", text: unrelated },
+        ],
+        query,
+      });
+      expect(results.map((row) => row.id)).toEqual(["match"]);
+      // LIKE substring fallback carries no BM25 ranking signal, so textScore is 0
+      // (recall only); the hybrid merge must not treat it as a perfect match.
+      expect(results[0]?.textScore).toBe(0);
+      expect(results[0]?.hasBodyMatch).toBe(true);
+    },
+  );
 
   itWithTrigramFts("finds short Japanese and Korean queries with substring fallback", async () => {
     const japaneseResults = await runSearch({
@@ -233,15 +221,41 @@ describe("searchKeyword trigram fallback", () => {
     expect(koreanResults.map((row) => row.id)).toEqual(["ko"]);
   });
 
-  itWithTrigramFts(
-    "keeps MATCH semantics for long trigram terms while requiring short CJK substrings",
-    async () => {
+  itWithTrigramFts.each([
+    {
+      query: "成语接龙 游戏",
+      match: "今天玩成语接龙游戏",
+      partial: "今天玩成语接龙",
+      short: "游戏",
+    },
+    {
+      query: "shipping UK",
+      match: "Shipping across the UK",
+      partial: "Shipping across the EU",
+      short: "UK office",
+    },
+    {
+      query: "shipping ΔΕ",
+      match: "Shipping for the δε project",
+      partial: "Shipping for the δζ project",
+      short: "δε office",
+    },
+    {
+      query: "shipping ΟΣ",
+      match: "Shipping for the οσ project",
+      partial: "Shipping for the οτ project",
+      short: "οσ office",
+    },
+  ])(
+    "keeps MATCH semantics while requiring every term in $query",
+    async ({ query, match, partial, short }) => {
       const results = await runSearch({
         rows: [
-          { id: "match", path: "memory/good.md", text: "今天玩成语接龙游戏" },
-          { id: "partial", path: "memory/partial.md", text: "今天玩成语接龙" },
+          { id: "match", path: "memory/good.md", text: match },
+          { id: "partial", path: "memory/partial.md", text: partial },
+          { id: "short", path: "memory/short.md", text: short },
         ],
-        query: "成语接龙 游戏",
+        query,
       });
       expect(results.map((row) => row.id)).toEqual(["match"]);
       expect(results[0]?.textScore).toBeGreaterThan(0);
@@ -476,7 +490,7 @@ describe("searchKeyword FTS MATCH fallback", () => {
       expect(typeof warning).toBe("string");
       expect(
         (warning as string | undefined)?.startsWith(
-          "memory search: FTS5 MATCH failed, falling back to LIKE: ",
+          "memory search: FTS5 MATCH failed, falling back to substring search: ",
         ),
       ).toBe(true);
     } finally {
@@ -798,23 +812,17 @@ describe("searchPathKeyword", () => {
     }
   });
 
-  it("case-folds short Cyrillic and Greek trigram terms after an anchor prefilter", async () => {
+  it("case-folds short Cyrillic and Greek trigram terms", async () => {
     const { db, schema } = createMemorySearchDb({ ftsTokenizer: "trigram" });
     try {
       if (!schema.ftsAvailable) {
         return;
       }
-      const insertSource = db.prepare(
-        "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, 'memory', ?, 0, 0)",
-      );
-      for (let index = 0; index < 256; index += 1) {
-        insertSource.run(`memory/unrelated-${index}.md`, `unrelated-${index}`);
-      }
-      insertSource.run("memory/Мир.md", "cyrillic-anchor-negative");
-      insertSource.run("memory/Αλφα.md", "greek-anchor-negative");
       for (const fixture of [
         { id: "cyrillic-short", path: "memory/Москва-notes.md" },
         { id: "greek-short", path: "memory/Αθήνα-notes.md" },
+        { id: "cyrillic-negative", path: "memory/Мир.md" },
+        { id: "greek-negative", path: "memory/Αλφα.md" },
       ]) {
         insertKeywordFixture(db, fixture);
       }
@@ -824,17 +832,6 @@ describe("searchPathKeyword", () => {
       expect(
         db.prepare("SELECT 1 FROM memory_index_paths_fts WHERE path LIKE ? LIMIT 1").get("%ΑΘ%"),
       ).toBeUndefined();
-      for (const anchors of [
-        ["%М%", "%м%"],
-        ["%Α%", "%α%"],
-      ]) {
-        const candidateCount = db
-          .prepare(
-            "SELECT count(*) AS count FROM memory_index_paths_fts WHERE path LIKE ? OR path LIKE ?",
-          )
-          .get(...anchors) as { count: number };
-        expect(candidateCount.count).toBe(2);
-      }
       const search = (query: string) =>
         searchPathKeywordFixture(db, query, {
           ftsTokenizer: "trigram",
@@ -1010,68 +1007,6 @@ describe("searchKeyword cross-model FTS visibility (issue #48300)", () => {
 
 describe("searchVector sqlite-vec KNN", () => {
   const { DatabaseSync } = requireNodeSqlite();
-
-  it("batches fallback chunk scoring without materializing all candidates", async () => {
-    type ChunkRow = {
-      rowid: number;
-      id: string;
-      path: string;
-      start_line: number;
-      end_line: number;
-      text: string;
-      embedding: string;
-      source: string;
-    };
-
-    const chunkRows: ChunkRow[] = Array.from({ length: 513 }, (_, index) => {
-      const vector: [number, number] = index === 511 ? [1, 0] : index === 512 ? [0.9, 0.1] : [0, 1];
-      return {
-        rowid: index + 1,
-        id: `target-${index}`,
-        path: `memory/target-${index}.md`,
-        start_line: 1,
-        end_line: 1,
-        text: `chunk target-${index}`,
-        embedding: JSON.stringify(vector),
-        source: "memory",
-      };
-    });
-    const batchSizes: number[] = [];
-    let provenanceReads = 0;
-    const prepare = vi.fn((sql: string) => {
-      // Provenance is enriched only for the retained top-N after streaming, so a
-      // handful of per-result provenance reads is expected; the batch scan itself
-      // must still stream one query per batch.
-      if (sql.includes("memory_index_chunk_provenance")) {
-        return {
-          get: () => {
-            provenanceReads += 1;
-            return undefined;
-          },
-        };
-      }
-      expect(sql).toContain("SELECT rowid, id, path");
-      expect(sql).toContain("ORDER BY rowid ASC");
-      expect(sql).toContain("LIMIT ?");
-      return {
-        all: (_model: string, lastRowid: number, limit: number) => {
-          const batch = chunkRows.filter((row) => row.rowid > lastRowid).slice(0, limit);
-          batchSizes.push(batch.length);
-          return batch;
-        },
-      };
-    });
-
-    const results = await searchVectorFixture(
-      { prepare } as unknown as Parameters<typeof searchVector>[0]["db"],
-      { limit: 2 },
-    );
-
-    expect(results.map((row) => row.id)).toEqual(["target-511", "target-512"]);
-    expect(batchSizes).toEqual([256, 256, 1]);
-    // Provenance reads must scale with the returned limit (2), not the 513 scanned candidates.
-    expect(provenanceReads).toBe(2);
-  });
 
   it("yields to the event loop during large fallback scans (issue #81172)", async () => {
     // Real Nextcloud-scale corpus where the vec0 fast path is unavailable

@@ -62,6 +62,7 @@ PACKAGE_TGZ="$(
     update-first-hop-compat \
     "${OPENCLAW_UPDATE_FIRST_HOP_CANDIDATE_PACKAGE_TGZ:-}"
 )"
+docker_e2e_package_mount_args "$PACKAGE_TGZ" /tmp/openclaw-update-first-hop-candidate.tgz
 
 mkdir -p "$FIXTURE_ROOT/packages/negative" "$FIXTURE_ROOT/packages/future"
 tar -xzf "$PACKAGE_TGZ" -C "$FIXTURE_ROOT/packages/negative"
@@ -104,7 +105,7 @@ docker_e2e_run_with_harness \
   -e OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK="$EXPECTED_MISSING_CHUNK" \
   -v "$ARTIFACT_DIR:/tmp/openclaw-update-first-hop-artifacts" \
   -v "$(docker_e2e_abs_path "$SOURCE_PACKAGE"):/tmp/openclaw-update-first-hop-source.tgz:ro" \
-  -v "$PACKAGE_TGZ:/tmp/openclaw-update-first-hop-candidate.tgz:ro" \
+  "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   -v "$FIXTURE_ROOT/negative.tgz:/tmp/openclaw-update-first-hop-negative.tgz:ro" \
   -v "$FIXTURE_ROOT/future.tgz:/tmp/openclaw-update-first-hop-future.tgz:ro" \
   "$IMAGE_NAME" \

@@ -83,6 +83,7 @@ export function sessionEntryPersistenceConflictReply(): CommandHandlerResult {
 }
 
 export async function persistAbortTargetEntry(params: {
+  isCurrent?: () => boolean;
   entry?: SessionEntry;
   key?: string;
   sessionStore?: Record<string, SessionEntry>;
@@ -90,7 +91,7 @@ export async function persistAbortTargetEntry(params: {
   abortCutoff?: AbortCutoff;
 }): Promise<boolean> {
   const { entry, key, sessionStore, storePath, abortCutoff } = params;
-  if (!entry || !key || !sessionStore) {
+  if (!entry || !key || !sessionStore || params.isCurrent?.() === false) {
     return false;
   }
 
@@ -101,9 +102,14 @@ export async function persistAbortTargetEntry(params: {
   sessionStore[key] = entry;
 
   if (storePath) {
+    let applied = false;
     await patchSessionEntryCore(
       { storePath, sessionKey: key },
       (nextEntry) => {
+        if (params.isCurrent?.() === false) {
+          return null;
+        }
+        applied = true;
         nextEntry.abortedLastRun = true;
         applyAbortCutoffToSessionEntry(nextEntry, abortCutoff);
         nextEntry.updatedAt = nextEntry.updatedAt === 0 ? 0 : Date.now();
@@ -113,8 +119,15 @@ export async function persistAbortTargetEntry(params: {
         fallbackEntry: entry,
         replaceEntry: true,
         skipMaintenance: true,
+        // Reassignment can leave the selected row unchanged across the patch await.
+        assertCommitAllowed: () => {
+          if (applied && params.isCurrent?.() === false) {
+            throw new Error("The selected session changed before it could be stopped.");
+          }
+        },
       },
     );
+    return applied;
   }
 
   return true;

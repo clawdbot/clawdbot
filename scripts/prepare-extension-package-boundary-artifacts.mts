@@ -224,6 +224,8 @@ async function runTsgoSteps(steps: NodeStep[]) {
           {
             ...step,
             ...command,
+            // Go honors PWD aliases; emitted paths must use this owner's actual cwd.
+            env: { ...command.env, PWD: repoRoot },
             timeoutMs: Math.min(step.timeoutMs, command.timeoutMs ?? step.timeoutMs),
           },
         ]
@@ -259,7 +261,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
           cwd: resolve(repoRoot, unit.outDir),
         });
       }
-      return { ...unit, outputRoot: fs.realpathSync(resolve(repoRoot, unit.outDir)) };
+      return { ...unit, outputRoot: fs.realpathSync.native(resolve(repoRoot, unit.outDir)) };
     }),
   );
   for (const batch of batches) {

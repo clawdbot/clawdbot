@@ -6,6 +6,10 @@ import {
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isIncognitoSessionKey } from "../incognito-session.js";
 import type { CodexAppServerClient } from "./client.js";
+import {
+  CODEX_SESSION_OVERRIDABLE_LAYER_TYPES,
+  readCodexEffectiveConfig,
+} from "./config-layer-policy.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import {
   isMessageOnlyCodexSourceReply,
@@ -44,6 +48,10 @@ export const CODEX_RING_ZERO_BASE_INSTRUCTIONS = "";
 const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
   "features.code_mode": true,
   "features.code_mode_only": false,
+  // Native code mode replaces OpenClaw's own exec/read/write/edit tools with the
+  // Codex shell, and cron creator caps project read/exec on the same premise, so
+  // request the shell explicitly instead of relying on the codex-home default.
+  "features.shell_tool": true,
   "features.apply_patch_streaming_events": true,
   suppress_unstable_features_warning: true,
 };
@@ -144,16 +152,6 @@ const CODEX_RING_ZERO_RESTRICTED_FEATURE_ALIASES = new Map<string, string>([
   ["memory_tool", "memories"],
   ["telepathy", "chronicle"],
   ["codex_hooks", "hooks"],
-]);
-
-const CODEX_RING_ZERO_OVERRIDABLE_LAYER_TYPES = new Set([
-  "packagedDefaults",
-  "mdm",
-  "system",
-  "enterpriseManaged",
-  "user",
-  "project",
-  "sessionFlags",
 ]);
 
 export type CodexThreadConfigurationContext = CodexThreadPromptContext &
@@ -524,18 +522,9 @@ export async function readCodexInheritedMcpServerNames(
   client: Pick<CodexAppServerClient, "request">,
   cwd: string,
   signal?: AbortSignal,
+  effectiveConfig?: CodexConfigReadResponse,
 ): Promise<string[]> {
-  const response: CodexConfigReadResponse = await client.request(
-    "config/read",
-    {
-      cwd,
-      includeLayers: true,
-    },
-    { signal },
-  );
-  if (!isJsonObject(response) || !isJsonObject(response.config)) {
-    throw new Error("Codex config/read returned an invalid effective config");
-  }
+  const response = effectiveConfig ?? (await readCodexEffectiveConfig(client, cwd, signal));
   if (!Array.isArray(response.layers)) {
     throw new Error("Codex config/read omitted effective config layers");
   }
@@ -555,7 +544,7 @@ export async function readCodexInheritedMcpServerNames(
         `Codex restricted tool surface cannot override config layer ${layer.name.type}; ${migrationGuidance}.`,
       );
     }
-    if (!CODEX_RING_ZERO_OVERRIDABLE_LAYER_TYPES.has(layer.name.type)) {
+    if (!CODEX_SESSION_OVERRIDABLE_LAYER_TYPES.has(layer.name.type)) {
       throw new Error(
         `Codex restricted tool surface does not recognize config layer ${layer.name.type}`,
       );
@@ -575,6 +564,7 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
   client: Pick<CodexAppServerClient, "request">,
   options: {
     restrictedToolSurface: boolean;
+    requiredNativeShell?: boolean;
     additionalDeniedFeatures?: readonly string[];
     allowedManagedRequirementsFingerprint?: string;
     allowConfiguredManagedHooks?: boolean;
@@ -624,6 +614,11 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
         throw new Error("Codex configRequirements/read returned invalid feature requirements");
       }
       const canonicalFeature = CODEX_RING_ZERO_RESTRICTED_FEATURE_ALIASES.get(feature) ?? feature;
+      if (options.requiredNativeShell && canonicalFeature === "shell_tool" && !enabled) {
+        throw new Error(
+          "Codex native code mode requires shell_tool, but managed requirements disable it. Ask your administrator to allow the shell, or select a tool policy that disables native code mode; no automation authority was captured.",
+        );
+      }
       const deniedByToolPolicy =
         (options.restrictedToolSurface &&
           CODEX_RING_ZERO_RESTRICTED_FEATURES.has(canonicalFeature)) ||

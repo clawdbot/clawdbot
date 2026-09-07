@@ -12,7 +12,7 @@ export function composerWebSearchBaseEnabled(config: Record<string, unknown> | n
 
 function toComposerSkill(skill: SkillStatusEntry): ChatComposerMenuSkill {
   const missingDeps = Object.values(skill.missing).some((values) => values.length > 0);
-  const blocked = skill.blockedByAllowlist || skill.blockedByAgentFilter === true;
+  const blocked = skill.blockedByAllowlist || skill.blockedByAgentFilter;
   const baseEnabled = !skill.disabled;
   return {
     key: skill.skillKey,

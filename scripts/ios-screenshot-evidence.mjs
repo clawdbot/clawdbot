@@ -714,7 +714,7 @@ export function reduceIosScreenshotEvidence({ inputDirectory, outputRoot, expect
   return combinedManifest;
 }
 
-export function parseIosScreenshotEvidenceArgs(argv) {
+function parseIosScreenshotEvidenceArgs(argv) {
   const [command, ...rest] = argv;
   const options = {};
   for (let index = 0; index < rest.length; index += 2) {

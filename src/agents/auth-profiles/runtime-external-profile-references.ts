@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
@@ -88,6 +89,23 @@ export function removeRuntimeExternalProfileReferences(params: {
     getRuntimeExternalCliProfileIds(next).filter((profileId) => !params.profileIds.has(profileId)),
   );
   return next;
+}
+
+/** Shared persistence and snapshots never retain a turn's selected personal account. */
+export function removePersonalAuthProfileReferences(store: AuthProfileStore): AuthProfileStore {
+  const profileIds = new Set(
+    [
+      ...Object.keys(store.profiles),
+      ...Object.keys(store.usageStats ?? {}),
+      ...Object.values(store.order ?? {}).flat(),
+      ...Object.values(store.lastGood ?? {}),
+      ...(store.runtimePersistedProfileIds ?? []),
+      ...(store.runtimeExternalProfileIds ?? []),
+      ...getRuntimeLocalProfileIds(store),
+      ...getRuntimeExternalCliProfileIds(store),
+    ].filter(isUserModelAuthProfileId),
+  );
+  return removeRuntimeExternalProfileReferences({ store, profileIds });
 }
 
 /** Carries lifecycle-owned external profiles across a durable-store refresh. */

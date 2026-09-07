@@ -65,9 +65,10 @@ function resolveCompactionSteerRetryDelaysMs() {
     : ([1_000, 2_000, 4_000, 8_000] as const);
 }
 
-// Wake an active requester run through transient compacting and transcript-wait
-// outcomes. Both active-wake call sites use one loop so delivery deadlines and
-// best-effort transcript retry stay consistent.
+// Wake an active requester run through transient compacting and delivery-mode
+// outcomes. Unsupported transcript-commit waits are terminal refusals: the loop
+// keeps the requested gate intact and lets the caller fall through to the
+// canonical requester-agent handoff instead of re-steering on stale context.
 export async function resolveActiveWakeWithRetries(
   sessionId: string,
   message: string,
@@ -118,20 +119,10 @@ export async function resolveActiveWakeWithRetries(
       break;
     }
     if (
-      outcome.reason === "transcript_commit_wait_unsupported" &&
-      currentOptions.waitForTranscriptCommit === true
-    ) {
-      const bestEffortOptions = { ...currentOptions };
-      delete bestEffortOptions.waitForTranscriptCommit;
-      currentOptions = bestEffortOptions;
-      outcome = await attemptWake(currentOptions);
-      continue;
-    }
-    if (
       outcome.reason === "source_reply_delivery_mode_mismatch" &&
       currentOptions.sourceReplyDeliveryMode !== undefined
     ) {
-      // Active requester runs own their final delivery mode. Direct-completion
+      // Active requester runs own the final delivery mode. Direct-completion
       // policy must not make an already-running automatic parent unreachable.
       const activeRunOptions = { ...currentOptions };
       delete activeRunOptions.sourceReplyDeliveryMode;
@@ -257,7 +248,10 @@ export async function maybeSteerSubagentAnnounce(params: {
   // A stale_run refusal means the requester run is evidence-dead: it will not
   // drain its steer queue, so "dropped" would discard the handoff. Report
   // not-active so dispatch takes the direct fallback instead.
-  if (queueOutcome.reason === "stale_run") {
+  if (
+    queueOutcome.reason === "stale_run" ||
+    queueOutcome.reason === "transcript_commit_wait_unsupported"
+  ) {
     return { status: "none" };
   }
   const currentActivity = resolveRequesterSessionActivity(

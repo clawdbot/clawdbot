@@ -192,7 +192,8 @@ describe("subagent registry persistence", () => {
         callGateway({ method: "agent.wait", params, timeoutMs }),
       sendRecoveryNotice: vi.fn(),
     };
-    activateSubagentRegistry(() => ({ recoveryRuntime }) as never);
+    const gateway = { recoveryRuntime, resolveGatewayContext: () => gateway as never };
+    activateSubagentRegistry(() => gateway as never);
   };
 
   const fastPersistSubagentRunsToDisk = (runs: Map<string, SubagentRunRecord>) =>
@@ -857,7 +858,7 @@ describe("subagent registry persistence", () => {
     expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
   });
 
-  it("finalizes stale unended restored runs with abortedLastRun in the sweeper", async () => {
+  it("finalizes restored runs whose restart interruption exceeded the recovery window", async () => {
     vi.mocked(callGateway).mockImplementationOnce(async (request) => {
       expectFields(request, {
         method: "agent.wait",
@@ -893,7 +894,8 @@ describe("subagent registry persistence", () => {
     await writeChildSessionEntry({
       sessionKey: childSessionKey,
       sessionId: "sess-stale-aborted-restore",
-      updatedAt: now,
+      // Age the interruption marker; task age alone remains restart-recoverable.
+      updatedAt: now - 3 * 60 * 60 * 1_000,
       abortedLastRun: true,
     });
 

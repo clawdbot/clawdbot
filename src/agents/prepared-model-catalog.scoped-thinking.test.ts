@@ -6,18 +6,14 @@ import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-run
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 
 const manifestCatalogMock = vi.fn((..._args: unknown[]): Array<Record<string, unknown>> => []);
-const scopedStaticMock = vi.fn(
-  async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
-    entries: [],
-    routeVariants: [],
-  }),
-);
-const scopedLiveMock = vi.fn(
-  async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
-    entries: [],
-    routeVariants: [],
-  }),
-);
+const scopedStaticMock = vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
+  entries: [],
+  routeVariants: [],
+}));
+const scopedLiveMock = vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
+  entries: [],
+  routeVariants: [],
+}));
 const publishedSnapshotMock = vi.fn((..._args: unknown[]) => undefined as unknown);
 const preparedSnapshotMock = vi.fn<
   (input: { agentDir: string }) => Promise<PreparedModelRuntimeSnapshot>

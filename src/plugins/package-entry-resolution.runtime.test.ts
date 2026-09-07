@@ -129,27 +129,32 @@ describe("canonical installed package runtime entries", () => {
   it.each([".ts", ".tsx", ".mts", ".cts"])(
     "rejects published source-only %s entries while allowing linked source checkouts",
     async (sourceExtension) => {
-      const { packageDir, sourceEntry, manifest } = createPackageFixture({ sourceExtension });
-      const installResult = await validatePackageExtensionEntriesForInstall({
-        packageDir,
-        extensions: [sourceEntry],
-        manifest,
+      const { packageDir, sourceEntry, manifest } = createPackageFixture({
+        sourceExtension,
+        runtimeOutputs: ["index.js"],
       });
-      const linkedInstallResult = await validatePackageExtensionEntriesForInstall({
-        packageDir,
-        extensions: [sourceEntry],
-        manifest,
-        allowSourceTypeScriptEntries: true,
-      });
+      // A valid JS extension lets the source-only setup entry reach its own validation.
+      for (const extensions of [[sourceEntry], ["./index.js"]]) {
+        const installParams = {
+          packageDir,
+          extensions,
+          manifest: { ...manifest, openclaw: { ...manifest.openclaw, extensions } },
+        };
+        expect(await validatePackageExtensionEntriesForInstall(installParams)).toEqual({
+          ok: false,
+          error: expect.stringContaining("requires compiled runtime output"),
+        });
+        expect(
+          await validatePackageExtensionEntriesForInstall({
+            ...installParams,
+            allowSourceTypeScriptEntries: true,
+          }),
+        ).toEqual({ ok: true });
+      }
       const diagnostics: Parameters<
         typeof resolvePackageRuntimeExtensionSources
       >[0]["diagnostics"] = [];
 
-      expect(installResult).toEqual({
-        ok: false,
-        error: expect.stringContaining("requires compiled runtime output"),
-      });
-      expect(linkedInstallResult).toEqual({ ok: true });
       expect(
         resolvePackageRuntimeExtensionSources({
           packageDir,

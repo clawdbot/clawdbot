@@ -272,14 +272,17 @@ export function listDangerousPluginNodeCommands(): string[] {
   if (!registry) {
     return [];
   }
-  const commands = [
-    ...registry.nodeHostCommands
-      .filter((entry) => entry.command.dangerous === true)
-      .map((entry) => entry.command.command),
-    ...registry.nodeInvokePolicies
-      .filter((entry) => entry.policy.dangerous === true)
-      .flatMap((entry) => entry.policy.commands),
-  ];
+  const commands: string[] = [];
+  registry.nodeHostCommands.forEach(({ command }) => {
+    if (command.dangerous === true) {
+      commands.push(command.command);
+    }
+  });
+  registry.nodeInvokePolicies.forEach(({ policy }) => {
+    if (policy.dangerous === true) {
+      policy.commands.forEach((command) => commands.push(command));
+    }
+  });
   return normalizeUniqueStringEntries(commands);
 }
 
@@ -293,23 +296,18 @@ function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
   if (!registry) {
     return [];
   }
-  const policyCommands = registry.nodeInvokePolicies.flatMap((entry) => {
-    if (entry.policy.dangerous === true) {
-      return [];
+  const commands: string[] = [];
+  registry.nodeInvokePolicies.forEach(({ policy }) => {
+    if (policy.dangerous !== true && policy.defaultPlatforms?.includes(platformId)) {
+      policy.commands.forEach((command) => commands.push(command));
     }
-    const defaults = entry.policy.defaultPlatforms ?? [];
-    return defaults.includes(platformId) ? entry.policy.commands : [];
   });
-  const nodeHostCommands = registry.nodeHostCommands
-    .filter((entry) => {
-      if (entry.command.dangerous === true) {
-        return false;
-      }
-      const defaults = entry.command.agentTool?.defaultPlatforms ?? [];
-      return defaults.includes(platformId);
-    })
-    .map((entry) => entry.command.command);
-  return normalizeUniqueStringEntries([...policyCommands, ...nodeHostCommands]);
+  registry.nodeHostCommands.forEach(({ command: { dangerous, agentTool, command } }) => {
+    if (dangerous !== true && agentTool?.defaultPlatforms?.includes(platformId)) {
+      commands.push(command);
+    }
+  });
+  return normalizeUniqueStringEntries(commands);
 }
 
 export function isForegroundRestrictedPluginNodeCommand(command: string): boolean {
@@ -578,7 +576,11 @@ export function resolveRequiredNodeCommandAuthority(params: {
 }): RequiredNodeCommandAuthority | undefined {
   const declaredCommands = new Set(params.declaredCommands);
   const effectiveCommands = new Set(params.effectiveCommands);
-  const withheldCommands = new Set(params.withheldCommands);
+  // A denial anywhere in the required set takes precedence over pairing approval.
+  const denied = params.requiredCommands.find((cmd) => params.withheldCommands.includes(cmd));
+  if (denied) {
+    return { command: denied, state: "unauthorized" };
+  }
   for (const command of params.requiredCommands) {
     if (
       effectiveCommands.has(command) &&
@@ -593,7 +595,7 @@ export function resolveRequiredNodeCommandAuthority(params: {
     if (declaredCommands.has(command) && !effectiveCommands.has(command)) {
       return { command, state: "pending-approval" };
     }
-    if (declaredCommands.has(command) || withheldCommands.has(command)) {
+    if (declaredCommands.has(command)) {
       return { command, state: "unauthorized" };
     }
     return { command, state: "undeclared" };

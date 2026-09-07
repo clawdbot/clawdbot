@@ -6,15 +6,16 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
 import { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-workspace.js";
-import { resolveInstalledPluginPackageOwnership } from "../plugins/installed-plugin-package-ownership.js";
+import { createInstalledPluginOwnershipResolver } from "../plugins/installed-plugin-package-ownership.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
 import { tracePluginLifecyclePhase } from "../plugins/plugin-lifecycle-trace.js";
+import { formatPluginTrustDiagnostic } from "../plugins/plugin-trust.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { quietPluginJsonLogger } from "./plugins-json-logger.js";
-import { formatPluginBundleFormat } from "./plugins-list-format.js";
+import { formatPluginBundleFormat, formatPluginStatus } from "./plugins-list-format.js";
 
 /** Options accepted by `openclaw plugins inspect`. */
 export type PluginInspectOptions = {
@@ -152,10 +153,11 @@ export async function runPluginsInspectCommand(
     () => loadPluginMetadataSnapshot({ config: cfg, workspaceDir }),
     { command: "inspect" },
   );
+  const ownershipResolver = createInstalledPluginOwnershipResolver(metadataSnapshot.index);
   const resolveInstallRecord = (pluginId: string) => {
     // Runtime child ids need the package owner's record; ambiguous ownership
     // must not borrow provenance from an unrelated same-id install.
-    const ownership = resolveInstalledPluginPackageOwnership(metadataSnapshot.index, pluginId);
+    const ownership = ownershipResolver.resolvePackage(pluginId);
     return ownership.ok ? ownership.value.installRecord : undefined;
   };
   const loggerParams = opts.json ? { logger: quietPluginJsonLogger } : {};
@@ -201,12 +203,7 @@ export async function runPluginsInspectCommand(
     const rows = inspectAll.map((inspect) => ({
       Name: inspect.plugin.name || inspect.plugin.id,
       ID: inspect.plugin.name && inspect.plugin.name !== inspect.plugin.id ? inspect.plugin.id : "",
-      Status:
-        inspect.plugin.status === "loaded"
-          ? theme.success("loaded")
-          : inspect.plugin.status === "disabled"
-            ? theme.warn("disabled")
-            : theme.error("error"),
+      Status: formatPluginStatus(inspect.plugin, runtimeInspect),
       Shape: inspect.shape,
       Capabilities: formatCapabilityKinds(inspect.capabilities),
       Compatibility:
@@ -325,7 +322,7 @@ export async function runPluginsInspectCommand(
     lines.push(inspect.plugin.description);
   }
   lines.push("");
-  lines.push(`${theme.muted("Status:")} ${inspect.plugin.status}`);
+  lines.push(`${theme.muted("Status:")} ${formatPluginStatus(inspect.plugin, runtimeInspect)}`);
   if (inspect.plugin.failurePhase) {
     lines.push(`${theme.muted("Failure phase:")} ${inspect.plugin.failurePhase}`);
   }
@@ -340,6 +337,9 @@ export async function runPluginsInspectCommand(
   }
   lines.push(`${theme.muted("Source:")} ${shortenHomeInString(inspect.plugin.source)}`);
   lines.push(`${theme.muted("Origin:")} ${inspect.plugin.origin}`);
+  if (inspect.plugin.trust) {
+    lines.push(`${theme.muted("Trust:")} ${formatPluginTrustDiagnostic(inspect.plugin.trust)}`);
+  }
   if (inspect.plugin.version) {
     lines.push(`${theme.muted("Version:")} ${inspect.plugin.version}`);
   }

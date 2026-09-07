@@ -21,6 +21,12 @@ export const OPENCLAW_RUNTIME_EVENT_HEADER = "OpenClaw runtime event.";
 /** Custom message type used for structured runtime-context messages. */
 export const OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE = "openclaw.runtime-context";
 
+/** Provenance assigned by the context producer, never inferred from its text. */
+export type RuntimeContextFragment = {
+  kind: "runtime-instruction" | "conversation-data" | "heartbeat-outcome";
+  text: string;
+};
+
 const LEGACY_INTERNAL_CONTEXT_HEADER =
   ["OpenClaw runtime context (internal):", OPENCLAW_RUNTIME_CONTEXT_NOTICE, ""].join("\n") + "\n";
 
@@ -36,22 +42,29 @@ export function escapeInternalRuntimeContextDelimiters(value: string): string {
     .replaceAll(INTERNAL_RUNTIME_CONTEXT_END, ESCAPED_INTERNAL_RUNTIME_CONTEXT_END);
 }
 
-function delimitedTokenLinePattern(token: string): string {
-  return `(?:^|\\r?\\n)[ \\t]*${escapeRegExp(token)}[ \\t]*(?=\\r?\\n|$)`;
+function createDelimitedToken(token: string) {
+  return {
+    token,
+    pattern: new RegExp(`(?:^|\\r?\\n)[ \\t]*${escapeRegExp(token)}[ \\t]*(?=\\r?\\n|$)`, "g"),
+  };
 }
 
-function findDelimitedTokenIndex(text: string, token: string, from: number): number {
-  const tokenRe = new RegExp(delimitedTokenLinePattern(token), "g");
-  tokenRe.lastIndex = Math.max(0, from);
-  const match = tokenRe.exec(text);
+const BEGIN_DELIMITER = createDelimitedToken(INTERNAL_RUNTIME_CONTEXT_BEGIN);
+const END_DELIMITER = createDelimitedToken(INTERNAL_RUNTIME_CONTEXT_END);
+
+function findDelimitedTokenIndex(
+  text: string,
+  delimiter: ReturnType<typeof createDelimitedToken>,
+  from: number,
+): number {
+  // Private patterns are reused synchronously; each search owns its offset so
+  // nested blocks and later calls never inherit an earlier match's lastIndex.
+  delimiter.pattern.lastIndex = Math.max(0, from);
+  const match = delimiter.pattern.exec(text);
   if (!match) {
     return -1;
   }
-  return match.index + match[0].indexOf(token);
-}
-
-function stripStandaloneDelimitedTokenLines(text: string, token: string): string {
-  return text.replace(new RegExp(delimitedTokenLinePattern(token), "g"), "");
+  return match.index + match[0].indexOf(delimiter.token);
 }
 
 function findDelimitedTokenLinePrefixStart(text: string, tokenIndex: number): number {
@@ -62,21 +75,20 @@ function findDelimitedTokenLinePrefixStart(text: string, tokenIndex: number): nu
   return text[lineStart - 2] === "\r" ? lineStart - 2 : lineStart - 1;
 }
 
-function extractDelimitedBlocks(
+function stripDelimitedBlocks(
   text: string,
-  begin: string,
-  end: string,
   options: { preserveSurroundingWhitespace?: boolean; separator?: string } = {},
-): { text: string; blocks: string[] } {
+): string {
+  const begin = BEGIN_DELIMITER;
+  const end = END_DELIMITER;
   let next = text;
-  const blocks: string[] = [];
   for (;;) {
     const start = findDelimitedTokenIndex(next, begin, 0);
     if (start === -1) {
-      return { text: next, blocks };
+      return next;
     }
 
-    let cursor = start + begin.length;
+    let cursor = start + begin.token.length;
     let depth = 1;
     let finish = -1;
     while (depth > 0) {
@@ -87,12 +99,12 @@ function extractDelimitedBlocks(
       }
       if (nextBegin !== -1 && nextBegin < nextEnd) {
         depth += 1;
-        cursor = nextBegin + begin.length;
+        cursor = nextBegin + begin.token.length;
         continue;
       }
       depth -= 1;
       finish = nextEnd;
-      cursor = nextEnd + end.length;
+      cursor = nextEnd + end.token.length;
     }
 
     const blockStart = options.preserveSurroundingWhitespace
@@ -102,13 +114,12 @@ function extractDelimitedBlocks(
       ? next.slice(0, blockStart)
       : next.slice(0, start).trimEnd();
     if (finish === -1 || depth !== 0) {
-      return { text: before, blocks };
+      return before;
     }
-    let blockEnd = finish + end.length;
+    let blockEnd = finish + end.token.length;
     while (next[blockEnd] === " " || next[blockEnd] === "\t") {
       blockEnd += 1;
     }
-    blocks.push(next.slice(start, blockEnd).trim());
     const after = options.preserveSurroundingWhitespace
       ? next.slice(blockEnd)
       : next.slice(blockEnd).trimStart();
@@ -117,15 +128,6 @@ function extractDelimitedBlocks(
         ? `${before}${options.separator ?? "\n\n"}${after}`
         : `${before}${after}`;
   }
-}
-
-function stripDelimitedBlock(
-  text: string,
-  begin: string,
-  end: string,
-  options?: { preserveSurroundingWhitespace?: boolean; separator?: string },
-): string {
-  return extractDelimitedBlocks(text, begin, end, options).text;
 }
 
 function findLegacyInternalEventEnd(text: string, start: number): number | null {
@@ -252,7 +254,7 @@ export function stripInternalRuntimeContext(
   options: { preserveSurroundingWhitespace?: boolean; separator?: string } = {},
 ): string {
   // All removable formats contain a delimiter or the exact runtime notice.
-  // Skip regex construction and line parsing for ordinary display text.
+  // Skip delimiter scans and line parsing for ordinary display text.
   if (
     !text.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN) &&
     !text.includes(INTERNAL_RUNTIME_CONTEXT_END) &&
@@ -260,34 +262,13 @@ export function stripInternalRuntimeContext(
   ) {
     return text;
   }
-  const withoutDelimitedBlocks = stripStandaloneDelimitedTokenLines(
-    stripDelimitedBlock(
-      text,
-      INTERNAL_RUNTIME_CONTEXT_BEGIN,
-      INTERNAL_RUNTIME_CONTEXT_END,
-      options,
-    ),
-    INTERNAL_RUNTIME_CONTEXT_END,
+  const withoutDelimitedBlocks = stripDelimitedBlocks(text, options).replace(
+    END_DELIMITER.pattern,
+    "",
   );
   return stripRuntimeContextPromptPreface(
     stripLegacyInternalRuntimeContext(withoutDelimitedBlocks),
   );
-}
-
-/** Extract protected runtime-context blocks while returning remaining visible text. */
-export function extractInternalRuntimeContext(text: string): {
-  text: string;
-  runtimeContext?: string;
-} {
-  const extracted = extractDelimitedBlocks(
-    text,
-    INTERNAL_RUNTIME_CONTEXT_BEGIN,
-    INTERNAL_RUNTIME_CONTEXT_END,
-  );
-  return {
-    text: extracted.text,
-    ...(extracted.blocks.length > 0 ? { runtimeContext: extracted.blocks.join("\n\n") } : {}),
-  };
 }
 
 /** Return true when text contains current or legacy runtime-context markers. */
@@ -296,7 +277,7 @@ export function hasInternalRuntimeContext(text: string): boolean {
     return false;
   }
   return (
-    findDelimitedTokenIndex(text, INTERNAL_RUNTIME_CONTEXT_BEGIN, 0) !== -1 ||
+    findDelimitedTokenIndex(text, BEGIN_DELIMITER, 0) !== -1 ||
     text.includes(LEGACY_INTERNAL_CONTEXT_HEADER) ||
     RUNTIME_CONTEXT_PROMPT_HEADERS.some((header) =>
       text.includes(`${header}\n${OPENCLAW_RUNTIME_CONTEXT_NOTICE}`),
@@ -305,7 +286,7 @@ export function hasInternalRuntimeContext(text: string): boolean {
 }
 
 /** Identifies hidden runtime context independently of its queue or transcript owner. */
-export function isOpenClawRuntimeContextCustomMessage(message: unknown): boolean {
+function isOpenClawRuntimeContextCustomMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
   }
@@ -323,13 +304,71 @@ export function stripRuntimeContextCustomMessages<T>(messages: T[]): T[] {
   return messages.filter((message) => !isOpenClawRuntimeContextCustomMessage(message));
 }
 
-function isUserMessage(message: unknown): boolean {
+function isUserMessage(message: unknown): message is { role: "user"; idempotencyKey?: unknown } {
   return Boolean(
     message && typeof message === "object" && (message as { role?: unknown }).role === "user",
   );
 }
 
-/** Keeps only current-turn runtime context positioned immediately before the active user. */
+/** Budget and submission share the carrier projection for the exact recorded turn. */
+export function resolvePendingRuntimeContextReplay<T>(params: {
+  messages: readonly unknown[];
+  pendingContextMessages: T[];
+  persistedUserIdempotencyKey?: string;
+}) {
+  const persistedUserIndex = params.persistedUserIdempotencyKey
+    ? params.messages.findLastIndex(
+        (message) =>
+          isUserMessage(message) && message.idempotencyKey === params.persistedUserIdempotencyKey,
+      )
+    : -1;
+  const replayPersistedCarrier =
+    persistedUserIndex >= 0 &&
+    isOpenClawRuntimeContextCustomMessage(params.messages[persistedUserIndex + 1]);
+  return {
+    persistedUserIndex,
+    replayPersistedCarrier,
+    pendingContextMessages: replayPersistedCarrier
+      ? stripRuntimeContextCustomMessages(params.pendingContextMessages)
+      : params.pendingContextMessages,
+  };
+}
+
+type RuntimeContextPromptOwner = { user?: unknown; transcriptUser?: unknown; release: () => void };
+const retainedRuntimeContextMessages = new WeakMap<object, RuntimeContextPromptOwner>();
+
+/** Prompt submission owns retention through streaming, steering, and retry, then releases it. */
+export function retainRuntimeContextMessageForPrompt(message: object): RuntimeContextPromptOwner {
+  const owner: RuntimeContextPromptOwner = {
+    release: () => {
+      retainedRuntimeContextMessages.delete(message);
+    },
+  };
+  retainedRuntimeContextMessages.set(message, owner);
+  return owner;
+}
+
+function isRetainedRuntimeContextMessage(message: unknown): boolean {
+  return (
+    typeof message === "object" && message !== null && retainedRuntimeContextMessages.has(message)
+  );
+}
+
+/** Steering extends this prompt; it does not retire its original user's context. */
+export function resolveRuntimeContextPromptOwner(messages: readonly unknown[]) {
+  const carrierIndex = messages.findIndex(isRetainedRuntimeContextMessage);
+  const carrier = messages[carrierIndex];
+  if (typeof carrier !== "object" || carrier === null) {
+    return undefined;
+  }
+  const userIndex = messages.findIndex(
+    (message, index) => index > carrierIndex && isUserMessage(message),
+  );
+  const owner = retainedRuntimeContextMessages.get(carrier);
+  return owner ? { owner, userIndex } : undefined;
+}
+
+/** Keeps the live prompt's context and unretained context immediately before the active user. */
 export function stripHistoricalRuntimeContextCustomMessages<T>(messages: T[]): T[] {
   if (!messages.some(isOpenClawRuntimeContextCustomMessage)) {
     return messages;
@@ -349,48 +388,37 @@ export function stripHistoricalRuntimeContextCustomMessages<T>(messages: T[]): T
     if (!isOpenClawRuntimeContextCustomMessage(message)) {
       return true;
     }
-    return currentRuntimeContextIndexes.has(index);
+    return currentRuntimeContextIndexes.has(index) || isRetainedRuntimeContextMessage(message);
   });
 }
 
 /**
- * Moves current-turn runtime-context carrier messages to the absolute tail of
- * the request (after the active user turn and any tool-call scaffolding).
- *
- * Prompt-cache rationale: a per-turn carrier that is stripped on replay makes
- * the next request diverge at the carrier's slot. Placed BEFORE the active user
- * turn, that slot precedes everything that gets reused, so the whole tail
- * (user turn + tool loop) re-bills every turn. Placed at the ABSOLUTE tail, the
- * divergence lands exactly where the next turn's new bytes (the assistant reply)
- * begin anyway, so the request is an append-only prefix-extension through the
- * active user turn — only the trailing carrier is ever re-billed.
- *
- * Runs after {@link stripHistoricalRuntimeContextCustomMessages}, so only the
- * current-turn carrier(s) remain. When there is no active user turn to anchor
- * after, messages are returned unchanged.
+ * Place prompt context after its own user's tool scaffolding, before a later
+ * steering user. Full-resend providers keep their cacheable tool prefix, while
+ * steering appends without relocating context already sent in the active request.
+ * Runs after historical context stripping; already-placed carriers stay put.
  */
 export function relocateCurrentRuntimeContextCarrierToTail<T>(messages: T[]): T[] {
-  const lastIndex = messages.length - 1;
-  if (lastIndex < 0 || !messages.some(isOpenClawRuntimeContextCustomMessage)) {
+  const carrierIndex = messages.findIndex(isOpenClawRuntimeContextCustomMessage);
+  const userIndex = messages.findIndex(
+    (message, index) => index > carrierIndex && isUserMessage(message),
+  );
+  if (carrierIndex < 0 || userIndex < 0) {
     return messages;
   }
-  // Already tail-placed (a contiguous carrier run ends the array): no-op so the
-  // serialized bytes stay stable across re-attempts of the same request.
-  let firstNonCarrierFromEnd = lastIndex;
-  while (
-    firstNonCarrierFromEnd >= 0 &&
-    isOpenClawRuntimeContextCustomMessage(messages[firstNonCarrierFromEnd])
-  ) {
-    firstNonCarrierFromEnd -= 1;
-  }
-  const rest = messages.filter((message) => !isOpenClawRuntimeContextCustomMessage(message));
-  // No active user turn to anchor after — leave placement to the strip pass.
-  if (!rest.some(isUserMessage)) {
-    return messages;
-  }
-  if (firstNonCarrierFromEnd === rest.length - 1) {
-    return messages;
-  }
+  const nextUserIndex = messages.findIndex(
+    (message, index) => index > userIndex && isUserMessage(message),
+  );
+  const boundary = nextUserIndex < 0 ? messages.length : nextUserIndex;
+  const prefix = messages
+    .slice(0, boundary)
+    .filter((message) => !isOpenClawRuntimeContextCustomMessage(message));
   const carriers = messages.filter(isOpenClawRuntimeContextCustomMessage);
-  return [...rest, ...carriers];
+  return [
+    ...prefix,
+    ...carriers,
+    ...messages
+      .slice(boundary)
+      .filter((message) => !isOpenClawRuntimeContextCustomMessage(message)),
+  ];
 }

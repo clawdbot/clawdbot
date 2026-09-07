@@ -14,11 +14,15 @@ type PendingHandoff = {
 
 export type ChatPaneElement = HTMLElement & {
   active?: boolean;
+  conversationPresented?: boolean;
   discardStagedAttachments?: () => void;
   paneId?: string;
   prepareForEviction?: () => void;
   presented?: boolean;
   sessionKey?: string;
+  transcriptLoading?: boolean;
+  transcriptReady?: boolean;
+  updateComplete?: Promise<unknown>;
   visuallyPresented?: boolean;
 };
 

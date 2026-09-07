@@ -26,13 +26,13 @@ import { pruneMemoryEntryOrigins, reserveMemoryEntryOrigins } from "./memory-ent
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import {
   buildPromotionMarker,
+  commitMemoryContent,
   extractPromotionKeys,
   hashMemoryContent,
   isAtomicReplacePermissionError,
   MemoryWriteConflictError,
   readMemoryContent,
   resolveMemoryWritePath,
-  writeMemoryContent,
 } from "./short-term-promotion-memory-write.js";
 import {
   buildPromotionRecallAnnotations,
@@ -525,9 +525,9 @@ export async function applyShortTermPromotions(
           operations: consolidationPlan.operations,
         });
         try {
-          await writeMemoryContent({
-            memoryPath,
-            memoryWritePath,
+          await commitMemoryContent({
+            filePath: memoryWritePath,
+            tempPrefix: `${path.basename(memoryPath)}.promotion`,
             expectedHash: consolidationBaseMemoryHash,
             content: consolidationResult.content,
           });
@@ -589,9 +589,9 @@ export async function applyShortTermPromotions(
           const content = `${header}${withTrailingNewline(baseMemory)}${section}`;
           // Append fallback keeps the historical read-modify-replace contract. Policy accepts
           // its external-editor race because OpenClaw writers remain serialized by this sweep lock.
-          await writeMemoryContent({
-            memoryPath,
-            memoryWritePath,
+          await commitMemoryContent({
+            filePath: memoryWritePath,
+            tempPrefix: `${path.basename(memoryPath)}.promotion`,
             expectedHash: hashMemoryContent(existingMemory),
             expectedContent: existingMemory,
             allowInPlaceFallback: true,

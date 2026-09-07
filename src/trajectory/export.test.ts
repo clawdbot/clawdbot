@@ -493,6 +493,45 @@ describe("exportTrajectoryBundle", () => {
     expect(fs.existsSync(path.join(tmpDir, "trajectory", "session-1.jsonl"))).toBe(false);
   });
 
+  it("exports logical-agent runtime events from a shared physical store", async () => {
+    const tmpDir = makeTempDir();
+    const storePath = path.join(tmpDir, "shared.sqlite");
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: "agent:main:unrelated", storePath },
+      { sessionId: "unrelated", updatedAt: 1 },
+    );
+    const target = {
+      agentId: "ops",
+      sessionKey: "agent:ops:trace",
+      sessionId: "session-1",
+      storePath,
+    };
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    appendSqliteTrajectoryRuntimeEvents(
+      target,
+      runtimeAttemptEvents([
+        ["session.started", "ops-run"],
+        ["session.ended", "ops-run", { status: "success" }],
+      ]),
+    );
+    const bundle = await exportTrajectoryBundle({
+      outputDir: path.join(tmpDir, "bundle"),
+      sessionTarget: target,
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+      workspaceDir: tmpDir,
+    });
+    expect(bundle.manifest.runtimeEventCount).toBe(2);
+    expect(
+      bundle.events.filter((event) => event.source === "runtime").map((event) => event.type),
+    ).toEqual(["session.started", "session.ended"]);
+    expect(
+      bundle.events
+        .filter((event) => event.source === "runtime")
+        .every((event) => event.runId === "ops-run"),
+    ).toBe(true);
+  });
+
   it("does not synthesize prompt files from export-time fallbacks", async () => {
     const tmpDir = makeTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");

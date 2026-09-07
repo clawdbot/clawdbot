@@ -11,6 +11,25 @@
   corner-shape: superellipse(1.5);
 }
 
+.chat-controls__inline-select[open] > wa-popup::part(popup) {
+  animation: chat-composer-picker-in var(--wa-transition-fast) ease;
+}
+
+.chat-controls__inline-select[open] > wa-popup[data-current-placement^="top"]::part(popup) {
+  transform-origin: bottom;
+}
+
+.chat-controls__inline-select[open] > wa-popup[data-current-placement^="bottom"]::part(popup) {
+  transform-origin: top;
+}
+
+@keyframes chat-composer-picker-in {
+  from {
+    opacity: 0;
+    scale: 0.9;
+  }
+}
+
 /* Composer popovers share one information architecture: a quiet title, a
    consistent icon/copy/state rail, and a neutral selected surface. Their
    widths still follow the amount of content each owner needs. */
@@ -119,7 +138,7 @@
   --chat-composer-menu-row-gap: 8px;
   --chat-composer-menu-row-radius: calc(10px * var(--openclaw-corner-radius-scale));
   --chat-composer-menu-icon: 16px;
-  --chat-composer-menu-selected: color-mix(in srgb, var(--text) 8%, transparent);
+  --chat-composer-menu-selected: var(--menu-selected);
   /* Breathing room between the draft and the surface it sits in. Small on
      purpose — it exists so the text never touches the frame, not to pad the
      composer out — and owned here so the editor's inset is one decision for
@@ -770,11 +789,6 @@
   color: var(--muted);
 }
 
-.agent-chat__attach-menu-option::part(base) {
-  box-sizing: border-box;
-  width: 100%;
-}
-
 .agent-chat__attach-menu-option svg {
   width: var(--chat-composer-menu-icon);
   height: var(--chat-composer-menu-icon);
@@ -836,15 +850,6 @@
 .agent-chat__capability-menu-state {
   color: var(--text);
   font-size: 12px;
-}
-
-.agent-chat__capability-menu-item::part(base),
-.agent-chat__attach-menu-option::part(base) {
-  box-sizing: border-box;
-  width: 100%;
-  min-height: var(--chat-composer-menu-row-height);
-  padding: var(--chat-composer-menu-row-padding);
-  border-radius: var(--chat-composer-menu-row-radius);
 }
 
 .agent-chat__capability-menu-item svg,
@@ -947,8 +952,8 @@
   display: none;
 }
 
-.agent-chat__capability-menu-subrow::part(base) {
-  padding-left: 28px;
+.agent-chat__capability-menu-subrow {
+  padding-inline-start: 28px;
 }
 
 .agent-chat__capability-menu-link {
@@ -1581,42 +1586,19 @@
 .chat-talk-input-picker::part(menu) {
   width: min(300px, calc(100vw - 24px));
   padding: 8px;
-  /* Same quick family as the chevron's own reveal, anchored at the bottom edge
-     the menu is placed against, so the list reads as continuing out of the
-     control the operator just touched rather than arriving from elsewhere. */
-  transform-origin: bottom right;
-  animation: chat-talk-input-picker-enter 140ms ease-out;
-}
-
-@keyframes chat-talk-input-picker-enter {
-  from {
-    opacity: 0;
-    transform: scale(0.96);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .chat-talk-input-picker::part(menu) {
-    animation: none;
-  }
 }
 
 .chat-talk-input-picker__item {
+  --wa-color-neutral-fill-normal: var(--bg-hover);
+
+  min-height: var(--chat-composer-menu-row-height);
+  padding: var(--chat-composer-menu-row-padding);
+  border-radius: var(--chat-composer-menu-row-radius);
   color: var(--text);
   font-size: 13px;
 }
 
-.chat-talk-input-picker__item::part(base) {
-  min-height: var(--chat-composer-menu-row-height);
-  padding: var(--chat-composer-menu-row-padding);
-  border-radius: var(--chat-composer-menu-row-radius);
-}
-
-.chat-talk-input-picker__item[aria-checked="true"]::part(base) {
+.chat-talk-input-picker__item[aria-checked="true"] {
   background: var(--chat-composer-menu-selected);
 }
 
@@ -2730,13 +2712,6 @@
   outline: none;
 }
 
-.agent-chat__input
-  wa-dropdown[data-chat-pointer-opened-picker]
-  wa-dropdown-item:is(:focus, :focus-visible)::part(base) {
-  outline: none;
-  box-shadow: none;
-}
-
 .chat-controls__inline-select-trigger--disabled {
   cursor: not-allowed;
   opacity: 0.55;
@@ -2814,7 +2789,7 @@
   width: 100%;
   min-height: var(--chat-composer-menu-row-height);
   padding: var(--chat-composer-menu-row-padding);
-  border: 1px solid transparent;
+  border: 0;
   border-radius: var(--chat-composer-menu-row-radius);
   background: transparent;
   color: var(--text);
@@ -2825,7 +2800,6 @@
 
 .chat-controls__inline-select-option:hover,
 .chat-controls__inline-select-option:focus-visible {
-  border-color: color-mix(in srgb, var(--border) 76%, transparent);
   background: var(--bg-hover);
   outline: none;
 }
@@ -2882,6 +2856,8 @@
 }
 
 .chat-controls__permission-option {
+  --wa-color-neutral-fill-normal: var(--bg-hover);
+
   display: flex;
   align-items: center;
   gap: var(--chat-composer-menu-row-gap);
@@ -2935,14 +2911,7 @@
   color: var(--accent);
 }
 
-.chat-controls__permission-option::part(base) {
-  align-items: center;
-  min-height: var(--chat-composer-menu-row-height);
-  padding: var(--chat-composer-menu-row-padding);
-  border-radius: var(--chat-composer-menu-row-radius);
-}
-
-.chat-controls__permission-option--selected::part(base) {
+.chat-controls__permission-option--selected {
   background: var(--chat-composer-menu-selected);
 }
 
@@ -3408,6 +3377,16 @@
   white-space: nowrap;
 }
 
+.chat-model-account.chat-controls__model-provenance {
+  flex-direction: column;
+  align-items: stretch;
+  white-space: normal;
+}
+
+.chat-model-account__error {
+  color: var(--danger);
+}
+
 .chat-controls__model-catalog-state {
   display: flex;
   align-items: center;
@@ -3837,15 +3816,30 @@
     min-width: 64px;
   }
 
+  .chat-thread {
+    scrollbar-gutter: auto;
+    scrollbar-width: none;
+  }
+
+  .chat-thread-inner,
   .agent-chat__composer-shell {
-    width: calc(
-      100% - max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-left, 0px)) -
-        max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-right, 0px))
-    );
-    margin: var(--chat-composer-top-margin, 0px)
-      max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-right, 0px))
-      calc(14px + var(--safe-area-bottom, 0px));
-    margin-left: max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-left, 0px));
+    --chat-frame-inset-left: max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-left, 0px));
+    --chat-frame-inset-right: max(var(--chat-mobile-edge-inset, 4px), var(--safe-area-right, 0px));
+    width: calc(100% - var(--chat-frame-inset-left) - var(--chat-frame-inset-right));
+    margin-left: var(--chat-frame-inset-left);
+    margin-right: var(--chat-frame-inset-right);
+  }
+
+  .chat-thread-inner,
+  .chat .agent-chat__composer-shell {
+    position: relative;
+    /* Center within physical safe areas without doing arithmetic on max-width keywords. */
+    left: calc((var(--chat-frame-inset-left) - var(--chat-frame-inset-right)) / 2);
+    margin-inline: auto;
+  }
+
+  .agent-chat__composer-shell {
+    margin-block: var(--chat-composer-top-margin, 0px) calc(14px + var(--safe-area-bottom, 0px));
     gap: 6px;
   }
 
@@ -3857,11 +3851,14 @@
 
 @media (display-mode: standalone) and (max-width: 768px),
   (display-mode: standalone) and (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat-thread-inner,
   .agent-chat__composer-shell {
-    width: calc(100% - 2 * var(--chat-mobile-edge-inset, 4px));
-    margin-right: var(--chat-mobile-edge-inset, 4px);
+    --chat-frame-inset-left: var(--chat-mobile-edge-inset, 4px);
+    --chat-frame-inset-right: var(--chat-mobile-edge-inset, 4px);
+  }
+
+  .agent-chat__composer-shell {
     margin-bottom: 14px;
-    margin-left: var(--chat-mobile-edge-inset, 4px);
   }
 }
 
@@ -4360,7 +4357,7 @@
 .agent-chat__avatar--text {
   width: 80px;
   height: 80px;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-full);
   background: var(--secondary);
   border: 1px solid var(--border);
   color: var(--text);

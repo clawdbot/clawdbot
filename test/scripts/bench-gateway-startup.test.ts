@@ -5,10 +5,22 @@ import { createServer, type RequestListener } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-startup.ts";
+import { stopChild } from "../../scripts/lib/gateway-bench-child.ts";
+import {
+  classifyGatewayReadyLog,
+  collectOutputLines,
+  waitForInitialProbe,
+} from "../../scripts/lib/gateway-bench-runtime.ts";
 import { isStartupTraceDuration } from "../../scripts/lib/gateway-startup-trace-ranking.js";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import { validateConfigObject } from "../../src/config/validation.js";
+import { isPidAlive } from "../../src/shared/pid-alive.js";
+import { waitForPidToExit } from "../../src/test-utils/process-tree.js";
+import { runNodeScript } from "../helpers/run-node-script.js";
+import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { registerStopChildBehaviorTests } from "./bench-gateway-child-test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -55,6 +67,148 @@ describe("gateway startup benchmark script", () => {
     expect(helpResult.stdout).not.toContain("[gateway-startup-bench]");
     expect(helpResult.stderr).toBe("");
   });
+
+  // Strict managed process-group verification is not supported on Windows.
+  it.skipIf(process.platform === "win32")(
+    "reports fractional counts without time units through the benchmark CLI",
+    async ({ signal }) => {
+      const fixtures = createTempDirTracker();
+      const root = fixtures.make("openclaw-bench-count-report-");
+      const entry = path.join(root, "entry.mjs");
+      const counter = path.join(root, "counter.json");
+      const eventsPath = path.join(root, "events.jsonl");
+      const reportPath = path.join(root, "report.json");
+      type FixtureEvent = {
+        phase: string;
+        pid: number;
+        home?: string;
+        method?: string;
+        status?: number;
+        path?: string;
+      };
+      const readEvents = (): FixtureEvent[] =>
+        fs.existsSync(eventsPath)
+          ? fs
+              .readFileSync(eventsPath, "utf8")
+              .trim()
+              .split("\n")
+              .map((line) => JSON.parse(line))
+          : [];
+      try {
+        fs.writeFileSync(
+          entry,
+          `import { createServer } from "node:http";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+const counter = ${JSON.stringify(counter)};
+const record = (phase, extra = {}) => appendFileSync(${JSON.stringify(eventsPath)}, JSON.stringify({ phase, pid: process.pid, ...extra }) + "\\n");
+const sample = (existsSync(counter) ? JSON.parse(readFileSync(counter, "utf8")) : 0) + 1;
+writeFileSync(counter, JSON.stringify(sample));
+record("started", { home: process.env.OPENCLAW_HOME });
+const port = Number(process.argv[process.argv.indexOf("--port") + 1]);
+const server = createServer((req, res) => {
+  const status = req.method === "HEAD" && ["/healthz", "/readyz"].includes(req.url) ? 200 : 404;
+  record("probe", { method: req.method, status, path: req.url });
+  res.writeHead(status, { connection: "close" });
+  res.end();
+});
+let stopping = false;
+const stop = (reason) => {
+  if (stopping) return;
+  stopping = true;
+  server.close(() => { record("closed", { reason }); process.exit(0); });
+};
+process.on("SIGTERM", () => stop("signal"));
+// The CLI owns stdin; EOF retires this detached fixture when the CLI is cancelled.
+process.stdin.on("end", () => stop("stdin-eof"));
+process.stdin.resume();
+server.listen(port, "127.0.0.1", () => {
+  console.log("[gateway] http server listening (0 plugins, 0.0s)");
+  console.log("[gateway] ready (0 plugins, 0.0s)");
+  console.log("startup trace: sidecars.model-runtime-build agentCount=" + (10 + sample) + " workspaceGroupCount=" + sample + " workspaceFactsMs=2.5");
+  console.log("startup trace: memory.ready rssMb=32.5 heapUsedMb=16.25 externalMb=2");
+});
+`,
+        );
+        const result = await runNodeScript(
+          [
+            "--import",
+            "tsx",
+            "scripts/bench-gateway-startup.ts",
+            "--entry",
+            entry,
+            "--case",
+            "default",
+            "--runs",
+            "2",
+            "--warmup",
+            "0",
+            "--output",
+            reportPath,
+          ],
+          { ...process.env, TMPDIR: root },
+          undefined,
+          { cwd: process.cwd(), signal, maxBuffer: 1024 * 1024, requireProcessTreeExit: true },
+        );
+        expect(result.error).toBeUndefined();
+        expect(result.status, result.stderr).toBe(0);
+        const events = readEvents();
+        const started = events.filter((event) => event.phase === "started");
+        expect(started).toHaveLength(2);
+        expect(events.filter((event) => event.phase === "closed")).toHaveLength(2);
+        const probes = events.filter((event) => event.phase === "probe");
+        for (const probe of probes) {
+          expect(probe).toMatchObject({ method: "HEAD", status: 200 });
+        }
+        for (const event of started) {
+          expect(
+            probes.filter((probe) => probe.pid === event.pid).map((probe) => probe.path),
+          ).toEqual(expect.arrayContaining(["/healthz", "/readyz"]));
+          expect(isPidAlive(event.pid)).toBe(false);
+          expect(event.home).toBeDefined();
+          expect(fs.existsSync(event.home!)).toBe(false);
+        }
+        const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+        expect(report.results).toHaveLength(1);
+        expect(report.results[0].samples).toHaveLength(2);
+        expect(report.results[0].summary.startupTrace).toMatchObject({
+          "sidecars.model-runtime-build.agentCount": { p50: 11.5, avg: 11.5, min: 11, max: 12 },
+          "sidecars.model-runtime-build.workspaceGroupCount": {
+            p50: 1.5,
+            avg: 1.5,
+            min: 1,
+            max: 2,
+          },
+          "sidecars.model-runtime-build.workspaceFactsMs": { p50: 2.5, avg: 2.5 },
+        });
+        expect(result.stdout).toContain("workspaceFacts=p50=2.5ms");
+        expect(result.stdout).toContain("ready memory: rss=p50=32.5MB");
+        expect(result.stdout).toContain("runtimePlugins=n/a");
+        expect(result.stdout).toMatch(
+          / {2}CPU core:\s+p50=\d+\.\d{3} avg=\d+\.\d{3} min=\d+\.\d{3} max=\d+\.\d{3}/u,
+        );
+        const counts = result.stdout
+          .split("\n")
+          .find((line) => line.startsWith("  prepared runtime:"));
+        expect(counts).toContain("agents=p50=11.5 avg=11.5 min=11 max=12");
+        expect(counts).toContain("workspaces=p50=1.5 avg=1.5 min=1 max=2");
+      } finally {
+        // Never signal retired PIDs; retain fixture evidence if an unclosed child remains alive.
+        const events = readEvents();
+        const closed = new Set(
+          events.filter((event) => event.phase === "closed").map((event) => event.pid),
+        );
+        for (const startedEvent of events.filter((event) => event.phase === "started")) {
+          if (!closed.has(startedEvent.pid)) {
+            expect(
+              await waitForPidToExit(startedEvent.pid),
+              `Unclosed fixture retained at ${root}`,
+            ).toBe(true);
+          }
+        }
+        fixtures.cleanup();
+      }
+    },
+  );
 
   it("rejects ambiguous benchmark CLI values before spawning Node", () => {
     expect(() => testing.parseOptions(["--wat"])).toThrow("Unknown argument: --wat");
@@ -179,14 +333,12 @@ describe("gateway startup benchmark script", () => {
   });
 
   it("classifies HTTP listen and gateway ready logs separately", () => {
-    expect(
-      testing.classifyGatewayReadyLog("[gateway] http server listening (0 plugins, 0.8s)"),
-    ).toBe("http-listen");
-    expect(testing.classifyGatewayReadyLog("[gateway] ready (0 plugins, 0.8s)")).toBe(
-      "gateway-ready",
+    expect(classifyGatewayReadyLog("[gateway] http server listening (0 plugins, 0.8s)")).toBe(
+      "http-listen",
     );
-    expect(testing.classifyGatewayReadyLog("[gateway] ready")).toBe("gateway-ready");
-    expect(testing.classifyGatewayReadyLog("[gateway] starting HTTP server...")).toBeNull();
+    expect(classifyGatewayReadyLog("[gateway] ready (0 plugins, 0.8s)")).toBe("gateway-ready");
+    expect(classifyGatewayReadyLog("[gateway] ready")).toBe("gateway-ready");
+    expect(classifyGatewayReadyLog("[gateway] starting HTTP server...")).toBeNull();
   });
 
   it("preserves ready and trace records split across output chunks", () => {
@@ -198,7 +350,7 @@ describe("gateway startup benchmark script", () => {
     let carry = "";
     const lines: string[] = [];
     for (const chunk of chunks) {
-      const parsed = testing.collectOutputLines(carry, chunk);
+      const parsed = collectOutputLines(carry, chunk);
       carry = parsed.carry;
       lines.push(...parsed.lines);
     }
@@ -208,7 +360,7 @@ describe("gateway startup benchmark script", () => {
     }
 
     expect(carry).toBe("");
-    expect(lines.map(testing.classifyGatewayReadyLog)).toContain("gateway-ready");
+    expect(lines.map(classifyGatewayReadyLog)).toContain("gateway-ready");
     expect(trace).toMatchObject({
       "sidecars.ready": 2,
       "sidecars.ready.heapUsedMb": 12,
@@ -288,7 +440,7 @@ describe("gateway startup benchmark script", () => {
       },
     ]);
 
-    expect(testing.collectResultFailures([result], { processMetricsRequired: true })).toEqual([
+    expect(testing.collectResultFailures([result])).toEqual([
       {
         id: "demo",
         reason: "missing /healthz, /readyz, completion, cpu, rss",
@@ -331,7 +483,7 @@ describe("gateway startup benchmark script", () => {
       },
     ]);
 
-    expect(testing.collectResultFailures([result], { processMetricsRequired: true })).toEqual([
+    expect(testing.collectResultFailures([result])).toEqual([
       {
         id: "demo",
         reason: "child exited 1",
@@ -374,7 +526,7 @@ describe("gateway startup benchmark script", () => {
       },
     ]);
 
-    expect(testing.collectResultFailures([result], { processMetricsRequired: true })).toEqual([]);
+    expect(testing.collectResultFailures([result])).toEqual([]);
   });
 
   it("enforces the combined incident readiness budgets", () => {
@@ -410,7 +562,7 @@ describe("gateway startup benchmark script", () => {
       },
     ]);
 
-    expect(testing.collectResultFailures([result], { processMetricsRequired: true })).toEqual([
+    expect(testing.collectResultFailures([result])).toEqual([
       {
         id: "incidentCombined",
         reason: "/healthz p95 30000.0ms must be under 30000.0ms",
@@ -458,7 +610,7 @@ describe("gateway startup benchmark script", () => {
       },
     ]);
 
-    expect(testing.collectResultFailures([result], { processMetricsRequired: true })).toEqual([
+    expect(testing.collectResultFailures([result])).toEqual([
       {
         id: "demo",
         reason: "child exited by SIGSEGV",
@@ -468,7 +620,7 @@ describe("gateway startup benchmark script", () => {
   });
 
   registerStopChildBehaviorTests({
-    stopChild: testing.stopChild,
+    stopChild,
     queuedExitCode: 7,
   });
 
@@ -531,7 +683,7 @@ describe("gateway startup benchmark script", () => {
     });
     try {
       const startAt = performance.now();
-      const result = await testing.waitForProbe({
+      const result = await waitForInitialProbe({
         deadlineAt: startAt + 1_000,
         path: "/readyz",
         port,
@@ -678,6 +830,27 @@ describe("gateway startup benchmark script", () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("builds a valid large plugin-model startup case", () => {
+    const root = tempDirs.make("openclaw-large-plugin-model-bench-test-");
+    const benchCase = testing.parseOptions(["--case", "largePluginModelConfig"]).cases[0];
+    if (!benchCase) {
+      throw new Error("expected large plugin-model benchmark case");
+    }
+    const configPath = testing.writeConfig(root, benchCase);
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as OpenClawConfig;
+    const entries = Object.values(config.agents?.entries ?? {});
+    const modelRefs = collectConfiguredModelRefs(config, { includeChannelModelOverrides: false });
+
+    expect(benchCase.completionTracePhase).toBe("config.snapshot.auto-enable");
+    expect(validateConfigObject(config).ok).toBe(true);
+    expect(entries).toHaveLength(256);
+    expect(modelRefs).toHaveLength(256 * 58);
+    expect(new Set(modelRefs.map(({ value }) => value.slice(0, value.indexOf("/"))))).toEqual(
+      new Set(["openai", "google", "minimax"]),
+    );
+    expect(config.plugins?.allow).toEqual(["openai", "google", "minimax"]);
   });
 
   it("builds prepared-runtime scale cases with shared and distinct workspaces", () => {

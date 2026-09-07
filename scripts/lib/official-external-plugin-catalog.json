@@ -37,9 +37,13 @@
             "id": "brave",
             "label": "Brave Search",
             "hint": "Brave Search web results.",
-            "onboardingScopes": ["text-inference"],
+            "onboardingScopes": [
+              "text-inference"
+            ],
             "credentialLabel": "Brave Search API key",
-            "envVars": ["BRAVE_API_KEY"],
+            "envVars": [
+              "BRAVE_API_KEY"
+            ],
             "placeholder": "BSA...",
             "signupUrl": "https://api-dashboard.search.brave.com/app/keys",
             "docsUrl": "https://docs.openclaw.ai/tools/brave-search",
@@ -66,12 +70,28 @@
           "label": "Codex"
         },
         "contracts": {
-          "migrationProviders": ["codex"]
+          "migrationProviders": [
+            "codex"
+          ]
         },
         "install": {
           "npmSpec": "@openclaw/codex",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.1-beta.1"
+        },
+        "setup": {
+          "nativeSessionCatalog": {
+            "label": "Codex",
+            "legacyDefaultEnabled": true,
+            "description": "Existing native Codex conversations on this Gateway and eligible paired nodes.",
+            "nodeCommands": [
+              "codex.appServer.threads.list.v1",
+              "codex.appServer.thread.turns.list.v1",
+              "codex.sessionCatalog.transcript.read.v1",
+              "codex.terminal.resume.v1",
+              "codex.cli.sessions.list"
+            ]
+          }
         }
       }
     },
@@ -321,7 +341,9 @@
       "source": "official",
       "kind": "plugin",
       "openclaw": {
-        "legacyPluginIds": ["fish-audio"],
+        "legacyPluginIds": [
+          "fish-audio"
+        ],
         "plugin": {
           "id": "fish-audio-speech",
           "label": "Fish Audio Speech"
@@ -452,7 +474,9 @@
           "label": "llama.cpp Provider"
         },
         "contracts": {
-          "embeddingProviders": ["local"]
+          "embeddingProviders": [
+            "local"
+          ]
         },
         "install": {
           "npmSpec": "@openclaw/llama-cpp-provider",

@@ -915,9 +915,193 @@ end
       screenshots.indexOf("RELEASE_IOS_SCREENSHOT_TESTS.each"),
     );
     expect(screenshots.indexOf("verify_release_ios_screenshot_manifest!")).toBeLessThan(
-      screenshots.indexOf("watch_screenshot("),
+      screenshots.indexOf("capture_watch_screenshot"),
     );
     expect(screenshots).toContain('ENV["OPENCLAW_SNAPSHOT_SKIP_WATCH"] == "1"');
+  });
+
+  it("reuses only the current screenshot build for Watch while standalone capture builds fresh", () => {
+    const source = `
+require "json"
+require "tmpdir"
+module UI
+  def self.user_error!(message)
+    raise message
+  end
+  def self.success(message); end
+end
+def default_platform(*); end
+def desc(*); end
+def platform(*)
+  yield
+end
+def lane(name, &body)
+  define_singleton_method(name, &body)
+end
+alias private_lane lane
+load ARGV.fetch(0)
+
+def repo_root
+  @root
+end
+def ios_root
+  File.join(@root, "apps", "ios")
+end
+def snapshot_devices
+  ["iPad Pro 13-inch"]
+end
+def resolve_simulator_device(_name)
+  { "name" => "Apple Watch Ultra 3 (49mm)", "udid" => "watch-simulator" }
+end
+def write_watch_screenshot_mode_defaults(*); end
+def clear_watch_screenshot_mode_defaults(*); end
+def set_watch_status_bar_override(*)
+  false
+end
+def normalize_watch_screenshot_status_bar(*); end
+def sleep(*); end
+
+def make_product(derived_data_path)
+  app = File.join(derived_data_path, "Build", "Products", "Debug-watchsimulator", "OpenClawWatchApp.app")
+  raise "stale product survived clean build" if File.exist?(File.join(app, "stale"))
+  return if @scenario == "missing"
+  FileUtils.mkdir_p(app)
+  File.write(File.join(app, "Info.plist"), "fixture.watch") unless @scenario == "invalid-plist"
+end
+module Open3
+  def self.capture3(command, *args)
+    raise "unexpected external command: #{command}" unless command == "/usr/libexec/PlistBuddy"
+    [File.read(args.last), "", Struct.new(:success?).new(true)]
+  end
+end
+def run_tests(**options)
+  raise "snapshot build is not fresh" unless options[:clean] && options[:build_for_testing]
+  @builds << "snapshot"
+  raise "snapshot build failed" if @scenario == "build-failure"
+  make_product(options.fetch(:derived_data_path))
+end
+def capture_release_ios_screenshot!(**options)
+  raise "capture before successful build" unless @builds == ["snapshot"]
+  name = options.fetch(:screenshot).fetch(:name)
+  output = File.join(options.fetch(:output_directory), "en-US", "#{options.fetch(:device)}-#{name}.png")
+  FileUtils.mkdir_p(File.dirname(output))
+  File.binwrite(output, PNG_SIGNATURE + "fixture")
+  FileUtils.mkdir_p(File.join(options.fetch(:result_bundle_archive_directory), "#{name}.xcresult"))
+  options.fetch(:capture_attempts) << { name: name, outcome: "passed" }
+  write_release_ios_screenshot_attempts!(
+    attempts: options.fetch(:capture_attempts), output_path: options.fetch(:capture_attempts_path)
+  )
+end
+def sh(command)
+  args = Shellwords.split(command)
+  @commands << args
+  if args.include?("xcodebuild") && args.include?("build")
+    @builds << "watch"
+    raise "Watch build failed" if @scenario == "standalone-build-failure"
+    make_product(args.fetch(args.index("-derivedDataPath") + 1))
+  elsif args[0, 3] == ["xcrun", "simctl", "install"]
+    @installed = args.last.sub(@root, "")
+    raise "simulator rejected Watch product" if @scenario == "invalid-install"
+  elsif args[0, 3] == ["xcrun", "simctl", "io"]
+    File.binwrite(args.last, PNG_SIGNATURE + "watch")
+  end
+end
+
+results = %w[combined iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure].map do |scenario|
+  Dir.mktmpdir("openclaw-watch-build-") do |root|
+    @root, @scenario, @builds, @commands, @installed = root, scenario, [], [], nil
+    %w[SnapshotDerivedData WatchScreenshotDerivedData].each do |directory|
+      app = File.join(ios_root, "build", directory, "Build", "Products", "Debug-watchsimulator", "OpenClawWatchApp.app")
+      FileUtils.mkdir_p(app)
+      File.write(File.join(app, "stale"), "previous invocation")
+    end
+    if scenario.start_with?("standalone")
+      output = File.join(ios_root, "fastlane", "screenshots", "en-US")
+      FileUtils.mkdir_p(output)
+      File.write(File.join(output, "Apple Watch Ultra 3 (49mm)-01-now-face.png"), "previous screenshot")
+    end
+    ENV["OPENCLAW_SNAPSHOT_SKIP_WATCH"] = scenario == "iphone" ? "1" : "0"
+    error = nil
+    begin
+      options = { release_version: "2026.9.1", app_store_revision: "2", build_number: "123" }
+      scenario.start_with?("standalone") ? watch_screenshot(options) : screenshots(options)
+    rescue => failure
+      error = failure.message.sub(root, "")
+    end
+    {
+      scenario: scenario, builds: @builds, error: error, installed: @installed,
+      pngs: Dir[File.join(ios_root, "fastlane", "screenshots", "en-US", "*.png")].length,
+      xcresults: Dir[File.join(ios_root, "build", "SnapshotTestResults", "*.xcresult")].length,
+      attempts: File.exist?(File.join(ios_root, "build", "SnapshotTestResults", "capture-attempts.json")),
+      versions: @commands.select { |args| args.any? { |arg| arg.end_with?("/ios-write-version-xcconfig.sh") } }
+        .map { |args| args.drop(2) }
+    }
+  end
+end
+puts JSON.generate(results)
+`;
+    const result = spawnSync("ruby", ["-e", source, fastfilePath], { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    const rows = JSON.parse(result.stdout) as {
+      scenario: string;
+      builds: string[];
+      error: string | null;
+      installed: string | null;
+      pngs: number;
+      xcresults: number;
+      attempts: boolean;
+      versions: string[][];
+    }[];
+    const row = (scenario: string) => rows.find((entry) => entry.scenario === scenario)!;
+    const versionArgs = ["--version", "2026.9.1", "--revision", "2", "--build-number", "123"];
+    expect(row("combined")).toMatchObject({
+      builds: ["snapshot"],
+      error: null,
+      installed:
+        "/apps/ios/build/SnapshotDerivedData/Build/Products/Debug-watchsimulator/OpenClawWatchApp.app",
+      pngs: 5,
+      xcresults: 4,
+      attempts: true,
+      versions: [versionArgs],
+    });
+    expect(row("iphone")).toMatchObject({
+      builds: ["snapshot"],
+      error: null,
+      installed: null,
+      pngs: 4,
+    });
+    expect(row("standalone")).toMatchObject({
+      builds: ["watch"],
+      error: null,
+      installed:
+        "/apps/ios/build/WatchScreenshotDerivedData/Build/Products/Debug-watchsimulator/OpenClawWatchApp.app",
+      pngs: 1,
+      versions: [versionArgs],
+    });
+    expect(row("standalone-build-failure")).toMatchObject({
+      builds: ["watch"],
+      error: "Watch build failed",
+      installed: null,
+      pngs: 0,
+    });
+    for (const scenario of ["missing", "invalid-plist", "invalid-install"]) {
+      expect(row(scenario), scenario).toMatchObject({
+        builds: ["snapshot"],
+        pngs: 4,
+        xcresults: 4,
+        attempts: true,
+      });
+    }
+    expect(row("missing").error).toContain("Watch screenshot build did not produce");
+    expect(row("invalid-plist").error).toContain("Expected Info.plist");
+    expect(row("invalid-install").error).toBe("simulator rejected Watch product");
+    expect(row("build-failure")).toMatchObject({
+      builds: ["snapshot"],
+      error: "snapshot build failed",
+      installed: null,
+      pngs: 0,
+      xcresults: 0,
+    });
   });
 
   it("runs screenshot shards alongside builds without changing runner authorization", () => {
@@ -939,12 +1123,19 @@ end
     expect(shardJob).toContain("needs: [preflight]");
     expect(shardJob).toContain("max-parallel: 2");
     expect(shardJob).toContain("device_family: [iphone, ipad-13]");
-    expect(shardJob).toContain('OPENCLAW_SNAPSHOT_SKIP_WATCH: "1"');
-    expect(shardJob).toContain("if: matrix.device_family == 'ipad-13'");
-    expect(shardJob).toContain("run_ios_fastlane ios watch_screenshot");
+    expect(shardJob).toContain(
+      "OPENCLAW_SNAPSHOT_SKIP_WATCH: ${{ matrix.device_family == 'iphone' && '1' || '0' }}",
+    );
+    expect(shardJob).not.toContain("run_ios_fastlane ios watch_screenshot");
     expect(shardJob).toContain("run: pnpm ios:screenshots");
     expect(shardJob).toContain("id: package_screenshot_evidence");
+    expect(shardJob).toContain('if [[ "$DEVICE_FAMILY" == "ipad-13" ]]; then');
+    expect(
+      shardJob.match(/node \.ci-harness\/scripts\/ios-screenshot-evidence\.mjs/g),
+    ).toHaveLength(2);
+    expect(shardJob).not.toContain("node scripts/ios-screenshot-evidence.mjs");
     expect(shardJob).toContain("steps.package_screenshot_evidence.outcome == 'failure'");
+    expect(shardJob).toContain("steps.device_screenshots.outcome == 'failure'");
     expect(shardJob).toContain("apps/ios/build/SnapshotTestResults/capture-attempts.json");
     expect(shardJob).not.toContain("IOS_SCREENSHOT_FASTLANE_VERSION");
     expect(shardJob).toContain("IOS_SCREENSHOT_NODE_VERSION");
@@ -958,7 +1149,8 @@ end
     expect(reducerJob).toContain("Setup screenshot evidence Node");
     expect(reducerJob).toContain("node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}");
     expect(reducerJob).toContain("id: reduce_screenshot_evidence");
-    expect(reducerJob).toContain("scripts/ios-screenshot-evidence.mjs reduce");
+    expect(reducerJob).toContain("node .ci-harness/scripts/ios-screenshot-evidence.mjs reduce");
+    expect(reducerJob).not.toContain("node scripts/ios-screenshot-evidence.mjs");
     expect(reducerJob).toContain('--workflow-sha "$WORKFLOW_SHA"');
     expect(reducerJob).toContain('--run-id "$RUN_ID"');
     expect(reducerJob).toContain('--run-attempt "$RUN_ATTEMPT"');

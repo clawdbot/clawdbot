@@ -1,18 +1,18 @@
 import type { UsersMentionableParams, UsersMentionableResult } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
-import { ref } from "lit/directives/ref.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
+import {
+  handleComposerMenuKeydown,
+  renderComposerMenu,
+  renderComposerMenuOption,
+} from "../../../components/composer-menu.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import { MAX_HUMAN_MENTIONS, updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
 import "../../../styles/chat/reply-preview.css";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
-import {
-  paneDomId,
-  scrollActiveMenuOptionIntoView,
-  syncComposerMenuScroll,
-} from "./chat-composer-dom.ts";
+import { paneDomId } from "./chat-composer-dom.ts";
 
 export type HumanMentionDirectory = {
   client: GatewayBrowserClient;
@@ -163,28 +163,22 @@ export class HumanMentionMenu {
     if (!this.open || event.defaultPrevented || event.isComposing || event.keyCode === 229) {
       return false;
     }
-    if (event.key === "Escape") {
-      event.preventDefault();
-      this.close();
-      requestUpdate();
-      return true;
-    }
-    if (!["ArrowDown", "ArrowUp", "Enter", "Tab"].includes(event.key)) {
-      return false;
-    }
-    event.preventDefault();
     const users = this.search?.kind === "ready" ? this.search.result.users : [];
-    if (users.length > 0) {
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-        this.index =
-          (this.index + (event.key === "ArrowDown" ? 1 : users.length - 1)) % users.length;
+    return handleComposerMenuKeydown(event, {
+      count: users.length,
+      index: this.index,
+      consumeEmpty: true,
+      close: () => {
+        this.close();
         requestUpdate();
-        scrollActiveMenuOptionIntoView(this.activeId(host.paneId));
-      } else {
-        this.select(users[this.index]!, host, requestUpdate);
-      }
-    }
-    return true;
+      },
+      move: (index) => {
+        this.index = index;
+        requestUpdate();
+        return this.activeId(host.paneId);
+      },
+      select: () => this.select(users[this.index]!, host, requestUpdate),
+    });
   }
 
   private select(
@@ -238,55 +232,47 @@ export class HumanMentionMenu {
           : !result?.users.length
             ? t("chat.mentions.empty")
             : null;
-    return html`<div
-      id=${paneDomId(host.paneId, "mention-menu-listbox")}
-      class="slash-menu mention-menu"
-      role="listbox"
-      aria-label=${t("chat.mentions.menu")}
-    >
-      <div class="slash-menu__scroll" ${ref(syncComposerMenuScroll)}>
-        <div class="slash-menu-group">
-          <div class="slash-menu-group__label" role="status">
-            ${message ?? t("chat.mentions.menu")}
-          </div>
-          ${message
+    return renderComposerMenu({
+      id: paneDomId(host.paneId, "mention-menu-listbox"),
+      className: "mention-menu",
+      label: t("chat.mentions.menu"),
+      trackScroll: false,
+      content: html` <div class="slash-menu-group">
+        <div class="slash-menu-group__label" role="status">
+          ${message ?? t("chat.mentions.menu")}
+        </div>
+        ${
+          message
             ? nothing
-            : result?.users.map(
-                (person, index) => html`<div
-                  id=${paneDomId(host.paneId, `mention-option-${index}`)}
-                  class="slash-menu-item ${index === this.index ? "slash-menu-item--active" : ""}"
-                  role="option"
-                  aria-selected=${index === this.index}
-                  @mousedown=${(event: MouseEvent) => event.preventDefault()}
-                  @click=${() => this.select(person, host, requestUpdate)}
-                  @mouseenter=${() => {
+            : result?.users.map((person, index) =>
+                renderComposerMenuOption({
+                  id: paneDomId(host.paneId, `mention-option-${index}`),
+                  active: index === this.index,
+                  select: () => this.select(person, host, requestUpdate),
+                  hover: () => {
                     this.index = index;
                     requestUpdate();
-                  }}
-                >
-                  <span class="slash-menu-icon" aria-hidden="true"
-                    >${renderChatAuthorAvatar({
-                      id: person.profileId,
-                      name: person.displayName,
-                      identity: { type: "profile", id: person.profileId },
-                      profileAvatarUrl: person.avatarUrl,
-                    })}</span
-                  >
-                  <span class="slash-menu-copy">
-                    <span class="slash-menu-name">${person.displayName}</span>
-                    <span class="slash-menu-desc"
-                      >${person.online ? t("chat.mentions.online") : t("chat.mentions.offline")} ·
-                      ${person.profileId.slice(-8)}</span
-                    >
-                  </span>
-                </div>`,
-              )}
-          ${result?.truncated
+                  },
+                  icon: renderChatAuthorAvatar({
+                    id: person.profileId,
+                    name: person.displayName,
+                    identity: { type: "profile", id: person.profileId },
+                    profileAvatarUrl: person.avatarUrl,
+                  }),
+                  iconHidden: true,
+                  name: person.displayName,
+                  description: html`${person.online ? t("chat.mentions.online") : t("chat.mentions.offline")}
+                  · ${person.profileId.slice(-8)}`,
+                }),
+              )
+        }
+        ${
+          result?.truncated
             ? html`<div class="slash-menu-group__label">${t("chat.mentions.truncated")}</div>`
-            : nothing}
-        </div>
-      </div>
-    </div>`;
+            : nothing
+        }
+      </div>`,
+    });
   }
 }
 

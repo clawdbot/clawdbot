@@ -8,14 +8,21 @@ import { IMessageRpcClient } from "./client.js";
 import { sendMessageIMessage } from "./send.js";
 
 const monitorMock = vi.hoisted(() => vi.fn(async () => undefined));
+const createRpcClientMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./monitor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./monitor.js")>()),
   monitorIMessageProvider: monitorMock,
 }));
 
+vi.mock("./client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client.js")>()),
+  createIMessageRpcClient: createRpcClientMock,
+}));
+
 const { sendIMessageOutbound, startIMessageGatewayAccount } = await import("./channel.runtime.js");
 const { resolveIMessageAccount } = await import("./accounts.js");
+const { imessagePlugin } = await import("./channel.js");
 
 function makeCtx(params: {
   cfg: Parameters<typeof resolveIMessageAccount>[0]["cfg"];
@@ -410,5 +417,60 @@ describe("iMessage account media limits", () => {
       await client.stop();
       await state.cleanup();
     }
+  });
+});
+
+describe("imessagePlugin pairing.notifyApproval", () => {
+  const pairingCfg = {
+    channels: {
+      imessage: {
+        defaultAccount: "alpha",
+        accounts: {
+          alpha: { cliPath: "/gateway/alpha-imsg", dbPath: "/gateway/alpha-chat.db" },
+          beta: { cliPath: "/gateway/beta-imsg", dbPath: "/gateway/beta-chat.db" },
+        },
+      },
+    },
+  };
+
+  it.each([
+    {
+      name: "the approved account",
+      accountId: "beta",
+      cliPath: "/gateway/beta-imsg",
+      dbPath: "/gateway/beta-chat.db",
+    },
+    {
+      name: "the default account when no account was approved",
+      accountId: undefined,
+      cliPath: "/gateway/alpha-imsg",
+      dbPath: "/gateway/alpha-chat.db",
+    },
+  ])("sends the approval from $name", async ({ accountId, cliPath, dbPath }) => {
+    const notifyApproval = imessagePlugin.pairing?.notifyApproval;
+    if (!notifyApproval) {
+      throw new Error("imessage pairing.notifyApproval unavailable");
+    }
+    const request = vi.fn(async () => ({ guid: "p:0/pairing-approval" }));
+    createRpcClientMock.mockReset();
+    createRpcClientMock.mockResolvedValue({ request, stop: vi.fn(async () => {}) });
+
+    await notifyApproval({
+      cfg: pairingCfg,
+      id: "+15551234567",
+      ...(accountId ? { accountId } : {}),
+    });
+
+    expect(createRpcClientMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ cliPath, dbPath }),
+    );
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      "send",
+      expect.objectContaining({
+        to: "+15551234567",
+        text: "✅ OpenClaw access approved. Send a message to start chatting.",
+      }),
+      expect.any(Object),
+    );
   });
 });

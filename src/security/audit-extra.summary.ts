@@ -11,7 +11,7 @@ import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
-import { hasConfiguredInternalHooks } from "../hooks/configured.js";
+import { resolveInternalHookSelection } from "../hooks/configured.js";
 import {
   createAgentToAgentPolicy,
   resolveSandboxSessionToolsVisibility,
@@ -142,7 +142,7 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
   const group = summarizeGroupPolicy(cfg);
   const elevated = cfg.tools?.elevated?.enabled !== false;
   const webhooksEnabled = cfg.hooks?.enabled === true;
-  const internalHooksEnabled = hasConfiguredInternalHooks(cfg);
+  const internalHooksEnabled = resolveInternalHookSelection(cfg).configured;
   const browserEnabled = isBrowserEnabled(cfg);
 
   const detail =

@@ -249,6 +249,15 @@ describe("Markdown final code content", () => {
       },
     },
     {
+      name: "standalone three-space inline code",
+      markdown: "`   `",
+      expected: {
+        text: "   ",
+        styles: [{ start: 0, end: 3, style: "code" }],
+        links: [],
+      },
+    },
+    {
       name: "inline code followed by prose",
       markdown: "Copy `name ` next",
       expected: {
