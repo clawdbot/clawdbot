@@ -27,6 +27,7 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeAssistantVisibleTextPreservingIndent } from "openclaw/plugin-sdk/text-chunking";
 import { Type } from "typebox";
 import { msteamsDirectoryContractPlugin } from "../directory-contract-api.js";
 import type {
@@ -377,6 +378,7 @@ const msteamsChannelOutbound: ChannelOutboundAdapter = {
   resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
     typeof fallbackLimit === "number" && fallbackLimit > 0 ? Math.min(fallbackLimit, 4000) : 4000,
   pollMaxOptions: 12,
+  sanitizeText: ({ text }) => sanitizeAssistantVisibleTextPreservingIndent(text),
   shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
     shouldSuppressLocalMSTeamsExecApprovalPrompt({ cfg, accountId, payload, hint }),
   deliveryCapabilities: {

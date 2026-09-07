@@ -10,7 +10,12 @@ import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair
 import { findCodeRegions, isInsideCode, stripLinesOutsideCode } from "./code-regions.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
 import { stripReasoningTagsFromText } from "./reasoning-tags.js";
-import { applyTextFilters, trimTextFilter, type TextFilter } from "./text-projection.js";
+import {
+  applyTextFilters,
+  leadingEmptyLinesTextFilter,
+  trimTextFilter,
+  type TextFilter,
+} from "./text-projection.js";
 
 const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
@@ -731,6 +736,7 @@ function stripAssistantInternalTraceLines(text: string): string {
 
 export type AssistantVisibleTextSanitizerProfile =
   | "delivery"
+  | "delivery-preserve-indent"
   | "final-answer-delivery"
   | "history"
   | "internal-scaffolding"
@@ -748,7 +754,13 @@ export function assistantVisibleTextFilters(
     return cached;
   }
   const preserve = profile === "internal-scaffolding";
-  const trim = preserve ? "start" : profile === "history" ? "none" : "both";
+  const trim = preserve
+    ? "start"
+    : profile === "history"
+      ? "none"
+      : profile === "delivery-preserve-indent"
+        ? "end"
+        : "both";
   const reasoning: TextFilter = {
     activationTokens: ["<"],
     transform: (text) =>
@@ -770,7 +782,9 @@ export function assistantVisibleTextFilters(
         stripToolCallXmlTags(text, {
           stripFunctionCallsXmlPayloads: profile === "tool-progress",
           stripFunctionResponseAfterPluralToolCalls:
-            profile === "delivery" || profile === "final-answer-delivery",
+            profile === "delivery" ||
+            profile === "delivery-preserve-indent" ||
+            profile === "final-answer-delivery",
         }),
     },
     ...(profile === "tool-progress" ? [] : [assistantTraceTextFilter]),
@@ -782,6 +796,11 @@ export function assistantVisibleTextFilters(
     filters.unshift(reasoning);
   } else {
     filters.push(reasoning);
+  }
+  if (profile === "delivery-preserve-indent") {
+    // Trailing-only trim keeps Markdown-significant leading indentation (e.g.
+    // Teams literal code blocks); drop blank lines left by stripped scaffolding.
+    filters.push(leadingEmptyLinesTextFilter);
   }
   filters.push(trimTextFilter(trim));
   profileFilters.set(key, filters);
@@ -819,6 +838,16 @@ export function stripAssistantInternalScaffolding(text: string): string {
  */
 export function sanitizeAssistantVisibleText(text: string): string {
   return sanitizeAssistantVisibleTextWithProfile(text, "delivery");
+}
+
+/**
+ * Full delivery sanitizer variant for channels whose formatter assigns
+ * Markdown meaning to leading line indentation (e.g. Teams literal code
+ * blocks). Keeps the delivery tool-trace and function-response cleanup, but
+ * trims only trailing whitespace so four-space and tab indents survive.
+ */
+export function sanitizeAssistantVisibleTextPreservingIndent(text: string): string {
+  return sanitizeAssistantVisibleTextWithProfile(text, "delivery-preserve-indent");
 }
 
 /** Sanitizes text already marked as final-answer prose by the agent runtime. */

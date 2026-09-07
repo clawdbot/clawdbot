@@ -97,10 +97,16 @@ export function createTextProjection(filters: readonly TextFilter[]) {
   };
 }
 
-export function trimTextFilter(mode: "none" | "start" | "both"): TextFilter {
+export function trimTextFilter(mode: "none" | "start" | "end" | "both"): TextFilter {
   return {
     transform: (text) =>
-      mode === "both" ? text.trim() : mode === "start" ? text.trimStart() : text,
+      mode === "both"
+        ? text.trim()
+        : mode === "start"
+          ? text.trimStart()
+          : mode === "end"
+            ? text.trimEnd()
+            : text,
     create: () => {
       let text = "";
       let leading = true;
@@ -111,10 +117,10 @@ export function trimTextFilter(mode: "none" | "start" | "both"): TextFilter {
           return input;
         }
         const appended = input.delta ?? input.text;
-        let delta = leading ? appended.trimStart() : appended;
+        let delta = leading && mode !== "end" ? appended.trimStart() : appended;
         removedLeading ||= delta.length !== appended.length;
         leading &&= !delta;
-        if (mode === "both") {
+        if (mode === "both" || mode === "end") {
           const content = delta.trimEnd();
           if (content) {
             const trailing = delta.slice(content.length);

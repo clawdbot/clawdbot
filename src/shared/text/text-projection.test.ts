@@ -59,25 +59,34 @@ describe("createTextProjection", () => {
     expect(projection.replace("Ready reply")).toEqual({ text: "Ready reply", delta: null });
   });
 
-  it.each(["none", "start", "both"] as const)("trims %s across whitespace boundaries", (mode) => {
-    const filter = trimTextFilter(mode);
-    const projection = createTextProjection([filter]);
-    let source = "";
-    let delivered = "";
-    for (const delta of [" \r", "\n\u00a0", " A ", "\t", "B\r", "\n", " C", "  "]) {
-      source += delta;
-      const result = projection.append(delta);
-      const expected =
-        mode === "both" ? source.trim() : mode === "start" ? source.trimStart() : source;
-      expect(result).toEqual({ text: expected, delta: expected.slice(delivered.length) });
-      delivered = expected;
-    }
-    expect(projection.replace(" \tReset \n")).toEqual({
-      text: filter.transform(" \tReset \n"),
-      delta: null,
-    });
-    expect(projection.append("end").text).toBe(filter.transform(" \tReset \nend"));
-  });
+  it.each(["none", "start", "end", "both"] as const)(
+    "trims %s across whitespace boundaries",
+    (mode) => {
+      const filter = trimTextFilter(mode);
+      const projection = createTextProjection([filter]);
+      let source = "";
+      let delivered = "";
+      for (const delta of [" \r", "\n\u00a0", " A ", "\t", "B\r", "\n", " C", "  "]) {
+        source += delta;
+        const result = projection.append(delta);
+        const expected =
+          mode === "both"
+            ? source.trim()
+            : mode === "start"
+              ? source.trimStart()
+              : mode === "end"
+                ? source.trimEnd()
+                : source;
+        expect(result).toEqual({ text: expected, delta: expected.slice(delivered.length) });
+        delivered = expected;
+      }
+      expect(projection.replace(" \tReset \n")).toEqual({
+        text: filter.transform(" \tReset \n"),
+        delta: null,
+      });
+      expect(projection.append("end").text).toBe(filter.transform(" \tReset \nend"));
+    },
+  );
 
   it.each([
     { chunks: [" \r", "\n\t\n", "  Code", "\n next"], expected: "  Code\n next" },

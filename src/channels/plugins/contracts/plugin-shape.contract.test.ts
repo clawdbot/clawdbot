@@ -41,6 +41,7 @@ const SHARED_SANITIZER_CHANNEL_IDS = [
   "twitch",
   "matrix",
   "slack",
+  "msteams",
 ] as const;
 const MESSAGE_TOOL_ARTIFACT_PLUGIN_IDS = ["imessage", "slack"] as const;
 const SESSION_CONVERSATION_ARTIFACT_PLUGIN_IDS = ["feishu", "telegram"] as const;
