@@ -20,6 +20,23 @@ function guarded(response: Response) {
   };
 }
 
+async function discoverModelContexts(
+  data: Record<string, unknown>[],
+  contextWindow?: number,
+): Promise<Record<string, number | undefined>> {
+  fetchWithSsrFGuardMock.mockResolvedValueOnce(
+    guarded(new Response(JSON.stringify({ data }), { status: 200 })),
+  );
+  const models = await discoverOpenAICompatibleLocalModels({
+    baseUrl: "http://127.0.0.1:8080/v1",
+    label: "self-hosted",
+    contextWindow,
+    discoverRuntimeContext: false,
+    env: {},
+  });
+  return Object.fromEntries(models.map((model) => [model.id, model.contextWindow]));
+}
+
 describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
   it("preserves health and falls back from root /models to /v1/models", async () => {
     fetchWithSsrFGuardMock
@@ -375,5 +392,85 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
         Authorization: "Bearer explicit-key",
       });
     }
+  });
+});
+
+describe("discoverOpenAICompatibleLocalModels context metadata", () => {
+  it("uses explicit, metadata, own, parent, then default context precedence", async () => {
+    await expect(
+      discoverModelContexts([
+        { id: "context-length", context_length: 4_096 },
+        { id: "context-window", context_window: 8_192 },
+        { id: "context-size", context_size: 12_288 },
+        { id: " Base/Model ", max_model_len: 32_768 },
+        {
+          id: "metadata",
+          meta: { n_ctx_train: 24_576 },
+          max_model_len: 16_384,
+          parent: "Base/Model",
+        },
+        { id: "own", max_model_len: 16_384, parent: "Base/Model" },
+        { id: "child", parent: " Base/Model " },
+        { id: "default" },
+      ]),
+    ).resolves.toEqual({
+      "context-length": 4_096,
+      "context-window": 8_192,
+      "context-size": 12_288,
+      "Base/Model": 32_768,
+      metadata: 24_576,
+      own: 16_384,
+      child: 32_768,
+      default: 128_000,
+    });
+
+    await expect(
+      discoverModelContexts(
+        [
+          { id: "base", max_model_len: 32_768 },
+          {
+            id: "configured",
+            meta: { n_ctx_train: 24_576 },
+            max_model_len: 16_384,
+            parent: "base",
+          },
+        ],
+        2_048,
+      ),
+    ).resolves.toEqual({ base: 2_048, configured: 2_048 });
+  });
+
+  it("inherits only one exact direct parent top-level context", async () => {
+    await expect(
+      discoverModelContexts([
+        { id: "Parent", max_model_len: 8_192 },
+        { id: "case-mismatch", parent: "parent" },
+        { id: "self", parent: "self" },
+        { id: "cycle-a", parent: "cycle-b" },
+        { id: "cycle-b", parent: "cycle-a" },
+        { id: "grandparent", max_model_len: 4_096 },
+        { id: "middle", parent: "grandparent" },
+        { id: "child", parent: "middle" },
+        { id: "root-only", root: "Parent" },
+        { id: "metadata-parent", meta: { n_ctx_train: 6_144 } },
+        { id: "metadata-child", parent: "metadata-parent" },
+        { id: "invalid-parent", max_model_len: 0 },
+        { id: "invalid-child", parent: "invalid-parent" },
+      ]),
+    ).resolves.toEqual({
+      Parent: 8_192,
+      "case-mismatch": 128_000,
+      self: 128_000,
+      "cycle-a": 128_000,
+      "cycle-b": 128_000,
+      grandparent: 4_096,
+      middle: 4_096,
+      child: 128_000,
+      "root-only": 128_000,
+      "metadata-parent": 6_144,
+      "metadata-child": 128_000,
+      "invalid-parent": 128_000,
+      "invalid-child": 128_000,
+    });
   });
 });
