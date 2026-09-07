@@ -1,7 +1,7 @@
 /**
  * System prompt runtime parameter resolver.
  *
- * Collects repository, time, timezone, channel, shell, and active-process facts for prompt rendering.
+ * Collects repository, time, timezone, channel, and shell facts for prompt rendering.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -16,7 +16,6 @@ import {
 } from "../infra/active-node-context.js";
 import { findGitRoot } from "../infra/git-root.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
-import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import { formatDateStamp, resolveUserTimezone } from "./date-time.js";
 import { resolveAgentIdentity } from "./identity.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
@@ -43,7 +42,6 @@ type RuntimeInfoInput = {
   /** Supported message actions for the current channel (e.g., react, edit, unsend) */
   channelActions?: string[];
   repoRoot?: string;
-  activeProcessSessions?: ActiveProcessSessionReference[];
   activeNode?: string;
 };
 

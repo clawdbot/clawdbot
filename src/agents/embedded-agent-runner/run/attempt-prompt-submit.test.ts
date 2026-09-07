@@ -494,9 +494,14 @@ describe("submitEmbeddedAttemptPrompt", () => {
     expect(session.getLastAssistantText()).toBe("recovered");
   });
 
-  it.each([false, true])(
-    "persists runtime context only for append-only replay (%s), once across retry and reopen",
-    async (appendOnlyRuntimeContext) => {
+  it.each([
+    { appendOnlyRuntimeContext: false, runtimeOnly: false },
+    { appendOnlyRuntimeContext: true, runtimeOnly: false },
+    { appendOnlyRuntimeContext: false, runtimeOnly: true },
+    { appendOnlyRuntimeContext: true, runtimeOnly: true },
+  ])(
+    "persists context across retry and reopen: append-only=$appendOnlyRuntimeContext runtime-only=$runtimeOnly",
+    async ({ appendOnlyRuntimeContext, runtimeOnly }) => {
       await withOpenClawTestState({ label: "runtime-context-persistence" }, async (state) => {
         const target = {
           agentId: "main",
@@ -534,6 +539,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
             ...input,
             activeSession: session,
             appendOnlyRuntimeContext,
+            runtimeOnly,
             appendContext: undefined,
             prependContext: undefined,
             transcriptPrompt: text,

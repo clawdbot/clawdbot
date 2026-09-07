@@ -71,14 +71,50 @@ describe("media generation delivery-phase prompt guard", () => {
     ).toBeUndefined();
   });
 
-  it("still warns while media generation is running", () => {
+  it("carries only bounded single-line facts while media generation is running", () => {
     taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReturnValue([
-      makeTask({ progressSummary: "Generating video" }),
+      makeTask({
+        taskId: `task-${"t".repeat(150)}`,
+        sourceId: `video_generate:${"p".repeat(150)}`,
+        progressSummary: `Generating\nvideo\u2028${"x".repeat(400)}`,
+      }),
     ]);
 
-    expect(videoTaskStatusOwner.buildActiveTaskPromptContextForSession("session/A")).toContain(
-      "Do not call `video_generate` again for the same request",
+    expect(videoTaskStatusOwner.buildActiveTaskPromptContextForSession("session/A")).toBe(
+      `- tool=video_generate; task=task-${"t".repeat(123)}; status=running; provider_json="${"p".repeat(128)}"; progress_json="Generatingvideo${"x".repeat(305)}"`,
     );
+  });
+
+  it("keeps a bounded task snapshot stable across registry order and elapsed time", () => {
+    const tasks = Array.from({ length: 10 }, (_, index) =>
+      makeTask({
+        taskId: `task-${index}`,
+        sourceId: "video_generate",
+        status: index % 2 === 0 ? "queued" : "running",
+      }),
+    );
+    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReturnValue(tasks.toReversed());
+
+    const context = videoTaskStatusOwner.buildActiveTaskPromptContextForSession("session/A");
+    expect(context).toBe(
+      [
+        "- tool=video_generate; task=task-0; status=queued",
+        "- tool=video_generate; task=task-1; status=running",
+        "- tool=video_generate; task=task-2; status=queued",
+        "- tool=video_generate; task=task-3; status=running",
+        "- tool=video_generate; task=task-4; status=queued",
+        "- tool=video_generate; task=task-5; status=running",
+        "- tool=video_generate; task=task-6; status=queued",
+        "- tool=video_generate; task=task-7; status=running",
+        "- additional_tasks=2",
+      ].join("\n"),
+    );
+
+    for (const task of tasks) {
+      task.lastEventAt = task.createdAt + 60_000;
+    }
+    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReturnValue(tasks);
+    expect(videoTaskStatusOwner.buildActiveTaskPromptContextForSession("session/A")).toBe(context);
   });
 
   it("keeps delivery-phase tasks available to duplicate/status lookups", () => {

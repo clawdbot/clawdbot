@@ -224,6 +224,7 @@ If you see unexpected `cacheWrite` spikes after a config or workspace change, ch
 
 ## OpenClaw cache-stability guards
 
+- Active exec sessions, subagent state, and media-generation progress travel in compact Runtime Context carriers after the current user message, so changes do not rewrite the system prompt ahead of conversation history. Project Memory facts, channel-specific ACP hints, delegation/orchestration mode, and the current elevated level stay below the system-prompt cache boundary; static recall, safety, and capability guidance stay above it.
 - Delivery instructions live after the system-prompt cache boundary. Native Codex carries the current delivery and target policy in late turn context, so alternating delivery modes does not rebuild its static prompt or message tool catalog when the available capabilities remain unchanged. Actual capability changes still update the catalog.
 - Bundled MCP tool catalogs are sorted deterministically (by server name, then tool name) before tool registration, so `listTools()` order changes do not churn the tools block and bust prompt-cache prefixes.
 - Message-tool action enums are sorted after policy filtering, keeping identical capabilities stable across channel discovery order changes.

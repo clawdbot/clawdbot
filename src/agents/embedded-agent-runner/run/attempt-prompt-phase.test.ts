@@ -280,7 +280,10 @@ function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 } = {}) 
         },
       },
       systemPrompt: { runtimeInfo: { model: "model-1" } },
-      toolCatalog: { toolSearch: { compacted: false } },
+      toolCatalog: {
+        toolSearch: { compacted: false },
+        toolSearchRunPlan: { capabilityToolNames: new Set(["read"]) },
+      },
       promptToolPolicy: {
         current: {
           activeToolNames: ["read"],
