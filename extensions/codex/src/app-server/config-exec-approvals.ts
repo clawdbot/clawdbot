@@ -1,11 +1,11 @@
-import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  execPolicy,
+  type EmbeddedRunAttemptParamsV2,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  maxAsk,
-  minSecurity,
   resolveExecApprovalsFromFile,
-  resolveExecModePolicy,
   type ExecApprovalsFile,
 } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import type {
@@ -85,7 +85,7 @@ function applyOpenClawExecPolicyLayer(
   const nextSecurity = security ?? base.security;
   const nextAsk = ask ?? base.ask;
   return {
-    mode: resolveExecModePolicy({ security: nextSecurity, ask: nextAsk }).mode,
+    mode: execPolicy.resolveExecModePolicy({ security: nextSecurity, ask: nextAsk }).mode,
     security: nextSecurity,
     ask: nextAsk,
     touched: true,
@@ -118,14 +118,14 @@ function applyOpenClawExecApprovalFloors(
     return base;
   }
   const nextSecurity = approvalFloors.security
-    ? minSecurity(base.security, approvalFloors.security)
+    ? execPolicy.minSecurity(base.security, approvalFloors.security)
     : base.security;
-  const nextAsk = approvalFloors.ask ? maxAsk(base.ask, approvalFloors.ask) : base.ask;
+  const nextAsk = approvalFloors.ask ? execPolicy.maxAsk(base.ask, approvalFloors.ask) : base.ask;
   if (nextSecurity === base.security && nextAsk === base.ask) {
     return base;
   }
   return {
-    mode: resolveExecModePolicy({ security: nextSecurity, ask: nextAsk }).mode,
+    mode: execPolicy.resolveExecModePolicy({ security: nextSecurity, ask: nextAsk }).mode,
     security: nextSecurity,
     ask: nextAsk,
     touched: true,
@@ -135,7 +135,11 @@ function applyOpenClawExecApprovalFloors(
 function resolveOpenClawExecPolicyForMode(
   mode: OpenClawExecMode,
 ): Omit<OpenClawExecPolicy, "touched"> {
-  const { security, ask } = resolveExecModePolicy({ mode, security: "full", ask: "off" });
+  const { security, ask } = execPolicy.resolveExecModePolicy({
+    mode,
+    security: "full",
+    ask: "off",
+  });
   return { mode, security, ask };
 }
 

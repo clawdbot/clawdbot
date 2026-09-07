@@ -43,6 +43,8 @@ import {
   prepareWatchedSessionsPrompt,
 } from "../agents/watched-sessions-prompt.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveExecModePolicy } from "../infra/exec-approvals-core.js";
+import { maxAsk, minSecurity } from "../infra/exec-approvals-policy.js";
 import type { ImageContent } from "../llm/types.js";
 import { redactToolDetail } from "../logging/redact.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
@@ -50,6 +52,9 @@ import { truncateUtf16Safe } from "../utils.js";
 
 /** Default truncation limit for user-facing tool progress output. */
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
+
+/** Core exec mode algebra for plugin-owned policy adapters. */
+export const execPolicy = Object.freeze({ resolveExecModePolicy, minSecurity, maxAsk });
 
 /**
  * Renders the Watched Sessions prompt block for plugin-owned harness prompts.

@@ -2,8 +2,6 @@
 
 export {
   loadExecApprovals,
-  maxAsk,
-  minSecurity,
   readExecApprovalsSnapshot,
   resolveExecApprovalsDisplayPath,
   resolveExecApprovalsFromFile,
