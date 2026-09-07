@@ -5553,6 +5553,56 @@ jobs:
               ;;
           esac
 
+      - name: Prepare exact F25 Android APK export
+        if: github.event_name == 'workflow_dispatch' && inputs.target_ref == '3e3092ac39e86858a3d2df6ff124bb72e55aa1e0' && needs.preflight.outputs.checkout_revision == inputs.target_ref && inputs.dispatch_id == 'f25-android-apk-export-3e3092ac39e8-v2' && matrix.task == 'build-play'
+        shell: bash
+        env:
+          SOURCE_COMMIT: ${{ needs.preflight.outputs.checkout_revision }}
+          WORKFLOW_COMMIT: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          output=apps/android/app/build/outputs/apk/play/debug
+          metadata="$output/output-metadata.json"
+          apk_name=$(jq -er 'select(.applicationId == "ai.openclaw.app.debug" and .variantName == "playDebug") | .elements | select(length == 1) | .[0].outputFile' "$metadata")
+          [[ "$apk_name" == *.apk && "$apk_name" != */* ]]
+          export_dir="$RUNNER_TEMP/f25-android-apk-export"
+          mkdir "$export_dir"
+          cp "$output/$apk_name" "$export_dir/candidate.apk"
+          cp "$metadata" "$export_dir/output-metadata.json"
+          test -s "$export_dir/candidate.apk"
+          build_config=apps/android/app/build/generated/source/buildConfig/play/debug/ai/openclaw/app/BuildConfig.java
+          test -s "$build_config"
+          grep -F "public static final String GIT_COMMIT = \"$SOURCE_COMMIT\";" "$build_config"
+          cp "$build_config" "$export_dir/BuildConfig.java"
+          tools="$ANDROID_SDK_ROOT/build-tools/36.0.0"
+          "$tools/apksigner" verify --verbose --print-certs "$export_dir/candidate.apk" | tee "$export_dir/signing.txt"
+          "$tools/aapt2" dump badging "$export_dir/candidate.apk" > "$export_dir/package.txt"
+          grep -F "package: name='ai.openclaw.app.debug' " "$export_dir/package.txt"
+          grep -Fx "sdkVersion:'31'" "$export_dir/package.txt"
+          grep -Fx "targetSdkVersion:'36'" "$export_dir/package.txt"
+          jq -n \
+            --arg sourceCommit "$SOURCE_COMMIT" \
+            --arg workflowCommit "$WORKFLOW_COMMIT" \
+            --arg runId "$GITHUB_RUN_ID" \
+            --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg originalApk "$apk_name" \
+            '{sourceCommit:$sourceCommit,workflowCommit:$workflowCommit,runId:$runId,runAttempt:$runAttempt,variant:"playDebug",apk:"candidate.apk",originalApk:$originalApk}' > "$export_dir/build.json"
+          (
+            cd "$export_dir"
+            sha256sum candidate.apk output-metadata.json BuildConfig.java signing.txt package.txt build.json > SHA256SUMS
+          )
+
+      - name: Upload exact F25 Android APK
+        if: github.event_name == 'workflow_dispatch' && inputs.target_ref == '3e3092ac39e86858a3d2df6ff124bb72e55aa1e0' && needs.preflight.outputs.checkout_revision == inputs.target_ref && inputs.dispatch_id == 'f25-android-apk-export-3e3092ac39e8-v2' && matrix.task == 'build-play'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: android-f25-play-debug-${{ needs.preflight.outputs.checkout_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/f25-android-apk-export/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
       - name: Save Robolectric Maven cache
         if: success() && startsWith(matrix.task, 'test-') && needs.preflight.outputs.cache_write_allowed == 'true' && steps.robolectric-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
