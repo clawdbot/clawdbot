@@ -1,5 +1,5 @@
 // Amazon Bedrock Mantle tests cover discovery plugin behavior.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 const {
   discoverMantleModels,
@@ -502,6 +502,8 @@ describe("bedrock mantle discovery", () => {
   // ---------------------------------------------------------------------------
 
   it("resolves implicit provider when bearer token is set", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 7, 31));
+    onTestFinished(() => clock.mockRestore());
     const mockFetch = vi.fn().mockResolvedValue(
       modelDiscoveryResponse({
         data: [{ id: "anthropic.claude-sonnet-4-6", object: "model" }],

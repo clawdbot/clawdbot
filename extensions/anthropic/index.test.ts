@@ -7,7 +7,7 @@ import {
   capturePluginRegistration,
   registerSingleProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 const { readClaudeCliCredentialsForSetupMock, readClaudeCliCredentialsForRuntimeMock } = vi.hoisted(
   () => ({
@@ -642,6 +642,8 @@ describe("anthropic provider replay hooks", () => {
   });
 
   it("resolves Claude Sonnet 5 with its exact API contract", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 7, 31));
+    onTestFinished(() => clock.mockRestore());
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
     const resolved = provider.resolveDynamicModel?.({
       provider: "anthropic",
