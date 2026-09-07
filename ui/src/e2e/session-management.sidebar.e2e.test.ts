@@ -123,6 +123,14 @@ suite.define(() => {
       expect(await parent.locator(".sidebar-session-indicator .session-glyph__ring").count()).toBe(
         0,
       );
+      const accessibility = await context.newCDPSession(page);
+      const collapsedTree = await accessibility.send("Accessibility.getFullAXTree");
+      const collapsedToggle = collapsedTree.nodes.find(
+        (node) =>
+          node.role?.value === "button" &&
+          node.name?.value === "Show 4 child sessions for Plan release",
+      );
+      expect(collapsedToggle?.description?.value).toBe("Active run");
       await captureUiProof(suite, page, "child-sessions-collapsed.png");
 
       await parent.getByRole("button", { name: "Show 4 child sessions for Plan release" }).click();
@@ -155,6 +163,15 @@ suite.define(() => {
       expect(await childToggle.getAttribute("class")).toContain(
         "sidebar-child-session-toggle--running",
       );
+      const expandedTree = await accessibility.send("Accessibility.getFullAXTree");
+      const expandedToggle = expandedTree.nodes.find(
+        (node) =>
+          node.role?.value === "button" &&
+          node.name?.value === "Hide 4 child sessions for Plan release",
+      );
+      expect(expandedToggle).toBeDefined();
+      expect(expandedToggle?.description?.value ?? "").toBe("");
+      await accessibility.detach();
       for (const child of [staleRunningChild, failedChild]) {
         expect(await child.locator("openclaw-elapsed-time").count()).toBe(0);
         expect((await child.locator(".session-row-trail").textContent())?.trim()).toBeTruthy();

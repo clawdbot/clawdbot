@@ -463,6 +463,11 @@ export function renderRecentSession(params: {
                   : "sessionsView.showChildSessions",
                 { count: String(session.childSessionKeys.length), session: label },
               )}
+              aria-description=${
+                !childrenExpanded && session.runningChildCount > 0
+                  ? t("sessionsView.activeRun")
+                  : nothing
+              }
               @click=${() => host.toggleSessionChildren(session)}
             >
               <span class="sidebar-child-session-toggle__icon" aria-hidden="true"
