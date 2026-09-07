@@ -11,6 +11,7 @@ import { isSessionRouteId, pathForRoute, type RouteId } from "../app-route-paths
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { IdentityAvatarController } from "../lib/identity-avatar-loader.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
@@ -197,10 +198,14 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     },
   );
   readonly catalogMenu: SidebarCatalogMenuController;
+  // Switcher tiles are plain <img> elements on the authenticated /avatar
+  // route, which only the shared identity avatar loader can fetch.
+  readonly agentMenuAvatars: IdentityAvatarController;
   pluginActionLifetime = new AbortController();
 
   constructor(readonly host: SidebarMenusControllerHost) {
     host.addController(this);
+    this.agentMenuAvatars = new IdentityAvatarController(host);
     this.catalogMenu = new SidebarCatalogMenuController({
       // Closing every transient menu keeps one popover at a time.
       beforeOpen: () => void this.dismissTransientMenus(),
@@ -696,7 +701,9 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   }
 
   renderAgentMenu() {
-    return this.menuRenderer?.renderSidebarAgentMenuForController(this) ?? nothing;
+    return this.agentMenuAvatars.withActiveRoutes(
+      () => this.menuRenderer?.renderSidebarAgentMenuForController(this) ?? nothing,
+    );
   }
 
   renderIdentityMenu() {
