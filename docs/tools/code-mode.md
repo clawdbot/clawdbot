@@ -799,8 +799,8 @@ type ToolCatalog = {
 ```
 
 `catalog.search(...)` returns a frozen array of callable handles, or an empty
-array when no tools match. If the matching callable names exceed the output
-budget, search rejects with guidance to narrow the query or lower `limit`.
+array when no tools match. If the matching callable names exceed the available program-data
+inbox capacity, search rejects with guidance to narrow the request.
 It never silently substitutes an empty or partial match list. A narrower search
 remains available after the error.
 
@@ -1070,13 +1070,32 @@ plain objects. Error-specific `toJSON` methods are not invoked. This includes
 rejected reasons from `Promise.allSettled(...)`. Handling an error does not fail
 the cell; uncaught errors still produce a failed result.
 
-Output order matches guest calls. Each nested tool result is bounded separately
-by `maxOutputBytes`. Cumulative guest output and the final value or failure
-diagnostic share one `maxOutputBytes` serialized UTF-8 budget across all waits. Oversized errors retain their leading cause and end
-with `[error truncated]`; truncation does not turn a failure into success.
-Catalog search rejects when its callable-name array cannot fit this budget;
-narrow the query or lower `limit` and retry. For other successful results that
-exceed the budget, OpenClaw returns a bounded value
+Nested tool data and model-visible output have separate limits. A successful
+bridge reply reaches the guest as its complete normalized JSON value, or its
+promise rejects with a catchable program-data resource error. The transport
+never substitutes a successful truncation marker. This also applies to catalog
+discovery and whole applicable skill instructions: intact or explicitly refused.
+
+Each cell has an aggregate pending-reply inbox of
+`min(memoryLimitBytes, maxSnapshotBytes)` encoded UTF-8 bytes: 10 MiB by default,
+up to 256 MiB under the existing configuration clamps. Successful values and
+bounded tool errors consume this allowance when they settle, before retention.
+The allowance spans inline execution and every wait; it is reusable after the
+host and worker release delivered replies, not a cumulative pagination quota.
+On saturation, a fixed, bounded failure diagnostic remains available without
+retaining tool data; these control replies are bounded by pending-call slots.
+Cancellation and expiry close admission and release undelivered replies.
+
+This is an additional logical host-data allowance, not a total RSS limit or a
+guarantee that large data can be suspended. Guest heap and whole-VM snapshot
+limits remain unchanged; worker handoff and JSON conversion can temporarily
+retain additional copies. Narrow or paginate requests after an admission error.
+
+Output order matches guest calls. Cumulative guest output and the final value
+or failure diagnostic still share one `maxOutputBytes` serialized UTF-8 budget
+across all waits. Oversized errors retain their leading cause and end with
+`[error truncated]`; truncation does not turn a failure into success. For
+successful emitted or returned output that exceeds this budget, OpenClaw returns a bounded value
 with `truncated: true`, a UTF-8-safe `prefix`, `omittedBytes`, and guidance to
 rerun with narrower arguments. Treat that marker as a successful partial result:
 reduce the search scope, paginate, select fewer files, or return a smaller
