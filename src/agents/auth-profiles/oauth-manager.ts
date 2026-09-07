@@ -36,11 +36,11 @@ import {
   isSameOAuthRefreshGeneration,
 } from "./oauth-refresh-marker.js";
 import {
-  deleteOAuthRefreshPeerClaims,
   failOAuthRefreshPeerClaims,
   fenceOAuthRefreshPeers,
   OAuthRefreshPeerFenceError,
   rollbackOAuthRefreshPeerClaims,
+  settleOAuthRefreshPeerClaims,
   type OAuthRefreshPeerClaim,
 } from "./oauth-refresh-peers.js";
 import {
@@ -364,51 +364,65 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     return `${provider}\u0000${profileId}`;
   }
 
-  async function mirrorRefreshedCredentialIntoMainStore(params: {
+  async function resolveAuthoritativeSharedOAuthCredentialUnderLock(params: {
     profileId: string;
-    refreshed: OAuthCredential;
-  }): Promise<void> {
-    try {
-      await withOAuthProfileLock(
-        { provider: params.refreshed.provider, profileId: params.profileId },
-        async () => {
-          await updateAuthProfileStoreWithLock({
-            agentDir: undefined,
-            updater: (store) => {
-              const existing = store.profiles[params.profileId];
-              const decision = shouldMirrorRefreshedOAuthCredential({
-                existing,
-                refreshed: params.refreshed,
-              });
-              if (!decision.shouldMirror) {
-                if (decision.reason === "identity-mismatch-or-regression") {
-                  authProfilesLog.warn(
-                    "refused to mirror OAuth credential: identity mismatch or regression",
-                    {
-                      profileId: params.profileId,
-                    },
-                  );
-                }
-                return false;
-              }
-              store.profiles[params.profileId] = { ...params.refreshed };
-              authProfilesLog.debug("mirrored refreshed OAuth credential to main agent store", {
+    candidate: OAuthCredential;
+  }): Promise<OAuthCredential | undefined> {
+    const updated = await updateAuthProfileStoreWithLock({
+      agentDir: undefined,
+      profileId: params.profileId,
+      updater: (store) => {
+        const existing = store.profiles[params.profileId];
+        const decision = shouldMirrorRefreshedOAuthCredential({
+          existing,
+          refreshed: params.candidate,
+        });
+        if (!decision.shouldMirror) {
+          if (decision.reason === "identity-mismatch-or-regression") {
+            authProfilesLog.warn(
+              "refused to mirror OAuth credential: identity mismatch or regression",
+              {
                 profileId: params.profileId,
-                expires: Number.isFinite(params.refreshed.expires)
-                  ? new Date(params.refreshed.expires).toISOString()
-                  : undefined,
-              });
-              return true;
-            },
-          });
-        },
-      );
-    } catch (err) {
-      authProfilesLog.debug("mirrorRefreshedCredentialIntoMainStore failed", {
-        profileId: params.profileId,
-        error: formatErrorMessage(err),
-      });
+              },
+            );
+          }
+          return false;
+        }
+        store.profiles[params.profileId] = { ...params.candidate };
+        authProfilesLog.debug("mirrored refreshed OAuth credential to main agent store", {
+          profileId: params.profileId,
+          expires: Number.isFinite(params.candidate.expires)
+            ? new Date(params.candidate.expires).toISOString()
+            : undefined,
+        });
+        return true;
+      },
+    });
+    if (updated === null) {
+      throw new Error("Failed to read authoritative shared OAuth credential");
     }
+    const authoritative = updated.profiles[params.profileId];
+    return authoritative?.type === "oauth" ? authoritative : undefined;
+  }
+
+  async function settlePeerClaimsUnderRefreshLock(params: {
+    claim: Extract<OAuthRefreshClaim, { kind: "claimed" }>;
+    claims: readonly OAuthRefreshPeerClaim[];
+    replacement: OAuthCredential;
+  }): Promise<void> {
+    const authoritativeSharedCredential =
+      params.claim.authPath === resolveSharedAuthStorePath()
+        ? params.replacement
+        : await resolveAuthoritativeSharedOAuthCredentialUnderLock({
+            profileId: params.claim.profileId,
+            candidate: params.replacement,
+          });
+    settleOAuthRefreshPeerClaims({
+      profileId: params.claim.profileId,
+      fence: params.claim.fence,
+      claims: params.claims,
+      authoritativeSharedCredential,
+    });
   }
 
   type OAuthRefreshClaim =
@@ -421,6 +435,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     | { kind: "use"; credential: OAuthCredential }
     | {
         kind: "claimed";
+        profileId: string;
         credential: OAuthCredential;
         fence: OAuthCredential;
         ownerAgentDir?: string;
@@ -836,6 +851,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           }
           return {
             kind: "claimed",
+            profileId: params.profileId,
             credential: credentialToRefresh,
             fence,
             ownerAgentDir,
@@ -957,12 +973,16 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             }
           }
           if (supersedingOwner && !peerFenceFailed) {
-            deleteOAuthRefreshPeerClaims({
-              profileId: params.profileId,
-              fence: claim.fence,
-              claims: activePeerClaims,
-            });
-            return supersedingOwner;
+            try {
+              await settlePeerClaimsUnderRefreshLock({
+                claim,
+                claims: activePeerClaims,
+                replacement: supersedingOwner,
+              });
+              return supersedingOwner;
+            } catch {
+              // Fall through so every exact peer and surviving owner fence becomes terminal.
+            }
           }
           try {
             failOAuthRefreshPeerClaims({
@@ -1043,10 +1063,10 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             }
             if (!peerSettlementError) {
               try {
-                deleteOAuthRefreshPeerClaims({
-                  profileId: params.profileId,
-                  fence: claim.fence,
+                await settlePeerClaimsUnderRefreshLock({
+                  claim,
                   claims: activePeerClaims,
+                  replacement: claimSettlement.credential,
                 });
               } catch (error) {
                 peerSettlementError = error;
@@ -1075,15 +1095,6 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         );
         if (!settled) {
           throw new Error("Failed to persist refreshed OAuth credential");
-        }
-        if (settled.persisted && claim.ownerAgentDir) {
-          const mainPath = resolveSharedAuthStorePath();
-          if (mainPath !== claim.authPath) {
-            await mirrorRefreshedCredentialIntoMainStore({
-              profileId: params.profileId,
-              refreshed: settled.credential,
-            });
-          }
         }
         return {
           apiKey: await adapter.buildApiKey(settled.credential.provider, settled.credential, {

@@ -269,7 +269,7 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
         Array.from({ length: 5 }, async (_, i) => {
           const dir = path.join(tempRoot, "agents", `sub-${i}`, "agent");
           await fs.mkdir(dir, { recursive: true });
-          const local = createExpiredOauthStore({ profileId, provider });
+          const local = createExpiredOauthStore({ profileId, provider, accountId: "acct-a" });
           const credential = local.profiles[profileId];
           if (credential?.type === "oauth") {
             // Access and expiry can drift while the single-use refresh generation stays shared.
@@ -291,7 +291,7 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
           return dir;
         }),
       );
-      const mainStore = createExpiredOauthStore({ profileId, provider });
+      const mainStore = createExpiredOauthStore({ profileId, provider, accountId: "acct-a" });
       const mainCredential = mainStore.profiles[profileId];
       if (mainCredential?.type === "oauth") {
         mainCredential.access = "main-drifted-access";
@@ -316,6 +316,7 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
           access: "cross-agent-refreshed-access",
           refresh: "cross-agent-refreshed-refresh",
           expires: freshExpiry,
+          accountId: "acct-a",
         } as never;
       });
 
@@ -746,11 +747,17 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
         Array.from({ length: 2 }, async (_, index) => {
           const agentDir = path.join(tempRoot, "agents", `peer-${index}`, "agent");
           await fs.mkdir(agentDir, { recursive: true });
-          saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), agentDir);
+          saveAuthProfileStore(
+            createExpiredOauthStore({ profileId, provider, accountId: "acct-a" }),
+            agentDir,
+          );
           return agentDir;
         }),
       );
-      saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), mainAgentDir);
+      saveAuthProfileStore(
+        createExpiredOauthStore({ profileId, provider, accountId: "acct-a" }),
+        mainAgentDir,
+      );
 
       let finishRefresh: (() => void) | undefined;
       let markStarted: (() => void) | undefined;
@@ -768,6 +775,7 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
           access: "stale-rotation-access",
           refresh: "stale-rotation-refresh",
           expires: Date.now() + 60 * 60 * 1000,
+          accountId: "acct-a",
         } as never;
       });
 
@@ -786,6 +794,7 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
           access: "relogin-access",
           refresh: "relogin-refresh",
           expires: Date.now() + 60 * 60 * 1000,
+          accountId: "acct-a",
         },
       });
       expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[profileId]).toMatchObject({

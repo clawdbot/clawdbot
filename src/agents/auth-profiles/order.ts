@@ -17,6 +17,7 @@ import {
   resolveTokenExpiryState,
   type AuthCredentialReasonCode,
 } from "./credential-state.js";
+import { isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import { dedupeProfileIds } from "./profile-list.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import {
@@ -210,6 +211,8 @@ type ResolveAuthProfileOrderParams = {
   cooldownScope?: "all-models";
   /** Read-only status keeps unresolved refs ordered so availability remains unknown. */
   readinessMode?: "execution" | "read-only";
+  /** Runtime resolvers may observe a durable pending refresh through settlement. */
+  includePendingOAuthRefresh?: boolean;
 };
 
 export type AuthProfileOrderResolution = {
@@ -302,6 +305,7 @@ export function resolveAuthProfileOrderWithMetadata(
   }
 
   const isValidProfile = (profileId: string): boolean => {
+    const credential = store.profiles[profileId];
     const eligibility = resolveAuthProfileEligibility({
       cfg,
       authAliasLookupParams: params.authAliasLookupParams,
@@ -312,6 +316,9 @@ export function resolveAuthProfileOrderWithMetadata(
     });
     return (
       eligibility.eligible ||
+      (params.includePendingOAuthRefresh === true &&
+        credential?.type === "oauth" &&
+        isPendingOAuthRefreshFence(credential)) ||
       (params.readinessMode === "read-only" && eligibility.reasonCode === "unresolved_ref")
     );
   };

@@ -230,7 +230,10 @@ export function createProviderAuthAvailability(
     includeExternalCliAuth?: boolean;
   }): Promise<string | undefined> {
     const { resolveApiKeyForProfile } = await import("../agents/auth-profiles/oauth.js");
-    const { agentDir, profileIds, store } = resolveUsableProviderAuthProfiles(params);
+    const { agentDir, profileIds, store } = resolveUsableProviderAuthProfiles({
+      ...params,
+      includePendingOAuthRefresh: true,
+    });
     if (!agentDir || profileIds.length === 0) {
       return undefined;
     }
@@ -254,6 +257,7 @@ export function createProviderAuthAvailability(
     agentDir?: string;
     allowKeychainPrompt?: boolean;
     includeExternalCliAuth?: boolean;
+    includePendingOAuthRefresh?: boolean;
   }): { agentDir: string; profileIds: string[]; store: AuthProfileStore } {
     const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.cfg ?? {});
     const externalCli = params.includeExternalCliAuth
@@ -270,6 +274,7 @@ export function createProviderAuthAvailability(
       cfg: params.cfg,
       store,
       provider: params.provider,
+      includePendingOAuthRefresh: params.includePendingOAuthRefresh,
     });
     if (profileIds.length > 0) {
       return { agentDir, profileIds, store };
@@ -284,6 +289,7 @@ export function createProviderAuthAvailability(
         cfg: params.cfg,
         store: fallbackStore,
         provider: params.provider,
+        includePendingOAuthRefresh: params.includePendingOAuthRefresh,
       }),
       store: fallbackStore,
     };

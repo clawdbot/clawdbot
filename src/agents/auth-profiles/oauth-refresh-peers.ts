@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import { toErrorObject } from "../../infra/errors.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import {
   listCandidateAuthProfileStores,
@@ -7,6 +8,7 @@ import {
   updateCandidateAuthProfileStore,
   type CandidateAuthProfileStore,
 } from "./candidate-stores.js";
+import { hasUsableOAuthCredential } from "./credential-state.js";
 import { isPersistedExternalCliAuthProfile } from "./external-cli-sync.js";
 import { isExactOAuthCredential } from "./oauth-refresh-fence.js";
 import {
@@ -14,6 +16,7 @@ import {
   isOAuthRefreshFence,
   isSameOAuthRefreshGeneration,
 } from "./oauth-refresh-marker.js";
+import { isSafeToAdoptMainStoreOAuthIdentity } from "./oauth-shared.js";
 import { getRuntimeExternalCliProfileIds } from "./runtime-external-profile-references.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
@@ -274,28 +277,52 @@ export function rollbackOAuthRefreshPeerClaims(params: {
   }
 }
 
-/** Delete only exact peer fences; inherited order and health state remain local. */
-export function deleteOAuthRefreshPeerClaims(params: {
+/**
+ * Retire exact peer fences only when their original credential can safely
+ * inherit the authoritative shared credential. Otherwise leave a terminal
+ * marker so merged resolution cannot expose another account.
+ */
+export function settleOAuthRefreshPeerClaims(params: {
   profileId: string;
   fence: OAuthCredential;
   claims: readonly OAuthRefreshPeerClaim[];
+  authoritativeSharedCredential?: OAuthCredential;
 }): void {
+  let firstError: Error | undefined;
   for (const claim of params.claims) {
-    updateCandidateAuthProfileStore({
-      candidate: claim.candidate,
-      preserveProfileState: true,
-      profileId: params.profileId,
-      updater: (store) => {
-        const current = store.profiles[params.profileId];
-        if (
-          !isExactOAuthCredential(current?.type === "oauth" ? current : undefined, params.fence)
-        ) {
-          return false;
-        }
-        delete store.profiles[params.profileId];
-        return true;
-      },
-    });
+    try {
+      updateCandidateAuthProfileStore({
+        candidate: claim.candidate,
+        preserveProfileState: true,
+        profileId: params.profileId,
+        updater: (store) => {
+          const current = store.profiles[params.profileId];
+          if (
+            !isExactOAuthCredential(current?.type === "oauth" ? current : undefined, params.fence)
+          ) {
+            return false;
+          }
+          const inherited = params.authoritativeSharedCredential;
+          const canInherit =
+            claim.original !== undefined &&
+            inherited !== undefined &&
+            inherited.provider === claim.original.provider &&
+            hasUsableOAuthCredential(inherited) &&
+            isSafeToAdoptMainStoreOAuthIdentity(claim.original, inherited);
+          if (canInherit) {
+            delete store.profiles[params.profileId];
+          } else {
+            store.profiles[params.profileId] = createFailedOAuthRefreshFence(params.fence);
+          }
+          return true;
+        },
+      });
+    } catch (error) {
+      firstError ??= toErrorObject(error, "Failed to settle OAuth refresh peer");
+    }
+  }
+  if (firstError !== undefined) {
+    throw firstError;
   }
 }
 
@@ -306,7 +333,7 @@ export function failOAuthRefreshPeerClaims(params: {
   claims: readonly OAuthRefreshPeerClaim[];
 }): void {
   const failed = createFailedOAuthRefreshFence(params.fence);
-  let firstError: unknown;
+  let firstError: Error | undefined;
   for (const claim of params.claims) {
     try {
       updateCandidateAuthProfileStore({
@@ -324,7 +351,7 @@ export function failOAuthRefreshPeerClaims(params: {
         },
       });
     } catch (error) {
-      firstError ??= error;
+      firstError ??= toErrorObject(error, "Failed to fail OAuth refresh peer");
     }
   }
   if (firstError !== undefined) {

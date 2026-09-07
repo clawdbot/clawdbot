@@ -48,6 +48,7 @@ vi.mock("./external-auth.js", async (importOriginal) => ({
   }),
 }));
 
+import { createFailedOAuthRefreshFence, createOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import {
   isStoredCredentialCompatibleWithAuthProvider,
   resolveAuthProfileEligibility,
@@ -61,6 +62,43 @@ describe("resolveAuthProfileOrder", () => {
     clearPluginMetadataLifecycleCaches();
     pluginMetadataMocks.getCurrentPluginMetadataSnapshot.mockClear();
     pluginMetadataMocks.loadPluginMetadataSnapshot.mockClear();
+  });
+
+  it("includes pending OAuth refresh only for settlement-aware runtime resolution", () => {
+    const profileId = "openai:pending";
+    const pending = createOAuthRefreshFence({
+      profileId,
+      credential: {
+        type: "oauth",
+        provider: "openai",
+        access: "expired-access",
+        refresh: "refresh-token",
+        expires: 1,
+        accountId: "acct-a",
+      },
+    });
+    const failed = createFailedOAuthRefreshFence(pending);
+
+    expect(
+      resolveAuthProfileOrder({
+        store: { version: 1, profiles: { [profileId]: pending } },
+        provider: "openai",
+      }),
+    ).toEqual([]);
+    expect(
+      resolveAuthProfileOrder({
+        store: { version: 1, profiles: { [profileId]: pending } },
+        provider: "openai",
+        includePendingOAuthRefresh: true,
+      }),
+    ).toEqual([profileId]);
+    expect(
+      resolveAuthProfileOrder({
+        store: { version: 1, profiles: { [profileId]: failed } },
+        provider: "openai",
+        includePendingOAuthRefresh: true,
+      }),
+    ).toEqual([]);
   });
 
   it("accepts aliased provider credentials from manifest metadata", async () => {
