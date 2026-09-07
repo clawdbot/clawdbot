@@ -40,10 +40,6 @@ this keeps an empty coverage list false and avoids allow-side compatibility.
 Prepare matchers for one synchronous operation; do not retain an authorization
 decision across awaited work.
 
-The deprecated `infra-runtime` exports `resolveExecModeFromPolicy` and
-`resolveExecPolicyForMode` are retired. Use `resolveExecModePolicy` from
-`openclaw/plugin-sdk/exec-approvals-runtime` for mode/policy projection.
-
 ## Package entries
 
 Installed plugins point `package.json` `openclaw` fields at both source and
