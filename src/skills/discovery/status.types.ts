@@ -1,5 +1,5 @@
 import type { RequirementConfigCheck, Requirements } from "../../shared/requirements.js";
-import type { ClawHubSkillStatusLink, LocalSkillCardStatus } from "../lifecycle/clawhub-status.js";
+import type { ClawHubSkillStatusLink, LocalSkillCardStatus } from "../lifecycle/clawhub.js";
 import type { SkillInstallSpec } from "../types.js";
 
 export type SkillInstallOption = {
