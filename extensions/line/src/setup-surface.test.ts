@@ -72,6 +72,66 @@ describe("line setup wizard", () => {
     expect(cfg.channels?.line?.channelAccessToken).toEqual(ref);
   });
 
+  it("answers each credential from what that credential resolved to", () => {
+    const [tokenCredential, secretCredential] = lineSetupWizard.credentials ?? [];
+    if (!tokenCredential?.inspect || !secretCredential?.inspect) {
+      throw new Error("expected both LINE credentials to support inspect");
+    }
+    const cfg = {
+      channels: {
+        line: {
+          channelAccessToken: "root-token",
+          channelSecret: "root-secret",
+          accounts: { marketing: { channelSecret: "marketing-secret" } },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    // The account brought its own secret and no token, and a named account reads only its own
+    // entry. Asking the credentials together would let one answer stand in for the other.
+    expect(tokenCredential.inspect({ cfg, accountId: "marketing" })).toMatchObject({
+      accountConfigured: false,
+    });
+    expect(secretCredential.inspect({ cfg, accountId: "marketing" })).toMatchObject({
+      accountConfigured: true,
+    });
+  });
+
+  it("keeps a plaintext credential while the other one is a reference it cannot resolve", async () => {
+    const confirmed: string[] = [];
+    const prompter = createTestWizardPrompter({
+      confirm: vi.fn(async ({ message }: { message: string }) => {
+        confirmed.push(message);
+        return true;
+      }) as WizardPrompter["confirm"],
+      text: vi.fn(async ({ message }: { message: string }) => {
+        throw new Error(`Unexpected prompt: ${message}`);
+      }) as WizardPrompter["text"],
+    });
+
+    const cfg = {
+      channels: {
+        line: {
+          channelAccessToken: "plain-token",
+          channelSecret: { source: "store", provider: "default", id: "LINE_SECRET" },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await runSetupWizardConfigure({ configure: lineConfigure, cfg, prompter });
+
+    // One credential answers for itself. Asking whether the account as a whole is configured
+    // would let the unresolved secret drag the token down and overwrite a credential that works.
+    expect(confirmed).toContain("LINE channel access token already configured. Keep it?");
+    expect(confirmed).toContain("LINE channel secret already configured. Keep it?");
+    expect(result.cfg.channels?.line?.channelAccessToken).toBe("plain-token");
+    expect(result.cfg.channels?.line?.channelSecret).toEqual({
+      source: "store",
+      provider: "default",
+      id: "LINE_SECRET",
+    });
+  });
+
   it("treats a configured reference as configured while it stays unresolved", () => {
     const credential = lineSetupWizard.credentials?.[0];
     if (!credential?.inspect) {
@@ -95,6 +155,98 @@ describe("line setup wizard", () => {
     expect(state.resolvedValue).toBeUndefined();
     expect(state.hasConfiguredValue).toBe(true);
     expect(state.accountConfigured).toBe(true);
+  });
+
+  it("treats a credential file it cannot read as nothing to keep", () => {
+    const credential = lineSetupWizard.credentials?.[0];
+    if (!credential?.inspect) {
+      throw new Error("expected the LINE token credential to support inspect");
+    }
+    const cfg = {
+      channels: { line: { tokenFile: "./line-token-that-does-not-exist" } },
+    } satisfies OpenClawConfig;
+
+    const state = credential.inspect({ cfg, accountId: "default" });
+
+    expect(state.resolvedValue).toBeUndefined();
+    expect(state.accountConfigured).toBe(false);
+    // The config still names the file, and that is what suppresses the env-var offer. Answering
+    // this one differently would change which question an unreadable file gets asked.
+    expect(state.hasConfiguredValue).toBe(true);
+  });
+
+  it("asks for the credential behind an unreadable file even when the env var is set", async () => {
+    vi.stubEnv("LINE_CHANNEL_ACCESS_TOKEN", "env-token");
+    const asked: string[] = [];
+    const prompter = createTestWizardPrompter({
+      confirm: vi.fn(async ({ message }: { message: string }) => {
+        asked.push(message);
+        return true;
+      }) as WizardPrompter["confirm"],
+      text: vi.fn(async ({ message }: { message: string }) => {
+        asked.push(message);
+        if (message === "Enter LINE channel access token") {
+          return "typed-token";
+        }
+        throw new Error(`Unexpected prompt: ${message}`);
+      }) as WizardPrompter["text"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: lineConfigure,
+      cfg: {
+        channels: {
+          line: {
+            tokenFile: "./line-token-that-does-not-exist",
+            channelSecret: "configured-secret",
+          },
+        },
+      } as OpenClawConfig,
+      prompter,
+    });
+
+    // Taking the env var here would drop the tokenFile the operator wrote without ever saying
+    // the file could not be read. A named file still answers the question of where to look.
+    expect(asked).not.toContain("LINE_CHANNEL_ACCESS_TOKEN detected. Use env var?");
+    expect(asked).toContain("Enter LINE channel access token");
+    expect(result.cfg.channels?.line?.channelAccessToken).toBe("typed-token");
+  });
+
+  it("asks for a token instead of offering to keep one behind an unreadable file", async () => {
+    const confirmed: string[] = [];
+    const prompter = createTestWizardPrompter({
+      confirm: vi.fn(async ({ message }: { message: string }) => {
+        confirmed.push(message);
+        return true;
+      }) as WizardPrompter["confirm"],
+      text: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Enter LINE channel access token") {
+          return "typed-token";
+        }
+        throw new Error(`Unexpected prompt: ${message}`);
+      }) as WizardPrompter["text"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: lineConfigure,
+      cfg: {
+        channels: {
+          line: {
+            tokenFile: "./line-token-that-does-not-exist",
+            channelSecret: "configured-secret",
+          },
+        },
+      } as OpenClawConfig,
+      prompter,
+    });
+
+    // Keeping a token whose file cannot be read writes nothing, and the account still refuses
+    // to start. Only the secret, which is readable, is worth offering to keep.
+    expect(confirmed).not.toContain("LINE channel access token already configured. Keep it?");
+    expect(confirmed).toContain("LINE channel secret already configured. Keep it?");
+    const line = result.cfg.channels?.line;
+    expect(line?.channelAccessToken).toBe("typed-token");
+    expect(line?.tokenFile).toBeUndefined();
   });
 
   installChannelDmPolicyContractSuite({

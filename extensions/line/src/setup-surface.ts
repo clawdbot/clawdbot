@@ -90,6 +90,8 @@ function createLineTokenCredential(params: {
   inputKey: "token" | "password";
   configKey: "channelAccessToken" | "channelSecret";
   fileKey: "tokenFile" | "secretFile";
+  statusKey: "tokenStatus" | "signingSecretStatus";
+  sourceKey: "tokenSource" | "signingSecretSource";
   providerHint: string;
   credentialLabel: string;
   envVar: string;
@@ -111,8 +113,11 @@ function createLineTokenCredential(params: {
     inputPrompt: params.inputPrompt,
     allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
     resolveAccount: ({ cfg, accountId }) => resolveLineAccount({ cfg, accountId }),
-    // `configuredFields` above answers both "is this configured" questions through the shared
-    // secret-input check, which reads a configured reference the runtime has not resolved yet.
+    // Keep is offered for what the account can still present: a credential that resolved, or a
+    // reference the provider has not answered yet, which the operator named on purpose. A
+    // credential file that cannot be read leaves nothing to keep, so the wizard asks for one.
+    accountConfigured: (account) =>
+      account[params.statusKey] === "available" || account[params.sourceKey] === "config",
     resolvedValue: (account) => normalizeOptionalString(account[params.configKey]),
     envValue: ({ accountId }) =>
       accountId === DEFAULT_ACCOUNT_ID
@@ -154,6 +159,8 @@ export const lineSetupWizard: ChannelSetupWizard = {
       inputKey: "token",
       configKey: "channelAccessToken",
       fileKey: "tokenFile",
+      statusKey: "tokenStatus",
+      sourceKey: "tokenSource",
       providerHint: channel,
       credentialLabel: t("wizard.line.channelAccessToken"),
       envVar: "LINE_CHANNEL_ACCESS_TOKEN",
@@ -165,6 +172,8 @@ export const lineSetupWizard: ChannelSetupWizard = {
       inputKey: "password",
       configKey: "channelSecret",
       fileKey: "secretFile",
+      statusKey: "signingSecretStatus",
+      sourceKey: "signingSecretSource",
       providerHint: "line-secret",
       credentialLabel: t("wizard.line.channelSecret"),
       envVar: "LINE_CHANNEL_SECRET",
