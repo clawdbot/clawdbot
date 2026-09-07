@@ -15,6 +15,7 @@ import type {
   UpdateRecoveryNativeObservation,
 } from "../../infra/update-run-recovery-native.js";
 import type { UpdateRecoveryRecord } from "../../infra/update-run-recovery.js";
+import { gatewayServiceCommandUsesInterruptedPackageRoot } from "./update-command-package-replay.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
 import { gatewayServiceCommandUsesRoot } from "./update-command-service-plan.js";
 
@@ -22,7 +23,7 @@ import { gatewayServiceCommandUsesRoot } from "./update-command-service-plan.js"
  * executor through inspection and the Recovery owner's exact-revision write.
  */
 export async function readUpdateCommandNativeObservation(params: {
-  record: Pick<UpdateRecoveryRecord, "runId" | "source" | "from">;
+  record: Pick<UpdateRecoveryRecord, "runId" | "source" | "from"> & Partial<UpdateRecoveryRecord>;
   env: NodeJS.ProcessEnv;
   definitionPaths: readonly string[];
   assertCurrent: () => void;
@@ -58,12 +59,19 @@ export async function readUpdateCommandNativeObservation(params: {
   ) {
     throw unavailable();
   }
-  const belongsToRoot = await gatewayServiceCommandUsesRoot({
+  let belongsToRoot = await gatewayServiceCommandUsesRoot({
     root: params.record.from.root,
     env: state.env,
     command: state.command,
   });
   params.assertCurrent();
+  if (belongsToRoot === null && state.runtime?.status === "stopped") {
+    belongsToRoot = await gatewayServiceCommandUsesInterruptedPackageRoot({
+      record: params.record,
+      command: state.command,
+    });
+    params.assertCurrent();
+  }
   if (!belongsToRoot || !service.isEnabled) {
     throw unavailable();
   }

@@ -42,6 +42,10 @@ import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { runUpdateCommandMutation } from "./update-command-mutation.js";
 import { withUpdateCommandNativePreparation } from "./update-command-native-preparation.js";
 import {
+  interruptPackageGapReplay,
+  packageGapReplayModes,
+} from "./update-command-package-gap.test-support.js";
+import {
   interruptSealedReplay,
   useShortRealReplayLeases,
 } from "./update-command-pending-replay.test-support.js";
@@ -62,6 +66,7 @@ afterEach(() => {
 });
 it.each([
   "replay-displaced",
+  ...packageGapReplayModes,
   "replay-conflict",
   "replay-shadowed",
   "rollback",
@@ -95,6 +100,10 @@ it.each([
     const interference = mode === "rollback-interference";
     const interrupted = mode === "rollback-interrupted";
     const replay = mode.startsWith("replay-");
+    const packageGap = mode.startsWith("replay-package-gap");
+    if (packageGap) {
+      vi.mocked(os.platform).mockReturnValue("linux");
+    }
     const rollback = mode === "rollback" || older || interference || interrupted || replay;
     if (replay) {
       useShortRealReplayLeases();
@@ -171,8 +180,12 @@ it.each([
           HOME: home,
           USERPROFILE: home,
           OPENCLAW_HOME: undefined,
-          OPENCLAW_STATE_DIR: path.join(home, "state"),
-          OPENCLAW_CONFIG_PATH: path.join(home, "state", "openclaw.json"),
+          OPENCLAW_STATE_DIR: path.join(home, packageGap ? ".openclaw" : "state"),
+          OPENCLAW_CONFIG_PATH: path.join(
+            home,
+            packageGap ? ".openclaw" : "state",
+            "openclaw.json",
+          ),
           OPENCLAW_PROFILE: undefined,
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
           OPENCLAW_SERVICE_MARKER: undefined,
@@ -580,11 +593,13 @@ it.each([
               updateStepTimeoutMs: 30_000,
             };
             if (replay) {
-              resume = await interruptSealedReplay(
-                params,
-                mode === "replay-conflict",
-                mode === "replay-shadowed",
-              );
+              resume = packageGap
+                ? await interruptPackageGapReplay(params, mode)
+                : await interruptSealedReplay(
+                    params,
+                    mode === "replay-conflict",
+                    mode === "replay-shadowed",
+                  );
               expect(start).not.toHaveBeenCalled();
               return;
             }
@@ -707,7 +722,11 @@ it.each([
           await resume?.();
           if (replay) {
             expect(start).toHaveBeenCalledTimes(
-              mode === "replay-conflict" || mode === "replay-shadowed" ? 0 : 1,
+              mode === "replay-conflict" ||
+                mode === "replay-shadowed" ||
+                (packageGap && mode !== "replay-package-gap")
+                ? 0
+                : 1,
             );
           }
         },

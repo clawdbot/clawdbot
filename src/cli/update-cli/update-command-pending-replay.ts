@@ -11,15 +11,16 @@ import { completeUpdateCommandCandidate } from "./update-command-candidate-compl
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { quiesceFailedUpdateCommand } from "./update-command-native-quiescence.js";
+import { inspectUpdateCommandPackageGap } from "./update-command-package-replay.js";
 import { resumeUnstartedUpdatePreparation } from "./update-command-preparation-replay.js";
 import {
   UpdateCommandRecoveryPendingError,
   type UpdateCommandRecovery,
 } from "./update-command-recovery.js";
+import { resolveUpdateCommandReplayAdmission } from "./update-command-replay-admission.js";
 import { discoverUpdateCommandRecovery } from "./update-command-replay-inspection.js";
 import { restoreUpdateCommandFailure } from "./update-command-restore.js";
 import { resumeTerminalUpdateRetirement } from "./update-command-retirement-retry.js";
-import { resolveUpdateCommandAdmissionEnv } from "./update-command-run.js";
 
 /** Admission continuation, before creating a new history row. Discovery carries
  * evidence only; the new installation executor must exclude the previous actor.
@@ -34,8 +35,7 @@ export async function resumePendingUpdateCommand(params: {
   if (params.opts.dryRun || params.opts.run || params.opts.recovery) {
     return false;
   }
-  const env = await resolveUpdateCommandAdmissionEnv(params);
-  const found = await discoverUpdateCommandRecovery(env);
+  const { env, found, root, packageGap } = await resolveUpdateCommandReplayAdmission(params);
   if (!found) {
     return false;
   }
@@ -49,8 +49,8 @@ export async function resumePendingUpdateCommand(params: {
     !found.checkpoint ||
     !found.package ||
     !found.nativeManager ||
-    !updateInstallRootsMatch(params.root, found.from.root) ||
-    (await fs.realpath(params.root)) !== found.from.root ||
+    !updateInstallRootsMatch(root, found.from.root) ||
+    (!packageGap && (await fs.realpath(root)) !== found.from.root) ||
     (found.restore && (!found.restore.planSha256 || found.restore.phase === "preparing"))
   ) {
     throw new UpdateCommandRecoveryPendingError(
@@ -59,10 +59,13 @@ export async function resumePendingUpdateCommand(params: {
   }
   return await withOwnedManagedUpdateEnv(env, () =>
     withUpdateCommandExecutor(found.runId, async (executor) => {
-      const fence = await executor.enter(params.root);
+      const fence = await executor.enter(root);
       const checked = await discoverUpdateCommandRecovery(env);
       fence.assertCurrent();
-      if (!isDeepStrictEqual(checked, found)) {
+      if (
+        !isDeepStrictEqual(checked, found) ||
+        (packageGap && !(await inspectUpdateCommandPackageGap(found)))
+      ) {
         throw new UpdateCommandRecoveryPendingError(
           "Interrupted update changed during executor admission.",
         );
@@ -102,12 +105,17 @@ export async function resumePendingUpdateCommand(params: {
             ),
           );
         }
-        await quiesceFailedUpdateCommand({
-          recovery,
-          env,
-          timeoutMs: params.timeoutMs,
-          stdout: process.stdout,
-        });
+        // A pending package restore already owns the native shutdown boundary.
+        // Do not append an unrelated native intent over it. Restoration below
+        // reacquires source owners and freshly verifies that shutdown before any rename.
+        if (!packageGap) {
+          await quiesceFailedUpdateCommand({
+            recovery,
+            env,
+            timeoutMs: params.timeoutMs,
+            stdout: process.stdout,
+          });
+        }
       }
       await restoreUpdateCommandFailure(opts, params.timeoutMs);
       fence.assertCurrent();

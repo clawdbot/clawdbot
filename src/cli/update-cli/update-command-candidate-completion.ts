@@ -49,9 +49,23 @@ async function completeCandidateAttempt(input: FinishUpdateParams) {
         reason: recovery.getRecord().primaryFailure!.code,
       },
     };
-    await withOwnedManagedUpdateEnv(run.env, () =>
-      restoreUpdateCommandFailure(params.opts, params.updateStepTimeoutMs),
-    );
+    try {
+      await withOwnedManagedUpdateEnv(run.env, () =>
+        restoreUpdateCommandFailure(params.opts, params.updateStepTimeoutMs),
+      );
+    } catch (error) {
+      // Preserve both failures for the existing redacted CLI error formatter.
+      // A restoration refusal must not erase the original Doctor/plugin cause.
+      if (params.failure) {
+        throw new UpdateCommandRecoveryPendingError(
+          "Candidate failure and restoration remain pending.",
+          {
+            cause: new AggregateError([params.failure.cause, error], params.failure.detail),
+          },
+        );
+      }
+      throw error;
+    }
   }
   const runtime = previous ? ("previous" as const) : ("candidate" as const);
   const identity = previous ? recovery.getRecord().from : recovery.getRecord().to;

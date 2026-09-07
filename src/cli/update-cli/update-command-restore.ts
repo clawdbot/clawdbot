@@ -131,6 +131,7 @@ export async function restoreUpdateCommandFailure(
             if (opened.status !== "ready") {
               throw new UpdateCommandRecoveryPendingError(
                 "Previous package custody is unavailable.",
+                { cause: new Error(opened.reason) },
               );
             }
             if (pendingPackage?.action === "activate") {
@@ -139,6 +140,7 @@ export async function restoreUpdateCommandFailure(
               if (reconciled.status !== "verified") {
                 throw new UpdateCommandRecoveryPendingError(
                   "Interrupted package activation remains unverified.",
+                  { cause: new Error(reconciled.reason) },
                 );
               }
             }
@@ -152,6 +154,12 @@ export async function restoreUpdateCommandFailure(
             ) {
               throw new UpdateCommandRecoveryPendingError(
                 "Previous package restoration remains unverified.",
+                {
+                  cause:
+                    packageResult.status === "verified"
+                      ? undefined
+                      : new Error(packageResult.reason),
+                },
               );
             }
             await source.verifySources();
