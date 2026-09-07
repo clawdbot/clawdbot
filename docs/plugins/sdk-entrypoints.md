@@ -27,7 +27,8 @@ plugin supports.
 `openclaw/plugin-sdk/agent-harness-runtime` exposes core's synchronous policy primitives:
 
 - `expandToolGroups(list?)` normalizes tool aliases, drops blank entries, expands
-  core groups, and returns unique tool ids in catalog order.
+  core groups, and returns unique tool ids in first-seen order. Members of each
+  expanded group follow that group's catalog order.
 - `createToolPolicyMatcher(policy?, writeAllowsApplyPatch = true)` returns a
   matcher for tool names. Deny entries win, an empty allow list is unrestricted,
   and `*` patterns and aliases use core normalization. Set the second argument
