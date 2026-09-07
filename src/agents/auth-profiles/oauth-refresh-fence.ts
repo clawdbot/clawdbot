@@ -6,7 +6,7 @@ import {
   isOAuthRefreshFence,
   isPendingOAuthRefreshFence,
 } from "./oauth-refresh-marker.js";
-import { hasMatchingOAuthIdentity, isSafeOAuthPostClaimSettlement } from "./oauth-shared.js";
+import { isSafeOAuthOwnerRefreshResult, isSafeOAuthPostClaimSettlement } from "./oauth-shared.js";
 import type { OAuthCredential } from "./types.js";
 
 /** Full structural equality for compare-and-swap of persisted OAuth credentials. */
@@ -260,10 +260,7 @@ export async function refreshSerializedOAuthCredential<TData>(params: {
       if (!hasUnexpiredOAuthCredential(refreshed.credential)) {
         throw new Error("OAuth refresh returned an unusable credential");
       }
-      if (
-        refreshed.credential.provider !== claim.credential.provider ||
-        !hasMatchingOAuthIdentity(claim.credential, refreshed.credential)
-      ) {
+      if (!isSafeOAuthOwnerRefreshResult(claim.credential, refreshed.credential)) {
         throw new Error("OAuth refresh returned credentials for a different OAuth account");
       }
       const settled = params.backend.withLock<{

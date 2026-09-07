@@ -91,6 +91,14 @@ export function hasMatchingOAuthIdentity(
   return hasOAuthIdentity(existing) && isSafeToCopyOAuthIdentity(existing, incoming);
 }
 
+/** Returns true when the current owner accepts its provider refresh result. */
+export function isSafeOAuthOwnerRefreshResult(
+  claimed: OAuthCredential,
+  refreshed: OAuthCredential,
+): boolean {
+  return claimed.provider === refreshed.provider && isSafeToCopyOAuthIdentity(claimed, refreshed);
+}
+
 /** Returns true when a claimed generation may settle with a live credential. */
 export function isSafeOAuthPostClaimSettlement(
   claimedGeneration: OAuthCredential,

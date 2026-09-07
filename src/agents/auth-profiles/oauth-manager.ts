@@ -45,6 +45,7 @@ import {
 } from "./oauth-refresh-peers.js";
 import {
   hasMatchingOAuthIdentity,
+  isSafeOAuthOwnerRefreshResult,
   isSafeOAuthPostClaimSettlement,
   isSafeToAdoptBootstrapOAuthIdentity,
   isSafeToAdoptMainStoreOAuthIdentity,
@@ -1119,10 +1120,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         if (!hasUsableOAuthCredential(rotated, { refreshMarginMs: 0 })) {
           throw new Error("OAuth refresh returned an unusable credential");
         }
-        if (
-          rotated.provider !== claim.credential.provider ||
-          !hasMatchingOAuthIdentity(claim.credential, rotated)
-        ) {
+        if (!isSafeOAuthOwnerRefreshResult(claim.credential, rotated)) {
           throw new Error("OAuth refresh returned credentials for a different OAuth account");
         }
         const settled = await withOAuthProfileLock(

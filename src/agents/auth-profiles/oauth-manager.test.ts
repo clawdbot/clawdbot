@@ -584,7 +584,6 @@ describe("createOAuthManager", () => {
         access: "stale-local-access",
         refresh: "stale-local-refresh",
         expires: Date.now() - 60_000,
-        accountId: "acct-minimax",
       });
       saveAuthProfileStore(
         {
@@ -606,7 +605,6 @@ describe("createOAuthManager", () => {
             access: "rotated-access",
             refresh: "rotated-refresh",
             expires: Date.now() + 600_000,
-            accountId: "acct-minimax",
           };
         }),
         readBootstrapCredential: () =>
@@ -615,7 +613,6 @@ describe("createOAuthManager", () => {
             access: "expired-external-access",
             refresh: "external-refresh",
             expires: Date.now() - 30_000,
-            accountId: "acct-minimax",
           }),
       });
 
@@ -633,6 +630,14 @@ describe("createOAuthManager", () => {
       expect(result.credential.provider).toBe("minimax-portal");
       expect(result.credential.access).toBe("rotated-access");
       expect(result.credential.refresh).toBe("rotated-refresh");
+      expect(
+        ensureAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId],
+      ).toMatchObject({
+        type: "oauth",
+        provider: "minimax-portal",
+        access: "rotated-access",
+        refresh: "rotated-refresh",
+      });
     });
   });
 

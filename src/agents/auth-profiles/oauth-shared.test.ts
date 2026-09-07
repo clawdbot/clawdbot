@@ -8,10 +8,77 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import {
+  isSafeOAuthOwnerRefreshResult,
+  isSafeOAuthPostClaimSettlement,
   overlayRuntimeExternalOAuthProfiles,
   shouldReplaceStoredOAuthCredential,
 } from "./oauth-shared.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
+
+describe("OAuth refresh identity policy", () => {
+  const credential = (
+    identity: Pick<OAuthCredential, "accountId" | "email"> = {},
+    provider = "openai",
+  ): OAuthCredential => ({
+    type: "oauth",
+    provider,
+    access: "access-token",
+    refresh: "refresh-token",
+    expires: Date.now() + 600_000,
+    ...identity,
+  });
+
+  it.each([
+    {
+      name: "known same identity",
+      claimed: credential({ accountId: "acct-a" }),
+      refreshed: credential({ accountId: "acct-a" }),
+      exactOwner: true,
+      differentOwner: true,
+    },
+    {
+      name: "known different identity",
+      claimed: credential({ accountId: "acct-a" }),
+      refreshed: credential({ accountId: "acct-b" }),
+      exactOwner: false,
+      differentOwner: false,
+    },
+    {
+      name: "both identities unknown",
+      claimed: credential(),
+      refreshed: credential(),
+      exactOwner: true,
+      differentOwner: false,
+    },
+    {
+      name: "unknown identity becomes known",
+      claimed: credential(),
+      refreshed: credential({ accountId: "acct-a" }),
+      exactOwner: true,
+      differentOwner: false,
+    },
+    {
+      name: "known identity becomes unknown",
+      claimed: credential({ accountId: "acct-a" }),
+      refreshed: credential(),
+      exactOwner: false,
+      differentOwner: false,
+    },
+    {
+      name: "provider changes",
+      claimed: credential({ accountId: "acct-a" }),
+      refreshed: credential({ accountId: "acct-a" }, "anthropic"),
+      exactOwner: false,
+      differentOwner: false,
+    },
+  ])(
+    "applies exact-owner and different-owner rules for $name",
+    ({ claimed, refreshed, exactOwner, differentOwner }) => {
+      expect(isSafeOAuthOwnerRefreshResult(claimed, refreshed)).toBe(exactOwner);
+      expect(isSafeOAuthPostClaimSettlement(claimed, refreshed)).toBe(differentOwner);
+    },
+  );
+});
 
 describe("overlayRuntimeExternalOAuthProfiles", () => {
   it("isolates runtime OAuth overlays without structuredClone", () => {

@@ -725,13 +725,12 @@ describe("OAuth refresh generation fence", () => {
     });
   });
 
-  it("rejects a late settlement after the exact credential generation is restored and reclaimed", async () => {
+  it("rejects a late settlement after an identity-less generation is restored and reclaimed", async () => {
     const profileId = "openai:default";
     const firstCredential = createCredential({
       access: "first-access",
       refresh: "stable-refresh",
       expires: 1,
-      accountId: "acct-123",
     });
     let persisted = JSON.stringify({ [profileId]: firstCredential });
     const backend = {
@@ -781,7 +780,6 @@ describe("OAuth refresh generation fence", () => {
           access: "second-rotated-access",
           refresh: "second-rotated-refresh",
           expires: Date.now() + 600_000,
-          accountId: "acct-123",
         }),
       })),
     ).resolves.toMatchObject({ apiKey: "second-rotated-access" });
@@ -792,7 +790,6 @@ describe("OAuth refresh generation fence", () => {
         access: "late-first-access",
         refresh: "late-first-refresh",
         expires: Date.now() + 600_000,
-        accountId: "acct-123",
       }),
     });
     await new Promise<void>((resolve) => {

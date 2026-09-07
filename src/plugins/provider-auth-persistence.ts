@@ -416,10 +416,11 @@ async function stageProviderAuthProfileBatchCore(
     try {
       await prepared.rollback();
     } catch (rollbackError) {
+      // oxlint-disable-next-line preserve-caught-error -- AggregateError.errors retains rollbackError; cause remains the initiating persistence failure.
       throw new AggregateError(
         [error, rollbackError],
         "Provider auth persistence failed and staged state could not be fully released.",
-        { cause: rollbackError },
+        { cause: error },
       );
     }
     throw error;

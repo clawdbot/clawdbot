@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as authProfiles from "../agents/auth-profiles.js";
 import {
   ensureAuthProfileStore,
   saveAuthProfileStore,
@@ -26,6 +27,7 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
+  vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
 });
@@ -355,6 +357,49 @@ describe("provider auth protected persistence", () => {
         }),
       ).toEqual({ ok: true, value: "candidate-b" });
     });
+  });
+
+  it("keeps the initiating persistence error as the dual-failure aggregate cause", async () => {
+    const rootDir = tempDirs.make("openclaw-provider-auth-dual-failure-");
+    const stateDir = path.join(rootDir, "state");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const database = { env };
+    const persistenceError = new Error("profile persistence failed");
+
+    vi.spyOn(authProfiles, "persistAuthProfileBatch").mockImplementation(async (params) => {
+      const credential = params.profiles[0]?.credential;
+      if (credential?.type !== "token" || !credential.tokenRef) {
+        throw new Error("Expected staged protected tokenRef");
+      }
+      updateSecretStoreAllowedHosts({
+        scope: { kind: "team" },
+        name: credential.tokenRef.id,
+        allowedHosts: ["api.example.test"],
+        updatedBy: "cli",
+        database,
+      });
+      throw persistenceError;
+    });
+
+    let failure: unknown;
+    try {
+      await stageProviderAuthProfileBatch({
+        profiles: [protectedTokenProfile("openai:default", "candidate-a")],
+        config: {},
+        env,
+        stateDir,
+        agentDir,
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    const aggregate = failure as AggregateError;
+    expect(aggregate.errors[0]).toBe(persistenceError);
+    expect(aggregate.errors[1]).toBeInstanceOf(AggregateError);
+    expect(aggregate.cause).toBe(persistenceError);
   });
 
   it("clears completed-login failure state in the immediate-commit path", async () => {
