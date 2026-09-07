@@ -112,11 +112,12 @@ target server during config edits.
   extend a run-owned runtime beyond run end or prevent explicit cleanup.
   Doctor preserves this key. If an earlier `doctor --fix` removed it, restore the
   intended value from your config backup; the deleted value cannot be inferred.
-- Each Gateway admits at most 256 OpenClaw-managed MCP runtimes across sessions
+- Each Gateway admits at most 256 OpenClaw-managed MCP runtimes with server connections across sessions
   and requester partitions, including creation and cleanup in progress. At the
   limit, existing runtimes stay alive and new admissions fail with a log message
   directing you to stop or reset unused sessions. A runtime can own multiple
-  configured server connections. Native client runtimes manage their own bounds.
+  configured server connections. Sessions without available MCP servers and
+  sign-in-only catalogs do not consume this limit. Native client runtimes manage their own bounds.
 - MCP config changes retire only changed or removed server connections. Unchanged
   servers keep their transports and tool catalogs; active runs can continue calling
   their tools and resources. The next turn's discovery creates changed servers from the new config. Plugin

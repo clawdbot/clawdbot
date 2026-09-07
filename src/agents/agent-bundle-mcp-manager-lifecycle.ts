@@ -128,19 +128,38 @@ function scopedCatalogToolsSignature(tools: readonly McpCatalogTool[]): string {
 }
 
 export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntimeManagerStore) {
-  const reserveRuntimeSlot = (existing?: SessionMcpRuntime): { idleTtlMs: number } => {
-    const current = existing && store.runtimeSlots.get(existing);
-    if (current) {
-      return current;
+  const reserveRuntimeSlot = (
+    existing: SessionMcpRuntime | undefined,
+    hasServers: boolean,
+  ): { idleTtlMs: number } => {
+    const slot = (existing && store.runtimeSlots.get(existing)) ?? { idleTtlMs: 0 };
+    if (!hasServers || store.liveRuntimeSlots.has(slot)) {
+      return slot;
     }
     if (store.liveRuntimeSlots.size >= SESSION_MCP_MAX_LIVE_RUNTIMES) {
       const message = `bundle-mcp: live runtime limit (${SESSION_MCP_MAX_LIVE_RUNTIMES}) reached; stop or reset unused sessions before connecting another MCP runtime`;
       logWarn(message);
       throw new Error(message);
     }
-    const slot = { idleTtlMs: 0 };
     store.liveRuntimeSlots.add(slot);
     return slot;
+  };
+  const releaseEmptyRuntimeSlot = async (runtimeKey: string, runtime: SessionMcpRuntime) => {
+    const slot = store.runtimeSlots.get(runtime);
+    if (!slot || !store.liveRuntimeSlots.has(slot)) {
+      return;
+    }
+    if (!runtime.joinCleanup) {
+      throw new Error("MCP runtime does not expose cleanup ownership");
+    }
+    await runtime.joinCleanup();
+    // Replacement transfers the slot before cleanup yields; only its current owner may release it.
+    if (
+      store.runtimesBySessionId.get(runtimeKey) === runtime &&
+      sessionMcpRuntimeOwners.get(runtime)?.hasServers() !== true
+    ) {
+      store.liveRuntimeSlots.delete(slot);
+    }
   };
   const disposeRuntime = async (runtime: SessionMcpRuntime, releaseSlot = true) => {
     try {
@@ -475,6 +494,7 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
     runExclusiveOnRuntimeKeys,
     sweepIdleRuntimes,
     reserveRuntimeSlot,
+    releaseEmptyRuntimeSlot,
     disposeRuntime,
     ensureIdleSweepTimer,
     disposeRuntimeKeyNow,

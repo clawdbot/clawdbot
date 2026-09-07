@@ -3425,7 +3425,10 @@ process.on("SIGINT", shutdown);`,
         logPath: path.join(tempDir, "server.log"),
         pidPath,
       });
-      const manager = createSessionMcpRuntimeManager({ enableIdleSweepTimer: false });
+      const manager = createSessionMcpRuntimeManager({
+        enableIdleSweepTimer: false,
+        now: () => Date.now(),
+      });
       const params: RuntimeParams = {
         sessionId: "session-child-keep-alive",
         workspaceDir: tempDir,
@@ -3740,7 +3743,7 @@ describe("requester-scoped MCP connection resolution", () => {
     const params: RuntimeParams = {
       sessionId: "uncertain-child",
       workspaceDir: "/workspace",
-      cfg: { mcp: { servers: {} } },
+      cfg: { mcp: { servers: { child: { command: "true" } } } },
     };
     try {
       const previous = await manager.getOrCreate(params);

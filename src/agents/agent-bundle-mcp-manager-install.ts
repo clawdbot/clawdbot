@@ -24,7 +24,7 @@ import {
   type McpServerConnectionResolved,
 } from "./mcp-connection-resolver.js";
 
-type RuntimeEntryParams = Parameters<CreateSessionMcpRuntime>[0] & {
+type RuntimeEntryParams = Omit<Parameters<CreateSessionMcpRuntime>[0], "configFingerprint"> & {
   configReloadAtAdmission?: SessionMcpConfigPublication;
   runtimeKey: string;
 };
@@ -86,9 +86,12 @@ export function createSessionMcpRuntimeManagerInstall(
   const getOrCreateRuntimeEntry = async (
     params: RuntimeEntryParams,
   ): Promise<SessionMcpRuntime> => {
-    const nextFingerprint =
-      params.configFingerprint ??
-      loadSessionMcpConfig({ ...params, logDiagnostics: false }).fingerprint;
+    const config = loadSessionMcpConfig({ ...params, logDiagnostics: false });
+    const nextFingerprint = requesterRuntimeFingerprint(
+      config.fingerprint,
+      params.requesterConnect,
+    );
+    const hasServers = Object.keys(config.loaded.mcpServers).length > 0;
     const { runtimeKey, configReloadAtAdmission, ...runtimeParams } = params;
     const existing = store.runtimesBySessionId.get(runtimeKey);
     const connectionMatches =
@@ -100,7 +103,7 @@ export function createSessionMcpRuntimeManagerInstall(
       existing.markUsed();
       return existing;
     }
-    const slot = lifecycle.reserveRuntimeSlot(existing);
+    const slot = lifecycle.reserveRuntimeSlot(existing, hasServers);
     store.connectionMetaByRuntimeKey.delete(runtimeKey);
     let runtime: SessionMcpRuntime | undefined;
     let previousCleanup: Promise<void> | undefined;
@@ -138,6 +141,9 @@ export function createSessionMcpRuntimeManagerInstall(
         });
         publication = next;
       }
+      if (!(sessionMcpRuntimeOwners.get(runtime)?.hasServers() ?? hasServers)) {
+        await lifecycle.releaseEmptyRuntimeSlot(runtimeKey, runtime);
+      }
       reconcileReusableRetirement(params, runtime);
       runtime.markUsed();
       return runtime;
@@ -164,19 +170,8 @@ export function createSessionMcpRuntimeManagerInstall(
       connectionOverrides: Map<string, McpServerConnectionResolved>;
     },
   ): Promise<SessionMcpRuntime> => {
-    const { fingerprint: resolvedFingerprint } = loadSessionMcpConfig({
-      ...params,
-      logDiagnostics: false,
-    });
-    const runtimeFingerprint = requesterRuntimeFingerprint(
-      resolvedFingerprint,
-      params.requesterConnect,
-    );
     const connectionHash = hashMcpResolvedConnections(params.connectionOverrides);
-    const runtime = await getOrCreateRuntimeEntry({
-      ...params,
-      configFingerprint: runtimeFingerprint,
-    });
+    const runtime = await getOrCreateRuntimeEntry(params);
     store.connectionMetaByRuntimeKey.set(params.runtimeKey, {
       connectionHash,
       resolvedAt: store.now(),

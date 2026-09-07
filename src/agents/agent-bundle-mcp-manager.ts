@@ -364,9 +364,13 @@ export function createSessionMcpRuntimeManager(
       lifecycle.ensureIdleSweepTimer();
       // In-flight creation checks this publication before it can expose its runtime.
       await Promise.all(
-        [...store.runtimesBySessionId.values()].map(async (runtime) =>
-          sessionMcpRuntimeOwners.get(runtime)?.reload(reload),
-        ),
+        [...store.runtimesBySessionId].map(async ([runtimeKey, runtime]) => {
+          const owner = sessionMcpRuntimeOwners.get(runtime);
+          await owner?.reload(reload);
+          if (owner?.hasServers() === false) {
+            await lifecycle.releaseEmptyRuntimeSlot(runtimeKey, runtime);
+          }
+        }),
       );
     },
     disposeAll: () => lifecycle.disposeManagedRuntimes(),

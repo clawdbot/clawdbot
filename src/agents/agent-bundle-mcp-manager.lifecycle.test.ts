@@ -112,6 +112,26 @@ afterEach(async () => {
 });
 
 describe("MCP manager creation ownership", () => {
+  it("keeps serverless sessions available beyond the MCP limit and while it is full", async () => {
+    const manager = createManager(createRuntimeFixture);
+    for (let index = 0; index < 300; index += 1) {
+      await manager.getOrCreate({ ...params, sessionId: `serverless-${index}` });
+    }
+    const configured = { mcp: { servers: { fixture: { command: "true" } } } };
+    for (let index = 0; index < 256; index += 1) {
+      await manager.getOrCreate({ ...params, sessionId: `connected-${index}`, cfg: configured });
+    }
+    await manager.getOrCreate({ ...params, sessionId: "serverless-at-capacity" });
+    await expect(
+      manager.getOrCreate({ ...params, sessionId: "connected-overflow", cfg: configured }),
+    ).rejects.toThrow("live runtime limit (256)");
+    await expect(
+      manager.getOrCreate({ ...params, sessionId: "serverless-0", cfg: configured }),
+    ).rejects.toThrow("live runtime limit (256)");
+    await manager.getOrCreate({ ...params, sessionId: "connected-0" });
+    await manager.getOrCreate({ ...params, sessionId: "serverless-0", cfg: configured });
+  });
+
   it.each(["static", "requester"] as const)(
     "bounds %s runtimes across sessions, creation, and cleanup",
     async (kind) => {
@@ -120,7 +140,11 @@ describe("MCP manager creation ownership", () => {
       const manager = createManager(factory);
       const acquire = (sessionId: string) =>
         kind === "static"
-          ? manager.getOrCreate({ ...params, sessionId })
+          ? manager.getOrCreate({
+              ...params,
+              sessionId,
+              cfg: { mcp: { servers: { fixture: { command: "true" } } } },
+            })
           : manager.getOrCreateRequesterScoped({ ...requesterParams("sender"), sessionId });
       const resolverRegistry = createMcpProofPluginRegistry();
       await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
