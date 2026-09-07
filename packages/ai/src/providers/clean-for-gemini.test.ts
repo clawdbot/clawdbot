@@ -298,4 +298,93 @@ describe("cleanSchemaForGemini", () => {
 
     expect(cleaned.enum).toBeUndefined();
   });
+
+  it("flattens a nested single-branch allOf literal", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: "object",
+      properties: {
+        settings: {
+          description: "Selected settings mode",
+          allOf: [{ const: "x", type: "string" }],
+        },
+      },
+    }) as { properties?: { settings?: Record<string, unknown> } };
+
+    expect(cleaned.properties?.settings).toEqual({
+      description: "Selected settings mode",
+      enum: ["x"],
+      type: "string",
+    });
+    expect(JSON.stringify(cleaned)).not.toContain("allOf");
+  });
+
+  it("flattens a nested single-branch allOf enum", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: "object",
+      properties: {
+        settings: {
+          description: "Selected settings mode",
+          allOf: [{ enum: ["x"], type: "string" }],
+        },
+      },
+    }) as { properties?: { settings?: Record<string, unknown> } };
+
+    expect(cleaned.properties?.settings).toEqual({
+      description: "Selected settings mode",
+      enum: ["x"],
+      type: "string",
+    });
+    expect(JSON.stringify(cleaned)).not.toContain("allOf");
+  });
+
+  it("merges multiple compatible object intersections", () => {
+    const cleaned = cleanSchemaForGemini({
+      description: "Combined settings",
+      allOf: [
+        {
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"],
+        },
+        {
+          type: "object",
+          properties: { enabled: { type: "boolean" } },
+          required: ["enabled", "notDeclared"],
+        },
+        {
+          type: "object",
+          properties: { mode: { type: "string", enum: ["safe", "fast"] } },
+          required: ["mode"],
+        },
+      ],
+    });
+
+    expect(cleaned).toEqual({
+      description: "Combined settings",
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        enabled: { type: "boolean" },
+        mode: { type: "string", enum: ["safe", "fast"] },
+      },
+      required: ["name", "enabled", "mode"],
+    });
+    expect(JSON.stringify(cleaned)).not.toContain("allOf");
+  });
+
+  it("widens conflicting intersections without retaining allOf", () => {
+    const cleaned = cleanSchemaForGemini({
+      description: "Conflicting mode",
+      allOf: [
+        { type: "string", enum: ["x"] },
+        { type: "string", enum: ["y"] },
+      ],
+    });
+
+    expect(cleaned).toEqual({
+      type: "string",
+      description: "Conflicting mode",
+    });
+    expect(JSON.stringify(cleaned)).not.toContain("allOf");
+  });
 });

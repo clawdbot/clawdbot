@@ -31,8 +31,10 @@ export const GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
   "maxProperties",
 
   // JSON Schema composition keywords not supported by OpenAPI 3.0 subset.
-  // `const` is handled separately (converted to enum) in the cleaning loop,
-  // but `not` has no safe equivalent and must be stripped.
+  // `const` is handled separately (converted to enum) in the cleaning loop;
+  // `allOf` is flattened separately, while `not` has no safe equivalent and
+  // must be stripped.
+  "allOf",
   "not",
 ]);
 
@@ -277,6 +279,232 @@ function sanitizeRequiredFields(schema: Record<string, unknown>): Record<string,
   return schema;
 }
 
+function schemaValuesEqual(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function intersectEnums(left: unknown[], right: unknown[]): unknown[] {
+  return left.filter((leftValue) =>
+    right.some((rightValue) => schemaValuesEqual(leftValue, rightValue)),
+  );
+}
+
+/** Merge schemas only when their intersection can be represented without `allOf`. */
+function tryMergeCompatibleAllOfSchemas(
+  schemas: Record<string, unknown>[],
+): Record<string, unknown> | undefined {
+  const merged: Record<string, unknown> = {};
+  const required = new Set<string>();
+
+  for (const schema of schemas) {
+    for (const [key, value] of Object.entries(schema)) {
+      if (key === "allOf") {
+        continue;
+      }
+      if (SCHEMA_META_KEYS.includes(key as (typeof SCHEMA_META_KEYS)[number])) {
+        if (!(key in merged)) {
+          merged[key] = value;
+        }
+        continue;
+      }
+      if (key === "required" && Array.isArray(value)) {
+        for (const entry of value) {
+          if (typeof entry === "string") {
+            required.add(entry);
+          }
+        }
+        continue;
+      }
+      if (key === "properties" && value && typeof value === "object" && !Array.isArray(value)) {
+        const properties = (merged.properties ?? {}) as Record<string, unknown>;
+        for (const [propertyName, propertySchema] of Object.entries(
+          value as Record<string, unknown>,
+        )) {
+          const existing = properties[propertyName];
+          if (existing === undefined) {
+            properties[propertyName] = propertySchema;
+            continue;
+          }
+          if (
+            !existing ||
+            typeof existing !== "object" ||
+            Array.isArray(existing) ||
+            !propertySchema ||
+            typeof propertySchema !== "object" ||
+            Array.isArray(propertySchema)
+          ) {
+            if (!schemaValuesEqual(existing, propertySchema)) {
+              return undefined;
+            }
+            continue;
+          }
+          const propertyIntersection = tryMergeCompatibleAllOfSchemas([
+            existing as Record<string, unknown>,
+            propertySchema as Record<string, unknown>,
+          ]);
+          if (!propertyIntersection) {
+            return undefined;
+          }
+          properties[propertyName] = propertyIntersection;
+        }
+        merged.properties = properties;
+        continue;
+      }
+      if (key === "enum" && Array.isArray(value)) {
+        if (!Array.isArray(merged.enum)) {
+          merged.enum = value;
+          continue;
+        }
+        const intersection = intersectEnums(merged.enum, value);
+        if (intersection.length === 0) {
+          return undefined;
+        }
+        merged.enum = intersection;
+        continue;
+      }
+      if (!(key in merged)) {
+        merged[key] = value;
+        continue;
+      }
+      if (!schemaValuesEqual(merged[key], value)) {
+        return undefined;
+      }
+    }
+  }
+
+  if (required.size > 0) {
+    merged.required = [...required];
+  }
+  return sanitizeRequiredFields(merged);
+}
+
+function copyPreferredSchemaMeta(
+  schemas: Record<string, unknown>[],
+  to: Record<string, unknown>,
+): void {
+  for (const schema of schemas) {
+    for (const key of SCHEMA_META_KEYS) {
+      if (!(key in to) && key in schema && schema[key] !== undefined) {
+        to[key] = schema[key];
+      }
+    }
+  }
+}
+
+/**
+ * Last-resort representation for conflicting intersections. It deliberately
+ * widens conflicting constraints, but retains object fields and explicitly
+ * declared required names so the callable shape remains useful.
+ */
+function flattenAllOfFallback(schemas: Record<string, unknown>[]): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  const explicitTypes = schemas
+    .map((schema) => schema.type)
+    .filter((type): type is string => typeof type === "string");
+  const commonType = explicitTypes.every((type) => type === explicitTypes[0])
+    ? explicitTypes[0]
+    : undefined;
+  const objectLike = schemas.every(
+    (schema) =>
+      schema.type === undefined ||
+      schema.type === "object" ||
+      (schema.properties &&
+        typeof schema.properties === "object" &&
+        !Array.isArray(schema.properties)),
+  );
+
+  if (objectLike && schemas.some((schema) => schema.type === "object" || schema.properties)) {
+    result.type = "object";
+    const properties: Record<string, unknown> = {};
+    const required = new Set<string>();
+    for (const schema of schemas) {
+      if (
+        schema.properties &&
+        typeof schema.properties === "object" &&
+        !Array.isArray(schema.properties)
+      ) {
+        for (const [name, propertySchema] of Object.entries(
+          schema.properties as Record<string, unknown>,
+        )) {
+          const existing = properties[name];
+          if (existing === undefined) {
+            properties[name] = propertySchema;
+            continue;
+          }
+          if (
+            existing &&
+            typeof existing === "object" &&
+            !Array.isArray(existing) &&
+            propertySchema &&
+            typeof propertySchema === "object" &&
+            !Array.isArray(propertySchema)
+          ) {
+            properties[name] =
+              tryMergeCompatibleAllOfSchemas([
+                existing as Record<string, unknown>,
+                propertySchema as Record<string, unknown>,
+              ]) ??
+              flattenAllOfFallback([
+                existing as Record<string, unknown>,
+                propertySchema as Record<string, unknown>,
+              ]);
+          }
+        }
+      }
+    }
+    for (const schema of schemas) {
+      if (!Array.isArray(schema.required)) {
+        continue;
+      }
+      for (const name of schema.required) {
+        if (typeof name === "string" && Object.hasOwn(properties, name)) {
+          required.add(name);
+        }
+      }
+    }
+    result.properties = properties;
+    if (required.size > 0) {
+      result.required = [...required];
+    }
+  } else if (commonType) {
+    result.type = commonType;
+  }
+
+  copyPreferredSchemaMeta(schemas, result);
+  return sanitizeRequiredFields(result);
+}
+
+function flattenAllOf(
+  outer: Record<string, unknown>,
+  variants: unknown[],
+): Record<string, unknown> {
+  const schemas = [outer, ...variants].filter(
+    (variant): variant is Record<string, unknown> =>
+      Boolean(variant) && typeof variant === "object" && !Array.isArray(variant),
+  );
+  return tryMergeCompatibleAllOfSchemas(schemas) ?? flattenAllOfFallback(schemas);
+}
+
+function removeSurvivingAllOf(schema: unknown): unknown {
+  if (!schema || typeof schema !== "object") {
+    return schema;
+  }
+  if (Array.isArray(schema)) {
+    return schema.map(removeSurvivingAllOf);
+  }
+
+  const record = schema as Record<string, unknown>;
+  const outer = Object.fromEntries(
+    Object.entries(record)
+      .filter(([key]) => key !== "allOf")
+      .map(([key, value]) => [key, removeSurvivingAllOf(value)]),
+  );
+  if (!Array.isArray(record.allOf)) {
+    return outer;
+  }
+  return flattenAllOf(outer, record.allOf.map(removeSurvivingAllOf));
+}
+
 function cleanSchemaForGeminiWithDefs(
   schema: unknown,
   defs: SchemaDefs | undefined,
@@ -322,6 +550,7 @@ function cleanSchemaForGeminiWithDefs(
 
   const hasAnyOf = "anyOf" in obj && Array.isArray(obj.anyOf);
   const hasOneOf = "oneOf" in obj && Array.isArray(obj.oneOf);
+  const hasAllOf = "allOf" in obj && Array.isArray(obj.allOf);
   let cleanedAnyOf = hasAnyOf
     ? (obj.anyOf as unknown[]).map((variant) =>
         cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
@@ -329,6 +558,11 @@ function cleanSchemaForGeminiWithDefs(
     : undefined;
   let cleanedOneOf = hasOneOf
     ? (obj.oneOf as unknown[]).map((variant) =>
+        cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
+      )
+    : undefined;
+  const cleanedAllOf = hasAllOf
+    ? (obj.allOf as unknown[]).map((variant) =>
         cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
       )
     : undefined;
@@ -352,6 +586,11 @@ function cleanSchemaForGeminiWithDefs(
   const cleaned: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(obj)) {
+    // allOf is flattened after its siblings are cleaned. Malformed allOf values
+    // are omitted as unsupported rather than passed through to Gemini.
+    if (key === "allOf") {
+      continue;
+    }
     if (GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS.has(key)) {
       continue;
     }
@@ -422,13 +661,13 @@ function cleanSchemaForGeminiWithDefs(
       cleaned[key] =
         cleanedOneOf ??
         value.map((variant) => cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack));
-    } else if (key === "allOf" && Array.isArray(value)) {
-      cleaned[key] = value.map((variant) =>
-        cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
-      );
     } else {
       cleaned[key] = value;
     }
+  }
+
+  if (cleanedAllOf) {
+    return flattenAllOf(cleaned, cleanedAllOf);
   }
 
   // Cloud Code Assist API rejects anyOf/oneOf in nested schemas even after
@@ -497,5 +736,6 @@ export function cleanSchemaForGemini(schema: unknown): TSchema {
   }
 
   const defs = extendSchemaDefs(undefined, schema as Record<string, unknown>);
-  return cleanSchemaForGeminiWithDefs(schema, defs, undefined) as TSchema;
+  const cleaned = cleanSchemaForGeminiWithDefs(schema, defs, undefined);
+  return removeSurvivingAllOf(cleaned) as TSchema;
 }
