@@ -3,8 +3,8 @@ import type { PromptRequest } from "@agentclientprotocol/sdk";
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
-import type { AcpGatewayAgent } from "./translator.js";
 import { createTestAcpEventLedger } from "./event-ledger.test-support.js";
+import type { AcpGatewayAgent } from "./translator.js";
 import {
   createChatEvent,
   createPendingPromptHarness,

@@ -4,8 +4,8 @@ import type { AcpSessionStore } from "@openclaw/acp-core/session";
 import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import { vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
-import { createTestAcpEventLedger } from "./event-ledger.test-support.js";
 import type { AcpEventLedger } from "./event-ledger.js";
+import { createTestAcpEventLedger } from "./event-ledger.test-support.js";
 import { AcpGatewayAgent } from "./translator.js";
 
 type TestAcpConnection = AgentSideConnection & {

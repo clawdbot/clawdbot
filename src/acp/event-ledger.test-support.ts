@@ -17,9 +17,7 @@ const testLedgerHandles: TestAcpLedgerHandle[] = [];
 
 /** Creates a test-owned SQLite ACP ledger and registers its DB/tempdir cleanup. */
 export function createTestAcpEventLedger(options: AcpLedgerOptions = {}): AcpEventLedger {
-  const tempDir = fs.realpathSync(
-    fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-acp-ledger-")),
-  );
+  const tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-acp-ledger-")));
   const databasePath = path.join(tempDir, "openclaw.sqlite");
   testLedgerHandles.push({ databasePath, tempDir });
   return createSqliteAcpEventLedger({ ...options, path: databasePath });
