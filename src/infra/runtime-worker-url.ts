@@ -26,5 +26,8 @@ export function resolveRuntimeWorkerUrl(params: {
 
 export function resolveRuntimeWorkerArgv(url: URL, execPath = process.execPath): string[] {
   const entry = fileURLToPath(url);
-  return /\.[cm]?ts$/.test(entry) && !isBunRuntime(execPath) ? ["--import", "tsx", entry] : [entry];
+  // Resolve the preload here: Node resolves bare imports from the child cwd.
+  return /\.[cm]?ts$/.test(entry) && !isBunRuntime(execPath)
+    ? ["--import", import.meta.resolve("tsx"), entry]
+    : [entry];
 }

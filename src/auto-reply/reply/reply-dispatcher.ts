@@ -311,10 +311,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     ...(hasPendingDelivery ? { hasPendingDelivery: true } : {}),
   });
 
-  const { unregister } = registerDispatcher({
-    pending: () => pending,
-    waitForIdle,
-  });
+  const unregister = registerDispatcher(() => pending);
 
   const reportObserverError = (err: unknown, info: ReplyDispatchRuntimeInfo) => {
     void Promise.resolve(options.onError?.(err, info)).catch(() => undefined);

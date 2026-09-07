@@ -7,6 +7,7 @@ import { syncDirectoryBestEffortSync } from "../../infra/directory-durability.js
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   encodeSessionArchiveContent,
@@ -294,8 +295,12 @@ function resolveSourceWorkerExecArgv(): string[] {
 }
 
 function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
+  diagnostics?: { workerThreadId?: number };
   expectedMessageType: "done" | "published" | "reclaimed";
   onCommitRequest?: () => void;
+  withWriteAdmission?: (
+    run: (refusal?: { error: unknown }) => Promise<Result[] | undefined>,
+  ) => Promise<void>;
   transferList?: ArrayBuffer[];
   workerData: object;
 }): Promise<Result[]> {
@@ -310,6 +315,10 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
       execArgv: sourceWorkerExecArgv,
       transferList: params.transferList,
     });
+    // Node clears threadId at exit. Keep only the spawned identity for the awaiting writer.
+    if (params.diagnostics) {
+      params.diagnostics.workerThreadId = worker.threadId;
+    }
   } catch (error) {
     return Promise.reject(toStringifiedError(error));
   }
@@ -317,13 +326,84 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
   return new Promise((resolve, reject) => {
     let results: Result[] | undefined;
     let workerError: Error | undefined;
-    worker.on("message", (message: { results: Result[]; type: string }) => {
+    let admission: { id: number; released: Deferred } | undefined;
+    let admissionId = 0;
+    let exited = false;
+    let exitCode: number | undefined;
+    const admissionTasks: Promise<void>[] = [];
+    worker.on("message", (message: { results: Result[]; type: string; admissionId?: number }) => {
       if (message.type === "commit-request") {
         try {
           params.onCommitRequest?.();
         } catch (error) {
           workerError = toStringifiedError(error);
         }
+      } else if (message.type === "admission-request") {
+        const withWriteAdmission = params.withWriteAdmission;
+        if (!withWriteAdmission || admission || message.admissionId !== admissionId + 1) {
+          workerError ??= new Error(
+            "SQLite reclamation Worker requested invalid write admission; cleanup is uncertain, restart OpenClaw before deleting the owning agent",
+          );
+          void worker.terminate();
+          return;
+        }
+        const requested = { id: ++admissionId, released: createDeferredCore() };
+        admission = requested;
+        const task = withWriteAdmission(async (refusal) => {
+          if (exited) {
+            return undefined;
+          }
+          if (refusal) {
+            workerError ??= toStringifiedError(refusal.error);
+          }
+          worker.postMessage(
+            {
+              type: "admission",
+              admissionId: requested.id,
+              allowed: refusal === undefined && workerError === undefined,
+            },
+            [],
+          );
+          // Denial still owns this FIFO section while the Worker unwinds its
+          // partially opened handle. Final admission is released only on exit.
+          await requested.released.promise;
+          if (exited && exitCode === 0 && !workerError) {
+            return results;
+          }
+          return undefined;
+        }).catch(async (error: unknown) => {
+          workerError ??= toStringifiedError(error);
+          if (!exited && admission === requested) {
+            try {
+              // An unavailable scheduler cannot authorize repair. Let the
+              // suspended owner unwind its handle and lease before exit.
+              worker.postMessage(
+                { type: "admission", admissionId: requested.id, allowed: false },
+                [],
+              );
+            } catch (dispatchError) {
+              workerError = new AggregateError(
+                [workerError, dispatchError],
+                "SQLite reclamation admission failed and Worker cleanup is uncertain; restart OpenClaw before deleting the owning agent",
+                { cause: workerError },
+              );
+              await worker.terminate();
+            }
+          }
+          await requested.released.promise;
+        });
+        admissionTasks.push(task);
+      } else if (message.type === "admission-release") {
+        if (!admission || message.admissionId !== admission.id) {
+          workerError ??= new Error(
+            "SQLite reclamation Worker released invalid write admission; cleanup is uncertain, restart OpenClaw before deleting the owning agent",
+          );
+          void worker.terminate();
+          return;
+        }
+        const released = admission;
+        admission = undefined;
+        released.released.resolve();
       } else if (message.type === params.expectedMessageType) {
         (results ??= []).push(...message.results);
       }
@@ -334,20 +414,21 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(params: {
       workerError ??= toStringifiedError(error);
     });
     worker.once("exit", (code) => {
+      exited = true;
+      exitCode = code;
+      admission?.released.resolve();
       worker.removeAllListeners();
-      if (workerError) {
-        reject(workerError);
-        return;
-      }
-      if (code !== 0) {
-        reject(new Error(`SQLite transcript archive worker exited with code ${code}`));
-        return;
-      }
-      if (!results) {
-        reject(new Error("SQLite transcript archive worker exited without results"));
-        return;
-      }
-      resolve(results);
+      void Promise.all(admissionTasks).then(() => {
+        if (workerError) {
+          reject(workerError);
+        } else if (code !== 0) {
+          reject(new Error(`SQLite transcript archive worker exited with code ${code}`));
+        } else if (!results) {
+          reject(new Error("SQLite transcript archive worker exited without results"));
+        } else {
+          resolve(results);
+        }
+      }, reject);
     });
   });
 }
@@ -358,8 +439,12 @@ const sqliteTranscriptArchiveWorkerQueue = new KeyedAsyncQueue();
 const SQLITE_TRANSCRIPT_ARCHIVE_WORKER_QUEUE_KEY = "lifecycle-archive";
 
 export function runSqliteTranscriptArchiveWorkerOperation<Result>(params: {
+  diagnostics?: { workerThreadId?: number };
   expectedMessageType: "done" | "published" | "reclaimed";
   onCommitRequest?: () => void;
+  withWriteAdmission?: (
+    run: (refusal?: { error: unknown }) => Promise<Result[] | undefined>,
+  ) => Promise<void>;
   transferList?: ArrayBuffer[];
   workerData: object;
 }): Promise<Result[]> {

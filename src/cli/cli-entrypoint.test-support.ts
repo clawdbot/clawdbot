@@ -44,6 +44,11 @@ export const gatewayDirectStopEntrypoints = {
     sourceWorkerName: "gateway-cli/run-loop",
     distWorkerPath: "cli/gateway-cli/run-loop.js",
   },
+  restartPolicy: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/restart",
+    distWorkerPath: "infra/restart.js",
+  },
   workAdmission: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../process/gateway-work-admission",

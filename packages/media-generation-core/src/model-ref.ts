@@ -1,4 +1,3 @@
-// Media Generation Core module implements model ref behavior.
 import {
   parseProviderModelRef,
   type ProviderModelRef,

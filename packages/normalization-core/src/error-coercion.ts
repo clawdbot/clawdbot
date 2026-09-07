@@ -39,7 +39,18 @@ function isAggregateErrorObject(error: Error): boolean {
 
 function readProperty(
   value: object,
-  key: "cause" | "code" | "status" | "errors" | "message" | "name" | "error" | "suppressed",
+  key:
+    | "cause"
+    | "code"
+    | "status"
+    | "errors"
+    | "message"
+    | "name"
+    | "error"
+    | "suppressed"
+    | "reason"
+    | "original"
+    | "data",
 ): unknown {
   try {
     return (value as Record<string, unknown>)[key];
@@ -263,8 +274,7 @@ export function extractErrorCode(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
-  // SAFETY: The object guard admits SDK error wrappers with optional code fields.
-  const code = (err as { code?: unknown }).code;
+  const code = readProperty(err, "code");
   if (typeof code === "string") {
     return code;
   }
@@ -335,14 +345,15 @@ export function extractErrorCodeOrErrno(err: unknown): string | undefined {
 export function collectNestedErrorCandidates(err: unknown): unknown[] {
   return collectErrorGraphCandidates(err, (current) => {
     const nested: unknown[] = [
-      current.cause,
-      current.reason,
-      current.original,
-      current.error,
-      current.data,
+      readProperty(current, "cause"),
+      readProperty(current, "reason"),
+      readProperty(current, "original"),
+      readProperty(current, "error"),
+      readProperty(current, "data"),
     ];
-    if (Array.isArray(current.errors)) {
-      nested.push(...current.errors);
+    const errors = readProperty(current, "errors");
+    if (Array.isArray(errors)) {
+      nested.push(...errors);
     }
     return nested;
   });

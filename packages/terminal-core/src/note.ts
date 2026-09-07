@@ -1,8 +1,7 @@
-// Terminal Core module implements note behavior.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { note as clackNote } from "@clack/prompts";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { splitGraphemes, visibleWidth } from "./ansi.js";
+import { iterateGraphemes, visibleWidth } from "./ansi.js";
 import { stylePromptTitle } from "./prompt-style.js";
 
 const MIN_NOTE_COLUMNS = 80;
@@ -31,7 +30,7 @@ function splitLongWord(word: string, maxLen: number): string[] {
   const parts: string[] = [];
   let current = "";
   let currentWidth = 0;
-  for (const grapheme of splitGraphemes(word)) {
+  for (const grapheme of iterateGraphemes(word)) {
     const width = visibleWidth(grapheme);
     if (current && currentWidth + width > maxLen) {
       parts.push(current);

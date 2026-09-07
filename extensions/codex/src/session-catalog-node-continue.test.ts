@@ -761,18 +761,18 @@ describe("Codex supervision actions", () => {
     ]);
     expect(onHost.mock.calls.map(([host]) => host)).toEqual(expect.arrayContaining(catalogHosts!));
     expect(invoke).not.toHaveBeenCalled();
-    const userSource = terminalHosts?.find((host) => host.label === "Local Codex · user");
-    expect(userSource).toBeDefined();
+    expect(terminalHosts?.filter((host) => host.kind === "gateway")).toEqual([
+      expect.objectContaining({ hostId: CODEX_LOCAL_SESSION_HOST_ID }),
+    ]);
+    const userSource = catalogHosts?.find((host) => host.label === "Local Codex · user");
+    expect(userSource).toMatchObject({ canStartTerminal: false });
     await expect(
       getProvider()?.startTerminalSession?.({
         agentId: "main",
         hostId: userSource!.hostId,
         cwd: binDir,
       }),
-    ).resolves.toMatchObject({
-      env: { CODEX_HOME: resolveCodexAppServerUserHomeDir(process.env) },
-      cwd: binDir,
-    });
+    ).rejects.toThrow("select the local machine or a connected node");
     pluginConfig = { appServer: { homeScope: "user" } };
     registerCodexSessionCatalog({
       api,

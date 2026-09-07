@@ -3,7 +3,6 @@ import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import net from "node:net";
 import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import type { Readable } from "node:stream";
@@ -100,10 +99,8 @@ const OLD_STATE_SESSION_KEYS = [
 /** Runs the isolated live gateway SQLite flip proof and returns structured evidence. */
 export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions = {}) {
   const print = options.print ?? false;
-  const mockOpenAiPort = await getFreeTcpPort();
   const inst = await createOpenClawTestInstance({
     name: `sqlite-sessions-transcripts-flip-${randomUUID()}`,
-    config: buildMockOpenAiConfig(mockOpenAiPort),
     env: {
       ...Object.fromEntries(listKnownProviderAuthEnvVarNames().map((name) => [name, undefined])),
       ALL_PROXY: undefined,
@@ -153,8 +150,23 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
   await runQaGatewayFixture(
     async () => {
       try {
-        // Doctor commands and the gateway must resolve the same isolated database.
+        // The mock, Doctor commands, and Gateway share the same isolated environment.
         inst.state.applyEnv();
+        const mockOpenAiPort = await startMockOpenAiServer(context, {
+          requestLogPath: context.mockOpenAiRequestLog,
+          responseText: context.fullTurnAssistantText,
+        });
+        const instanceConfig = expectDefined(
+          parseJsonObject(await fs.readFile(inst.configPath, "utf8")),
+          "isolated instance configuration",
+        );
+        const mockConfig = buildMockOpenAiConfig(mockOpenAiPort);
+        // Publish only the listener already owned by the child, preserving fixture credentials.
+        await inst.state.writeConfig({
+          ...instanceConfig,
+          ...mockConfig,
+          gateway: { ...asRecord(instanceConfig.gateway), ...mockConfig.gateway },
+        });
         gatewayEntrypoint = await inst.entrypoint();
         if (options.requireBuiltCli === true && !isBuiltCliEntrypoint(gatewayEntrypoint)) {
           throw new Error(`expected built CLI entrypoint, got ${gatewayEntrypoint.join(" ")}`);
@@ -177,12 +189,6 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
           }
           bundledPlugins = [{ id: plugin.id, source: plugin.source }];
         }
-
-        await startMockOpenAiServer(context, {
-          port: mockOpenAiPort,
-          requestLogPath: context.mockOpenAiRequestLog,
-          responseText: context.fullTurnAssistantText,
-        });
 
         await seedLegacySessionStore(context);
         await record("seeded-legacy-store");
@@ -443,7 +449,7 @@ function buildProofContext(stateDir: string) {
   };
 }
 
-function buildMockOpenAiConfig(mockPort: number): Record<string, unknown> {
+function buildMockOpenAiConfig(mockPort: number) {
   const modelRef = "openai/gpt-5.5";
   const modelId = "gpt-5.5";
   const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -492,23 +498,6 @@ function buildMockOpenAiConfig(mockPort: number): Record<string, unknown> {
   };
 }
 
-async function getFreeTcpPort(): Promise<number> {
-  const srv = net.createServer();
-  await new Promise<void>((resolve, reject) => {
-    srv.once("error", reject);
-    srv.listen(0, "127.0.0.1", resolve);
-  });
-  const addr = srv.address();
-  if (!addr || typeof addr === "string") {
-    srv.close();
-    throw new Error("failed to bind ephemeral mock OpenAI port");
-  }
-  await new Promise<void>((resolve) => {
-    srv.close(() => resolve());
-  });
-  return addr.port;
-}
-
 async function connectProofClient(
   inst: OpenClawTestInstance,
   context: ProofContext,
@@ -527,16 +516,16 @@ async function connectProofClient(
 async function startMockOpenAiServer(
   context: ProofContext,
   params: {
-    port: number;
     requestLogPath: string;
     responseText: string;
   },
-): Promise<void> {
+): Promise<number> {
   const child = spawn("node", ["scripts/e2e/mock-openai-server.mjs"], {
     cwd: process.cwd(),
     env: {
       ...process.env,
-      MOCK_PORT: String(params.port),
+      MOCK_BIND_HOST: "127.0.0.1",
+      MOCK_PORT: "0",
       MOCK_REQUEST_LOG: params.requestLogPath,
       SUCCESS_MARKER: params.responseText,
     },
@@ -544,28 +533,54 @@ async function startMockOpenAiServer(
   });
   const stop = ownProofChild(context, child);
   const childOutput = captureChildOutput(child);
+  let stdout = "";
+  let readinessError: Error | undefined;
+  const captureReadiness = (chunk: string) => {
+    if (readinessError) {
+      return;
+    }
+    if (stdout.length + chunk.length > 64 * 1024) {
+      readinessError = new Error("mock OpenAI readiness output exceeded its limit");
+      return;
+    }
+    stdout += chunk;
+  };
+  child.stdout.on("data", captureReadiness);
   let ready = false;
-  await runQaGatewayFixture(
-    async () => {
-      const deadline = Date.now() + SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS;
-      while (Date.now() < deadline) {
-        if (child.exitCode !== null || child.signalCode !== null) {
-          throw new Error(
-            `mock OpenAI exited before listening (code=${String(child.exitCode)} signal=${String(
-              child.signalCode,
-            )})\n${tail(childOutput())}`,
-          );
+  try {
+    return await runQaGatewayFixture(
+      async () => {
+        const deadline = Date.now() + SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS;
+        while (Date.now() < deadline) {
+          if (readinessError) {
+            throw readinessError;
+          }
+          if (child.exitCode !== null || child.signalCode !== null) {
+            throw new Error(
+              `mock OpenAI exited before listening (code=${String(child.exitCode)} signal=${String(
+                child.signalCode,
+              )})\n${tail(childOutput())}`,
+            );
+          }
+          const listening = /(?:^|\n)mock-openai listening on ([^\r\n]*)\r?\n/u.exec(stdout);
+          if (listening) {
+            const portText = expectDefined(listening[1], "mock OpenAI listener port");
+            const port = Number(portText);
+            if (!/^[1-9]\d{0,4}$/u.test(portText) || port > 65_535) {
+              throw new Error(`invalid mock OpenAI listener port: ${portText}`);
+            }
+            ready = true;
+            return port;
+          }
+          await sleep(25);
         }
-        if (childOutput().includes("mock-openai listening")) {
-          ready = true;
-          return;
-        }
-        await sleep(25);
-      }
-      throw new Error(`timeout waiting for mock OpenAI server\n${tail(childOutput())}`);
-    },
-    () => (ready ? undefined : stop()),
-  );
+        throw new Error(`timeout waiting for mock OpenAI server\n${tail(childOutput())}`);
+      },
+      () => (ready ? undefined : stop()),
+    );
+  } finally {
+    child.stdout.off("data", captureReadiness);
+  }
 }
 
 function captureChildOutput(child: ProofChildProcess): () => string {
@@ -824,7 +839,7 @@ async function requireLegacyStartupRefusal(inst: OpenClawTestInstance, context: 
     message = error instanceof Error ? error.message : String(error);
   }
   if (
-    !message.startsWith("gateway exited before readiness (code=1 signal=null)") ||
+    !message.startsWith("gateway exited before readiness (code=78 signal=null)") ||
     !message.includes("Gateway failed to start: Legacy session store requires migration:") ||
     !message.includes(path.join(context.legacySessionsDir, "sessions.json")) ||
     !message.includes('Run "openclaw doctor --fix"')

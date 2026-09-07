@@ -41,6 +41,8 @@ launcher scripts).
 
 Failed update and repair attempts enter [recovery triage](/cli/update#recover-a-failed-update)
 after service recovery and cleanup finish.
+A verified rollback does not start triage: the previous generation is running
+again, and the report keeps the failing check as the reason.
 
 After a final interactive update failure, **Diagnose update failure** and
 **Report update failure** are separate choices. Reporting first shows the exact
@@ -93,6 +95,12 @@ Failed steps include the final diagnostics from both output streams; timeouts
 are labeled explicitly. The final report includes the outcome, recorded phase durations, failed steps,
 verification facts, and recovery guidance. `--json` keeps stdout machine-readable and does not
 print progress steps.
+
+When switching from a dev checkout to a package, the updater replaces npm's
+install link and leaves the external checkout untouched. If activation fails,
+restoring that link and its launchers does not verify the mutable checkout's
+runtime. Recovery stays unverified and does not authorize an automatic restart;
+inspect the checkout and recovery report before restarting it.
 
 `--yes` also skips the optional shell-completion setup prompt. Existing
 completion profiles and caches are still repaired when needed; installing
@@ -153,9 +161,12 @@ openclaw triage --agent codex
 Use `openclaw triage --non-interactive` to collect diagnostics without starting
 an agent. Add `--update-result <path>` to include a saved update-failure artifact.
 
-Validation failures leave the serving Gateway untouched. After activation, a
+Validation failures leave the serving Gateway untouched. If stopping the managed
+service unloads it and then fails before activation, OpenClaw attempts to restore
+the verified original runtime after rechecking service ownership. After activation, a
 failed verification can [restore the previous package](/cli/update#validation-and-activation)
-when configuration content and database schema versions are unchanged. Preserve migrated state and
+when database schemas are unchanged and the config file still matches the
+candidate’s activation Doctor output. Preserve migrated state and
 history; replacing the code alone cannot undo a migration. The original
 failed update still exits nonzero after the agent finishes, even if the repair
 succeeds.
@@ -237,12 +248,25 @@ verification facts are included only when observed. Chat reports are limited to 
 The run records `downtimeMs` from the service stop request until a Gateway is
 verified running. Staging, candidate validation, and pre-activation repair are excluded. Verification
 records include service PID/port, version/build identity, settled health,
-plugin activation errors, channel readiness, `/readyz`, and the inference probe.
+plugin activation errors, channel readiness, and `/readyz`.
 
-After a live database migration, a fresh process from the candidate completes
-verification and writes the final outcome to the same run. It carries forward
-the activation steps; a schema upgrade does not create a separate report or let
-the old updater reopen the newer database.
+With transactional updaters from 2026.9.3 onward, a fresh process from the
+candidate completes verification after a live database migration and writes the
+final outcome to the same run. It carries forward the activation steps; a schema
+upgrade does not create a separate report or let the old updater reopen the
+newer database.
+
+The 2026.9.2 updater keeps its own completion path. For shared-state migrations,
+the candidate applies schema content but delays version publication until every
+affected terminal run is at least five minutes old, or each still-running row
+has been unchanged for more than 30 minutes. Doctor reports the deferral; the
+new Gateway already uses the migrated content and publishes the version after
+the deadline. Pending agent-database migrations, missing state metadata, and
+failed content migrations still produce `update-schema-bump-unfenced` with
+[manual update commands](/install/updating#updating-from-2026.9.2-across-a-schema-bump).
+See [Database schemas](/reference/database-schemas#schema-bumps-and-older-updaters)
+for exact publication rules and the remaining risk to a stalled old CLI's final
+report.
 
 ## `update repair`
 
@@ -263,7 +287,7 @@ openclaw update repair --accept-capabilities
 | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `--channel <stable\|extended-stable\|beta\|dev>` | Persist the core update channel before repair. For extended-stable, eligible official npm and trusted official ClawHub plugins that follow bare/default or `latest` intent target the exact installed core version. Extended-stable repair is rejected on Git checkouts without changing config. |
 | `--json`                                         | Print machine-readable finalization JSON.                                                                                                                                                                                                                                                        |
-| `--timeout <seconds>`                            | Timeout for repair steps. Default `1800`.                                                                                                                                                                                                                                                        |
+| `--timeout <seconds>`                            | Override each repair phase deadline in seconds. Defaults vary by phase (see below).                                                                                                                                                                                                              |
 | `--yes`                                          | Skip confirmation prompts.                                                                                                                                                                                                                                                                       |
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes while repairing plugin state.                                                                                                                                                                                                                   |
 | `--no-restart`                                   | Accepted for parity; repair never restarts the Gateway.                                                                                                                                                                                                                                          |
@@ -302,6 +326,27 @@ With `--json`, stdout contains one JSON document. Doctor panels and other
 diagnostics go to stderr, so stdout can be parsed directly. Failed doctor or
 plugin finalization steps still exit non-zero.
 
+Finalization (including the supervisor-facing `update finalize` command) records
+phase starts and finishes immediately on stderr and in the update run ledger.
+The defaults are 30 seconds for preflight admission, config validation, config backup, and completion
+cache work; 120 seconds for Doctor migrations; 600 seconds for plugin registry
+and installation work; and 180 seconds for post-plugin Doctor and validation.
+`--timeout` overrides each phase budget.
+
+A phase deadline produces exit code 1 and JSON with `status: "failed"`,
+`stuckPhase`, `elapsedMs`, `error`, and the existing `phaseTimings` array. Owned
+command trees are stopped before the finalizer exits so the supervisor can
+recover. Preserve the phase diagnostic when reporting a stalled update.
+Shared CLI disposers have individual five-second deadlines. If the finalizer
+remains alive ten seconds after its terminal JSON, stderr and the ledger
+record active resource types and unsettled disposer names, then the process
+exits with its recorded outcome. A retained handle cannot withhold the
+supervisor's result indefinitely.
+Human repair can still wait for a recovery choice or repair agent; its exit grace
+starts after recovery finishes. Completion-cache refresh remains best effort
+when its child can be stopped within the phase budget. A phase that exceeds its
+overall deadline still fails finalization.
+
 Plugin artifacts that require capability consent are not installed without an
 interactive review or explicit `--accept-capabilities`. `--yes` alone does not
 accept capability changes, and JSON mode does not prompt. An unresolved review
@@ -338,8 +383,14 @@ listed separately as requiring verification. Protected and blocked artifacts
 include reason codes.
 
 Before applying, stop the Gateway for that same profile/state directory and wait
-for other SQLite maintenance commands to finish. Cleanup requires exclusive
-offline state ownership and never stops or restarts a service itself.
+for other SQLite maintenance commands to finish. Stop database readers too,
+including watchers that repeatedly run `openclaw sessions --all-agents --json`,
+and keep them stopped until cleanup exits. Read-only SQLite connections can
+create or change WAL/SHM sidecars, invalidating cleanup's destination check even
+when session content is unchanged. If cleanup reports `Recovery destination
+database changed; preview cleanup again.`, stop those readers, preview again,
+and retry. Cleanup requires exclusive offline state ownership and never stops
+or restarts a service itself.
 
 <Warning>
 Cleanup permanently removes the selected rollback originals, including branches
@@ -423,11 +474,13 @@ aligned:
 
 ### Validation and activation
 
-If the resolved package version equals the installed version, or the Git target
-SHA equals `HEAD`, the run finishes `skipped` with reason `already-current`.
-It does not stop, replace, or restart the Gateway. Read-only plugin convergence
-checks can still report repair needs; use `openclaw update repair` to apply them.
-An explicit `--channel` selection still persists the channel for future updates.
+If the resolved package version equals the installed version without changing
+the selected channel or installation method, or the Git target SHA equals
+`HEAD`, the run finishes `skipped` with reason `already-current`. A same-version
+explicit `--channel` or installation-method change finishes successfully.
+Neither path stops or restarts the Gateway unless the installation method
+changes. Read-only plugin convergence checks can still report repair needs; use
+`openclaw update repair` to apply them.
 
 For targets that support candidate validation, the old Gateway keeps serving through `staging` and
 `validating`. The updater uses the candidate entrypoint for Doctor lint
@@ -435,8 +488,11 @@ For targets that support candidate validation, the old Gateway keeps serving thr
 plugin resolution and compatibility planning. It also rehearses migrations and
 boots a canary with copied configuration and verified SQLite snapshots in an
 isolated temporary state directory. The copied database registry points to the
-copied agent databases. Channels, cron, automatic updates, and other side
-services are suppressed in this canary.
+copied agent databases. Installed plugin payloads and their dependencies are also
+copied; the rehearsal install records point to those copies, and their OpenClaw
+host links target the staged candidate. The live plugin files and host links stay
+unchanged. Channels, cron, automatic updates, and other side services are
+suppressed in this canary.
 
 Schema checks also use private SQLite copies so inspection does not create or
 modify WAL sidecars beside live databases. Each schema inspection has a
@@ -469,15 +525,15 @@ budgets, permitted repairs, and attempt reports.
 Only `activating` stops the managed service. Its offline work includes the package
 or checkout swap, required `doctor --fix` migrations, and state compatibility
 inspection, followed by service start
-in `restarting`. In `verifying`, the updater requires the normal 12-probe settle,
-the expected version and Git build identity, no plugin activation errors,
-channel readiness, and HTTP 200 from `/readyz`. It then runs a real agent turn
-through that Gateway using configured inference and verifies the saved request and
-completed response through a fresh session-storage reader. This serving check has
-a 60-second budget and must match the health-checked Gateway boot and expected
-artifact version/build. Unavailable inference, timeout, failed turns, or missing
-persistence fail verification and enter the existing repair or rollback flow.
-Health or readiness alone cannot pass verification.
+in `restarting`. Update verification does not use model inference. In `verifying`,
+the updater checks that the managed service is running and owns its port, requires
+the normal 12-probe health settle and a Gateway hello handshake matching the
+expected version and Git build identity, checks for plugin activation errors and
+channel readiness, and requires HTTP 200 from `/readyz`.
+
+A candidate can be running while verification fails. Recovery guidance uses the
+latest observed service state and names the running version when known; an
+earlier activation stop does not mean the service remains stopped.
 
 Plugin packages download and sync after the core Gateway is serving. When the
 plugin snapshot changes, the updater stops the service for a second measured
@@ -490,14 +546,29 @@ is verified. If activation fails before a working package is confirmed and rollb
 cannot be verified, finalization retains the backup and reports its location. Keep
 that backup and repair the installation before restarting, including for older
 targets without migration continuation. Automatic rollback requires that retained package, its pre-update verification, unchanged
-configuration content, and unchanged shared and affected per-agent SQLite
-`user_version` values. The updater restores the previous generation and verifies
+config content since the activation Doctor pass, and unchanged pre-existing shared and affected per-agent
+SQLite `user_version` values. A database first created during activation or
+verification is schema-neutral only at the candidate's supported version for its
+database kind; a missing pre-existing database or a new database at a foreign
+version blocks rollback. Newly created databases must also be readable by the
+previous package; unknown or incompatible support refuses rollback with
+`rollback-state-unverified`. The updater restores the previous generation and verifies
 it running before finishing `rolled-back`, preserving the failing check as its
 reason. See [Automatic rollback](/install/updating#automatic-schema-neutral-rollback)
-for the restoration and package-manager guards. A failure alone does not
+for the restoration and package-manager guards. The candidate’s own Doctor
+migrations in the main config file do not block rollback, including on a fresh
+install’s first update. Separate `$include` files must retain their pre-activation
+configuration content. Doctor must have consumed the captured pre-update config,
+and the current file must match its reported output. Restoration holds the normal config writer lock and
+rechecks the captured hash before writing.
+When needed, rollback replaces the main config with the exact bytes captured before
+Doctor and owner-only permissions (`0600`), including the previous writer stamp.
+Operator edits made after activation block
+restoration, including edits before Doctor reads the config or after its last write; the next action names the changed config file. A failure alone does not
 authorize restarting the candidate.
 
-If configuration content or a schema version changed, automatic rollback is refused with
+If the config file changed after the activation Doctor pass or the databases are
+not schema-neutral, automatic rollback is refused with
 `state-migrated-no-rollback`. The updater enters `repairing` on the installed
 candidate, also used if rollback itself fails. If the previous package was
 already restored, repair targets that version. Between repair attempts, the
@@ -694,6 +765,14 @@ the sentinel.
 </Steps>
 
 ### Plugin sync details
+
+On stable updates, a configured OpenClaw-owned official plugin with no install
+record is repaired from the selected core release cohort. This also applies to
+`doctor --fix` after an earlier upgrade lost a formerly bundled plugin. Admission
+checks that package target before stopping the Gateway; post-core reconciliation
+installs it before restart. Existing install records retain their source and
+selector policy. Verified official packages use the existing
+[capability-consent exemption](/plugins/manage-plugins#capability-consent).
 
 Managed npm plugins on the beta channel select the newest version by semantic
 version order from their `beta` and `latest` dist-tags, using the same policy as

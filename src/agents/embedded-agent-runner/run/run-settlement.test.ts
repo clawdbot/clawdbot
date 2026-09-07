@@ -174,6 +174,73 @@ async function withSettlementFixture(
   });
 }
 
+describe("MCP run lifetime", () => {
+  it("retires a run-owned transient successor without a durable commit", async () => {
+    await withSettlementFixture(async (fixture) => {
+      const { getOrCreateSessionMcpRuntime } =
+        await import("../../agent-bundle-mcp-manager.test-support.js");
+      const { getSessionMcpRuntimeManagerForTesting } =
+        await import("../../agent-bundle-mcp-manager-api.js");
+      const manager = getSessionMcpRuntimeManagerForTesting();
+      const sessionId = randomUUID();
+      fixture.input.runInput.runParams.cleanupBundleMcpOnRunEnd = true;
+      fixture.input.compaction.durable = false;
+      fixture.session.capturePreparedCompactionTarget({
+        sessionId,
+        sessionFile: fixture.target.sessionKey,
+        sessionTarget: { ...fixture.target, sessionId },
+      });
+      try {
+        await getOrCreateSessionMcpRuntime({
+          sessionId,
+          sessionKey: fixture.target.sessionKey,
+          workspaceDir: fixture.input.runInput.runParams.workspaceDir,
+          cfg: { mcp: { servers: {} } },
+          manifestRegistry: { plugins: [] },
+        });
+        await fixture.settle();
+        expect(manager.peekSession({ sessionId })).toBeUndefined();
+      } finally {
+        await manager.disposeAll();
+      }
+    });
+  });
+
+  it.each([false, true])("retires only run-owned IDs when cleanup is %s", async (cleanup) => {
+    await withSettlementFixture(async (fixture) => {
+      const { getOrCreateSessionMcpRuntime } =
+        await import("../../agent-bundle-mcp-manager.test-support.js");
+      const { getSessionMcpRuntimeManagerForTesting } =
+        await import("../../agent-bundle-mcp-manager-api.js");
+      const manager = getSessionMcpRuntimeManagerForTesting();
+      fixture.input.runInput.runParams.cleanupBundleMcpOnRunEnd = cleanup;
+      const create = (sessionId: string) =>
+        getOrCreateSessionMcpRuntime({
+          sessionId,
+          sessionKey: fixture.target.sessionKey,
+          workspaceDir: fixture.input.runInput.runParams.workspaceDir,
+          cfg: { mcp: { servers: {} } },
+          manifestRegistry: { plugins: [] },
+        });
+      try {
+        const original = await create(fixture.target.sessionId);
+        const successorId = randomUUID();
+        await fixture.accept(successorId);
+        const successor = await create(successorId);
+        const rebound = await create(randomUUID());
+        await fixture.settle();
+        expect(manager.peekSession({ sessionId: original.sessionId })).toBeUndefined();
+        expect(manager.peekSession({ sessionId: successor.sessionId })).toBe(
+          cleanup ? undefined : successor,
+        );
+        expect(manager.peekSession({ sessionKey: fixture.target.sessionKey })).toBe(rebound);
+      } finally {
+        await manager.disposeAll();
+      }
+    });
+  });
+});
+
 describe("settleEmbeddedRun compaction identity", () => {
   it.each(["identity publication", "runtime cleanup"] as const)(
     "publishes the actual committed rotation before cleanup when %s aborts the caller",

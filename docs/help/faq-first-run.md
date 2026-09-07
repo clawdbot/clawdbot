@@ -152,7 +152,7 @@ and troubleshooting see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="What runtime do I need?">
-    Node **22.22.3+**, **24.15+**, or **25.9+** is the primary and default runtime (Node 26 recommended). `pnpm` is the repo package manager.
+    Node **24.16+** or **26.1+** is the primary and default runtime (Node 26 recommended). `pnpm` is the repo package manager.
     Bun 1.4+ builds with WAL-reset-safe `node:sqlite` can run the CLI, Gateway, and managed node host as an explicit opt-in.
   </Accordion>
 

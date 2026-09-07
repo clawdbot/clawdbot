@@ -40,7 +40,6 @@ export type PluginToolGroups = {
 /** Analysis of an allowlist after matching core and plugin tool ids. */
 type AllowlistResolution = {
   unknownAllowlist: string[];
-  pluginOnlyAllowlist: boolean;
 };
 
 export type DeclaredToolAllowlistContext = {
@@ -273,7 +272,7 @@ function isDeclaredMcpAllowlistEntry(entry: string, prefixes: Set<string>): bool
   return false;
 }
 
-/** Classifies allowlists as core, plugin-only, or unknown for diagnostics. */
+/** Finds allowlist entries that match neither core nor declared plugin tools. */
 export function analyzeAllowlistByToolType(
   policy: ToolPolicyLike | undefined,
   groups: PluginToolGroups,
@@ -281,11 +280,11 @@ export function analyzeAllowlistByToolType(
   declaredTools?: DeclaredToolAllowlistContext,
 ): AllowlistResolution {
   if (!policy?.allow || policy.allow.length === 0) {
-    return { unknownAllowlist: [], pluginOnlyAllowlist: false };
+    return { unknownAllowlist: [] };
   }
   const normalized = normalizeToolList(expandShippedCoreToolPolicyNames(policy.allow));
   if (normalized.length === 0) {
-    return { unknownAllowlist: [], pluginOnlyAllowlist: false };
+    return { unknownAllowlist: [] };
   }
   const pluginIds = new Set(groups.byPlugin.keys());
   for (const value of declaredTools?.pluginIds ?? []) {
@@ -303,10 +302,8 @@ export function analyzeAllowlistByToolType(
   }
   const mcpToolPrefixes = buildDeclaredMcpToolPrefixes(declaredTools?.mcpServerNames);
   const unknownAllowlist: string[] = [];
-  let hasOnlyPluginEntries = true;
   for (const entry of normalized) {
     if (entry === "*") {
-      hasOnlyPluginEntries = false;
       continue;
     }
     const isPluginEntry =
@@ -316,17 +313,12 @@ export function analyzeAllowlistByToolType(
       isDeclaredMcpAllowlistEntry(entry, mcpToolPrefixes);
     const expanded = expandToolGroups([entry]);
     const isCoreEntry = expanded.some((tool) => coreTools.has(tool));
-    if (!isPluginEntry) {
-      hasOnlyPluginEntries = false;
-    }
     if (!isCoreEntry && !isPluginEntry) {
       unknownAllowlist.push(entry);
     }
   }
-  const pluginOnlyAllowlist = hasOnlyPluginEntries;
   return {
     unknownAllowlist: uniqueStrings(unknownAllowlist),
-    pluginOnlyAllowlist,
   };
 }
 

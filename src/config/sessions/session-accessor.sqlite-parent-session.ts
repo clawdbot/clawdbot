@@ -21,7 +21,7 @@ import {
   resolveLifecyclePrimaryEntry,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
+import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import {
   buildForkedChildTranscriptEvents,
   estimateTranscriptPromptTokens,
@@ -196,15 +196,13 @@ export async function forkSessionEntryFromParentTarget(
       }
 
       let result: ForkSessionEntryFromParentTargetResult = { status: "failed" };
-      let previousIdentity = new Map<string, SessionEntry>();
-      let currentIdentity = new Map<string, SessionEntry>();
-      runOpenClawAgentWriteTransaction((writeDatabase) => {
+      const publish = runOpenClawAgentWriteTransaction((writeDatabase) => {
         // Parent authority can close while this fork waits behind another writer.
         params.commitGuard?.();
         const freshParent = resolveLifecyclePrimaryEntry(writeDatabase, parentTarget)?.entry;
         if (!freshParent?.sessionId) {
           result = { status: "missing-parent" };
-          return;
+          return undefined;
         }
         // The copied transcript belongs to this authoritative parent, not the
         // preflight snapshot; a harness lock may have changed while preparing.
@@ -213,7 +211,7 @@ export async function forkSessionEntryFromParentTarget(
         const freshBase = freshExisting?.entry ?? params.fallbackEntry;
         if (!freshBase) {
           result = { status: "missing-entry" };
-          return;
+          return undefined;
         }
         const fork = forkSqliteParentTranscriptInTransaction(writeDatabase, resolved, {
           parentEntry: freshParent,
@@ -223,7 +221,7 @@ export async function forkSessionEntryFromParentTarget(
         if (fork.status !== "created") {
           result =
             fork.status === "missing-parent" ? { status: "missing-parent" } : { status: "failed" };
-          return;
+          return undefined;
         }
         const patch = params.patch?.({
           decision,
@@ -245,14 +243,18 @@ export async function forkSessionEntryFromParentTarget(
           totalTokensFresh: false,
           totalTokensVersion: undefined,
         };
-        previousIdentity = readSessionIdentitySnapshot(writeDatabase, [sessionTarget.canonicalKey]);
+        const previousIdentity = readSessionIdentitySnapshot(writeDatabase, [
+          sessionTarget.canonicalKey,
+        ]);
         const next = writeSessionEntry(
           writeDatabase,
           sessionTarget.canonicalKey,
           mergeSessionEntry(freshBase, forkIdentityPatch),
           { previousEntry: freshBase },
         );
-        currentIdentity = readSessionIdentitySnapshot(writeDatabase, [sessionTarget.canonicalKey]);
+        const currentIdentity = readSessionIdentitySnapshot(writeDatabase, [
+          sessionTarget.canonicalKey,
+        ]);
         result = {
           status: "forked",
           decision,
@@ -260,8 +262,14 @@ export async function forkSessionEntryFromParentTarget(
           parentEntry: cloneSessionEntry(freshParent),
           sessionEntry: cloneSessionEntry(next),
         };
+        return prepareSessionIdentityPublication(
+          writeDatabase,
+          resolved.agentId,
+          previousIdentity,
+          currentIdentity,
+        );
       }, toDatabaseOptions(resolved));
-      emitCommittedSessionIdentityDiff(resolved.agentId, previousIdentity, currentIdentity);
+      publish?.();
       return result;
     },
   );
@@ -283,17 +291,21 @@ function persistSqliteParentForkSkipPatch(params: {
     previous: params.entry,
     sessionKey: params.sessionKey,
   });
-  let previousIdentity = new Map<string, SessionEntry>();
-  let currentIdentity = new Map<string, SessionEntry>();
-  runOpenClawAgentWriteTransaction((database) => {
+  const publish = runOpenClawAgentWriteTransaction((database) => {
     params.commitGuard?.();
-    previousIdentity = readSessionIdentitySnapshot(database, [params.sessionKey]);
+    const previousIdentity = readSessionIdentitySnapshot(database, [params.sessionKey]);
     writeSessionEntry(database, params.sessionKey, next, {
       previousEntry: params.entry,
     });
-    currentIdentity = readSessionIdentitySnapshot(database, [params.sessionKey]);
+    const currentIdentity = readSessionIdentitySnapshot(database, [params.sessionKey]);
+    return prepareSessionIdentityPublication(
+      database,
+      params.resolved.agentId,
+      previousIdentity,
+      currentIdentity,
+    );
   }, toDatabaseOptions(params.resolved));
-  emitCommittedSessionIdentityDiff(params.resolved.agentId, previousIdentity, currentIdentity);
+  publish();
   return cloneSessionEntry(next);
 }
 

@@ -121,6 +121,13 @@ export function resolveRetryAfterMs(
     : Math.ceil(Math.max(headerSeconds ?? 0, seconds ?? 0) * 1000);
 }
 
+/** Usage-window evidence is distinct from a temporary throttle's retry floor. */
+export function hasLongWindowRateLimitEvidence(message: string | undefined): boolean {
+  return Boolean(
+    message && LONG_WINDOW_RATE_LIMIT_RE.test(message) && !SHORT_RATE_LIMIT_UNIT_RE.test(message),
+  );
+}
+
 /** Classify provider rate-limit text without deciding a caller's retry policy. */
 export function classifyRateLimitWindow(
   message: string | undefined,
@@ -141,7 +148,7 @@ export function classifyRateLimitWindow(
   if (RETRY_AFTER_VALUE_RE.test(raw) && !hasShortRateLimitUnit) {
     return { kind: "long" };
   }
-  if (LONG_WINDOW_RATE_LIMIT_RE.test(raw) && !hasShortRateLimitUnit) {
+  if (hasLongWindowRateLimitEvidence(raw)) {
     return { kind: "long" };
   }
   if (SHORT_WINDOW_RATE_LIMIT_RE.test(raw) || extractLeadingHttpStatus(raw)?.code === 429) {

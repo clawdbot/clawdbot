@@ -1,4 +1,3 @@
-// ACP Core module implements session lineage meta behavior.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 const SUBAGENT_ROLES = ["orchestrator", "leaf"] as const;

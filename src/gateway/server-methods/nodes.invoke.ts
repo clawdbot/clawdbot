@@ -31,7 +31,6 @@ import { handleNodeInvokeProgress } from "./nodes.handlers.invoke-progress.js";
 import { handleNodeInvokeResult } from "./nodes.handlers.invoke-result.js";
 import {
   respondUnavailableOnNodeInvokeErrorWithProvenance,
-  respondUnavailableOnThrow,
   parseGatewayPayload,
 } from "./nodes.helpers.js";
 import {
@@ -51,6 +50,7 @@ import {
   maybeWakeNodeWithApns,
   waitForNodeReconnect,
 } from "./nodes.wake.js";
+import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 

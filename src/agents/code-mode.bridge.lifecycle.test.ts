@@ -575,7 +575,8 @@ describe("Code Mode subscribed bridge lifecycle", () => {
           controller.abort(new Error("parked owner closed"));
         }
         expect([...testing.activeRuns.keys()]).toEqual([survivorId]);
-        await expect(pending.promise).resolves.toMatchObject({ id: pending.id, ok: false });
+        await expect(pending.promise).resolves.toBeUndefined();
+        expect(() => pending.reply.take()).toThrow("unavailable");
         expect(testing.activeRuns.get(survivorId)).toBe(survivorState);
         expect(otherPending.settled).toBeUndefined();
       } finally {
@@ -818,10 +819,15 @@ describe("Code Mode subscribed bridge lifecycle", () => {
           disposeAllCodeModeRuns();
         }
 
-        const settlement = await pending.promise;
-        expect(settlement).toMatchObject({ id: pending.id, ok: false });
-        expect(settlement.ok ? "" : settlement.error).toMatch(/cancel|abort|expir|owner|shut/i);
+        await expect(pending.promise).resolves.toBeUndefined();
         const result = resultDetails(await waiting);
+        if (close === "cancel") {
+          expect(result).toMatchObject({
+            status: "completed",
+            value: expect.stringMatching(/cancel/i),
+          });
+        }
+        expect(() => pending.reply.take()).toThrow("unavailable");
         expect(result.status).not.toBe("waiting");
         if (close === "catalog") {
           expect(result).toMatchObject({

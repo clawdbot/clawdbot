@@ -1,10 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { execNodeEvalSync } from "../test-utils/node-process.js";
-import { resetContextWindowCacheForTest } from "./context-runtime-state.js";
-
-afterEach(() => {
-  resetContextWindowCacheForTest();
-});
 
 describe("context runtime state", () => {
   it("invalidates a released load marker when the process-global cache is introduced", () => {

@@ -1,6 +1,8 @@
 // Coverage for Tool Search control planning and allowlist accounting.
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import type { AnyAgentTool } from "../../tools/common.js";
 import { buildToolSearchRunPlan } from "./attempt-tool-search-run-plan.js";
 
 describe("buildToolSearchRunPlan", () => {
@@ -79,6 +81,57 @@ describe("buildToolSearchRunPlan", () => {
     expect([...plan.replayAllowedToolNames]).toEqual(["fake_plugin_tool", "exec", "wait"]);
     expect([...plan.capabilityToolNames]).toEqual(["exec", "wait"]);
     expect(plan.hasCallableTools).toBe(true);
+  });
+
+  it("carries native catalog capabilities without widening direct execution authority", () => {
+    const tool = (name: string): AnyAgentTool => ({
+      name,
+      label: name,
+      description: "Tool inventory fixture",
+      parameters: Type.Object({}),
+      execute: async () => ({ content: [], details: undefined }),
+    });
+    const foreignTool = tool("sessions_yield");
+    setPluginToolMeta(foreignTool, { pluginId: "bundle-mcp", optional: false });
+    const catalogCapabilityTools = [
+      ...["process", "sessions_spawn", "image_generate", "music_generate", "video_generate"].map(
+        tool,
+      ),
+      foreignTool,
+    ];
+    const input = {
+      visibleTools: [tool("exec"), tool("wait")],
+      uncompactedTools: catalogCapabilityTools,
+      catalogCapabilityTools,
+      clientTools: [
+        {
+          type: "function" as const,
+          function: { name: "subagents", parameters: { type: "object", properties: {} } },
+        },
+      ],
+      clientToolsCataloged: true,
+      catalogToolCount: catalogCapabilityTools.length,
+      controlsEnabled: true,
+      deferredToolsCallable: false,
+      controlNames: ["exec", "wait"],
+      explicitAllowlistSources: [],
+    };
+    const plan = buildToolSearchRunPlan(input);
+
+    expect(plan.capabilityToolNames).toEqual(
+      new Set([
+        "exec",
+        "wait",
+        "process",
+        "sessions_spawn",
+        "image_generate",
+        "music_generate",
+        "video_generate",
+      ]),
+    );
+    expect([...plan.visibleAllowedToolNames]).toEqual(["exec", "wait"]);
+    expect([...plan.liveAllowedToolNames]).toEqual(["exec", "wait"]);
+    expect(plan.replayAllowedToolNames.has("sessions_spawn")).toBe(true);
   });
 
   it("does not let unrelated client tools mask a bad explicit allowlist", () => {

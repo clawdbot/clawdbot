@@ -36,8 +36,8 @@ vi.mock("../config/config.js", () => ({
   replaceConfigFile: (params: unknown) => mocks.replaceConfig(params),
 }));
 
-vi.mock("./install-persistence.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./install-persistence.js")>()),
+vi.mock("./install-config-mutation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./install-config-mutation.js")>()),
   resolveInstallConfigMutationPreflights: () => ({
     hookMutation: { mode: "allowed" },
     pluginMutation: { mode: "allowed" },

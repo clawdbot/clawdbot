@@ -272,8 +272,8 @@ function expectMockLogNotContains(mock: ReturnType<typeof vi.fn>, expected: stri
 }
 
 // Minimal WebSocket mock for connection-log assertions.
-vi.mock("ws", () => ({
-  default: class MockWebSocket {
+vi.mock("./ws-runtime.js", () => ({
+  WebSocket: class MockWebSocket {
     private handlers = new Map<string, Array<(...args: unknown[]) => void>>();
     private bufferedMessageFlushed = false;
 

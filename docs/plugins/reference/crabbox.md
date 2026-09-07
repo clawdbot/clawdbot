@@ -26,7 +26,7 @@ Cloud worker provider backed by the Crabbox CLI.
 
 ## Configure
 
-See [Cloud worker environments](/gateway/configuration-reference#crabbox-profile) for the profile schema and lifecycle notes.
+See [Cloud worker environments](/gateway/config-cloud-workers#crabbox-profile) for the profile schema and lifecycle notes.
 
 Forward Gateway environment variables to an operator-provided setup script by listing their names in the Crabbox profile settings:
 

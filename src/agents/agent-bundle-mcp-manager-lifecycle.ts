@@ -3,8 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { logWarn } from "../logger.js";
 import { sessionMcpRuntimeOwners } from "./agent-bundle-mcp-runtime-owner.js";
 import {
-  DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS,
-  SESSION_MCP_MAX_IDLE_REQUESTER_RUNTIMES,
+  SESSION_MCP_MAX_LIVE_RUNTIMES,
   SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS,
   type CreateSessionMcpRuntime,
 } from "./agent-bundle-mcp-runtime-shared.js";
@@ -46,7 +45,8 @@ type SessionMcpRuntimeManagerStore = {
   createRuntime: CreateSessionMcpRuntime;
   now: () => number;
   idleSweepIntervalMs: number;
-  maxIdleRequesterRuntimes: number;
+  runtimeSlots: WeakMap<SessionMcpRuntime, { idleTtlMs: number }>;
+  liveRuntimeSlots: Set<{ idleTtlMs: number }>;
   enableIdleSweepTimer: boolean;
   idleSweepTimer: ReturnType<typeof setInterval> | undefined;
   idleSweepInFlight: Promise<void> | undefined;
@@ -57,7 +57,6 @@ export type SessionMcpRuntimeManagerOpts = {
   now?: () => number;
   enableIdleSweepTimer?: boolean;
   idleSweepIntervalMs?: number;
-  maxIdleRequesterRuntimesPerSession?: number;
 };
 
 function parseRuntimeCacheSessionId(runtimeKey: string): string {
@@ -100,8 +99,8 @@ export function createSessionMcpRuntimeManagerStore(
     createRuntime: opts.createRuntime ?? createSessionMcpRuntime,
     now: opts.now ?? Date.now,
     idleSweepIntervalMs: opts.idleSweepIntervalMs ?? SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS,
-    maxIdleRequesterRuntimes:
-      opts.maxIdleRequesterRuntimesPerSession ?? SESSION_MCP_MAX_IDLE_REQUESTER_RUNTIMES,
+    runtimeSlots: new WeakMap(),
+    liveRuntimeSlots: new Set(),
     enableIdleSweepTimer: opts.enableIdleSweepTimer !== false,
     idleSweepTimer: undefined,
     idleSweepInFlight: undefined,
@@ -129,13 +128,51 @@ function scopedCatalogToolsSignature(tools: readonly McpCatalogTool[]): string {
 }
 
 export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntimeManagerStore) {
-  const disposeRuntime = async (runtime: SessionMcpRuntime) => {
+  const reserveRuntimeSlot = (
+    existing: SessionMcpRuntime | undefined,
+    hasServers: boolean,
+  ): { idleTtlMs: number } => {
+    const slot = (existing && store.runtimeSlots.get(existing)) ?? { idleTtlMs: 0 };
+    if (!hasServers || store.liveRuntimeSlots.has(slot)) {
+      return slot;
+    }
+    if (store.liveRuntimeSlots.size >= SESSION_MCP_MAX_LIVE_RUNTIMES) {
+      const message = `bundle-mcp: live runtime limit (${SESSION_MCP_MAX_LIVE_RUNTIMES}) reached; stop or reset unused sessions before connecting another MCP runtime`;
+      logWarn(message);
+      throw new Error(message);
+    }
+    store.liveRuntimeSlots.add(slot);
+    return slot;
+  };
+  const releaseEmptyRuntimeSlot = async (runtimeKey: string, runtime: SessionMcpRuntime) => {
+    const slot = store.runtimeSlots.get(runtime);
+    if (!slot || !store.liveRuntimeSlots.has(slot)) {
+      return;
+    }
+    if (!runtime.joinCleanup) {
+      throw new Error("MCP runtime does not expose cleanup ownership");
+    }
+    await runtime.joinCleanup();
+    // Replacement transfers the slot before cleanup yields; only its current owner may release it.
+    if (
+      store.runtimesBySessionId.get(runtimeKey) === runtime &&
+      sessionMcpRuntimeOwners.get(runtime)?.hasServers() !== true
+    ) {
+      store.liveRuntimeSlots.delete(slot);
+    }
+  };
+  const disposeRuntime = async (runtime: SessionMcpRuntime, releaseSlot = true) => {
     try {
       await runtime.dispose();
       if (!runtime.joinCleanup) {
         throw new Error("MCP runtime does not expose cleanup ownership");
       }
       await runtime.joinCleanup();
+      const slot = store.runtimeSlots.get(runtime);
+      if (releaseSlot && slot) {
+        store.liveRuntimeSlots.delete(slot);
+        store.runtimeSlots.delete(runtime);
+      }
     } catch (error) {
       recordAgentCleanupFailure();
       throw error;
@@ -224,10 +261,11 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
     const nowMs = store.now();
     const expired: Array<{ runtimeKey: string; runtime: SessionMcpRuntime }> = [];
     for (const [runtimeKey, runtime] of store.runtimesBySessionId.entries()) {
-      if ((runtime.activeLeases ?? 0) > 0) {
+      const idleTtlMs = store.runtimeSlots.get(runtime)?.idleTtlMs ?? 0;
+      if (idleTtlMs === 0 || (runtime.activeLeases ?? 0) > 0) {
         continue;
       }
-      if (nowMs - runtime.lastUsedAt < DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS) {
+      if (nowMs - runtime.lastUsedAt < idleTtlMs) {
         continue;
       }
       // Acquisition runs outside the runtime lease. Keep its current
@@ -251,54 +289,8 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
         trackDisposal([runtimeKey], () => disposeRuntime(runtime)),
       ),
     );
+    ensureIdleSweepTimer();
     return expired.length;
-  };
-
-  /**
-   * A busy shared channel can otherwise accumulate one live scoped runtime per
-   * sender until the idle TTL fires. Evict LRU zero-lease requester runtimes
-   * beyond the cap; leased runtimes and the bare static runtime never evict.
-   */
-  const enforceRequesterRuntimeCap = async (
-    sessionId: string,
-    keepRuntimeKey: string,
-  ): Promise<void> => {
-    const requesterKeys = runtimeKeysForSessionId(sessionId).filter(
-      (runtimeKey) => runtimeKey !== sessionId,
-    );
-    const overflow = requesterKeys.length - store.maxIdleRequesterRuntimes;
-    if (overflow <= 0) {
-      return;
-    }
-    const evictable = requesterKeys
-      .filter((runtimeKey) => runtimeKey !== keepRuntimeKey)
-      .map((runtimeKey) => ({
-        runtimeKey,
-        runtime: store.runtimesBySessionId.get(runtimeKey),
-      }))
-      .filter(
-        (entry): entry is { runtimeKey: string; runtime: SessionMcpRuntime } =>
-          entry.runtime !== undefined && (entry.runtime.activeLeases ?? 0) === 0,
-      )
-      .toSorted((a, b) => a.runtime.lastUsedAt - b.runtime.lastUsedAt)
-      .slice(0, overflow);
-    for (const { runtimeKey, runtime } of evictable) {
-      // Do not queue opportunistic eviction behind active requester work: that
-      // would dispose the runtime the work just refreshed.
-      if (store.runtimeWorkChains.has(runtimeKey)) {
-        continue;
-      }
-      // Claim the idle key before yielding so later requester work follows disposal.
-      await runExclusiveOnRuntimeKeys([runtimeKey], async () => {
-        const current = store.runtimesBySessionId.get(runtimeKey);
-        if (current !== runtime || (current.activeLeases ?? 0) > 0) {
-          return;
-        }
-        store.runtimesBySessionId.delete(runtimeKey);
-        store.connectionMetaByRuntimeKey.delete(runtimeKey);
-        await Promise.allSettled([trackDisposal([runtimeKey], () => disposeRuntime(current))]);
-      });
-    }
   };
 
   const queueIdleSweep = () => {
@@ -316,6 +308,13 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
   };
 
   const ensureIdleSweepTimer = () => {
+    const enabled = [...store.runtimesBySessionId.values()].some(
+      (runtime) => (store.runtimeSlots.get(runtime)?.idleTtlMs ?? 0) > 0,
+    );
+    if (!enabled) {
+      clearIdleSweepTimer();
+      return;
+    }
     if (!store.enableIdleSweepTimer || store.idleSweepIntervalMs <= 0 || store.idleSweepTimer) {
       return;
     }
@@ -392,6 +391,7 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
         ...runtimeKeys.map(disposeRuntimeKeyNow),
       ]);
       const failed = outcomes.find((outcome) => outcome.status === "rejected");
+      ensureIdleSweepTimer();
       if (failed) {
         throw failed.reason;
       }
@@ -493,7 +493,9 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
     totalActiveLeasesForSessionId,
     runExclusiveOnRuntimeKeys,
     sweepIdleRuntimes,
-    enforceRequesterRuntimeCap,
+    reserveRuntimeSlot,
+    releaseEmptyRuntimeSlot,
+    disposeRuntime,
     ensureIdleSweepTimer,
     disposeRuntimeKeyNow,
     disposeManagedRuntimes,

@@ -8,6 +8,7 @@ import { NodeRegistry } from "../node-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { createNodeDesktopService } from "./node-source.js";
 import { createNodeDesktopStreamBroker } from "./node-stream-broker.js";
+import * as observeBridge from "./observe-bridge.js";
 import { createDesktopSessionRegistry } from "./session-registry.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -122,6 +123,33 @@ function createFixture(boundary: "activation" | "pairing" | "attachment") {
 }
 
 describe("node desktop runtime policy", () => {
+  it("keeps requester authority on the observer ticket after node attachment", async () => {
+    const fixture = createFixture("attachment");
+    const mint = vi.spyOn(observeBridge, "mintDesktopObserverToken");
+    const controller = new AbortController();
+    const client = { invalidated: false };
+    const requester = {
+      signal: controller.signal,
+      isCurrent: () => !client.invalidated,
+    };
+    const observed = fixture.service.observe({
+      nodeId: "node",
+      control: false,
+      credentials: { password: "synthetic-password" },
+      requester,
+    });
+    await fixture.reached;
+    fixture.attached.resolve({ stream: new PassThrough(), auth: "vnc-password" });
+
+    await expect(observed).resolves.toMatchObject({ transport: "rfb", control: false });
+    const mintedRequester = mint.mock.calls[0]?.[0].requester;
+    expect(mintedRequester).toBe(requester);
+    expect(mintedRequester?.isCurrent()).toBe(true);
+    client.invalidated = true;
+    expect(mintedRequester?.isCurrent()).toBe(false);
+    expect(controller.signal.aborted).toBe(false);
+  });
+
   it.each(["activation", "pairing"] as const)(
     "does not dispatch after policy changes during %s",
     async (boundary) => {

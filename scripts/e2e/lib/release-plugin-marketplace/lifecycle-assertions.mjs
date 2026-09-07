@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
-import { isExplicitPluginDisableMarker } from "../plugin-uninstall-assertions.mjs";
+import { hasExpectedPluginUninstallConfigState } from "../plugin-uninstall-assertions.mjs";
 
 function assert(condition, message) {
   if (!condition) {
@@ -179,7 +179,7 @@ function assertMarketplaceUninstalled() {
     `installed plugin index still includes ${pluginId}`,
   );
   assert(
-    isExplicitPluginDisableMarker(config, pluginId),
+    hasExpectedPluginUninstallConfigState(config, pluginId),
     `exact disabled uninstall marker missing for ${pluginId}`,
   );
   assert(!config.plugins?.allow?.includes(pluginId), `allowlist still includes ${pluginId}`);

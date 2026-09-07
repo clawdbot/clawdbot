@@ -20,7 +20,6 @@ import {
   CODEX_LOCAL_SESSION_HOST_ID,
   DEFAULT_TRANSCRIPT_PAGE_LIMIT,
   isInteractiveThreadSource,
-  parseCatalogPage,
 } from "./session-catalog-parsing.js";
 import {
   CODEX_TERMINAL_RESUME_COMMAND,
@@ -222,6 +221,7 @@ function registerCodexSessionCatalog(params: {
         canStartTerminal:
           host.kind === "gateway"
             ? localTerminalAvailable &&
+              host.hostId === CODEX_LOCAL_SESSION_HOST_ID &&
               localHomes.some(
                 (home) => home.hostId === host.hostId && home.appServer.start.transport === "stdio",
               )
@@ -339,13 +339,17 @@ function registerCodexSessionCatalog(params: {
         getPluginConfig: params.getPluginConfig,
         getRuntimeConfig: params.getRuntimeConfig,
         resolveRuntimeOptions: params.resolveRuntimeOptions,
-        parseCatalogPage,
         ...(source ? { source } : {}),
         ...request,
         agentId,
       });
     },
     startTerminalSession: async (request) => {
+      if (!request.nodeId && request.hostId && request.hostId !== CODEX_LOCAL_SESSION_HOST_ID) {
+        throw new CatalogParamsError(
+          "Codex terminal host is unavailable; select the local machine or a connected node",
+        );
+      }
       const source = request.nodeId
         ? undefined
         : resolveLocalCatalogHomeForThread({

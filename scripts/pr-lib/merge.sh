@@ -499,19 +499,15 @@ merge_run() {
     return 1
   fi
   local merge_flag
-  local merge_label
   case "$merge_method" in
     squash)
       merge_flag="--squash"
-      merge_label="squash"
       ;;
     merge)
       merge_flag="--merge"
-      merge_label="merge commit"
       ;;
     rebase)
       merge_flag="--rebase"
-      merge_label="rebase"
       ;;
     *)
       echo "Invalid OPENCLAW_PR_MERGE_METHOD: $merge_method (expected squash, merge, or rebase)."
@@ -602,10 +598,8 @@ merge_run() {
   if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = true ]; then
     route="admin"
     merge_args=(--admin "${merge_args[@]}")
-    merge_label="admin squash with trusted Crabbox infrastructure proof"
   elif [ "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .pr.isMergeQueueEnabled)" = true ]; then
     route=queue
-    merge_label="merge queue (requested $merge_method)"
   elif [ "$auto_merge_requested" = true ]; then
     # Select once before intent; CLEAN needs no auto request. No dispatch error
     # can authorize a second route or request.
@@ -614,7 +608,6 @@ merge_run() {
       MERGEABLE/BEHIND)
         route=auto
         merge_args=(--auto "${merge_args[@]}")
-        merge_label="squash auto-merge"
         ;;
       *) merge_outcome_stop "auto-merge admission requires MERGEABLE with CLEAN or BEHIND status"; return 1 ;;
     esac
@@ -718,20 +711,8 @@ merge_run() {
   if [ "$route" = admin ]; then
     record_crabbox_landing_parent_audit "$landed_sha" "$crabbox_final_main_sha" || return 1
   fi
-  local repo_nwo
-  repo_nwo="$MERGE_REPO_NAME"
-
-  local landed_sha_url="$MERGE_REPO_URL/commit/$landed_sha"
-  local prep_sha_url="$MERGE_REPO_URL/pull/$pr/commits/$PREP_HEAD_SHA"
-
-  local comment_body
-  printf -v comment_body \
-    'Merged via %s.\n\n- Prepared head SHA: [%s](%s)\n- Landed commit: [%s](%s)' \
-    "$merge_label" \
-    "$PREP_HEAD_SHA" \
-    "$prep_sha_url" \
-    "$landed_sha" \
-    "$landed_sha_url"
+  local comment_body MERGE_COMPLETION_COMMENT_URL
+  comment_body=$(merge_outcome_comment_body "$pr") || return 1
   if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = "true" ]; then
     local crabbox_check_url
     local ci_gate_url
@@ -746,33 +727,21 @@ merge_run() {
       "$(jq -r .expectedParentSha .local/merge-crabbox-parent-audit.json)" \
       "$(jq -r .actualParentSha .local/merge-crabbox-parent-audit.json)"
   fi
-  comment_body+=$'\n\n'"<!-- openclaw-merge:$attempt -->"
-  merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.phase="commenting"')" || return 1
-  local comment_url
-  if ! comment_url=$(gh_plain api --hostname "$MERGE_REPO_HOST" --method POST \
-    "repos/$repo_nwo/issues/$pr/comments" --raw-field "body=$comment_body" --jq '.html_url // empty') ||
-    [ -z "$comment_url" ]; then
-    echo "Merge confirmed; completion comment outcome uncertain. No second POST or cleanup. Run scripts/pr merge-run $pr for read-only reconciliation."
-    return 1
-  fi
-  merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.phase="commented"')" || return 1
+  merge_outcome_post_comment "$pr" "$comment_body" || return 1
 
   # Only this uninterrupted completion path owns cleanup. The exact-head lease
   # protects advanced/different-head recreations, but cannot detect same-SHA recreation.
-  local head_json head_ref head_repo cleanup_complete=true
-  if head_json=$(gh_plain pr view "$pr" --repo "$MERGE_REPO_URL" --json headRefOid,headRefName,headRepository,headRepositoryOwner) &&
-    head_ref=$(printf '%s\n' "$head_json" | jq -er --arg head "$PREP_HEAD_SHA" 'select(.headRefOid == $head) | .headRefName | select(type == "string" and length > 0)') &&
-    head_repo=$(printf '%s\n' "$head_json" | jq -er '.headRepositoryOwner.login + "/" + .headRepository.name | select(test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"))') &&
-    git check-ref-format "refs/heads/$head_ref"; then
+  local MERGE_HEAD_REF MERGE_HEAD_REPO cleanup_complete=true
+  if merge_outcome_head_branch "$pr"; then
     local cleanup_error ref_status=0
-    if ! cleanup_error=$(git push --force-with-lease="refs/heads/$head_ref:$PREP_HEAD_SHA" \
-      "https://$MERGE_REPO_HOST/$head_repo.git" ":refs/heads/$head_ref" 2>&1); then
+    if ! cleanup_error=$(git push --force-with-lease="refs/heads/$MERGE_HEAD_REF:$PREP_HEAD_SHA" \
+      "https://$MERGE_REPO_HOST/$MERGE_HEAD_REPO.git" ":refs/heads/$MERGE_HEAD_REF" 2>&1); then
       # GitHub may already have deleted the branch, or the delete response was
       # lost. Only a successful advertisement with no exact ref proves absence.
-      git ls-remote --exit-code --refs "https://$MERGE_REPO_HOST/$head_repo.git" "refs/heads/$head_ref" >/dev/null || ref_status=$?
+      git ls-remote --exit-code --refs "https://$MERGE_REPO_HOST/$MERGE_HEAD_REPO.git" "refs/heads/$MERGE_HEAD_REF" >/dev/null || ref_status=$?
       if [ "$ref_status" -ne 2 ]; then
         cleanup_complete=false
-        echo "Warning: remote cleanup pending; branch changed or inaccessible. Inspect $head_repo:$head_ref; never delete it by name without verifying ownership."
+        echo "Warning: remote cleanup pending; branch changed or inaccessible. Inspect $MERGE_HEAD_REPO:$MERGE_HEAD_REF; never delete it by name without verifying ownership."
         printf '%s\n' "$cleanup_error" >&2
       fi
     fi
@@ -791,6 +760,6 @@ merge_run() {
     echo "Merge confirmed; completion pending: inspect cleanup warnings. Recovery will not delete branches or worktrees."
   fi
   echo "landed commit: $landed_sha"
-  echo "completion comment: $comment_url"
+  echo "completion comment: $MERGE_COMPLETION_COMMENT_URL"
   echo "$MERGE_REPO_URL/pull/$pr"
 }

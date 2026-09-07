@@ -13,13 +13,20 @@ import {
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
-it.each([{ classification: "subagent" as const }, { spawnedBy: "agent:main:parent" }])(
-  "removes author avatars when spawn metadata arrives: %j",
-  async (metadata) => {
-    const props = threadProps("spawn-metadata", "agent:main:opaque-child", [
-      { role: "user", content: "Inspect the workspace", timestamp: 1_000 },
-      { role: "assistant", content: "Workspace inspected", timestamp: 2_000 },
-    ]);
+it.each([
+  { metadata: { classification: "subagent" as const }, hideAvatars: true },
+  { metadata: { spawnedBy: "agent:main:parent" }, hideAvatars: false },
+])(
+  "uses session identity for author avatars when metadata arrives: %j",
+  async ({ metadata, hideAvatars }) => {
+    const props = threadProps(
+      "spawn-metadata",
+      "agent:main:dashboard:01234567-89ab-cdef-0123-456789abcdef",
+      [
+        { role: "user", content: "Inspect the workspace", timestamp: 1_000 },
+        { role: "assistant", content: "Workspace inspected", timestamp: 2_000 },
+      ],
+    );
     props.userId = "viewer";
     props.userName = "Example User";
     const row: GatewaySessionRow = {
@@ -42,7 +49,11 @@ it.each([{ classification: "subagent" as const }, { spawnedBy: "agent:main:paren
     expect(container.querySelector(".chat-avatar.user")).not.toBeNull();
     props.selectedSession = { ...row, ...metadata };
     await rerender();
-    expect(container.querySelector(".chat-avatar, .chat-author-avatar")).toBeNull();
+    if (hideAvatars) {
+      expect(container.querySelector(".chat-avatar, .chat-author-avatar")).toBeNull();
+    } else {
+      expect(container.querySelector(".chat-avatar.user")).not.toBeNull();
+    }
     expect(container.querySelector(".chat-sender-name")?.textContent).toContain("Example User");
     expect(container.textContent).toContain("Workspace inspected");
     transcript.hostDisconnected();

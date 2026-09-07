@@ -341,13 +341,13 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
 ## Runtime behavior
 
-- Telegram runs inside the gateway process.
+- Telegram message handling runs inside the gateway process.
 - Routing is deterministic: Telegram inbound replies back to Telegram (the model does not pick channels).
 - Inbound messages normalize into the shared channel envelope with reply metadata, media placeholders, and persisted reply-chain context for replies the gateway has observed.
 - Group sessions are isolated by group ID. Forum topics append `:topic:<threadId>`.
 - When the bot joins an allowed group or supergroup, it posts one introduction grounded in available room metadata: the group title, description, and pinned message. The Telegram Bot API cannot read group messages from before the bot joined, so introductions never claim to use prior chat history. Introductions are enabled by default, never run in private chats, and can be disabled with `channels.telegram.joinIntro: false` or overridden per account with `channels.telegram.accounts.<accountId>.joinIntro`. See [group join introductions](/channels#group-join-introductions) for once-per-room behavior and untrusted-content handling.
 - DM messages can carry `message_thread_id`; OpenClaw preserves it for replies. DM topic sessions split only when Telegram `getMe` reports `has_topics_enabled: true` for the bot; otherwise DMs stay on the flat session.
-- Long polling uses the grammY runner with per-chat/per-thread sequencing. Runner sink concurrency uses `agents.defaults.maxConcurrent`.
+- Long polling runs in an isolated worker. Updates are saved to a durable queue and processed in order for each chat and topic.
 - Multi-account startup bounds concurrent `getMe` probes so large bot fleets do not fan out every account probe at once.
 - Each gateway process guards long polling so only one active poller can use a bot token at a time. Persistent `getUpdates` 409 conflicts point to another OpenClaw gateway, script, or external poller using the same token.
 - The polling watchdog restarts after 120 seconds without completed `getUpdates` liveness.
@@ -380,7 +380,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `streaming.progress.commentary` (default: `false`) opts into assistant commentary/preamble text in the temporary progress draft
     - legacy `channels.telegram.streamMode`, boolean `streaming` values, and retired native draft preview keys are detected; run `openclaw doctor --fix` to migrate them
 
-    Tool-progress lines are the short status updates shown while tools run (command execution, file reads, planning updates, patch summaries, Codex preamble/commentary in app-server mode). `partial` and `block` previews show them by default; the `progress` draft shows them only with `streaming.progress.toolProgress: true`.
+    Tool-progress lines are the short status updates shown while tools run (command execution, file reads, planning updates, patch summaries, Codex preamble/commentary in app-server mode). `partial` and `block` previews show them by default; the `progress` draft shows them only with `streaming.progress.toolProgress: true`. Compaction status follows the same settings and appears as soon as compaction starts, including before the first model output.
 
     Keep answer-preview edits but hide tool-progress lines:
 
@@ -695,7 +695,26 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
   </Accordion>
 
-  <Accordion title="Audio, video, and stickers">
+  <Accordion title="Photo albums, audio, video, and stickers">
+    ### Photo albums
+
+    Send multiple image attachments in one `message` tool call. OpenClaw groups consecutive photos into Telegram albums of up to 10 images, in their original order. Automatic replies with multiple photos use the same grouping. A single photo, including a final remainder of one, is sent separately.
+
+```json5
+{
+  action: "send",
+  channel: "telegram",
+  to: "123456789",
+  message: "Trip photos",
+  attachments: [
+    { type: "image", media: "https://example.com/photo-1.jpg" },
+    { type: "image", media: "https://example.com/photo-2.jpg" },
+  ],
+}
+```
+
+    The caption goes on the first photo. Text that exceeds the caption limit follows the album as a separate message. Photos sent as documents, other media types, and messages with inline buttons keep separate sends so their existing controls and delivery behavior are preserved.
+
     ### Audio messages
 
     Telegram distinguishes voice notes from audio files. Default: audio-file behavior; tag `[[audio_as_voice]]` in the agent reply to force a voice-note send. Inbound voice-note transcripts are framed as machine-generated, untrusted text in agent context, but mention detection still uses the raw transcript so mention-gated voice messages keep working.
@@ -845,7 +864,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     The listener reserves `/healthz` for health checks, so `webhookPath` must use a different route. If an existing setup uses `/healthz`, choose another route, update the path in `webhookUrl` and the reverse proxy mapping, then restart OpenClaw.
 
-    In the default isolated long-polling mode, OpenClaw persists its restart watermark after an update is committed to the durable ingress queue. A failed handler remains retryable from that queue. Classic polling (`polling.isolated: false`) advances its watermark after dispatch succeeds.
+    In long-polling mode, OpenClaw saves its restart position after an update is committed to the durable ingress queue. A failed handler remains retryable from that queue.
 
     The local listener binds to `127.0.0.1:8787` by default. For public ingress, put a reverse proxy in front of the local port, or set `webhookHost: "0.0.0.0"` intentionally.
 

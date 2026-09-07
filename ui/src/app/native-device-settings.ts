@@ -8,37 +8,48 @@ type PermissionId =
   | "camera"
   | "speechRecognition"
   | "location"
-  | "automation"; // automation = Swift Capability.appleScript
-type PermissionStatus = "granted" | "denied" | "notDetermined" | "unavailable";
+  | "automation" // automation = Swift Capability.appleScript
+  | "contacts"
+  | "calendars"
+  | "reminders"
+  | "photos";
+type PermissionStatus = "granted" | "denied" | "notDetermined" | "unavailable" | "limited";
 
 export type NativeDeviceSettingsSnapshot = {
   contract: 1;
   device: {
-    platform: "macos";
+    platform: "macos" | "ios";
+    formFactor?: "phone" | "pad" | "desktop";
+    modelName?: string;
     appVersion: string; // CFBundleShortVersionString
     appBuild: string; // CFBundleVersion
     profileName: string | null; // OPENCLAW_PROFILE name when active, else null
   };
-  app: {
-    showDockIcon: boolean;
+  app?: {
+    appearance?: "system" | "light" | "dark";
+    notificationsEnabled?: boolean;
+    showDockIcon?: boolean;
     iconStyle?: { selectedId: string; available: Array<{ id: string; name: string }> }; // advertised by hosts with Dock icon selection
-    iconAnimationsEnabled: boolean;
-    launchAtLogin: boolean;
-    launchAtLoginAvailable: boolean; // false when SMAppService cannot be used (named profile, unbundled)
-    quickChatEnabled: boolean;
-    quickChatShortcut: string | null; // human display string, e.g. "⌥Space"; null when unset
-    debugPaneEnabled: boolean;
+    iconAnimationsEnabled?: boolean;
+    launchAtLogin?: boolean;
+    launchAtLoginAvailable?: boolean; // false when SMAppService cannot be used (named profile, unbundled)
+    quickChatEnabled?: boolean;
+    quickChatShortcut?: string | null; // human display string, e.g. "⌥Space"; null when unset
+    debugPaneEnabled?: boolean;
   };
-  capabilities: {
-    canvasEnabled: boolean;
-    cameraEnabled: boolean;
-    computerControlEnabled: boolean;
-    computerControlProvider: "peekaboo" | "cua";
-    cuaDriverBundled: boolean;
-    peekabooBridgeEnabled: boolean;
-    activeComputerPresenceEnabled: boolean;
+  capabilities?: {
+    canvasEnabled?: boolean;
+    cameraEnabled?: boolean;
+    keepAwakeEnabled?: boolean;
+    healthSummaryAvailable?: boolean;
+    healthSummaryEnabled?: boolean;
+    computerControlEnabled?: boolean;
+    computerControlProvider?: "peekaboo" | "cua";
+    cuaDriverBundled?: boolean;
+    peekabooBridgeEnabled?: boolean;
+    activeComputerPresenceEnabled?: boolean;
   };
-  browser: {
+  browser?: {
     importAvailable: boolean; // app in local mode and a Chrome-family profile with cookies exists
     cookieSync: {
       available: boolean; // false unless app is in remote mode with an external CLI
@@ -50,27 +61,35 @@ export type NativeDeviceSettingsSnapshot = {
     };
   };
   permissions: {
-    entries: Array<{ id: PermissionId; status: PermissionStatus }>; // one entry per PermissionId, stable order as listed above
-    location: { mode: "off" | "whileUsing" | "always"; precise: boolean };
+    entries: Array<{ id: PermissionId; status: PermissionStatus }>; // unique ids in host-published order
+    location: {
+      mode: "off" | "whileUsing" | "always";
+      precise: boolean;
+      preciseEditable?: boolean;
+    };
   };
   voice: {
-    supported: boolean; // voice wake runtime available on this macOS
+    supported: boolean; // voice wake runtime available on this device
     wakeEnabled: boolean; // AppState.swabbleEnabled
-    wakeTriggersTalkMode: boolean;
-    pushToTalkEnabled: boolean;
-    talkPhaseSoundsEnabled: boolean;
-    talkShiftToStopEnabled: boolean;
-    realtimeRelayEnabled: boolean;
-    triggerChime: boolean;
-    sendChime: boolean;
-    microphone: { selectedId: string | null; devices: Array<{ id: string; name: string }> }; // null = System Default
-    locale: {
+    wakeTriggersTalkMode?: boolean;
+    pushToTalkEnabled?: boolean;
+    talkPhaseSoundsEnabled?: boolean;
+    talkShiftToStopEnabled?: boolean;
+    realtimeRelayEnabled?: boolean;
+    triggerChime?: boolean;
+    sendChime?: boolean;
+    talkEnabled?: boolean;
+    talkButtonEnabled?: boolean;
+    talkBackgroundEnabled?: boolean;
+    speakerphoneEnabled?: boolean;
+    microphone?: { selectedId: string | null; devices: Array<{ id: string; name: string }> }; // null = System Default
+    locale?: {
       primary: string;
       additional: string[];
       available: Array<{ id: string; name: string }>;
     };
   };
-  updates: {
+  updates?: {
     available: boolean; // Sparkle updater present and usable
     automatic: boolean; // automaticallyChecksForUpdates (also drives automaticallyDownloadsUpdates, as today)
     unavailableReason: string | null;
@@ -78,6 +97,8 @@ export type NativeDeviceSettingsSnapshot = {
 };
 
 export type SettingKey =
+  | "app.appearance"
+  | "app.notificationsEnabled"
   | "app.showDockIcon"
   | "app.iconStyle"
   | "app.iconAnimationsEnabled"
@@ -86,6 +107,8 @@ export type SettingKey =
   | "app.debugPaneEnabled"
   | "capabilities.canvasEnabled"
   | "capabilities.cameraEnabled"
+  | "capabilities.keepAwakeEnabled"
+  | "capabilities.healthSummaryEnabled"
   | "capabilities.computerControlEnabled"
   | "capabilities.computerControlProvider"
   | "capabilities.peekabooBridgeEnabled"
@@ -103,6 +126,10 @@ export type SettingKey =
   | "voice.realtimeRelayEnabled"
   | "voice.triggerChime"
   | "voice.sendChime"
+  | "voice.talkEnabled"
+  | "voice.talkButtonEnabled"
+  | "voice.talkBackgroundEnabled"
+  | "voice.speakerphoneEnabled"
   | "voice.microphone" // value: string id | null
   | "voice.locale.primary" // value: string
   | "voice.locale.additional" // value: string[]
@@ -114,7 +141,11 @@ type NativePanel =
   | "browser-import"
   | "connection"
   | "gateways"
-  | "debug";
+  | "debug"
+  | "diagnostics"
+  | "licenses"
+  | "about"
+  | "watch";
 
 type NativeDeviceSettingsMessage =
   | { type: "status" }
@@ -165,6 +196,10 @@ const PERMISSION_IDS = [
   "speechRecognition",
   "location",
   "automation",
+  "contacts",
+  "calendars",
+  "reminders",
+  "photos",
 ] as const satisfies readonly PermissionId[];
 
 function nullableString(value: unknown): boolean {
@@ -184,6 +219,31 @@ function namedDevices(value: unknown): boolean {
   );
 }
 
+function optionalBooleans(value: Record<string, unknown>, keys: string[]): boolean {
+  return keys.every((key) => value[key] === undefined || typeof value[key] === "boolean");
+}
+
+function permissionEntries(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  const ids = new Set<string>();
+  return Array.from(value).every((entry) => {
+    if (
+      !isRecord(entry) ||
+      typeof entry.id !== "string" ||
+      !PERMISSION_IDS.some((id) => id === entry.id) ||
+      ids.has(entry.id) ||
+      typeof entry.status !== "string" ||
+      !["granted", "denied", "notDetermined", "unavailable", "limited"].includes(entry.status)
+    ) {
+      return false;
+    }
+    ids.add(entry.id);
+    return true;
+  });
+}
+
 function isSnapshot(value: unknown): value is NativeDeviceSettingsSnapshot {
   if (!isRecord(value) || value.contract !== 1) {
     return false;
@@ -191,73 +251,82 @@ function isSnapshot(value: unknown): value is NativeDeviceSettingsSnapshot {
   const { device, app, capabilities, browser, permissions, voice, updates } = value;
   if (
     !isRecord(device) ||
-    !isRecord(app) ||
-    !isRecord(capabilities) ||
-    !isRecord(browser) ||
+    (app !== undefined && !isRecord(app)) ||
+    (capabilities !== undefined && !isRecord(capabilities)) ||
+    (browser !== undefined && !isRecord(browser)) ||
     !isRecord(permissions) ||
     !isRecord(voice) ||
-    !isRecord(updates)
+    (updates !== undefined && !isRecord(updates))
   ) {
     return false;
   }
-  const cookieSync = browser.cookieSync;
+  const cookieSync = browser?.cookieSync;
   const location = permissions.location;
   const microphone = voice.microphone;
   const locale = voice.locale;
-  if (!isRecord(cookieSync) || !isRecord(location) || !isRecord(microphone) || !isRecord(locale)) {
+  if (!isRecord(location)) {
     return false;
   }
   return (
-    device.platform === "macos" &&
+    (device.platform === "macos" || device.platform === "ios") &&
+    (device.formFactor === undefined ||
+      (typeof device.formFactor === "string" &&
+        ["phone", "pad", "desktop"].includes(device.formFactor))) &&
+    (device.modelName === undefined || typeof device.modelName === "string") &&
     typeof device.appVersion === "string" &&
     typeof device.appBuild === "string" &&
     nullableString(device.profileName) &&
-    [
-      "showDockIcon",
-      "iconAnimationsEnabled",
-      "launchAtLogin",
-      "launchAtLoginAvailable",
-      "quickChatEnabled",
-      "debugPaneEnabled",
-    ].every((key) => typeof app[key] === "boolean") &&
-    nullableString(app.quickChatShortcut) &&
-    (app.iconStyle === undefined ||
-      (isRecord(app.iconStyle) &&
-        typeof app.iconStyle.selectedId === "string" &&
-        namedDevices(app.iconStyle.available))) &&
-    [
-      "canvasEnabled",
-      "cameraEnabled",
-      "computerControlEnabled",
-      "cuaDriverBundled",
-      "peekabooBridgeEnabled",
-      "activeComputerPresenceEnabled",
-    ].every((key) => typeof capabilities[key] === "boolean") &&
-    (capabilities.computerControlProvider === "peekaboo" ||
-      capabilities.computerControlProvider === "cua") &&
-    typeof browser.importAvailable === "boolean" &&
-    typeof cookieSync.available === "boolean" &&
-    typeof cookieSync.enabled === "boolean" &&
-    stringList(cookieSync.domains) &&
-    typeof cookieSync.targetProfile === "string" &&
-    typeof cookieSync.state === "string" &&
-    ["off", "idle", "running", "error"].includes(cookieSync.state) &&
-    nullableString(cookieSync.detail) &&
-    Array.isArray(permissions.entries) &&
-    permissions.entries.length === PERMISSION_IDS.length &&
-    Array.from(permissions.entries).every(
-      (entry, index) =>
-        isRecord(entry) &&
-        entry.id === PERMISSION_IDS[index] &&
-        typeof entry.status === "string" &&
-        ["granted", "denied", "notDetermined", "unavailable"].includes(entry.status),
-    ) &&
+    (app === undefined ||
+      (optionalBooleans(app, [
+        "notificationsEnabled",
+        "showDockIcon",
+        "iconAnimationsEnabled",
+        "launchAtLogin",
+        "launchAtLoginAvailable",
+        "quickChatEnabled",
+        "debugPaneEnabled",
+      ]) &&
+        (app.appearance === undefined ||
+          (typeof app.appearance === "string" &&
+            ["system", "light", "dark"].includes(app.appearance))) &&
+        (app.quickChatShortcut === undefined || nullableString(app.quickChatShortcut)) &&
+        (app.iconStyle === undefined ||
+          (isRecord(app.iconStyle) &&
+            typeof app.iconStyle.selectedId === "string" &&
+            namedDevices(app.iconStyle.available))))) &&
+    (capabilities === undefined ||
+      (optionalBooleans(capabilities, [
+        "canvasEnabled",
+        "cameraEnabled",
+        "keepAwakeEnabled",
+        "healthSummaryAvailable",
+        "healthSummaryEnabled",
+        "computerControlEnabled",
+        "cuaDriverBundled",
+        "peekabooBridgeEnabled",
+        "activeComputerPresenceEnabled",
+      ]) &&
+        (capabilities.computerControlProvider === undefined ||
+          capabilities.computerControlProvider === "peekaboo" ||
+          capabilities.computerControlProvider === "cua"))) &&
+    (browser === undefined ||
+      (typeof browser.importAvailable === "boolean" &&
+        isRecord(cookieSync) &&
+        typeof cookieSync.available === "boolean" &&
+        typeof cookieSync.enabled === "boolean" &&
+        stringList(cookieSync.domains) &&
+        typeof cookieSync.targetProfile === "string" &&
+        typeof cookieSync.state === "string" &&
+        ["off", "idle", "running", "error"].includes(cookieSync.state) &&
+        nullableString(cookieSync.detail))) &&
+    permissionEntries(permissions.entries) &&
     typeof location.mode === "string" &&
     ["off", "whileUsing", "always"].includes(location.mode) &&
     typeof location.precise === "boolean" &&
-    [
-      "supported",
-      "wakeEnabled",
+    optionalBooleans(location, ["preciseEditable"]) &&
+    typeof voice.supported === "boolean" &&
+    typeof voice.wakeEnabled === "boolean" &&
+    optionalBooleans(voice, [
       "wakeTriggersTalkMode",
       "pushToTalkEnabled",
       "talkPhaseSoundsEnabled",
@@ -265,15 +334,24 @@ function isSnapshot(value: unknown): value is NativeDeviceSettingsSnapshot {
       "realtimeRelayEnabled",
       "triggerChime",
       "sendChime",
-    ].every((key) => typeof voice[key] === "boolean") &&
-    nullableString(microphone.selectedId) &&
-    namedDevices(microphone.devices) &&
-    typeof locale.primary === "string" &&
-    stringList(locale.additional) &&
-    namedDevices(locale.available) &&
-    typeof updates.available === "boolean" &&
-    typeof updates.automatic === "boolean" &&
-    nullableString(updates.unavailableReason)
+      "talkEnabled",
+      "talkButtonEnabled",
+      "talkBackgroundEnabled",
+      "speakerphoneEnabled",
+    ]) &&
+    (microphone === undefined ||
+      (isRecord(microphone) &&
+        nullableString(microphone.selectedId) &&
+        namedDevices(microphone.devices))) &&
+    (locale === undefined ||
+      (isRecord(locale) &&
+        typeof locale.primary === "string" &&
+        stringList(locale.additional) &&
+        namedDevices(locale.available))) &&
+    (updates === undefined ||
+      (typeof updates.available === "boolean" &&
+        typeof updates.automatic === "boolean" &&
+        nullableString(updates.unavailableReason)))
   );
 }
 

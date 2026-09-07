@@ -431,6 +431,11 @@ fi
 run_bundle_mutation xattr -cr "$APP_BUNDLE" 2>/dev/null || true
 
 # Sign bundled helper binaries before signing the app bundle.
+MAC_CONTROL_CLI="$APP_BUNDLE/Contents/MacOS/openclaw-mac"
+if [ -f "$MAC_CONTROL_CLI" ]; then
+  echo "Signing macOS control CLI"; sign_plain_item "$MAC_CONTROL_CLI"
+fi
+
 MLX_TTS_HELPER="$APP_BUNDLE/Contents/MacOS/openclaw-mlx-tts"
 if [ -f "$MLX_TTS_HELPER" ]; then
   echo "Signing MLX TTS helper"; sign_plain_item "$MLX_TTS_HELPER"

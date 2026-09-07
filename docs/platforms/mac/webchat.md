@@ -58,8 +58,8 @@ Gateway origin, including its port. Each browser-authenticated profile has its
 own dashboard browser data, isolated across named app profiles. Manual
 token/password profiles retain their existing browser store and preferences.
 Signing in with your browser starts a personal store without copying credentials
-from the shared browser store. Links opened beside a browser-authenticated
-dashboard use a separate temporary browser session.
+from the shared browser store. Mac tabs in a browser-authenticated dashboard
+use a separate temporary browser session, shared by that window's Mac tabs.
 Removing a profile closes its native chat and dashboard windows and shuts down
 its secondary connection.
 Updating a saved profile's credentials refreshes its open dashboard windows.

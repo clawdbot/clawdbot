@@ -9,6 +9,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fixtureCapabilityConsentArgs } from "../package-compat.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
+import { packFutureUpdateFixture } from "../update-first-hop-package-fixtures.mjs";
 import { observePostCoreCommand } from "./process-observer.mjs";
 
 // Without a core tarball, run only the plugin reinstall boundary against the supplied CLI.
@@ -285,6 +286,12 @@ export async function runConsentScenario(entry, coreTarball) {
         );
         return;
       }
+      const deniedCoreTarball = path.join(root, "core-denied-future.tgz");
+      const acceptedCoreTarball = path.join(root, "core-accepted-future.tgz");
+      const coreUpdateFixtures = [
+        packFutureUpdateFixture(coreTarball, deniedCoreTarball, 0),
+        packFutureUpdateFixture(coreTarball, acceptedCoreTarball, 1),
+      ];
       await serve(1);
       await cli("initial-install", [
         "plugins",
@@ -302,7 +309,7 @@ export async function runConsentScenario(entry, coreTarball) {
       await serve(2);
       const denied = await cli(
         "update-denied",
-        ["update", "--tag", coreTarball, "--yes", "--json"],
+        ["update", "--tag", deniedCoreTarball, "--yes", "--json"],
         { allowFailure: true },
       );
       const deniedResult = JSON.parse(denied.output);
@@ -337,13 +344,18 @@ export async function runConsentScenario(entry, coreTarball) {
       const accepted = await cli("update-accepted", [
         "update",
         "--tag",
-        coreTarball,
+        acceptedCoreTarball,
         "--accept-capabilities",
         "--yes",
         "--no-restart",
         "--json",
       ]);
-      JSON.parse(accepted.output);
+      const acceptedResult = JSON.parse(accepted.output);
+      assert.equal(acceptedResult.status, "ok", "accepted core update must execute, not skip");
+      const installedPackage = JSON.parse(
+        fs.readFileSync(path.resolve(path.dirname(entry), "..", "package.json"), "utf8"),
+      );
+      assert.equal(installedPackage.version, coreUpdateFixtures[1].targetVersion);
       assert(
         accepted.children.some((child) => child.postCore),
         "accepted update did not hand off to a fresh post-core process",
@@ -374,6 +386,7 @@ export async function runConsentScenario(entry, coreTarball) {
             status: "passed",
             root,
             coreTarballSha256,
+            coreUpdateFixtures,
             assertions: [
               ...reinstallAssertions,
               "no-consent preserves old payload and record",

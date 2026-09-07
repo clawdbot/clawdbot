@@ -35,7 +35,6 @@ import {
   closeAgentPicker,
   closeSessionMenus,
   createControllerHost,
-  handleSessionPickerEvent,
   isPlaceTopologyEvent,
   presenceStateSignature,
 } from "./new-session-runtime.ts";
@@ -198,6 +197,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
             }
             if (isPlaceTopologyEvent(event.event)) {
               void this.gateway.refreshCloudProfiles();
+              this.gateway.handleCatalogRetry();
               return;
             }
             const presence = event.event === "presence" ? readPresenceEntries(event.payload) : null;
@@ -208,6 +208,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
             if (signature !== this.presenceSignature) {
               this.presenceSignature = signature;
               void this.gateway.refreshCloudProfiles();
+              this.gateway.handleCatalogRetry();
             }
           });
         },
@@ -235,19 +236,16 @@ export class NewSessionPage extends OpenClawLightDomElement {
     if (event instanceof KeyboardEvent) {
       focusChatComposerFromPrintableKeydown(this, event);
     }
-    handleSessionPickerEvent(this, event);
   }
 
   override connectedCallback() {
     super.connectedCallback();
     document.addEventListener("keydown", this, true);
-    document.addEventListener("pointerdown", this, true);
     window.addEventListener("beforeunload", this.flushDraft);
   }
 
   override disconnectedCallback() {
     document.removeEventListener("keydown", this, true);
-    document.removeEventListener("pointerdown", this, true);
     window.removeEventListener("beforeunload", this.flushDraft);
     retainDraft(this.context, this.submission, this.openedFor, this.messageOwnerKey);
     this.subscriptions.clear();
@@ -320,6 +318,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       });
     }
     this.place.restorePreferenceSelections();
+    this.place.synchronizeTerminalHosts();
     activateDraft(this.submission, openKey);
     this.submission.resumeInterruptedSubmission();
   }
@@ -473,6 +472,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
 
   override render() {
     const pendingMessage = this.submission.pendingMessage;
+    const identity = this.context?.gateway.snapshot.selfUser?.identity;
     const incognito = this.submission.visibility === "incognito";
     return html`
       <div
@@ -491,6 +491,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
         ${renderNewSessionBody({
           error: this.submission.error,
           pendingMessage,
+          userId: identity?.type === "profile" ? identity.id : null,
           submitting: this.submission.submitting,
           renderDraft: () => this.renderWelcome(),
           onOpenImage: this.setImageLightbox,

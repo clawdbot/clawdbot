@@ -1577,27 +1577,6 @@ extension OnboardingAISetupModel {
     }
 
     #if DEBUG
-    func _test_setProviderAuth(option: AuthOption, sessionID: String) {
-        self.activeAuthOption = option
-        self.providerWizardKind = .auth
-        self.authSessionID = sessionID
-        self.authBusy = true
-    }
-
-    func _test_applyAuthWizardResult(
-        done: Bool,
-        status: String?,
-        error: String?,
-        preparedModelRef: String? = nil)
-    {
-        self.applyAuthWizardResult(
-            done: done,
-            step: nil,
-            status: status,
-            error: error,
-            preparedModelRef: preparedModelRef)
-    }
-
     var _test_authSessionID: String? {
         self.authSessionID
     }

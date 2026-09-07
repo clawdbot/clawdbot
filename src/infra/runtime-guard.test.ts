@@ -1,5 +1,5 @@
 // Covers runtime detection and version support checks.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertSupportedRuntime,
   isSupportedBunVersion,
@@ -7,6 +7,31 @@ import {
   nodeVersionSatisfiesEngine,
   parseSemver,
 } from "./runtime-guard.js";
+
+const state = vi.hoisted(() => ({
+  version: "24.16.0",
+  error: vi.fn(),
+  run: vi.fn(),
+}));
+
+vi.mock("node:process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:process")>();
+  return {
+    default: {
+      ...actual,
+      get versions() {
+        return { ...actual.versions, node: state.version, bun: undefined };
+      },
+      stderr: { write: state.error },
+      exit: (code: number) => {
+        throw new Error(`runtime exit ${code}`);
+      },
+    },
+  };
+});
+vi.mock("../worker/worker-deploy-runtime.js", () => ({}));
+vi.mock("../worker/worker-deploy-browser-runtime.js", () => ({ default: {} }));
+vi.mock("../worker/worker-process.js", () => ({ runWorkerProcess: state.run }));
 
 describe("runtime-guard", () => {
   it("parses semver with or without leading v", () => {
@@ -24,29 +49,33 @@ describe("runtime-guard", () => {
   });
 
   it("checks node versions against the supported engine range", () => {
-    const engine = ">=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0";
-    expect(nodeVersionSatisfiesEngine("22.22.3", engine)).toBe(true);
+    const engine = ">=24.16.0 <25 || >=26.1.0";
+    expect(nodeVersionSatisfiesEngine("22.23.2", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("22.22.2", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("23.11.0", engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("24.14.1", engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("24.15.0", engine)).toBe(true);
+    expect(nodeVersionSatisfiesEngine("24.15.0", engine)).toBe(false);
+    expect(nodeVersionSatisfiesEngine("24.16.0", engine)).toBe(true);
     expect(nodeVersionSatisfiesEngine("25.8.1", engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("25.9.0", engine)).toBe(true);
-    expect(nodeVersionSatisfiesEngine("26.0.0", engine)).toBe(true);
+    expect(nodeVersionSatisfiesEngine("25.9.0", engine)).toBe(false);
+    expect(nodeVersionSatisfiesEngine("26.0.0", engine)).toBe(false);
+    expect(nodeVersionSatisfiesEngine("26.1.0", engine)).toBe(true);
     expect(nodeVersionSatisfiesEngine(null, engine)).toBe(false);
     expect(nodeVersionSatisfiesEngine("unknown", engine)).toBe(false);
   });
 
   it.each([
-    ["22.22.3", true],
+    ["22.23.2", false],
     ["22.22.2", false],
     ["23.11.0", false],
     ["24.14.1", false],
-    ["24.15.0", true],
+    ["24.15.0", false],
+    ["24.16.0", true],
     ["25.8.1", false],
-    ["25.9.0", true],
-    ["26.0.0", true],
-    ["24.15.0+local.1", true],
+    ["25.9.0", false],
+    ["26.0.0", false],
+    ["26.1.0", true],
+    ["24.16.0+local.1", true],
     ["24.15.0-rc.1", false],
     ["25.9.1-nightly.20260714", false],
     ["24.15", false],
@@ -87,7 +116,7 @@ describe("runtime-guard", () => {
     expect(runtime.error).toHaveBeenCalledOnce();
     expect(runtime.error).toHaveBeenCalledWith(
       [
-        "openclaw requires Node >=22.22.3 <23, >=24.15.0 <25, or >=25.9.0.",
+        "openclaw requires Node >=24.16.0 <25, or >=26.1.0.",
         "Detected: node 20.0.0 (exec: /usr/bin/node).",
         "PATH searched: /usr/bin",
         "Install Node: https://nodejs.org/en/download",
@@ -105,7 +134,7 @@ describe("runtime-guard", () => {
     };
     const details = {
       kind: "node" as const,
-      version: "22.22.3",
+      version: "24.16.0",
       execPath: "/usr/bin/node",
       pathEnv: "/usr/bin",
       hasNodeSqlite: true,
@@ -228,7 +257,7 @@ describe("runtime-guard", () => {
     expect(runtime.error).toHaveBeenCalledOnce();
     expect(runtime.error).toHaveBeenCalledWith(
       [
-        "openclaw requires Node >=22.22.3 <23, >=24.15.0 <25, or >=25.9.0.",
+        "openclaw requires Node >=24.16.0 <25, or >=26.1.0.",
         "Detected: unknown runtime (exec: unknown).",
         "PATH searched: (not set)",
         "Install Node: https://nodejs.org/en/download",
@@ -236,5 +265,35 @@ describe("runtime-guard", () => {
       ].join("\n"),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+});
+
+describe("sealed worker runtime", () => {
+  const originalArgv = process.argv;
+  beforeEach(() => {
+    vi.resetModules();
+    state.error.mockClear();
+    state.run.mockClear();
+    process.argv = [process.execPath, "worker.mjs"];
+  });
+  afterEach(() => {
+    process.argv = originalArgv;
+  });
+
+  it.each(["22.23.2", "26.0.0"])(
+    "rejects an explicitly configured worker runtime %s before starting work",
+    async (version) => {
+      state.version = version;
+      await expect(import("../worker/worker-deploy-entry.js")).rejects.toThrow("runtime exit 1");
+      expect(state.run).not.toHaveBeenCalled();
+      expect(state.error).toHaveBeenCalledWith(expect.stringContaining("Upgrade Node"));
+    },
+  );
+
+  it.each(["24.16.0", "26.1.0"])("starts the worker on supported runtime %s", async (version) => {
+    state.version = version;
+    await import("../worker/worker-deploy-entry.js");
+    expect(state.run).toHaveBeenCalledOnce();
+    expect(state.error).not.toHaveBeenCalled();
   });
 });

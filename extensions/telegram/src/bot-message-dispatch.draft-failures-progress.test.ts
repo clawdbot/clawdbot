@@ -434,69 +434,89 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
-  it("shows compaction progress on the same answer stream", async () => {
-    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
-    const compactionFlushCounts: number[] = [];
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-        answerDraftStream.flush.mockClear();
+  it.each(["progress", "partial", "block"] as const)(
+    "shows compaction progress before model output in %s mode",
+    async (streamMode) => {
+      const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+      const compactionPreviews: unknown[] = [];
+      const compactionFlushCounts: number[] = [];
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          answerDraftStream.flush.mockClear();
+          await replyOptions?.onCompactionStart?.();
+          compactionFlushCounts.push(answerDraftStream.flush.mock.calls.length);
+          compactionPreviews.push(answerDraftStream.updatePreview.mock.lastCall?.[0]);
+          await replyOptions?.onCompactionEnd?.({ completed: false });
+          compactionFlushCounts.push(answerDraftStream.flush.mock.calls.length);
+          compactionPreviews.push(answerDraftStream.updatePreview.mock.lastCall?.[0]);
+          await replyOptions?.onCompactionStart?.();
+          compactionFlushCounts.push(answerDraftStream.flush.mock.calls.length);
+          compactionPreviews.push(answerDraftStream.updatePreview.mock.lastCall?.[0]);
+          await replyOptions?.onCompactionEnd?.({ completed: true });
+          compactionFlushCounts.push(answerDraftStream.flush.mock.calls.length);
+          compactionPreviews.push(answerDraftStream.updatePreview.mock.lastCall?.[0]);
+          await replyOptions?.onPartialReply?.({ text: "Partial before compaction" });
+          await dispatcherOptions.deliver({ text: "Final after compaction" }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode,
+        telegramCfg: { streaming: { mode: streamMode, progress: { toolProgress: true } } },
+      });
+
+      expect(compactionPreviews).toEqual(
+        [
+          "Compacting context",
+          "Compaction incomplete",
+          "Compacting context",
+          "Compaction complete",
+        ].map((text) =>
+          expect.objectContaining({ text: expect.stringContaining(text), complete: true }),
+        ),
+      );
+      if (streamMode === "progress") {
+        expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
+        expect(compactionFlushCounts).toEqual([1, 2, 3, 4]);
+        expectDeliveredReply(0, { text: "Final after compaction" });
+        expect(
+          requireInvocationOrder(answerDraftStream.discard, 0, "compaction progress discard"),
+        ).toBeLessThan(requireInvocationOrder(deliverReplies, 0, "final reply delivery"));
+        expectWindowRetiredAfterFinal(answerDraftStream, deliverReplies);
+      } else {
+        expect(answerDraftStream.update).toHaveBeenCalledWith(
+          "Final after compaction",
+          expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+        );
+        expect(deliverReplies).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each(["partial", "block", "off"] as const)(
+    "keeps compaction reactions when preview progress is disabled in %s mode",
+    async (streamMode) => {
+      const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+      const statusReactionController = createStatusReactionController();
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
         await replyOptions?.onCompactionStart?.();
-        compactionFlushCounts.push(answerDraftStream.flush.mock.calls.length);
-        await replyOptions?.onCompactionEnd?.({ completed: false });
-        compactionFlushCounts.push(answerDraftStream.flush.mock.calls.length);
-        await replyOptions?.onCompactionStart?.();
-        compactionFlushCounts.push(answerDraftStream.flush.mock.calls.length);
         await replyOptions?.onCompactionEnd?.({ completed: true });
-        compactionFlushCounts.push(answerDraftStream.flush.mock.calls.length);
-        await replyOptions?.onPartialReply?.({ text: "Partial before compaction" });
-        await dispatcherOptions.deliver({ text: "Final after compaction" }, { kind: "final" });
         return { queuedFinal: true };
-      },
-    );
+      });
 
-    await dispatchWithContext({
-      context: createContext(),
-      streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
-    });
+      await dispatchWithContext({
+        context: createContext({ statusReactionController: statusReactionController as never }),
+        streamMode,
+        telegramCfg: { streaming: { mode: streamMode, preview: { toolProgress: false } } },
+      });
 
-    expect(answerDraftStream.forceNewMessage).not.toHaveBeenCalled();
-    expect(compactionFlushCounts).toEqual([1, 2, 3, 4]);
-    expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringContaining("Compacting context") }),
-    );
-    expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringContaining("Compaction incomplete") }),
-    );
-    expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringContaining("Compaction complete") }),
-    );
-    expectDeliveredReply(0, { text: "Final after compaction" });
-    expect(
-      requireInvocationOrder(answerDraftStream.discard, 0, "compaction progress discard"),
-    ).toBeLessThan(requireInvocationOrder(deliverReplies, 0, "final reply delivery"));
-    expectWindowRetiredAfterFinal(answerDraftStream, deliverReplies);
-  });
-
-  it("keeps compaction reactions without rendering a draft outside progress mode", async () => {
-    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
-    const statusReactionController = createStatusReactionController();
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
-      await replyOptions?.onCompactionStart?.();
-      await replyOptions?.onCompactionEnd?.({ completed: true });
-      return { queuedFinal: true };
-    });
-
-    await dispatchWithContext({
-      context: createContext({ statusReactionController: statusReactionController as never }),
-      streamMode: "partial",
-    });
-
-    expect(answerDraftStream.updatePreview).not.toHaveBeenCalled();
-    expect(statusReactionController.setCompacting).toHaveBeenCalledTimes(1);
-    expect(statusReactionController.cancelPending).toHaveBeenCalledTimes(1);
-  });
+      expect(answerDraftStream.updatePreview).not.toHaveBeenCalled();
+      expect(statusReactionController.setCompacting).toHaveBeenCalledTimes(1);
+      expect(statusReactionController.cancelPending).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("rotates a tool-progress-only answer draft before streaming the final answer", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
