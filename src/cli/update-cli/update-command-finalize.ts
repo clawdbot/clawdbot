@@ -89,9 +89,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
             const prepared = await lifecycle.run("targetConfigValidation", () =>
               prepareUpdateFinalization(opts, root, requestedChannel),
             );
-            if (prepared) {
-              await updateFinalizeCommandInternal(opts, prepared, lifecycle);
-            }
+            await updateFinalizeCommandInternal(opts, prepared, lifecycle);
           } catch (error) {
             if (error instanceof UpdateCommandFailure) {
               lifecycle.complete(error.exitCode);
@@ -143,7 +141,6 @@ async function prepareUpdateFinalization(
         opts,
         controlPlaneUpdateSentinelMeta: null,
       });
-      return undefined;
     }
   }
   const storedChannel = configSnapshot.valid
@@ -176,7 +173,7 @@ async function prepareUpdateFinalization(
 
 async function updateFinalizeCommandInternal(
   opts: UpdateFinalizeOptions,
-  prepared: NonNullable<Awaited<ReturnType<typeof prepareUpdateFinalization>>>,
+  prepared: Awaited<ReturnType<typeof prepareUpdateFinalization>>,
   lifecycle: UpdateFinalizationLifecycle,
 ): Promise<void> {
   const { root, preFinalizeConfig, requestedChannel, storedChannel, effectiveChannel, channel } =

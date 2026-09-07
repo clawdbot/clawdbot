@@ -8,6 +8,7 @@ import {
 } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { watchCliExitAfterOutput } from "../one-shot-exit.js";
+import { hasCliProcessScope } from "../runtime-cleanup-scope.js";
 import { getPendingCliDisposers } from "../runtime-cleanup.js";
 
 // Local metadata/backup/completion work gets 30s; Doctor gets 2m for migrations,
@@ -104,25 +105,28 @@ export class UpdateFinalizationLifecycle {
       });
       this.record(active, result === "failed" ? "failed" : "completed", Date.now());
     };
-    this.timer = setTimeout(() => {
-      // Do not race and unwind a still-mutating phase. Kill owned subprocesses and
-      // exit without yielding, so late awaits cannot write into an OCM rollback.
-      try {
-        this.stopChildren();
-        end("failed");
-        const error = `Update finalization timed out in ${phase} after ${budgetMs}ms`;
-        this.finishLedger(1, error);
-        writeSync(2, `${error}\n`);
-        if (this.json) {
-          writeSync(
-            1,
-            `${JSON.stringify({ status: "failed", mode: "finalize", root: this.root, restart: false, stuckPhase: phase, elapsedMs: Math.round(performance.now() - this.startedAt), error, phaseTimings: this.phaseTimings })}\n`,
-          );
+    // Borrowed invocations keep awaiting the phase without taking over their host's lifetime.
+    if (hasCliProcessScope()) {
+      this.timer = setTimeout(() => {
+        // Do not race and unwind a still-mutating phase. Kill owned subprocesses and
+        // exit without yielding, so late awaits cannot write into an OCM rollback.
+        try {
+          this.stopChildren();
+          end("failed");
+          const error = `Update finalization timed out in ${phase} after ${budgetMs}ms`;
+          this.finishLedger(1, error);
+          writeSync(2, `${error}\n`);
+          if (this.json) {
+            writeSync(
+              1,
+              `${JSON.stringify({ status: "failed", mode: "finalize", root: this.root, restart: false, stuckPhase: phase, elapsedMs: Math.round(performance.now() - this.startedAt), error, phaseTimings: this.phaseTimings })}\n`,
+            );
+          }
+        } finally {
+          defaultRuntime.exit(1);
         }
-      } finally {
-        defaultRuntime.exit(1);
-      }
-    }, budgetMs);
+      }, budgetMs);
+    }
     try {
       const result = await run();
       end(outcome?.(result) ?? "completed");
@@ -168,6 +172,9 @@ export class UpdateFinalizationLifecycle {
     this.completed = true;
     clearTimeout(this.timer);
     this.finishLedger(exitCode);
+    if (!hasCliProcessScope()) {
+      return;
+    }
     // This timer never keeps a healthy command alive. Once output has a terminal
     // outcome, retained handles or cleanup must not withhold EOF from supervisors.
     const watch = () =>

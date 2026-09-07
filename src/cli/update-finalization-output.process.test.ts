@@ -29,7 +29,14 @@ const scenarios = [
   "human-plugin-warning",
   "human-recovery-plugin-error",
 ];
-const finalizeScenarios = ["json", "phase-hang", "completion-hang", "handle-hang"];
+const finalizeScenarios = [
+  "json",
+  "phase-hang",
+  "completion-hang",
+  "handle-hang",
+  "borrowed-phase",
+  "borrowed-output",
+];
 
 describe.each(["repair", "finalize"])("update %s process output", (command) => {
   // Both spellings share the finalization action; one matrix covers its output modes.
@@ -80,7 +87,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         ...(scenario === "human-recovery-plugin-error" ? [] : ["--yes"]),
         "--no-restart",
         "--timeout",
-        blockedPhase ? "1" : "9",
+        blockedPhase || scenario === "borrowed-phase" ? "1" : "9",
         ...(json && scenario !== "inherited-json" ? ["--json"] : []),
       ];
       const readRun = () =>
@@ -140,6 +147,17 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
       expect(result.code, failure).toBe(
         scenario.endsWith("error") || scenario === "phase-hang" ? 1 : 0,
       );
+      if (scenario.startsWith("borrowed-")) {
+        expect(result.stderr, failure).toContain("Borrowed caller completed.");
+        expect(result.stderr, failure).not.toContain("Process still alive after terminal output");
+        if (scenario === "borrowed-phase") {
+          const timing = JSON.parse(result.stdout).phaseTimings.find(
+            (entry: { phase: string }) => entry.phase === "configSnapshot",
+          );
+          expect(timing, failure).toMatchObject({ outcome: "completed" });
+          expect(timing.durationMs, failure).toBeGreaterThanOrEqual(1_000);
+        }
+      }
       if (blockedPhase) {
         if (scenario === "phase-hang") {
           expect(observedPhaseStart?.steps).toContainEqual(

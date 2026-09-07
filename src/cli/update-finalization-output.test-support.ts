@@ -10,6 +10,7 @@ const root = process.env.HOME!;
 // Keep real install discovery inside the fixture; only the completion case has a CLI binary.
 await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
 const [scenario, ...args] = process.argv.slice(2);
+const borrowed = scenario?.startsWith("borrowed-");
 if (scenario === "completion-hang") {
   await fs.writeFile(
     path.join(root, "openclaw.mjs"),
@@ -101,7 +102,9 @@ const stubs = new Map<string, string>([
     sourceUrl("./update-cli/update-command-config-snapshot.ts"),
     scenario === "phase-hang"
       ? 'export const createUpdateConfigSnapshot = async () => { console.error("fixture configSnapshot entered"); setInterval(() => {}, 1000); await new Promise(() => {}); };'
-      : "export const createUpdateConfigSnapshot = async () => {};",
+      : scenario === "borrowed-phase"
+        ? "export const createUpdateConfigSnapshot = async () => { await new Promise(resolve => setTimeout(resolve, 1_200)); };"
+        : "export const createUpdateConfigSnapshot = async () => {};",
   ],
   [
     sourceUrl("./update-cli/update-command-config.ts"),
@@ -145,31 +148,43 @@ const { registerUpdateCli } = await import("./update-cli.js");
 const { defaultRuntime } = await import("../runtime.js");
 const { formatCliJsonFailure } = await import("./failure-output.js");
 const { runCliWithExitFinalization } = await import("./one-shot-exit.js");
+const { withCliProcessScope } = await import("./runtime-cleanup-scope.js");
 const { enableConsoleCapture } = await import("../logging/console.js");
 const { withConsoleLogsRoutedToStderrForJson, applyResolvedCommandOutputMode } =
   await import("./json-output-mode.js");
 const { isCommandJsonOutputMode } = await import("./program/json-mode.js");
 process.argv = [process.execPath, path.join(root, "openclaw.mjs"), ...args];
 enableConsoleCapture();
-await runCliWithExitFinalization({
-  run: () =>
-    withConsoleLogsRoutedToStderrForJson(
-      process.argv,
-      async () => {
-        const program = new Command().name("openclaw");
-        program.hook("preAction", (_root, command) => {
-          applyResolvedCommandOutputMode(isCommandJsonOutputMode(command));
-        });
-        registerUpdateCli(program);
-        await program.parseAsync(process.argv);
-        if (scenario === "handle-hang") {
-          setInterval(() => {}, 1000);
+const run = () =>
+  withConsoleLogsRoutedToStderrForJson(
+    process.argv,
+    async () => {
+      const program = new Command().name("openclaw");
+      program.hook("preAction", (_root, command) => {
+        applyResolvedCommandOutputMode(isCommandJsonOutputMode(command));
+      });
+      registerUpdateCli(program);
+      await program.parseAsync(process.argv);
+      if (scenario === "handle-hang") {
+        setInterval(() => {}, 1000);
+      }
+      if (borrowed) {
+        if (scenario === "borrowed-output") {
+          await new Promise((resolve) => setTimeout(resolve, 11_000));
         }
-      },
-      { retainRoutingUntilProcessExit: true },
-    ),
-  onError: (error) => {
-    defaultRuntime.writeJson(formatCliJsonFailure(error));
-    process.exitCode = 1;
-  },
-});
+        console.error("Borrowed caller completed.");
+      }
+    },
+    { retainRoutingUntilProcessExit: true },
+  );
+if (borrowed) {
+  await run();
+} else {
+  await runCliWithExitFinalization({
+    run: () => withCliProcessScope(run),
+    onError: (error) => {
+      defaultRuntime.writeJson(formatCliJsonFailure(error));
+      process.exitCode = 1;
+    },
+  });
+}
