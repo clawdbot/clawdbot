@@ -9896,15 +9896,6 @@ server.listen(0, "127.0.0.1", () => {
     expect(macosLintStep.run).toContain("swiftlint lint --config config/swiftlint.yml");
     expect(macosLintStep.run).toContain("swiftformat --lint apps/macos/Sources");
     expect(iosLintStep.run).toContain("skipping iOS lint for this frozen target");
-    expect(buildStep.run).not.toContain("for attempt in");
-    expect(buildStep.run.match(/swift build /gu)).toHaveLength(2);
-    expect(buildStep.run).toContain(
-      '[[ -d "$sparkle_framework" && ! -f "$sparkle_framework/Info.plist" ]]',
-    );
-    expect(buildStep.run).toContain("swift package --package-path apps/macos reset");
-    expect(buildStep.run.indexOf("swift package --package-path apps/macos reset")).toBeGreaterThan(
-      buildStep.run.indexOf("sparkle_framework="),
-    );
 
     const runCacheFixture = (artifactState: "no-build" | "absent" | "incomplete" | "complete") => {
       const root = tempDirs.make(`openclaw-swift-cache-${artifactState}-`);
@@ -10015,27 +10006,34 @@ exit 1
       };
     };
 
+    const releaseBuildCommand =
+      "build --package-path apps/macos --product OpenClaw --configuration release";
+    const packageResetCommand = "package --package-path apps/macos reset";
+
     const absentFramework = runBuildFixture("absent", "fail");
     expect(absentFramework.status).toBe(1);
-    expect(absentFramework.calls).toEqual([
-      "build --package-path apps/macos --product OpenClaw --configuration release",
-    ]);
+    expect(absentFramework.calls).toEqual([releaseBuildCommand]);
 
     const recovered = runBuildFixture("incomplete", "recover");
     expect(recovered.status).toBe(0);
-    expect(recovered.calls.filter((call) => call.startsWith("build "))).toHaveLength(2);
-    expect(recovered.calls.filter((call) => call.startsWith("package "))).toHaveLength(1);
+    expect(recovered.calls).toEqual([
+      releaseBuildCommand,
+      packageResetCommand,
+      releaseBuildCommand,
+    ]);
     expect(recovered.output).toContain("did not produce complete Sparkle metadata");
 
     const completeFramework = runBuildFixture("complete", "fail");
     expect(completeFramework.status).toBe(1);
-    expect(completeFramework.calls.filter((call) => call.startsWith("build "))).toHaveLength(1);
-    expect(completeFramework.calls.filter((call) => call.startsWith("package "))).toHaveLength(0);
+    expect(completeFramework.calls).toEqual([releaseBuildCommand]);
 
     const secondFailure = runBuildFixture("incomplete", "fail");
     expect(secondFailure.status).toBe(1);
-    expect(secondFailure.calls.filter((call) => call.startsWith("build "))).toHaveLength(2);
-    expect(secondFailure.calls.filter((call) => call.startsWith("package "))).toHaveLength(1);
+    expect(secondFailure.calls).toEqual([
+      releaseBuildCommand,
+      packageResetCommand,
+      releaseBuildCommand,
+    ]);
   });
 
   it("uses native macOS Swift tests and preserves the first failure", () => {

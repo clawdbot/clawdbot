@@ -50,3 +50,32 @@ enum CostUsageFormatting {
         return String(format: "$%.4f", value)
     }
 }
+
+struct CostUsageMenuDateParser {
+    let timeZone: TimeZone
+    private let formatter: DateFormatter
+
+    init(timeZone: TimeZone) {
+        self.timeZone = timeZone
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = timeZone
+        self.formatter = formatter
+    }
+
+    var requestParameters: [String: AnyHashable] {
+        // Older Gateway tzdata can use the existing fixed-offset contract for an unknown zone.
+        let minutes = self.timeZone.secondsFromGMT() / 60
+        let offset = String(format: "UTC%@%d:%02d", minutes < 0 ? "-" : "+", abs(minutes) / 60, abs(minutes) % 60)
+        return ["mode": "specific", "timeZone": self.timeZone.identifier, "utcOffset": offset]
+    }
+
+    func parse(_ value: String) -> Date? {
+        self.formatter.date(from: value)
+    }
+
+    func format(_ date: Date) -> String {
+        self.formatter.string(from: date)
+    }
+}

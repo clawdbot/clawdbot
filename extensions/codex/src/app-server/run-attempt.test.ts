@@ -4729,6 +4729,7 @@ describe("runCodexAppServerAttempt", () => {
     "cold resume",
     "unsubscribed",
     "compacted during acceptance",
+    "dropped by fitting",
   ] as const)(
     "introduces bounded workspace references once per native thread need: %s",
     async (scenario) => {
@@ -4738,6 +4739,18 @@ describe("runCodexAppServerAttempt", () => {
       await fs.mkdir(workspaceDir, { recursive: true });
       await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
       await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), bootstrap);
+      let oversizedPrefix = scenario === "dropped by fitting";
+      if (oversizedPrefix) {
+        openRunSession(sessionFile).appendMessage(userMessage("Earlier conversation", Date.now()));
+        initializeGlobalHookRunner(
+          createMockPluginRegistry([
+            {
+              hookName: "before_prompt_build",
+              handler: () => ({ prependContext: oversizedPrefix ? "p".repeat(1 << 20) : "" }),
+            },
+          ]),
+        );
+      }
       let compactDuringAcceptance = false;
       let harness = createStartedThreadHarness(
         async (method) => {
@@ -4792,29 +4805,43 @@ describe("runCodexAppServerAttempt", () => {
         return { input, result };
       };
       const first = await runTurn();
-      expect(first.input).toContain(memorySummary);
-      expect(first.input).toContain(bootstrap);
-      expect(first.input).not.toContain("memory_search");
-      expect(
-        first.result.systemPromptReport?.injectedWorkspaceFiles.find(
-          (file) => file.name === "MEMORY.md",
-        ),
-      ).toMatchObject({
-        rawChars: memorySummary.length,
-        injectedChars: memorySummary.length,
-        truncated: false,
-      });
-      compactDuringAcceptance = scenario === "compacted during acceptance";
-      const second = await runTurn();
-      expect.soft(second.input).not.toContain(memorySummary);
-      expect.soft(second.input).not.toContain(bootstrap);
-      expect
-        .soft(
-          second.result.systemPromptReport?.injectedWorkspaceFiles.find(
+      if (oversizedPrefix) {
+        expect(first.input.length).toBeLessThanOrEqual(1 << 20);
+        expect(first.input).toContain("Earlier conversation");
+        expect(first.input).toContain("Current user request:");
+        expect(first.input).not.toContain(memorySummary);
+        expect(first.input).not.toContain(bootstrap);
+      } else {
+        expect(first.input).toContain(memorySummary);
+        expect(first.input).toContain(bootstrap);
+        expect(
+          first.result.systemPromptReport?.injectedWorkspaceFiles.find(
             (file) => file.name === "MEMORY.md",
           ),
-        )
-        .toMatchObject({ injectedChars: 0, truncated: false });
+        ).toMatchObject({
+          rawChars: memorySummary.length,
+          injectedChars: memorySummary.length,
+          truncated: false,
+        });
+      }
+      expect(first.input).not.toContain("memory_search");
+      compactDuringAcceptance = scenario === "compacted during acceptance";
+      oversizedPrefix = false;
+      const second = await runTurn();
+      if (scenario === "dropped by fitting") {
+        expect(second.input).toContain(memorySummary);
+        expect(second.input).toContain(bootstrap);
+      } else {
+        expect.soft(second.input).not.toContain(memorySummary);
+        expect.soft(second.input).not.toContain(bootstrap);
+        expect
+          .soft(
+            second.result.systemPromptReport?.injectedWorkspaceFiles.find(
+              (file) => file.name === "MEMORY.md",
+            ),
+          )
+          .toMatchObject({ injectedChars: 0, truncated: false });
+      }
       expect(harness.requests.filter(({ method }) => method === "thread/start")).toHaveLength(1);
       expect(harness.requests.filter(({ method }) => method === "thread/resume")).toHaveLength(0);
 
@@ -4839,7 +4866,7 @@ describe("runCodexAppServerAttempt", () => {
         await releaseCodexAppServerLiveThread(harness.client, "thread-1");
       }
       const third = await runTurn();
-      if (scenario === "unchanged") {
+      if (scenario === "unchanged" || scenario === "dropped by fitting") {
         expect.soft(third.input).not.toContain(expectedMemory);
         expect.soft(third.input).not.toContain(bootstrap);
       } else {

@@ -67,6 +67,60 @@ describe("Discord webhook delivery", () => {
   });
 
   it.each([
+    {
+      label: "CommonMark bold",
+      text: "`__literal__` __Important__",
+      expected: "`__literal__` **Important**",
+      tableMode: undefined,
+    },
+    {
+      label: "configured table formatting",
+      text: "| A | B |\n| - | - |\n| x | y |",
+      expected: "```\n| A | B |\n| --- | --- |\n| x | y |\n```",
+      tableMode: undefined,
+    },
+    {
+      label: "explicit table formatting override",
+      text: "| A | B |\n| - | - |\n| x | y |",
+      expected: "| A | B |\n| - | - |\n| x | y |",
+      tableMode: "off" as const,
+    },
+    {
+      label: "prose mention after closed multiline code",
+      text: "Example: `first\nsecond`\nPlease review @alice",
+      expected: "Example: `first\nsecond`\nPlease review <@123456789>",
+      tableMode: undefined,
+    },
+  ])(
+    "preserves $label through bound-thread persona delivery",
+    async ({ text, expected, tableMode }) => {
+      mockDiscordBoundThreadManager(hoisted);
+      await withWebhookServer(
+        (_content, index) => ({ body: { id: String(index), channel_id: "thread-1" } }),
+        async (contents) => {
+          await discordOutbound.sendText?.({
+            cfg: {
+              channels: {
+                discord: {
+                  token: "Bot test-token",
+                  markdown: { tables: "code" },
+                  mentionAliases: { alice: "123456789" },
+                },
+              },
+            },
+            to: "channel:parent-1",
+            threadId: "thread-1",
+            text,
+            formatting: { tableMode },
+          });
+          expect(contents).toEqual([expected]);
+          expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
+        },
+      );
+    },
+  );
+
+  it.each([
     { label: "reasoning", text: `Reasoning:\n_${"a".repeat(4000)}_`, aliases: undefined },
     {
       label: "expanded mention",

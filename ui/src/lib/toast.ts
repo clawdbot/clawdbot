@@ -15,6 +15,8 @@ export type ToastOptions = {
   /** Positions a compact toast at the top center of the owning surface. */
   anchor?: Element;
   anchorTopOffset?: number;
+  /** Bottom placement suits settings feedback without covering the page heading. */
+  placement?: "top" | "bottom";
   icon?: TemplateResult;
   actionLabel?: string;
   onAction?: () => void;
@@ -156,7 +158,7 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     const anchored = anchorRect !== null && anchorRect.width > 0;
     return html`
       <div
-        class="app-toast ${anchored ? "app-toast--anchored" : ""}"
+        class="app-toast ${anchored ? "app-toast--anchored" : toast.placement === "bottom" ? "app-toast--bottom" : ""}"
         data-active=${this.active ? "true" : "false"}
         style=${styleMap(
           anchored

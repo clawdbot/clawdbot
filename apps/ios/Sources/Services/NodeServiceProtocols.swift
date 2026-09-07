@@ -30,7 +30,9 @@ protocol LocationServicing: Sendable {
     func authorizationStatus() -> CLAuthorizationStatus
     func accuracyAuthorization() -> CLAccuracyAuthorization
     func authorizationSnapshot() -> LocationAuthorizationSnapshot
-    func ensureAuthorization(mode: OpenClawLocationMode) async -> CLAuthorizationStatus
+    func ensureAuthorization(
+        mode: OpenClawLocationMode,
+        isCurrent: @MainActor () -> Bool) async -> CLAuthorizationStatus
     func currentLocation(
         params: OpenClawLocationGetParams,
         desiredAccuracy: OpenClawLocationAccuracy,

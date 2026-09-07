@@ -5,7 +5,7 @@ import {
   removeManagedOutgoingMediaBlocks,
 } from "../../gateway/managed-image-attachments.js";
 import {
-  buildAssistantDisplayContentFromReplyPayloads,
+  buildAssistantReplyContent,
   hasAssistantDisplayMediaContent,
   hasManagedOutgoingAssistantContent,
 } from "../../gateway/server-methods/chat-assistant-content.js";
@@ -58,7 +58,7 @@ export async function commitCurrentSessionCronCompletion(
       expectedGeneration: params.sourceSessionGeneration,
       text: completionText,
       prepareDisplayContent: async () => {
-        preparedContent = await buildAssistantDisplayContentFromReplyPayloads({
+        const { assistantContent } = await buildAssistantReplyContent({
           sessionKey: sourceSessionKey,
           agentId: params.agentId,
           // Enrich each payload before rendering so rich text, media order, and
@@ -81,6 +81,7 @@ export async function commitCurrentSessionCronCompletion(
             );
           },
         });
+        preparedContent = assistantContent;
         return hasAssistantDisplayMediaContent(preparedContent) ? preparedContent : undefined;
       },
       idempotencyKey: `cron-current-completion:${runId}`,

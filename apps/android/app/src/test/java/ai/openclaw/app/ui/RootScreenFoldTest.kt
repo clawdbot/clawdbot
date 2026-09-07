@@ -107,7 +107,7 @@ class RootScreenFoldTest {
   @get:Rule val composeRule = createComposeRule()
 
   private val layouts = MutableSharedFlow<WindowLayoutInfo>(replay = 1)
-  private val activeActivities = mutableSetOf<Activity>()
+  private val activeCollections = mutableMapOf<Activity, Int>()
   private lateinit var view: View
   private lateinit var backDispatcher: OnBackPressedDispatcher
   private lateinit var focusManager: FocusManager
@@ -122,11 +122,17 @@ class RootScreenFoldTest {
           object : WindowInfoTracker by tracker {
             override fun windowLayoutInfo(activity: Activity): Flow<WindowLayoutInfo> =
               flow {
-                check(activeActivities.add(activity))
+                activeCollections[activity] = (activeCollections[activity] ?: 0) + 1
                 try {
                   emitAll(layouts)
                 } finally {
-                  activeActivities.remove(activity)
+                  val count = checkNotNull(activeCollections[activity])
+                  check(count > 0)
+                  if (count == 1) {
+                    activeCollections.remove(activity)
+                  } else {
+                    activeCollections[activity] = count - 1
+                  }
                 }
               }
           }
@@ -831,38 +837,61 @@ class RootScreenFoldTest {
     val first = Robolectric.buildActivity(ComponentActivity::class.java).setup()
     val second = Robolectric.buildActivity(ComponentActivity::class.java).create()
     var activity by mutableStateOf(first.get())
+    var siblingEnabled by mutableStateOf(false)
     var observed = emptyList<DisplayFeature>()
+    var siblingObserved = emptyList<DisplayFeature>()
     try {
       composeRule.setContent {
         CompositionLocalProvider(LocalActivity provides activity, LocalLifecycleOwner provides activity) {
           val features = rememberWindowDisplayFeatures()
           SideEffect { observed = features }
+          if (siblingEnabled) {
+            val siblingFeatures = rememberWindowDisplayFeatures()
+            SideEffect { siblingObserved = siblingFeatures }
+          }
         }
       }
-      composeRule.runOnIdle { assertEquals(setOf(first.get()), activeActivities) }
+      composeRule.runOnIdle { assertEquals(mapOf(first.get() to 1), activeCollections) }
       val fold = testFold(Rect(490, 0, 510, 1000))
       emit(listOf(fold))
       composeRule.runOnIdle { assertEquals(listOf(fold), observed) }
+      composeRule.runOnIdle { siblingEnabled = true }
+      composeRule.runOnIdle {
+        assertEquals(mapOf(first.get() to 2), activeCollections)
+        assertEquals(listOf(fold), observed)
+        assertEquals(listOf(fold), siblingObserved)
+      }
+      composeRule.runOnIdle { siblingEnabled = false }
+      composeRule.runOnIdle { assertEquals(mapOf(first.get() to 1), activeCollections) }
+      val updatedFold = testFold(Rect(590, 0, 610, 1000))
+      emit(listOf(updatedFold))
+      composeRule.runOnIdle {
+        assertEquals(listOf(updatedFold), observed)
+        assertEquals(listOf(fold), siblingObserved)
+      }
       composeRule.runOnIdle {
         first.pause().stop()
       }
-      composeRule.runOnIdle { assertTrue(activeActivities.isEmpty()) }
+      composeRule.runOnIdle { assertTrue(activeCollections.isEmpty()) }
       composeRule.runOnIdle { first.start().resume() }
-      composeRule.runOnIdle { assertEquals(setOf(first.get()), activeActivities) }
+      composeRule.runOnIdle {
+        assertEquals(mapOf(first.get() to 1), activeCollections)
+        assertEquals(listOf(updatedFold), observed)
+      }
       composeRule.runOnIdle { activity = second.get() }
       composeRule.runOnIdle {
-        assertTrue("The stopped replacement must not collect", activeActivities.isEmpty())
+        assertTrue("The stopped replacement must not collect", activeCollections.isEmpty())
         assertTrue("Do not retain old-Activity features while awaiting an emission", observed.isEmpty())
         first.pause().stop().destroy()
         second.start().resume()
       }
-      composeRule.runOnIdle { assertEquals(setOf(second.get()), activeActivities) }
+      composeRule.runOnIdle { assertEquals(mapOf(second.get() to 1), activeCollections) }
       emit(emptyList())
       composeRule.runOnIdle {
         assertTrue(observed.isEmpty())
         second.pause().stop().destroy()
       }
-      composeRule.runOnIdle { assertTrue(activeActivities.isEmpty()) }
+      composeRule.runOnIdle { assertTrue(activeCollections.isEmpty()) }
     } finally {
       if (!first.get().isDestroyed) first.pause().stop().destroy()
       if (!second.get().isDestroyed) second.pause().stop().destroy()

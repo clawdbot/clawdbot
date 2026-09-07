@@ -62,11 +62,13 @@ import {
 import { appendSessionResetBoundary } from "./session-accessor.sqlite-reset-boundary.js";
 import {
   cloneSessionEntry,
+  resolveSqliteAgentId,
   resolveSqliteReadScope,
   resolveSqliteStoreScope,
   resolveSqliteTranscriptArchiveDirectory,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
+  type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
 import {
   collectAdmissionProtectedSessionIds,
@@ -608,14 +610,23 @@ export async function deleteSessionEntryLifecycle(
 /** Disk-budget owner: delete one exact archived row without recursively scheduling another pass. */
 export async function deleteDiskBudgetSessionEntryLifecycle(
   params: DeleteSessionEntryLifecycleParams,
+  resolved: ResolvedSqliteScope,
 ): Promise<DeleteSessionEntryLifecycleResult> {
-  const agentId = params.agentId ?? parseAgentSessionKey(params.target.canonicalKey)?.agentId;
-  const resolved = resolveSqliteStoreScope(params.storePath, { agentId });
+  // A shared store lends its physical owner, not the victim's logical identity.
+  // Validate against captured ownership so a custom selector cannot retarget cleanup.
+  const targetScope = {
+    ...resolved,
+    agentId: resolveSqliteAgentId({
+      scopedAgentId: params.agentId ?? parseAgentSessionKey(params.target.canonicalKey)?.agentId,
+      storeAgentId: resolved.databaseAgentId ?? resolved.agentId,
+      storeShared: resolved.databaseAgentId !== undefined,
+    }),
+  };
   return await withCommittedHistoryMaintenance(
     params,
     async (recordCommit, markCommitted) =>
       await deleteSqliteSessionEntryLifecycleLocked(
-        resolved,
+        targetScope,
         params,
         false,
         undefined,

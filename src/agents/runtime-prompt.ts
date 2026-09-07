@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../infra/os-summary.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
-import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import {
   listChannelSupportedActions,
   resolveChannelMessageToolHints,
@@ -32,7 +31,6 @@ export async function resolveAgentRuntimePrompt(params: {
   currentMessageId?: string | number | null;
   senderId?: string | null;
   senderIsOwner?: boolean | null;
-  activeProcessSessions?: ActiveProcessSessionReference[];
 }) {
   const runtimeChannel = normalizeMessageChannel(params.channel);
   const channelPromptContext = {
@@ -91,7 +89,6 @@ export async function resolveAgentRuntimePrompt(params: {
       chatType: params.chatType,
       capabilities: runtimeCapabilities,
       channelActions,
-      activeProcessSessions: params.activeProcessSessions,
     },
   });
 

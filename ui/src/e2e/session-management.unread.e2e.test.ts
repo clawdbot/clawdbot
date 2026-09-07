@@ -150,7 +150,7 @@ suite.define(() => {
           markedUnreadAt: marker,
         },
       });
-      await activeRow.locator(".session-run-spinner").waitFor();
+      await activeRow.locator(".sidebar-session-indicator .session-glyph__ring").waitFor();
       await expectRequestCountStable(gateway, "sessions.patch", 1);
       await captureUiProof(suite, page, "manual-unread-running.png");
 

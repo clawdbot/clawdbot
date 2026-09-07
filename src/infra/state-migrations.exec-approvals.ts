@@ -14,11 +14,13 @@ import {
   tryParsePersistedExecApprovals,
 } from "./exec-approvals-config.js";
 import type { ExecApprovalsFile } from "./exec-approvals-core.js";
+import { ExecApprovalsMigrationRequiredError } from "./exec-approvals-migration-gate.js";
 import {
   readExecApprovalsConfigRow,
   serializeExecApprovals,
   writeExecApprovalsConfigRow,
 } from "./exec-approvals-sqlite.js";
+import { pathMayExistSync } from "./path-existence.js";
 import type { LegacyExecApprovalsDetection } from "./state-migrations.exec-approvals.types.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
@@ -249,11 +251,11 @@ function decideAndRecordMigration(params: {
         reportJson,
         upsert: true,
       });
-      const message =
-        decisionMessage(decision, removeSource) +
-        (legacy.ok
-          ? ""
-          : ` First problem: ${legacy.error}. Repair exec-approvals.json locally, then rerun \`openclaw doctor --fix\` with the same OPENCLAW_STATE_DIR.`);
+      const message = removeSource
+        ? decisionMessages[decision]
+        : legacy.ok
+          ? "Conflicting legacy exec approvals remain"
+          : `Invalid legacy exec approvals (${legacy.error})`;
       return { message, removeSource, sourceKey };
     },
     { env: params.env },
@@ -261,26 +263,15 @@ function decideAndRecordMigration(params: {
   );
 }
 
-function decisionMessage(decision: MigrationDecision, removeSource: boolean): string {
-  switch (decision) {
-    case "empty-legacy-retired":
-      return "Archived empty legacy exec approvals without changing SQLite policy.";
-    case "legacy-imported":
-      return "Imported legacy exec approvals into shared SQLite state.";
-    case "invalid-canonical-repaired":
-      return "Replaced an invalid SQLite exec approvals row with validated legacy state.";
-    case "canonical-preserved":
-      return removeSource
-        ? "Preserved byte-identical canonical SQLite exec approvals."
-        : "Preserved canonical SQLite exec approvals and retained conflicting legacy JSON.";
-    case "malformed-legacy-preserved":
-      return "Preserved malformed legacy exec approvals for operator recovery.";
-    case "receipt-authoritative":
-      return "Completed cleanup for previously imported legacy exec approvals.";
-  }
-  const unreachable: never = decision;
-  return unreachable;
-}
+const decisionMessages: Record<MigrationDecision, string> = {
+  "empty-legacy-retired": "Archived empty legacy exec approvals without changing SQLite policy.",
+  "legacy-imported": "Imported legacy exec approvals into shared SQLite state.",
+  "invalid-canonical-repaired":
+    "Replaced an invalid SQLite exec approvals row with validated legacy state.",
+  "canonical-preserved": "Preserved byte-identical canonical SQLite exec approvals.",
+  "malformed-legacy-preserved": "Preserved malformed legacy exec approvals for operator recovery.",
+  "receipt-authoritative": "Completed cleanup for previously imported legacy exec approvals.",
+};
 
 async function migrateWithExclusiveStateOwnership(params: {
   detected: LegacyExecApprovalsDetection;
@@ -445,13 +436,13 @@ export async function migrateLegacyExecApprovals(params: {
   if (!detected?.hasLegacy) {
     return { changes: [], warnings: [] };
   }
-  return await withLegacyMigrationStateLock({
+  const result = await withLegacyMigrationStateLock({
     stateDir: params.stateDir,
     env: params.env,
     label: "legacy exec approvals",
     releaseLabel: "Exec approvals",
     errorLabel: "Failed reading legacy exec approvals",
-    retryGuidance: "Stop the Gateway, then run `openclaw doctor --fix` again.",
+    retryGuidance: `Stop the Gateway and node hosts holding ${params.stateDir}.`,
     run: async (env) => {
       const stateRoot = await root(params.stateDir, {
         hardlinks: "reject",
@@ -466,4 +457,22 @@ export async function migrateLegacyExecApprovals(params: {
       });
     },
   });
+  if (result.changes.length > 0) {
+    return result;
+  }
+  const retainedPaths = [
+    detected.sourcePath,
+    `${detected.sourcePath}${DOCTOR_CLAIM_SUFFIX}`,
+  ].filter(pathMayExistSync);
+  return {
+    ...result,
+    warnings: result.warnings.map(
+      (problem) =>
+        new ExecApprovalsMigrationRequiredError(
+          retainedPaths.join(", ") || detected.sourcePath,
+          "doctor",
+          problem,
+        ).message,
+    ),
+  };
 }

@@ -115,6 +115,46 @@ another restart.
 
 See [Release channels](/install/development-channels) for channel semantics.
 
+### Updating from 2026.9.2 across a schema bump
+
+Updates driven by OpenClaw 2026.9.2 can cross a shared-state schema bump normally.
+The target applies the migration content while retaining the old published
+schema version, so the old updater can finish its ledger writes and final
+report. Doctor explains that schema content is applied and version publication
+is deferred. The new Gateway runs on the migrated content during this interval.
+
+Publication waits until every affected update run has been terminal for at least
+five minutes. A running row that has not changed for more than 30 minutes counts
+as abandoned for this purpose. The Gateway watcher publishes after the deadline;
+a later database open can also publish it. See the precise timing and residual
+old-CLI limitation in [Database schemas](/reference/database-schemas#schema-bumps-and-older-updaters).
+
+If an agent database also needs migration, required state metadata is missing,
+or the state-content migration fails, Doctor instead reports
+`update-schema-bump-unfenced` with database versions and manual update commands.
+Let the failed update finish restoring the previous package. OpenClaw 2026.9.2
+leaves the Gateway service stopped after failed post-install verification. Run
+the manual update from a shell outside the Gateway, replacing `<target>` with
+the exact target version from the refusal:
+
+```bash
+openclaw gateway stop
+npm install -g openclaw@<target> --allow-scripts=openclaw
+openclaw doctor --fix
+openclaw gateway start
+```
+
+Run each command only after the previous one succeeds. On npm 11.15 and earlier,
+omit `--allow-scripts=openclaw`. For a pnpm-owned install, replace the install
+command with `pnpm add -g --allow-build=openclaw openclaw@<target>`; for Bun, use
+`bun add -g --trust openclaw@<target>`.
+
+Same-schema updates, earlier ledger-less updaters such as 2026.9.1, and fenced
+transactional updaters from 2026.9.3 onward keep their existing behavior. The
+fallback does not undo an earlier migration; if the database is already newer
+than the restored package, install a compatible target and finish Doctor before
+starting the Gateway.
+
 ### From chat
 
 The OpenClaw owner can say "update" (the agent uses the `gateway` action
