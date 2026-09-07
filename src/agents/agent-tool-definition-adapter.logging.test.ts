@@ -22,6 +22,7 @@ let createBeforeToolCallBlockedError: typeof import("./agent-tools.before-tool-c
 let wrapToolParamValidation: typeof import("./agent-tools.params.js").wrapToolParamValidation;
 let REQUIRED_PARAM_GROUPS: typeof import("./agent-tools.params.js").REQUIRED_PARAM_GROUPS;
 let logError: typeof import("../logger.js").logError;
+let withToolOperatorHint: typeof import("./tool-operator-hint.js").withToolOperatorHint;
 
 type ToolExecute = ReturnType<
   typeof import("./agent-tool-definition-adapter.js").toToolDefinitions
@@ -39,6 +40,7 @@ describe("agent tool definition adapter logging", () => {
       await import("./agent-tools.before-tool-call.test-support.js"));
     ({ wrapToolParamValidation, REQUIRED_PARAM_GROUPS } = await import("./agent-tools.params.js"));
     ({ logError } = await import("../logger.js"));
+    ({ withToolOperatorHint } = await import("./tool-operator-hint.js"));
   });
 
   beforeEach(() => {
@@ -77,6 +79,42 @@ describe("agent tool definition adapter logging", () => {
     expect(firstLogErrorMessage()).toContain(
       '[tools] edit failed: Missing required parameter: edits (received: path). Supply correct parameters before retrying. raw_params={"path":"notes.txt"}',
     );
+  });
+
+  it("logs the operator hint for a contained tool failure without exposing it to the model", async () => {
+    const baseTool = {
+      name: "apply_patch",
+      label: "apply_patch",
+      description: "patches files",
+      parameters: Type.Object({ input: Type.String() }),
+      execute: async () => {
+        throw withToolOperatorHint(
+          new Error("Path escapes sandbox root (~/workspace): /outside/note.md"),
+          "apply_patch is restricted to the workspace by default. Set tools.exec.applyPatch.workspaceOnly to false.",
+        );
+      },
+    } satisfies AgentTool;
+    const [def] = toToolDefinitions([baseTool]);
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+
+    const result = await def.execute(
+      "call-hint-1",
+      { input: "*** Begin Patch" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    const logged = String(firstLogErrorMessage());
+    expect(logged).toContain("Path escapes sandbox root");
+    expect(logged).toContain("tools.exec.applyPatch.workspaceOnly");
+
+    // The model-visible result carries the rejection but never the way to lift it.
+    const modelText = JSON.stringify(result);
+    expect(modelText).toContain("Path escapes sandbox root");
+    expect(modelText).not.toContain("workspaceOnly");
   });
 
   it("does not log raw params for intentional before_tool_call blocks", async () => {

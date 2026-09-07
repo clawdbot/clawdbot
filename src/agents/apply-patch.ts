@@ -9,6 +9,10 @@ import { Type } from "typebox";
 import { createAbortError } from "../infra/abort-signal.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import {
+  type ApplyPatchContainmentSource,
+  withApplyPatchContainmentHint,
+} from "./apply-patch-containment-hint.js";
+import {
   type ApplyPatchFileOptions,
   createPatchTarget,
   type PatchFileOps,
@@ -121,6 +125,7 @@ export function createApplyPatchTool(
     root?: string;
     sandbox?: SandboxApplyPatchConfig;
     workspaceOnly?: boolean;
+    containmentSource?: ApplyPatchContainmentSource;
     abortSignal?: AbortSignal;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   } = {},
@@ -149,14 +154,22 @@ export function createApplyPatchTool(
         throw createAbortError("Aborted");
       }
 
-      const result = await applyPatch(input, {
-        cwd,
-        root,
-        sandbox,
-        workspaceOnly,
-        memoryWriteProvenance: options.memoryWriteProvenance,
-        signal: executionSignal,
-      });
+      let result: Awaited<ReturnType<typeof applyPatch>>;
+      try {
+        result = await applyPatch(input, {
+          cwd,
+          root,
+          sandbox,
+          workspaceOnly,
+          memoryWriteProvenance: options.memoryWriteProvenance,
+          signal: executionSignal,
+        });
+      } catch (error) {
+        throw withApplyPatchContainmentHint(
+          error,
+          workspaceOnly ? options.containmentSource : undefined,
+        );
+      }
 
       // A no-op patch is not terminal — the model may still be mid-task and
       // needs a continuation, not an ended turn.

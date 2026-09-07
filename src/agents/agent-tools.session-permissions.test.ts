@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import * as logger from "../logger.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
@@ -60,6 +62,58 @@ async function withAliasedWorkspace(
 }
 
 describe("session permission filesystem tools", () => {
+  it.each([undefined, "guarded", "full"] as const)(
+    "logs required-root containment without exposing policy advice to the model (mode=%s)",
+    async (mode) => {
+      await withTempDir("openclaw-required-root-hint-", async (dir) => {
+        const parent = await fs.realpath(dir);
+        const root = path.join(parent, "workspace");
+        const outside = path.join(parent, "outside.txt");
+        await fs.mkdir(root);
+        await fs.writeFile(outside, "original\n");
+        const patch = createOpenClawCodingTools({
+          workspaceDir: root,
+          requireWorkspaceOnly: true,
+          sessionPermissionPolicy: mode ? { root, mode } : undefined,
+          config: {
+            tools: { fs: { workspaceOnly: false }, exec: { applyPatch: { workspaceOnly: false } } },
+          },
+        }).find((tool) => tool.name === "apply_patch");
+        if (!patch) {
+          throw new Error("expected apply_patch tool");
+        }
+        const [definition] = toToolDefinitions([patch]);
+        if (!definition) {
+          throw new Error("expected apply_patch definition");
+        }
+        // SAFETY: this core tool does not consume extension context; no extension hooks are installed.
+        const context = {} as Parameters<typeof definition.execute>[4];
+        const logError = vi.spyOn(logger, "logError").mockImplementation(() => {});
+        try {
+          const result = await definition.execute(
+            "required-root-hint",
+            {
+              input: `*** Begin Patch\n*** Update File: ${outside}\n@@\n-original\n+changed\n*** End Patch`,
+            },
+            undefined,
+            undefined,
+            context,
+          );
+          expect(logError).toHaveBeenCalledWith(expect.stringContaining("required workspace root"));
+          expect(logError.mock.calls[0]?.[0]).not.toContain("Only a full");
+          expect(result.details).toEqual({
+            status: "error",
+            tool: "apply_patch",
+            error: `Path escapes sandbox root (${root}): ${outside}`,
+          });
+          await expect(fs.readFile(outside, "utf8")).resolves.toBe("original\n");
+        } finally {
+          logError.mockRestore();
+        }
+      });
+    },
+  );
+
   describe.runIf(process.platform !== "win32")(
     "guarded canonical root with alias workspace",
     () => {

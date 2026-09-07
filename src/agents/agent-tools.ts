@@ -625,6 +625,12 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const applyPatchWorkspaceOnly =
     workspaceOnly ||
     (sessionCoreToolPolicy?.applyPatchWorkspaceOnly ?? applyPatchConfig?.workspaceOnly !== false);
+  // A required root survives full permission mode and both workspaceOnly config switches.
+  const applyPatchContainmentSource = options?.requireWorkspaceOnly
+    ? "required-root"
+    : sessionCoreToolPolicy
+      ? "session"
+      : "config";
   const applyPatchEnabled =
     !readOnly &&
     applyPatchConfig?.enabled !== false &&
@@ -664,6 +670,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     memoryWriteProvenance,
     applyPatchEnabled,
     applyPatchWorkspaceOnly,
+    applyPatchContainmentSource,
     execDefaults: {
       ...execDefaults,
       bypassHostApprovalFloors:
