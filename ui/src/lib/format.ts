@@ -10,7 +10,7 @@ import {
   resolveCompactDurationParts,
   resolveSingleUnitDurationParts,
   type DurationPart,
-} from "../../../src/infra/format-time/format-duration-internal.ts";
+} from "../../../src/infra/format-time/duration-parts.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { formatUiError } from "./format-error.ts";
 

@@ -1,11 +1,8 @@
 // Duration formatting helpers produce compact, precise, and human display
 // strings from millisecond values.
 import prettyMilliseconds from "pretty-ms";
-import {
-  formatDurationParts,
-  formatSingleUnitDuration,
-  resolveCompactDurationParts,
-} from "./format-duration-internal.js";
+import { resolveCompactDurationParts } from "./duration-parts.js";
+import { formatDurationParts, formatSingleUnitDuration } from "./format-duration-internal.js";
 
 export type FormatDurationSecondsOptions = {
   decimals?: number;
