@@ -14,6 +14,7 @@ import {
   projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
   sameDefaultInferenceRoute,
+  type SystemAgentConfigSnapshot,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
 import {
@@ -87,6 +88,7 @@ export async function verifySetupInference(
   let verifiedBinding: SystemAgentVerifiedInferenceBinding | undefined;
   const verification = await verifySetupInferenceConfig({
     config: cfg,
+    configSnapshot: snapshot,
     runtime: params.runtime,
     requireExecutionOwner: params.bindSession === true,
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -125,7 +127,12 @@ export async function verifySetupInference(
   if (!params.bindSession) {
     return verification;
   }
-  const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(cfg, params.agentId);
+  const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(
+    cfg,
+    params.agentId,
+    {},
+    snapshot,
+  );
   if (!configuredRoute || !verifiedBinding) {
     return {
       ok: false,
@@ -151,7 +158,7 @@ export type ResolvePersistentApplyInferenceDeps = SystemAgentVerifiedInferenceDe
 };
 
 function executionRouteIdentity(route: SystemAgentConfiguredRoute): unknown {
-  const { runConfig: _runConfig, ...identity } = route;
+  const { runConfig: _runConfig, sourceConfig: _sourceConfig, ...identity } = route;
   return identity;
 }
 
@@ -214,6 +221,8 @@ export async function resolvePersistentApplyInference(params: {
 /** Live-test a staged default-agent route before any caller persists it. */
 export async function verifySetupInferenceConfig(params: {
   config: OpenClawConfig;
+  /** Present only when config is the unchanged runtime view from this read. */
+  configSnapshot?: SystemAgentConfigSnapshot;
   /** Interactive candidate activation verifies managed tool-capable models before persistence. */
   verifyAgentTools?: boolean;
   /** Candidate profiles staged in the isolated probe store, never the real agent store. */
@@ -253,6 +262,7 @@ export async function verifySetupInferenceConfig(params: {
       kind: "existing-model",
       cfg,
       sourceCfg: cfg,
+      configSnapshot: params.configSnapshot,
       workspaceDir: tempDir,
       pluginWorkspaceDir: tempDir,
       agentDir: path.join(tempDir, "agent"),
@@ -348,7 +358,12 @@ export async function verifySetupInferenceConfig(params: {
     let stagedOwnerPluginArtifacts: SystemAgentOwnerPluginArtifactSnapshot | undefined;
     if (requiresExecutionOwner) {
       configuredRoute =
-        (await resolveSystemAgentConfiguredRouteFromConfig(cfg, routeAgentId)) ?? undefined;
+        (await resolveSystemAgentConfiguredRouteFromConfig(
+          cfg,
+          routeAgentId,
+          {},
+          params.configSnapshot,
+        )) ?? undefined;
       if (!configuredRoute) {
         return {
           ok: false,
@@ -483,6 +498,7 @@ export async function completeSetupInference(params: {
   }
   return await completeSetupInferenceConfig({
     config: snapshot.runtimeConfig ?? snapshot.config,
+    configSnapshot: snapshot,
     prompt: params.prompt,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     runtime: params.runtime,
@@ -494,6 +510,7 @@ export async function completeSetupInference(params: {
 /** Config-injected variant used by setup clients and live provider tests. */
 export async function completeSetupInferenceConfig(params: {
   config: OpenClawConfig;
+  configSnapshot?: SystemAgentConfigSnapshot;
   prompt: string;
   agentId?: string;
   runtime: RuntimeEnv;
@@ -516,6 +533,7 @@ export async function completeSetupInferenceConfig(params: {
       kind: "existing-model",
       cfg: params.config,
       sourceCfg: params.config,
+      configSnapshot: params.configSnapshot,
       workspaceDir: tempDir,
       pluginWorkspaceDir: tempDir,
       agentDir: path.join(tempDir, "agent"),

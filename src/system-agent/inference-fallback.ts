@@ -3,7 +3,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { listAgentIds } from "../agents/agent-scope.js";
 import { hasAvailableAuthForProvider } from "../agents/model-auth.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -44,13 +44,9 @@ type InferenceFallbackDeps = {
   }) => Promise<BoundVerifySetupInferenceResult>;
 };
 
-async function readCurrentConfig(): Promise<OpenClawConfig> {
+async function readCurrentSnapshot(): Promise<ConfigFileSnapshot> {
   const { readConfigFileSnapshot } = await import("../config/config.js");
-  const snapshot = await readConfigFileSnapshot();
-  if (!snapshot.exists || !snapshot.valid) {
-    return {};
-  }
-  return snapshot.runtimeConfig ?? snapshot.config;
+  return await readConfigFileSnapshot();
 }
 
 type InferenceFallbackParams = {
@@ -82,13 +78,21 @@ export async function verifySystemAgentInferenceWithFallback(
 ): Promise<BoundVerifySetupInferenceResult | ConfiguredRouteResult> {
   const deps = params.deps ?? {};
   const routePolicy = params.routePolicy;
-  const config = await (deps.readConfig ?? readCurrentConfig)();
+  const snapshot = deps.readConfig ? undefined : await readCurrentSnapshot();
+  const config = deps.readConfig
+    ? await deps.readConfig()
+    : snapshot?.exists && snapshot.valid
+      ? (snapshot.runtimeConfig ?? snapshot.config)
+      : {};
   const requestedAgentId = resolveAmbientOwnerAgentId(config, params.requestingAgentId);
   const candidateAgentIds = new Set([
     requestedAgentId,
     ...listAgentIds(config).map((agentId) => normalizeAgentId(agentId)),
   ]);
-  const resolveRoute = deps.resolveRoute ?? resolveSystemAgentConfiguredRouteFromConfig;
+  const resolveRoute =
+    deps.resolveRoute ??
+    ((candidateConfig: OpenClawConfig, agentId: string) =>
+      resolveSystemAgentConfiguredRouteFromConfig(candidateConfig, agentId, {}, snapshot));
   const routes: Array<{ agentId: string; provider: string; route: SystemAgentConfiguredRoute }> =
     [];
   for (const agentId of candidateAgentIds) {
@@ -154,7 +158,7 @@ export async function verifySystemAgentInferenceWithFallback(
       candidate !== first &&
       !(await hasAuth({
         provider: candidate.provider,
-        cfg: config,
+        cfg: candidate.route.runConfig,
         preferredProfile: candidate.route.authProfileId,
         agentDir: candidate.route.agentDir,
         modelId: candidate.route.model,

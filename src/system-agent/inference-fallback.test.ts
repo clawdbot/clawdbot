@@ -11,6 +11,7 @@ function route(agentId: string, provider: string): SystemAgentConfiguredRoute {
     runner: "embedded",
     agentHarnessRuntimeOverride: "openclaw",
     runConfig: {},
+    sourceConfig: {},
     modelLabel: `${provider}/model`,
     provider,
     model: "model",

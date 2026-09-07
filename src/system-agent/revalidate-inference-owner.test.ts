@@ -36,6 +36,7 @@ function embeddedRoute(agentHarnessRuntimeOverride: string): SystemAgentConfigur
     agentId: "main",
     agentDir: "/tmp/openclaw-agent",
     agentHarnessRuntimeOverride,
+    sourceConfig: {},
     runConfig: {
       agents: {
         defaults: {

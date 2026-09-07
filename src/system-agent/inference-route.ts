@@ -10,12 +10,16 @@ import {
   cliBackendAcceptsAuthProfileForwarding,
   resolveCliExecutionAuthProfileId,
 } from "../agents/cli-execution-auth.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
+import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { SYSTEM_AGENT_ID } from "./agent-id.js";
 
 export type SystemAgentConfiguredRoute = {
+  /** Unprojected input, kept separate from prepared execution credentials. */
+  sourceConfig: OpenClawConfig;
   runConfig: OpenClawConfig;
   modelLabel: string;
   provider: string;
@@ -41,10 +45,16 @@ type SystemAgentRouteProjectionDeps = Pick<
   "loadAuthProfileStoreForRuntime" | "pluginMetadataPlugins"
 >;
 
+/** The canonical source and default-materialized view from one authoritative read. */
+export type SystemAgentConfigSnapshot = Pick<
+  ConfigFileSnapshot,
+  "sourceConfig" | "runtimeConfig" | "config"
+>;
+
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
 export type DefaultInferenceRouteProjection = {
-  route: DistributiveOmit<SystemAgentConfiguredRoute, "runConfig"> | null;
+  route: DistributiveOmit<SystemAgentConfiguredRoute, "runConfig" | "sourceConfig"> | null;
   defaultSelection: { explicitIds: string[]; fallbackId?: string };
   auth: unknown;
   models: unknown;
@@ -73,20 +83,33 @@ function projectSystemAgentExecutionConfig(
     },
   ];
   const { list: _legacyList, ...agentsConfig } = config.agents ?? {};
-  return {
+  const projected = {
     ...config,
     agents: {
       ...agentsConfig,
       entries: toAgentEntriesRecord(projectedAgents),
     },
   };
+  copyConfigResolutionFacts(config, projected);
+  return projected;
 }
 
 export async function resolveSystemAgentConfiguredRouteFromConfig(
   runConfig: OpenClawConfig,
   requestedAgentId?: string,
   deps: SystemAgentRouteProjectionDeps = {},
+  configSnapshot?: SystemAgentConfigSnapshot,
 ): Promise<SystemAgentConfiguredRoute | null> {
+  // Match before adding the reserved execution agent changes the source shape.
+  // Gateway publication owns the canonical source, not the default-materialized
+  // view. Only that exact view may use its paired source; a staged candidate must
+  // match on its own, even when its caller still holds the original snapshot.
+  const source =
+    configSnapshot && runConfig === (configSnapshot.runtimeConfig ?? configSnapshot.config)
+      ? configSnapshot.sourceConfig
+      : runConfig;
+  const prepared = createRuntimeConfigReader(source)();
+  const preparedConfig = prepared === source ? runConfig : prepared;
   const [agentScope, modelSelection, modelRuntimeAliases, simpleCompletion, harnessPolicy] =
     await Promise.all([
       import("../agents/agent-scope.js"),
@@ -147,8 +170,9 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
       })
     : undefined;
   const authProfileId = allowCliAuthProfileForwarding ? cliAuthProfileId : selection.profileId;
-  const executionConfig = projectSystemAgentExecutionConfig(runConfig, modelOwnerAgentId);
+  const executionConfig = projectSystemAgentExecutionConfig(preparedConfig, modelOwnerAgentId);
   const base = {
+    sourceConfig: runConfig,
     runConfig: executionConfig,
     modelLabel: `${selection.provider}/${selection.modelId}`,
     provider: executionProvider,
@@ -277,7 +301,7 @@ export async function projectInferenceRoute(
     Object.values(agentRouteOverrides).some((value) => value !== undefined);
   let projectedRoute: DefaultInferenceRouteProjection["route"] = null;
   if (route) {
-    const { runConfig: _runConfig, ...routeWithoutConfig } = route;
+    const { runConfig: _runConfig, sourceConfig: _sourceConfig, ...routeWithoutConfig } = route;
     projectedRoute = routeWithoutConfig;
   }
   return {

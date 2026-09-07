@@ -181,6 +181,7 @@ async function activateSetupInferenceUnredacted(
       ...(params.apiKey !== undefined ? { apiKey: params.apiKey } : {}),
       cfg,
       sourceCfg,
+      configSnapshot: snapshot,
       workspaceDir: tempDir,
       pluginWorkspaceDir: workspace,
       agentDir: testAgentDir,
@@ -471,6 +472,7 @@ async function activateSetupInferenceUnredacted(
       testPlan.config,
       requestedAgentId,
       routeDeps,
+      snapshot,
     );
     if (
       !stagedRoute ||
@@ -627,6 +629,7 @@ async function activateSetupInferenceUnredacted(
             latestRuntime,
             requestedAgentId,
             routeDeps,
+            latestSnapshot,
           )
         : null;
       if (!latestResolvedRoute) {
