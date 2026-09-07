@@ -760,6 +760,8 @@ diagnose a failed check. Recovery guidance reports whether the Gateway is runnin
 or stopped from the latest service observation, even when a running candidate did
 not pass verification. A restored Gateway must pass its own verification checks
 before the run can finish as `rolled-back`.
+Automatic triage never follows a verified rollback; it runs only when the update
+ends failed.
 
 If the config file changed after the activation Doctor pass or the databases are
 not schema-neutral, rollback is refused with

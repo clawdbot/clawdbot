@@ -1,4 +1,4 @@
-name: Node 22 Compat
+name: Node 26 minimum Compat
 
 on:
   schedule:
@@ -22,23 +22,23 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           cache-mode: restore
-          node-version: "22.23.2"
+          node-version: "26.1.0"
           install-bun: "false"
 
       - name: Resolve trusted declaration cache artifact
         id: declaration_cache
         env:
-          ARTIFACT_NAME: build-all-cache-v1-Linux-X64-node-22.23.2
+          ARTIFACT_NAME: build-all-cache-v1-Linux-X64-node-26.1.0
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           if ! runs_json="$(
             gh api \
-              "repos/${GITHUB_REPOSITORY}/actions/workflows/node22-compat.yml/runs?branch=main&status=success&per_page=5" \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/node-runtime-compat.yml/runs?branch=main&status=success&per_page=5" \
               2>/dev/null
           )"; then
-            echo "::warning::Unable to list trusted Node 22 runs; continuing cold."
+            echo "::warning::Unable to list trusted Node 26 minimum runs; continuing cold."
             exit 0
           fi
 
@@ -76,7 +76,7 @@ jobs:
                 .status == "completed" and
                 .conclusion == "success" and
                 .head_branch == "main" and
-                (.path | split("@")[0]) == ".github/workflows/node22-compat.yml" and
+                (.path | split("@")[0]) == ".github/workflows/node-runtime-compat.yml" and
                 (.event == "schedule" or .event == "workflow_dispatch")
               ) |
               [.id, .head_sha] |
@@ -99,7 +99,7 @@ jobs:
       - name: Configure Node test resources
         run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
 
-      - name: Run Node 22 compatibility
+      - name: Run Node 26 minimum compatibility
         env:
           NODE_OPTIONS: --max-old-space-size=8192
         run: |
@@ -108,6 +108,7 @@ jobs:
           node openclaw.mjs --help
           node openclaw.mjs status --json --timeout 1
           pnpm test:build:singleton
+          pnpm test src/config/sessions/session-suggestion-store.test.ts src/config/sessions/session-sharing-store.test.ts src/config/sessions/session-accessor.creation-snapshot.test.ts
 
       - name: Publish trusted declaration cache artifact
         if: success() && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'
@@ -116,7 +117,7 @@ jobs:
           compression-level: 1
           if-no-files-found: error
           include-hidden-files: true
-          name: build-all-cache-v1-${{ runner.os }}-${{ runner.arch }}-node-22.23.2
+          name: build-all-cache-v1-${{ runner.os }}-${{ runner.arch }}-node-26.1.0
           overwrite: true
           path: .artifacts/build-all-cache
           retention-days: 14

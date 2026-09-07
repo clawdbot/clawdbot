@@ -129,7 +129,8 @@ export class WorkerTaskPool<Input, Output> {
   // Worker listeners outlive tasks; their creation scope must not retain an async task frame.
   private createWorker(slot: Slot<Input, Output>): Worker {
     const worker = new Worker(this.options.workerUrl, {
-      execArgv: this.options.workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : [],
+      // Preserve native require(ESM) and its transitive import-only exports.
+      execArgv: this.options.workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx/esm"] : [],
       ...this.options.workerOptions,
     });
     slot.worker = worker;
