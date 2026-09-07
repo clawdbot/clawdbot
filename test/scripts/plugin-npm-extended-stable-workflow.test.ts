@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { PLUGIN_NPM_RELEASE_AUTHORITY_PATHS } from "../../scripts/lib/plugin-publication-candidates.ts";
@@ -166,6 +167,40 @@ function runStableBootstrapAdmission(
 }
 
 describe("plugin npm extended-stable workflow", () => {
+  it.each([
+    ["selected existing-package repair", "", "latest", "full-release-validation", false],
+    ["qualified stable publication", "stable", "latest", "full-release-validation", true],
+    ["qualified full publication", "full", "latest", "full-release-validation", true],
+    ["beta publication", "beta", "beta", "full-release-validation", false],
+    ["focused beta evidence", "beta", "latest", "authorized-beta-focused-v1", false],
+  ])(
+    "creates bootstrap approval only with qualified evidence: %s",
+    (_name, profile, distTag, evidenceMode, expected) => {
+      const parent = parse(
+        readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8"),
+      ) as Workflow;
+      for (const name of [
+        "Prepare stable npm bootstrap approval",
+        "Attest stable npm bootstrap approval",
+        "Upload stable npm bootstrap approval",
+      ]) {
+        const condition = step(parent.jobs?.publish, name).if!;
+        expect(
+          runInNewContext(condition.slice(3, -2), {
+            inputs: {
+              npm_dist_tag: distTag,
+              release_evidence_mode: evidenceMode,
+              publish_openclaw_npm: false,
+              plugin_publish_scope: "selected",
+            },
+            needs: { resolve_release_target: { outputs: { release_profile: profile } } },
+          }),
+          name,
+        ).toBe(expected);
+      }
+    },
+  );
+
   it.skipIf(process.platform === "win32")(
     "admits exact attested stable/full bootstrap and retains beta",
     () => {
