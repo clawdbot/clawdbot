@@ -1,5 +1,6 @@
 import fsSync from "node:fs";
 import path from "node:path";
+import { statRegularFile } from "@openclaw/fs-safe/advanced";
 import { normalizeOptionalString as normalizeOptionalStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { ClawHubDownloadResult } from "../../infra/clawhub-artifacts.js";
 import {
@@ -286,6 +287,11 @@ export async function readClawHubSkillsLockfile(
 ): Promise<ClawHubSkillsLockfile> {
   for (const candidate of metadataPaths(workspaceDir, "lock.json")) {
     try {
+      // Missing metadata is normal before installation. Leave present-file races
+      // and uncertain paths to the strict reader, including its error diagnostics.
+      if ((await statRegularFile(candidate).catch(() => undefined))?.missing) {
+        continue;
+      }
       return parseClawHubSkillsLockfile(await readJson<Partial<ClawHubSkillsLockfile>>(candidate));
     } catch (err) {
       if (err instanceof JsonFileReadError && hasErrnoCode(err.cause, "ENOENT")) {
