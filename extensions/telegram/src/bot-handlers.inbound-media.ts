@@ -218,7 +218,7 @@ export function createTelegramInboundMedia({
       },
     );
     const hasAnyMention = textParts.entities.some((entity) => entity.type === "mention");
-    const explicitlyMentioned = botUsername ? hasBotMention(msg, botUsername) : false;
+    const explicitlyMentioned = botUsername ? hasBotMention(msg, botUsername, ctx.me?.id) : false;
     const wasMentioned = matchesMentionWithExplicit({
       text: textParts.text,
       mentionRegexes,

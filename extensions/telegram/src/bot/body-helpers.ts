@@ -347,7 +347,7 @@ function isBotCommandAddressedToMention(command: string, mention: string): boole
   return atIndex > 1;
 }
 
-export function hasBotMention(msg: Message, botUsername: string) {
+export function hasBotMention(msg: Message, botUsername: string, botId?: number) {
   const { text, entities } = getTelegramTextParts(msg);
   const mention = normalizeLowercaseStringOrEmpty(`@${botUsername}`);
   if (hasStandaloneTelegramMention(normalizeLowercaseStringOrEmpty(text), mention)) {
@@ -359,6 +359,12 @@ export function hasBotMention(msg: Message, botUsername: string) {
       return true;
     }
     if (ent.type === "bot_command" && isBotCommandAddressedToMention(slice, mention)) {
+      return true;
+    }
+    // A `text_mention` entity tags a user by id (the entity text is the display
+    // name, not `@username`), so the `mention` branch above never matches it.
+    // When it resolves to this bot, it is still an explicit mention of us.
+    if (ent.type === "text_mention" && botId !== undefined && ent.user?.id === botId) {
       return true;
     }
   }
