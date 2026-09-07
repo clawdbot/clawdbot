@@ -619,3 +619,132 @@ it("preserves an existing copied file behind a case-equivalent entry name", asyn
     await rehearsal.cleanup();
   }
 });
+
+it.each(["relative", "absolute", "external-store", "cycle"] as const)(
+  "preserves pnpm transitive dependency topology in a private rehearsal (%s)",
+  async (layout) => {
+    const plugin = path.join(root, "local-plugin");
+    const modules = path.join(plugin, "node_modules");
+    const store =
+      layout === "external-store" ? path.join(root, "virtual-store") : path.join(modules, ".pnpm");
+    const foo = path.join(store, "foo@1.0.0", "node_modules", "foo");
+    const bar = path.join(store, "bar@1.0.0", "node_modules", "bar");
+    for (const [directory, name, code] of [
+      [plugin, "plugin", 'import value from "foo"; export default value;'],
+      [foo, "foo", 'import value from "bar"; export default `foo:${value}`;'],
+      [bar, "bar", 'export default "bar";'],
+    ]) {
+      await fs.mkdir(directory!, { recursive: true });
+      await fs.writeFile(
+        path.join(directory!, "package.json"),
+        JSON.stringify({ name, type: "module", exports: "./index.js" }),
+      );
+      await fs.writeFile(path.join(directory!, "index.js"), code!);
+    }
+    await fs.mkdir(modules, { recursive: true });
+    if (layout === "external-store") {
+      await fs.writeFile(
+        path.join(modules, ".modules.yaml"),
+        `virtualStoreDir: ${JSON.stringify(store)}\n`,
+      );
+    }
+    const links = [
+      [path.join(modules, "foo"), foo],
+      [path.join(path.dirname(foo), "bar"), bar],
+    ] as const;
+    for (const [link, target] of links) {
+      await fs.symlink(
+        layout === "absolute" || process.platform === "win32"
+          ? target
+          : path.relative(path.dirname(link), target),
+        link,
+        "junction",
+      );
+    }
+    if (layout === "cycle") {
+      await fs.symlink(foo, path.join(path.dirname(bar), "foo"), "junction");
+    }
+    await fs.writeFile(
+      path.join(foo, "cli.js"),
+      'import value from "./index.js"; console.log(value);',
+    );
+    await fs.mkdir(path.join(modules, ".bin"));
+    const launcher = path.join(modules, ".bin", "foo");
+    await fs.writeFile(
+      launcher,
+      `#!/bin/sh\nbasedir=$(dirname "$0")\nexec "${process.execPath}" "$basedir/../foo/cli.js"\n`,
+    );
+    const originalLinks = await Promise.all(links.map(([link]) => fs.readlink(link)));
+    const readPlugin = async (directory: string) => {
+      const result = await runCommandBuffered(
+        [
+          process.execPath,
+          "--input-type=module",
+          "-e",
+          `console.log((await import(${JSON.stringify(pathToFileURL(path.join(directory, "index.js")).href)})).default)`,
+        ],
+        { timeoutMs: 10_000 },
+      );
+      expect(result.code, result.stderr.toString()).toBe(0);
+      return result.stdout.toString().trim();
+    };
+    expect(await readPlugin(plugin)).toBe("foo:bar");
+    const rehearsal = await prepareUpdateCandidateRehearsal({
+      config: { plugins: { load: { paths: [plugin] } } },
+      stateDir: path.join(root, "source-state"),
+      candidateRoot: root,
+    });
+    try {
+      const config: OpenClawConfig = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
+      const copiedPlugin = config.plugins!.load!.paths![0]!;
+      expect(await readPlugin(copiedPlugin)).toBe("foo:bar");
+      if (process.platform !== "win32") {
+        const result = await runCommandBuffered(
+          ["/bin/sh", path.join(copiedPlugin, "node_modules", ".bin", "foo")],
+          { timeoutMs: 10_000 },
+        );
+        expect(result.code, result.stderr.toString()).toBe(0);
+        expect(result.stdout.toString().trim()).toBe("foo:bar");
+      }
+      const copiedFoo = await fs.realpath(path.join(copiedPlugin, "node_modules", "foo"));
+      const copiedBar = await fs.realpath(path.join(path.dirname(copiedFoo), "bar"));
+      expect(copiedBar.startsWith(rehearsal.stateDir + path.sep)).toBe(true);
+      await fs.writeFile(path.join(copiedBar, "index.js"), 'export default "changed";');
+      expect(await readPlugin(copiedPlugin)).toBe("foo:changed");
+      expect(await readPlugin(plugin)).toBe("foo:bar");
+      expect(await Promise.all(links.map(([link]) => fs.readlink(link)))).toEqual(originalLinks);
+    } finally {
+      await rehearsal.cleanup();
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "copies an external file link without traversing unrelated siblings",
+  async () => {
+    const plugin = path.join(root, "plugin");
+    const assets = path.join(root, "assets");
+    await fs.mkdir(plugin);
+    await fs.mkdir(assets);
+    await fs.writeFile(path.join(plugin, "package.json"), '{"name":"plugin"}');
+    const source = path.join(assets, "config.txt");
+    await fs.writeFile(source, "preserved");
+    await fs.symlink(path.join(root, "missing-unrelated-target"), path.join(assets, "unrelated"));
+    await fs.symlink(source, path.join(plugin, "config.txt"));
+    const rehearsal = await prepareUpdateCandidateRehearsal({
+      config: { plugins: { load: { paths: [plugin] } } },
+      stateDir: path.join(root, "source-state"),
+      candidateRoot: root,
+    });
+    try {
+      const config: OpenClawConfig = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
+      const copied = path.join(config.plugins!.load!.paths![0]!, "config.txt");
+      expect(await fs.readFile(copied, "utf8")).toBe("preserved");
+      await fs.writeFile(copied, "private");
+      expect(await fs.readFile(source, "utf8")).toBe("preserved");
+      expect(await fs.readlink(path.join(plugin, "config.txt"))).toBe(source);
+    } finally {
+      await rehearsal.cleanup();
+    }
+  },
+);

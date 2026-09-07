@@ -16,6 +16,7 @@ import {
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
+import { copyUpdateCandidatePluginTrees } from "./update-candidate-plugin-tree.js";
 import { resolveUpdateCandidatePluginPath } from "./update-candidate-state.js";
 
 async function resolvePluginFilePackageRoot(file: string): Promise<string> {
@@ -146,28 +147,12 @@ export async function projectUpdateCandidatePlugins(params: {
       roots.set(owner, project(managed || file ? owner : source));
     }
   }
-  const copies = [...roots].filter(
-    ([source]) =>
-      ![...roots.keys()].some((other) => other !== source && isPathInside(other, source)),
-  );
-  const hostLinks = new Set<string>();
-  for (const [source, target] of copies) {
-    await fs.cp(source, target, {
-      recursive: true,
-      dereference: true,
-      filter: (entry, destination) => {
-        if (
-          path.basename(entry) === "openclaw" &&
-          path.basename(path.dirname(entry)) === "node_modules"
-        ) {
-          // Candidate code is an immutable host edge, not a dependency tree to copy.
-          hostLinks.add(destination);
-          return false;
-        }
-        return true;
-      },
-    });
-  }
+  const { copies, hostLinks } = await copyUpdateCandidatePluginTrees({
+    roots,
+    project,
+    targetStateDir: params.targetStateDir,
+    candidateRoot: params.candidateRoot,
+  });
   for (const { source, real, file } of locators) {
     const copy = copies.find(([directory]) => isPathInside(directory, real));
     if (!copy) {
