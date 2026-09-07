@@ -239,6 +239,14 @@ describe("run-additional-boundary-checks", () => {
     });
   });
 
+  it("keeps the dependency pin guard in CI boundary checks", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "deps:pins:check",
+      command: "pnpm",
+      args: ["deps:pins:check"],
+    });
+  });
+
   it("keeps the Docker E2E package guard in CI boundary checks", () => {
     expect(BOUNDARY_CHECKS).toContainEqual({
       label: "lint:docker-e2e",
