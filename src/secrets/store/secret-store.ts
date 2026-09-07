@@ -470,6 +470,7 @@ function writeSecretStoreEntryInternal(
       return previous
         ? {
             value: previous.value,
+            // SAFETY: The canonical secret_store schema and write validation restrict kind to secret|env.
             kind: previous.kind as SecretStoreKind,
             allowedHosts: previous.allowed_hosts,
             updatedBy: previous.updated_by,

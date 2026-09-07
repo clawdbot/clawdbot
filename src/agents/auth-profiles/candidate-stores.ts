@@ -4,6 +4,7 @@ import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import { isErrno } from "../../infra/errno.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent-db-registry-listing.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
@@ -40,7 +41,7 @@ async function collectStateRootCandidates(env: NodeJS.ProcessEnv): Promise<Candi
   try {
     entries = await fs.readdir(agentsRoot, { withFileTypes: true });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (isErrno(error) && error.code === "ENOENT") {
       return [];
     }
     throw error;
