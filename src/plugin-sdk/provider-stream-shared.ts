@@ -723,3 +723,4 @@ export { streamWithPayloadPatch };
 export { createToolStreamWrapper } from "../llm/providers/stream-wrappers/zai.js";
 
 export { applyCompletionsAnthropicCacheControl } from "@openclaw/ai/transports";
+export { projectCopilotRequestFacts } from "@openclaw/ai/internal/shared";

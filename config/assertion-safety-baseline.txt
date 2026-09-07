@@ -499,7 +499,7 @@ extensions/github-copilot/models.ts	3
 extensions/github-copilot/oauth.ts	1
 extensions/github-copilot/replay-policy.ts	2
 extensions/github-copilot/runtime-auth.ts	2
-extensions/github-copilot/stream.ts	4
+extensions/github-copilot/stream.ts	3
 extensions/github-copilot/usage.ts	1
 extensions/google-meet/index.ts	1
 extensions/google-meet/src/calendar.ts	1
@@ -1699,7 +1699,6 @@ src/agents/context-resolution.ts	1
 src/agents/context-runtime-state.ts	4
 src/agents/context-window-guard.ts	1
 src/agents/context.ts	2
-src/agents/copilot-dynamic-headers.ts	1
 src/agents/cron-creator-authority-context.ts	1
 src/agents/custom-api-registry.ts	2
 src/agents/delegation-capability.ts	1
