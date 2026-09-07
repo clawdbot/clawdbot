@@ -36,8 +36,8 @@ export async function withTestAcpEventLedgerDatabase<T>(
   });
 }
 
-export function closeTestAcpEventLedgers(): void {
-  const handles = testLedgerHandles.splice(0).reverse();
+function closeTestAcpEventLedgers(): void {
+  const handles = testLedgerHandles.splice(0).toReversed();
   const errors: unknown[] = [];
   for (const { databasePath, tempDir } of handles) {
     try {
