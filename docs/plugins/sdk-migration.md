@@ -872,9 +872,15 @@ timeline for current status.
   </Accordion>
 
   <Accordion title="Channel runtime shim and channel actions helpers">
-    `openclaw/plugin-sdk/channel-runtime` has been removed. Use
+    `openclaw/plugin-sdk/channel-runtime` was removed during the channel
+    runtime refactor, then restored as a deprecated compatibility alias that
+    re-exports the channel runtime helpers (typing indicators, reply prefix,
+    account status sink, long-poll lifecycle) from
+    `openclaw/plugin-sdk/channel-outbound`. Keep using
     `openclaw/plugin-sdk/channel-runtime-context` for registering runtime
-    objects.
+    objects, and import the helpers from
+    `openclaw/plugin-sdk/channel-outbound` in new plugins; the alias is
+    scheduled for removal in the 2026.10 release train.
 
     The native message schema helpers in `openclaw/plugin-sdk/channel-actions`
     were removed alongside raw "actions" channel exports. Expose capabilities

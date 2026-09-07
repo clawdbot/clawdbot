@@ -529,6 +529,10 @@
       "types": "./dist/plugin-sdk/approval-handler-runtime.d.ts",
       "default": "./dist/plugin-sdk/approval-handler-runtime.js"
     },
+    "./plugin-sdk/channel-runtime": {
+      "types": "./dist/plugin-sdk/channel-runtime.d.ts",
+      "default": "./dist/plugin-sdk/channel-runtime.js"
+    },
     "./plugin-sdk/channel-runtime-context": {
       "types": "./dist/plugin-sdk/channel-runtime-context.d.ts",
       "default": "./dist/plugin-sdk/channel-runtime-context.js"
