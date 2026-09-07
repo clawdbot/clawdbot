@@ -14,6 +14,7 @@ import type {
   WorkerLocalWorkspaceReconcileRequest,
   WorkerLocalWorkspaceSyncRequest,
   WorkerWorkspaceReconcileRequest,
+  WorkerWorkspaceReconcileResult,
   WorkerWorkspaceCommand,
   WorkerWorkspaceTunnelHandle,
 } from "./tunnel-contract.js";
@@ -83,6 +84,33 @@ export function createNodeWorkerWorkspaceActions(params: {
     return await params.runWorkspaceCommand(command);
   };
   const workspace = createNodeWorkerWorkspaceFallback(exec);
+  const createStabilityVerifier =
+    (
+      workspaceDir: string,
+      baseCommit: string | null,
+      expectedManifestRef: () => string,
+      changedMessage: string,
+    ): WorkerWorkspaceReconcileResult["verifyStable"] =>
+    async (renewal) => {
+      // Local acceptance can advance the reference; snapshot it for each invocation, not creation.
+      const expectedRef = expectedManifestRef();
+      if (renewal) {
+        await renewal.quiescence.assertActive({
+          manifest: {
+            workspaceDir,
+            baseCommit,
+            expectedManifestRef: expectedRef,
+            priorManifestDigests: [expectedRef.slice("sha256:".length)],
+          },
+          capture: renewal.capture,
+        });
+        return;
+      }
+      const observed = await workspace.captureManifest(workspaceDir, baseCommit, expectedRef);
+      if (observed !== expectedRef) {
+        throw new Error(changedMessage);
+      }
+    };
   const quiesceWorkspace = createWorkerWorkspaceQuiescence({
     ownerSignal: params.ownerSignal,
     sharedHost: true,
@@ -167,16 +195,12 @@ export function createNodeWorkerWorkspaceActions(params: {
         request.baseManifestRef,
       );
       try {
-        const verifyStable = async () => {
-          const observed = await workspace.captureManifest(
-            request.remoteWorkspaceDir,
-            uploaded.base.baseCommit,
-            uploaded.currentManifestRef,
-          );
-          if (observed !== uploaded.currentManifestRef) {
-            throw new Error("Repository workspace changed during checkpoint capture");
-          }
-        };
+        const verifyStable = createStabilityVerifier(
+          request.remoteWorkspaceDir,
+          uploaded.base.baseCommit,
+          () => uploaded.currentManifestRef,
+          "Repository workspace changed during checkpoint capture",
+        );
         await verifyStable();
         if (!uploaded.base.baseCommit) {
           throw new Error("Repository checkpoint has no pinned Git base");
@@ -307,16 +331,12 @@ export function createNodeWorkerWorkspaceActions(params: {
     try {
       const changed = uploaded.currentManifestRef !== request.baseManifestRef;
       let expectedRemoteRef = uploaded.currentManifestRef;
-      const verifyStable = async () => {
-        const observed = await workspace.captureManifest(
-          request.remoteWorkspaceDir,
-          uploaded.base.baseCommit,
-          expectedRemoteRef,
-        );
-        if (observed !== expectedRemoteRef) {
-          throw new Error("Cloud workspace changed during final reconciliation");
-        }
-      };
+      const verifyStable = createStabilityVerifier(
+        request.remoteWorkspaceDir,
+        uploaded.base.baseCommit,
+        () => expectedRemoteRef,
+        "Cloud workspace changed during final reconciliation",
+      );
       await verifyStable();
       const publishAcceptedManifest = async (accepted: {
         manifestRef: string;

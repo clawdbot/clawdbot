@@ -26,12 +26,51 @@ function createWorkerArtifactFixtures({
   onTestFinished,
 }: Pick<TestContext, "signal" | "onTestFinished">) {
   const fixtureLifetime = createFixtureLifetime();
+  let diagnosticRow:
+    | Readonly<{
+        layout: "single" | "projects";
+        invariant: "fresh generations" | "source mode" | "source and config edits";
+        startedMs: number;
+      }>
+    | undefined;
+  function observeDiagnostic(
+    phase: string,
+    invocation?: Readonly<
+      NonNullable<typeof diagnosticRow> & { ordinal: number; mode: "compiled" | "source" }
+    >,
+    preparation?: {
+      reportedPreparationMs: number;
+      inputCount: number;
+      outputCount: number;
+    },
+  ) {
+    if (!diagnosticRow) {
+      return undefined;
+    }
+    const observedMs = performance.now();
+    const facts = {
+      ...diagnosticRow,
+      ...invocation,
+      ...preparation,
+      phase,
+      observedMs,
+      elapsedMs: observedMs - (invocation?.startedMs ?? diagnosticRow.startedMs),
+      aborted: signal.aborted,
+    };
+    console.log("worker artifact phase", JSON.stringify(facts));
+    return facts;
+  }
   function fixtureDirectory() {
     fs.mkdirSync(artifacts, { recursive: true });
     return fixtureLifetime.createTempDir("worker proof-", artifacts);
   }
 
-  function createFixtureCommands() {
+  function createFixtureCommands(row?: Omit<NonNullable<typeof diagnosticRow>, "startedMs">) {
+    if (row) {
+      diagnosticRow = Object.freeze({ ...row, startedMs: performance.now() });
+      observeDiagnostic("row-start");
+    }
+    let ordinal = 0;
     const finished = new AbortController();
     const commandSignal = AbortSignal.any([signal, finished.signal]);
     const commands: Promise<unknown>[] = [];
@@ -39,8 +78,12 @@ function createWorkerArtifactFixtures({
     // All commands retain this body's authority, including native IPC borrowers.
     // Finishing stops child work; whole-body finally still owns generation disposal.
     onTestFinished(async () => {
+      observeDiagnostic("finish-abort-start");
       finished.abort();
+      observeDiagnostic("finish-abort-end");
+      observeDiagnostic("command-join-start");
       await Promise.allSettled(commands);
+      observeDiagnostic("command-join-end");
     });
 
     function observeChild<T>(child: ChildProcess, completion: Promise<T>): Promise<T> {
@@ -57,14 +100,70 @@ function createWorkerArtifactFixtures({
       return joined;
     }
 
-    function node(args: string[], cwd = root, env = process.env) {
+    function node(args: string[], cwd = root, env = process.env, mode?: "compiled" | "source") {
+      // Capture this invocation before launch, never from Vitest's current-test pointer.
+      const invocation =
+        mode && diagnosticRow
+          ? Object.freeze({
+              ...diagnosticRow,
+              ordinal: ++ordinal,
+              mode,
+              startedMs: performance.now(),
+            })
+          : undefined;
+      if (invocation) {
+        observeDiagnostic("invocation-start", invocation);
+      }
       const completion = fixtureLifetime.track(
         runNodeScript(args, env, undefined, {
           cwd,
           signal: commandSignal,
           maxBuffer: 2 * 1024 * 1024,
           requireProcessTreeExit: process.platform !== "win32",
-        }).then((result) => ({ ...result, code: result.status })),
+          onReady(child) {
+            if (!invocation) {
+              return;
+            }
+            let preparedObserved = false;
+            let verificationObserved = false;
+            let tail = "";
+            // The fixed vitest-worker-run metadata line fits this bounded carry. Keep
+            // its reported duration distinct from parent receipt time and pipe delay.
+            const observeMarkers = (chunk: Buffer) => {
+              const text = tail + chunk.toString("utf8");
+              const prepared =
+                !preparedObserved &&
+                /\[vitest-workers\] prepared [a-f\d]{12} in (\d+)ms \((\d+) inputs, (\d+) outputs\)/.exec(
+                  text,
+                );
+              if (prepared) {
+                preparedObserved = true;
+                const preparation = {
+                  reportedPreparationMs: Number(prepared[1]),
+                  inputCount: Number(prepared[2]),
+                  outputCount: Number(prepared[3]),
+                };
+                observeDiagnostic("preparation-marker", invocation, preparation);
+              }
+              if (
+                !verificationObserved &&
+                text.includes("[vitest-workers] verifying completed generation before cleanup")
+              ) {
+                verificationObserved = true;
+                observeDiagnostic("final-verification-start-marker", invocation);
+              }
+              tail = text.slice(-256);
+              if (preparedObserved && verificationObserved) {
+                child.stderr!.off("data", observeMarkers);
+              }
+            };
+            child.stderr!.on("data", observeMarkers);
+            child.once("close", () => child.stderr!.off("data", observeMarkers));
+          },
+        }).then((result) => {
+          const diagnostic = invocation && observeDiagnostic("invocation-complete", invocation);
+          return { ...result, code: result.status, diagnostic };
+        }),
       );
       commands.push(completion);
       return completion;
@@ -135,7 +234,7 @@ function createWorkerArtifactFixtures({
     return { node, startBorrower, prepareWorkers, observeChild };
   }
 
-  return { fixtureLifetime, fixtureDirectory, createFixtureCommands };
+  return { fixtureLifetime, fixtureDirectory, createFixtureCommands, observeDiagnostic };
 }
 
 export function createWorkerArtifactTest() {
@@ -150,7 +249,12 @@ export function createWorkerArtifactTest() {
     try {
       await runTest();
     } finally {
-      await workerArtifacts.fixtureLifetime.cleanup();
+      workerArtifacts.observeDiagnostic("fixture-cleanup-start");
+      try {
+        await workerArtifacts.fixtureLifetime.cleanup();
+      } finally {
+        workerArtifacts.observeDiagnostic("fixture-cleanup-end");
+      }
     }
   });
   test.beforeAll(() => {

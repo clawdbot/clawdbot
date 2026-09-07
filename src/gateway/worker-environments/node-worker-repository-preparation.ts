@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SpawnResult } from "../../process/exec.js";
+import { NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS } from "../../worker/node-workspace-protocol.js";
 import type { WorkerWorkspaceCommand, WorkerWorkspaceSyncResult } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
 import { workspaceSyncError } from "./workspace-sync-helpers.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
-const GIT_TIMEOUT_MS = 60_000;
 const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 export const WORKER_REPOSITORY_GIT_ARGS = ["-c", "credential.helper=", "-c", "core.askPass="];
 const workspaceSyncLog = createSubsystemLogger("gateway/worker-workspace");
@@ -63,7 +63,7 @@ export function createNodeWorkerRepositoryPreparation(exec: NodeWorkerRepository
       argv: ["node", "-e", AUTHENTICATED_GIT_JS, "--", ...WORKER_REPOSITORY_GIT_ARGS, ...args],
       input: JSON.stringify({ origin: identity?.origin, token: identity?.gitToken }),
       ...(resetWorkspace ? { resetWorkspace: true } : {}),
-      timeoutMs: GIT_TIMEOUT_MS,
+      timeoutMs: NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS,
       transportRetry: "never",
     });
   const capture = async (dir: string, base: string | null, reference?: string) =>
@@ -76,7 +76,7 @@ export function createNodeWorkerRepositoryPreparation(exec: NodeWorkerRepository
         ...(base ? [base, "eligible"] : ["", "all"]),
         ...(reference ? [reference.slice("sha256:".length)] : []),
       ],
-      timeoutMs: GIT_TIMEOUT_MS,
+      timeoutMs: NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS,
       transportRetry: "idempotent",
     });
   const checkoutAndCapture = async (
@@ -172,7 +172,7 @@ export function createNodeWorkerRepositoryPreparation(exec: NodeWorkerRepository
           const applied = await exec({
             argv: ["openclaw-internal-workspace-seed"],
             seed: { action: "apply", key: seedKey },
-            timeoutMs: GIT_TIMEOUT_MS,
+            timeoutMs: NODE_WORKER_WORKSPACE_COMMAND_TIMEOUT_MS,
             transportRetry: "never",
           });
           if (succeeded(applied) && applied.stdout.trim() === "applied") {

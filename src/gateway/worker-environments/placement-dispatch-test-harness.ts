@@ -20,10 +20,7 @@ import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerPlacementRunnerAvailabilityReader } from "./placement-projector.js";
 import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
 import type { WorkerEnvironmentService } from "./service.js";
-import {
-  WorkerTunnelOwnerDisconnectedError,
-  type WorkerWorkspaceReconcileRequest,
-} from "./tunnel-contract.js";
+import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
 import type { WorkerTunnelHandle } from "./tunnel.js";
 import {
   projectWorkspaceResultConflict,
@@ -109,6 +106,13 @@ export function createHarness(
   let remainingLeaseFailures = options.leaseFailureCount ?? 0;
   let verifyCalls = 0;
   const log: string[] = [];
+  const verifyWorkspace = async () => {
+    log.push("workspace:verify");
+    verifyCalls += 1;
+    if (options.verifyFails || verifyCalls === options.verifyFailureCall) {
+      throw new Error("workspace changed after reconciliation");
+    }
+  };
   const reportWorkspaceResultConflict = vi.fn(async () => {});
   const reportWorkspaceResultRecoveryFailure = vi.fn(
     async (_recovery: WorkerWorkspaceRecoveryFailureReport) => {},
@@ -255,7 +259,7 @@ export function createHarness(
         }),
       };
     }),
-    reconcileWorkspace: vi.fn(async (request: WorkerWorkspaceReconcileRequest) => {
+    reconcileWorkspace: vi.fn<WorkerTunnelHandle["reconcileWorkspace"]>(async (request) => {
       if (request.source.kind !== "local") {
         throw new Error("Local dispatch fixture received a repository workspace");
       }
@@ -303,12 +307,14 @@ export function createHarness(
       return {
         manifestRef: reconciledManifestRef,
         changed: options.reconcileChanged ?? true,
-        verifyStable: async () => {
-          log.push("workspace:verify");
-          verifyCalls += 1;
-          if (options.verifyFails || verifyCalls === options.verifyFailureCall) {
-            throw new Error("workspace changed after reconciliation");
+        verifyStable: async (renewal) => {
+          if (renewal) {
+            if (renewal.capture === "before-and-after") {
+              await verifyWorkspace();
+            }
+            await renewal.quiescence.assertActive();
           }
+          await verifyWorkspace();
         },
         verifyLocalStable: async () => {
           log.push("workspace:verify-local");
