@@ -99,7 +99,7 @@ function findNextStandaloneTag(
 }
 
 /** Detect Claude's legacy tool protocol only when it occupies standalone assistant lines. */
-function hasClaudeRawToolInvocation(text: string): boolean {
+export function hasClaudeRawToolInvocation(text: string): boolean {
   if (!text.includes("<invoke") || !text.includes("<parameter")) {
     return false;
   }

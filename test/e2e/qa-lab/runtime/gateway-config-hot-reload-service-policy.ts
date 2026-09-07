@@ -308,7 +308,7 @@ export async function proveHotReloadServicePolicy({
         assert(tightenedHttp.retryAfterSeconds > 0 && tightenedHttp.retryAfterSeconds <= 5);
         assert(tightenedBrowser.retryAfterMs > 0 && tightenedBrowser.retryAfterMs <= 5_000);
         await preservedBans();
-        await patch({ gateway: { controlUi: { toolTitles: false } } });
+        await patch({ gateway: { controlUi: { communityInvite: false } } });
         assert.equal((await http(4)).status, 401);
         assert.equal((await http(4, true)).status, 429, "Unrelated reload discarded a failure");
         await preservedBans();

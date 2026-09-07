@@ -1,8 +1,8 @@
 import {
   isCodexAppServerNativeAuthProfile,
   type CodexAppServerAuthProfileLookup,
-  type CodexAppServerThreadBinding,
-} from "./session-binding.js";
+} from "./auth-profile.js";
+import type { CodexAppServerThreadBinding } from "./session-binding.js";
 
 export const CODEX_NATIVE_PERSONALITY_NONE = "none";
 

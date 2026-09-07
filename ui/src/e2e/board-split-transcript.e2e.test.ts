@@ -201,13 +201,15 @@ describeControlUiE2e("Board split transcript restore", () => {
     await page.locator(".board-session-surface").waitFor();
     await page.getByText("Message number 39:").first().waitFor({ timeout: 15_000 });
 
-    const sidePanel = page.locator(".side-panel");
     await focusChatSidePanel(page);
     await expect
       .poll(async () => (await visibleTranscriptState(page)).intersectingRows, { timeout: 5_000 })
       .toBe(0);
 
-    await sidePanel.getByRole("button", { name: "Restore split", exact: true }).click();
+    await page
+      .locator(".chat-pane__header")
+      .getByRole("button", { name: "Restore split", exact: true })
+      .click();
 
     // The transcript must repaint promptly from the collapse render itself,
     // without waiting for an unrelated state change to re-render the pane.
@@ -350,7 +352,10 @@ describeControlUiE2e("Board split transcript restore", () => {
     await expectSidePanelTabs(page, ["Dashboard", "Browser", "Chat"], false);
     await recordStep("transition-01-expanded");
 
-    await sidePanel.getByRole("button", { name: "Restore split", exact: true }).click();
+    await page
+      .locator(".chat-pane__header")
+      .getByRole("button", { name: "Restore split", exact: true })
+      .click();
     await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
     await expect.poll(() => chat.isVisible()).toBe(true);
     await restoreChatAsMain(page);

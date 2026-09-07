@@ -220,7 +220,7 @@ describe("prepared model catalog worker generation mismatch", () => {
       workerBoundary.fingerprint = undefined;
       const recovered = await worker.loadCatalog();
       expect(spawned).toHaveLength(2);
-      expect(recovered.entries).toContainEqual(
+      expect(recovered.modelCatalog.entries).toContainEqual(
         expect.objectContaining({ provider: PROVIDER_ID, id: "account-scoped-model" }),
       );
       expect(fs.readFileSync(fixture.marker, "utf8")).toBe("start\ndone\n");
@@ -275,9 +275,11 @@ describe("prepared model catalog worker generation mismatch", () => {
             expect(failure).toMatchObject({ name: "PreparedModelCatalogGenerationMismatchError" });
           }
           expect(await outcome).toMatchObject({
-            entries: expect.arrayContaining([
-              expect.objectContaining({ provider: PROVIDER_ID, id: "account-scoped-model" }),
-            ]),
+            modelCatalog: {
+              entries: expect.arrayContaining([
+                expect.objectContaining({ provider: PROVIDER_ID, id: "account-scoped-model" }),
+              ]),
+            },
           });
           await expect(worker.loadAuth({ providerIds: [PROVIDER_ID] })).resolves.toMatchObject({
             authStore: expect.objectContaining({ version: 1 }),

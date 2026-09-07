@@ -20,7 +20,6 @@ import {
   resolveClaudeCliExecutionArgs,
   resolveClaudeCliThinkingEnv,
 } from "./cli-shared.js";
-import anthropicPluginPackage from "./package.json" with { type: "json" };
 
 type ClaudeCliAuthCredential =
   | { type: "oauth"; access: string; expires: number }
@@ -39,12 +38,6 @@ type ClaudeCliPreparedExecution = CliBackendPreparedExecution & {
 };
 
 const CLAUDE_CLI_CREDENTIAL_FINGERPRINT_KEY = randomBytes(32);
-// SDK import and query() set these in process.env. Seed them before core
-// fingerprints the child env so the first resumed turn keeps its warm query.
-const CLAUDE_AGENT_SDK_ENV = {
-  CLAUDE_AGENT_SDK_VERSION: anthropicPluginPackage.dependencies["@anthropic-ai/claude-agent-sdk"],
-  NoDefaultCurrentDirectoryInExePath: "1",
-};
 const CLAUDE_CLI_DEFAULT_ARGS = [
   "-p",
   "--output-format",
@@ -334,25 +327,24 @@ export function buildClaudeAgentSdkCliBackend(
           apiKeyAsAuthToken: options.apiKeyAsAuthToken,
         });
         const isolatedCompletion = credentialContext.isolatedCompletionPrompt !== undefined;
-        const agentSdkExecution =
+        const cliExecution =
           !isolatedCompletion && context.executionMode === "agent"
             ? {
                 async *execute(executionContext: CliBackendExecuteContext) {
-                  const { executeClaudeAgentSdk } = await import("./agent-sdk.runtime.js");
+                  const { executeClaudeCli } = await import("./cli.runtime.js");
                   executionContext.assertCurrent?.();
-                  yield* executeClaudeAgentSdk(executionContext, authInput?.secretInput);
+                  yield* executeClaudeCli(executionContext, authInput?.secretInput);
                 },
               }
             : undefined;
         const env = {
-          ...(agentSdkExecution ? CLAUDE_AGENT_SDK_ENV : {}),
           ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
           ...(context.contextWindow === "200k" ? { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" } : {}),
           ...resolveClaudeCliThinkingEnv(context.thinkingLevel, context.modelId),
           ...(options.endpoint ? { ANTHROPIC_BASE_URL: options.endpoint } : {}),
           ...authInput?.env,
         };
-        return Object.keys(env).length > 0 || isolatedCompletion || agentSdkExecution
+        return Object.keys(env).length > 0 || isolatedCompletion || cliExecution
           ? {
               env,
               // The paired side-question argv projection disables settings, memory,
@@ -361,7 +353,7 @@ export function buildClaudeAgentSdkCliBackend(
               ...(authInput?.clearEnv ? { clearEnv: authInput.clearEnv } : {}),
               ...(authInput?.secretInput ? { secretInput: authInput.secretInput } : {}),
               ...(authInput?.cleanup ? { cleanup: authInput.cleanup } : {}),
-              ...agentSdkExecution,
+              ...cliExecution,
             }
           : undefined;
       };

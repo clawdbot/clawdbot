@@ -78,7 +78,7 @@ export async function prepareCodexAttemptContext(
       ...(transcriptReadFence ? { admission: transcriptReadFence } : {}),
     });
     connection.runAbortController.signal.throwIfAborted();
-    params.hostCapabilities.assertActive();
+    connection.assertCurrent();
     return messages;
   };
   const historyState = {
@@ -107,6 +107,12 @@ export async function prepareCodexAttemptContext(
     sessionKey: contextSessionKey,
     sessionId: params.sessionId,
     workspaceDir: params.workspaceDir,
+    // Native-owned models are confirmed after startup; hooks must not publish
+    // stale bindings or private transport overrides as the selected model.
+    ...(!usesSupervisionConnection &&
+    connection.mutable.startupBinding?.preserveNativeModel !== true
+      ? { modelProviderId: params.provider, modelId: params.modelId }
+      : {}),
     trigger: params.trigger,
     ...buildAgentHookContextChannelFields({
       sessionKey: contextSessionKey,

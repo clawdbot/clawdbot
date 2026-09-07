@@ -79,6 +79,7 @@ export function recordCodexTrajectoryCompletion(
     yieldDetected: params.yieldDetected ?? false,
     aborted: terminal.aborted,
     promptError: normalizeCodexTrajectoryError(terminal.promptError),
+    ...(terminal.settlementWarning ? { settlementWarning: terminal.settlementWarning } : {}),
     usage: params.result.attemptUsage,
     assistantTexts: params.result.assistantTexts,
     messagesSnapshot: params.result.messagesSnapshot,

@@ -76,7 +76,9 @@ function processGroupRssBytes(pid) {
     return rows.length > 0 || !processExists(pid) ? { status: "exited" } : { status: "failed" };
   }
   const samples = activeRows.map((columns) => Number(columns[2]));
-  if (samples.some((value) => !Number.isSafeInteger(value) || value <= 0)) {
+  // Linux can release a task's memory before marking it zombie; zero RSS is
+  // a valid measurement, not a sampler failure or proof that the group exited.
+  if (samples.some((value) => !Number.isSafeInteger(value) || value < 0)) {
     return { status: "failed" };
   }
   return {

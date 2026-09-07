@@ -3,19 +3,16 @@ import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtime
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import { isBundledProviderCompatPlugin } from "./bundled-provider-compat.js";
-import { hasExplicitChannelConfig } from "./channel-presence-policy.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import {
   blocksPluginStartup,
   hasConfiguredActivationPath,
-  listManifestChannelIds,
   normalizePluginsConfigForInstalledIndex,
 } from "./gateway-startup-plugin-config.js";
 import type {
   ConfiguredGenerationProviderIds,
   ConfiguredVoiceProviderIds,
-  ManifestRegistryLookup,
   NormalizedPluginsConfig,
 } from "./gateway-startup-plugin-contracts.js";
 import {
@@ -304,37 +301,4 @@ export function canStartGatewayStartupPlugin(params: GatewayStartupActivationPar
   return GATEWAY_STARTUP_ACTIVATION_POLICIES.some(
     ({ matches, policy }) => matches(params) && passesPluginStartupPolicy(params, policy),
   );
-}
-
-export function canStartConfiguredChannelPlugin(
-  params: PluginStartupActivationParams & { manifestLookup: ManifestRegistryLookup },
-): boolean {
-  const { activationSource, config, manifestLookup, plugin, pluginsConfig } = params;
-  if (
-    !pluginsConfig.enabled ||
-    pluginsConfig.deny.includes(plugin.pluginId) ||
-    pluginsConfig.entries[plugin.pluginId]?.enabled === false
-  ) {
-    return false;
-  }
-  const explicitBundledChannelConfig =
-    plugin.origin === "bundled" &&
-    listManifestChannelIds(manifestLookup, plugin.pluginId).some((channelId) =>
-      hasExplicitChannelConfig({
-        config: activationSource.rootConfig ?? config,
-        channelId,
-      }),
-    );
-  if (
-    pluginsConfig.allow.length > 0 &&
-    !pluginsConfig.allow.includes(plugin.pluginId) &&
-    !explicitBundledChannelConfig
-  ) {
-    return false;
-  }
-  if (plugin.origin === "bundled") {
-    return true;
-  }
-  const activationState = resolveStartupActivationState(params);
-  return activationState.enabled && activationState.explicitlyEnabled;
 }

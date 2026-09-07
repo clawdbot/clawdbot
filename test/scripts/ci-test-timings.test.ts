@@ -210,6 +210,13 @@ it.todo("retains todo coverage");
       serialProject: "ui-e2e-serial-standalone",
       mixed: true,
     },
+    ...["ui-e2e-real-gateway", "ui-e2e-real-gateway-standalone"].flatMap((parallelProject) =>
+      [false, true].map((mixed) => ({
+        parallelProject,
+        serialProject: "ui-e2e-serial-standalone",
+        mixed,
+      })),
+    ),
   ])(
     "keeps $parallelProject weights without refitting $serialProject overhead (mixed: $mixed)",
     ({ parallelProject, serialProject, mixed }) => {
@@ -221,14 +228,16 @@ it.todo("retains todo coverage");
         `✓ |${parallelProject}| ${first} (1 test) 4000ms`,
         `✓ ${parallelProject} ${second} (1 test) 4000ms`,
         ...(mixed ? [serialLine] : []),
-        `Duration ${mixed ? 7 : 5}s (transform 1s, setup 0ms, tests ${mixed ? 10 : 8}s, environment 0ms)`,
+        mixed
+          ? "Duration 7s (transform 10%, setup 0%, tests 90%, environment 0%)"
+          : "Duration 5s (transform 1s, setup 0ms, tests 8s, environment 0ms)",
       ].join("\n");
       const runs = [1, 2].map((id) => timingRun(id, [{ kind: "uiE2e", text: parallel }]));
       const parallelOnly = refitTestTimings(runs, baseline).timings.uiE2e;
       expect(parallelOnly.fileSeconds).toMatchObject({ [first]: 4, [second]: 4 });
       expect(parallelOnly.perFileOverheadSeconds).toBe(0.6);
 
-      const serial = `${serialLine}\nDuration 3s (transform 1s, setup 0ms, tests 2s, environment 0ms)`;
+      const serial = `${serialLine}\nDuration 3s (transform 10%, setup 0%, tests 90%, environment 0%)`;
       const runsWithSerial = [1, 2].map((id) =>
         timingRun(id, [{ kind: "uiE2e", text: `${parallel}\n${serial}` }]),
       );

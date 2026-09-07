@@ -1,4 +1,6 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, test } from "vitest";
+import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js";
 import {
   createOperatorIdentityFixture,
   REMOTE_BOOTSTRAP_HEADERS,
@@ -11,6 +13,7 @@ import {
   restoreGatewayToken,
   rpcReq,
 } from "./server.auth.test-helpers.js";
+import { connectWatchNode, readJson } from "./watch-node-http.test-helpers.js";
 
 export function registerControlUiMobileBootstrapSuite(): void {
   const FULL_OPERATOR_SCOPES = [
@@ -66,111 +69,323 @@ export function registerControlUiMobileBootstrapSuite(): void {
       restoreGatewayToken(prevToken);
     }
   };
-  test("voice-node setup code reconnects with node and Talk-only operator tokens", async () => {
-    const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
-    const { VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE } =
-      await import("../shared/device-bootstrap-profile.js");
-    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
+  const embeddedVoiceClient = {
+    id: "node-host",
+    version: "1.0.0",
+    platform: "esp32",
+    mode: "node",
+    deviceFamily: "ESP32",
+  } satisfies ConnectParams["client"];
+  const watchVoiceClient = {
+    id: "openclaw-watchos",
+    version: "1.0.0",
+    platform: "watchOS 11.5.0",
+    mode: "node",
+    deviceFamily: "Apple Watch",
+  } satisfies ConnectParams["client"];
+  test.each([
+    {
+      name: "embedded WebSocket",
+      watchHttp: false,
+      client: embeddedVoiceClient,
+      operatorClient: embeddedVoiceClient,
+      allowed: true,
+    },
+    {
+      name: "Watch HTTP",
+      watchHttp: true,
+      client: watchVoiceClient,
+      operatorClient: watchVoiceClient,
+      allowed: true,
+    },
+    {
+      name: "Watch HTTP after OS update",
+      watchHttp: true,
+      client: watchVoiceClient,
+      operatorClient: { ...watchVoiceClient, platform: "watchOS 11.6.0" },
+      allowed: true,
+    },
+    {
+      name: "Watch HTTP with changed platform family",
+      watchHttp: true,
+      client: watchVoiceClient,
+      operatorClient: { ...watchVoiceClient, platform: "iOS 26.4.0" },
+      allowed: false,
+    },
+    {
+      name: "Watch HTTP with changed device family",
+      watchHttp: true,
+      client: watchVoiceClient,
+      operatorClient: { ...watchVoiceClient, deviceFamily: "iPhone" },
+      allowed: false,
+    },
+  ])(
+    "voice-node $name enforces reconnect metadata and Talk access",
+    async ({ watchHttp, client, operatorClient, allowed }) => {
+      const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
+      const { VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE } =
+        await import("../shared/device-bootstrap-profile.js");
+      const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
+      const { server, port, prevToken } = await startProxiedControlUiServer("secret");
+      const { identityPath, identity } = await createOperatorIdentityFixture(
+        "openclaw-bootstrap-voice-node-",
+      );
+      const sockets: Awaited<ReturnType<typeof openWs>>[] = [];
+
+      try {
+        let auth: unknown;
+        if (watchHttp) {
+          const { decodePairingSetupCode } = await import("../pairing/setup-code.js");
+          const wsOwner = await openWs(port);
+          sockets.push(wsOwner);
+          expect(
+            (await connectReq(wsOwner, { scopes: ["operator.admin"], prePairDevice: true })).ok,
+          ).toBe(true);
+          const setup = await rpcReq<{ setupCode: string }>(wsOwner, "device.pair.setupCode", {
+            bootstrapProfile: "voice-node",
+            includeQr: false,
+            publicUrl: `ws://127.0.0.1:${port}`,
+          });
+          expect(setup.ok).toBe(true);
+          const setupCode = setup.payload?.setupCode;
+          if (!setupCode) {
+            throw new Error("expected owner-issued Watch setup code");
+          }
+          const bootstrap = decodePairingSetupCode(setupCode);
+          const response = await connectWatchNode({
+            baseUrl: `${bootstrap.url.replace("ws:", "http:")}/api/nodes/watch`,
+            identity,
+            client,
+            bootstrapToken: bootstrap.bootstrapToken,
+          });
+          expect(response.status).toBe(200);
+          auth = await readJson(response);
+          wsOwner.close();
+        } else {
+          const issued = await issueDeviceBootstrapToken({
+            profile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+          });
+          const wsBootstrap = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+          sockets.push(wsBootstrap);
+          const initial = await connectReq(wsBootstrap, {
+            skipDefaultAuth: true,
+            bootstrapToken: issued.token,
+            role: "node",
+            scopes: [],
+            client,
+            deviceIdentityPath: identityPath,
+          });
+          if (!initial.ok) {
+            throw new Error(`voice-node bootstrap failed: ${JSON.stringify(initial.error)}`);
+          }
+          if (!isRecord(initial.payload)) {
+            throw new Error("expected voice-node hello payload");
+          }
+          auth = initial.payload.auth;
+          expect(auth).toMatchObject({ role: "node", scopes: [] });
+          wsBootstrap.close();
+        }
+        if (!isRecord(auth) || typeof auth.deviceToken !== "string" || !auth.deviceToken) {
+          throw new Error("expected issued voice-node device token");
+        }
+        const nodeToken = auth.deviceToken;
+        if (!Array.isArray(auth.deviceTokens)) {
+          throw new Error("expected voice-node role grants");
+        }
+        const deviceTokens: unknown[] = auth.deviceTokens;
+        const operatorHandoff = deviceTokens.find(
+          (entry) => isRecord(entry) && entry.role === "operator",
+        );
+        expect(operatorHandoff).toMatchObject({
+          scopes: ["operator.read", "operator.talk"],
+          deviceToken: expect.any(String),
+        });
+        if (
+          !isRecord(operatorHandoff) ||
+          typeof operatorHandoff.deviceToken !== "string" ||
+          !operatorHandoff.deviceToken
+        ) {
+          throw new Error("expected handed-off voice-node operator token");
+        }
+        const operatorToken = operatorHandoff.deviceToken;
+        expect((await listDevicePairing()).pending).toEqual([]);
+        const paired = await getPairedDevice(identity.deviceId);
+        expect(paired?.roles).toEqual(["node", "operator"]);
+        expect(paired?.approvedScopes).toEqual(["operator.read", "operator.talk"]);
+
+        const wsNode = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+        sockets.push(wsNode);
+        const nodeReconnect = await connectReq(wsNode, {
+          skipDefaultAuth: true,
+          prePairDevice: false,
+          deviceToken: nodeToken,
+          role: "node",
+          scopes: [],
+          client,
+          ...(watchHttp
+            ? {
+                commands: ["device.info", "device.status", "system.notify"],
+                permissions: { notifications: true },
+              }
+            : {}),
+          deviceIdentityPath: identityPath,
+        });
+        expect(nodeReconnect.ok).toBe(true);
+        wsNode.close();
+
+        const wsOperator = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+        sockets.push(wsOperator);
+        const operatorReconnect = await connectReq(wsOperator, {
+          skipDefaultAuth: true,
+          prePairDevice: false,
+          deviceToken: operatorToken,
+          role: "operator",
+          scopes: ["operator.read", "operator.talk"],
+          client: operatorClient,
+          deviceIdentityPath: identityPath,
+        });
+        if (!allowed) {
+          expect(operatorReconnect.ok).toBe(false);
+          expect(operatorReconnect.error?.details).toMatchObject({
+            code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+          });
+          expect((await getPairedDevice(identity.deviceId))?.platform).toBe(client.platform);
+          return;
+        }
+        expect(operatorReconnect.ok).toBe(true);
+        expect((await getPairedDevice(identity.deviceId))?.platform).toBe(operatorClient.platform);
+        expect((await rpcReq(wsOperator, "health")).ok).toBe(true);
+        const talkMode = await rpcReq(wsOperator, "talk.mode", {
+          enabled: true,
+          phase: "listening",
+        });
+        expect(talkMode.ok).toBe(true);
+        expect(talkMode.payload).toMatchObject({ enabled: true, phase: "listening" });
+        const adminMutation = await rpcReq(wsOperator, "set-heartbeats", { enabled: false });
+        expect(adminMutation.ok).toBe(false);
+        expect(adminMutation.error?.message ?? "").toContain("missing scope");
+        wsOperator.close();
+      } finally {
+        for (const socket of sockets) {
+          socket.close();
+        }
+        await server.close();
+        restoreGatewayToken(prevToken);
+      }
+    },
+  );
+
+  test.each([
+    { name: "Watch HTTP voice", watchHttp: true, client: watchVoiceClient, voice: true },
+    {
+      name: "embedded WebSocket voice",
+      watchHttp: false,
+      client: embeddedVoiceClient,
+      voice: true,
+    },
+    { name: "Watch HTTP node-only", watchHttp: true, client: watchVoiceClient, voice: false },
+  ])("$name setup retires only replaced operator grants", async ({ watchHttp, client, voice }) => {
+    const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
+    const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+    const { getPairedDevice, requestDevicePairing } = await import("../infra/device-pairing.js");
+    const { decodePairingSetupCode } = await import("../pairing/setup-code.js");
     const { server, port, prevToken } = await startProxiedControlUiServer("secret");
     const { identityPath, identity } = await createOperatorIdentityFixture(
-      "openclaw-bootstrap-voice-node-",
+      "openclaw-watch-voice-existing-operator-",
     );
-    const client = {
-      id: "node-host",
-      version: "1.0.0",
-      platform: "esp32",
-      mode: "node" as const,
-      deviceFamily: "ESP32",
-    };
-
+    const sockets: Awaited<ReturnType<typeof openWs>>[] = [];
     try {
-      const issued = await issueDeviceBootstrapToken({
-        profile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-      });
-      const wsBootstrap = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
-      const initial = await connectReq(wsBootstrap, {
-        skipDefaultAuth: true,
-        bootstrapToken: issued.token,
-        role: "node",
-        scopes: [],
-        client,
-        deviceIdentityPath: identityPath,
-      });
-      if (!initial.ok) {
-        throw new Error(`voice-node bootstrap failed: ${JSON.stringify(initial.error)}`);
-      }
-      expect(initial.ok).toBe(true);
-      const auth = (
-        initial.payload as
-          | {
-              auth?: {
-                role?: string;
-                scopes?: string[];
-                deviceToken?: string;
-                deviceTokens?: Array<{
-                  role?: string;
-                  scopes?: string[];
-                  deviceToken?: string;
-                }>;
-              };
-            }
-          | undefined
-      )?.auth;
-      expect(auth?.role).toBe("node");
-      expect(auth?.scopes).toEqual([]);
-      const nodeToken = auth?.deviceToken;
-      if (!nodeToken) {
-        throw new Error("expected issued voice-node device token");
-      }
-      const operatorHandoff = auth?.deviceTokens?.find((entry) => entry.role === "operator");
-      expect(operatorHandoff).toMatchObject({
-        scopes: ["operator.read", "operator.talk"],
-        deviceToken: expect.any(String),
-      });
-      const operatorToken = operatorHandoff?.deviceToken;
-      if (!operatorToken) {
-        throw new Error("expected handed-off voice-node operator token");
-      }
-      expect((await listDevicePairing()).pending).toEqual([]);
-      const paired = await getPairedDevice(identity.deviceId);
-      expect(paired?.roles).toEqual(["node", "operator"]);
-      expect(paired?.approvedScopes).toEqual(["operator.read", "operator.talk"]);
-      wsBootstrap.close();
-
-      const wsNode = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
-      const nodeReconnect = await connectReq(wsNode, {
-        skipDefaultAuth: true,
-        deviceToken: nodeToken,
-        role: "node",
-        scopes: [],
-        client,
-        deviceIdentityPath: identityPath,
-      });
-      expect(nodeReconnect.ok).toBe(true);
-      wsNode.close();
-
-      const wsOperator = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
-      const operatorReconnect = await connectReq(wsOperator, {
-        skipDefaultAuth: true,
-        deviceToken: operatorToken,
+      const pairing = await requestDevicePairing({
+        deviceId: identity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+        platform: client.platform,
+        deviceFamily: client.deviceFamily,
+        clientId: client.id,
+        clientMode: client.mode,
         role: "operator",
-        scopes: ["operator.read", "operator.talk"],
-        client,
-        deviceIdentityPath: identityPath,
+        roles: ["node", "operator"],
+        scopes: ["operator.read", "operator.approvals"],
       });
-      expect(operatorReconnect.ok).toBe(true);
-      expect((await rpcReq(wsOperator, "health")).ok).toBe(true);
-      const talkMode = await rpcReq(wsOperator, "talk.mode", {
-        enabled: true,
-        phase: "listening",
+      const approved = await approveDevicePairing(pairing.request.requestId, {
+        callerScopes: ["operator.admin"],
       });
-      expect(talkMode.ok).toBe(true);
-      expect(talkMode.payload).toMatchObject({ enabled: true, phase: "listening" });
-      const adminMutation = await rpcReq(wsOperator, "set-heartbeats", { enabled: false });
-      expect(adminMutation.ok).toBe(false);
-      expect(adminMutation.error?.message ?? "").toContain("missing scope");
-      wsOperator.close();
+      expect(approved?.status).toBe("approved");
+      const oldToken = (await getPairedDevice(identity.deviceId))?.tokens?.operator?.token;
+      if (!oldToken) {
+        throw new Error("expected the previously approved operator token");
+      }
+      const oldOperator = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      sockets.push(oldOperator);
+      expect(
+        (
+          await connectReq(oldOperator, {
+            skipDefaultAuth: true,
+            prePairDevice: false,
+            deviceToken: oldToken,
+            role: "operator",
+            scopes: ["operator.read", "operator.approvals"],
+            client,
+            deviceIdentityPath: identityPath,
+          })
+        ).ok,
+      ).toBe(true);
+      expect((await rpcReq(oldOperator, "health")).ok).toBe(true);
+      const oldOperatorClosed = new Promise<false>((resolve) => {
+        oldOperator.once("close", () => resolve(false));
+      });
+
+      const owner = await openWs(port);
+      sockets.push(owner);
+      expect(
+        (await connectReq(owner, { scopes: ["operator.admin"], prePairDevice: true })).ok,
+      ).toBe(true);
+      const setup = await rpcReq<{ setupCode: string }>(owner, "device.pair.setupCode", {
+        bootstrapProfile: voice ? "voice-node" : "node",
+        includeQr: false,
+        publicUrl: `ws://127.0.0.1:${port}`,
+      });
+      expect(setup.ok).toBe(true);
+      if (!setup.payload?.setupCode) {
+        throw new Error("expected owner-authorized voice setup");
+      }
+      const bootstrap = decodePairingSetupCode(setup.payload.setupCode);
+      if (watchHttp) {
+        const response = await connectWatchNode({
+          baseUrl: `${bootstrap.url.replace("ws:", "http:")}/api/nodes/watch`,
+          identity,
+          client,
+          bootstrapToken: bootstrap.bootstrapToken,
+        });
+        expect(response.status).toBe(200);
+        await readJson(response);
+      } else {
+        const node = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+        sockets.push(node);
+        const connected = await connectReq(node, {
+          skipDefaultAuth: true,
+          bootstrapToken: bootstrap.bootstrapToken,
+          role: "node",
+          scopes: [],
+          client,
+          deviceIdentityPath: identityPath,
+        });
+        expect(connected.ok).toBe(true);
+      }
+      expect(new Set((await getPairedDevice(identity.deviceId))?.approvedScopes)).toEqual(
+        new Set(
+          voice ? ["operator.read", "operator.talk"] : ["operator.read", "operator.approvals"],
+        ),
+      );
+
+      const oldGrantStillConnected = await Promise.race([
+        oldOperatorClosed,
+        rpcReq(oldOperator, "health").then((reply) => reply.ok),
+      ]);
+      expect(oldGrantStillConnected).toBe(!voice);
     } finally {
+      for (const socket of sockets) {
+        socket.close();
+      }
       await server.close();
       restoreGatewayToken(prevToken);
     }

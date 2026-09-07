@@ -13,6 +13,7 @@ import {
   normalizeAgentToolResultMiddlewareRuntimes,
 } from "./agent-tool-result-middleware.js";
 import { buildPluginApi, createUnavailableRuntime } from "./api-builder.js";
+import { resolveCapabilityProviderRegistration } from "./capability-catalog.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
 import type {
@@ -25,6 +26,7 @@ import type {
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
+import { resolvePluginCapabilityCatalogContext } from "./loader-runtime-load.js";
 import type { PluginAgentToolResultMiddlewareRegistration } from "./registry-types.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
@@ -281,13 +283,25 @@ export function createCapturedPluginRegistration(params?: {
         registerEmbeddingProvider(provider: EmbeddingProviderAdapter) {
           embeddingProviders.push(provider);
         },
-        registerSpeechProvider(provider: SpeechProviderPlugin) {
+        registerSpeechProvider(entry) {
+          const provider = resolveCapabilityProviderRegistration(
+            entry,
+            resolvePluginCapabilityCatalogContext,
+          );
           speechProviders.push(provider);
         },
-        registerRealtimeTranscriptionProvider(provider: RealtimeTranscriptionProviderPlugin) {
+        registerRealtimeTranscriptionProvider(entry) {
+          const provider = resolveCapabilityProviderRegistration(
+            entry,
+            resolvePluginCapabilityCatalogContext,
+          );
           realtimeTranscriptionProviders.push(provider);
         },
-        registerRealtimeVoiceProvider(provider: RealtimeVoiceProviderPlugin) {
+        registerRealtimeVoiceProvider(entry) {
+          const provider = resolveCapabilityProviderRegistration(
+            entry,
+            resolvePluginCapabilityCatalogContext,
+          );
           realtimeVoiceProviders.push(provider);
         },
         registerMediaUnderstandingProvider(provider: MediaUnderstandingProviderPlugin) {

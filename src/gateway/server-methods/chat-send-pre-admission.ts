@@ -11,6 +11,7 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
+import { createChatAbortOps } from "../chat-abort-ops.js";
 import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
 import { loadSessionEntry } from "../session-utils.js";
@@ -22,7 +23,6 @@ import {
 } from "./chat-abort-authorization.js";
 import {
   abortChatRunsForSessionKeyWithPartials,
-  createChatAbortOps,
   descendantAbortError,
 } from "./chat-abort-runtime.js";
 import { hasRestartRecoveryTerminalRun, resolveDurableChatClaim } from "./chat-restart-recovery.js";

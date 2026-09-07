@@ -41,6 +41,10 @@ type SubagentRunReadSqliteRow = Pick<
   delivery_status: string | null;
   delivery_suspended_at: number | null;
   requester_agent_id: string | null;
+  collect: number | null;
+  group_id: string | null;
+  swarm_requester_session_key: string | null;
+  collector_status: NonNullable<SubagentRunRecord["collectorCompletion"]>["status"] | null;
 };
 type CanonicalSubagentRunRecord = SubagentRunRecord &
   Required<Pick<SubagentRunRecord, "completion" | "delivery">>;
@@ -132,6 +136,19 @@ export function upsertSubagentRunRowInDatabase(
       .onConflict((conflict) =>
         conflict.column("run_id").doUpdateSet(subagentRunRecordToSqliteUpdate(row)),
       ),
+  );
+}
+
+/** Deletes one run on the exact supplied shared-state handle. */
+export function deleteSubagentRunRowInDatabase(
+  database: OpenClawStateDatabase,
+  runId: string,
+): void {
+  executeSqliteQuerySync(
+    database.db,
+    getNodeSqliteKysely<SubagentRegistryDatabase>(database.db)
+      .deleteFrom("subagent_runs")
+      .where("run_id", "=", runId),
   );
 }
 
@@ -252,6 +269,14 @@ function readSubagentSessionListRows(): SubagentRunReadSqliteRow[] {
         "requester_session_key",
         "created_at",
         subagentPayloadJsonValue<string | null>("$.model").as("model"),
+        subagentPayloadJsonValue<number | null>("$.collect").as("collect"),
+        subagentPayloadJsonValue<string | null>("$.groupId").as("group_id"),
+        subagentPayloadJsonValue<string | null>("$.swarmRequesterSessionKey").as(
+          "swarm_requester_session_key",
+        ),
+        subagentPayloadJsonValue<string | null>("$.collectorCompletion.status").as(
+          "collector_status",
+        ),
         subagentPayloadJsonValue<number | null>("$.runTimeoutSeconds").as("run_timeout_seconds"),
         subagentPayloadJsonValue<SubagentRunRecord["execution"]["status"]>("$.execution.status").as(
           "execution_status",
@@ -306,6 +331,10 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
       controllerSessionKey: row.controller_session_key?.trim() || undefined,
       requesterSessionKey,
       requesterAgentId: row.requester_agent_id?.trim() || undefined,
+      collect: row.collect === 1 ? true : undefined,
+      groupId: row.group_id || undefined,
+      swarmRequesterSessionKey: row.swarm_requester_session_key || undefined,
+      collectorCompletion: row.collector_status ? { status: row.collector_status } : undefined,
       model: row.model || undefined,
       generation: normalizeFiniteNumber(row.generation),
       createdAt: row.created_at,

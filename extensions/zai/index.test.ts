@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
+import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { buildZaiClaudeAgentSdkBackend } from "./cli-backend.js";
 import plugin from "./index.js";
@@ -609,14 +610,7 @@ describe("zai provider plugin", () => {
             },
             { type: "text", text: "visible reply" },
           ],
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
+          usage: createZeroUsageFixture(),
           stopReason: "stop",
           timestamp: 2,
         },

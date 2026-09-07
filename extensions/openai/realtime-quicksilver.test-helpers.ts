@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { vi, type Mock } from "vitest";
+import { openAIRealtimeHost } from "./realtime-host.js";
 import { createOpenAIQuicksilverBrowserSessionBroker } from "./realtime-quicksilver-session.js";
 
 export class FakeSocket extends EventEmitter {
@@ -120,22 +121,25 @@ export function createBroker(params?: {
   const sockets: FakeSocket[] = [];
   const socketRequests: Array<{ url: string; headers?: Record<string, string> }> = [];
   const logger = { debug: vi.fn() as Mock, warn: vi.fn() as Mock };
-  const realtime = createOpenAIQuicksilverBrowserSessionBroker({
-    getConfig: () => ({
-      gateway: { controlUi: { allowedOrigins: ["https://control.example"] } },
-    }),
-    logger,
-    fetchImpl: params?.fetchImpl ?? vi.fn(async () => createCallResponse()),
-    webSocketFactory: (url, options) => {
-      const socket = params?.socketFactory?.(sockets.length) ?? new FakeSocket();
-      sockets.push(socket);
-      socketRequests.push({
-        url,
-        headers: options.headers as Record<string, string> | undefined,
-      });
-      return socket;
+  const realtime = createOpenAIQuicksilverBrowserSessionBroker(
+    {
+      getConfig: () => ({
+        gateway: { controlUi: { allowedOrigins: ["https://control.example"] } },
+      }),
+      logger,
+      fetchImpl: params?.fetchImpl ?? vi.fn(async () => createCallResponse()),
+      webSocketFactory: (url, options) => {
+        const socket = params?.socketFactory?.(sockets.length) ?? new FakeSocket();
+        sockets.push(socket);
+        socketRequests.push({
+          url,
+          headers: options.headers as Record<string, string> | undefined,
+        });
+        return socket;
+      },
     },
-  });
+    openAIRealtimeHost,
+  );
   const runAgentConsult = params?.runAgentConsult ?? vi.fn(async () => ({ text: "Done" }));
   return { realtime, sockets, socketRequests, logger, runAgentConsult };
 }

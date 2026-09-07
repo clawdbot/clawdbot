@@ -173,17 +173,6 @@ function resolveProviderMetadataSnapshot(
   });
 }
 
-function resolveManifestProviderAuthEnvVarCandidates(
-  params?: ProviderEnvVarLookupParams,
-): Record<string, string[]> {
-  const snapshot = resolveProviderMetadataSnapshot(params);
-  const aliases = resolveProviderAuthAliasMap({
-    ...params,
-    metadataSnapshot: snapshot,
-  });
-  return resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(params, snapshot, aliases);
-}
-
 function resolveManifestProviderUsageAuthEnvVarNames(
   params?: ProviderEnvVarLookupParams,
 ): string[] {
@@ -195,10 +184,10 @@ function resolveManifestProviderUsageAuthEnvVarNames(
   );
 }
 
-function resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(
+function resolveManifestProviderAuthEnvVarCandidates(
   params: ProviderEnvVarLookupParams | undefined,
   snapshot: PluginMetadataSnapshot,
-  aliases: Readonly<Record<string, string>>,
+  sortedAliases: readonly (readonly [string, string])[],
 ): Record<string, string[]> {
   const candidates: Record<string, string[]> = {};
   for (const plugin of snapshot.plugins) {
@@ -209,9 +198,7 @@ function resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(
       appendUniqueEnvVarCandidates(candidates, provider.id, provider.envVars ?? []);
     }
   }
-  for (const [alias, target] of Object.entries(aliases).toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  )) {
+  for (const [alias, target] of sortedAliases) {
     const keys = candidates[target];
     if (keys) {
       appendUniqueEnvVarCandidates(candidates, alias, keys);
@@ -223,7 +210,8 @@ function resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(
 function resolveManifestRuntimeAuthFacts(
   params: ProviderEnvVarLookupParams | undefined,
   snapshot: PluginMetadataSnapshot,
-  aliases: Readonly<Record<string, string>>,
+  aliasEntries: readonly (readonly [string, string])[],
+  sortedAliases: readonly (readonly [string, string])[],
 ) {
   const evidenceByProvider: Record<string, ProviderAuthEvidence[]> = {};
   const refs = new Set<string>();
@@ -253,15 +241,14 @@ function resolveManifestRuntimeAuthFacts(
       appendUniqueProviderRef(refs, providerId);
     }
   }
-  for (const [alias, target] of Object.entries(aliases).toSorted(([left], [right]) =>
-    left.localeCompare(right),
-  )) {
+  for (const [alias, target] of sortedAliases) {
     const evidence = evidenceByProvider[target];
     if (evidence) {
       appendUniqueAuthEvidence(evidenceByProvider, alias, evidence);
     }
   }
-  for (const [alias, target] of Object.entries(aliases)) {
+  // Fallback refs keep insertion order; sorting would change one-pass alias-chain expansion.
+  for (const [alias, target] of aliasEntries) {
     if (refs.has(target)) {
       appendUniqueProviderRef(refs, alias);
     }
@@ -276,8 +263,13 @@ function resolveManifestRuntimeAuthFacts(
 export function resolveProviderAuthEnvVarCandidates(
   params?: ProviderEnvVarLookupParams,
 ): Record<string, readonly string[]> {
+  const snapshot = resolveProviderMetadataSnapshot(params);
+  const aliases = resolveProviderAuthAliasMap({ ...params, metadataSnapshot: snapshot });
+  const sortedAliases = Object.entries(aliases).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  );
   return {
-    ...resolveManifestProviderAuthEnvVarCandidates(params),
+    ...resolveManifestProviderAuthEnvVarCandidates(params, snapshot, sortedAliases),
     ...CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES,
   };
 }
@@ -292,13 +284,15 @@ export function resolveProviderAuthLookupMaps(
     metadataSnapshot: snapshot,
   };
   const aliasMap = resolveProviderAuthAliasMap(lookupParams);
+  const aliasEntries = Object.entries(aliasMap);
+  const sortedAliases = aliasEntries.toSorted(([left], [right]) => left.localeCompare(right));
   return {
     aliasMap,
     envCandidateMap: {
-      ...resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(params, snapshot, aliasMap),
+      ...resolveManifestProviderAuthEnvVarCandidates(params, snapshot, sortedAliases),
       ...CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES,
     },
-    ...resolveManifestRuntimeAuthFacts(params, snapshot, aliasMap),
+    ...resolveManifestRuntimeAuthFacts(params, snapshot, aliasEntries, sortedAliases),
   };
 }
 

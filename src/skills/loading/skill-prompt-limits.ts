@@ -34,7 +34,6 @@ function buildSkillsLimitNote(params: {
 }
 
 function buildRenderedSkillsPrompt(params: {
-  remoteNote?: string;
   skills: Skill[];
   total: number;
   format: SkillsPromptFormat;
@@ -58,7 +57,7 @@ function buildRenderedSkillsPrompt(params: {
           descriptionMaxChars: params.format.descriptionMaxChars,
         })
       : formatSkillsForPromptCore(params.skills);
-  return [params.remoteNote, limitNote, catalog].filter(Boolean).join("\n");
+  return [limitNote, catalog].filter(Boolean).join("\n");
 }
 
 type SkillsPromptParams = {
@@ -93,20 +92,15 @@ export function prepareSkillsForPrompt(params: SkillsPromptParams): {
     format: SkillsPromptFormat,
     includeLimitNote = true,
   ): string | undefined => {
-    const remoteNotes = params.remoteNote ? [params.remoteNote, undefined] : [undefined];
-    for (const remoteNote of remoteNotes) {
-      const prompt = buildRenderedSkillsPrompt({
-        remoteNote,
-        skills,
-        total,
-        format,
-        includeLimitNote,
-      });
-      if (prompt.length <= maxSkillsPromptChars) {
-        return prompt;
-      }
+    // Reuse the catalog and limit notice when the optional remote note does not fit.
+    const prompt = buildRenderedSkillsPrompt({ skills, total, format, includeLimitNote });
+    if (
+      params.remoteNote &&
+      params.remoteNote.length + prompt.length + (prompt ? 1 : 0) <= maxSkillsPromptChars
+    ) {
+      return prompt ? `${params.remoteNote}\n${prompt}` : params.remoteNote;
     }
-    return undefined;
+    return prompt.length <= maxSkillsPromptChars ? prompt : undefined;
   };
 
   const fitsCompact = (

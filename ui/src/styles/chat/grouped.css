@@ -151,7 +151,6 @@
 
 .chat-group.tool.chat-group--with-footer > .chat-group-messages {
   max-width: var(--chat-message-column-max);
-  margin-inline-start: 1px;
 }
 
 .chat-group.user .chat-group-footer {
@@ -690,7 +689,6 @@ img.chat-avatar.user {
 
 /* Image avatar support */
 img.chat-avatar {
-  display: block;
   object-fit: cover;
   object-position: center;
 }

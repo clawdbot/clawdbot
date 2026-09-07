@@ -330,6 +330,61 @@ public struct OpenClawWatchAppStatus: Codable, Sendable, Equatable {
         self.arguments = arguments
         self.verbatim = verbatim
     }
+
+    public static func decodeLegacyGateway(
+        text: String?,
+        connected: Bool) -> OpenClawWatchAppStatus
+    {
+        if connected {
+            return OpenClawWatchAppStatus(code: .gatewayConnected)
+        }
+        guard let text, !text.isEmpty else {
+            return OpenClawWatchAppStatus(code: .gatewayOffline)
+        }
+        return OpenClawWatchAppStatus(code: .legacy, verbatim: text)
+    }
+
+    public static func decodeLegacyTalk(
+        text: String?,
+        enabled: Bool,
+        listening: Bool,
+        speaking: Bool) -> OpenClawWatchAppStatus
+    {
+        if speaking {
+            return OpenClawWatchAppStatus(code: .talkSpeaking)
+        }
+        if listening {
+            return OpenClawWatchAppStatus(code: .talkListening)
+        }
+        if !enabled {
+            return OpenClawWatchAppStatus(code: .talkOff)
+        }
+        guard let text, !text.isEmpty else {
+            return OpenClawWatchAppStatus(code: .talkReady)
+        }
+        return OpenClawWatchAppStatus(code: .legacy, verbatim: text)
+    }
+
+    public static func decodeLegacyChat(
+        code: String?,
+        text: String?) -> OpenClawWatchAppStatus?
+    {
+        let statusCode: OpenClawWatchAppStatusCode? = switch code {
+        case "connectIPhone":
+            OpenClawWatchAppStatusCode.chatConnectIPhone
+        case "noMessages":
+            OpenClawWatchAppStatusCode.chatNoMessages
+        case "unavailable":
+            OpenClawWatchAppStatusCode.chatUnavailable
+        default:
+            nil
+        }
+        if let statusCode {
+            return OpenClawWatchAppStatus(code: statusCode)
+        }
+        guard let text, !text.isEmpty else { return nil }
+        return OpenClawWatchAppStatus(code: .legacy, verbatim: text)
+    }
 }
 
 public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
@@ -421,7 +476,7 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
     {
         // Preserve the shipped source API while producers migrate to semantic statuses.
         self.init(
-            gatewayStatus: Self.decodeLegacyGatewayStatus(
+            gatewayStatus: OpenClawWatchAppStatus.decodeLegacyGateway(
                 text: gatewayStatusText,
                 connected: gatewayConnected),
             gatewayStatusText: gatewayStatusText,
@@ -431,7 +486,7 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
             agentAvatarText: agentAvatarText,
             sessionKey: sessionKey,
             gatewayStableID: gatewayStableID,
-            talkStatus: Self.decodeLegacyTalkStatus(
+            talkStatus: OpenClawWatchAppStatus.decodeLegacyTalk(
                 text: talkStatusText,
                 enabled: talkEnabled,
                 listening: talkListening,
@@ -442,7 +497,7 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
             talkSpeaking: talkSpeaking,
             pendingApprovalCount: pendingApprovalCount,
             chatItems: chatItems,
-            chatStatus: Self.decodeLegacyChatStatus(code: nil, text: chatStatusText),
+            chatStatus: OpenClawWatchAppStatus.decodeLegacyChat(code: nil, text: chatStatusText),
             chatStatusText: chatStatusText,
             sentAtMs: sentAtMs,
             snapshotId: snapshotId,
@@ -507,7 +562,7 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
                 code: .legacy,
                 verbatim: gatewayStatusText)
         } else {
-            self.gatewayStatus = Self.decodeLegacyGatewayStatus(
+            self.gatewayStatus = OpenClawWatchAppStatus.decodeLegacyGateway(
                 text: gatewayStatusText,
                 connected: self.gatewayConnected)
         }
@@ -526,7 +581,7 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
                 code: .legacy,
                 verbatim: talkStatusText)
         } else {
-            self.talkStatus = Self.decodeLegacyTalkStatus(
+            self.talkStatus = OpenClawWatchAppStatus.decodeLegacyTalk(
                 text: talkStatusText,
                 enabled: self.talkEnabled,
                 listening: self.talkListening,
@@ -537,7 +592,7 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
         let chatStatusCode = try container.decodeIfPresent(String.self, forKey: .chatStatusCode)
         self.chatStatus = (try? container.decode(
             OpenClawWatchAppStatus.self,
-            forKey: .chatStatus)) ?? Self.decodeLegacyChatStatus(
+            forKey: .chatStatus)) ?? OpenClawWatchAppStatus.decodeLegacyChat(
             code: chatStatusCode,
             text: chatStatusText)
         self.chatStatusText = chatStatusText ?? self.chatStatus.map(Self.legacyText)
@@ -568,61 +623,6 @@ public struct OpenClawWatchAppSnapshotMessage: Codable, Sendable, Equatable {
         try container.encodeIfPresent(self.sentAtMs, forKey: .sentAtMs)
         try container.encodeIfPresent(self.snapshotId, forKey: .snapshotId)
         try container.encodeIfPresent(self.chatDeliveryContext, forKey: .chatDeliveryContext)
-    }
-
-    private static func decodeLegacyGatewayStatus(
-        text: String?,
-        connected: Bool) -> OpenClawWatchAppStatus
-    {
-        if connected {
-            return OpenClawWatchAppStatus(code: .gatewayConnected)
-        }
-        guard let text, !text.isEmpty else {
-            return OpenClawWatchAppStatus(code: .gatewayOffline)
-        }
-        return OpenClawWatchAppStatus(code: .legacy, verbatim: text)
-    }
-
-    private static func decodeLegacyTalkStatus(
-        text: String?,
-        enabled: Bool,
-        listening: Bool,
-        speaking: Bool) -> OpenClawWatchAppStatus
-    {
-        if speaking {
-            return OpenClawWatchAppStatus(code: .talkSpeaking)
-        }
-        if listening {
-            return OpenClawWatchAppStatus(code: .talkListening)
-        }
-        if !enabled {
-            return OpenClawWatchAppStatus(code: .talkOff)
-        }
-        guard let text, !text.isEmpty else {
-            return OpenClawWatchAppStatus(code: .talkReady)
-        }
-        return OpenClawWatchAppStatus(code: .legacy, verbatim: text)
-    }
-
-    private static func decodeLegacyChatStatus(
-        code: String?,
-        text: String?) -> OpenClawWatchAppStatus?
-    {
-        let statusCode: OpenClawWatchAppStatusCode? = switch code {
-        case "connectIPhone":
-            OpenClawWatchAppStatusCode.chatConnectIPhone
-        case "noMessages":
-            OpenClawWatchAppStatusCode.chatNoMessages
-        case "unavailable":
-            OpenClawWatchAppStatusCode.chatUnavailable
-        default:
-            nil
-        }
-        if let statusCode {
-            return OpenClawWatchAppStatus(code: statusCode)
-        }
-        guard let text, !text.isEmpty else { return nil }
-        return OpenClawWatchAppStatus(code: .legacy, verbatim: text)
     }
 
     private static func legacyText(for status: OpenClawWatchAppStatus) -> String {

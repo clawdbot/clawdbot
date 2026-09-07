@@ -78,7 +78,7 @@ export function sanitizeGoogleChatText(text: string): string {
 }
 
 function projectDecodedGoogleChatResources(ir: MarkdownIR): MarkdownIR {
-  const characters = ir.text.split("");
+  const characters = ir.text.includes("<") ? ir.text.split("") : [];
   let changed = false;
   for (const match of ir.text.matchAll(/<(?:users|customEmojis)\/[^<>\s]+>/giu)) {
     const start = match.index ?? 0;
@@ -90,7 +90,7 @@ function projectDecodedGoogleChatResources(ir: MarkdownIR): MarkdownIR {
 }
 
 function projectGoogleChatLinkLabels(ir: MarkdownIR): MarkdownIR {
-  const characters = ir.text.split("");
+  const characters = ir.links.length > 0 ? ir.text.split("") : [];
   let changed = false;
   for (const link of ir.links) {
     const label = ir.text.slice(link.start, link.end);

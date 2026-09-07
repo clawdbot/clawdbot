@@ -11,21 +11,6 @@ import {
 
 export type { WorkboardRouteData } from "./route-location.ts";
 
-async function loadWorkboardRoute(
-  context: ApplicationContext,
-  location: RouteLocation,
-): Promise<WorkboardRouteData> {
-  const sessions = context.sessions.state;
-  await Promise.all([
-    context.runtimeConfig.ensureLoaded(),
-    context.agents.ensureList(),
-    sessions.result || sessions.loading ? Promise.resolve() : context.sessions.refresh(),
-  ]);
-  return {
-    ...resolveWorkboardRouteLocation(location, context.basePath),
-  };
-}
-
 export const page = definePage({
   ...routePageSpec("workboard"),
   loaderDeps: (context: ApplicationContext, location: RouteLocation) => {
@@ -36,11 +21,16 @@ export const page = definePage({
       canonicalLocation?.search ?? route.search
     }`;
   },
-  loader: (context: ApplicationContext, { location }) => loadWorkboardRoute(context, location),
+  loader: (context: ApplicationContext, { location }) =>
+    resolveWorkboardRouteLocation(location, context.basePath),
   component: () =>
-    import("./workboard-page.ts").then(() => ({
+    import("../plugin/plugin-page.ts").then(() => ({
       header: true,
       render: (data: WorkboardRouteData | undefined) =>
-        html`<openclaw-workboard-page .routeData=${data}></openclaw-workboard-page>`,
+        html`<openclaw-plugin-page
+          .pluginId=${"workboard"}
+          .tabId=${"workboard"}
+          .params=${{ boardId: data?.boardFilter ?? "__all__" }}
+        ></openclaw-plugin-page>`,
     })),
 });

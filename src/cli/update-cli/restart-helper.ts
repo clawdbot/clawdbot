@@ -1,5 +1,4 @@
 // Builds detached, platform-specific restart scripts for update handoff.
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -19,6 +18,7 @@ import {
   shellEscapeRestartLogValue,
 } from "../../daemon/restart-logs.js";
 import { getWindowsCmdExePath } from "../../infra/windows-install-roots.js";
+import { COMMAND_PROCESS_TREE_KILL_GRACE_MS, spawnCommand } from "../../process/exec-spawn.js";
 
 /**
  * Shell-escape a string for embedding in single-quoted shell arguments.
@@ -768,31 +768,23 @@ exit $status
   }
 }
 
-/**
- * Executes the prepared restart script as a **detached** process.
- *
- * The script must outlive the CLI process because the CLI itself is part
- * of the service being restarted — `systemctl restart` / `launchctl
- * kickstart -k` will terminate the current process tree.  Using
- * `spawn({ detached: true })` + `unref()` ensures the script survives
- * the parent's exit.
- *
- * Resolves immediately after spawning; the script runs independently.
- */
-export async function runRestartScript(scriptPath: string): Promise<void> {
+/** Observe native acceptance separately from the caller's subsequent health check. */
+export async function runRestartScript(scriptPath: string, timeoutMs: number): Promise<boolean> {
   const isWindows = process.platform === "win32";
   const file = isWindows ? getWindowsCmdExePath() : "/bin/sh";
   const args = isWindows ? ["/d", "/s", "/c", quoteCmdScriptArg(scriptPath)] : [scriptPath];
 
   try {
-    const child = spawn(file, args, {
+    await spawnCommand([file, ...args], {
+      // Keep the detached, stream-independent handoff on every platform, but
+      // observe its result before classifying failed health as an activation refusal.
       detached: true,
       stdio: "ignore",
-      windowsHide: true,
+      timeout: timeoutMs,
+      forceKillAfterDelay: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
     });
-    child.on("error", () => {});
-    child.unref();
+    return true;
   } catch {
-    // Restart handoff is best-effort; update completion must not crash here.
+    return false;
   }
 }

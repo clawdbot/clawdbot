@@ -124,7 +124,7 @@ describe("routeReply delivery result", () => {
 
     expect(res).toEqual({
       ok: true,
-      delivered: true,
+      delivered: false,
       ambiguous: true,
       reason: "adapter_returned_no_identity",
     });

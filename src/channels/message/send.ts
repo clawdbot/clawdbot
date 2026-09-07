@@ -53,27 +53,10 @@ type DurableMessageSuppressionReason =
 type DurableMessageFailureStage = "platform_send" | "queue" | "unknown";
 
 type DurableMessagePayloadDeliveryOutcome =
-  | {
-      index: number;
-      status: "sent";
-      results: OutboundDeliveryResult[];
-    }
-  | {
-      index: number;
-      status: "suppressed";
+  | Exclude<OutboundPayloadDeliveryOutcome, { status: "suppressed" }>
+  | (Omit<Extract<OutboundPayloadDeliveryOutcome, { status: "suppressed" }>, "reason"> & {
       reason: DurableMessageSuppressionReason;
-      hookEffect?: {
-        cancelReason?: string;
-        metadata?: Record<string, unknown>;
-      };
-    }
-  | {
-      index: number;
-      status: "failed";
-      error: unknown;
-      sentBeforeError: boolean;
-      stage: DurableMessageFailureStage;
-    };
+    });
 
 export type DurableMessageBatchSendResult =
   | {
@@ -115,6 +98,13 @@ export function durableMessageBatchMayHaveReachedRecipient(
     return true;
   }
   if (result.status === "suppressed" && result.reason === "adapter_returned_no_identity") {
+    return true;
+  }
+  if (
+    result.status === "failed" &&
+    isOutboundDeliveryError(result.error) &&
+    result.error.sentBeforeError
+  ) {
     return true;
   }
   return (
@@ -195,18 +185,6 @@ function toDurableMessageIntent(
   };
 }
 
-function toDurablePayloadOutcome(
-  outcome: OutboundPayloadDeliveryOutcome,
-): DurableMessagePayloadDeliveryOutcome {
-  return outcome;
-}
-
-function toDurablePayloadOutcomes(
-  outcomes: readonly OutboundPayloadDeliveryOutcome[],
-): DurableMessagePayloadDeliveryOutcome[] {
-  return outcomes.map((outcome) => toDurablePayloadOutcome(outcome));
-}
-
 export type DurableMessageSendContextParams = DurableMessageBatchSendParams & {
   durability?: Exclude<MessageDurabilityPolicy, "disabled">;
   /** Runs after the durable queue intent exists and before platform delivery starts. */
@@ -277,8 +255,6 @@ export async function withDurableMessageSendContextCore<T>(
     },
     send: async (rendered): Promise<DurableMessageBatchSendResult> => {
       const payloadOutcomes: OutboundPayloadDeliveryOutcome[] = [];
-      const durablePayloadOutcomes = (): DurableMessagePayloadDeliveryOutcome[] =>
-        toDurablePayloadOutcomes(payloadOutcomes);
       try {
         const results = await deliverOutboundPayloadsInternal({
           ...deliveryParams,
@@ -312,14 +288,14 @@ export async function withDurableMessageSendContextCore<T>(
               error: failedOutcome.error,
               sentBeforeError: true,
               ...(deliveryIntent ? { deliveryIntent } : {}),
-              ...(payloadOutcomes.length > 0 ? { payloadOutcomes: durablePayloadOutcomes() } : {}),
+              ...(payloadOutcomes.length > 0 ? { payloadOutcomes: [...payloadOutcomes] } : {}),
             };
           }
           return {
             status: "failed",
             error: failedOutcome.error,
             stage: failedOutcome.stage,
-            ...(payloadOutcomes.length > 0 ? { payloadOutcomes: durablePayloadOutcomes() } : {}),
+            ...(payloadOutcomes.length > 0 ? { payloadOutcomes: [...payloadOutcomes] } : {}),
           };
         }
         if (results.length === 0) {
@@ -331,7 +307,7 @@ export async function withDurableMessageSendContextCore<T>(
             reason:
               payloadOutcomes.find((outcome) => outcome.status === "suppressed")?.reason ??
               "no_visible_result",
-            ...(payloadOutcomes.length > 0 ? { payloadOutcomes: durablePayloadOutcomes() } : {}),
+            ...(payloadOutcomes.length > 0 ? { payloadOutcomes: [...payloadOutcomes] } : {}),
           };
         }
         return {
@@ -339,7 +315,7 @@ export async function withDurableMessageSendContextCore<T>(
           results,
           receipt,
           ...(deliveryIntent ? { deliveryIntent } : {}),
-          ...(payloadOutcomes.length > 0 ? { payloadOutcomes: durablePayloadOutcomes() } : {}),
+          ...(payloadOutcomes.length > 0 ? { payloadOutcomes: [...payloadOutcomes] } : {}),
         };
       } catch (error: unknown) {
         if (isOutboundDeliveryError(error)) {
@@ -357,7 +333,7 @@ export async function withDurableMessageSendContextCore<T>(
               sentBeforeError: true,
               ...(deliveryIntent ? { deliveryIntent } : {}),
               ...(error.payloadOutcomes.length > 0
-                ? { payloadOutcomes: toDurablePayloadOutcomes(error.payloadOutcomes) }
+                ? { payloadOutcomes: [...error.payloadOutcomes] }
                 : {}),
             };
           }
@@ -366,7 +342,7 @@ export async function withDurableMessageSendContextCore<T>(
             error,
             stage: error.stage,
             ...(error.payloadOutcomes.length > 0
-              ? { payloadOutcomes: toDurablePayloadOutcomes(error.payloadOutcomes) }
+              ? { payloadOutcomes: [...error.payloadOutcomes] }
               : {}),
           };
         }
