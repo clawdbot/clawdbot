@@ -382,6 +382,7 @@ async function processDiscordMessageInner(
       draftStream &&
       draftPreview.isProgressMode &&
       info.kind === "block" &&
+      !deliverablePayload.isCommentary &&
       !options?.allowProgressBlock
     ) {
       const reply = resolveSendableOutboundReplyParts(deliverablePayload);
