@@ -186,6 +186,20 @@ export function createPluginApiFactory(
                     sessionKey: injection.sessionKey,
                   };
                 }
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return {
+                    enqueued: false,
+                    id: "",
+                    sessionKey: injection.sessionKey,
+                  };
+                }
+                if (!shouldCommitWorkflowSideEffect()) {
+                  return {
+                    enqueued: false,
+                    id: "",
+                    sessionKey: injection.sessionKey,
+                  };
+                }
                 const { enqueuePluginNextTurnInjection } = await loadHookState();
                 return enqueuePluginNextTurnInjection({
                   cfg: registryParams.runtime.config.current() as OpenClawConfig,
