@@ -2,6 +2,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { isCronJobActive } from "../active-jobs.js";
 import { noteCronJobsStoreCommit } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
@@ -85,7 +86,20 @@ function repairInDatabase(params: {
       return { kind: "superseded", receipt: currentReceipt };
     }
     if (currentReceipt && !params.proposedReceiptIsStale) {
-      return { kind: "live", receipt: currentReceipt };
+      // Own-process receipts never age out, so liveness must be proven from
+      // the process-local side: an executing run always holds its reservation
+      // marker or the active-jobs registry entry. Foreign runs are not
+      // observable here and stay live. Neither proof matching an open
+      // own-process receipt means the outcome path was lost (finalize gap) —
+      // reclaim instead of wedging the job behind its own marker until
+      // restart (#139215).
+      const localReservation = state.queuedRunReservationsByJobId.get(proposal.jobId);
+      const locallyOwned =
+        localReservation?.runReceipt.receiptId === currentReceipt.receiptId ||
+        isCronJobActive(proposal.jobId);
+      if (currentReceipt.ownerPid !== process.pid || locallyOwned) {
+        return { kind: "live", receipt: currentReceipt };
+      }
     }
   } else if (currentReceipt) {
     return { kind: "superseded", receipt: currentReceipt };
