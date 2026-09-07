@@ -4,7 +4,7 @@ import { escapeRegExp } from "./regexp.mjs";
 const STABLE_RELEASE_TAG_RE = /^v(?<version>\d{4}\.\d{1,2}\.\d{1,2})(?:-[1-9]\d*)?$/u;
 const STABLE_PACKAGE_VERSION_RE =
   /^(?<year>\d{4})\.(?<month>\d{1,2})\.(?<patch>\d{1,2})(?:-(?<correction>[1-9]\d*))?$/u;
-const SHA256_DIGEST_RE = /^sha256:[a-f0-9]{64}$/u;
+const SHA256_HEX_RE = /^[a-f0-9]{64}$/u;
 const MAX_ROLLBACK_DRILL_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 
 function parseStableReleaseTagDetails(tag) {
@@ -81,15 +81,39 @@ function readReleaseAssets(release) {
     : [];
 }
 
+function isSha256Hex(value) {
+  return typeof value === "string" && value.length === 64 && SHA256_HEX_RE.test(value);
+}
+
+function isCanonicalAssetDigest(value) {
+  return (
+    typeof value === "string" &&
+    value.length === 71 &&
+    value.startsWith("sha256:") &&
+    isSha256Hex(value.slice(7))
+  );
+}
+
 function readVerifiedAssetNames(assets) {
   return new Set(
-    assets.filter((asset) => SHA256_DIGEST_RE.test(asset.digest ?? "")).map((asset) => asset.name),
+    assets.filter((asset) => isCanonicalAssetDigest(asset.digest)).map((asset) => asset.name),
   );
 }
 
 function copyOwnFields(source, ...keys) {
   return Object.fromEntries(
     keys.filter((key) => Object.hasOwn(source, key)).map((key) => [key, source[key]]),
+  );
+}
+
+function recordsEqual(actual, expected) {
+  if (!actual || typeof actual !== "object" || Array.isArray(actual)) {
+    return false;
+  }
+  const expectedEntries = Object.entries(expected);
+  return (
+    Object.keys(actual).length === expectedEntries.length &&
+    expectedEntries.every(([key, value]) => actual[key] === value)
   );
 }
 
@@ -216,7 +240,9 @@ export function verifyStableMainCloseout(params) {
     // extend it, but must never rewrite recorded assets or release evidence.
     for (const recorded of releaseAssets) {
       const observed = observedAssets.find((asset) => asset.name === recorded.name);
-      if (!observed || observed.digest !== recorded.digest) {
+      const observedDigest =
+        observed && typeof observed.digest === "string" ? observed.digest : null;
+      if (!observed || observedDigest !== recorded.digest) {
         errors.push(`Recorded release asset changed or disappeared: ${recorded.name}.`);
       }
     }
@@ -238,13 +264,12 @@ export function verifyStableMainCloseout(params) {
       (!Object.hasOwn(existingManifest, "appcast") &&
         Object.hasOwn(existingManifest, "appcastSha256"))
     : macAttachedAtCloseout;
-  // A recorded appcast remains bound to its main snapshot. Only late macOS
-  // publication needs the current feed, which may have retired older entries.
-  const appcast = appcastVerifiedAtCloseout
-    ? params.mainAppcast
-    : (params.publishedAppcast ?? params.mainAppcast);
+  // A verified recorded appcast remains bound to its original main snapshot.
+  // Fresh closeout and late macOS publication still verify the current feed.
+  const appcast = params.publishedAppcast ?? params.mainAppcast;
   if (
     macPublished &&
+    (!existingManifest || !appcastVerifiedAtCloseout) &&
     !appcast.includes(`/releases/download/${params.tag}/${expectedMacAssets[0]}`)
   ) {
     errors.push(`main appcast.xml does not point at ${expectedMacAssets[0]} from ${params.tag}.`);
@@ -258,6 +283,33 @@ export function verifyStableMainCloseout(params) {
   const apps = Object.values(appPlatforms).every((state) => state === "attached")
     ? "attached"
     : "pending";
+  if (existingManifest) {
+    if (
+      Object.hasOwn(existingManifest, "appPlatforms") &&
+      !recordsEqual(existingManifest.appPlatforms, appPlatforms)
+    ) {
+      errors.push("Recorded app platform states do not match canonical release asset digests.");
+    }
+    if (Object.hasOwn(existingManifest, "apps") && existingManifest.apps !== apps) {
+      errors.push("Recorded aggregate app state does not match canonical release asset digests.");
+    }
+    const expectedAppcastState = macAttachedAtCloseout ? "verified" : "pending";
+    if (
+      Object.hasOwn(existingManifest, "appcast") &&
+      existingManifest.appcast !== expectedAppcastState
+    ) {
+      errors.push("Recorded appcast state does not match canonical macOS release asset digests.");
+    }
+    const hasAppcastSha256 = Object.hasOwn(existingManifest, "appcastSha256");
+    if (
+      hasAppcastSha256 !== macAttachedAtCloseout ||
+      (hasAppcastSha256 && !isSha256Hex(existingManifest.appcastSha256))
+    ) {
+      errors.push(
+        "Recorded appcast hash presence or format does not match canonical macOS release asset state.",
+      );
+    }
+  }
 
   verifyRollbackDrill(params, errors);
 
