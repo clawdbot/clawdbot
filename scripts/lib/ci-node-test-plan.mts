@@ -124,16 +124,11 @@ const policyTestWatches = [
   })),
 ] satisfies readonly PolicyTestWatch[];
 
-function normalizeChangedPath(changedPath: string): string {
-  return changedPath.replaceAll("\\", "/").replace(/^\.\//u, "");
-}
-
 /** Resolve policy tests whose scanned source surface intersects this diff. */
 export function resolvePolicyTestTargets(changedPaths: readonly string[]): string[] {
-  const normalizedPaths = changedPaths.map(normalizeChangedPath);
   return policyTestWatches
     .filter(({ watchGlobs }) =>
-      normalizedPaths.some((changedPath) =>
+      changedPaths.some((changedPath) =>
         watchGlobs.some((watchGlob) => matchesGlob(changedPath, watchGlob)),
       ),
     )
@@ -142,9 +137,8 @@ export function resolvePolicyTestTargets(changedPaths: readonly string[]): strin
 
 /** True when the policy tests are the complete bounded owner for this path. */
 export function isPolicyTestOwnedPath(changedPath: string): boolean {
-  const normalizedPath = normalizeChangedPath(changedPath);
   return policyTestWatches.some(({ ownerGlobs }) =>
-    ownerGlobs?.some((ownerGlob) => matchesGlob(normalizedPath, ownerGlob)),
+    ownerGlobs?.some((ownerGlob) => matchesGlob(changedPath, ownerGlob)),
   );
 }
 
@@ -2005,7 +1999,6 @@ export function createNodeTestShards(options: NodeTestPlanOptions = {}): NodeTes
   const changedTestPlans = includeReleaseOnlyPluginShards
     ? []
     : (options.changedPaths ?? [])
-        .map(normalizeChangedPath)
         .filter(
           (file) =>
             isTestFileTarget(file) &&
@@ -2433,6 +2426,7 @@ function splitOversizedCompactGroup(
   group: NodeTestShardGroup,
   runnerBackend: string | undefined,
   runtimePartition?: ReturnType<typeof partitionRuntimeTestFiles>,
+  splitHostedToolingTails = false,
 ): Array<{ group: NodeTestShardGroup; seconds: number }> {
   // Hybrid groups must fit both the first-attempt runner and hosted retries;
   // a faster retry estimate must not leave a slow first attempt unsplit.
@@ -2509,10 +2503,25 @@ function splitOversizedCompactGroup(
       // budget first so unrelated families can share the small remainder.
       // Hybrid retains balanced children for its faster Blacksmith admission.
       const discoveryOrder = (a: string, b: string) => files.indexOf(a) - files.indexOf(b);
-      stripes = packNodeTestGroups(
-        files.toSorted((a, b) => weightForValue(b) - weightForValue(a) || discoveryOrder(a, b)),
-        (bin, file) => batchWeight([...bin, file]) <= COMPACT_EXCLUSIVE_JOB_SECONDS,
-      ).map((patterns) => patterns.toSorted(discoveryOrder));
+      const packFiles = (patterns: string[], secondsCap: number) =>
+        packNodeTestGroups(
+          patterns.toSorted(
+            (a, b) => weightForValue(b) - weightForValue(a) || discoveryOrder(a, b),
+          ),
+          (bin, file) => batchWeight([...bin, file]) <= secondsCap,
+        ).map((batch) => batch.toSorted(discoveryOrder));
+      stripes = packFiles(files, COMPACT_EXCLUSIVE_JOB_SECONDS);
+      const tail = stripes.at(-1);
+      if (
+        splitHostedToolingTails &&
+        tail &&
+        tail.length > 1 &&
+        batchWeight(tail) <= COMPACT_EXCLUSIVE_JOB_SECONDS
+      ) {
+        // Half-budget tails can share with another family instead of stranding
+        // capacity. Keep full chunks and indivisible files at their original cost.
+        stripes.splice(-1, 1, ...packFiles(tail, COMPACT_EXCLUSIVE_JOB_SECONDS / 2));
+      }
     } else {
       // The fixed build stays with its runtime child; only remaining test
       // work benefits from more stripes. Empty include lists run the whole config.
@@ -2610,6 +2619,7 @@ export function packNodeTestGroups<Group>(
 function createCompactNodeTestShardBundles(
   options: NodeTestPlanOptions,
   compactMode: CompactNodeTestPlanMode,
+  splitHostedToolingTails = false,
 ): CompactNodeTestShard[] {
   const isBlacksmithProfile = (options.runnerBackend ?? "blacksmith") === "blacksmith";
   const shards = createNodeTestShards(options).filter(
@@ -2644,7 +2654,12 @@ function createCompactNodeTestShardBundles(
       COMPACT_BLACKSMITH_SPLIT_OWNERS.has(group.shard_name) ||
       runtimePartition !== undefined ||
       (group.pretestBuildMode !== undefined && group.includePatterns === undefined)
-        ? splitOversizedCompactGroup(group, options.runnerBackend, runtimePartition)
+        ? splitOversizedCompactGroup(
+            group,
+            options.runnerBackend,
+            runtimePartition,
+            splitHostedToolingTails,
+          )
         : [{ group, seconds: estimateCompactGroupSeconds(group, options.runnerBackend) }];
     for (const planned of plannedGroups) {
       planned.group.runner = resolveCiNodeTestRunner(
@@ -2709,6 +2724,7 @@ function createCompactNodeTestShardBundles(
       [DEFAULT_NODE_TEST_RUNNER, BUNDLED_NODE_TEST_RUNNER, EXTRA_LARGE_NODE_TEST_RUNNER].includes(
         runner,
       ));
+  const hostedToolingGroups: NodeTestShardGroup[] = [];
   let packedBins = [...groupsByRunner.values()].flatMap((groups) => {
     const usesBlacksmithRunner = usesBlacksmithCapacity(groups[0].runner);
     // Admit the final groups with their shared prerequisite. Rebalancing after
@@ -2720,7 +2736,14 @@ function createCompactNodeTestShardBundles(
           estimateBinSeconds([b]) - estimateBinSeconds([a]) ||
           a.shard_name.localeCompare(b.shard_name),
       );
-    const bins = packNodeTestGroups(sortedGroups, (candidate, group) => {
+    // Hosted inventory must not influence non-hosted anchor membership.
+    const anchorGroups = packsHostedTooling
+      ? sortedGroups.filter((group) => !isHostedToolingGroup(group))
+      : sortedGroups;
+    if (packsHostedTooling) {
+      hostedToolingGroups.push(...sortedGroups.filter(isHostedToolingGroup));
+    }
+    const bins = packNodeTestGroups(anchorGroups, (candidate, group) => {
       const exclusive = isExclusiveCompactGroup(group);
       // Keep ordinary work off serial runtime hosts. Hybrid exclusive/dist bins
       // retain their existing prerequisite sharing and admission policy.
@@ -2767,17 +2790,13 @@ function createCompactNodeTestShardBundles(
     return bins;
   });
   if (packsHostedTooling) {
-    const anchors = packedBins
-      .map((bin) => bin.filter((group) => !isHostedToolingGroup(group)))
-      .filter((bin): bin is [NodeTestShardGroup, ...NodeTestShardGroup[]] => bin.length > 0);
-    const hostedGroups = packedBins
-      .flatMap((bin) => bin.filter(isHostedToolingGroup))
-      .toSorted(
-        (a, b) =>
-          runnerRank(b) - runnerRank(a) ||
-          estimateBinSeconds([b]) - estimateBinSeconds([a]) ||
-          a.shard_name.localeCompare(b.shard_name),
-      );
+    const anchors = packedBins;
+    const hostedGroups = hostedToolingGroups.toSorted(
+      (a, b) =>
+        runnerRank(b) - runnerRank(a) ||
+        estimateBinSeconds([b]) - estimateBinSeconds([a]) ||
+        a.shard_name.localeCompare(b.shard_name),
+    );
     const strongestGroupCount =
       hostedGroups.findLastIndex((group) => group.runner === hostedGroups[0]!.runner) + 1;
     const units = [
@@ -2850,6 +2869,11 @@ function createCompactNodeTestShardBundles(
   }
 
   if (compactJobs.length > COMPACT_NODE_TEST_JOB_CAP) {
+    if (packsHostedTooling && !splitHostedToolingTails) {
+      // Repartition once at the file owner so timing identities and build costs
+      // describe the smaller tails before the same admission checks pack them.
+      return createCompactNodeTestShardBundles(options, compactMode, true);
+    }
     throw new Error(
       `compact ${options.runnerBackend ?? "blacksmith"} node test plan exceeds ${COMPACT_NODE_TEST_JOB_CAP} jobs (${compactJobs.length} planned)`,
     );

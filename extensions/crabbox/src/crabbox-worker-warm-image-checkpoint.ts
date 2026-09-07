@@ -34,7 +34,9 @@ export function parseCreatedCheckpoint(
   ) {
     throw new Error("Crabbox checkpoint create returned an invalid native checkpoint");
   }
-  return { checkpointId, kind, state: nativeState === "available" ? "available" : "pending" };
+  // This parser consumes only successful `checkpoint create --wait` results.
+  // Crabbox owns readiness; provider-native state names are not a portable readiness signal.
+  return { checkpointId, kind, state: "available" };
 }
 
 export function parseCheckpointAvailability(stdout: string): "available" | "pending" | "missing" {

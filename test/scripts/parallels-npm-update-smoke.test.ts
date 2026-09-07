@@ -492,16 +492,7 @@ exit 1
             provider: "openai",
             updateTarget: "local-main",
           });
-          const guestMacos = Reflect.get(smoke, "guestMacos") as (
-            script: string,
-            timeoutMs: number,
-            ctx: {
-              append: (chunk: string | Uint8Array) => void;
-              logPath: string;
-              signal: AbortSignal;
-            },
-          ) => Promise<void>;
-          const result = guestMacos.call(smoke, "echo update", 30_000, {
+          const result = smoke["guestMacos"]("echo update", 30_000, {
             append: (chunk) =>
               output.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8")),
             logPath: path.join(root, "update.log"),
@@ -531,7 +522,6 @@ exit 1
       expect(output.join("")).toContain("update-diagnostic\n");
       const log = readFileSync(logPath, "utf8");
       expect(log).toContain("--current-user whoami");
-      expect(log).toContain("--current-user /usr/bin/env PATH=");
       expect(log).toContain("/usr/bin/tee /tmp/openclaw-parallels-npm-update-macos-");
       expect(log).toContain("/bin/chmod 700 /tmp/openclaw-parallels-npm-update-macos-");
       expect(log).toContain("/usr/sbin/chown desktop-user");

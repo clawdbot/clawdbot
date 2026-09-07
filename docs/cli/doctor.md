@@ -97,8 +97,19 @@ service through its owner. Once the native manager confirms it is offline,
 Doctor can repair its selected state without changing or starting that service.
 
 If migration or config repair cannot finish, Doctor leaves the stopped service
-stopped and reports an incomplete repair. Resolve the reported blocker, rerun
-`openclaw doctor --fix`, then start the service through its owner.
+stopped and reports an incomplete repair with exit code 1. When state requires
+manual recovery, the diagnosis names its path and the next action:
+
+- **Unsupported canonical workspace version:** use an OpenClaw build that supports
+  that version. Preserve the shared database unchanged.
+- **Unreadable or conflicting exec policy:** stop the Gateway and node hosts,
+  then reconcile the named legacy file or interrupted claim with a verified copy
+  of the intended policy. Preserve the existing SQLite policy.
+
+Doctor does not quarantine unsupported workspace state, discard future-version
+rows, or infer execution policy. Repeating the same repair invocation cannot
+resolve these conditions. After manual recovery, verify readiness before starting
+the service through its owner.
 
 ## Gateway service recovery
 

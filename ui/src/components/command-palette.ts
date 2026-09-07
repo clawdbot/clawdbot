@@ -227,27 +227,25 @@ function renderCommandPalette(props: CommandPaletteProps) {
               : nothing
           }
           ${
-            props.sessionSearchPartial || props.sessionSearchIncomplete
+            props.sessionSearchFailed || props.sessionSearchPartial || props.sessionSearchIncomplete
               ? html`<div class="cmd-palette__empty" role="status">
                   ${t(
-                    props.sessionSearchIncomplete
-                      ? "palette.searchIncomplete"
-                      : "palette.searchPartial",
+                    props.sessionSearchFailed
+                      ? "palette.searchFailed"
+                      : props.sessionSearchIncomplete
+                        ? "palette.searchIncomplete"
+                        : "palette.searchPartial",
                   )}
                 </div>`
               : nothing
           }
           ${
-            grouped.length === 0
+            grouped.length === 0 && !props.sessionSearchFailed
               ? html`<div class="cmd-palette__empty">
                   <span class="nav-item__icon" style="opacity:0.3;width:20px;height:20px"
                     >${icons.search}</span
                   >
-                  <span
-                    >${
-                      props.sessionSearchFailed ? t("palette.searchFailed") : t("palette.noResults")
-                    }</span
-                  >
+                  <span>${t("palette.noResults")}</span>
                 </div>`
               : grouped.map(
                   ([category, groupedItems]) => html`

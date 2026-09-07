@@ -123,6 +123,7 @@ describe("shouldPreserveUserFacingSessionStateForInputProvenance", () => {
     "image_generate",
     "music_generate",
     "subagent_announce",
+    "subagent_settle",
     "subagent_interrupted_resume",
     "video_generate",
   ])("preserves user-facing session state for internal %s handoffs", (sourceTool) => {

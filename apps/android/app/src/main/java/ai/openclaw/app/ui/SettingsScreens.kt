@@ -1672,9 +1672,9 @@ private fun GatewaySettingsScreen(
   }
 
   pendingSetupResetPlan?.let { plan ->
-    AlertDialog(
+    FoldAwarePrompt(
       onDismissRequest = { pendingSetupResetPlan = null },
-      title = { Text(nativeString("Replace gateway setup?")) },
+      title = nativeString("Replace gateway setup?"),
       text = {
         Text(
           gatewaySettingsSetupResetConfirmationText(),
@@ -1682,7 +1682,10 @@ private fun GatewaySettingsScreen(
           color = ClawTheme.colors.text,
         )
       },
-      confirmButton = {
+      actions = {
+        TextButton(onClick = { pendingSetupResetPlan = null }) {
+          Text(nativeString("Cancel"))
+        }
         TextButton(
           onClick = {
             pendingSetupResetPlan = null
@@ -1692,11 +1695,6 @@ private fun GatewaySettingsScreen(
           Text(nativeString("Replace setup"))
         }
       },
-      dismissButton = {
-        TextButton(onClick = { pendingSetupResetPlan = null }) {
-          Text(nativeString("Cancel"))
-        }
-      },
       containerColor = ClawTheme.colors.surface,
     )
   }
@@ -1704,9 +1702,9 @@ private fun GatewaySettingsScreen(
   pendingForgetStableId?.let { stableId ->
     val entry = pairedGateways.firstOrNull { it.stableId == stableId }
     val gatewayName = entry?.name ?: nativeString("this gateway")
-    AlertDialog(
+    FoldAwarePrompt(
       onDismissRequest = { pendingForgetStableId = null },
-      title = { Text(nativeString("Forget gateway?")) },
+      title = nativeString("Forget gateway?"),
       text = {
         Text(
           nativeString(
@@ -1715,7 +1713,8 @@ private fun GatewaySettingsScreen(
           ),
         )
       },
-      confirmButton = {
+      actions = {
+        TextButton(onClick = { pendingForgetStableId = null }) { Text(nativeString("Cancel")) }
         TextButton(
           onClick = {
             pendingForgetStableId = null
@@ -1724,9 +1723,6 @@ private fun GatewaySettingsScreen(
         ) {
           Text(nativeString("Forget"))
         }
-      },
-      dismissButton = {
-        TextButton(onClick = { pendingForgetStableId = null }) { Text(nativeString("Cancel")) }
       },
       containerColor = ClawTheme.colors.surface,
     )

@@ -1183,10 +1183,6 @@ export const testing = {
     await disposeAllSessionMcpRuntimes();
     setBundleMcpCatalogListTimeoutMsForTest();
     setBundleMcpDisposeTimeoutMsForTest();
-    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
-    resolverTesting.setMcpServerConnectionResolversForTest();
-    resolverTesting.setMcpConnectionResolverTimeoutMsForTest();
-    resolverTesting.setMcpConnectionRevalidateMsForTest();
   },
   getCachedSessionIds() {
     return getSessionMcpRuntimeManagerForTesting().listSessionIds();

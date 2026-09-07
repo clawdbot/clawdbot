@@ -1,4 +1,4 @@
-import { html, nothing, render } from "lit";
+import { html, nothing } from "lit";
 import type { SessionMoveTarget } from "../../../packages/gateway-protocol/src/index.js";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -12,7 +12,7 @@ import type { DraftCloudProfile } from "../pages/new-session/discovery.ts";
 import { DraftCloudMachineState } from "../pages/new-session/draft-cloud-machine-state.ts";
 import "../styles/new-session.css";
 import { icons } from "./icons.ts";
-import "./modal-dialog.ts";
+import { withPromiseModalHost } from "./promise-modal-host.ts";
 
 type Catalog = {
   profiles: readonly DraftCloudProfile[];
@@ -52,9 +52,7 @@ export function showSessionPlacementTargetDialog(
     return Promise.resolve(null);
   }
   active = true;
-  const host = document.createElement("div");
-  document.body.append(host);
-  return new Promise((resolve) => {
+  return withPromiseModalHost<SessionMoveTarget | null>(undefined, ({ render, finish: settle }) => {
     let loading = true;
     let loadError: string | null = null;
     let catalog: Catalog = { profiles: [], devices: [] };
@@ -62,10 +60,8 @@ export function showSessionPlacementTargetDialog(
     const cloudMachines = new DraftCloudMachineState();
 
     const finish = (result: SessionMoveTarget | null) => {
-      render(nothing, host);
-      host.remove();
+      settle(result);
       active = false;
-      resolve(result);
     };
 
     const select = (target: SessionMoveTarget) => {
@@ -92,8 +88,8 @@ export function showSessionPlacementTargetDialog(
     function paint() {
       const selectedKey = targetKey(selected);
       const restart = options.mode === "restart";
-      render(
-        html`
+      render(() => {
+        return html`
           <openclaw-modal-dialog
             label=${t(
               restart ? "sessionsView.restartSessionTitle" : "sessionsView.moveSessionTitle",
@@ -255,9 +251,8 @@ export function showSessionPlacementTargetDialog(
               </div>
             </form>
           </openclaw-modal-dialog>
-        `,
-        host,
-      );
+        `;
+      });
     }
 
     paint();

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as processIdentity from "../shared/pid-alive.js";
 import { killPidIfAlive, waitForPidToExit } from "../test-utils/process-tree.js";
+import { COMMAND_PROCESS_TREE_KILL_GRACE_MS } from "./exec-spawn.js";
 import { createCommandTerminationController } from "./exec-termination.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -44,6 +45,72 @@ async function withOwnedTree(
 }
 
 describe.skipIf(process.platform === "win32")("command process-group settlement", () => {
+  it.each([
+    { name: "an absent group", probeError: "ESRCH", needsGrace: false },
+    { name: "surviving descendants", probeError: undefined, needsGrace: true },
+    { name: "a permission-denied group", probeError: "EPERM", needsGrace: true },
+  ])(
+    "settles $name after a failed root without losing cleanup ownership",
+    async ({ probeError, needsGrace }) => {
+      vi.useFakeTimers();
+      vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockReturnValue(123);
+      const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+        if (probeError) {
+          throw Object.assign(new Error(probeError), { code: probeError });
+        }
+        return true;
+      });
+      const child = { pid: 4242, exitCode: 7, signalCode: null, kill: vi.fn(() => true) };
+      const cancelController = new AbortController();
+      const controller = createCommandTerminationController({
+        child,
+        cancelController,
+        processTree: { mode: "graceful" },
+        killGraceMs: 300,
+        isChildExited: () => true,
+        isCommandSettled: () => true,
+      });
+      try {
+        expect(controller.terminate()).toBe(needsGrace);
+        let settled = false;
+        const completion = controller.settle().then((cleanup) => {
+          settled = true;
+          return cleanup;
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(settled).toBe(!needsGrace);
+        expect(controller.terminate()).toBe(needsGrace);
+        if (needsGrace) {
+          expect(kill).toHaveBeenCalledWith(-4242, "SIGTERM");
+        } else {
+          expect(kill).not.toHaveBeenCalledWith(-4242, "SIGTERM");
+        }
+        expect(kill).not.toHaveBeenCalledWith(-4242, "SIGKILL");
+        await vi.advanceTimersByTimeAsync(299);
+        expect(settled).toBe(!needsGrace);
+        expect(kill).not.toHaveBeenCalledWith(-4242, "SIGKILL");
+        await vi.advanceTimersByTimeAsync(1);
+        expect(settled).toBe(!needsGrace);
+        if (needsGrace) {
+          expect(kill).toHaveBeenCalledWith(-4242, "SIGKILL");
+        } else {
+          expect(kill).not.toHaveBeenCalledWith(-4242, "SIGKILL");
+        }
+        // Neither live nor EPERM probes prove extinction after the force-send receipt.
+        await vi.advanceTimersByTimeAsync(COMMAND_PROCESS_TREE_KILL_GRACE_MS - 1);
+        expect(settled).toBe(!needsGrace);
+        await vi.advanceTimersByTimeAsync(1);
+        await expect(completion).resolves.toBe(needsGrace ? "uncertain" : "normal");
+        expect(kill.mock.calls.every(([pid]) => pid === -4242)).toBe(true);
+        expect(child.kill).not.toHaveBeenCalled();
+        expect(cancelController.signal.aborted).toBe(false);
+      } finally {
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each(["graceful", "force"] as const)(
     "joins observed group exit after a %s force-send receipt",
     async (mode) => {

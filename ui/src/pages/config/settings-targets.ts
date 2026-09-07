@@ -139,7 +139,8 @@ export const SETTINGS_SEARCH_TARGETS = {
       "githubConnections.forMe",
       "githubConnections.forSystem",
     ],
-    aliases: "github oauth account connection publication",
+    aliases:
+      "github oauth account connection publication authentication auth status dashboard actions",
   },
   modelBehavior: {
     ...SETTINGS_ROUTE_TARGETS.modelBehavior,

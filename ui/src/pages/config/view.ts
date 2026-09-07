@@ -52,6 +52,7 @@ function renderAppearance(props: ConfigProps) {
       <input
         class="settings-input"
         data-settings-chat-message-width
+        aria-label=${t("configView.chatPrefs.messageWidth")}
         type="text"
         spellcheck="false"
         placeholder="48rem"

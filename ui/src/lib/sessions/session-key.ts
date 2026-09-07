@@ -55,6 +55,15 @@ export function resolveUiSessionNavigationParentKey(
   return normalizeOptionalString(row?.parentSessionKey) ?? normalizeOptionalString(row?.spawnedBy);
 }
 
+// Mirrors the Gateway policy in src/config/sessions/session-pin-policy.ts.
+export function isPinnableUiSessionRow(row: {
+  key: string;
+  parentSessionKey?: string | null;
+  spawnedBy?: string | null;
+}): boolean {
+  return resolveUiSessionNavigationParentKey(row) == null && !isSubagentSessionKey(row.key);
+}
+
 function normalizeMainKey(value: string | undefined | null): string {
   return normalizeOptionalLowercaseString(value) ?? DEFAULT_MAIN_KEY;
 }

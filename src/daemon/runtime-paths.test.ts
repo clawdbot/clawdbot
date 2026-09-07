@@ -184,46 +184,35 @@ describe("resolvePreferredNodePath", () => {
     expect(execFile).toHaveBeenCalledTimes(2);
   });
 
-  it("uses system node for Linux service installs instead of nvm execPath", async () => {
-    mockNodePathPresent(linuxSystemNode);
+  it.each([
+    [nvmNode, true],
+    ["/home/test/.local/share/fnm/aliases/default/bin/node", true],
+    ["/home/test/.local/share/mise/installs/node/24/bin/node", true],
+    ["/home/test/.NVM/versions/node/v24/bin/node", true],
+    ["/home/test/.nvs/node/24/bin/node", false],
+    ["/home/test/.local/share/pnpm/node", false],
+    ["/home/test/.nvm/../system/bin/node", false],
+  ] as const)(
+    "preserves Linux runtime preference for %s (managed=%s)",
+    async (execPath, managed) => {
+      mockNodePathPresent(linuxSystemNode);
+      const execFile = vi
+        .fn()
+        .mockResolvedValueOnce(nodeRuntime("24.15.0"))
+        .mockResolvedValueOnce(nodeRuntime("24.15.0"));
 
-    const execFile = vi
-      .fn()
-      .mockResolvedValueOnce(nodeRuntime("24.15.0"))
-      .mockResolvedValueOnce(nodeRuntime("24.15.0"));
+      const result = await resolvePreferredNodePath({
+        env: {},
+        runtime: "node",
+        platform: "linux",
+        execFile,
+        execPath,
+      });
 
-    const result = await resolvePreferredNodePath({
-      env: {},
-      runtime: "node",
-      platform: "linux",
-      execFile,
-      execPath: nvmNode,
-    });
-
-    expect(result).toBe(linuxSystemNode);
-    expect(execFile).toHaveBeenCalledTimes(2);
-  });
-
-  it("uses system node for Linux service installs instead of default fnm execPath", async () => {
-    const linuxFnmNode = "/home/test/.local/share/fnm/aliases/default/bin/node";
-    mockNodePathPresent(linuxSystemNode);
-
-    const execFile = vi
-      .fn()
-      .mockResolvedValueOnce(nodeRuntime("24.15.0"))
-      .mockResolvedValueOnce(nodeRuntime("24.15.0"));
-
-    const result = await resolvePreferredNodePath({
-      env: {},
-      runtime: "node",
-      platform: "linux",
-      execFile,
-      execPath: linuxFnmNode,
-    });
-
-    expect(result).toBe(linuxSystemNode);
-    expect(execFile).toHaveBeenCalledTimes(2);
-  });
+      expect(result).toBe(managed ? linuxSystemNode : execPath);
+      expect(execFile).toHaveBeenCalledTimes(managed ? 2 : 1);
+    },
+  );
 
   it("uses system node for macOS service installs instead of default fnm execPath", async () => {
     const darwinFnmNode = "/Users/test/Library/Application Support/fnm/aliases/default/bin/node";

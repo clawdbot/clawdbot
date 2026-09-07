@@ -327,6 +327,11 @@ logs each completed slow stage immediately, including failures, and emits a
 `native-turn-handoff` summary before submitting the native turn. Timing records
 contain stage names and identifiers, not prompts or tool arguments.
 
+Embedded-run startup, prep, core-plugin-tool and auth stage summaries include
+`pid`, `threadId` and `isMainThread` in the message to distinguish emitters sharing
+a log file. These identify the summary emitter, not where every timed operation
+ran. Elapsed stage time can include asynchronous waits and is not CPU time.
+
 Use the first `turn_accepted`, `model_call_started`, `tool_execution_started`, and
 `assistant_output_started` milestones to separate startup from later activity.
 Delayed first assistant/tool activity is logged once at `info` by default,

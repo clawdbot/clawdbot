@@ -15,9 +15,10 @@ import {
 } from "../../app/gateway-store.test-support.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
+import { createLiveActivity, type LiveActivity } from "./live-activity.ts";
 import type { ActivityRouteData, RunInspectorState } from "./run-inspector-model.ts";
 import type { ActivityEntry } from "./tool-activity.ts";
-import * as liveActivity from "./view.ts";
+import * as activityView from "./view.ts";
 import "./activity-page.ts";
 
 type TestActivityPage = HTMLElement & {
@@ -81,6 +82,16 @@ function staleEntry(): ActivityEntry {
 
 const activeGateways = new Set<ApplicationContext["gateway"]>();
 const activePages = new Set<TestActivityPage>();
+const activeActivities = new Map<ApplicationContext["gateway"], LiveActivity>();
+
+function activityContext(source: ApplicationContext["gateway"]) {
+  let liveActivity = activeActivities.get(source);
+  if (!liveActivity) {
+    liveActivity = createLiveActivity(source);
+    activeActivities.set(source, liveActivity);
+  }
+  return { gateway: source, liveActivity };
+}
 
 function activityHello(recoveryScope = "activity-owner-a"): GatewayHelloOk {
   return {
@@ -101,6 +112,7 @@ function activityGateway() {
     },
   });
   activeGateways.add(store.gateway);
+  activityContext(store.gateway);
   store.gateway.start();
   store.current().opts.onHello?.(activityHello());
   return store;
@@ -108,18 +120,18 @@ function activityGateway() {
 
 function bindActivity(source: ApplicationContext["gateway"]): TestActivityPage {
   const page = document.createElement("openclaw-activity-page") as TestActivityPage;
-  page.context = { gateway: source } as unknown as ApplicationContext;
+  page.context = activityContext(source) as ApplicationContext;
   page.routeData = { mode: "live", selector: null };
   activePages.add(page);
   page.subscriptions.hostConnected();
   return page;
 }
 
-function toolEvent(id: string) {
+function toolEvent(id: string, sessionKey = "main") {
   return createGatewayEvent("session.tool", {
     stream: "tool",
     runId: `run-${id}`,
-    sessionKey: "main",
+    sessionKey,
     data: {
       toolCallId: id,
       name: "read",
@@ -133,11 +145,15 @@ afterEach(() => {
   for (const page of activePages) {
     page.subscriptions.hostDisconnected();
   }
+  for (const activity of activeActivities.values()) {
+    activity.dispose();
+  }
   for (const source of activeGateways) {
     source.stop();
   }
   activePages.clear();
   activeGateways.clear();
+  activeActivities.clear();
   setAvatarGatewayOrigin(null);
   localStorage.clear();
   sessionStorage.clear();
@@ -152,7 +168,7 @@ describe("ActivityPage gateway lifecycle", () => {
       mode === "sessions"
         ? { mode, filters: { personId: null, query: "", time: "7d" }, selector: null }
         : { mode, selector: null, selectorId: null, decisionCursor: null };
-    const render = vi.spyOn(liveActivity, "renderActivity");
+    const render = vi.spyOn(activityView, "renderActivity");
     try {
       page.render();
       expect(render).not.toHaveBeenCalled();
@@ -168,14 +184,14 @@ describe("ActivityPage gateway lifecycle", () => {
 
   it("replays the active gateway on initial bind and source replacement", () => {
     const page = document.createElement("openclaw-activity-page") as TestActivityPage;
-    page.context = { gateway: gateway() } as unknown as ApplicationContext;
+    page.context = activityContext(gateway()) as ApplicationContext;
     page.entries = [staleEntry()];
 
     page.subscriptions.hostConnected();
     expect(page.entries).toEqual([]);
 
     page.entries = [staleEntry()];
-    page.context = { gateway: gateway() } as unknown as ApplicationContext;
+    page.context = activityContext(gateway()) as ApplicationContext;
     page.subscriptions.hostUpdate();
     expect(page.entries).toEqual([]);
 
@@ -276,6 +292,141 @@ describe("ActivityPage gateway lifecycle", () => {
 
     const revisitedPage = bindActivity(source);
     expect(revisitedPage.entries.map((entry) => entry.outputPreview)).toEqual(["new output"]);
+  });
+
+  it("retains activity across navigation after diagnostic eviction", () => {
+    const { gateway: source, current } = activityGateway();
+    const page = bindActivity(source);
+    const fillDiagnosticLog = () => {
+      for (let index = 0; index < 300; index += 1) {
+        current().opts.onEvent?.(createGatewayEvent("diagnostic", { index }));
+      }
+    };
+    current().opts.onEvent?.(toolEvent("original"));
+    fillDiagnosticLog();
+    expect(page.entries.map((entry) => entry.outputPreview)).toEqual(["original output"]);
+    page.subscriptions.hostDisconnected();
+
+    current().opts.onEvent?.(toolEvent("while-away", "agent:other:work"));
+    fillDiagnosticLog();
+    expect(source.eventLog).toHaveLength(250);
+    expect(source.eventLog.every((event) => event.event === "diagnostic")).toBe(true);
+
+    const revisitedPage = bindActivity(source);
+    expect(revisitedPage.entries.map((entry) => entry.outputPreview)).toEqual([
+      "original output",
+      "while-away output",
+    ]);
+  });
+
+  it.each(["tool", "answer_candidate"] as const)(
+    "collects delivered %s activity across sessions before the page opens",
+    (kind) => {
+      const { gateway: source, current } = activityGateway();
+      const origins = [
+        { runId: "selected", sessionKey: "main", agentId: "main" },
+        { runId: "other", sessionKey: "agent:research:work", agentId: "research" },
+        { runId: "global", sessionKey: "global", agentId: "research" },
+        { runId: "unscoped" },
+      ];
+      for (const origin of origins) {
+        current().opts.onEvent?.(
+          createGatewayEvent(kind === "tool" ? "session.tool" : "agent", {
+            ...origin,
+            stream: kind === "tool" ? "tool" : "item",
+            data:
+              kind === "tool"
+                ? {
+                    phase: "result",
+                    name: "read",
+                    toolCallId: "shared-call",
+                    result: { text: `${origin.runId} output` },
+                  }
+                : {
+                    kind: "answer_candidate",
+                    itemId: "shared-item",
+                    status: "selected",
+                    progressText: `${origin.runId} output`,
+                  },
+          }),
+        );
+      }
+
+      const page = bindActivity(source);
+      expect(page.entries.map((entry) => entry.runId)).toEqual(
+        origins.map((origin) => origin.runId),
+      );
+      expect(page.entries.map((entry) => entry.sessionKey)).toEqual([
+        "main",
+        "agent:research:work",
+        "global",
+        undefined,
+      ]);
+      expect(new Set(page.entries.map((entry) => entry.id)).size).toBe(origins.length);
+    },
+  );
+
+  it("preserves activity and Clear when the selected chat changes", () => {
+    const { gateway: source, current } = activityGateway();
+    const page = bindActivity(source);
+    current().opts.onEvent?.(toolEvent("original"));
+    const originalId = page.entries[0]!.id;
+    page.expandedIds.add(originalId);
+    for (let index = 0; index < 300; index += 1) {
+      current().opts.onEvent?.(createGatewayEvent("diagnostic", { index }));
+    }
+
+    source.setSessionKey("agent:other:work");
+
+    expect(page.entries.map((entry) => entry.outputPreview)).toEqual(["original output"]);
+    expect([...page.expandedIds]).toEqual([originalId]);
+    current().opts.onEvent?.(toolEvent("other", "agent:other:work"));
+    expect(page.entries.map((entry) => entry.outputPreview)).toEqual([
+      "original output",
+      "other output",
+    ]);
+
+    page.clearEntries();
+    source.setSessionKey("main");
+    expect(page.entries).toEqual([]);
+    current().opts.onEvent?.(toolEvent("after-clear", "agent:other:work"));
+    expect(page.entries.map((entry) => entry.outputPreview)).toEqual(["after-clear output"]);
+  });
+
+  it.each(["gateway", "account"] as const)(
+    "retires activity after a %s change while the page is closed",
+    (change) => {
+      const { gateway: source, current } = activityGateway();
+      const page = bindActivity(source);
+      current().opts.onEvent?.(toolEvent("old"));
+      page.subscriptions.hostDisconnected();
+      if (change === "gateway") {
+        source.connect({ gatewayUrl: "wss://other-activity.example.test" });
+      } else {
+        current().opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
+        current().opts.onHello?.(activityHello("activity-owner-b"));
+      }
+      current().opts.onEvent?.(toolEvent("new"));
+
+      const revisitedPage = bindActivity(source);
+      expect(revisitedPage.entries.map((entry) => entry.outputPreview)).toEqual(["new output"]);
+    },
+  );
+
+  it("releases retained activity and subscriptions with the application owner", () => {
+    const { gateway: source, current } = activityGateway();
+    const { liveActivity } = activityContext(source);
+    const observe = vi.fn();
+    liveActivity.subscribe(observe);
+    current().opts.onEvent?.(toolEvent("original"));
+    expect(observe).toHaveBeenCalledOnce();
+    observe.mockClear();
+
+    liveActivity.dispose();
+    current().opts.onEvent?.(toolEvent("after-disposal"));
+
+    expect(liveActivity.snapshot.entries).toEqual([]);
+    expect(observe).not.toHaveBeenCalled();
   });
 
   it("stores the safe-only inspection response directly", async () => {

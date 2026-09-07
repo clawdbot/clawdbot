@@ -200,7 +200,6 @@ export async function inspectGatewayRestart(params: {
               healthy: true,
               staleGatewayPids: [],
               gatewayVersion: reachable.gatewayVersion,
-              ...(reachable.gatewayBootId ? { gatewayBootId: reachable.gatewayBootId } : {}),
               gatewayBuildId: reachable.gatewayBuildId,
               ...(reachable.activatedPluginErrors.length > 0
                 ? { activatedPluginErrors: reachable.activatedPluginErrors }
@@ -243,13 +242,11 @@ export async function inspectGatewayRestart(params: {
         ) || listenerAttributionGap
       : gatewayListeners.length > 0 || listenerAttributionGap;
   let healthy = running && ownsPort;
-  let gatewayBootId: string | undefined;
   let gatewayVersion: string | null | undefined;
   let gatewayBuildId: string | null | undefined;
   if (requiresGatewayProbe && healthy && portUsage.status === "busy") {
     const reachable = await loadReachability();
     healthy = reachable.reachable;
-    gatewayBootId = reachable.gatewayBootId;
     gatewayVersion = reachable.gatewayVersion;
     gatewayBuildId = reachable.gatewayBuildId;
     if (reachable.activatedPluginErrors.length > 0) {
@@ -262,7 +259,6 @@ export async function inspectGatewayRestart(params: {
   if (!healthy && running && portUsage.status === "busy" && !requiresGatewayProbe) {
     const reachable = await loadReachability();
     healthy = reachable.reachable;
-    gatewayBootId = reachable.gatewayBootId;
     gatewayVersion = reachable.gatewayVersion;
     gatewayBuildId = reachable.gatewayBuildId;
   }
@@ -294,7 +290,6 @@ export async function inspectGatewayRestart(params: {
           portUsage,
           healthy,
           staleGatewayPids,
-          ...(gatewayBootId ? { gatewayBootId } : {}),
           ...(gatewayVersion !== undefined ? { gatewayVersion } : {}),
           ...(gatewayBuildId !== undefined ? { gatewayBuildId } : {}),
           ...(probeError ? { probeError } : {}),
