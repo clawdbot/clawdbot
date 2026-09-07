@@ -315,7 +315,6 @@ export async function handleFeishuMessage(params: {
 
   // Resolve each turn from live config; DMs reauthorize after awaited work below.
   const cfg = getFeishuRuntime().config.current() as ClawdbotConfig;
-
   // Resolve account with merged config
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   const feishuCfg = account.config;
