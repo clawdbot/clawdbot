@@ -669,9 +669,9 @@ function buildRequestBody(
   }
 
   if (context.tools) {
-    const converted = convertResponsesToolPayload(context.tools, { strict: null });
-    if (converted.tools.length > 0) {
-      body.tools = converted.tools;
+    const tools = convertResponsesToolPayload(context.tools, { strict: null });
+    if (tools.length > 0) {
+      body.tools = tools;
       body.tool_choice = "auto";
       body.parallel_tool_calls = true;
     }
