@@ -6,6 +6,11 @@ import UIKit
 @testable import OpenClaw
 
 @Suite(.serialized) struct OpenClawAppDelegateTests {
+    @Test func `live voice description is available to App Intents consumers`() {
+        let intentType: any AppIntent.Type = StartLiveVoiceIntent.self
+        #expect(intentType.description != nil)
+    }
+
     @Test @MainActor func `resolves registry model before view task assigns delegate model`() {
         let registryModel = NodeAppModel()
         OpenClawAppModelRegistry.appModel = registryModel

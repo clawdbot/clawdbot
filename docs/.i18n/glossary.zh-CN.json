@@ -2332,6 +2332,70 @@
     "target": "Gateway 协议身份验证"
   },
   {
+    "source": "Config and utilities",
+    "target": "配置与实用工具"
+  },
+  {
+    "source": "Agent and sessions",
+    "target": "Agent 与会话"
+  },
+  {
+    "source": "Model helpers",
+    "target": "模型辅助方法"
+  },
+  {
+    "source": "Background work",
+    "target": "后台工作"
+  },
+  {
+    "source": "Gateway and nodes",
+    "target": "Gateway 与节点"
+  },
+  {
+    "source": "Media helpers",
+    "target": "媒体辅助方法"
+  },
+  {
+    "source": "State and system",
+    "target": "状态与系统"
+  },
+  {
+    "source": "Channel helpers",
+    "target": "频道辅助方法"
+  },
+  {
+    "source": "Plugin runtime config and utilities",
+    "target": "插件运行时配置与实用工具"
+  },
+  {
+    "source": "Plugin runtime agent helpers",
+    "target": "插件运行时 Agent 辅助方法"
+  },
+  {
+    "source": "Plugin runtime model helpers",
+    "target": "插件运行时模型辅助方法"
+  },
+  {
+    "source": "Plugin runtime background work",
+    "target": "插件运行时后台工作"
+  },
+  {
+    "source": "Plugin runtime Gateway and nodes",
+    "target": "插件运行时 Gateway 与节点"
+  },
+  {
+    "source": "Plugin runtime media helpers",
+    "target": "插件运行时媒体辅助方法"
+  },
+  {
+    "source": "Plugin runtime state and system",
+    "target": "插件运行时状态与系统"
+  },
+  {
+    "source": "Plugin runtime channel helpers",
+    "target": "插件运行时频道辅助方法"
+  },
+  {
     "source": "Slack setup",
     "target": "Slack 设置"
   },

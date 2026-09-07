@@ -9,7 +9,7 @@ const require = createRequire(import.meta.url);
 const root = process.env.HOME!;
 // Keep real install discovery inside the fixture; only the completion case has a CLI binary.
 await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
-const [scenario, ...args] = process.argv.slice(2);
+const [runtimeProcessEntrypointsJson, scenario, ...args] = process.argv.slice(2);
 const borrowed = scenario?.startsWith("borrowed-");
 if (scenario === "completion-hang") {
   await fs.writeFile(
@@ -88,6 +88,12 @@ export const readConfigFileSnapshot = async () => ({ valid: true, config, source
 export const assertConfigWriteAllowedInCurrentMode = () => {};
 `;
 const stubs = new Map<string, string>([
+  // Forward prepared locations, not currentModuleUrl as an import: builds may
+  // place that URL in a shared chunk. Workers still execute their real compiled code.
+  [
+    sourceUrl("../infra/runtime-process-entrypoints.ts"),
+    `export const runtimeProcessEntrypoints = ${runtimeProcessEntrypointsJson};`,
+  ],
   [sourceUrl("../commands/doctor.ts"), doctorSource],
   [sourceUrl("../config/config.ts"), snapshotSource],
   [

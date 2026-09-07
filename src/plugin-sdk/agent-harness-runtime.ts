@@ -24,7 +24,6 @@ import {
   clearActiveEmbeddedRun,
   queueEmbeddedAgentMessageWithOutcome,
   setActiveEmbeddedRun,
-  type AbortAndDrainEmbeddedAgentRunResult,
   type EmbeddedAgentQueueMessageOptions,
 } from "../agents/embedded-agent-runner/runs.js";
 import { runStructuredInput } from "../agents/harness/structured-input-execution.js";
@@ -306,7 +305,6 @@ export {
   resolveActiveEmbeddedRunSessionId,
   setActiveEmbeddedRun,
 };
-export type { AbortAndDrainEmbeddedAgentRunResult as AbortAndDrainAgentHarnessRunResult };
 
 /**
  * @deprecated Active-run queueing is an internal runtime concern. This legacy
@@ -392,6 +390,24 @@ export async function loadCodexBundleMcpThreadConfig(
     await import("../agents/codex-mcp-config.js");
   return load(params);
 }
+
+/** Load shared MCP request and subprocess ownership only when opening a connection. */
+export const mcpStdioRuntime = Object.freeze({
+  async load() {
+    const [{ createMcpStdioClient }, { OpenClawStdioClientTransport }, lifecycle] =
+      await Promise.all([
+        import("../agents/mcp-stdio-client.js"),
+        import("../agents/mcp-stdio-transport.js"),
+        import("../agents/mcp-client-lifecycle.js"),
+      ]);
+    return {
+      createMcpStdioClient,
+      OpenClawStdioClientTransport,
+      connectMcpClient: lifecycle.connectMcpClient,
+      disposeMcpClient: lifecycle.disposeMcpClient,
+    };
+  },
+});
 
 export type { McpToolCatalog, SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 export { assignSafeServerNames as assignMcpCatalogSafeServerNames } from "../agents/agent-bundle-mcp-names.js";
