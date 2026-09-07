@@ -9,7 +9,7 @@ import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import type { HookMappingConfig } from "../../config/types.hooks.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RunCronAgentTurnResult } from "../../cron/isolated-agent/run.types.js";
-import { resolveSystemEventOptionsOwnerAgentId } from "../../infra/system-event-ownership.js";
+import { resolveSystemEventOwnerAgentId } from "../../infra/system-event-ownership.js";
 import { createSuiteLogPathTracker } from "../../logging/log-test-helpers.js";
 import {
   applyLoggingConfig,
@@ -520,7 +520,7 @@ describe("gateway hook early-failure recovery", () => {
       { sessionKey: testCase.eventSessionKey },
     );
     const eventOptions = mocks.enqueueSystemEvent.mock.calls[0]?.[1] as object;
-    expect(resolveSystemEventOptionsOwnerAgentId(eventOptions)).toBe(global ? "hooks" : null);
+    expect(resolveSystemEventOwnerAgentId(eventOptions)).toBe(global ? "hooks" : null);
 
     expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
       source: "hook",

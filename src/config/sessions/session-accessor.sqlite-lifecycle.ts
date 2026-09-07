@@ -42,7 +42,6 @@ import {
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
-import { emitCommittedSessionEntryRemovals } from "./session-accessor.sqlite-identity.js";
 import {
   planSessionLifecycleArtifactCleanup,
   planSessionStateDeleteIfUnreferenced,
@@ -159,6 +158,7 @@ export async function cleanupSessionLifecycleArtifactsCore(
           async () => {
             assertCurrent();
             const plan = createLifecycleArtifactReclamationPlan({
+              agentId: resolved.agentId,
               databaseOptions,
               entries: cleanupPlan.entries,
               materializedPlans,
@@ -174,7 +174,6 @@ export async function cleanupSessionLifecycleArtifactsCore(
                 `SQLite session reclamation returned ${reclaimed.kind} for ${plan.kind}`,
               );
             }
-            emitCommittedSessionEntryRemovals(resolved.agentId, cleanupPlan.entries);
             return reclaimed.value;
           },
           diagnostics,
