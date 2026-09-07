@@ -129,6 +129,8 @@ type MessageSendParams = {
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
   /** @internal Revalidates caller authority immediately before recipient-visible I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
+  /** @internal Synchronously fences caller authority at the final direct-adapter handoff. */
+  assertDirectAdapterHandoff?: () => void;
   /** @internal Keep ephemeral-authority sends out of replayable recovery. */
   skipQueue?: boolean;
   mirror?: OutboundMirror;
@@ -465,6 +467,9 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       ...(params.onDeliveryResult ? { onDeliveryResult: params.onDeliveryResult } : {}),
       ...(params.onPlatformSendDispatch
         ? { onPlatformSendDispatch: params.onPlatformSendDispatch }
+        : {}),
+      ...(params.assertDirectAdapterHandoff
+        ? { assertDirectAdapterHandoff: params.assertDirectAdapterHandoff }
         : {}),
       skipQueue: params.skipQueue,
       ...(params.onDeliveredPayload ? { onDeliveredPayload: params.onDeliveredPayload } : {}),

@@ -283,6 +283,7 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
 
     expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: worktree, workspaceDir: worktree }),
+      undefined,
     );
   });
 });

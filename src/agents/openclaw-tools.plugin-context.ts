@@ -31,6 +31,8 @@ export type OpenClawPluginToolOptions = {
   nativeChannelId?: string;
   /** Opaque host-issued capability for current-turn channel message actions. */
   messageActionTurnCapability?: string;
+  /** Expose the host-bound one-shot reply tool for the engaged Code Mode turn. */
+  includeCurrentTurnDeliveryTool?: boolean;
   agentDir?: string;
   workspaceDir?: string;
   config?: OpenClawConfig;

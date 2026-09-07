@@ -14,7 +14,7 @@ import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import type { NestedToolActivity } from "../../../sessions/nested-tool-activity.js";
-import { createOpenClawCodingTools } from "../../agent-tools.js";
+import { createEmbeddedAttemptCodingTools } from "../../agent-tools.js";
 import { createSkillInstructionDeliveryCache } from "../../agent-tools.read.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import { createCodeModePermissionChangeReason } from "../../code-mode-permission-change.js";
@@ -24,6 +24,10 @@ import {
   CodeModeTranscriptAuthority,
 } from "../../code-mode-transcript-authority.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
+import {
+  rebindCurrentTurnDeliveryToolRef,
+  type CurrentTurnDeliveryToolRef,
+} from "../../current-turn-delivery.js";
 import {
   isLocalModelLeanEnabled,
   resolveLocalModelLeanPreserveToolNames,
@@ -59,7 +63,9 @@ import { buildEmbeddedAttemptToolRunContext } from "./attempt-tool-run-context.j
 import { TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES } from "./attempt-tool-search-run-plan.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-type OpenClawCodingToolsOptions = NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>;
+type OpenClawCodingToolsOptions = NonNullable<
+  Parameters<typeof createEmbeddedAttemptCodingTools>[0]
+>;
 type SkillUsagePaths = OpenClawCodingToolsOptions["skillUsagePaths"];
 
 export function prepareEmbeddedAttemptToolBase(params: {
@@ -259,10 +265,11 @@ export function prepareEmbeddedAttemptToolBase(params: {
     sessionPermissionPolicy: PreparedSessionPermissionPolicy | undefined,
     abortSignal: AbortSignal,
   ) => {
+    const currentTurnDeliveryToolRef: CurrentTurnDeliveryToolRef = {};
     const constructedToolsRaw = !shouldConstructTools
       ? []
       : (() => {
-          const allTools = createOpenClawCodingTools({
+          const toolOptions: OpenClawCodingToolsOptions = {
             agentId: params.setup.sessionAgentId,
             ...buildConversationContext(),
             exec: {
@@ -328,15 +335,24 @@ export function prepareEmbeddedAttemptToolBase(params: {
             skillUsagePaths: params.skillUsagePaths,
             conversationCapabilityProfile: runtimeCapabilityProfile,
             onYield: params.onYield,
-          });
+          };
+          const deliveryToolRef =
+            codeModeControlsEnabledForRun && !attempt.forceRestartSafeTools
+              ? currentTurnDeliveryToolRef
+              : undefined;
+          const allTools = createEmbeddedAttemptCodingTools(toolOptions, deliveryToolRef);
           // The built-in harness retains its existing authoritative wrappers.
           // Only plugin harnesses receive and require the projected host capability.
           const boundTools = attempt.hostCapabilities
             ? attempt.hostCapabilities.bindToolSurface(allTools)
             : allTools;
+          rebindCurrentTurnDeliveryToolRef(currentTurnDeliveryToolRef, allTools, boundTools);
           params.markCoreToolStage("attempt:create-openclaw-coding-tools");
           const filteredTools = applyEmbeddedAttemptToolsAllow(boundTools, effectiveToolsAllow, {
             toolMeta: (tool) => getPluginToolMeta(tool),
+            preserveTools: currentTurnDeliveryToolRef.value
+              ? new Set([currentTurnDeliveryToolRef.value])
+              : undefined,
           });
           params.markCoreToolStage("attempt:tools-allow");
           return filteredTools;

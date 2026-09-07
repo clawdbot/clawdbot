@@ -49,6 +49,18 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
     ).toEqual(["exec", "read"]);
   });
 
+  it("preserves only the exact host capability outside explicit toolsAllow", () => {
+    const currentTurnDelivery = { name: "send_current_reply" };
+    const pluginCollision = { name: "send_current_reply" };
+    const tools = [{ name: "read" }, currentTurnDelivery, pluginCollision];
+
+    expect(
+      applyEmbeddedAttemptToolsAllow(tools, ["read"], {
+        preserveTools: new Set([currentTurnDelivery]),
+      }),
+    ).toEqual([{ name: "read" }, currentTurnDelivery]);
+  });
+
   it("keeps forced message tool through explicit runtime allowlists", () => {
     // Forced delivery tools must remain available even when callers narrow the
     // runtime allowlist to a plugin-specific tool.

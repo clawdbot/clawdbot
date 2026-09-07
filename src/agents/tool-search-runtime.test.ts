@@ -506,6 +506,35 @@ describe("Tool Search terminal results", () => {
       expect(second.execute).toHaveBeenCalledOnce();
     },
   );
+
+  it.each([
+    ["terminal then ordinary", ["terminal_action", "ordinary_action"]],
+    ["ordinary then terminal", ["ordinary_action", "terminal_action"]],
+  ] as const)(
+    "uses monotonic terminal semantics for a settled Code Mode cell: %s",
+    async (_, order) => {
+      const terminal = fakeTool("terminal_action");
+      terminal.execute = vi.fn(async () => ({
+        ...jsonResult({ outcome: "terminal" }),
+        terminate: true,
+      }));
+      const ordinary = fakeTool("ordinary_action");
+      const { runtime } = createRuntime([terminal, ordinary]);
+      const parentToolCallId = "code-mode-parent";
+
+      for (const name of order) {
+        await runtime.call(name, {}, { parentToolCallId, terminalAggregation: "any" });
+      }
+      const result = formatToolSearchControlResult(
+        { status: "completed" },
+        runtime,
+        parentToolCallId,
+        "completed",
+      );
+
+      expect(result.terminate).toBe(true);
+    },
+  );
 });
 
 describe("Tool Search input schemas", () => {

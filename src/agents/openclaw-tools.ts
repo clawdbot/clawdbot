@@ -15,6 +15,7 @@ import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { rebindCurrentTurnDeliveryToolRef } from "./current-turn-delivery.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
 import {
@@ -634,13 +635,14 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
   ];
   options?.recordToolPrepStage?.("openclaw-tools:core-tool-list");
   let allTools = tools;
-  if (!options?.disablePluginTools) {
+  if (!options?.disablePluginTools || options?.includeCurrentTurnDeliveryTool) {
     allTools = [
       ...tools,
       ...resolveOpenClawPluginToolsForOptions({
         options: { ...options, activeProjectKeys },
         resolvedConfig,
         existingToolNames: new Set(tools.map((tool) => tool.name)),
+        currentTurnDeliveryToolRef: options?.currentTurnDeliveryToolRef,
       }),
     ];
     options?.recordToolPrepStage?.("openclaw-tools:plugin-tools");
@@ -658,24 +660,31 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     options ? { ...options, agentAccountId: gatewayCallerAccountId } : options,
   );
 
-  if (options?.wrapBeforeToolCallHook === false) {
-    return allTools.map(wrapGatewayCallerIdentity);
-  }
-  const defaultHookContext: HookContext = {
-    ...(hookAgentId ? { agentId: hookAgentId } : {}),
-    ...(resolvedConfig ? { config: resolvedConfig } : {}),
-    ...(options?.agentSessionKey ? { sessionKey: options.agentSessionKey } : {}),
-    ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
-    ...(options?.currentChannelId ? { channelId: options.currentChannelId } : {}),
-    loopDetection: resolveToolLoopDetectionConfig({ cfg: resolvedConfig, agentId: hookAgentId }),
-  };
-  const hookContext = { ...defaultHookContext, ...options?.beforeToolCallHookContext };
-  options?.recordToolPrepStage?.("openclaw-tools:tool-hooks");
-  return allTools
-    .map((tool) =>
-      isToolWrappedWithBeforeToolCallHook(tool)
-        ? tool
-        : wrapToolWithBeforeToolCallHook(tool, hookContext),
-    )
-    .map(wrapGatewayCallerIdentity);
+  const finalizedTools =
+    options?.wrapBeforeToolCallHook === false
+      ? allTools.map(wrapGatewayCallerIdentity)
+      : (() => {
+          const defaultHookContext: HookContext = {
+            ...(hookAgentId ? { agentId: hookAgentId } : {}),
+            ...(resolvedConfig ? { config: resolvedConfig } : {}),
+            ...(options?.agentSessionKey ? { sessionKey: options.agentSessionKey } : {}),
+            ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
+            ...(options?.currentChannelId ? { channelId: options.currentChannelId } : {}),
+            loopDetection: resolveToolLoopDetectionConfig({
+              cfg: resolvedConfig,
+              agentId: hookAgentId,
+            }),
+          };
+          const hookContext = { ...defaultHookContext, ...options?.beforeToolCallHookContext };
+          options?.recordToolPrepStage?.("openclaw-tools:tool-hooks");
+          return allTools
+            .map((tool) =>
+              isToolWrappedWithBeforeToolCallHook(tool)
+                ? tool
+                : wrapToolWithBeforeToolCallHook(tool, hookContext),
+            )
+            .map(wrapGatewayCallerIdentity);
+        })();
+  rebindCurrentTurnDeliveryToolRef(options?.currentTurnDeliveryToolRef, allTools, finalizedTools);
+  return finalizedTools;
 }

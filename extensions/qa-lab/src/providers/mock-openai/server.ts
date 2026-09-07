@@ -212,6 +212,8 @@ const MOCK_HTTP_POST_ROUTES = new Map([
   ["/v1/messages", "Anthropic Messages"],
 ]);
 const QA_COMPACTION_RETRY_PROMPT_RE = /compaction retry mutating tool check/i;
+const QA_CURRENT_TURN_CODE_MODE_PROMPT_RE =
+  /QA current-turn Code Mode delivery: send exactly `([^`]+)`; if another provider request follows, reply exactly `([^`]+)`/iu;
 const QA_COMPACTION_SUMMARY_INSTRUCTIONS_RE =
   /context summarization assistant[\s\S]*structured summary[\s\S]*do not continue/i;
 const QA_COMPACTION_RETRY_OVERFLOW_THRESHOLD_BYTES = 256 * 1024;
@@ -1013,6 +1015,22 @@ async function buildResponsesPayload(
       : null;
   };
   const allInputText = extractAllRequestTexts(input, body);
+  const currentTurnCodeMode = QA_CURRENT_TURN_CODE_MODE_PROMPT_RE.exec(allInputText);
+  if (currentTurnCodeMode) {
+    const outboundMarker = currentTurnCodeMode[1] ?? "";
+    const ordinaryFinalMarker = currentTurnCodeMode[2] ?? "";
+    if (!hasCompletedToolOutput && hasDeclaredTool(toolDeclarationBody, "exec")) {
+      return buildRawToolCallEventsWithArgs("exec", {
+        language: "javascript",
+        code: [
+          `const sent = await send_current_reply({ text: ${JSON.stringify(outboundMarker)} });`,
+          'const observed = await read({ path: "package.json", offset: 1, limit: 1 });',
+          "return { sent, observed: Boolean(observed) };",
+        ].join("\n"),
+      });
+    }
+    return buildAssistantEvents(ordinaryFinalMarker);
+  }
   const hasCompactionRetryDurableContext = allInputText.includes(
     QA_COMPACTION_RETRY_DURABLE_MARKER,
   );

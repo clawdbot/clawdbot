@@ -62,6 +62,8 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   toolsAllow?: string[],
   options?: {
     toolMeta?: (tool: T) => { pluginId: string } | undefined;
+    /** Exact host capabilities remain authoritative outside operator allow-lists. */
+    preserveTools?: ReadonlySet<T>;
   },
 ): T[] {
   if (!toolsAllow) {
@@ -85,7 +87,9 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
       ? expandPolicyWithPluginGroups({ allow: restriction }, pluginGroups)
       : { allow: expandShippedCoreToolPolicyNames(restriction) };
     const matches = createRuntimeToolMatcher(policy?.allow);
-    return currentTools.filter((tool) => matches(tool.name));
+    return currentTools.filter(
+      (tool) => options?.preserveTools?.has(tool) === true || matches(tool.name),
+    );
   }, tools);
 }
 

@@ -295,8 +295,9 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(execTool.description).toContain("Node.js modules");
     expect(execTool.description).toContain("`require`/`import` are NOT available");
     expect(execTool.description).toContain("Enabled tools are async global functions");
-    expect(execTool.description).toContain("Await dependent calls in order");
-    expect(execTool.description).toContain("independent calls may run with Promise.all");
+    expect(execTool.description).toContain("OpenClaw Code Mode");
+    expect(execTool.description).toContain("Compose deterministic dependent work in one cell");
+    expect(execTool.description).toContain("use Promise.all only for independent work");
     expect(execTool.description).toContain(
       "Declared output fields may feed later calls in the same program",
     );
@@ -306,9 +307,10 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(execTool.description).toContain("normal tool policy and approvals");
     expect(execTool.description).toContain("`catalog.search(query)`");
     expect(execTool.description).toContain("results are callable");
-    expect(execTool.description).toContain("`-> ?` means unknown output");
-    expect(execTool.description).toContain("do not feed it into guessed field-dependent logic");
-    expect(execTool.description).toContain("use a later `exec` for dependent composition");
+    expect(execTool.description).toContain("`-> ?` means the output contract is unknown");
+    expect(execTool.description).toContain("only when the actual output is genuinely ambiguous");
+    expect(execTool.description).toContain("If authority changes between calls");
+    expect(execTool.description).toContain("Never replay a mutation whose outcome is uncertain");
     expect(execTool.description).not.toContain("ALL_TOOLS");
     expect(execTool.description).not.toContain("tools.call");
     expect(execTool.description).not.toContain("exact id");
@@ -329,8 +331,9 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(parameters.properties?.code?.description).toContain(
       "Call enabled async globals directly",
     );
+    expect(parameters.properties?.code?.description).toContain("OpenClaw Code Mode");
     expect(parameters.properties?.code?.description).toContain(
-      "independent calls may use Promise.all",
+      "use Promise.all only for independent calls",
     );
     expect(parameters.properties?.code?.description).toContain(
       "Declared output fields may feed later calls in the same program",
@@ -340,9 +343,11 @@ describe("Code Mode catalog and model-visible surface", () => {
     );
     expect(parameters.properties?.code?.description).toContain("`catalog.search(query)`");
     expect(parameters.properties?.code?.description).toContain(
-      "cannot feed guessed dependent logic in the same program",
+      "Observe again only for genuinely ambiguous output or changed authority",
     );
-    expect(parameters.properties?.code?.description).toContain("use a later `exec`");
+    expect(parameters.properties?.code?.description).toContain(
+      "never replay an uncertain mutation",
+    );
     expect(parameters.properties?.code?.description).not.toContain("ALL_TOOLS");
     expect(parameters.properties?.code?.description).not.toContain("tools.call");
     expect(parameters.properties?.code?.description).toContain("`require`, or `import`");
@@ -439,7 +444,18 @@ describe("Code Mode catalog and model-visible surface", () => {
       const codeDescription = parameters.properties?.code?.description;
 
       expect(execTool.description.length).toBeLessThan(2_400);
-      expect(execTool.description).toContain("independent calls may run with Promise.all");
+      expect(execTool.description).toContain("Run JavaScript or TypeScript in OpenClaw Code Mode");
+      expect(execTool.description).toContain(
+        "Compose deterministic dependent work in one cell and await calls in order",
+      );
+      expect(execTool.description).toContain("use Promise.all only for independent work");
+      expect(execTool.description).toContain(
+        "Declared output fields may feed later calls in the same program.",
+      );
+      expect(execTool.description).not.toContain("so continue directly from them");
+      expect(execTool.description).toContain("only when the actual output is genuinely ambiguous");
+      expect(execTool.description).toContain("If authority changes between calls");
+      expect(execTool.description).toContain("Never replay a mutation whose outcome is uncertain");
       expect(execTool.description).toContain("`setTimeout` and `clearTimeout`");
       expect(execTool.description).toContain("65536 bytes");
       expect(execTool.description).toContain("rerun with narrower args");
@@ -451,6 +467,15 @@ describe("Code Mode catalog and model-visible surface", () => {
       expect(execTool.description).not.toContain("heavier computation");
       expect(codeDescription).toEqual(expect.any(String));
       expect(String(codeDescription).length).toBeLessThan(620);
+      expect(codeDescription).toContain("OpenClaw Code Mode requires JS/TS");
+      expect(codeDescription).toContain("Compose deterministic dependent work in one cell");
+      expect(codeDescription).toContain(
+        "Declared output fields may feed later calls in the same program.",
+      );
+      expect(codeDescription).toContain(
+        "Observe again only for genuinely ambiguous output or changed authority",
+      );
+      expect(codeDescription).toContain("never replay an uncertain mutation");
       expect(codeDescription).not.toContain("MCP namespace globals");
       expect(codeDescription).not.toContain("`API` virtual declaration files");
     },

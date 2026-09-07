@@ -287,6 +287,7 @@ export async function runBridgeRequest(params: {
         }
         const called = await params.runtime.callExactId(binding.id, input, {
           parentToolCallId: params.parentToolCallId,
+          terminalAggregation: "any",
           signal: params.signal,
           onUpdate: params.onUpdate,
         });
@@ -337,6 +338,7 @@ export async function runBridgeRequest(params: {
             }
             const called = await params.runtime.callExactId(entry.id, request.input, {
               parentToolCallId: params.parentToolCallId,
+              terminalAggregation: "any",
               signal: params.signal,
               onUpdate: params.onUpdate,
             });
