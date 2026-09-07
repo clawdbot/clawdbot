@@ -14,7 +14,12 @@ import { createManagedHandoffLeaseStore } from "../../infra/update-managed-servi
 import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "../../infra/update-managed-service-handoff-runtime-assets.js";
 import { stageManagedHandoffRuntime } from "../../infra/update-managed-service-handoff-runtime.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
-import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import { runUtf8CommandWithTimeout } from "../../process/exec.js";
+import { waitForPidToExit } from "../../test-utils/process-tree.js";
+import {
+  withUpdateCommandExecutor,
+  withUpdateCommandExecutorChild,
+} from "./update-command-executor.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -229,5 +234,263 @@ describe("live update executor", () => {
       fence.assertCurrent();
     });
     expect(createManagedHandoffLeaseStore().read(moved)).toEqual({ kind: "absent" });
+  });
+});
+
+describe("candidate executor delegation", () => {
+  const moduleUrl = new URL("./update-command-executor.ts", import.meta.url).href;
+  const program = `
+    import fs from "node:fs";
+    import {setTimeout} from "node:timers/promises";
+    import {withDelegatedUpdateCommandExecutor} from ${JSON.stringify(moduleUrl)};
+    const input=JSON.parse(fs.readFileSync(0,"utf8"));
+    await withDelegatedUpdateCommandExecutor(input.grant,input.grant.runId,input.grant.root,async (fence)=>{
+      process.stdout.write("admitted\\n");
+      while(!fs.existsSync(input.proceed)) await setTimeout(10);
+      fence.assertCurrent();
+      fs.writeFileSync(input.output,"owned");
+    });
+  `;
+  it.each([false, true])(
+    "retains parent exclusion through a real child (revoked=%s)",
+    async (revoked) => {
+      const ready = createDeferred();
+      const proceed = path.join(root, "proceed");
+      const output = path.join(root, "effect");
+      const work = withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        const fence = await executor.enter(root);
+        const pending = withUpdateCommandExecutorChild(fence, (grant, beforeInput) =>
+          runUtf8CommandWithTimeout(
+            [
+              process.execPath,
+              "--import",
+              path.resolve("scripts/tsx.mjs"),
+              "--input-type=module",
+              "-e",
+              program,
+            ],
+            {
+              input: JSON.stringify({ grant, proceed, output }),
+              beforeInput,
+              timeoutMs: 15_000,
+              killProcessTree: true,
+              onOutputChunk: (chunk) => {
+                if (chunk.toString().includes("admitted")) {
+                  ready.resolve();
+                }
+              },
+            },
+          ),
+        );
+        try {
+          await Promise.race([
+            ready.promise,
+            pending.then((result) => {
+              throw new Error(result.stderr);
+            }),
+          ]);
+          expect(() => fence.assertCurrent()).toThrow("suspended");
+          const store = createManagedHandoffLeaseStore();
+          const primary = store.read(root);
+          expect(primary.kind).toBe("current");
+          if (primary.kind !== "current") {
+            throw new Error("missing primary owner");
+          }
+          expect(store.release(primary.lease)).toBe(false);
+          if (revoked) {
+            expect(store.bind(primary.lease, process.pid)).not.toBeNull();
+          }
+        } finally {
+          fs.writeFileSync(proceed, "continue");
+        }
+        const result = await pending;
+        expect(result.code, result.stderr).toBe(0);
+        fence.assertCurrent();
+      });
+      if (revoked) {
+        await expect(work).rejects.toThrow(/ownership|release/);
+        expect(fs.existsSync(output)).toBe(false);
+      } else {
+        await work;
+        expect(fs.readFileSync(output, "utf8")).toBe("owned");
+        expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "does not release installation ownership while a candidate descendant is alive",
+    async () => {
+      let descendant: number | undefined;
+      try {
+        await expect(
+          withUpdateCommandExecutor(randomUUID(), async (executor) => {
+            const fence = await executor.enter(root);
+            await withUpdateCommandExecutorChild(fence, async (grant, beforeInput) => {
+              const result = await runUtf8CommandWithTimeout(
+                [
+                  process.execPath,
+                  "-e",
+                  `const fs=require('node:fs');const {spawn}=require('node:child_process');
+                  JSON.parse(fs.readFileSync(0,'utf8'));
+                  const child=spawn(process.execPath,['-e',"setInterval(()=>{},1000);process.send('ready')"],{stdio:['ignore','ignore','ignore','ipc']});
+                  child.once('message',()=>{process.stdout.write(String(child.pid));child.disconnect();child.unref();});`,
+                ],
+                {
+                  input: JSON.stringify(grant),
+                  beforeInput,
+                  killProcessTree: true,
+                  timeoutMs: 15_000,
+                },
+              );
+              descendant = Number(result.stdout);
+              expect(result.code, result.stderr).toBe(0);
+              expect(Number.isSafeInteger(descendant) && descendant > 0).toBe(true);
+              process.kill(descendant, 0);
+              return result;
+            });
+          }),
+        ).rejects.toThrow(/settled|release/);
+        const store = createManagedHandoffLeaseStore();
+        expect(store.acquire(root, "next-owner", { kind: "update" }).kind).toBe("busy");
+      } finally {
+        if (descendant) {
+          process.kill(descendant, "SIGTERM");
+          await waitForPidToExit(descendant);
+        }
+      }
+    },
+  );
+
+  it("rejects a grant that does not match the stored parent generation", async () => {
+    const output = path.join(root, "effect");
+    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const fence = await executor.enter(root);
+      const result = await withUpdateCommandExecutorChild(fence, (grant, beforeInput) =>
+        runUtf8CommandWithTimeout(
+          [
+            process.execPath,
+            "--import",
+            path.resolve("scripts/tsx.mjs"),
+            "--input-type=module",
+            "-e",
+            program,
+          ],
+          {
+            input: JSON.stringify({
+              grant: {
+                ...grant,
+                parent: { ...grant.parent, updatedAt: grant.parent.updatedAt + 1 },
+              },
+              output,
+            }),
+            beforeInput,
+            timeoutMs: 15_000,
+            killProcessTree: true,
+          },
+        ),
+      );
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain("does not match its parent");
+      expect(fs.existsSync(output)).toBe(false);
+      fence.assertCurrent();
+    });
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "retains a candidate group after both the updater and its direct child exit",
+    async () => {
+      stageManagedHandoffRuntime(root);
+      const runtimeEntry = path.join(root, "runtime", MANAGED_HANDOFF_RUNTIME_ENTRY);
+      const options = {
+        databasePath: path.join(temporary, "managed-update-handoffs.sqlite"),
+        serviceManagerEnv: resolveServiceManagerEnv(),
+      };
+      const command = `
+        const {spawn}=require('node:child_process');
+        process.stdin.once('data',()=>{
+          const leaf=spawn(process.execPath,['-e',"setInterval(()=>{},1000);process.send('ready')"],{stdio:['ignore','ignore','ignore','ipc']});
+          leaf.once('message',()=>{process.stdout.write(String(leaf.pid));leaf.disconnect();leaf.unref();});
+        });
+      `;
+      const parent = spawnSync(
+        process.execPath,
+        [
+          "-e",
+          `
+        const {spawn}=require('node:child_process');
+        const {createManagedHandoffLeaseStore}=require(${JSON.stringify(runtimeEntry)});
+        const store=createManagedHandoffLeaseStore(${JSON.stringify(options)});
+        const original=store.acquire(${JSON.stringify(root)},'parent',{kind:'update'});
+        const delegation=store.acquire(${JSON.stringify(root + "/.openclaw-update-child-group")},'run',{kind:'update'});
+        if(original.kind!=='acquired'||delegation.kind!=='acquired')throw new Error('admission failed');
+        const child=spawn(process.execPath,['-e',${JSON.stringify(command)}],{detached:true,stdio:['pipe','pipe','inherit']});
+        if(!store.bind(delegation.lease,child.pid))throw new Error('bind failed');
+        child.stdout.pipe(process.stdout);child.stdin.end('start');
+      `,
+        ],
+        { encoding: "utf8", timeout: 15_000 },
+      );
+      expect(parent.status, parent.stderr).toBe(0);
+      const descendant = Number(parent.stdout);
+      expect(Number.isSafeInteger(descendant) && descendant > 0).toBe(true);
+      const store = createManagedHandoffLeaseStore();
+      try {
+        expect(store.acquire(root, "new", { kind: "update" }).kind).toBe("busy");
+      } finally {
+        process.kill(descendant, "SIGTERM");
+        await waitForPidToExit(descendant);
+      }
+      const next = store.acquire(root, "new", { kind: "update" });
+      expect(next.kind).toBe("acquired");
+      if (next.kind === "acquired") {
+        expect(store.release(next.lease)).toBe(true);
+      }
+    },
+  );
+
+  it("does not reclaim a dead parent while its delegated child is alive", async () => {
+    stageManagedHandoffRuntime(root);
+    const runtimeEntry = path.join(root, "runtime", MANAGED_HANDOFF_RUNTIME_ENTRY);
+    const options = {
+      databasePath: path.join(temporary, "managed-update-handoffs.sqlite"),
+      serviceManagerEnv: resolveServiceManagerEnv(),
+    };
+    const parent = spawnSync(
+      process.execPath,
+      [
+        "-e",
+        `
+      const {spawn}=require("node:child_process");
+      const {createManagedHandoffLeaseStore}=require(${JSON.stringify(runtimeEntry)});
+      const store=createManagedHandoffLeaseStore(${JSON.stringify(options)});
+      const parent=store.acquire(${JSON.stringify(root)},"parent",{kind:"update"});
+      const delegated=store.acquire(${JSON.stringify(root + "/.openclaw-update-child-test")},"run",{kind:"update"});
+      if(parent.kind!=="acquired"||delegated.kind!=="acquired")throw new Error("admission failed");
+      const child=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore",detached:true});
+      child.unref();
+      if(!store.bind(delegated.lease,child.pid))throw new Error("bind failed");
+      process.stdout.write(String(child.pid));
+    `,
+      ],
+      { encoding: "utf8", timeout: 15_000 },
+    );
+    expect(parent.status, parent.stderr).toBe(0);
+    const pid = Number(parent.stdout);
+    expect(Number.isInteger(pid) && pid > 0).toBe(true);
+    try {
+      expect(createManagedHandoffLeaseStore().acquire(root, "new", { kind: "update" }).kind).toBe(
+        "busy",
+      );
+    } finally {
+      process.kill(pid, "SIGTERM");
+      await waitForPidToExit(pid);
+    }
+    const store = createManagedHandoffLeaseStore();
+    const acquired = store.acquire(root, "new", { kind: "update" });
+    expect(acquired.kind).toBe("acquired");
+    if (acquired.kind === "acquired") {
+      expect(store.release(acquired.lease)).toBe(true);
+    }
   });
 });

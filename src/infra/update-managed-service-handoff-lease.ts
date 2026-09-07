@@ -5,6 +5,7 @@ import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import { sql } from "kysely";
 import { z } from "zod";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
+import { isChildProcessTreeAlive } from "../process/child-process-tree.js";
 import { isPidDefinitelyDead, getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import {
   executeSqliteQuerySync,
@@ -19,58 +20,16 @@ import {
 } from "./sqlite-transaction.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import { canCleanupLegacyManagedHandoff } from "./update-managed-service-handoff-cleanup.js";
+import {
+  managedHandoffBootSchema,
+  parseManagedHandoffLeasePayload,
+  type HandoffProcessIdentity,
+  type HandoffNativeLifetime,
+  type ManagedHandoffLeaseAction,
+  type ManagedHandoffLeasePayload,
+} from "./update-managed-service-handoff-schema.js";
 
 const text = z.string().min(1).max(4096);
-const processIdentitySchema = z.strictObject({
-  pid: z.number().int().positive(),
-  startIdentity: text.max(128),
-});
-const bootSchema = z.union([
-  z.strictObject({
-    platform: z.enum(["linux", "darwin"]),
-    identity: z.string().regex(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i),
-  }),
-  z.strictObject({
-    platform: z.literal("win32"),
-    identity: z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{7}Z$/),
-  }),
-]);
-const nativeLifetimeSchema = z.strictObject({
-  kind: z.literal("native"),
-  unit: text,
-  scope: text,
-  placement: z.discriminatedUnion("kind", [
-    z.strictObject({ kind: z.literal("pending") }),
-    z.strictObject({
-      kind: z.literal("attached"),
-      invocation: z.string().regex(/^[a-f0-9]{32}$/i),
-    }),
-  ]),
-});
-const actionSchema = z.discriminatedUnion("kind", [
-  z.strictObject({ kind: z.literal("update") }),
-  z
-    .strictObject({
-      kind: z.literal("triage"),
-      phase: z.enum(["reserved", "running", "closing", "closed", "uncertain"]),
-      lifetime: z.discriminatedUnion("kind", [
-        z.strictObject({ kind: z.literal("foreground"), boot: bootSchema }),
-        nativeLifetimeSchema,
-      ]),
-    })
-    .refine(
-      (action) =>
-        action.phase !== "running" ||
-        action.lifetime.kind !== "native" ||
-        action.lifetime.placement.kind === "attached",
-    ),
-]);
-const payloadSchema = z.strictObject({
-  version: z.literal(2),
-  executor: processIdentitySchema,
-  helper: processIdentitySchema,
-  action: actionSchema,
-});
 export const triageFailureSchema = z.strictObject({
   kind: z.enum(["update", "gateway-startup"]),
   phase: z.string().max(120),
@@ -79,23 +38,13 @@ export const triageFailureSchema = z.strictObject({
   expectedVersion: z.string().max(100).optional(),
   gateway: z.enum(["verify-running", "preserve"]),
 });
-type HandoffProcessIdentity = z.infer<typeof processIdentitySchema>;
-type HandoffNativeLifetime = z.infer<typeof nativeLifetimeSchema>;
-type ManagedHandoffLeaseAction = z.infer<typeof actionSchema>;
-export type ManagedHandoffLease = z.infer<typeof payloadSchema> & {
+export type ManagedHandoffLease = ManagedHandoffLeasePayload & {
   key: string;
   owner: string;
   payload: string;
   updatedAt: number;
 };
 
-function parse(value: string) {
-  try {
-    return payloadSchema.parse(JSON.parse(value));
-  } catch {
-    return null;
-  }
-}
 export function resolveManagedUpdateLeaseDatabasePath(): string {
   return path.join(resolvePreferredOpenClawTmpDir(), "managed-update-handoffs.sqlite");
 }
@@ -182,7 +131,7 @@ export function createManagedHandoffLeaseStore(
       platform: process.platform,
       identity: process.platform === "win32" ? value : value?.toLowerCase(),
     };
-    const parsed = bootSchema.safeParse(boot);
+    const parsed = managedHandoffBootSchema.safeParse(boot);
     if (!parsed.success) {
       throw new Error("OS boot identity unavailable; run openclaw triage manually");
     }
@@ -285,7 +234,7 @@ export function createManagedHandoffLeaseStore(
     );
   }
   function handle(root: string, value: LeaseRow): ManagedHandoffLease {
-    const payload = parse(value.payload_json);
+    const payload = parseManagedHandoffLeasePayload(value.payload_json);
     if (!payload || !text.safeParse(value.owner).success) {
       throw new Error(
         "existing managed handoff lease is incompatible; retain diagnostics and run openclaw triage manually",
@@ -360,6 +309,27 @@ export function createManagedHandoffLeaseStore(
   function transact<T>(db: HandoffDatabase, operation: () => T): T {
     return runSqliteImmediateTransactionSync(db, operation, { logger });
   }
+  function hasUnsettledChildren(lease: ManagedHandoffLease): boolean {
+    const prefix = `${lease.key}/.openclaw-update-child-`;
+    return withDatabase(false, (db) => {
+      const children = executeSqliteQuerySync(
+        db,
+        leaseQueries(db)
+          .selectFrom("managed_update_handoffs")
+          .select(["install_root", "owner", "payload_json", "updated_at"])
+          .where("install_root", ">=", prefix)
+          .where("install_root", "<", prefix + "\uffff"),
+      ).rows;
+      return children.some((entry) => {
+        const child = handle(entry.install_root, entry);
+        return (
+          processState(child.helper) !== "dead" ||
+          processState(child.executor) !== "dead" ||
+          (process.platform !== "win32" && isChildProcessTreeAlive(child.executor))
+        );
+      });
+    });
+  }
   function reclaimable(lease: ManagedHandoffLease) {
     const action = lease.action;
     if (action.kind === "triage" && action.lifetime.kind === "foreground") {
@@ -378,7 +348,10 @@ export function createManagedHandoffLeaseStore(
       return false;
     }
     return (
-      action.kind !== "triage" || action.lifetime.kind !== "native" || nativeClosed(action.lifetime)
+      !hasUnsettledChildren(lease) &&
+      (action.kind !== "triage" ||
+        action.lifetime.kind !== "native" ||
+        nativeClosed(action.lifetime))
     );
   }
   function admit(
@@ -452,7 +425,11 @@ export function createManagedHandoffLeaseStore(
   ): LeaseAcquisition {
     const helper = processIdentity();
     const payload = JSON.stringify({ version: 2, executor: helper, helper, action });
-    if (!text.safeParse(root).success || !text.safeParse(owner).success || !parse(payload)) {
+    if (
+      !text.safeParse(root).success ||
+      !text.safeParse(owner).success ||
+      !parseManagedHandoffLeasePayload(payload)
+    ) {
       throw new Error("managed handoff admission is invalid");
     }
     if (transition) {
@@ -499,11 +476,11 @@ export function createManagedHandoffLeaseStore(
     executor?: HandoffProcessIdentity,
   ) {
     const payload = JSON.stringify({
-      ...parse(lease.payload),
+      ...parseManagedHandoffLeasePayload(lease.payload),
       action,
       ...(executor ? { executor, helper: lease.helper } : {}),
     });
-    if (!parse(payload)) {
+    if (!parseManagedHandoffLeasePayload(payload)) {
       return null;
     }
     return withDatabase(true, (db) => {
@@ -563,7 +540,11 @@ export function createManagedHandoffLeaseStore(
       helper: lease.helper,
       action,
     });
-    if (!text.safeParse(root).success || !parse(payload) || fs.realpathSync(root) !== root) {
+    if (
+      !text.safeParse(root).success ||
+      !parseManagedHandoffLeasePayload(payload) ||
+      fs.realpathSync(root) !== root
+    ) {
       throw new Error("managed triage destination is not canonical");
     }
     if (root === lease.key) {
@@ -622,7 +603,14 @@ export function createManagedHandoffLeaseStore(
     return cas(active, { ...active.action, phase });
   }
   function release(lease: ManagedHandoffLease) {
-    if (!current(lease)) {
+    if (
+      !current(lease) ||
+      hasUnsettledChildren(lease) ||
+      (lease.key.includes("/.openclaw-update-child-") &&
+        lease.executor.pid !== lease.helper.pid &&
+        process.platform !== "win32" &&
+        isChildProcessTreeAlive(lease.executor))
+    ) {
       return false;
     }
     const localHelper = lease.helper.pid === process.pid && processState(lease.helper) === "live";
