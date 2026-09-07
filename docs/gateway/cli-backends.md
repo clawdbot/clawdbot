@@ -143,6 +143,13 @@ claude update
 
 The bundled `claude-cli` backend prefers Claude Code's native skill resolver. When the current skills snapshot has at least one selected skill with a materialized path, OpenClaw passes a temporary Claude Code plugin via `--plugin-dir` and omits the duplicate OpenClaw skills catalog from the appended system prompt. Without a materialized plugin skill, OpenClaw keeps the prompt catalog as a fallback. Skill env/API key overrides still apply to the child process environment for the run.
 
+OpenClaw disables Claude Code's built-in Git workflow instructions and startup
+Git-status snapshot with `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1`. Claude Code
+rebuilds that snapshot when a process resumes, so workspace edits or commits
+would otherwise invalidate cached conversation history. Git tools and workspace
+instructions remain available. This does not prevent cache misses after prompt
+changes, compaction, model or thinking changes, or cache expiry.
+
 OpenClaw always launches Claude Code with its default permission mode.
 OpenClaw's permission responses and `PreToolUse` hook keep native tools under
 host control, including when user or enterprise settings would otherwise
