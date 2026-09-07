@@ -615,8 +615,9 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       }
       const alreadyPending =
         state.lastError === "completion_handoff_pending" || state.lastError === lastError;
+      // Index with literals so noUncheckedIndexedAccess stays definite (const tuple).
       const retryDelayMs = alreadyPending
-        ? REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS.length - 1]
+        ? REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[1]
         : REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[0];
       const nextAttemptAt = Math.min(now + retryDelayMs, deadlineAt);
       state = {
