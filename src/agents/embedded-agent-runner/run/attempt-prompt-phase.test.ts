@@ -355,11 +355,9 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     const fixture = createFixture();
     const session = fixture.input.prepared.sessionRuntime.agentSession.activeSession;
     const observations = vi.fn<(observation: PromptCacheRequestObservation) => void>();
-    const requests: number[] = [];
     const observer = createPromptCacheRequestObserver(
       { sessionId: "prompt-phase-cache-observer", streamStrategy: "test" },
       observations,
-      ({ requestIndex }) => requests.push(requestIndex),
     );
     fixture.input.preparedStreamRuntime.cache.onModelRequest = observer.onModelRequest;
     let compacting = false;
@@ -401,7 +399,6 @@ describe("runEmbeddedAttemptPromptPhase", () => {
         changes: [{ code: "tools", detail: "tool set changed with same count" }],
       },
     ]);
-    expect(requests).toEqual([1, 2, 3]);
   });
 
   it.each([

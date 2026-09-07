@@ -116,14 +116,6 @@ async function createTurnFixture(systemPromptOverride?: string) {
       applyPromptBuildToolsAllow: () => ["image_generate"],
       setActiveSessionSystemPrompt,
       setLeasedSteering: vi.fn(),
-      cache: {
-        observabilityEnabled: false,
-        retention: "none",
-        streamStrategy: "default",
-        transport: "sse",
-        tools: [],
-        trace: null,
-      },
     });
     return prepareEmbeddedAttemptPromptContext({
       attempt,
