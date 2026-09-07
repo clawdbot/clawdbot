@@ -99,7 +99,11 @@ function workerResume(
         kind: "resume",
         snapshot: waiting.snapshot,
         config,
-        settledRequests,
+        settledRequests: settledRequests.map(({ id, ok, value }) => ({
+          id,
+          ok,
+          json: JSON.stringify(value),
+        })),
       },
       10_000,
     )

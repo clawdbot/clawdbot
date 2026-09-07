@@ -7,6 +7,7 @@ import type { Worker } from "node:worker_threads";
 import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
+import { configureSqliteWalMaintenance } from "../../infra/sqlite-wal.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -20,6 +21,7 @@ import { loadSessionEntry, replaceSessionEntrySync } from "./session-accessor.sq
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 import {
   createHistoryEvictionReclamationPlan,
+  createLifecycleArtifactReclamationPlan,
   runSqliteSessionReclamation,
 } from "./session-accessor.sqlite-reclamation.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
@@ -198,6 +200,70 @@ test.each([
       await expect(loadTranscriptEvents(scope)).resolves.toEqual([
         { type: "session", id: scope.sessionId },
       ]);
+    }
+  },
+  20_000,
+);
+
+test.each([false, true])(
+  "periodic vacuum services reclamation approval (rejected: %s)",
+  async (rejected) => {
+    const { database, databaseOptions } = createFixture();
+    // sqlite-allow-raw -- Disposable free pages exercise the real incremental vacuum.
+    database.db.exec(`CREATE TABLE reclamation_fixture (payload BLOB);
+      INSERT INTO reclamation_fixture VALUES (zeroblob(8388608));
+      DROP TABLE reclamation_fixture;`);
+    const freePages = () =>
+      Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count);
+    const before = freePages();
+    expect(before).toBeGreaterThan(512);
+    const plan = createLifecycleArtifactReclamationPlan({
+      databaseOptions,
+      entries: [],
+      materializedPlans: [],
+    });
+    const maintenanceErrors: unknown[] = [];
+    let commitChecks = 0;
+    let checksDuringMaintenance = 0;
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const maintenance = configureSqliteWalMaintenance(database.db, {
+      busyTimeoutMs: 1_000,
+      checkpointIntervalMs: 1,
+      onCheckpointError: (error) => maintenanceErrors.push(error),
+    });
+    hooks.beforeAuthorization = () => {
+      // The worker holds the writer lock and cannot commit until this thread approves it.
+      vi.advanceTimersByTime(1);
+      checksDuringMaintenance = commitChecks;
+    };
+    try {
+      const reclamation = runSqliteSessionReclamation({
+        forceInProcess: false,
+        plan,
+        assertCommitAllowed: () => {
+          commitChecks += 1;
+          if (rejected) {
+            throw new Error("reclamation owner retired");
+          }
+        },
+      });
+      if (rejected) {
+        await expect(reclamation).rejects.toThrow("reclamation owner retired");
+      } else {
+        await expect(reclamation).resolves.toMatchObject({
+          kind: "lifecycle-artifacts",
+          value: { removedEntries: 0 },
+        });
+      }
+      expect(maintenanceErrors).toEqual([]);
+      expect(checksDuringMaintenance).toBe(1);
+      expect(commitChecks).toBe(1);
+      const reclaimed = before - freePages();
+      expect(reclaimed).toBeGreaterThan(0);
+      expect(reclaimed).toBeLessThanOrEqual(512);
+    } finally {
+      maintenance.close({ checkpointMode: "PASSIVE" });
+      vi.useRealTimers();
     }
   },
   20_000,

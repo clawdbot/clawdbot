@@ -20,6 +20,20 @@ bounded image model and renderer.
 
 Only need the CLI and Gateway? Start with [Getting started](/start/getting-started).
 
+## Requirements
+
+**OpenClaw.app requires macOS 15.0 (Sequoia) or later.** This also applies to
+its native `openclaw-mac` helper. [Voice Wake and push-to-talk](/platforms/mac/voicewake#requirements)
+require macOS 26 or later.
+
+The Node-based CLI and Gateway need a [supported Node version](/install/node)
+on an operating system supported by that runtime. Official Node 24 and Node 26
+macOS binaries require macOS 13.5 or later. Running the CLI on an older Mac
+does not make the native app compatible with that macOS version.
+
+Building from source also requires the toolchain listed in
+[macOS developer setup](/platforms/mac/dev-setup#prerequisites).
+
 ## Download
 
 Get macOS app builds from [OpenClaw GitHub releases](https://github.com/openclaw/openclaw/releases).

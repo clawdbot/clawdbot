@@ -48,7 +48,7 @@ Node and SSH workspace access and reconciliation outlive worker RPC credential e
 ## Requirements
 
 - A worker provider plugin. The bundled `crabbox` plugin drives the [Crabbox](https://crabbox.sh/) CLI; Crabbox owns the supported cloud backends and their configuration. Install Crabbox 0.41.1 or newer for the operating-system user that runs the Gateway and put it on that user's `PATH`, or set `settings.binary` to its absolute path. Keeping placed workers alive also requires a release that includes `crabbox heartbeat` (added after v0.43.0). Versions through 0.43.0 can allocate fixed-ID worker leases but lack heartbeat support; OpenClaw continues operating with one warning, and the coordinator may reap a placed worker after its `idleTimeout`.
-- For Crabbox AWS workers, the effective `aws.instanceProfile` must be empty. The provider checks `crabbox config show --json` before allocation, then requires `crabbox inspect --json` to report `providerMetadata.instanceProfileAttached: false` from EC2 `DescribeInstances`. Leases with an instance role or without authoritative metadata are stopped and rejected.
+- For Crabbox AWS workers, the effective `aws.instanceProfile` must be empty. The provider checks `crabbox config show --json` before allocation, then requires `crabbox inspect --json` to report `providerMetadata.instanceProfileAttached: false` from EC2 `DescribeInstances`. Leases with an instance role or without authoritative metadata are stopped and rejected. Local CLI/configuration preparation failures finish before the allocation boundary and do not leave a cleanup request for a nonexistent lease. Failures after an allocation request still retain their exact cleanup owner until Stop proves release.
 - A supported Node.js release and npm on the leased machine. Bare cloud images usually lack them — install them in the profile's `setup` command. The machine also needs registry access to install the runtime's dependencies for its operating system and CPU.
 - GitHub CLI (`gh`) on the worker's `PATH` for GitHub commands and HTTPS pushes. The sealed worker bundle includes the credential-binding launcher, not GitHub CLI. Crabbox developer images include `gh`; install it in `settings.setup` for other images.
 - A repository session created with `repository: { url, ref? }`, or a live, registry-owned session managed worktree created with `worktree: true`. Repository sources require a managed node and access to the upstream Git repository. Cloud dispatch does not accept arbitrary plain directories. Manifest mirroring after Git metadata becomes unavailable does not make plain directories dispatchable.
@@ -350,7 +350,7 @@ Gateway or use an intentionally credential-free endpoint. Normal Codex turns
 are supported, but `/btw` side questions are not yet placement-bound and fail
 visibly. Completed changes return through the same placement workspace
 reconciliation as worker turns. See
-[Run Codex on a paired device](/plugins/codex-harness#run-codex-on-a-paired-device)
+[Run Codex on a paired device](/plugins/codex-harness/placement#run-codex-on-a-paired-device)
 for the exact allowlist configuration and lifecycle.
 
 ### Codex or OpenClaw on a cloud profile

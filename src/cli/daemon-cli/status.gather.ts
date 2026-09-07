@@ -494,12 +494,10 @@ export async function gatherDaemonStatus(
       });
     if (probeUrlOverride || explicitAuth.token || explicitAuth.password) {
       daemonProbeAuth = explicitAuth;
-    } else if (
-      daemonCfg.gateway?.auth?.mode === "none" ||
-      daemonCfg.gateway?.auth?.mode === "trusted-proxy"
-    ) {
+    } else if (daemonCfg.gateway?.auth?.mode === "none") {
       daemonProbeAuth = {};
     } else if (canResolveProbeAuth) {
+      // Trusted-proxy probes still use the local-direct password owned by this resolver.
       const probeAuthResolution = await loadGatewayProbeAuthModule().then(
         ({ resolveGatewayProbeAuthSafeWithSecretInputs }) =>
           resolveGatewayProbeAuthSafeWithSecretInputs({

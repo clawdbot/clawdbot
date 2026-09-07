@@ -7,12 +7,9 @@ import {
   readFileDescriptorBoundedSync,
 } from "../../infra/boundary-file-read.js";
 import type { ParsedSkillFrontmatter } from "../types.js";
-import { parseSkillFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
-import {
-  createSyntheticSourceInfo,
-  resolveSkillDisplayName,
-  type Skill,
-} from "./skill-contract.js";
+import { parseSkillFrontmatter } from "./frontmatter.js";
+import type { Skill } from "./skill-contract.js";
+import { materializeSkill } from "./skill-materializer.js";
 
 export type LoadedLocalSkill = {
   skill: Skill;
@@ -115,26 +112,20 @@ export function loadSingleSkillDirectory(params: {
     });
     return null;
   }
-  const invocation = resolveSkillInvocationPolicy(frontmatter);
   const filePath = path.resolve(skillFilePath);
   const baseDir = path.resolve(params.skillDir);
 
   return {
-    skill: {
+    skill: materializeSkill({
+      content: raw,
+      frontmatter,
       name,
-      displayName: resolveSkillDisplayName(raw, name),
       description,
       filePath,
       baseDir,
       source: params.source,
-      sourceInfo: createSyntheticSourceInfo(filePath, {
-        source: params.source,
-        baseDir,
-        scope: "project",
-        origin: "top-level",
-      }),
-      disableModelInvocation: invocation.disableModelInvocation,
-    },
+      sourceOptions: { source: params.source, scope: "project", origin: "top-level" },
+    }),
     frontmatter,
     content: raw,
   };

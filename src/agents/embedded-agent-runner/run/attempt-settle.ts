@@ -115,13 +115,11 @@ export async function runEmbeddedAttemptSettledPhase(
   const promptState: EmbeddedAttemptPromptState = {
     contextBudgetStatus: undefined,
     preflightRecovery: undefined,
-    promptCacheChangesForTurn: null,
     yieldAborted: false,
   };
   const preparedStreamRuntime = input.preparedStreamRuntime;
   const {
     abortable,
-    cache: { observabilityEnabled: cacheObservabilityEnabled },
     isProbeSession,
     onBlockReplyFlush,
     stream: preparedStream,
@@ -262,8 +260,7 @@ export async function runEmbeddedAttemptSettledPhase(
           prePromptMessageCount: sessionRuntimeState.prePromptMessageCount,
           nestedToolActivities,
           cache: {
-            observabilityEnabled: cacheObservabilityEnabled,
-            changesForTurn: promptState.promptCacheChangesForTurn,
+            getObservation: preparedStreamRuntime.cache.getObservation,
             retention: effectivePromptCacheRetention,
           },
         });

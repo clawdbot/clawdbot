@@ -2,6 +2,10 @@
 import { isGatewayTransportError } from "../gateway/transport-error.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
+import {
+  UpdateSchemaRefusalError,
+  type UpdateSchemaRefusalDatabase,
+} from "../state/openclaw-update-schema-refusal.js";
 import { formatCliCommand } from "./command-format.js";
 
 type FormatCliFailureOptions = {
@@ -21,6 +25,11 @@ export type CliJsonFailure = {
   error: {
     type: "cli_error";
     message: string;
+    code?: string;
+    databases?: readonly UpdateSchemaRefusalDatabase[];
+    updaterVersion?: string;
+    targetVersion?: string;
+    commands?: readonly string[];
   };
 };
 
@@ -107,6 +116,15 @@ export function formatCliJsonFailure(
     error: {
       type: "cli_error",
       message,
+      ...(error instanceof UpdateSchemaRefusalError
+        ? {
+            code: error.code,
+            databases: error.databases,
+            updaterVersion: error.updaterVersion,
+            targetVersion: error.targetVersion,
+            commands: error.commands,
+          }
+        : {}),
     },
   };
 }

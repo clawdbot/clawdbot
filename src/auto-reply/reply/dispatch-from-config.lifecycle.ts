@@ -467,6 +467,7 @@ export function createDispatchReplyOperationCoordinator(params: {
       try {
         return await admitReplyTurn({
           sessionKey: dispatchOperationSessionKey,
+          agentId: params.agentId,
           resolveGatewayContext:
             readChannelContextGatewayContextResolver(params.ctx) ??
             getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext,

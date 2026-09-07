@@ -16,6 +16,7 @@ import {
   isLegacyIpv4Literal,
   parseCanonicalIpAddress,
   parseLooseIpAddress,
+  isUnspecifiedIpAddress,
 } from "@openclaw/net-policy/ip";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -426,23 +427,6 @@ function isLoopbackIpAddressIncludingEmbeddedIpv4(address: string): boolean {
   return extractEmbeddedIpv4FromIpv6(parsed)?.range() === "loopback";
 }
 
-function isUnspecifiedIpAddressIncludingEmbeddedIpv4(address: string): boolean {
-  const parsed = parseCanonicalIpAddress(address);
-  if (!parsed) {
-    return false;
-  }
-  if (isIpv4Address(parsed)) {
-    return parsed.range() === "unspecified";
-  }
-  if (parsed.range() === "unspecified") {
-    return true;
-  }
-  if (parsed.range() === "loopback") {
-    return false;
-  }
-  return extractEmbeddedIpv4FromIpv6(parsed)?.range() === "unspecified";
-}
-
 function isBlockedTrustedResolvedIpv6Address(address: string): boolean {
   const parsed = parseCanonicalIpAddress(address);
   if (!parsed || isIpv4Address(parsed)) {
@@ -474,7 +458,7 @@ function assertAllowedTrustedHostnameResolvedAddressesOrThrow(
 
   for (const entry of results) {
     if (
-      isUnspecifiedIpAddressIncludingEmbeddedIpv4(entry.address) ||
+      isUnspecifiedIpAddress(entry.address) ||
       (!isLoopbackAllowed && isLoopbackIpAddressIncludingEmbeddedIpv4(entry.address)) ||
       isBlockedTrustedResolvedIpv6Address(entry.address) ||
       isLinkLocalIpAddress(entry.address) ||

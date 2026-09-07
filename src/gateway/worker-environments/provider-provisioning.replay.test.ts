@@ -475,7 +475,7 @@ describe("worker environment service provision replay", () => {
     } satisfies Partial<WorkerEnvironmentServiceError>);
     expect(provision).not.toHaveBeenCalled();
     expect(support.testState.store.list()[0]).toMatchObject({
-      state: "provisioning",
+      state: "failed",
       leaseId: null,
     });
   });

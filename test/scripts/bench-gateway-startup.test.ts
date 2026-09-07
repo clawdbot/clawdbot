@@ -440,7 +440,7 @@ server.listen(port, "127.0.0.1", () => {
       },
     ]);
 
-    expect(testing.collectResultFailures([result], { processMetricsRequired: true })).toEqual([
+    expect(testing.collectResultFailures([result])).toEqual([
       {
         id: "demo",
         reason: "missing /healthz, /readyz, completion, cpu, rss",
@@ -483,7 +483,7 @@ server.listen(port, "127.0.0.1", () => {
       },
     ]);
 
-    expect(testing.collectResultFailures([result], { processMetricsRequired: true })).toEqual([
+    expect(testing.collectResultFailures([result])).toEqual([
       {
         id: "demo",
         reason: "child exited 1",
@@ -526,7 +526,7 @@ server.listen(port, "127.0.0.1", () => {
       },
     ]);
 
-    expect(testing.collectResultFailures([result], { processMetricsRequired: true })).toEqual([]);
+    expect(testing.collectResultFailures([result])).toEqual([]);
   });
 
   it("enforces the combined incident readiness budgets", () => {
@@ -562,7 +562,7 @@ server.listen(port, "127.0.0.1", () => {
       },
     ]);
 
-    expect(testing.collectResultFailures([result], { processMetricsRequired: true })).toEqual([
+    expect(testing.collectResultFailures([result])).toEqual([
       {
         id: "incidentCombined",
         reason: "/healthz p95 30000.0ms must be under 30000.0ms",
@@ -610,7 +610,7 @@ server.listen(port, "127.0.0.1", () => {
       },
     ]);
 
-    expect(testing.collectResultFailures([result], { processMetricsRequired: true })).toEqual([
+    expect(testing.collectResultFailures([result])).toEqual([
       {
         id: "demo",
         reason: "child exited by SIGSEGV",

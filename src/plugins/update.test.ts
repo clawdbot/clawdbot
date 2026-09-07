@@ -6,6 +6,7 @@ import { bundledPluginRootAt } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import type { SpawnResult } from "../process/exec.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
@@ -51,6 +52,14 @@ const installPluginFromClawHubMock = vi.fn();
 const installPluginFromGitSpecMock = vi.fn();
 const resolveBundledPluginSourcesMock = vi.fn();
 const runCommandWithTimeoutMock = vi.fn();
+const failedNpmVersionQueryResult: SpawnResult = {
+  code: 1,
+  stdout: "",
+  stderr: "npm version query failed",
+  signal: null,
+  killed: false,
+  termination: "exit",
+};
 const validatePackageExtensionEntriesForInstallMock = vi.fn();
 const markClawPackageIndependentlyOwnedMock = vi.fn();
 const withClawPackageLifecycleLeaseMock = vi.fn(
@@ -1441,6 +1450,7 @@ describe("updateNpmInstalledPlugins", () => {
       installerVersion: "2026.5.2-beta.2",
       installerResolvedSpec: "@openclaw/acpx@2026.5.2-beta.2",
     });
+    runCommandWithTimeoutMock.mockResolvedValueOnce(failedNpmVersionQueryResult);
 
     const result = await updatePlugin(config, "acpx", { syncOfficialPluginInstalls: true });
 
@@ -1720,6 +1730,7 @@ describe("updateNpmInstalledPlugins", () => {
       installerVersion: "2026.5.2",
       installerResolvedSpec: "@openclaw/acpx@2026.5.2",
     });
+    runCommandWithTimeoutMock.mockResolvedValueOnce(failedNpmVersionQueryResult);
     const result = await updatePlugin(config, "acpx", { syncOfficialPluginInstalls: true });
 
     expect(npmInstallCall()?.spec).toBe("@openclaw/acpx");
@@ -2033,6 +2044,7 @@ describe("updateNpmInstalledPlugins", () => {
       installerVersion: "2026.5.28-beta.3",
       installerResolvedSpec: "@openclaw/msteams@2026.5.28-beta.3",
     });
+    runCommandWithTimeoutMock.mockResolvedValueOnce(failedNpmVersionQueryResult);
 
     const result = await updatePlugin(config, "msteams");
 

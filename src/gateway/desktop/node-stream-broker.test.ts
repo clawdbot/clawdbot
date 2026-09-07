@@ -305,38 +305,47 @@ describe("node desktop stream tickets", () => {
     await expect(minted.attached).rejects.toThrow("stale");
   });
 
-  it("keeps a redeemed ticket cancellable while metadata is pending", async () => {
-    const logCapture = createDiagnosticLogRecordCapture();
-    logCaptures.push(logCapture);
-    const broker = createNodeDesktopStreamBroker();
-    const session = { connId: "conn-1", pairingGeneration: "generation-1" };
-    const baseUrl = await startBrokerServer({ broker, session });
-    const minted = broker.mint({ nodeId: "node-1", ...session });
-    const ws = new WebSocket(`${baseUrl}${minted.attachPath}`);
-    cleanups.push(async () => ws.terminate());
-    await new Promise<void>((resolve, reject) => {
-      ws.once("open", resolve);
-      ws.once("error", reject);
-    });
-    const closed = new Promise<void>((resolve) => {
-      ws.once("close", () => resolve());
-    });
+  it.each(["cancelled", "expired"] as const)(
+    "rejects a redeemed ticket that is %s while metadata is pending",
+    async (outcome) => {
+      const logCapture = createDiagnosticLogRecordCapture();
+      logCaptures.push(logCapture);
+      const broker = createNodeDesktopStreamBroker({ now: () => 1_000 });
+      const session = { connId: "conn-1", pairingGeneration: "generation-1" };
+      const baseUrl = await startBrokerServer({ broker, session });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const minted = broker.mint({ nodeId: "node-1", ...session });
+      const ws = new WebSocket(`${baseUrl}${minted.attachPath}`);
+      cleanups.push(async () => ws.terminate());
+      await new Promise<void>((resolve, reject) => {
+        ws.once("open", resolve);
+        ws.once("error", reject);
+      });
+      const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+        ws.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
+      });
 
-    minted.cancel();
+      if (outcome === "cancelled") {
+        minted.cancel();
+      } else {
+        vi.advanceTimersByTime(60_000);
+      }
 
-    await expect(minted.attached).rejects.toThrow("cancelled");
-    await expect(closed).resolves.toBeUndefined();
-    await expect
-      .poll(async () => {
-        await logCapture.flush();
-        return logCapture.records.filter((record) => record.message === "node stream closed");
-      })
-      .toHaveLength(1);
-    expect(logCapture.records[0]?.attributes).toMatchObject({
-      trigger: "attach-rejected",
-      closeCode: 1008,
-    });
-  });
+      await expect(minted.attached).rejects.toThrow(`node desktop stream ticket ${outcome}`);
+      await expect(closed).resolves.toEqual({ code: 1008, reason: "node desktop attach rejected" });
+      vi.useRealTimers();
+      await expect
+        .poll(async () => {
+          await logCapture.flush();
+          return logCapture.records.filter((record) => record.message === "node stream closed");
+        })
+        .toHaveLength(1);
+      expect(logCapture.records[0]?.attributes).toMatchObject({
+        trigger: "attach-rejected",
+        closeCode: 1008,
+      });
+    },
+  );
 
   it("rejects when the raw upgrade socket closes during pairing authorization", async () => {
     let pairingChecks = 0;

@@ -154,7 +154,7 @@ Details: [Thinking + reasoning directives](/tools/thinking) and [Token use](/ref
 - Explicit `message` tool and CLI text sends also apply the resolved prefix, without duplicating a prefix already present. They resolve identity placeholders but do not select a model; a prefix containing unresolved model, provider, or thinking-level placeholders is omitted entirely.
 - Reply threading via `replyToMode` and per-channel defaults.
 
-Details: [Configuration](/gateway/config-agents#messages) and channel docs.
+Details: [Configuration](/gateway/config-agents/messages-and-talk#messages) and channel docs.
 
 ## Silent replies
 

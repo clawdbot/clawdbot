@@ -514,6 +514,11 @@ enforce the assertion, leave V2 unsupported.
 
 The V1 `messageInjection`, queue options, `queueAgentHarnessMessage`, and
 `setActiveEmbeddedRun` signatures shipped in v2026.8.1 remain source-compatible.
+Pass the resolved agent ID as the fifth `setActiveEmbeddedRun` argument so raw
+`global` and `unknown` keys retain their owner. Legacy calls inside a matching
+live host binding inherit its validated agent; an ambient caller alone does not
+supply ownership. Outside that binding, omitted ownership uses the qualified
+session key or the configured default agent for session activity.
 Unscoped V1 injection retains its existing behavior. Source-bound controls
 require V2 and reject visibly before queue or I/O when only V1 is available;
 they never fall back to an unchecked V1 callback. Existing deprecation windows

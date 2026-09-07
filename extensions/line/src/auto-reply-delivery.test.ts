@@ -201,7 +201,7 @@ describe("deliverLineAutoReply", () => {
   // fallback prose is the only thing carrying the question. Delivering bare
   // option labels would leave the user choosing between answers to nothing.
   it("delivers the question with the options when only quick replies render", async () => {
-    const prepared = prepareLineReplyPayload({
+    const prepared = await prepareLineReplyPayload({
       text: "Agent needs input:\n1. Alpha",
       presentationTextMode: "fallback",
       presentation: {

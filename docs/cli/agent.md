@@ -8,7 +8,7 @@ title: "Agent"
 
 # `openclaw agent`
 
-Run one agent turn through the Gateway. The explicit `--local` flag is the only embedded execution path.
+Run one agent turn through the Gateway. The explicit `--local` flag and `agent exec` are the embedded execution paths.
 
 Pass at least one session selector: `--to`, `--session-key`, `--session-id`, or `--agent`. Explicitly blank or whitespace-only selector values are rejected before local or Gateway dispatch, even when another selector supplies a valid target. Omit an unused selector instead of passing an empty value.
 

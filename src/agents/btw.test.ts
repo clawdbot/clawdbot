@@ -3,7 +3,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { consumeReplyUsageState } from "../auto-reply/reply/reply-usage-state.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { onInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
 import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -1262,6 +1264,54 @@ describe("runBtwSideQuestion", () => {
       }),
     );
   });
+
+  it.each([false, true])(
+    "exposes side-question usage with diagnostics enabled: %s",
+    async (enabled) => {
+      const usage = { input: 13, output: 9, cacheRead: 7, cacheWrite: 3, total: 32 };
+      const harness = registerCodexSideQuestionHarness();
+      harness.mockResolvedValue({ text: "Codex side answer.", usage });
+      const runId = `btw-usage-reply-${enabled}`;
+      const authorityRunId = `btw-usage-authority-${enabled}`;
+      const sessionEntry = createSessionEntry({ inputTokens: 200, cacheRead: 100 });
+      const originalEntry = structuredClone(sessionEntry);
+      const diagnostics: unknown[] = [];
+      const unsubscribe = onInternalDiagnosticEvent((event) => {
+        if (event.type === "model.usage") {
+          diagnostics.push(event);
+        }
+      });
+      try {
+        await expect(
+          runSideQuestion({
+            cfg: { diagnostics: { enabled } },
+            sessionEntry,
+            authorityRunId,
+            opts: { runId },
+          }),
+        ).resolves.toEqual({ text: "Codex side answer." });
+        expect(consumeReplyUsageState(runId)).toMatchObject({ usage, sessionId: "session-1" });
+        expect(consumeReplyUsageState(authorityRunId)).toBeUndefined();
+        expect(sessionEntry).toEqual(originalEntry);
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(diagnostics).toEqual(
+          enabled
+            ? [
+                expect.objectContaining({
+                  type: "model.usage",
+                  sessionId: "session-1",
+                  usage: { ...usage, promptTokens: 23 },
+                }),
+              ]
+            : [],
+        );
+      } finally {
+        unsubscribe();
+      }
+    },
+  );
 
   it("keeps an unprofiled subscription token on the OpenClaw BTW path", async () => {
     const supports = vi.fn(supportsPreparedOpenAIAuth);

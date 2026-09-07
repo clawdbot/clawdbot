@@ -1,8 +1,11 @@
+import path from "node:path";
 /** Compact current-turn snapshots; instructions belong in the stable system prompt. */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadExecApprovals, resolveExecApprovalsFromFile } from "../infra/exec-approvals.js";
 import { listActiveProcessSessionReferences } from "./bash-process-references.js";
 import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
+import type { RuntimeContextFragment } from "./internal-runtime-context.js";
 import {
   buildActiveImageGenerationTaskPromptContextForSession,
   buildActiveMusicGenerationTaskPromptContextForSession,
@@ -34,8 +37,53 @@ export function buildMediaTaskRuntimeContext(
   return facts.length ? ["## Media Generation Tasks", ...facts].join("\n") : undefined;
 }
 
-export function buildRuntimeFactsPrompt(params: RuntimeFactsParams): string | undefined {
+function buildApprovedExecutablesRuntimeContext(agentId: string): string {
+  const header = "## Approved executables";
+  try {
+    const { allowlist } = resolveExecApprovalsFromFile({ file: loadExecApprovals(), agentId });
+    const hints = allowlist
+      .flatMap((entry) => {
+        const pattern = entry.pattern.trim();
+        if (
+          !pattern ||
+          pattern === "*" ||
+          pattern.startsWith("=command:") ||
+          !/[\\/~]/.test(pattern)
+        ) {
+          return [];
+        }
+        // Keep absolute approval tokens exact; a basename can resolve to another binary.
+        const name = path.win32.isAbsolute(pattern)
+          ? pattern
+          : path.win32.basename(pattern).replace(/\.exe$/i, "");
+        // Omit hints that cannot be displayed faithfully within the prompt budget.
+        if (!name || name.length > 256 || sanitizeForPromptLiteral(name) !== name) {
+          return [];
+        }
+        return [`  ${name} ${entry.argPattern ? "(restricted args)" : "(any arguments)"}`];
+      })
+      .toSorted()
+      .slice(0, 10);
+    return [
+      header,
+      ...(hints.length
+        ? [
+            "Pre-approved executables (exact arguments are enforced at runtime; no approval prompt needed when args match):",
+            ...hints,
+          ]
+        : ["none"]),
+    ].join("\n");
+  } catch {
+    // Hints are advisory; approval loading must not block prompt preparation.
+    return `${header}\nunavailable`;
+  }
+}
+
+export function buildRuntimeFactsContext(params: RuntimeFactsParams): RuntimeContextFragment[] {
   const sections: string[] = [];
+  if (process.platform === "win32" && params.capabilityToolNames.has("exec")) {
+    sections.push(buildApprovedExecutablesRuntimeContext(params.agentId));
+  }
   if (params.capabilityToolNames.has("process")) {
     const sessions = listActiveProcessSessionReferences({
       scopeKey: resolveProcessToolScopeKey(params),
@@ -68,5 +116,5 @@ export function buildRuntimeFactsPrompt(params: RuntimeFactsParams): string | un
   if (media) {
     sections.push(media);
   }
-  return sections.join("\n\n") || undefined;
+  return sections.map((text) => ({ kind: "conversation-data", text }));
 }
