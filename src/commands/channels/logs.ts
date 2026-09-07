@@ -6,6 +6,7 @@ import {
   CHAT_CHANNEL_ORDER,
   normalizeChatChannelId as normalizeBundledChannelId,
 } from "../../channels/registry.js";
+import { levelToMinLevel, tryParseLogLevel } from "../../logging/levels.js";
 import { readConfiguredParsedLogTail } from "../../logging/log-tail.js";
 import type { ParsedLogLine } from "../../logging/parse-log-line.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
@@ -13,12 +14,15 @@ import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime
 
 export type ChannelsLogsOptions = {
   channel?: string;
+  level?: string;
   lines?: string | number;
   json?: boolean;
 };
 
 const DEFAULT_LIMIT = 200;
 const MAX_BYTES = 1_000_000;
+const CHANNEL_LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace"] as const;
+type ChannelLogLevel = (typeof CHANNEL_LOG_LEVELS)[number];
 
 type ChannelLogFilter = { channel: string; pluginIds: ReadonlySet<string> };
 type ManifestChannel = { id: string; pluginId: string };
@@ -90,6 +94,32 @@ function parseLinesOption(value: unknown): number {
   return parsed;
 }
 
+function parseLevelOption(value: unknown): ChannelLogLevel | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  const level = tryParseLogLevel(normalizeLowercaseStringOrEmpty(value));
+  if (!level || level === "silent") {
+    throw new Error(`--level must be one of: ${CHANNEL_LOG_LEVELS.join(", ")}.`);
+  }
+  return level;
+}
+
+function matchesMinimumLevel(
+  line: Pick<ParsedLogLine, "level">,
+  minimumLevel: ChannelLogLevel | undefined,
+): boolean {
+  if (!minimumLevel) {
+    return true;
+  }
+  const level = tryParseLogLevel(line.level);
+  return (
+    level !== undefined &&
+    level !== "silent" &&
+    levelToMinLevel(level) >= levelToMinLevel(minimumLevel)
+  );
+}
+
 /** Print or serialize recent log lines matching one channel subsystem/module. */
 export async function channelsLogsCommand(
   opts: ChannelsLogsOptions,
@@ -97,12 +127,13 @@ export async function channelsLogsCommand(
 ) {
   const filter = parseChannelFilter(opts.channel);
   const { channel } = filter;
+  const minimumLevel = parseLevelOption(opts.level);
   const limit = parseLinesOption(opts.lines);
 
   const tail = await readConfiguredParsedLogTail({
     limit,
     maxBytes: MAX_BYTES,
-    filter: (line) => matchesChannel(line, filter),
+    filter: (line) => matchesChannel(line, filter) && matchesMinimumLevel(line, minimumLevel),
   });
   const { lines, truncated } = tail;
 

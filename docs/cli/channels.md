@@ -58,7 +58,9 @@ did not name.
 - `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>` (default `10000`), `--json`
 - `channels capabilities`: `--channel <name>`, `--agent <id>`, `--account <id>` (requires `--channel`), `--target <dest>` (requires `--channel`), `--timeout <ms>` (default `10000`, capped at `30000`), `--json`
 - `channels resolve <entries...>`: `--channel <name>`, `--account <id>`, `--agent <id>`, `--kind <auto|user|group|channel>` (default `auto`), `--json`
-- `channels logs`: `--channel <name|all>` (default `all`), `--lines <n>` (default `200`), `--json`
+- `channels logs`: `--channel <name|all>` (default `all`), `--level <fatal|error|warn|info|debug|trace>`, `--lines <n>` (default `200`), `--json`
+
+Use `channels logs --level warn` to show warnings and more severe entries only. The filter applies to both text and JSON output; omitting it preserves the complete channel log tail.
 
 `channels logs --channel <name>` matches subsystem or module names rooted at `<name>`
 or `gateway/channels/<name>`, including slash-separated descendants. Similar names

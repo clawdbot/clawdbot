@@ -259,6 +259,7 @@ export async function registerChannelsCli(
     .command("logs")
     .description("Show recent channel logs from the gateway log file")
     .option("--channel <name>", `Channel (${formatCliChannelOptions(["all"])}; default: all)`)
+    .option("--level <level>", "Minimum log level (fatal, error, warn, info, debug, trace)")
     .option("--lines <n>", "Number of lines (default: 200)", "200")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {

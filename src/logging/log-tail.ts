@@ -206,7 +206,7 @@ export async function readConfiguredParsedLogTail(params?: {
   cursor?: number;
   limit?: number;
   maxBytes?: number;
-  filter?: (line: Pick<ParsedLogLine, "subsystem" | "module" | "plugin">) => boolean;
+  filter?: (line: Pick<ParsedLogLine, "level" | "subsystem" | "module" | "plugin">) => boolean;
 }): Promise<ParsedLogTailPayload> {
   const tail = await readConfiguredLogTail(params, (raw) => {
     const parsed = parseLogLine(raw);

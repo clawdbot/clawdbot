@@ -36,12 +36,13 @@ function logLine(params: {
   module?: string;
   plugin?: string;
   message: string;
+  level?: string;
 }) {
   return `${JSON.stringify({
     time: "2026-04-25T12:00:00.000Z",
     0: params.message,
     _meta: {
-      logLevelName: "INFO",
+      logLevelName: params.level ?? "INFO",
       name: JSON.stringify({
         ...(params.subsystem ? { subsystem: params.subsystem } : {}),
         ...(params.module ? { module: params.module } : {}),
@@ -337,6 +338,56 @@ describe("channelsLogsCommand", () => {
   it("rejects partial line limits", async () => {
     await expect(channelsLogsCommand({ lines: "2x", json: true }, runtime)).rejects.toThrow(
       "--lines must be a positive integer.",
+    );
+  });
+
+  it("filters text and JSON output by minimum log level", async () => {
+    await fs.writeFile(
+      logPath,
+      [
+        logLine({ module: "gateway/channels/slack/send", message: "debug", level: "DEBUG" }),
+        logLine({ module: "gateway/channels/slack/send", message: "warn", level: "WARN" }),
+        logLine({ module: "gateway/channels/slack/send", message: "error", level: "ERROR" }),
+        logLine({ module: "gateway/channels/slack/send", message: "fatal", level: "FATAL" }),
+      ].join("\n"),
+    );
+
+    await channelsLogsCommand({ channel: "slack", level: "warn", json: true }, runtime);
+
+    expect(readJsonPayload().lines.map((line) => line.message)).toEqual(["warn", "error", "fatal"]);
+
+    runtime.log.mockClear();
+    await channelsLogsCommand({ channel: "slack", level: "warn" }, runtime);
+
+    expect(runtime.log.mock.calls.flat().join("\n")).toContain("warn");
+    expect(runtime.log.mock.calls.flat().join("\n")).toContain("error");
+    expect(runtime.log.mock.calls.flat().join("\n")).toContain("fatal");
+    expect(runtime.log.mock.calls.flat().join("\n")).not.toContain("debug");
+  });
+
+  it("filters by minimum level before applying the line limit", async () => {
+    await fs.writeFile(
+      logPath,
+      [
+        logLine({ module: "gateway/channels/slack/send", message: "warn", level: "WARN" }),
+        ...Array.from({ length: 4 }, (_, index) =>
+          logLine({
+            module: "gateway/channels/slack/send",
+            message: `info-${index}`,
+            level: "INFO",
+          }),
+        ),
+      ].join("\n"),
+    );
+
+    await channelsLogsCommand({ channel: "slack", level: "warn", lines: 1, json: true }, runtime);
+
+    expect(readJsonPayload().lines.map((line) => line.message)).toEqual(["warn"]);
+  });
+
+  it("rejects unsupported log levels", async () => {
+    await expect(channelsLogsCommand({ level: "verbose", json: true }, runtime)).rejects.toThrow(
+      "--level must be one of: fatal, error, warn, info, debug, trace.",
     );
   });
 });
