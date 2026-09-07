@@ -137,6 +137,12 @@ suite.define(() => {
       const response = await page.goto(`${suite.server.baseUrl}chat`);
       expect(response?.status()).toBe(200);
       await expect.poll(() => page.locator(".chat-group").count()).toBe(historyMessageCount);
+      expect(
+        await page.locator(".chat-main").evaluate((element) => {
+          const style = getComputedStyle(element);
+          return `${style.transitionProperty} ${style.transitionDuration}`;
+        }),
+      ).toBe("flex 0.18s");
       await page.locator(".chat-thread").evaluate((element) => {
         element.scrollTop = Math.max(0, element.scrollHeight / 2);
       });
