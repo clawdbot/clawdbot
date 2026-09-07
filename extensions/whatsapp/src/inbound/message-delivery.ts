@@ -36,6 +36,7 @@ import {
   type WhatsAppNormalizedInboundMessage,
 } from "./message-normalization.js";
 import { addWhatsAppOutboundMentionsToContent } from "./outbound-mentions.js";
+import { createWhatsAppReadReceiptDispatcher } from "./read-receipt-dispatch.js";
 import { normalizeWhatsAppSendResult } from "./send-result.js";
 import type { WhatsAppAttachedSocketSession } from "./socket-session.js";
 import type { WebInboundCallbackMessage } from "./types.js";
@@ -151,19 +152,12 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
         }
       : undefined;
 
-  const maybeMarkInboundAsRead = async (target: WhatsAppReadReceiptTarget | undefined) => {
-    if (!target || options.sendReadReceipts === false) {
-      return;
-    }
-    const { id, remoteJid, participant } = target;
-    try {
-      await socketSession.markRead(target);
-      const suffix = participant ? ` (participant ${participant})` : "";
-      logWhatsAppVerbose(options.verbose, `Marked message ${id} as read for ${remoteJid}${suffix}`);
-    } catch (err) {
-      logWhatsAppVerbose(options.verbose, `Failed to mark message ${id} read: ${String(err)}`);
-    }
-  };
+  const readReceiptDispatcher = createWhatsAppReadReceiptDispatcher({
+    markRead: (target) => socketSession.markRead(target),
+    sendReadReceipts: options.sendReadReceipts !== false,
+    logVerbose: (message) => logWhatsAppVerbose(options.verbose, message),
+    logger: inboundLogger,
+  });
 
   const maybeLogSkippedSelfChatReadReceipt = (
     inbound: WhatsAppNormalizedInboundMessage,
@@ -183,7 +177,26 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       maybeLogSkippedSelfChatReadReceipt(inbound, target);
       return;
     }
-    await maybeMarkInboundAsRead(target);
+    await readReceiptDispatcher.maybeMarkInboundAsRead(target);
+  };
+
+  // Fire-and-track dispatch: the sequential upsert loop must never wait on a
+  // read-receipt acknowledgement. markRead is bounded by the socket operation
+  // timeout (default 60s), so one stalled receipt would otherwise delay the
+  // admission of every later message in the same upsert. The dispatch is
+  // awaited nowhere; the dedupe reservation and bounded pending queue live in
+  // the read-receipt dispatcher, and errors are logged here so no rejection
+  // escapes unhandled.
+  const dispatchReadReceipt = (
+    inbound: WhatsAppNormalizedInboundMessage,
+    target: WhatsAppReadReceiptTarget | undefined,
+  ) => {
+    maybeMarkNonSelfChatReadReceipt(inbound, target).catch((error: unknown) => {
+      inboundLogger.warn(
+        { error: formatError(error) },
+        "failed dispatching WhatsApp receive-time read receipt",
+      );
+    });
   };
   const messageDebouncer = createWhatsAppInboundMessageDebouncer({
     resolveDebounceMs: () =>
@@ -194,7 +207,6 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       }),
     onMessage: options.onMessage,
     shouldDebounce: options.shouldDebounce,
-    markRead: maybeMarkInboundAsRead,
     onPendingWorkChanged: publishPendingWorkState,
     onError: (error) => {
       inboundLogger.error({ error: String(error) }, "failed handling inbound web message");
@@ -229,7 +241,6 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     inbound: WhatsAppNormalizedInboundMessage,
     enriched: WhatsAppEnrichedInboundMessage,
     durable: {
-      readReceipt?: WhatsAppReadReceiptTarget;
       receiveOrder?: number;
       turnAdoptionLifecycle?: WhatsAppIngressLifecycle;
     },
@@ -384,7 +395,6 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
         : undefined,
       group,
       turnAdoptionLifecycle: durable.turnAdoptionLifecycle,
-      readReceipt: durable.readReceipt,
       receiveOrder: durable.receiveOrder,
     };
     if (inboundMessage.event.id) {
@@ -447,10 +457,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     ) {
       return "completed";
     }
-    const readReceipt = buildReadReceiptTarget(inbound);
-    const deliveryReadReceipt = inbound.access.isSelfChat ? undefined : readReceipt;
     if (context.skipStaleAppend === true) {
-      await maybeMarkNonSelfChatReadReceipt(inbound, readReceipt);
       return "completed";
     }
 
@@ -461,13 +468,20 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       logVerbose: (message) => logWhatsAppVerbose(options.verbose, message),
     });
     if (!enriched) {
-      await maybeMarkNonSelfChatReadReceipt(inbound, deliveryReadReceipt);
       return "completed";
+    }
+
+    // Cold durable replay (restart recovery) bypasses handleMessagesUpsert,
+    // where every live receipt dispatch lives. Rows the live path admitted
+    // carry a preparation entry, so only rows without one still need the
+    // receive-time retry here; the dispatcher dedupes against any receipt
+    // the live path already sent.
+    if (preparation === undefined) {
+      dispatchReadReceipt(inbound, buildReadReceiptTarget(inbound));
     }
 
     recordAcceptedInboundActivity(options.accountId);
     await enqueueInboundMessage(msg, inbound, enriched, {
-      readReceipt: deliveryReadReceipt,
       receiveOrder: context.receiveOrder ?? context.receivedAt,
       turnAdoptionLifecycle: lifecycle,
     });
@@ -577,25 +591,55 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
         finishPreparation(undefined);
         const inbound = await normalizeInboundMessage(msg);
         if (inbound) {
-          await maybeMarkNonSelfChatReadReceipt(inbound, buildReadReceiptTarget(inbound));
+          dispatchReadReceipt(inbound, buildReadReceiptTarget(inbound));
         }
       } else if (result.kind === "durable" && result.queueResult.kind === "accepted") {
         if (skipRecentOutboundEcho) {
           finishPreparation(null);
         } else {
+          let acceptedInbound: PreparedInbound | null | undefined;
           try {
-            finishPreparation(await normalizeInboundMessage(msg), true);
+            acceptedInbound = await normalizeInboundMessage(msg);
+            // Publish the prepared identity first so the durable drain never
+            // waits on a stalled receipt ack, then fire the read receipt.
+            finishPreparation(acceptedInbound, true);
           } catch (error) {
             finishPreparation(undefined);
+            acceptedInbound = undefined;
             inboundLogger.warn(
               { error: formatError(error) },
               "failed preparing WhatsApp inbound identity; durable drain will normalize again",
             );
           }
+          if (acceptedInbound) {
+            // Read receipts (blue ticks) fire at receive time: the sender sees
+            // the message was read as soon as the gateway ingests it, before
+            // the agent turn starts (issue #128875). Fire-and-track only: a
+            // stalled acknowledgement must not delay the admission of later
+            // messages in the same upsert.
+            dispatchReadReceipt(acceptedInbound, buildReadReceiptTarget(acceptedInbound));
+          }
         }
       } else {
         // Pending redelivery leaves the first accepted delivery's preparation in place.
         finishPreparation(undefined);
+        // An active durable duplicate (row still pending or claimed) can carry
+        // a receive-time receipt whose first attempt failed: the admission
+        // verdict has no accepted branch for it, so a replay would otherwise
+        // never re-reach the dispatcher and the blue tick would stay lost.
+        // The dispatcher dedupes across sent/in-flight/pending, so completed
+        // or in-flight acknowledgements stay no-ops, and the agent turn is
+        // never redelivered here (turn dispatch is owned by the ingress drain).
+        if (
+          !skipRecentOutboundEcho &&
+          result.kind === "durable" &&
+          (result.queueResult.kind === "pending" || result.queueResult.kind === "claimed")
+        ) {
+          const inbound = await normalizeInboundMessage(msg);
+          if (inbound) {
+            dispatchReadReceipt(inbound, buildReadReceiptTarget(inbound));
+          }
+        }
       }
     }
   };

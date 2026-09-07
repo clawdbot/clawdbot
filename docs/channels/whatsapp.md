@@ -403,6 +403,8 @@ A liveness probe sent to your own number can therefore become agent input with `
 
     Per-account override: `channels.whatsapp.accounts.<id>.sendReadReceipts`. Self-chat safeguards skip read receipts even when globally enabled (see [Self-chat behavior](/channels/whatsapp#personal-number-and-self-chat-behavior)).
 
+    Read receipts fire as soon as the gateway ingests the message — before the agent turn starts — so senders see blue ticks within seconds instead of only once a reply arrives.
+
   </Accordion>
 </AccordionGroup>
 

@@ -1,5 +1,8 @@
 // WhatsApp monitor inbox behavior split by ownership.
+import { createHash } from "node:crypto";
+import type { WAMessage } from "baileys";
 import { describe, expect, it, vi } from "vitest";
+import { serializeWhatsAppDurableInboundMessage } from "./inbound/durable-payload.js";
 import { createWhatsAppDurableInboundQueue } from "./inbound/durable-receive.js";
 import { resolveWhatsAppIngressLifecycle } from "./inbound/ingress-lifecycle.js";
 import type { WebInboundMessage } from "./inbound/types.js";
@@ -79,17 +82,22 @@ describe("web monitor inbox delivery and dedupe", () => {
     await listener.close();
   });
 
-  it("delivery coordinator delays read receipts until inbound handlers complete", async () => {
-    let finishMessage: (() => void) | undefined;
+  it("delivery coordinator sends read receipts when the message is received, not after the agent turn", async () => {
+    let releaseHandler: (() => void) | undefined;
     const handlerGate = new Promise<void>((resolve) => {
-      finishMessage = resolve;
+      releaseHandler = resolve;
+    });
+    let markHandlerFinished: (() => void) | undefined;
+    const handlerFinished = new Promise<void>((resolve) => {
+      markHandlerFinished = resolve;
     });
     const onMessage = vi.fn(async () => {
       await handlerGate;
+      markHandlerFinished?.();
     });
 
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
-    const messageId = nextMessageId("delayed-read");
+    const messageId = nextMessageId("immediate-read");
 
     sock.ev.emit(
       "messages.upsert",
@@ -103,18 +111,23 @@ describe("web monitor inbox delivery and dedupe", () => {
     );
     await waitForMessageCalls(onMessage, 1);
 
-    expect(sock.readMessages).not.toHaveBeenCalled();
-    finishMessage?.();
-    await vi.waitFor(() => {
-      expect(sock.readMessages).toHaveBeenCalledWith([
-        {
-          remoteJid: "999@s.whatsapp.net",
-          id: messageId,
-          participant: undefined,
-          fromMe: false,
-        },
-      ]);
-    });
+    // The read receipt (blue tick) must already be on the wire while the
+    // agent turn is still running — the handler gate is still closed.
+    expect(sock.readMessages).toHaveBeenCalledWith([
+      {
+        remoteJid: "999@s.whatsapp.net",
+        id: messageId,
+        participant: undefined,
+        fromMe: false,
+      },
+    ]);
+
+    releaseHandler?.();
+    await handlerFinished;
+    await settleInboundWork();
+
+    // Completing the turn must not send a second receipt.
+    expect(sock.readMessages).toHaveBeenCalledTimes(1);
 
     await listener.close();
   });
@@ -213,14 +226,19 @@ describe("web monitor inbox delivery and dedupe", () => {
     sock.ev.emit("messages.upsert", upsert);
     await settleInboundWork();
     expect(onMessage).toHaveBeenCalledTimes(1);
+    // The pending redelivery must not re-send the receive-time receipt.
+    expect(sock.readMessages).toHaveBeenCalledTimes(1);
 
     finishMessage?.();
     await listener.close();
   });
 
-  it("delivery coordinator does not redispatch a completed transport-key duplicate", async () => {
+  it("delivery coordinator does not re-send the read receipt for a completed transport-key duplicate", async () => {
     const onMessage = vi.fn(async () => undefined);
-    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const pendingWork = vi.fn<(count: number, at?: number) => void>();
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      onPendingWorkChanged: pendingWork,
+    });
     const upsert = buildNotifyMessageUpsert({
       id: nextMessageId("durable-completed"),
       remoteJid: "999@s.whatsapp.net",
@@ -232,12 +250,403 @@ describe("web monitor inbox delivery and dedupe", () => {
     sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 1);
     await vi.waitFor(() => expect(sock.readMessages).toHaveBeenCalledTimes(1));
-    sock.readMessages.mockClear();
+
+    // Redelivery of the completed transport key must not send a second
+    // receipt: the receive-time receipt already fired on acceptance.
+    const settledBefore = pendingWork.mock.calls.length;
+    sock.ev.emit("messages.upsert", upsert);
+    await vi.waitFor(() => {
+      expect(pendingWork.mock.calls.length).toBeGreaterThan(settledBefore);
+      expect(pendingWork.mock.calls.at(-1)?.[0]).toBe(0);
+    });
+
+    expect(sock.readMessages).toHaveBeenCalledTimes(1);
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    await listener.close();
+  });
+
+  it("delivery coordinator retries a rejected read receipt when the message is redelivered", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const messageId = nextMessageId("receipt-rejection-retry");
+    const upsert = buildNotifyMessageUpsert({
+      id: messageId,
+      remoteJid: "999@s.whatsapp.net",
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+
+    // The receive-time acknowledgement fails on the socket; the failed
+    // attempt must release its reservation instead of claiming the receipt
+    // permanently.
+    sock.readMessages.mockRejectedValueOnce(new Error("connection closed"));
 
     sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
     await vi.waitFor(() => expect(sock.readMessages).toHaveBeenCalledTimes(1));
 
+    // A same-process redelivery of the completed transport key retries the
+    // missing receipt.
+    sock.ev.emit("messages.upsert", upsert);
+    await vi.waitFor(() => expect(sock.readMessages).toHaveBeenCalledTimes(2));
+
+    // The message itself stays deduped; only the receipt is retried.
     expect(onMessage).toHaveBeenCalledTimes(1);
+    await listener.close();
+  });
+
+  it("delivery coordinator retries a timed-out read receipt when the message is redelivered", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      socketTiming: {
+        keepAliveIntervalMs: 25_000,
+        connectTimeoutMs: 60_000,
+        defaultQueryTimeoutMs: 100,
+      },
+    });
+    const messageId = nextMessageId("receipt-timeout-retry");
+    const upsert = buildNotifyMessageUpsert({
+      id: messageId,
+      remoteJid: "999@s.whatsapp.net",
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+
+    // The receive-time acknowledgement stalls on the socket and trips the
+    // owned operation timeout.
+    sock.readMessages.mockImplementationOnce(() => new Promise<never>(() => {}));
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
+    await vi.waitFor(() => expect(sock.readMessages).toHaveBeenCalledTimes(1));
+    // Let the operation timeout fire and release the in-flight reservation.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 300);
+    });
+
+    // A same-process redelivery of the completed transport key retries the
+    // missing receipt.
+    sock.ev.emit("messages.upsert", upsert);
+    await vi.waitFor(() => expect(sock.readMessages).toHaveBeenCalledTimes(2));
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    await listener.close();
+  });
+
+  it("delivery coordinator does not block later message admission on a stalled read receipt", async () => {
+    let releaseFirstReceipt: (() => void) | undefined;
+    let firstReceiptSettled = false;
+    const firstReceiptGate = new Promise<void>((resolve) => {
+      releaseFirstReceipt = resolve;
+    });
+    void firstReceiptGate.then(() => {
+      firstReceiptSettled = true;
+    });
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 20,
+      // The receive-time receipt for the first message stalls on the socket.
+      // It is bounded by the socket operation timeout, but the admission loop
+      // must not wait for it: the second message in the same upsert has to be
+      // admitted while the first receipt is still in flight.
+      socketTiming: {
+        keepAliveIntervalMs: 25_000,
+        connectTimeoutMs: 60_000,
+        defaultQueryTimeoutMs: 60_000,
+      },
+    });
+    const firstId = nextMessageId("receipt-stall-1");
+    const secondId = nextMessageId("receipt-stall-2");
+    const first = buildNotifyMessageUpsert({
+      id: firstId,
+      remoteJid: "999@s.whatsapp.net",
+      text: "first",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+    const second = buildNotifyMessageUpsert({
+      id: secondId,
+      remoteJid: "999@s.whatsapp.net",
+      text: "second",
+      timestamp: 1_700_000_001,
+      pushName: "Tester",
+    });
+
+    // Only the first receipt stalls; later receipts resolve normally.
+    sock.readMessages.mockImplementationOnce(() => firstReceiptGate);
+
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [...first.messages, ...second.messages],
+    });
+
+    // Both messages are admitted and delivered while the first receipt is
+    // still stalled on the socket.
+    await waitForMessageCalls(onMessage, 2);
+    expect(inboundMessage(onMessage, 0).payload.body).toBe("first");
+    expect(inboundMessage(onMessage, 1).payload.body).toBe("second");
+    expect(sock.readMessages).toHaveBeenCalledWith([
+      {
+        remoteJid: "999@s.whatsapp.net",
+        id: firstId,
+        participant: undefined,
+        fromMe: false,
+      },
+    ]);
+    expect(firstReceiptSettled).toBe(false);
+
+    // Release the stalled receipt; each message must still have exactly one
+    // acknowledgement (no double-fire).
+    releaseFirstReceipt?.();
+    await vi.waitFor(() => expect(firstReceiptSettled).toBe(true));
+    await vi.waitFor(() => expect(sock.readMessages).toHaveBeenCalledTimes(2));
+    expect(sock.readMessages).toHaveBeenNthCalledWith(1, [
+      {
+        remoteJid: "999@s.whatsapp.net",
+        id: firstId,
+        participant: undefined,
+        fromMe: false,
+      },
+    ]);
+    expect(sock.readMessages).toHaveBeenNthCalledWith(2, [
+      {
+        remoteJid: "999@s.whatsapp.net",
+        id: secondId,
+        participant: undefined,
+        fromMe: false,
+      },
+    ]);
+
+    await listener.close();
+  });
+
+  it("delivery coordinator bounds concurrent read-receipt dispatches and drains queued receipts when the socket recovers", async () => {
+    // Mirrors the production READ_RECEIPT_INFLIGHT_MAX /
+    // READ_RECEIPT_PENDING_MAX bounds in inbound/message-delivery.ts. Each
+    // distinct inbound message normally starts one socket readMessages
+    // operation; when the socket is stalled (markRead is bounded by the
+    // socket operation timeout, default 60s), a burst of distinct messages
+    // must not start unbounded socket work, and receipts that arrive while
+    // the in-flight window is full must be retained (queued) and drained
+    // once the socket recovers — never silently dropped — while admission
+    // stays unblocked and every message is acknowledged exactly once.
+    const INFLIGHT_MAX = 32;
+    const TOTAL = INFLIGHT_MAX + 3;
+    const stalledAcks: Array<() => void> = [];
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 20,
+      socketTiming: {
+        keepAliveIntervalMs: 25_000,
+        connectTimeoutMs: 60_000,
+        defaultQueryTimeoutMs: 60_000,
+      },
+      verbose: true,
+    });
+
+    const messages = Array.from(
+      { length: TOTAL },
+      (_, index) =>
+        buildNotifyMessageUpsert({
+          id: nextMessageId(`receipt-saturation-${index}`),
+          remoteJid: "999@s.whatsapp.net",
+          text: `msg-${index}`,
+          timestamp: 1_700_000_000 + index,
+          pushName: "Tester",
+        }).messages[0],
+    );
+
+    // Every acknowledgement stalls on the socket, so the in-flight window
+    // fills up and stays full.
+    sock.readMessages.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          stalledAcks.push(resolve);
+        }),
+    );
+
+    sock.ev.emit("messages.upsert", { type: "notify", messages });
+
+    // Admission is never blocked by receipt saturation: every message is
+    // delivered even while the acknowledgement window is full.
+    await waitForMessageCalls(onMessage, TOTAL);
+    // Socket work is bounded to the in-flight window size while the socket
+    // is stalled; the excess receipts are queued, not dropped.
+    await vi.waitFor(() => expect(sock.readMessages).toHaveBeenCalledTimes(INFLIGHT_MAX));
+    expect(onMessage).toHaveBeenCalledTimes(TOTAL);
+
+    // Recover the socket and release the stalled acknowledgements; the
+    // queued receipts must drain automatically as the window frees up.
+    sock.readMessages.mockResolvedValue(undefined);
+    for (const release of stalledAcks.splice(0)) {
+      release();
+    }
+    await vi.waitFor(() => expect(sock.readMessages).toHaveBeenCalledTimes(TOTAL), {
+      timeout: 5_000,
+    });
+    await settleInboundWork();
+
+    // Every message is acknowledged exactly once: no receipt was silently
+    // dropped during the stall and none double-fires after the drain.
+    expect(sock.readMessages).toHaveBeenCalledTimes(TOTAL);
+
+    // Redelivering an already-acknowledged message must not re-send its
+    // receipt; the delivery itself stays deduped.
+    sock.ev.emit("messages.upsert", { type: "notify", messages: [messages[INFLIGHT_MAX]] });
+    await settleInboundWork();
+    expect(sock.readMessages).toHaveBeenCalledTimes(TOTAL);
+    expect(onMessage).toHaveBeenCalledTimes(TOTAL);
+
+    await listener.close();
+  });
+
+  it("delivery coordinator bounds the pending receipt queue and keeps overflow retryable", async () => {
+    // Beyond the in-flight window AND the bounded pending queue, a receipt
+    // target can no longer be retained: it is dropped with a warn, but the
+    // message itself is still admitted, and a redelivery retries the receipt
+    // once capacity frees up — the loss is bounded and observable, never a
+    // silent unbounded swallow.
+    const INFLIGHT_MAX = 32;
+    const PENDING_MAX = 128;
+    const TOTAL = INFLIGHT_MAX + PENDING_MAX + 5;
+    const RETAINED = INFLIGHT_MAX + PENDING_MAX;
+    const stalledAcks: Array<() => void> = [];
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      debounceMs: 20,
+      socketTiming: {
+        keepAliveIntervalMs: 25_000,
+        connectTimeoutMs: 60_000,
+        defaultQueryTimeoutMs: 60_000,
+      },
+      verbose: true,
+    });
+
+    const messages = Array.from(
+      { length: TOTAL },
+      (_, index) =>
+        buildNotifyMessageUpsert({
+          id: nextMessageId(`receipt-queue-overflow-${index}`),
+          remoteJid: "999@s.whatsapp.net",
+          text: `msg-${index}`,
+          timestamp: 1_700_000_000 + index,
+          pushName: "Tester",
+        }).messages[0],
+    );
+
+    sock.readMessages.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          stalledAcks.push(resolve);
+        }),
+    );
+
+    sock.ev.emit("messages.upsert", { type: "notify", messages });
+
+    // Admission is never blocked: every message is delivered even when both
+    // receipt windows are full. (Custom timeout: 165 messages through the
+    // debounced admission pipeline exceed the shared helper's fixed 5s
+    // window.)
+    await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(TOTAL), {
+      timeout: 20_000,
+    });
+    expect(sock.readMessages).toHaveBeenCalledTimes(INFLIGHT_MAX);
+
+    // Recover the socket: the in-flight window drains, then the bounded
+    // pending queue drains completely; only the beyond-bound overflow is
+    // dropped.
+    sock.readMessages.mockResolvedValue(undefined);
+    for (const release of stalledAcks.splice(0)) {
+      release();
+    }
+    await vi.waitFor(() => expect(sock.readMessages).toHaveBeenCalledTimes(RETAINED), {
+      timeout: 5_000,
+    });
+    await settleInboundWork();
+    expect(sock.readMessages).toHaveBeenCalledTimes(RETAINED);
+
+    // A dropped receipt was never recorded as sent: redelivering one of the
+    // overflow messages retries its acknowledgement. The delivery itself
+    // stays deduped: the agent still sees each message exactly once.
+    const droppedIndex = RETAINED;
+    sock.ev.emit("messages.upsert", { type: "notify", messages: [messages[droppedIndex]] });
+    await vi.waitFor(() => expect(sock.readMessages).toHaveBeenCalledTimes(RETAINED + 1), {
+      timeout: 5_000,
+    });
+    expect(onMessage).toHaveBeenCalledTimes(TOTAL);
+
+    await listener.close();
+  });
+
+  it("delivery coordinator acknowledges a completed duplicate replayed after restart once", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const first = await startInboxMonitor(onMessage as InboxOnMessage);
+    const sock = first.sock;
+    const upsert = buildNotifyMessageUpsert({
+      id: nextMessageId("durable-replay"),
+      remoteJid: "999@s.whatsapp.net",
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
+    await vi.waitFor(() => expect(sock.readMessages).toHaveBeenCalledTimes(1));
+    await first.listener.close();
+
+    // A fresh coordinator (simulated process restart) has no in-memory receipt
+    // memo; the completed replay redelivery still acknowledges the message once.
+    const replayedOnMessage = vi.fn(async () => undefined);
+    const replay = await startInboxMonitor(replayedOnMessage as InboxOnMessage);
+    replay.sock.ev.emit("messages.upsert", upsert);
+    await vi.waitFor(() => expect(sock.readMessages).toHaveBeenCalledTimes(2));
+    await settleInboundWork();
+    expect(replayedOnMessage).not.toHaveBeenCalled();
+    await replay.listener.close();
+  });
+
+  it("delivery coordinator sends a read receipt for a cold durable replay drained at startup", async () => {
+    // A stop after durable admission can leave a persisted row for the next
+    // coordinator. Seed that row directly, then start a fresh coordinator:
+    // its startup drain must dispatch the receive-time receipt even though no
+    // new socket upsert ever arrives.
+    const messageId = nextMessageId("cold-replay");
+    const remoteJid = "999@s.whatsapp.net";
+    const upsert = buildNotifyMessageUpsert({
+      id: messageId,
+      remoteJid,
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+    const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
+    await queue.enqueue(
+      createHash("sha256").update(`${remoteJid}\n${messageId}`).digest("hex"),
+      {
+        message: serializeWhatsAppDurableInboundMessage(upsert.messages[0] as unknown as WAMessage),
+        upsertType: "notify",
+        receivedAt: Date.now(),
+      },
+      { laneKey: remoteJid },
+    );
+
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      durableInboundQueue: queue,
+    });
+    await waitForMessageCalls(onMessage, 1);
+    await vi.waitFor(() => expect(sock.readMessages).toHaveBeenCalledTimes(1));
+    expect(sock.readMessages).toHaveBeenCalledWith([
+      {
+        remoteJid,
+        id: messageId,
+        participant: undefined,
+        fromMe: false,
+      },
+    ]);
     await listener.close();
   });
 
@@ -630,6 +1039,12 @@ describe("web monitor inbox delivery and dedupe", () => {
       expect(sock.readMessages).toHaveBeenCalledTimes(1);
     });
 
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 2);
+    await settleInboundWork();
+    // Redelivery of the same message must not re-send the receipt.
+    expect(sock.readMessages).toHaveBeenCalledTimes(1);
+
     await listener.close();
   });
 
@@ -658,6 +1073,12 @@ describe("web monitor inbox delivery and dedupe", () => {
     await vi.waitFor(() => {
       expect(sock.readMessages).toHaveBeenCalledTimes(1);
     });
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 2);
+    await settleInboundWork();
+    // Redelivery of the same message must not re-send the receipt.
+    expect(sock.readMessages).toHaveBeenCalledTimes(1);
 
     await listener.close();
   });
