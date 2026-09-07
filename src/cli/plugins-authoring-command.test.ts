@@ -671,6 +671,41 @@ describe("plugin authoring commands", () => {
     }
   });
 
+  it("builds and checks metadata through a symlink project root", async () => {
+    const tmpDir = tempDirs.make("openclaw-plugin-symlink-root-");
+    const projectDir = path.join(tmpDir, "project");
+    fs.mkdirSync(projectDir);
+    writeSourceToolPluginProject({
+      tmpDir: projectDir,
+      packageName: "openclaw-plugin-symlink-root",
+      pluginId: "symlink-root",
+      toolName: "symlink_root_echo",
+    });
+    const linkedRoot = path.join(tmpDir, "linked-project");
+    fs.symlinkSync(projectDir, linkedRoot, process.platform === "win32" ? "junction" : "dir");
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const opts = { root: linkedRoot, entry: path.join(linkedRoot, "src", "index.ts") };
+
+    try {
+      await runPluginsBuildCommand(opts);
+      expect(
+        JSON.parse(fs.readFileSync(path.join(projectDir, "package.json"), "utf8")),
+      ).toMatchObject({
+        openclaw: { extensions: ["./src/index.ts"] },
+      });
+      expect(
+        JSON.parse(fs.readFileSync(path.join(projectDir, "openclaw.plugin.json"), "utf8")),
+      ).toMatchObject({
+        id: "symlink-root",
+        contracts: { tools: ["symlink_root_echo"] },
+      });
+      await runPluginsBuildCommand({ ...opts, check: true });
+      expect(log).toHaveBeenCalledWith("Plugin metadata is up to date.");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it.each(["write", "rename"] as const)(
     "keeps the project intact when package publication fails during %s",
     async (failure) => {

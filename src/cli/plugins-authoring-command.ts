@@ -329,15 +329,16 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
     return;
   }
 
+  const realRootDir = fs.realpathSync(rootDir);
   await replaceFileAtomic({
-    filePath: packagePath,
+    filePath: path.join(realRootDir, "package.json"),
     content: `${JSON.stringify(nextPackageManifest, null, 2)}\n`,
     preserveExistingMode: true,
-    dirMode: (await fs.promises.stat(rootDir)).mode & 0o7777,
+    dirMode: (await fs.promises.stat(realRootDir)).mode & 0o7777,
     syncTempFile: true,
     syncParentDir: true,
   });
-  await writePluginBuildManifest(rootDir, manifest);
+  await writePluginBuildManifest(realRootDir, manifest);
   defaultRuntime.log(`Wrote ${formatOutputPath(manifestPath, PLUGIN_MANIFEST_FILENAME)}`);
   defaultRuntime.log(`Updated ${formatOutputPath(packagePath, "package.json")}`);
 }
