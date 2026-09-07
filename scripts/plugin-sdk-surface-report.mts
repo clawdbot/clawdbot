@@ -202,7 +202,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: restore the shipped read-only conversation-binding inspection facade.
       // +1: canonical node CLI owners for plugin-provided node commands.
       // +3: typed feature contracts, backend registration, and native Control UI hosting.
-      152,
+      // +1: public provider-owned asynchronous embedding batch contract.
+      153,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -362,7 +363,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: add one tool policy object and retire two unused deprecated mode exports.
       // -1: one exec policy object replaces two deprecated comparator exports.
       // +1: approved bounded TAR inspection through the archive admission owner.
-      4446,
+      // +3: public provider-owned asynchronous embedding batch contract.
+      4449,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

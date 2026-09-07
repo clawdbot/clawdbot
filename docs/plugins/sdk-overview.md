@@ -179,9 +179,12 @@ is the generic embedding surface for reusable vector generation. Memory search
 consumes this generic provider surface. The older memory-specific registrar and
 manifest contract were removed after their August 2026 migration window.
 
-Memory-specific providers that still expose a runtime `batchEmbed(...)` stay on
-the existing per-file batching contract unless their runtime explicitly sets
-`sourceWideBatchEmbed: true`. That opt-in lets the memory host submit chunks from
+Embedding providers can type their asynchronous `batchEmbed(...)` capability with
+`EmbeddingProviderBatchRuntime` from
+`openclaw/plugin-sdk/embedding-provider-runtime-contract`. The public contract
+contains batch chunks and execution options, without host cache or identity metadata.
+Batches remain per-file unless the runtime sets `sourceWideBatchEmbed: true`.
+That opt-in lets the memory host submit chunks from
 multiple dirty memory files and enabled sources in one `batchEmbed(...)` call up
 to the host batch limits. Batch adapters that upload JSONL request files must
 split provider jobs before their upload-size cap as well as their request-count
