@@ -127,4 +127,20 @@ describe("readSelfTriggerMarker", () => {
     });
     expect(readSelfTriggerMarker(event, ROOM_ID)).toBeNull();
   });
+
+  it("still parses a valid marker regardless of sender (sender binding is enforced at ingress prefix, not here)", () => {
+    // readSelfTriggerMarker is a pure content check; the sender === selfUserId
+    // binding is enforced in handler-ingress-prefix.ts, which only calls this
+    // function when senderId === selfUserId. This test documents that contract:
+    // the helper itself does not (and should not) filter by sender.
+    const event = makeEvent({
+      msgtype: "m.text",
+      body: "PROJECT_REQUESTED: build the API",
+      "com.openclaw.self_trigger": VALID_MARKER,
+    });
+    event.sender = "@attacker:matrix.org";
+    // The marker is still structurally valid — but the ingress prefix will
+    // never call readSelfTriggerMarker for @attacker because senderId !== selfUserId.
+    expect(readSelfTriggerMarker(event, ROOM_ID)).not.toBeNull();
+  });
 });

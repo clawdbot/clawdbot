@@ -51,13 +51,12 @@ export async function readMatrixIngressPrefix(config: MatrixIngressPrefixConfig)
     claimInboundReplay,
   } = config;
   const selfUserId = await client.getUserId();
-  if (senderId === selfUserId) {
+  const selfTriggerMarker = senderId === selfUserId ? readSelfTriggerMarker(event, roomId) : null;
+  if (senderId === selfUserId && !selfTriggerMarker) {
     // Self-authored messages are dropped to prevent self-reply loops.
     // Exception: messages carrying a valid self-trigger marker are allowed
     // through, enabling cross-room session wake-up for multi-agent systems.
-    if (!readSelfTriggerMarker(event, roomId)) {
-      return undefined;
-    }
+    return undefined;
   }
   if (dropPreStartupMessages) {
     if (typeof eventTs === "number" && eventTs < startupMs - startupGraceMs) {
@@ -109,5 +108,5 @@ export async function readMatrixIngressPrefix(config: MatrixIngressPrefixConfig)
     senderId,
     selfUserId,
   });
-  return { content, isDirectMessage, locationPayload, selfUserId };
+  return { content, isDirectMessage, locationPayload, selfUserId, selfTriggerMarker };
 }

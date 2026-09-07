@@ -19,6 +19,7 @@ export type MatrixIngressAccessParams = {
   isDirectMessage: boolean;
   locationPayload: MatrixLocationPayload | null;
   selfUserId: string;
+  selfTriggerMarker: Record<string, unknown> | null;
   reservedHistorySlot?: ReservedHistorySlot;
 };
 
