@@ -288,51 +288,72 @@ describe("AppSidebar catalog deletion", () => {
     },
   );
 
-  it("discards an in-flight pre-delete list and immediately requests fresh rows", async () => {
-    vi.useFakeTimers();
-    const restoreDialog = installDialogPolyfill();
-    try {
-      const result = catalogList([{ threadId: "thread-1", name: "Shared session" }]);
-      const request = vi.fn().mockResolvedValue(result);
-      const sidebar = await mountWithCatalog(result, undefined, request);
-      await vi.advanceTimersByTimeAsync(50);
-      const staleList = deferred<SessionsCatalogListResult>();
-      const archive = deferred<unknown>();
-      const freshList = deferred<SessionsCatalogListResult>();
-      request.mockClear();
-      request
-        .mockReturnValueOnce(staleList.promise)
-        .mockReturnValueOnce(archive.promise)
-        .mockReturnValueOnce(freshList.promise);
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(request.mock.calls.map(([method]) => method)).toEqual(["sessions.catalog.list"]);
+  it.each(["poll", "page"])(
+    "discards a pre-delete %s response and requests fresh rows",
+    async (source) => {
+      vi.useFakeTimers();
+      const restoreDialog = installDialogPolyfill();
+      try {
+        const result = catalogList([{ threadId: "thread-1", name: "Shared session" }]);
+        if (source === "page") {
+          result.catalogs[0]!.hosts[0]!.nextCursor = "page-2";
+        }
+        const request = vi.fn().mockResolvedValue(result);
+        const sidebar = await mountWithCatalog(result, undefined, request);
+        await vi.advanceTimersByTimeAsync(50);
+        const staleList = deferred<SessionsCatalogListResult>();
+        const archive = deferred<unknown>();
+        const freshList = deferred<SessionsCatalogListResult>();
+        request.mockClear();
+        request
+          .mockReturnValueOnce(staleList.promise)
+          .mockReturnValueOnce(archive.promise)
+          .mockReturnValueOnce(freshList.promise);
+        if (source === "page") {
+          const loadMore = sidebar.querySelector<HTMLButtonElement>(
+            '[data-session-catalog-load-more="codex"]',
+          );
+          expect(loadMore).not.toBeNull();
+          loadMore!.click();
+          await vi.advanceTimersByTimeAsync(0);
+          expect(request).toHaveBeenCalledWith("sessions.catalog.list", {
+            agentId: "main",
+            catalogId: "codex",
+            hostIds: ["gateway:local"],
+            cursors: { "gateway:local": "page-2" },
+          });
+        } else {
+          await vi.advanceTimersByTimeAsync(30_000);
+        }
+        expect(request.mock.calls.map(([method]) => method)).toEqual(["sessions.catalog.list"]);
 
-      const actions = await selectCatalogDelete(sidebar);
-      answerConfirmDialog(actions, "confirm");
-      await vi.advanceTimersByTimeAsync(0);
-      expect(request.mock.calls.map(([method]) => method)).toEqual([
-        "sessions.catalog.list",
-        "sessions.catalog.archive",
-      ]);
-      archive.resolve({});
-      await vi.advanceTimersByTimeAsync(0);
-      staleList.resolve(catalogList([{ threadId: "thread-1", name: "Stale deleted session" }]));
-      await vi.advanceTimersByTimeAsync(1);
-      await sidebar.updateComplete;
-      expect(sidebar.textContent).not.toContain("Stale deleted session");
-      expect(request.mock.calls.map(([method]) => method)).toEqual([
-        "sessions.catalog.list",
-        "sessions.catalog.archive",
-        "sessions.catalog.list",
-      ]);
+        const actions = await selectCatalogDelete(sidebar);
+        answerConfirmDialog(actions, "confirm");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(request.mock.calls.map(([method]) => method)).toEqual([
+          "sessions.catalog.list",
+          "sessions.catalog.archive",
+        ]);
+        archive.resolve({});
+        await vi.advanceTimersByTimeAsync(0);
+        staleList.resolve(catalogList([{ threadId: "thread-1", name: "Stale deleted session" }]));
+        await vi.advanceTimersByTimeAsync(1);
+        await sidebar.updateComplete;
+        expect(sidebar.textContent).not.toContain("Stale deleted session");
+        expect(request.mock.calls.map(([method]) => method)).toEqual([
+          "sessions.catalog.list",
+          "sessions.catalog.archive",
+          "sessions.catalog.list",
+        ]);
 
-      freshList.resolve(catalogList([]));
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
-      expect(sidebar.querySelector('[data-session-key*="thread-1"]')).toBeNull();
-    } finally {
-      restoreDialog();
-      vi.useRealTimers();
-    }
-  });
+        freshList.resolve(catalogList([]));
+        await vi.advanceTimersByTimeAsync(0);
+        await sidebar.updateComplete;
+        expect(sidebar.querySelector('[data-session-key*="thread-1"]')).toBeNull();
+      } finally {
+        restoreDialog();
+        vi.useRealTimers();
+      }
+    },
+  );
 });

@@ -338,6 +338,9 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   invalidateSessionCatalogs(): void {
     this.sessionCatalogRevision += 1;
+    for (const { id } of this.sessionCatalogs) {
+      this.sessionCatalogRevisions.set(id, (this.sessionCatalogRevisions.get(id) ?? 0) + 1);
+    }
     requestSessionCatalogRefresh(this, true);
   }
 

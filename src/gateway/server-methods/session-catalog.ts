@@ -714,14 +714,20 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
         return;
       }
       const { catalogId: _catalogId, ...providerRequest } = request;
-      respond(
-        true,
-        await provider.archive({
-          ...providerRequest,
-          agentId: authorization.agentId,
-          allowProcessHomeFallback: authorization.allowProcessHomeFallback,
-        }),
-      );
+      const result = await provider.archive({
+        ...providerRequest,
+        agentId: authorization.agentId,
+        allowProcessHomeFallback: authorization.allowProcessHomeFallback,
+      });
+      const cache = catalogListsByConfig.get(context.getRuntimeConfig())?.entries;
+      if (cache) {
+        // Host publications can outlive the aggregate response and still contain the deleted row.
+        for (const entry of cache.values()) {
+          entry.progress.retire();
+        }
+        cache.clear();
+      }
+      respond(true, result);
     } catch (error) {
       const details = catalogError(error);
       respond(
