@@ -1,26 +1,8 @@
 import { listAgentEntries, listAgentIds } from "../agents/agent-scope-config.js";
-import type { BroadcastStrategy } from "../config/types.messages.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isAcpSessionKey, normalizeAgentId } from "../routing/session-key.js";
+import type { GroupThreadMentionFacts, ResolvedGroupThreadConfig } from "./group-thread.types.js";
 import { buildMentionRegexes, normalizeMentionText } from "./reply/mentions.js";
-
-export type ResolvedGroupThreadConfig = {
-  agents: string[];
-  unknownAgentIds: string[];
-  qualified: boolean;
-  configuredAgentCount: number;
-  mentionGating: boolean;
-  maxRounds: number;
-  maxTurns: number;
-  strategy: BroadcastStrategy;
-};
-
-export type GroupThreadMentionFacts = {
-  channel: string;
-  peerId: string;
-  group: ResolvedGroupThreadConfig;
-  mentionedAgentIds: string[];
-};
 
 function boundedCount(value: number | undefined, fallback: number, maximum: number): number {
   return Math.max(

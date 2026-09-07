@@ -6,15 +6,13 @@ import { normalizeAccountId } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import type { TurnAdoptionLifecycle } from "./get-reply-options.types.js";
-import {
-  resolveGroupThreadMentionedAgentIds,
-  type ResolvedGroupThreadConfig,
-} from "./group-thread-config.js";
+import { resolveGroupThreadMentionedAgentIds } from "./group-thread-config.js";
 import {
   withGroupThreadTurn,
   type GroupThreadParticipant,
   type GroupThreadTurn,
 } from "./group-thread-context.js";
+import type { ResolvedGroupThreadConfig } from "./group-thread.types.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "./tokens.js";
 
 export type { GroupThreadTurn } from "./group-thread-context.js";

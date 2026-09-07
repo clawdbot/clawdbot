@@ -11,7 +11,7 @@ import type { PluginHookChannelContext } from "../plugins/hook-channel-context.t
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
 import type { CommandArgs } from "./commands-args.types.js";
-import type { GroupThreadMentionFacts } from "./group-thread-config.js";
+import type { GroupThreadMentionFacts } from "./group-thread.types.js";
 import type { HistoryEntry } from "./reply/history.types.js";
 import type { ReplyThreadingPolicy } from "./types.js";
 

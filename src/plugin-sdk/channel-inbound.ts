@@ -45,8 +45,8 @@ export {
   resolveGroupThreadMentionFacts,
   isGroupThreadRouteExclusive,
   resolveGroupThreadConfig,
-  type GroupThreadMentionFacts,
 } from "../auto-reply/group-thread-config.js";
+export type { GroupThreadMentionFacts } from "../auto-reply/group-thread.types.js";
 export {
   readAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,

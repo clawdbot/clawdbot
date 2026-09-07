@@ -119,6 +119,10 @@ continuation identities, and synchronous `maxTurns` reservations. Channel
 plugins own admission facts and platform encoding; do not implement another
 participant loop in a plugin.
 
+`MsgContext.GroupThread` carries prepared participant mention facts as a data-only
+contract. Shared context types do not depend on mention matching or channel
+registries; the admission resolver owns mention matching before dispatch.
+
 A turn is one participant run started by the coordinator. Its previews,
 chunks, and message-tool sends can produce multiple physical messages. Do not
 buffer or count deliveries to enforce `maxTurns`. The group budget is
