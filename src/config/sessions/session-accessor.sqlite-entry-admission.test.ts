@@ -162,7 +162,7 @@ it.each(["sessions.json", "custom.json"])(
       entries.map(({ sessionKey }) => loadSessionEntry({ env, storePath, sessionKey })?.sessionId),
     ).toEqual(entries.map(({ entry }) => entry.sessionId));
     expect(
-      fs.readdirSync(path.dirname(storePath)).filter((filename) => filename.endsWith(".sqlite")),
+      fs.readdirSync(path.dirname(storePath)).filter((entryName) => entryName.endsWith(".sqlite")),
     ).toHaveLength(1);
   },
 );
