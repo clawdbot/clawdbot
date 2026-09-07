@@ -1,7 +1,9 @@
+import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import {
   buildChannelInboundEventContext,
   createChannelInboundEnvelopeBuilder,
   recordChannelBotPairLoopAndCheckSuppression,
+  toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createChannelMessageReplyPipeline,
@@ -30,6 +32,8 @@ import type {
 
 const CHANNEL_ID = "clickclack" as const;
 const CLICKCLACK_MESSAGE_ID_PATTERN = /^msg_[0-9a-hjkmnp-tv-z]{26}$/u;
+const CLICKCLACK_MAX_UPLOAD_BYTES = 64 * 1024 * 1024;
+const CLICKCLACK_UPLOAD_READ_IDLE_TIMEOUT_MS = 30_000;
 
 function hasClickClackReplyMedia(payload: {
   mediaUrl?: string;
@@ -43,6 +47,63 @@ function hasClickClackReplyMedia(payload: {
 
 function resolveClickClackAgentRunId(messageId: string): string | undefined {
   return CLICKCLACK_MESSAGE_ID_PATTERN.test(messageId) ? `${CHANNEL_ID}:${messageId}` : undefined;
+}
+
+async function stageClickClackInboundMedia(params: {
+  account: ResolvedClickClackAccount;
+  cfg: CoreConfig;
+  message: ClickClackMessage;
+  correlationId?: string;
+  abortSignal?: AbortSignal;
+}) {
+  const attachments = params.message.attachments ?? [];
+  if (attachments.length === 0) {
+    return [];
+  }
+  const runtime = getClickClackRuntime();
+  const client = createClickClackClient({
+    baseUrl: params.account.apiEndpoint,
+    token: params.account.token,
+    correlationId: params.correlationId,
+  });
+  const maxBytes = Math.min(
+    resolveChannelMediaMaxBytes({
+      cfg: params.cfg,
+      accountId: params.account.accountId,
+      resolveChannelLimitMb: () => params.account.config.mediaMaxMb,
+    }) ?? CLICKCLACK_MAX_UPLOAD_BYTES,
+    CLICKCLACK_MAX_UPLOAD_BYTES,
+  );
+  const staged: Array<{ path: string; contentType: string; messageId: string }> = [];
+  for (const attachment of attachments) {
+    if (params.abortSignal?.aborted) {
+      throw params.abortSignal.reason ?? new Error("ClickClack attachment staging aborted");
+    }
+    if (attachment.byte_size > maxBytes) {
+      throw new Error(`ClickClack attachment ${attachment.id} exceeds the configured media limit`);
+    }
+    const sourceUrl = `${params.account.apiEndpoint}/api/uploads/${encodeURIComponent(attachment.id)}`;
+    const saved = await client.consumeUpload(
+      attachment.id,
+      (response) =>
+        runtime.channel.media.saveResponseMedia(response, {
+          sourceUrl,
+          filePathHint: attachment.filename,
+          originalFilename: attachment.filename,
+          fallbackContentType: attachment.content_type,
+          maxBytes,
+          readIdleTimeoutMs: CLICKCLACK_UPLOAD_READ_IDLE_TIMEOUT_MS,
+          subdir: "inbound",
+        }),
+      params.abortSignal,
+    );
+    staged.push({
+      path: saved.path,
+      contentType: saved.contentType ?? attachment.content_type,
+      messageId: params.message.id,
+    });
+  }
+  return toInboundMediaFacts(staged);
 }
 
 async function dispatchModelReply(params: {
@@ -113,6 +174,7 @@ export async function handleClickClackInbound(params: {
   message: ClickClackMessage;
   access?: ClickClackInboundAccess;
   correlationId?: string;
+  abortSignal?: AbortSignal;
   buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const runtime = getClickClackRuntime();
@@ -132,6 +194,13 @@ export async function handleClickClackInbound(params: {
     return;
   }
   const { discussionRoute, isDirect, route, target } = access.preparedRoute;
+  const media = await stageClickClackInboundMedia({
+    account: params.account,
+    cfg: params.config,
+    message,
+    correlationId: params.correlationId,
+    abortSignal: params.abortSignal,
+  });
   const progress = params.account.nativeProgress
     ? createClickClackAgentProgressPublisher({
         client: createClickClackClient({
@@ -155,7 +224,7 @@ export async function handleClickClackInbound(params: {
         },
       })
     : undefined;
-  if (params.account.replyMode === "model" && !discussionRoute) {
+  if (params.account.replyMode === "model" && !discussionRoute && media.length === 0) {
     if (access.botLoopProtection) {
       const loopResult = recordChannelBotPairLoopAndCheckSuppression(access.botLoopProtection);
       if (loopResult.suppressed) {
@@ -253,6 +322,7 @@ export async function handleClickClackInbound(params: {
       threadParentId: message.parent_message_id ? message.thread_root_id : undefined,
     },
     message: { body, bodyForAgent: message.body, rawBody: message.body, commandBody: message.body },
+    media,
     access: {
       commands: { authorized: access.commandAuthorized },
       mentions: access.mentionFacts,

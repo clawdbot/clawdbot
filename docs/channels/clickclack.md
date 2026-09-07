@@ -541,6 +541,13 @@ upload and message part, then retry attachment association with those same
 objects. See [Durable media delivery](#durable-media-delivery) for the server
 contract and recovery behavior.
 
+Inbound ClickClack attachments are downloaded with the bot token and staged in
+OpenClaw's managed media store before the agent turn starts. The configured
+`mediaMaxMb` limit and ClickClack's 64 MiB ceiling both apply. ClickClack servers
+that support atomic `upload_id` message creation publish `message.created` only
+after the attachment link exists, preventing consumers from seeing a transient
+text-only message.
+
 Examples:
 
 ```bash
