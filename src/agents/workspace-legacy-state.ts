@@ -7,6 +7,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { resolveLegacyStateDirs, resolveStateDir } from "../config/paths.js";
 import { root } from "../infra/fs-safe.js";
 import { pathMayExistSync } from "../infra/path-existence.js";
+import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { formatDoctorStateRepairFailure } from "../infra/state-repair-message.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveWorkspaceStateIdentity } from "./workspace-state-identity.js";
@@ -158,7 +159,8 @@ function workspaceMigrationError(
   env?: NodeJS.ProcessEnv,
   operation?: "doctor",
 ): Error {
-  return new Error(
+  return new StartupMaintenanceRequiredError(
+    "legacy-workspace",
     operation === "doctor"
       ? formatDoctorStateRepairFailure(
           `Legacy workspace setup state requires migration at ${blockedPaths.join(", ")}`,

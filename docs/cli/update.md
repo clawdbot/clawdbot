@@ -821,6 +821,14 @@ the sentinel.
 
 ### Plugin sync details
 
+On stable updates, a configured OpenClaw-owned official plugin with no install
+record is repaired from the selected core release cohort. This also applies to
+`doctor --fix` after an earlier upgrade lost a formerly bundled plugin. Admission
+checks that package target before stopping the Gateway; post-core reconciliation
+installs it before restart. Existing install records retain their source and
+selector policy. Verified official packages use the existing
+[capability-consent exemption](/plugins/manage-plugins#capability-consent).
+
 Managed npm plugins on the beta channel select the newest version by semantic
 version order from their `beta` and `latest` dist-tags, using the same policy as
 the core updater. This includes official plugins with a default/latest catalog

@@ -24,7 +24,7 @@ import {
 } from "./lazy-custom-element.ts";
 import { lazyShellEvent, type LazyShellEvent } from "./lazy-shell-action.ts";
 import {
-  isBrowserPanelAvailable,
+  isBrowserPanelSurfaceAvailable,
   isDesktopPanelAvailable,
   isHomePanelAvailable,
 } from "./panel-availability.ts";
@@ -77,7 +77,7 @@ export class ShellPanelOwner {
       gatewaySnapshot,
       context.config.current.terminalEnabled ?? false,
     );
-    const browserAvailable = !sessionRoute && isBrowserPanelAvailable(gatewaySnapshot);
+    const browserAvailable = !sessionRoute && isBrowserPanelSurfaceAvailable(gatewaySnapshot);
     const assistantAvailable = custodianAvailable || isHomePanelAvailable(context.gateway);
     for (const [element, layout, available] of [
       [host.terminalPanelElement, terminalPanelLayout, terminalAvailable],
@@ -142,7 +142,7 @@ export class ShellPanelOwner {
       return;
     }
     const snapshot = host.context?.gateway?.snapshot;
-    if (snapshot && isBrowserPanelAvailable(snapshot)) {
+    if (snapshot && isBrowserPanelSurfaceAvailable(snapshot)) {
       this.requestLazyElement(
         host.browserPanelElement,
         lazyShellEvent(BROWSER_PANEL_TOGGLE_EVENT, event),

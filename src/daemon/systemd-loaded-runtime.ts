@@ -138,6 +138,34 @@ export async function readLoadedSystemdServiceRuntime(
       ],
       ["s", "u", "u", "i", "i", "s", "t", "t"],
     );
+    let drained = optionalCounter(tasks) === 0;
+    if (
+      (active === "inactive" || active === "failed") &&
+      pid === 0 &&
+      optionalCounter(tasks) === undefined
+    ) {
+      // TasksCurrent is UINT64_MAX when accounting is unavailable, not zero.
+      // Ask the pinned manager for descendants and main/control PIDs instead.
+      // This does not load a unit; failures remain unknown under the same deadline.
+      remainingQueries++;
+      const [processes] = await query(
+        [
+          "call",
+          owner,
+          "/org/freedesktop/systemd1",
+          `${MANAGER}.Manager`,
+          "GetUnitProcesses",
+          "s",
+          unitName,
+        ],
+        ["a(sus)"],
+      );
+      drained =
+        Array.isArray(processes) &&
+        processes.length === 1 &&
+        Array.isArray(processes[0]) &&
+        processes[0].length === 0;
+    }
     // Same manager identity alone does not exclude unit restart/state changes.
     // Compare native transition generations as well as state to reject ABA observations.
     const after = await readUnit();
@@ -164,9 +192,7 @@ export async function readLoadedSystemdServiceRuntime(
       status:
         active === "active"
           ? "running"
-          : (active === "inactive" || active === "failed") &&
-              pid === 0 &&
-              optionalCounter(tasks) === 0
+          : (active === "inactive" || active === "failed") && pid === 0 && drained
             ? "stopped"
             : "unknown",
       state: active,

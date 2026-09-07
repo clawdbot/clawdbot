@@ -4,10 +4,6 @@ import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import {
-  type CredentialMode,
-  renderCredentialModeSwitch,
-} from "../../components/credential-mode.ts";
-import {
   renderSettingsPage,
   renderSettingsRow,
   renderSettingsSecretInput,
@@ -29,21 +25,17 @@ type ConnectionProps = {
   settings: UiSettings;
   /** URL of the live connection; the draft in `settings` may differ until Connect. */
   liveGatewayUrl: string;
-  password: string;
+  secret: string;
   lastError: string | null;
   systemInfo: SystemInfoResult | null;
   systemInfoUnavailable: boolean;
-  credentialMode: CredentialMode;
   /** True when the draft differs from the live connection. */
   dirty: boolean;
-  showGatewayToken: boolean;
-  showGatewayPassword: boolean;
+  showGatewaySecret: boolean;
   onConnectionChange: (patch: Partial<Pick<UiSettings, "gatewayUrl" | "token">>) => void;
-  onPasswordChange: (next: string) => void;
-  onCredentialModeChange: (mode: CredentialMode) => void;
+  onSecretChange: (next: string) => void;
   onSessionKeyChange: (next: string) => void;
-  onToggleGatewayTokenVisibility: () => void;
-  onToggleGatewayPasswordVisibility: () => void;
+  onToggleGatewaySecretVisibility: () => void;
   onConnect: () => void;
 };
 
@@ -78,46 +70,27 @@ function describeConnection(props: ConnectionProps, authMode: GatewayAuthMode | 
   return facts.filter(Boolean).join(" · ");
 }
 
-function renderCredentialRow(props: ConnectionProps) {
-  const isPassword = props.credentialMode === "password";
-  const control = html`
-    <div class="connection-credential">
-      ${renderCredentialModeSwitch({
-        mode: props.credentialMode,
-        onChange: props.onCredentialModeChange,
-        variant: "settings",
-      })}
-      ${renderSettingsSecretInput({
-        ariaLabel: t("connection.access.credential"),
-        value: isPassword ? props.password : props.settings.token,
-        placeholder: isPassword ? t("login.passwordFieldPlaceholder") : t("login.tokenPlaceholder"),
-        visible: isPassword ? props.showGatewayPassword : props.showGatewayToken,
-        showLabel: t(isPassword ? "connection.access.showPassword" : "connection.access.showToken"),
-        hideLabel: t(isPassword ? "connection.access.hidePassword" : "connection.access.hideToken"),
-        toggleLabel: t(
-          isPassword
-            ? "connection.access.togglePasswordVisibility"
-            : "connection.access.toggleTokenVisibility",
-        ),
-        onInput: (next) => {
-          // Editing pins the visible mode so a cleared token cannot flip the field.
-          props.onCredentialModeChange(props.credentialMode);
-          if (isPassword) {
-            props.onPasswordChange(next);
-          } else {
-            props.onConnectionChange({ token: next });
-          }
-        },
-        onToggle: isPassword
-          ? props.onToggleGatewayPasswordVisibility
-          : props.onToggleGatewayTokenVisibility,
-      })}
-    </div>
-  `;
+function renderSecretRow(props: ConnectionProps, authMode: GatewayAuthMode | undefined) {
+  const hintKey =
+    authMode === "password"
+      ? "connection.access.passwordHint"
+      : authMode === "token"
+        ? "connection.access.tokenHint"
+        : "connection.access.secretHint";
   return renderSettingsRow({
-    title: t("connection.access.credential"),
-    description: t(isPassword ? "connection.access.passwordHint" : "connection.access.tokenHint"),
-    control,
+    title: t("connection.access.secret"),
+    description: t(hintKey),
+    control: renderSettingsSecretInput({
+      ariaLabel: t("connection.access.secret"),
+      value: props.secret,
+      placeholder: t("connection.access.secretPlaceholder"),
+      visible: props.showGatewaySecret,
+      showLabel: t("connection.access.showSecret"),
+      hideLabel: t("connection.access.hideSecret"),
+      toggleLabel: t("connection.access.toggleSecretVisibility"),
+      onInput: props.onSecretChange,
+      onToggle: props.onToggleGatewaySecretVisibility,
+    }),
     stackedOnNarrow: true,
   });
 }
@@ -151,14 +124,14 @@ export function renderConnection(props: ConnectionProps) {
     ${
       isTrustedProxy
         ? renderSettingsRow({
-            title: t("connection.access.credential"),
+            title: t("connection.access.secret"),
             description: t("connection.access.trustedProxy"),
             control: renderSettingsStatus({
               kind: "ok",
               label: t("connection.access.trustedProxyStatus"),
             }),
           })
-        : renderCredentialRow(props)
+        : renderSecretRow(props, authMode)
     }
     ${renderSettingsRow({
       title: t("connection.access.sessionKey"),

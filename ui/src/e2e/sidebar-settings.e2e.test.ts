@@ -378,8 +378,7 @@ suite.define(() => {
       await page.keyboard.press("Control+Shift+,");
       await waitForControlUiSettingsTakeover(page);
       await page.locator('.settings-sidebar__item[href="/settings/connection"]').click();
-      await page.getByRole("radio", { name: "Token", exact: true }).click();
-      await page.getByLabel("Credential", { exact: true }).fill("replacement-owner-token");
+      await page.getByLabel("Gateway secret", { exact: true }).fill("replacement-owner-token");
       await page.getByRole("button", { name: "Connect", exact: true }).click();
       await expect
         .poll(() =>
@@ -472,9 +471,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}settings/connection`);
 
       const gatewayUrl = page.getByLabel("Gateway URL", { exact: true });
-      const credential = page.getByLabel("Credential", { exact: true });
-      const tokenMode = page.getByRole("radio", { name: "Token", exact: true });
-      const passwordMode = page.getByRole("radio", { name: "Password", exact: true });
+      const credential = page.getByLabel("Gateway secret", { exact: true });
       const sessionKey = page.getByLabel("Default session", { exact: true });
 
       for (const input of [gatewayUrl, credential, sessionKey]) {
@@ -483,28 +480,21 @@ suite.define(() => {
       }
 
       await gatewayUrl.fill("ws://gateway.example.test:18789");
-      await tokenMode.click();
-      await credential.fill("browser-proof-token");
-      await passwordMode.click();
-      await credential.fill("browser-proof-password");
+      await credential.fill("browser-proof-secret");
       await sessionKey.fill("browser-proof-session");
 
       expect(await gatewayUrl.inputValue()).toBe("ws://gateway.example.test:18789");
-      expect(await credential.inputValue()).toBe("browser-proof-password");
+      expect(await credential.inputValue()).toBe("browser-proof-secret");
       expect(await sessionKey.inputValue()).toBe("browser-proof-session");
 
-      await page.getByRole("button", { name: "Toggle password visibility", exact: true }).click();
+      await page.getByRole("button", { name: "Toggle secret visibility", exact: true }).click();
       expect(await credential.getAttribute("type")).toBe("text");
-      expect(await credential.inputValue()).toBe("browser-proof-password");
+      expect(await credential.inputValue()).toBe("browser-proof-secret");
       expect(await credential.isEditable()).toBe(true);
 
       await gateway.waitForRequest("system.info");
       const reads = (await gateway.getRequests("system.info")).length;
       const connections = (await gateway.getRequests("connect")).length;
-      await tokenMode.click();
-      expect(await credential.inputValue()).toBe("browser-proof-token");
-      await page.getByRole("button", { name: "Toggle token visibility", exact: true }).click();
-      expect(await credential.getAttribute("type")).toBe("text");
       await gateway.deferNext("connect");
       await gateway.closeLatest(1012, "synthetic reconnect");
       const notice = page.locator('.connection-action-block[role="status"]');
@@ -514,21 +504,16 @@ suite.define(() => {
       await gateway.resolveDeferred("connect");
       await notice.waitFor({ state: "hidden" });
       await gateway.waitForRequest("system.info", { after: reads });
-      await passwordMode.click();
       expect(await credential.getAttribute("type")).toBe("password");
 
       for (const [input, value] of [
         [gatewayUrl, "ws://gateway.example.test:18789"],
-        [credential, "browser-proof-password"],
+        [credential, "browser-proof-secret"],
         [sessionKey, "browser-proof-session"],
       ] as const) {
         expect(await input.inputValue()).toBe(value);
         expect(await input.isEditable()).toBe(true);
       }
-      await tokenMode.click();
-      expect(await credential.inputValue()).toBe("browser-proof-token");
-      expect(await credential.getAttribute("type")).toBe("password");
-      expect(await credential.isEditable()).toBe(true);
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
         await page.screenshot({
           animations: "disabled",

@@ -158,3 +158,40 @@ export function currentUpdateRecoveryNativeFacts(
   const last = manager.effects.at(-1);
   return last?.state === "not-applied" ? last.before : (last?.after ?? manager.original);
 }
+
+/** Only a captured, enabled running service stopped before package activation
+ * may use preparation recovery. Suppression, borrowed enablement, unknown
+ * dispatches and unrelated native histories require their ordinary owners. */
+export function isRecoverablePreparationNative(
+  manager: z.infer<typeof RecoveryNativeManagerSchema>,
+  restored = false,
+): boolean {
+  const { original, effects } = manager;
+  if (effects.length === 0) {
+    return true;
+  }
+  const [stop, restore] = effects;
+  return (
+    original.exists &&
+    original.enabled === true &&
+    original.loaded &&
+    !original.stopped &&
+    effects.length <= 2 &&
+    stop?.action === "stop" &&
+    stop.state !== "not-applied" &&
+    isDeepStrictEqual(stop.before, original) &&
+    isDeepStrictEqual(stop.after, {
+      ...original,
+      stopped: true,
+      loaded: manager.identity.platform !== "darwin",
+    }) &&
+    (restore
+      ? stop.state === "observed" &&
+        restore.action === "restore" &&
+        restore.state !== "not-applied" &&
+        isDeepStrictEqual(restore.before, stop.after) &&
+        isDeepStrictEqual(restore.after, original) &&
+        (!restored || restore.state === "observed")
+      : !restored)
+  );
+}

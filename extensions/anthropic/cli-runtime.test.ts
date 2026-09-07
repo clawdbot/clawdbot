@@ -481,7 +481,11 @@ describe("Claude native stdio boundary", () => {
     expect(handle?.isIdle()).toBe(true);
     expect(context.requestToolPermission).toHaveBeenCalledTimes(4);
     expect(context.requestToolPermission).toHaveBeenCalledWith(
-      expect.objectContaining({ toolName: "Read", toolInput: { file_path: "fixture.txt" } }),
+      expect.objectContaining({
+        cwd: context.cwd,
+        toolName: "Read",
+        toolInput: { file_path: "fixture.txt" },
+      }),
     );
   });
 

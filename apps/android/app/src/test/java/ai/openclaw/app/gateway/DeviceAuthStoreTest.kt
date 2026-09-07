@@ -7,6 +7,7 @@ import android.content.SharedPreferences
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -39,6 +40,36 @@ class DeviceAuthStoreTest {
     assertEquals("operator", entry?.role)
     assertEquals(listOf("operator.read", "operator.write"), entry?.scopes)
     assertTrue((entry?.updatedAtMs ?: 0L) > 0L)
+  }
+
+  @Test
+  fun tokenDerivedMutationsRequireTheCurrentStoredToken() {
+    val (prefs) = createPrefs()
+    val store = DeviceAuthStore(prefs)
+
+    for (expectedToken in listOf("old", " ")) {
+      assertFalse(store.saveToken("gateway-a", "device-1", "operator", "stale", replacesStoredToken = expectedToken))
+      assertNull(store.loadEntry("gateway-a", "device-1", "operator"))
+    }
+
+    assertTrue(store.saveToken("gateway-a", "device-1", "operator", " old ", listOf("operator.read")))
+    assertTrue(
+      store.saveToken("gateway-a", "device-1", "operator", "new", listOf("operator.write"), replacesStoredToken = " old "),
+    )
+    val freshEntry = store.loadEntry("gateway-a", "device-1", "operator")
+    assertEquals("new", freshEntry?.token)
+    assertEquals("operator", freshEntry?.role)
+    assertEquals(listOf("operator.write"), freshEntry?.scopes)
+    assertTrue((freshEntry?.updatedAtMs ?: 0L) > 0L)
+
+    assertFalse(
+      store.saveToken("gateway-a", "device-1", "operator", "stale", listOf("operator.admin"), replacesStoredToken = "old"),
+    )
+    assertEquals(freshEntry, store.loadEntry("gateway-a", "device-1", "operator"))
+    store.clearToken("gateway-a", "device-1", "operator", onlyIfToken = "old")
+    assertEquals(freshEntry, store.loadEntry("gateway-a", "device-1", "operator"))
+    store.clearToken("gateway-a", "device-1", "operator", onlyIfToken = " new ")
+    assertNull(store.loadEntry("gateway-a", "device-1", "operator"))
   }
 
   @Test

@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as services from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
+import * as packageRecovery from "../../infra/package-update-recovery.js";
 import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
@@ -21,6 +22,7 @@ import {
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import * as health from "../daemon-cli/restart-health.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { resumePendingUpdateCommand } from "./update-command-pending-replay.js";
@@ -269,4 +271,183 @@ it("refuses settlement when a native inspection await loses the actual installat
   for (const method of [f.service.start, f.service.stop, f.service.restart]) {
     expect(method).not.toHaveBeenCalled();
   }
+});
+
+it.each([
+  "restored",
+  "start acknowledgement lost",
+  "unhealthy",
+  "config drift",
+  "package drift",
+  "unapplied stop",
+  "HTTP failure",
+  "boot changed",
+  "build changed",
+  "lease replaced",
+  "late package drift",
+  "late source drift",
+  "source changed before start",
+  "package changed before start",
+])("reconciles the original stop-only preparation: %s", async (scenario) => {
+  const f = await prepare();
+  await withUpdateCommandExecutor(f.run.runId, async (executor) => {
+    const fence = await executor.enter(f.fixture.packageRoot);
+    const current = claimUpdateRecovery(f.record, fence, { env: f.env });
+    const manager = current.nativeManager!;
+    f.record = (
+      await recordUpdateRecoveryNativeIntent(
+        current,
+        {
+          effectId: randomUUID(),
+          action: "stop",
+          target: { ...manager.original, stopped: true, loaded: process.platform !== "darwin" },
+          observe: async () => ({ identity: manager.identity, facts: manager.original }),
+        },
+        fence,
+        { env: f.env },
+      )
+    ).record;
+  });
+  // This real package fixture has no build metadata. Persisted absence is null,
+  // as is the authenticated hello observation, never an omitted runtime field.
+  expect(f.record.from.buildId).toBeNull();
+  expect(
+    UpdateRecoveryRecordSchema.safeParse({
+      ...f.record,
+      from: { ...f.record.from, buildId: undefined },
+    }).success,
+  ).toBe(false);
+  ledger.recordUpdateRunPhase(f.run.runId, "activating", {}, { env: f.env });
+  let running = scenario === "unapplied stop";
+  vi.mocked(f.service.readRuntime).mockImplementation(async () => ({
+    status: running ? "running" : "stopped",
+    pid: running ? process.pid : undefined,
+    systemd: { unit: "openclaw-gateway.service", managerUid: process.getuid?.() ?? 1001 },
+  }));
+  vi.mocked(f.service.isLoaded).mockImplementation(
+    async () => process.platform !== "darwin" || running,
+  );
+  const start = vi.mocked(f.service.start).mockImplementation(async (args) => {
+    args.assertCurrent?.();
+    running = true;
+    if (scenario === "start acknowledgement lost") {
+      throw new Error("start reply lost");
+    }
+  });
+  const healthySnapshot = (): health.GatewayRestartSnapshot => ({
+    healthy: scenario !== "unhealthy",
+    runtime: { status: "running", pid: process.pid },
+    staleGatewayPids: [],
+    portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    gatewayVersion: f.record.from.version,
+    gatewayBuildId: f.record.from.buildId,
+    gatewayBootId: "original-restored-boot",
+  });
+  vi.spyOn(health, "waitForGatewayHealthyRestart").mockImplementation(async () =>
+    healthySnapshot(),
+  );
+  vi.spyOn(health, "inspectGatewayRestart").mockImplementation(async () => {
+    if (scenario === "lease replaced") {
+      const db = new DatabaseSync(path.join(f.base, "control", "managed-update-handoffs.sqlite"));
+      try {
+        db.prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?").run(
+          "replacement",
+          f.fixture.packageRoot,
+        );
+      } finally {
+        db.close();
+      }
+    }
+    if (scenario === "late package drift") {
+      await fs.appendFile(path.join(f.fixture.packageRoot, "dist", "index.js"), " ");
+    }
+    if (scenario === "late source drift") {
+      await fs.appendFile(f.include, " ");
+    }
+    return {
+      ...healthySnapshot(),
+      ...(scenario === "boot changed" ? { gatewayBootId: "intervening-boot" } : {}),
+      ...(scenario === "build changed" ? { gatewayBuildId: "intervening-build" } : {}),
+    };
+  });
+  vi.spyOn(health, "waitForGatewayHttpReadiness").mockResolvedValue({
+    healthz: 200,
+    readyz: scenario === "HTTP failure" ? 503 : 200,
+  });
+  vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+  if (scenario === "config drift") {
+    await fs.appendFile(f.include, " ");
+  }
+  if (scenario === "package drift") {
+    await fs.appendFile(path.join(f.fixture.packageRoot, "dist", "index.js"), " ");
+  }
+  if (scenario.endsWith("changed before start")) {
+    const reopen = packageRecovery.reopenPackageUpdateTransaction;
+    vi.spyOn(packageRecovery, "reopenPackageUpdateTransaction").mockImplementation(async (args) => {
+      const opened = await reopen(args);
+      await fs.appendFile(
+        scenario.startsWith("source")
+          ? f.include
+          : path.join(f.fixture.packageRoot, "dist", "index.js"),
+        " ",
+      );
+      return opened;
+    });
+  }
+  const replay = () =>
+    withEnvAsync(f.env, () =>
+      resumePendingUpdateCommand({ opts: { json: true }, root: f.fixture.packageRoot }),
+    );
+  if (scenario === "restored") {
+    await expect(replay()).resolves.toBe(true);
+  } else {
+    await expect(replay()).rejects.toThrow();
+  }
+  if (scenario === "start acknowledgement lost") {
+    await expect(replay()).resolves.toBe(true);
+  }
+  const final = loadUpdateRecovery(f.run.runId, { env: f.env })!;
+  if (["restored", "start acknowledgement lost"].includes(scenario)) {
+    expect(getUpdateRun(f.run.runId, { env: f.env })?.status).toBe("failed");
+    expect(final.preparationAborted).toBeDefined();
+    const manager = final.nativeManager!;
+    for (const effects of [
+      manager.effects.slice(0, 1),
+      manager.effects.map((effect, i) =>
+        i === 1 ? { ...effect, state: "intent", observedRevision: undefined } : effect,
+      ),
+    ]) {
+      expect(
+        UpdateRecoveryRecordSchema.safeParse({ ...final, nativeManager: { ...manager, effects } })
+          .success,
+      ).toBe(false);
+    }
+    expect(final.nativeManager?.effects.map((e) => [e.action, e.state])).toEqual([
+      ["stop", "observed"],
+      ["restore", "observed"],
+    ]);
+  } else {
+    expect(final.preparationAborted).toBeUndefined();
+    expect(getUpdateRun(f.run.runId, { env: f.env })?.status).toBe("running");
+  }
+  expect(start).toHaveBeenCalledTimes(
+    [
+      "config drift",
+      "package drift",
+      "unapplied stop",
+      "source changed before start",
+      "package changed before start",
+    ].includes(scenario)
+      ? 0
+      : 1,
+  );
+  if (scenario === "unapplied stop") {
+    expect(final.nativeManager?.effects).toEqual(f.record.nativeManager?.effects);
+  }
+  expect(f.service.stop).not.toHaveBeenCalled();
+  expect(final.effects).toEqual([]);
+  expect(final.checkpoint).toBeUndefined();
+  expect(final.terminal).toBeUndefined();
+  expect(await fs.stat(f.record.preimages!.ref.manifestPath)).toBeDefined();
+  expect(await fs.stat(f.fixture.params.stage.packageRoot)).toBeDefined();
 });

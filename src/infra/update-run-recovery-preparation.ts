@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import type { PackageRecoveryVerified } from "./package-update-recovery.js";
 import { finishAbortedUpdatePreparationInTransaction } from "./update-run-ledger.js";
+import { isRecoverablePreparationNative } from "./update-run-recovery-native-schema.js";
 import { parseRecoveryPackageObservation } from "./update-run-recovery-package-schema.js";
 import {
   UpdateRecoveryConflictError,
@@ -20,7 +21,7 @@ export function assertUnstartedUpdatePreparation(record: UpdateRecoveryRecord): 
     !record.nativeManager ||
     !p ||
     record.effects.length !== 0 ||
-    record.nativeManager.effects.length !== 0 ||
+    !isRecoverablePreparationNative(record.nativeManager) ||
     record.handoff ||
     record.checkpoint ||
     record.afterImages !== undefined ||
@@ -44,7 +45,8 @@ export function assertUnstartedUpdatePreparation(record: UpdateRecoveryRecord): 
 }
 
 /** The caller keeps the installation, config/include and native owners live.
- * No artifacts or native state are changed. History and marker commit together. */
+ * Native restoration must already be independently observed. This commit changes
+ * no artifacts or native state. History and marker commit together. */
 export function abortUpdatePreparation(
   expected: UpdateRecoveryRecord,
   observation: PackageRecoveryVerified,
@@ -59,12 +61,18 @@ export function abortUpdatePreparation(
       assertUnstartedUpdatePreparation(record);
       if (
         record.claimKind !== "recovery" ||
+        !isRecoverablePreparationNative(record.nativeManager!, true) ||
         !isDeepStrictEqual(record, expected) ||
         !isDeepStrictEqual(observed, record.package!.observed)
       ) {
         throw new UpdateRecoveryConflictError();
       }
-      finishAbortedUpdatePreparationInTransaction(db, record.runId, options);
+      finishAbortedUpdatePreparationInTransaction(
+        db,
+        record.runId,
+        options,
+        record.nativeManager!.effects.length !== 0,
+      );
       record.primaryFailure = { code: "interrupted-preparation", effectId: null };
       record.preparationAborted = {
         reason: "interrupted-preparation",

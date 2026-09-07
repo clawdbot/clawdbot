@@ -78,7 +78,8 @@ enum OpenClawConfigFile {
     static func saveDict(
         _ dict: [String: Any],
         preserveExistingKeys: Bool = false,
-        allowGatewayAuthMutation: Bool = false)
+        allowGatewayAuthMutation: Bool = false,
+        allowGatewayModeRemoval: Bool = false)
         -> Bool
     {
         self.withFileLock {
@@ -144,7 +145,9 @@ enum OpenClawConfigFile {
                 if preservedGatewayAuth {
                     suspicious.append("gateway-auth-preserved")
                 }
-                let blocking = self.configWriteBlockingReasons(suspicious)
+                let blocking = self.configWriteBlockingReasons(suspicious).filter {
+                    !(allowGatewayModeRemoval && $0 == "gateway-mode-removed")
+                }
                 if !blocking.isEmpty {
                     let rejectedPath = self.persistRejectedConfigWrite(data: data, configURL: url)
                     self.logger.warning("config write rejected (\(blocking.joined(separator: ", "))) at \(url.path)")

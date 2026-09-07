@@ -27,20 +27,16 @@ function createConnectionProps(overrides: Partial<ConnectionProps> = {}): Connec
       sidebarEntries: [],
       locale: "en",
     },
-    password: "",
+    secret: "tok",
     lastError: null,
     systemInfo: null,
     systemInfoUnavailable: false,
-    credentialMode: "token",
     dirty: false,
-    showGatewayToken: false,
-    showGatewayPassword: false,
+    showGatewaySecret: false,
     onConnectionChange: () => undefined,
-    onPasswordChange: () => undefined,
-    onCredentialModeChange: () => undefined,
+    onSecretChange: () => undefined,
     onSessionKeyChange: () => undefined,
-    onToggleGatewayTokenVisibility: () => undefined,
-    onToggleGatewayPasswordVisibility: () => undefined,
+    onToggleGatewaySecretVisibility: () => undefined,
     onConnect: () => undefined,
     ...overrides,
   };
@@ -87,50 +83,44 @@ describe("connection view rendering", () => {
     render(renderConnection(createConnectionProps()), container);
     await Promise.resolve();
 
-    expect(accessRowTitles(container)).toEqual(["Gateway URL", "Credential", "Default session"]);
+    expect(accessRowTitles(container)).toEqual([
+      "Gateway URL",
+      "Gateway secret",
+      "Default session",
+    ]);
     expect(container.querySelector(".settings-section__desc")?.textContent?.trim()).toBe(
       "Not connected.",
     );
     expect(container.querySelector(".settings-section__actions")?.textContent?.trim()).toBe(
       "Offline",
     );
-    expect(
-      container.querySelectorAll(".connection-credential .settings-secret input"),
-    ).toHaveLength(1);
+    expect(container.querySelectorAll(".settings-secret input")).toHaveLength(1);
     expect(container.textContent).not.toContain("Last error");
   });
 
   it.each(["token", "password"] as const)(
-    "keeps the %s credential labeled when revealed",
-    (credentialMode) => {
+    "keeps the secret labeled when revealed in %s mode",
+    (authMode) => {
       const container = document.createElement("div");
-      const props = createConnectionProps({ password: "password", credentialMode });
-      const labels = ["Gateway URL", "Credential", "Default session"];
-      const inputLabels = () =>
-        Array.from(container.querySelectorAll<HTMLInputElement>(".settings-group input")).map(
-          (input) => input.getAttribute("aria-label"),
-        );
+      const props = createConnectionProps({
+        hello: { snapshot: { authMode } } as unknown as GatewayHelloOk,
+      });
+      const input = () =>
+        container.querySelector<HTMLInputElement>('input[aria-label="Gateway secret"]');
 
       render(renderConnection(props), container);
-      expect(inputLabels()).toEqual(labels);
+      expect(input()?.type).toBe("password");
+      expect(input()?.value).toBe("tok");
+      expect(input()?.placeholder).toBe("Paste the token or type the password");
+      expect(container.textContent).toContain(`This Gateway expects its ${authMode}.`);
+      expect(container.querySelector('[role="radiogroup"]')).toBeNull();
       expect(
-        container.querySelector<HTMLInputElement>('input[aria-label="Credential"]')?.type,
-      ).toBe("password");
-      expect(
-        container.querySelector<HTMLInputElement>('input[aria-label="Credential"]')?.value,
-      ).toBe(credentialMode === "password" ? "password" : "tok");
-      expect(
-        container.querySelector(`button[aria-label="Toggle ${credentialMode} visibility"]`),
+        container.querySelector('button[aria-label="Toggle secret visibility"]'),
       ).not.toBeNull();
 
-      render(
-        renderConnection({ ...props, showGatewayToken: true, showGatewayPassword: true }),
-        container,
-      );
-      expect(inputLabels()).toEqual(labels);
-      expect(
-        container.querySelector<HTMLInputElement>('input[aria-label="Credential"]')?.type,
-      ).toBe("text");
+      render(renderConnection({ ...props, showGatewaySecret: true }), container);
+      expect(input()?.type).toBe("text");
+      expect(input()?.value).toBe("tok");
     },
   );
 
@@ -143,9 +133,12 @@ describe("connection view rendering", () => {
     render(renderConnection(createConnectionProps({ connected: true, hello })), container);
     await Promise.resolve();
 
-    expect(accessRowTitles(container)).toEqual(["Gateway URL", "Credential", "Default session"]);
-    expect(container.querySelector(".connection-credential")).toBeNull();
-    expect(container.querySelector('input[aria-label="Credential"]')).toBeNull();
+    expect(accessRowTitles(container)).toEqual([
+      "Gateway URL",
+      "Gateway secret",
+      "Default session",
+    ]);
+    expect(container.querySelector('input[aria-label="Gateway secret"]')).toBeNull();
     expect(container.querySelector('[role="radiogroup"]')).toBeNull();
     expect(container.querySelector(".settings-row .settings-status")?.textContent?.trim()).toBe(
       "Trusted proxy",

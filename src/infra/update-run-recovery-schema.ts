@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import {
   RecoveryNativeManagerSchema,
+  isRecoverablePreparationNative,
   currentUpdateRecoveryNativeFacts,
 } from "./update-run-recovery-native-schema.js";
 import {
@@ -218,7 +219,8 @@ const recoveryInspectionRecordSchema = z
         pairId: z.uuid().nullable(),
       })
       .optional(),
-    // Historical no-effect settlement, not a serving or rollback receipt.
+    // Historical pre-package settlement (native state may have been restored),
+    // not a serving or database rollback receipt.
     preparationAborted: z
       .strictObject({
         reason: z.literal("interrupted-preparation"),
@@ -246,7 +248,7 @@ const recoveryInspectionRecordSchema = z
         !record.package ||
         record.claimKind !== "recovery" ||
         record.effects.length !== 0 ||
-        record.nativeManager.effects.length !== 0 ||
+        !isRecoverablePreparationNative(record.nativeManager, true) ||
         record.handoff ||
         record.checkpoint ||
         record.afterImages !== undefined ||

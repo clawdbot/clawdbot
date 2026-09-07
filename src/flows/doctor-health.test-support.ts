@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 import { createConfigIO } from "../config/io.factory.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
 
@@ -144,6 +145,16 @@ vi.mock("./doctor-health-contributions.js", () => ({
 }));
 
 export { mocks };
+
+export function seedMaintenanceStartupFailure(openDatabase: () => OpenClawStateDatabase) {
+  openDatabase().db.exec(
+    "INSERT INTO gateway_boot_lifecycle (boot_id, pid, started_at_ms, completed_at_ms, outcome, startup_reason) VALUES ('maintenance', 1, 1, 2, 'startup_failed', 'gateway.maintenance_required')",
+  );
+  return () =>
+    openDatabase()
+      .db.prepare("SELECT outcome FROM gateway_boot_lifecycle WHERE boot_id = 'maintenance'")
+      .get();
+}
 
 export function registerDoctorConfigReceiptTests(
   runDoctorHealthFlow: typeof import("./doctor-health.js").runDoctorHealthFlow,

@@ -13,6 +13,11 @@ import {
   type resolveNpmInstallSpecsForUpdateChannel,
 } from "../../../plugins/install-channel-specs.js";
 import { resolveTrustedSourceLinkedOfficialNpmInstall } from "../../../plugins/official-external-install-records.js";
+import {
+  listOfficialExternalPluginCatalogEntries,
+  resolveOfficialExternalPluginId,
+  resolveOfficialExternalPluginInstall,
+} from "../../../plugins/official-external-plugin-catalog.js";
 import { isPayloadMissing } from "../../../plugins/payload-verification.js";
 import { resolveNpmUpdateTarget } from "../../../plugins/update-source.js";
 import {
@@ -36,6 +41,23 @@ export function resolveRecordedInstallCandidate(params: {
   repairReason?: InstallCandidateRepairReason;
 }): DownloadableInstallCandidate {
   const record = params.record;
+  if (!record && params.candidate.trustedSourceLinkedOfficialInstall) {
+    const packageName = parseRegistryNpmSpec(params.candidate.npmSpec ?? "")?.name;
+    const officialReleasePackage =
+      packageName?.startsWith("@openclaw/") &&
+      listOfficialExternalPluginCatalogEntries().some(
+        (entry) =>
+          entry.source === "official" &&
+          entry.name === packageName &&
+          resolveOfficialExternalPluginId(entry) === params.candidate.pluginId &&
+          parseRegistryNpmSpec(resolveOfficialExternalPluginInstall(entry)?.npmSpec ?? "")?.name ===
+            packageName,
+      );
+    if (officialReleasePackage) {
+      // Formerly bundled plugins have no recorded selector; restore the core's release cohort.
+      return { ...params.candidate, versionBoundToOpenClaw: true };
+    }
+  }
   const recordedSource =
     record?.source === "npm" || record?.source === "clawhub" ? record.source : undefined;
   const staleRuntimeRepair = params.repairReason === "stale-version-bound-runtime";

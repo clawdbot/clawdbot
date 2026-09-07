@@ -509,8 +509,8 @@ describe("markdown sidebar", () => {
 
   it.each([
     ["external.html", "https://files.example/external.html", "text/html"],
-    ["preview.html", "/__openclaw__/media/preview.html", "text/html"],
-    ["wide.csv", "/__openclaw__/media/wide.csv", "text/csv"],
+    ["external.txt", "https://files.example/external.txt", "text/plain"],
+    ["bundle.zip", "/__openclaw__/media/bundle.zip", "application/zip"],
     ["brief.pdf", "/__openclaw__/media/brief.pdf", "application/pdf"],
   ] as const)(
     "renders document %s as a Files card without previewing it",

@@ -15,6 +15,7 @@ import type { UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { readUpdateCommandNativeObservation } from "./update-command-native-observation.js";
+import { restoreUpdatePreparationNative } from "./update-command-preparation-native.js";
 import {
   UpdateCommandRecoveryPendingError,
   type UpdateCommandRecovery,
@@ -22,7 +23,8 @@ import {
 import { discoverUpdateCommandRecovery } from "./update-command-replay-inspection.js";
 import { withUpdateCommandSourceOwnership } from "./update-command-source-ownership.js";
 
-/** Reconcile only preparation which never admitted a native or package effect.
+/** Reconcile only preparation before any package effect. A stop-only native
+ * history must be restored with fresh observations under the same source owners.
  * A failed historical result is not a checkpoint, serving receipt, or rollback.
  * Retained artifacts stay intact and the next update requires a new invocation. */
 export async function resumeUnstartedUpdatePreparation(params: {
@@ -74,7 +76,8 @@ export async function resumeUnstartedUpdatePreparation(params: {
         });
         if (
           !isDeepStrictEqual(native.identity, record.nativeManager!.identity) ||
-          !isDeepStrictEqual(native.facts, record.nativeManager!.original)
+          (record.nativeManager!.effects.length === 0 &&
+            !isDeepStrictEqual(native.facts, record.nativeManager!.original))
         ) {
           throw new UpdateCommandRecoveryPendingError(
             "Original native state changed after preparation.",
@@ -92,8 +95,39 @@ export async function resumeUnstartedUpdatePreparation(params: {
           },
         });
         source.assertCurrent();
-        if (opened.status !== "ready") {
-          throw new UpdateCommandRecoveryPendingError(opened.reason);
+        if (
+          opened.status !== "ready" ||
+          !isDeepStrictEqual(opened.observed, record.package!.observed)
+        ) {
+          throw new UpdateCommandRecoveryPendingError("Prepared package identity has changed.");
+        }
+        await restoreUpdatePreparationNative({
+          recovery,
+          env,
+          definitionPaths: source.definitionPaths,
+          assertCurrent: source.assertCurrent,
+          verifyUnchanged: async () => {
+            const beforeStart = await opened.transaction.observe();
+            source.assertCurrent();
+            if (
+              beforeStart.status !== "verified" ||
+              !isDeepStrictEqual(beforeStart, record.package!.observed)
+            ) {
+              throw new UpdateCommandRecoveryPendingError(
+                "Package changed before native restoration.",
+              );
+            }
+            await source.verifySources();
+          },
+          timeoutMs: params.timeoutMs,
+        });
+        const closingPackage = await opened.transaction.observe();
+        source.assertCurrent();
+        if (
+          closingPackage.status !== "verified" ||
+          !isDeepStrictEqual(closingPackage, record.package!.observed)
+        ) {
+          throw new UpdateCommandRecoveryPendingError("Package changed during native restoration.");
         }
         const closingNative = await readUpdateCommandNativeObservation({
           record,
@@ -102,7 +136,10 @@ export async function resumeUnstartedUpdatePreparation(params: {
           assertCurrent: source.assertCurrent,
           timeoutMs: params.timeoutMs,
         });
-        if (!isDeepStrictEqual(closingNative, native)) {
+        if (
+          !isDeepStrictEqual(closingNative.identity, native.identity) ||
+          !isDeepStrictEqual(closingNative.facts, record.nativeManager!.original)
+        ) {
           throw new UpdateCommandRecoveryPendingError(
             "Native state changed during package inspection.",
           );
@@ -112,7 +149,7 @@ export async function resumeUnstartedUpdatePreparation(params: {
         recovery.onRecord(
           abortUpdatePreparation(
             record,
-            opened.observed,
+            closingPackage,
             { assertCurrent: source.assertCurrent },
             { env },
           ),
@@ -128,7 +165,7 @@ export async function resumeUnstartedUpdatePreparation(params: {
         });
       } else {
         defaultRuntime.log(
-          "Interrupted preparation was verified unchanged and recorded as failed. Run update again to start a new attempt.",
+          "Original package, sources and native state reconciled; the interrupted attempt was recorded as failed. Run update again to start a new attempt.",
         );
       }
       return true;

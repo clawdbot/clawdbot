@@ -506,6 +506,7 @@ export function finishAbortedUpdatePreparationInTransaction(
   db: DatabaseSync,
   runId: string,
   options: LedgerOptions,
+  nativeRestored = false,
 ): void {
   if (!db.isTransaction) {
     throw new Error("Preparation settlement requires its recovery transaction");
@@ -516,7 +517,8 @@ export function finishAbortedUpdatePreparationInTransaction(
     (record) => {
       if (
         record.status !== "running" ||
-        !["requested", "staging", "validating"].includes(record.phase)
+        (!["requested", "staging", "validating"].includes(record.phase) &&
+          !(nativeRestored && record.phase === "activating"))
       ) {
         throw new Error("Preparation settlement requires unfinished pre-activation history");
       }

@@ -41,7 +41,10 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     sessionKey: string;
     unarchiveAccess: SessionMethodAccess;
   }) {
-    if (params.selectedSession?.spawnedBy || isSubagentSessionKey(params.sessionKey)) {
+    if (
+      params.selectedSession?.classification === "subagent" ||
+      isSubagentSessionKey(params.sessionKey)
+    ) {
       const parentKey = resolveUiSessionNavigationParentKey(params.selectedSession);
       const parent = resolveChatPaneParentSession(
         params.selectedSession,

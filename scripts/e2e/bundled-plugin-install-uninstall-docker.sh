@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-bundled-plugin-install-uninstall-e2e" OPENCLAW_BUNDLED_PLUGIN_INSTALL_UNINSTALL_E2E_IMAGE)"
 LIST_TIMEOUT_MS="$(
   docker_e2e_read_positive_int_env OPENCLAW_BUNDLED_PLUGIN_LIST_TIMEOUT_MS 30000
@@ -62,6 +63,11 @@ DOCKER_ENV_ARGS=(
   -e "OPENCLAW_BUNDLED_PLUGIN_RUNTIME_TEARDOWN_KILL_GRACE_MS=$RUNTIME_TEARDOWN_KILL_GRACE_MS"
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64"
 )
+capability_status=0
+openclaw_resolve_frozen_plugin_harness_capabilities \
+  "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" || capability_status=$?
+[ "$capability_status" -eq 0 ] || exit "$capability_status"
+openclaw_append_frozen_plugin_harness_docker_env
 for env_name in \
   OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL \
   OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX \

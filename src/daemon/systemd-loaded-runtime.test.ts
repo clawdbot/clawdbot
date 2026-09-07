@@ -199,6 +199,90 @@ describe("loaded-only systemd runtime", () => {
     expect(systemctl).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { label: "empty inventory", data: [[]], expected: "stopped" },
+    {
+      label: "remaining descendant",
+      data: [[["/unit/child", 431, "worker"]]],
+      expected: "unknown",
+    },
+    { label: "missing payload", data: [], expected: "unknown" },
+    { label: "invalid payload", data: [null], expected: "unknown" },
+    { label: "failed enumeration", data: null, expected: "unknown" },
+  ])(
+    "checks native process drainage when accounting is unavailable: $label",
+    async ({ data, expected }) => {
+      busctl.mockImplementation(async (_env, args) => {
+        if (args.includes("GetUnitProcesses")) {
+          return data === null
+            ? { code: 1, termination: "exit", stdout: "", stderr: "Access denied" }
+            : success(JSON.stringify({ type: "a(sus)", data }));
+        }
+        return managerReply(args, {
+          ActiveState: { type: "s", data: "inactive" },
+          SubState: { type: "s", data: "dead" },
+          MainPID: { type: "u", data: 0 },
+          TasksCurrent: { type: "t", data: Number("18446744073709551615") },
+        });
+      });
+      const runtime = await readSystemdServiceRuntime(env, { requireLoaded: true });
+      expect(runtime.status).toBe(expected);
+      expect(runtime.systemd?.tasksCurrent).toBeUndefined();
+      expect(busctl.mock.calls.find(([, args]) => args.includes("GetUnitProcesses"))?.[1]).toEqual([
+        "--auto-start=no",
+        "--json=short",
+        "call",
+        ":1.42",
+        "/org/freedesktop/systemd1",
+        "org.freedesktop.systemd1.Manager",
+        "GetUnitProcesses",
+        "s",
+        unitName,
+      ]);
+      expect(systemctl).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["owner", "generation", "deadline"])(
+    "rejects inventory after %s changes",
+    async (changed) => {
+      let enumerated = false;
+      let elapsed = 0;
+      const now = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+      busctl.mockImplementation(async (_env, args) => {
+        if (args.includes("GetUnitProcesses")) {
+          enumerated = true;
+          if (changed === "deadline") {
+            elapsed = 1001;
+          }
+          return success(JSON.stringify({ type: "a(sus)", data: [[]] }));
+        }
+        if (enumerated && changed === "owner" && args.includes("GetNameOwner")) {
+          return success(JSON.stringify({ type: "s", data: [":1.43"] }));
+        }
+        return managerReply(args, {
+          ActiveState: { type: "s", data: "inactive" },
+          SubState: { type: "s", data: "dead" },
+          MainPID: { type: "u", data: 0 },
+          TasksCurrent: { type: "t", data: Number("18446744073709551615") },
+          ActiveEnterTimestampMonotonic: {
+            type: "t",
+            data: enumerated && changed === "generation" ? 101 : 100,
+          },
+        });
+      });
+      try {
+        expect(
+          (await readSystemdServiceRuntime(env, { requireLoaded: true, timeoutMs: 1000 })).status,
+        ).toBe("unknown");
+        expect(enumerated).toBe(true);
+        expect(systemctl).not.toHaveBeenCalled();
+      } finally {
+        now.mockRestore();
+      }
+    },
+  );
+
   it("bounds all manager calls by one monotonic deadline", async () => {
     let elapsed = 0;
     const now = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
