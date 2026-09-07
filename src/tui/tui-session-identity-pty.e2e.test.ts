@@ -1,3 +1,5 @@
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { sleep } from "../utils/sleep.js";
@@ -389,8 +391,18 @@ it("falls back to the default session when remembered lookup fails", async () =>
   });
 
   try {
-    await fixture.run.waitForOutput("session main", STARTUP_TIMEOUT_MS);
     await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+
+    // After fallback the header/footer must agree with the send target, not
+    // retain the stale provisional label.
+    const rows = await waitForSynchronizedFrameRows(
+      fixture.run,
+      (frame) => frame.some((row) => row.includes("local ready")),
+      STARTUP_TIMEOUT_MS,
+    );
+    expect(rows.join("\n")).toContain("session main");
+    expect(rows.join("\n")).not.toContain("session picker-target");
+
     await fixture.run.write(`${marker}\r`, { delay: false });
     const sent = await fixture.waitForLogEntry(
       (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", marker),
@@ -398,6 +410,82 @@ it("falls back to the default session when remembered lookup fails", async () =>
     );
     expect(sent.payload).toMatchObject({ sessionKey: "main" });
     expect(markerSends(await readFixtureLog(fixture.logPath), marker)).toHaveLength(1);
+  } finally {
+    await fixture.cleanup();
+  }
+}, 65_000);
+
+it("shows the remembered session label during startup before remote validation", async () => {
+  const stateDir = tempDirs.make("openclaw-tui-provisional-label-");
+  await seedRememberedSession(stateDir);
+  // 10000 ms restore delay ensures listSessions is still pending when the
+  // first synchronized frame renders.  The predicate timeout of 8000 ms
+  // matches only frames rendered before validation completes — the pre-fix
+  // code renders "session main" first and would time out.
+  const fixture = await startTuiFixture({
+    env: {
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_TUI_PTY_PICKER_FIXTURE: "1",
+      OPENCLAW_TUI_PTY_RESTORE_DELAY_MS: "10000",
+    },
+  });
+
+  try {
+    const rows = await waitForSynchronizedFrameRows(
+      fixture.run,
+      (frame) =>
+        frame.some((row) => row.includes("session picker-target")) &&
+        !frame.some((row) => row.includes("session main")),
+      8_000,
+    );
+    expect(rows.join("\n")).toContain("session picker-target");
+
+    // After validation completes the confirmed session label persists.
+    await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+    const readyRows = await waitForSynchronizedFrameRows(
+      fixture.run,
+      (frame) => frame.some((row) => row.includes("local ready")),
+      STARTUP_TIMEOUT_MS,
+    );
+    expect(readyRows.join("\n")).toContain("session picker-target");
+    expect(readyRows.join("\n")).not.toContain("session main");
+  } finally {
+    await fixture.cleanup();
+  }
+}, 65_000);
+
+it("clears the provisional label after a failed remembered-session lookup", async () => {
+  const stateDir = tempDirs.make("openclaw-tui-provisional-failure-");
+  await seedRememberedSession(stateDir);
+  const fixture = await startTuiFixture({
+    env: {
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_TUI_PTY_PICKER_FIXTURE: "1",
+      OPENCLAW_TUI_PTY_RESTORE_DELAY_MS: "10000",
+      OPENCLAW_TUI_PTY_RESTORE_FAILURES: "1",
+    },
+  });
+
+  try {
+    // While validation is pending the header shows the remembered name.
+    const earlyRows = await waitForSynchronizedFrameRows(
+      fixture.run,
+      (frame) =>
+        frame.some((row) => row.includes("session picker-target")) &&
+        !frame.some((row) => row.includes("session main")),
+      8_000,
+    );
+    expect(earlyRows.join("\n")).toContain("session picker-target");
+
+    // After the delayed lookup fails the label must reconcile to the default.
+    await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+    const readyRows = await waitForSynchronizedFrameRows(
+      fixture.run,
+      (frame) => frame.some((row) => row.includes("local ready")),
+      STARTUP_TIMEOUT_MS,
+    );
+    expect(readyRows.join("\n")).toContain("session main");
+    expect(readyRows.join("\n")).not.toContain("session picker-target");
   } finally {
     await fixture.cleanup();
   }
@@ -450,6 +538,59 @@ it("abandons a stale restore generation without sending or duplicating input", a
     );
     expect(sent.payload).toMatchObject({ sessionKey: REMEMBERED_SESSION_KEY });
     expect(markerSends(await readFixtureLog(fixture.logPath), marker)).toHaveLength(1);
+  } finally {
+    await fixture.cleanup();
+  }
+}, 65_000);
+
+it("starts normally when the pre-render state read throws", async () => {
+  // A state database using a newer schema version makes readTuiLastSessionKey
+  // throw during the pre-render lookup. The TUI must still start (reach its
+  // established startup-failure path inside the started UI) rather than
+  // rejecting runTui() before tui.start().
+  const stateDir = tempDirs.make("openclaw-tui-future-state-");
+  await seedRememberedSession(stateDir);
+  // Overwrite the seeded DB with a valid but future-version database so the
+  // read-only open throws a schema-version error before any query runs.
+  const dbPath = path.join(stateDir, "state", "openclaw.sqlite");
+  const db = new DatabaseSync(dbPath);
+  db.exec(
+    "CREATE TABLE IF NOT EXISTS config_machine_state (state_key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at_ms INTEGER NOT NULL)",
+  );
+  const scopeKey = buildTuiLastSessionScopeKey({
+    connectionUrl: "pty-fixture://local",
+    agentId: "main",
+    sessionScope: "per-sender",
+  });
+  db.prepare(
+    "INSERT OR REPLACE INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
+  ).run(`tui.lastSession.${scopeKey}`, JSON.stringify(REMEMBERED_SESSION_KEY), Date.now());
+  db.exec("PRAGMA user_version = 999");
+  db.close();
+
+  const fixture = await startTuiFixture({
+    env: {
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_TUI_PTY_PICKER_FIXTURE: "1",
+      OPENCLAW_TUI_PTY_RESTORE_DELAY_MS: "10000",
+    },
+  });
+
+  try {
+    // The TUI must reach a rendered frame — it must not reject runTui() before
+    // tui.start(). The schema-version error also breaks the post-connect
+    // restore, so the status shows "startup failed"; what matters is that the
+    // UI is active and the header uses the default session, not the remembered
+    // label that the failed read could not produce.
+    const rows = await waitForSynchronizedFrameRows(
+      fixture.run,
+      (frame) =>
+        frame.some((row) => row.includes("session main")) &&
+        !frame.some((row) => row.includes("session picker-target")),
+      STARTUP_TIMEOUT_MS,
+    );
+    expect(rows.join("\n")).toContain("session main");
+    expect(rows.join("\n")).not.toContain("session picker-target");
   } finally {
     await fixture.cleanup();
   }
