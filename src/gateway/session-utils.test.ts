@@ -2599,6 +2599,15 @@ describe("gateway session utils", () => {
         expect(sibling.displayName).toBe("Project Team / Releases");
       }
       const store = readStore();
+      await recordInboundSessionMeta({
+        storePath,
+        sessionKey: key,
+        ctx: { ...ctx, GroupSubject: undefined },
+      });
+      expect(readStore()[key]).toMatchObject({
+        subject: store[key].subject,
+        displayName: store[key].displayName,
+      });
       await replaceSessionEntry(
         { sessionKey: key, storePath },
         { ...store[key], label: "My planning chat" },
