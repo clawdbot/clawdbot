@@ -1239,6 +1239,52 @@ describe("containerRpcRequest send", () => {
     expect(body).not.toHaveProperty("quote_author");
     expect(body).not.toHaveProperty("quote_message");
   });
+
+  it("keeps decimal text-style spans and drops hex/exponent offsets", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...bodyStream(JSON.stringify({ timestamp: "1700000000000" })),
+    });
+
+    await containerRpcRequest(
+      "send",
+      {
+        account: "+14259798283",
+        recipient: ["+15550001111"],
+        message: "Bold text",
+        "text-style": ["0:4:BOLD", "0x10:4:ITALIC", "1e1:2:BOLD", "0:1.5:BOLD"],
+      },
+      { baseUrl: "http://localhost:8080" },
+    );
+
+    const body = parseFetchBody();
+    expect(body.message).toBe("**Bold** text");
+    expect(body.text_mode).toBe("styled");
+  });
+
+  it("omits styled mode when every text-style span is non-decimal", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...bodyStream(JSON.stringify({ timestamp: "1700000000000" })),
+    });
+
+    await containerRpcRequest(
+      "send",
+      {
+        account: "+14259798283",
+        recipient: ["+15550001111"],
+        message: "Bold text",
+        "text-style": ["0x0:0x4:BOLD", "1e0:4:BOLD"],
+      },
+      { baseUrl: "http://localhost:8080" },
+    );
+
+    const body = parseFetchBody();
+    expect(body.message).toBe("Bold text");
+    expect(body).not.toHaveProperty("text_mode");
+  });
 });
 
 describe("containerSendReceipt", () => {

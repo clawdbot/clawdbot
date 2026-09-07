@@ -23,6 +23,7 @@ import {
 } from "openclaw/plugin-sdk/response-limit-runtime";
 import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import WebSocket from "ws";
+import { parseContainerTextStyleEntry } from "./client-container-text-style.js";
 
 type ContainerRpcOptions = {
   baseUrl: string;
@@ -834,11 +835,8 @@ export async function containerRpcRequest<T = unknown>(
 
       const textStylesRaw = p["text-style"] as string[] | undefined;
       const textStyles = textStylesRaw?.flatMap((s) => {
-        const [start, length, style] = s.split(":");
-        if (start === undefined || length === undefined || style === undefined) {
-          return [];
-        }
-        return [{ start: Number(start), length: Number(length), style }];
+        const parsed = parseContainerTextStyleEntry(s);
+        return parsed ? [parsed] : [];
       });
 
       const quoteTimestamp = normalizeContainerQuoteTimestamp(
