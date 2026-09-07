@@ -1,8 +1,11 @@
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Context, Model } from "../../../llm/types.js";
-import type { ProviderPlugin } from "../../../plugins/types.js";
-import { loadBundledPluginFacade } from "../../../test-utils/bundled-plugin-public-surface.js";
+import { submitEmbeddedAttemptPrompt } from "../../src/agents/embedded-agent-runner/run/attempt-prompt-submit.js";
+import { buildRuntimeContextCustomMessage } from "../../src/agents/embedded-agent-runner/run/runtime-context-prompt.js";
+import {
+  clearEmbeddedSessionPromptStates,
+  getEmbeddedSessionPromptState,
+} from "../../src/agents/embedded-agent-runner/session-prompt-state.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -10,13 +13,10 @@ import {
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
   testModel,
-} from "../../sessions/agent-session-loop-correctness.test-support.js";
-import {
-  clearEmbeddedSessionPromptStates,
-  getEmbeddedSessionPromptState,
-} from "../session-prompt-state.js";
-import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
-import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
+} from "../../src/agents/sessions/agent-session-loop-correctness.test-support.js";
+import type { Context, Model } from "../../src/llm/types.js";
+import type { ProviderPlugin } from "../../src/plugins/types.js";
+import { loadBundledPluginFacade } from "../../src/test-utils/bundled-plugin-public-surface.js";
 
 registerAgentSessionLoopTestLifecycle();
 const sessionId = "responses-runtime-context";
