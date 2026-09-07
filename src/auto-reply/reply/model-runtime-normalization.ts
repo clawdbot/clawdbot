@@ -128,13 +128,14 @@ export function mergePreparedConfiguredCatalog(params: {
   if (!params.prepared?.length) {
     return params.configured;
   }
-  const preparedByKey = new Map(
-    params.prepared.map((entry) => [modelKey(entry.provider, entry.id), entry]),
+  const mergedByKey = new Map(
+    params.configured.map((entry) => [modelKey(entry.provider, entry.id), entry]),
   );
-  return params.configured.map((entry) => {
-    const prepared = preparedByKey.get(modelKey(entry.provider, entry.id));
-    // The prepared row owns runtime capabilities; the configured row limits
-    // visibility and retains any authored metadata absent from that snapshot.
-    return prepared ? { ...entry, ...prepared } : entry;
-  });
+  // Plugin-owned providers need not have authored models.providers rows. Keep
+  // their prepared capabilities too; selection applies visibility after this merge.
+  for (const entry of params.prepared) {
+    const key = modelKey(entry.provider, entry.id);
+    mergedByKey.set(key, { ...mergedByKey.get(key), ...entry });
+  }
+  return [...mergedByKey.values()];
 }

@@ -188,6 +188,7 @@ const ModelDefinitionSchema = Type.Object({
     }),
   ),
   contextWindow: Type.Optional(Type.Number()),
+  contextTokens: Type.Optional(Type.Number()),
   maxTokens: Type.Optional(Type.Number()),
   params: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
   headers: Type.Optional(Type.Record(Type.String(), Type.String())),
@@ -694,6 +695,7 @@ export class ModelRegistry {
           input: runtimeInput,
           cost: modelDef.cost ?? defaultCost,
           contextWindow: modelDef.contextWindow ?? 128000,
+          contextTokens: modelDef.contextTokens,
           maxTokens: modelDef.maxTokens ?? 16384,
           ...(modelDef.maxTokens !== undefined ? { maxTokensSource } : {}),
           params: modelDef.params,
@@ -1015,6 +1017,7 @@ export class ModelRegistry {
           input: modelDef.input,
           cost: modelDef.cost,
           contextWindow: modelDef.contextWindow,
+          contextTokens: modelDef.contextTokens,
           maxTokens: modelDef.maxTokens,
           params: modelDef.params,
           headers: undefined,
@@ -1061,6 +1064,7 @@ export interface ProviderConfigInput {
     input: ("text" | "image")[];
     cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
     contextWindow: number;
+    contextTokens?: number;
     maxTokens: number;
     params?: Record<string, unknown>;
     headers?: Record<string, string>;
