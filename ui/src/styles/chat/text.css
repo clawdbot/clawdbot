@@ -806,13 +806,25 @@
 /* Code surfaces must lift off the host bubble in every theme. --secondary equals
    --card on every dark palette, so chips painted with it vanished inside user
    bubbles; --bg-muted/--border-strong separate in both modes without an override. */
-.chat-text :where(:not(pre, a.markdown-file-link) > code) {
+.chat-text
+  :where(:not(pre, a.markdown-file-link, a.markdown-github-item, a.markdown-code-url) > code) {
   background: var(--bg-muted);
   padding: 0.1em 0.2em;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong);
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+/* Classification wins over authoring syntax: a URL keeps the same link
+   presentation whether it was written bare or in backticks. */
+.chat-text :is(a.markdown-github-item, a.markdown-code-url) > code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
 }
 
 /* Classification wins over authoring syntax: once a span is recognized as a

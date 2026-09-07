@@ -556,9 +556,13 @@ describe("toSanitizedMarkdownHtml links", () => {
       expect(fragment.querySelector("img.markdown-link-favicon")).toBeNull();
     });
 
-    it("emits an inert hostname-only placeholder for enabled web links", () => {
+    it.each([
+      ["authored label", "[Docs](https://docs.example.com/a?secret=1#fragment)"],
+      ["plain text", "https://docs.example.com/a?secret=1#fragment"],
+      ["inline code", "`https://docs.example.com/a?secret=1#fragment`"],
+    ])("emits an inert hostname-only placeholder for enabled web links in %s", (kind, input) => {
       const fragment = htmlFragment(
-        toSanitizedMarkdownHtml("[Docs](https://docs.example.com/a?secret=1#fragment)", {
+        toSanitizedMarkdownHtml(input, {
           linkFavicons: true,
         }),
       );
@@ -567,6 +571,9 @@ describe("toSanitizedMarkdownHtml links", () => {
       expect(image?.dataset.linkFaviconHost).toBe("docs.example.com");
       expect(image?.hasAttribute("src")).toBe(false);
       expect(image?.alt).toBe("");
+      const link = image?.closest("a");
+      expect(link?.getAttribute("href")).toBe("https://docs.example.com/a?secret=1#fragment");
+      expect(link?.classList.contains("markdown-bare-url")).toBe(kind !== "authored label");
     });
 
     it("keeps the bundled GitHub mark and skips image-only links", () => {
@@ -834,6 +841,26 @@ describe("toSanitizedMarkdownHtml links", () => {
   });
 
   describe("bare url links", () => {
+    it.each([
+      ["surrounding prose", "see https://example.com/path"],
+      ["multiple URLs", "https://example.com https://example.org"],
+      ["relative path", "/docs/example"],
+      ["non-web scheme", "ftp://example.com/file"],
+    ])("leaves inline code containing %s unlinked", (_kind, content) => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(`\`${content}\``));
+      expect(fragment.querySelector("a")).toBeNull();
+      expect(fragment.querySelector("code")?.textContent).toBe(content);
+    });
+
+    it("keeps a code URL inside an authored link attached to that destination", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("[`https://example.com`](https://example.org)"),
+      );
+      expect(fragment.querySelectorAll("a")).toHaveLength(1);
+      expect(fragment.querySelector("a")?.getAttribute("href")).toBe("https://example.org");
+      expect(fragment.querySelector("a code")?.textContent).toBe("https://example.com");
+    });
+
     it("marks autolinked URL text but not authored labels", () => {
       const fragment = htmlFragment(
         toSanitizedMarkdownHtml(
@@ -857,6 +884,25 @@ describe("toSanitizedMarkdownHtml links", () => {
     it.each([
       ["bare pull request", "https://github.com/openclaw/openclaw/pull/3434", "#3434", "pull"],
       ["bare issue", "https://github.com/openclaw/openclaw/issues/3435", "#3435", "issue"],
+      [
+        "inline pull request",
+        "`https://github.com/openclaw/openclaw/pull/141131`",
+        "#141131",
+        "pull",
+      ],
+      ["inline issue", "`https://github.com/openclaw/openclaw/issues/3435`", "#3435", "issue"],
+      [
+        "padded inline URL",
+        "`  https://github.com/openclaw/openclaw/pull/141131  `",
+        "#141131",
+        "pull",
+      ],
+      [
+        "inline repository",
+        "`https://github.com/openclaw/openclaw`",
+        "openclaw/openclaw",
+        undefined,
+      ],
       ["autolink", "<https://github.com/openclaw/openclaw/pull/3434>", "#3434", "pull"],
       ["bare www item", "https://www.github.com/openclaw/openclaw/issues/3435", "#3435", "issue"],
       ["repository", "https://github.com/openclaw/openclaw", "openclaw/openclaw", undefined],
@@ -1014,10 +1060,10 @@ describe("toSanitizedMarkdownHtml links", () => {
       expect(fragment.querySelector("a.markdown-github-item, a[data-github-kind]")).toBeNull();
     });
 
-    it("leaves github urls inside code untouched", () => {
+    it("leaves github urls inside fenced code blocks untouched", () => {
       const fragment = htmlFragment(
         toSanitizedMarkdownHtml(
-          "`https://github.com/openclaw/openclaw`\n\n```\nhttps://github.com/openclaw/openclaw\n```\n\n`https://github.com/o/r/issues/3434`\n\n```\nhttps://github.com/o/r/pull/3434\n```",
+          "```\nhttps://github.com/openclaw/openclaw\n```\n\n```\nhttps://github.com/o/r/pull/3434\n```",
         ),
       );
       expect(fragment.querySelector("a")).toBeNull();

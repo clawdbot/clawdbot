@@ -38,6 +38,13 @@ const LINK_FORMS = [
     lead: "then the fix is in ",
   },
   {
+    className: "markdown-code-url markdown-bare-url markdown-github-link markdown-github-item",
+    kind: "pull",
+    id: "inline-pull",
+    label: "<code>#3434</code>",
+    lead: "then the fix is in ",
+  },
+  {
     className: "markdown-github-link markdown-github-item",
     kind: "pull",
     id: "repository-ref",
@@ -49,6 +56,13 @@ const LINK_FORMS = [
     kind: "",
     id: "bare-url",
     label: "text.css",
+    lead: "then the owning rule lives at ",
+  },
+  {
+    className: "markdown-code-url markdown-bare-url markdown-github-link",
+    kind: "",
+    id: "inline-bare-url",
+    label: "<code>text.css</code>",
     lead: "then the owning rule lives at ",
   },
   {
@@ -113,14 +127,14 @@ async function probeWrap(
             // invariant: the mark is never left behind on the previous line.
             const linkStart = link.getClientRects()[0];
             const labelRange = document.createRange();
-            const labelText = link.firstChild;
+            const labelText = (link.querySelector("code") ?? link).firstChild;
             if (!labelText || !linkStart) {
               throw new Error(`Missing label geometry for ${id}`);
             }
             labelRange.setStart(labelText, 0);
             labelRange.setEnd(labelText, 1);
             const labelStart = labelRange.getBoundingClientRect();
-            labelRange.selectNodeContents(link);
+            labelRange.selectNodeContents(labelText);
             collected.push({
               columnWidth,
               fragments: link.getClientRects().length,
@@ -186,7 +200,7 @@ describeGitHubLinkPresentation("chat GitHub link presentation", () => {
   it("keeps GitHub links breaking across lines instead of moving whole", async () => {
     const samples = await probeWrap("dark");
     // Non-item links still fill the line they start on rather than moving whole.
-    for (const id of ["bare-url", "authored"]) {
+    for (const id of ["bare-url", "inline-bare-url", "authored"]) {
       const collected = samples[id] ?? [];
       expect({ id, splits: collected.some((sample) => sample.fragments > 1) }).toEqual({
         id,
@@ -204,7 +218,7 @@ describeGitHubLinkPresentation("chat GitHub link presentation", () => {
       try {
         await page.goto(`file://${fixtureFile}`);
         const masks: string[] = [];
-        for (const id of ["issue", "pull"]) {
+        for (const id of ["issue", "pull", "inline-pull"]) {
           const chip = page.locator(`#${id}`);
           const idle = await chip.evaluate((element) => {
             const style = getComputedStyle(element);
@@ -244,6 +258,33 @@ describeGitHubLinkPresentation("chat GitHub link presentation", () => {
           .locator("#authored")
           .evaluate((element) => getComputedStyle(element, "::before").maskImage);
         expect(new Set([...masks, genericMask]).size).toBe(3);
+        for (const id of ["pull", "bare-url"]) {
+          const presentation = await page.locator(`#inline-${id}`).evaluate((link, bareId) => {
+            const code = link.querySelector("code");
+            const bare = document.getElementById(bareId);
+            if (!code || !bare) {
+              throw new Error(`Missing inline code presentation fixture for ${bareId}`);
+            }
+            const codeStyle = getComputedStyle(code);
+            const linkStyle = getComputedStyle(link);
+            const linkBox = link.getBoundingClientRect();
+            const bareBox = bare.getBoundingClientRect();
+            return {
+              codeTypography: [codeStyle.fontFamily, codeStyle.fontSize, codeStyle.color],
+              linkTypography: [linkStyle.fontFamily, linkStyle.fontSize, linkStyle.color],
+              background: codeStyle.backgroundColor,
+              border: codeStyle.borderWidth,
+              padding: codeStyle.padding,
+              linkSize: [linkBox.width, linkBox.height],
+              bareSize: [bareBox.width, bareBox.height],
+            };
+          }, id);
+          expect(presentation.codeTypography).toEqual(presentation.linkTypography);
+          expect(presentation.background).toBe("rgba(0, 0, 0, 0)");
+          expect(presentation.border).toBe("0px");
+          expect(presentation.padding).toBe("0px");
+          expect(presentation.linkSize).toEqual(presentation.bareSize);
+        }
       } finally {
         await page.close();
       }

@@ -18,7 +18,11 @@ import {
 import { installMarkdownGitHubRefs } from "./markdown-github-refs.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
-import { installMarkdownSessionLinks, SESSION_LINK_SCAN_RE } from "./markdown-session-links.ts";
+import {
+  installMarkdownSessionLinks,
+  parseMarkdownSessionUrl,
+  SESSION_LINK_SCAN_RE,
+} from "./markdown-session-links.ts";
 import { installMarkdownTables } from "./markdown-tables.ts";
 import { escapeMarkdownHtml } from "./markdown-text.ts";
 
@@ -499,19 +503,42 @@ export function createMarkdownParser(): MarkdownItParser {
 
   // Classify web anchors for presentation; runs after linkify so bare URLs are
   // already anchors. The GitHub mark skips links whose only content is an image
-  // (badges/shields), where a mark beside a mark reads as noise. Code spans and
-  // fences need no exclusion: markdown-it does not linkify inside them.
+  // (badges/shields), where a mark beside a mark reads as noise. A code span
+  // containing only a web URL gets the same classification as a bare URL.
   markdownParser.core.ruler.after("linkify", "web-link-classes", (state) => {
     for (const blockToken of state.tokens) {
       if (blockToken.type !== "inline" || !blockToken.children) {
         continue;
       }
       const children = blockToken.children;
+      let linkDepth = 0;
       for (let index = 0; index < children.length; index++) {
         const open = children[index];
+        if (open?.type === "link_close") {
+          linkDepth--;
+        }
+        if (open?.type === "code_inline" && linkDepth === 0) {
+          const href = open.content.trim();
+          if (
+            !/\s/.test(href) &&
+            parseWebLinkHref(href) &&
+            // Session URLs must reach their later owner without an enclosing link.
+            !(state.env.sessionLinks && parseMarkdownSessionUrl(href))
+          ) {
+            const link = new state.Token("link_open", "a", 1);
+            link.attrSet("href", href);
+            link.attrSet("class", "markdown-code-url");
+            link.markup = "linkify";
+            open.content = href;
+            children.splice(index, 1, link, open, new state.Token("link_close", "a", -1));
+            index--;
+            continue;
+          }
+        }
         if (open?.type !== "link_open") {
           continue;
         }
+        linkDepth++;
         const href = String(open.attrGet("href") ?? "");
         const url = href ? parseWebLinkHref(href) : null;
         if (!url) {
