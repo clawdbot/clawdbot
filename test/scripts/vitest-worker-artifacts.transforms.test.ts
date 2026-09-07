@@ -19,6 +19,15 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
     ({ layout, invariant }, { workerArtifacts }) =>
       workerArtifacts.fixtureLifetime.run(async () => {
         const { node } = workerArtifacts.createFixtureCommands();
+        const diagnosticRoot = path.join(
+          root,
+          ".artifacts/task38-integration/ci-planner-timeout/windows-phases",
+        );
+        fs.mkdirSync(diagnosticRoot, { recursive: true });
+        const diagnosticDirectory = fs.mkdtempSync(
+          path.join(diagnosticRoot, `${layout}-${invariant.replaceAll(" ", "-")}-`),
+        );
+        let launchIndex = 0;
         const directory = workerArtifacts.fixtureDirectory();
         const { config, value, configuredValue, parent, cacheDirectory } = workerProbe(
           directory,
@@ -42,14 +51,36 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           expectedValue = "first",
           configValue = "first",
         ) => {
-          const result = await node([
-            mode === "compiled" ? "scripts/run-vitest.mjs" : "node_modules/vitest/vitest.mjs",
-            "run",
-            "--config",
-            config,
-            "--project",
-            "first",
-          ]);
+          const launchDirectory = path.join(diagnosticDirectory, `launch-${++launchIndex}-${mode}`);
+          fs.mkdirSync(launchDirectory);
+          fs.writeFileSync(
+            path.join(launchDirectory, "identity.json"),
+            JSON.stringify({
+              layout,
+              invariant,
+              launchIndex,
+              mode,
+              expectedValue,
+              configValue,
+              directory,
+            }),
+          );
+          const result = await node(
+            [
+              mode === "compiled" ? "scripts/run-vitest.mjs" : "node_modules/vitest/vitest.mjs",
+              "run",
+              "--config",
+              config,
+              "--project",
+              "first",
+            ],
+            root,
+            {
+              ...process.env,
+              OPENCLAW_TASK38_PHASE_LOG: path.join(launchDirectory, "child.jsonl"),
+            },
+            launchDirectory,
+          );
           expect(result.code, result.stderr + result.stdout).toBe(0);
           const generation: string = JSON.parse(readLines("generations.jsonl").at(-1)!);
           const observed = JSON.parse(readLines("observations.jsonl").at(-1)!);
@@ -88,9 +119,25 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
               path.join(root, "extensions/memory-core/src/memory/manager-search-knn.child.ts"),
             );
           }
+          fs.appendFileSync(
+            path.join(launchDirectory, "parent.jsonl"),
+            JSON.stringify({
+              event: "generation-and-values-verified",
+              at: Date.now(),
+              monotonicMs: performance.now(),
+            }) + "\n",
+          );
           console.log(
             "cache transport",
-            JSON.stringify({ mode, ...observed, generation, transforms: counts() }),
+            JSON.stringify({
+              layout,
+              invariant,
+              launchIndex,
+              mode,
+              ...observed,
+              generation,
+              transforms: counts(),
+            }),
           );
         };
         await launch("compiled");

@@ -57,14 +57,51 @@ function createWorkerArtifactFixtures({
       return joined;
     }
 
-    function node(args: string[], cwd = root, env = process.env) {
+    function node(args: string[], cwd = root, env = process.env, diagnosticDirectory?: string) {
+      const phase = (event: string, details: Record<string, unknown> = {}) => {
+        if (diagnosticDirectory) {
+          fs.appendFileSync(
+            path.join(diagnosticDirectory, "parent.jsonl"),
+            JSON.stringify({ event, at: Date.now(), monotonicMs: performance.now(), ...details }) +
+              "\n",
+          );
+        }
+      };
+      phase("launch", { args });
       const completion = fixtureLifetime.track(
         runNodeScript(args, env, undefined, {
           cwd,
           signal: commandSignal,
           maxBuffer: 2 * 1024 * 1024,
           requireProcessTreeExit: process.platform !== "win32",
-        }).then((result) => ({ ...result, code: result.status })),
+          onReady: diagnosticDirectory
+            ? (child) => {
+                phase("spawn", { pid: child.pid });
+                const aborted = () => phase("abort");
+                commandSignal.addEventListener("abort", aborted, { once: true });
+                for (const [stream, pipe] of [
+                  ["stdout", child.stdout],
+                  ["stderr", child.stderr],
+                ] as const) {
+                  pipe?.on("data", (chunk: Buffer) => {
+                    fs.appendFileSync(path.join(diagnosticDirectory, `${stream}.log`), chunk);
+                    phase("output", { stream, bytes: chunk.byteLength });
+                  });
+                }
+                child.once("exit", (code, signal) => phase("exit", { code, signal }));
+                child.once("close", (code, signal) => {
+                  commandSignal.removeEventListener("abort", aborted);
+                  phase("close", { code, signal });
+                });
+              }
+            : undefined,
+        }).then((result) => {
+          phase("joined", {
+            code: result.status,
+            error: result.error instanceof Error ? result.error.message : undefined,
+          });
+          return { ...result, code: result.status };
+        }),
       );
       commands.push(completion);
       return completion;
@@ -201,6 +238,11 @@ export function workerProbe(
     import { resolveRuntimeWorkerUrl } from ${JSON.stringify(path.join(root, "src/infra/runtime-worker-url.ts"))};
     import { prepareSqliteReadOnlyLocation } from ${JSON.stringify(path.join(root, "src/infra/sqlite-readonly-location.ts"))};
     import { runSqliteTranscriptArchivePublishWorker } from ${JSON.stringify(path.join(root, "src/config/sessions/session-accessor.sqlite-archive.ts"))};
+    function task38Phase(event, details = {}) {
+      const log = process.env.OPENCLAW_TASK38_PHASE_LOG;
+      if (log) fs.appendFileSync(log, JSON.stringify({event, at:Date.now(), monotonicMs:performance.now(), pid:process.pid, ...details})+'\\n');
+    }
+    task38Phase('collection-complete', {version:process.version, execPath:process.execPath});
     const tuiUrls = Object.values(tuiPtyRuntimeEntrypoints).map(entry => resolveRuntimeWorkerUrl(entry).href);
     const setupUrls = cliCompactionBackendEntrypoints.map(entry => resolveRuntimeWorkerUrl(entry).href);
     // Import acquisition must finish during collection, before any fixture hook starts.
@@ -211,7 +253,14 @@ export function workerProbe(
     });
     vi.mock('node:worker_threads', async (original) => {
       const actual = await original();
-      return {...actual, Worker: vi.fn(function(...args) { return new actual.Worker(...args); })};
+      return {...actual, Worker: vi.fn(function(...args) {
+        task38Phase('archive-worker-create', {url:String(args[0])});
+        const worker = new actual.Worker(...args);
+        worker.once('online', () => task38Phase('archive-worker-online'));
+        worker.on('message', message => task38Phase('archive-worker-message', {type:message.type}));
+        worker.once('exit', code => task38Phase('archive-worker-exit', {code}));
+        return worker;
+      })};
     });
     it('runs current SQLite code in the expected execution mode', async () => {
       const launcherArgv = inject('launcherArgv');
@@ -236,7 +285,9 @@ export function workerProbe(
       db.exec("CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES ('current source');");
       db.close();
       try {
+        task38Phase('sqlite-readonly-start');
         const prepared = await prepareSqliteReadOnlyLocation(file);
+        task38Phase('sqlite-readonly-returned');
         try {
           const snapshot = new DatabaseSync(prepared.location, {readOnly:true});
           expect(snapshot.prepare('SELECT value FROM probe').get()).toEqual({value:'current source'});
@@ -245,7 +296,9 @@ export function workerProbe(
           // The executable identifies the generation; its descriptor may live in a shared chunk.
           const generation = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly).href;
           const sourceMode = ${mode === "auto" ? "generation.endsWith('.ts')" : mode === "source"};
+          task38Phase('archive-publish-start');
           await expect(runSqliteTranscriptArchivePublishWorker([])).resolves.toEqual([]);
+          task38Phase('archive-publish-returned');
           const [archiveUrl] = Worker.mock.calls.at(-1);
           expect(archiveUrl.href.endsWith(sourceMode ? '.ts' : '.js')).toBe(true);
           if (!sourceMode) expect(fileURLToPath(archiveUrl).startsWith(fileURLToPath(new URL('../', generation)))).toBe(true);
@@ -267,8 +320,15 @@ export function workerProbe(
             const poll=setInterval(check,50);
             check();
           });
-        } finally {prepared.cleanup();}
-      } finally {fs.rmSync(dir,{recursive:true,force:true});}
+        } finally {
+          task38Phase('sqlite-cleanup-start');
+          prepared.cleanup();
+          task38Phase('sqlite-cleanup-done');
+        }
+      } finally {
+        fs.rmSync(dir,{recursive:true,force:true});
+        task38Phase('fixture-body-finally-done');
+      }
     });
   `,
   );
