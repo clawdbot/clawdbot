@@ -33,25 +33,40 @@ import {
 } from "./session-accessor.sqlite-transcript-write.js";
 import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
 
-const hooks = vi.hoisted(() => ({ beforeAuthorization: undefined as (() => void) | undefined }));
+const hooks = vi.hoisted(() => ({
+  beforeAuthorization: undefined as (() => void) | undefined,
+  afterWriteAdmission: undefined as (() => Promise<void>) | undefined,
+}));
 vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-accessor.sqlite-archive.js")>();
   return {
     ...actual,
     runSqliteTranscriptArchiveWorkerOperation: (
       params: Parameters<typeof actual.runSqliteTranscriptArchiveWorkerOperation>[0],
-    ) =>
-      actual.runSqliteTranscriptArchiveWorkerOperation({
+    ) => {
+      const withWriteAdmission = params.withWriteAdmission;
+      return actual.runSqliteTranscriptArchiveWorkerOperation({
         ...params,
+        ...(withWriteAdmission
+          ? {
+              withWriteAdmission: (run: Parameters<typeof withWriteAdmission>[0]) =>
+                withWriteAdmission(async (refusal) => {
+                  await hooks.afterWriteAdmission?.();
+                  return await run(refusal);
+                }),
+            }
+          : {}),
         onCommitRequest: () => {
           hooks.beforeAuthorization?.();
           params.onCommitRequest?.();
         },
-      }),
+      });
+    },
   };
 });
 afterEach(() => {
   hooks.beforeAuthorization = undefined;
+  hooks.afterWriteAdmission = undefined;
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -127,11 +142,13 @@ test.each(
     const appends: unknown[] = [];
     const appendErrors: unknown[] = [];
     let commitChecks = 0;
-    let retired = false;
+    let commitRequested = false;
+    let checksDuringWriters = 0;
     const owner = new AsyncLocalStorage<string>();
     hooks.beforeAuthorization = () =>
       owner.run("transcript-writer", () => {
-        retired = rejected;
+        commitRequested = true;
+        const checksBeforeWriters = commitChecks;
         // The worker owns BEGIN IMMEDIATE and is waiting for the parent. Both sync
         // runtimes must service that request before its queued handler can return.
         for (const scope of scopes) {
@@ -162,25 +179,21 @@ test.each(
             appendErrors.push(error);
           }
         }
+        checksDuringWriters = commitChecks - checksBeforeWriters;
       });
     const reclamation = owner.run("reclamation-owner", () =>
-      runExclusiveSqliteSessionWrite(
-        databaseOptions,
-        () =>
-          runSqliteSessionReclamation({
-            diagnostics,
-            forceInProcess: false,
-            plan,
-            assertCommitAllowed: () => {
-              commitChecks += 1;
-              expect(owner.getStore()).toBe("reclamation-owner");
-              if (retired) {
-                throw new Error("reclamation owner retired");
-              }
-            },
-          }),
+      runSqliteSessionReclamation({
         diagnostics,
-      ),
+        forceInProcess: false,
+        plan,
+        assertCommitAllowed: () => {
+          commitChecks += 1;
+          expect(owner.getStore()).toBe("reclamation-owner");
+          if (rejected && commitRequested) {
+            throw new Error("reclamation owner retired");
+          }
+        },
+      }),
     );
     try {
       if (rejected) {
@@ -198,7 +211,7 @@ test.each(
     expect(workers[0]?.id).toBeGreaterThan(0);
     expect(diagnostics).toEqual({ kind: "history-eviction", workerThreadId: workers[0]?.id });
     expect(workers[0]?.worker.threadId).toBe(-1);
-    expect(commitChecks).toBe(2);
+    expect(checksDuringWriters).toBeGreaterThan(0);
     expect(appendErrors).toEqual([]);
     expect(appends).toEqual(
       operation === "entry"
@@ -262,9 +275,7 @@ test("captures removal identity when a synchronous writer authorizes reclamation
   };
   try {
     await expect(
-      runExclusiveSqliteSessionWrite(databaseOptions, () =>
-        runSqliteSessionReclamation({ forceInProcess: false, plan }),
-      ),
+      runSqliteSessionReclamation({ forceInProcess: false, plan }),
     ).resolves.toMatchObject({ kind: "lifecycle-artifacts", value: { removedEntries: 1 } });
     expect(removedSessionIds).toEqual([removed.sessionId]);
     await expect(loadTranscriptEvents(writer)).resolves.toEqual([
@@ -274,6 +285,63 @@ test("captures removal identity when a synchronous writer authorizes reclamation
     unsubscribe();
   }
 });
+
+test.runIf(process.platform !== "win32")(
+  "keeps the opened database and its canonical writer queue after an alias retarget",
+  async () => {
+    const { databaseOptions, scopes } = createFixture(true);
+    const removed = scopes[0]!;
+    const aliasPath = removed.storePath;
+    const expectedEntry = loadSessionEntry(removed);
+    if (!aliasPath || !expectedEntry) {
+      throw new Error("expected the aliased removal fixture entry");
+    }
+    const replacementPath = path.join(path.dirname(databaseOptions.path), "replacement.sqlite");
+    const replacementScope = { ...removed, storePath: replacementPath };
+    replaceSessionEntrySync(replacementScope, expectedEntry);
+    const plan = createLifecycleArtifactReclamationPlan({
+      agentId: databaseOptions.agentId,
+      databaseOptions: { ...databaseOptions, path: aliasPath },
+      entries: [{ sessionKey: removed.sessionKey, expectedEntry }],
+      materializedPlans: [],
+    });
+    let canonicalWrite: Promise<void> | undefined;
+    let canonicalWriteRan = false;
+    hooks.afterWriteAdmission = async () => {
+      hooks.afterWriteAdmission = undefined;
+      // The claim and Worker plan already belong to the original open database.
+      await fs.unlink(aliasPath);
+      symlinkSync(replacementPath, aliasPath);
+      canonicalWrite = runExclusiveSqliteSessionWrite(databaseOptions, async () => {
+        canonicalWriteRan = true;
+      });
+      await yieldToEventLoop();
+      expect(canonicalWriteRan).toBe(false);
+    };
+    const reclamation = runSqliteSessionReclamation({ forceInProcess: false, plan });
+    try {
+      await expect(reclamation).resolves.toMatchObject({
+        kind: "lifecycle-artifacts",
+        value: { removedEntries: 1 },
+      });
+      expect(canonicalWrite).toBeDefined();
+      await canonicalWrite;
+      expect(canonicalWriteRan).toBe(true);
+      expect(
+        loadSessionEntry({
+          ...removed,
+          storePath: databaseOptions.path,
+          readConsistency: "latest",
+        }),
+      ).toBeUndefined();
+      expect(loadSessionEntry({ ...replacementScope, readConsistency: "latest" })).toEqual(
+        expectedEntry,
+      );
+    } finally {
+      await Promise.allSettled([reclamation, ...(canonicalWrite ? [canonicalWrite] : [])]);
+    }
+  },
+);
 
 test.each([false, true])(
   "periodic vacuum services reclamation approval (rejected: %s)",
@@ -295,8 +363,8 @@ test.each([false, true])(
     });
     const maintenanceErrors: unknown[] = [];
     let commitChecks = 0;
+    let commitRequested = false;
     let checksDuringMaintenance = 0;
-    let retired = false;
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const maintenance = configureSqliteWalMaintenance(database.db, {
       busyTimeoutMs: 1_000,
@@ -305,9 +373,10 @@ test.each([false, true])(
     });
     hooks.beforeAuthorization = () => {
       // The worker holds the writer lock and cannot commit until this thread approves it.
-      retired = rejected;
+      commitRequested = true;
+      const checksBeforeMaintenance = commitChecks;
       vi.advanceTimersByTime(1);
-      checksDuringMaintenance = commitChecks;
+      checksDuringMaintenance = commitChecks - checksBeforeMaintenance;
     };
     try {
       const reclamation = runSqliteSessionReclamation({
@@ -315,7 +384,7 @@ test.each([false, true])(
         plan,
         assertCommitAllowed: () => {
           commitChecks += 1;
-          if (retired) {
+          if (rejected && commitRequested) {
             throw new Error("reclamation owner retired");
           }
         },
@@ -329,8 +398,7 @@ test.each([false, true])(
         });
       }
       expect(maintenanceErrors).toEqual([]);
-      expect(checksDuringMaintenance).toBe(2);
-      expect(commitChecks).toBe(2);
+      expect(checksDuringMaintenance).toBeGreaterThan(0);
       const reclaimed = before - freePages();
       expect(reclaimed).toBeGreaterThan(0);
       expect(reclaimed).toBeLessThanOrEqual(512);
@@ -392,20 +460,15 @@ test("queued and different-store reclamations retain only their own worker ident
   const diagnostics: SqliteSessionReclamationDiagnostics[] = [{}, {}, {}];
   const operations = [first, first, other].map((fixture, index) => {
     const record = diagnostics[index];
-    return runExclusiveSqliteSessionWrite(
-      fixture.databaseOptions,
-      () =>
-        runSqliteSessionReclamation({
-          forceInProcess: false,
-          plan: fixture.plan,
-          diagnostics: record,
-        }),
-      record,
-    );
+    return runSqliteSessionReclamation({
+      forceInProcess: false,
+      plan: fixture.plan,
+      diagnostics: record,
+    });
   });
   try {
-    // The same-store successor has not entered its callback or claimed a worker.
-    expect(diagnostics[1]).toEqual({});
+    // The queued successor has not claimed a worker.
+    expect(diagnostics[1]).not.toHaveProperty("workerThreadId");
     await Promise.all(operations);
     expect(diagnostics.map((record) => record.kind)).toEqual([
       "history-eviction",
@@ -445,18 +508,17 @@ test("file warnings link an awaited native worker without attributing it to the 
   const observeWorker = (worker: Worker) => workers.push({ worker, id: worker.threadId });
   setLoggerOverride({ level: "info", file });
   process.on("worker", observeWorker);
-  const first = runExclusiveSqliteSessionWrite(
-    databaseOptions,
-    async () => {
-      // Exercise the real slow-warning threshold without a large database or a fake clock.
-      await delay(1_100);
-      return runSqliteSessionReclamation({ forceInProcess: false, plan, diagnostics });
-    },
-    diagnostics,
-  );
-  const second = runExclusiveSqliteSessionWrite(databaseOptions, async () => "successor");
+  let second: Promise<string> | undefined;
+  hooks.afterWriteAdmission = async () => {
+    hooks.afterWriteAdmission = undefined;
+    second = runExclusiveSqliteSessionWrite(databaseOptions, async () => "successor");
+    // Hold the actual Worker's admission across the real slow-warning threshold.
+    await delay(1_100);
+  };
+  const first = runSqliteSessionReclamation({ forceInProcess: false, plan, diagnostics });
   try {
     await expect(first).resolves.toMatchObject({ kind: "history-eviction" });
+    expect(second).toBeDefined();
     await expect(second).resolves.toBe("successor");
     await flushLogger();
     const records = (await fs.readFile(file, "utf8"))

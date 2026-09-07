@@ -47,7 +47,11 @@ import type { SessionEntryRemovalPlan } from "./session-accessor.sqlite-lifecycl
 import { deleteSessionDeliveryArtifacts } from "./session-accessor.sqlite-node-artifacts.js";
 import { withSqliteReclamationAuthorization } from "./session-accessor.sqlite-reclamation-commit.js";
 import { isRecentHistoricalSessionId } from "./session-accessor.sqlite-references.js";
-import { cloneSessionEntry, getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import {
+  cloneSessionEntry,
+  getSessionKysely,
+  runExclusiveSqliteSessionWrite,
+} from "./session-accessor.sqlite-scope.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type SessionBoardCleanupDatabase = Pick<
@@ -420,18 +424,26 @@ export async function runSqliteSessionReclamation(params: {
       env: params.plan.databaseOptions.env,
     })
   ) {
-    return reclaimSqliteSessionInTransaction(params.plan, {
-      beforeMutation: params.assertCommitAllowed,
-      onCommit: (database) => {
-        const publish = prepareReclamationPublication(params.plan);
-        if (publish) {
-          deferOpenClawAgentPostCommitPublication(database, publish);
-        }
-        params.onInProcessCommit?.(database);
-      },
-    });
+    return await runExclusiveSqliteSessionWrite(
+      params.plan.databaseOptions,
+      async () =>
+        reclaimSqliteSessionInTransaction(params.plan, {
+          beforeMutation: params.assertCommitAllowed,
+          onCommit: (database) => {
+            const publish = prepareReclamationPublication(params.plan);
+            if (publish) {
+              deferOpenClawAgentPostCommitPublication(database, publish);
+            }
+            params.onInProcessCommit?.(database);
+          },
+        }),
+      params.diagnostics,
+    );
   }
-  const retained = retainOpenClawAgentDatabaseReadOnly(params.plan.databaseOptions);
+  const retained = await runExclusiveSqliteSessionWrite(params.plan.databaseOptions, async () => {
+    params.assertCommitAllowed?.();
+    return retainOpenClawAgentDatabaseReadOnly(params.plan.databaseOptions);
+  });
   if (!retained.found) {
     throw new Error("SQLite session reclamation lost its prepared database");
   }
@@ -466,6 +478,24 @@ export async function runSqliteSessionReclamation(params: {
           diagnostics: params.diagnostics,
           expectedMessageType: "reclaimed",
           onCommitRequest: () => recoveredCommitErrors.push(...authorize()),
+          withWriteAdmission: async (run) =>
+            await runExclusiveSqliteSessionWrite(
+              plan.databaseOptions,
+              async () => {
+                let refusal: { error: unknown } | undefined;
+                try {
+                  assertCommitAllowed();
+                } catch (error) {
+                  refusal = { error };
+                }
+                const completed = await run(refusal);
+                if (completed?.[0]) {
+                  // Publish captured identities after native exit, before releasing the writer.
+                  publishCommitted?.();
+                }
+              },
+              params.diagnostics,
+            ),
           transferList: prepareReclamationWorkerTransferList(plan),
           workerData: {
             commitGate,
@@ -499,8 +529,6 @@ export async function runSqliteSessionReclamation(params: {
         path: params.plan.databaseOptions.path,
       });
     }
-    // Publish the removal identities captured at authorization only after confirmed settlement.
-    publishCommitted?.();
     return workerResult.result;
   } finally {
     claim.release();
