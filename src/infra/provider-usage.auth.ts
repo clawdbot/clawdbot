@@ -6,6 +6,7 @@ import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   hasAnyAuthProfileStoreSource,
   resolveApiKeyForProfile,
+  resolveAuthProfileEligibility,
   resolveAuthProfileOrder,
   type AuthProfileStore,
 } from "../agents/auth-profiles.js";
@@ -192,28 +193,32 @@ function resolveProviderApiKeyCandidatesFromConfigAndStoreSync(params: {
     return candidates;
   }
 
-  const normalizedProviderIds = new Set(
-    normalizeUniqueStringEntries(
-      params.providerIds.map((providerId) => normalizeProviderId(providerId)),
-    ),
+  const normalizedProviderIds = normalizeUniqueStringEntries(
+    params.providerIds.map((providerId) => normalizeProviderId(providerId)),
   );
   const store = resolveUsageAuthStore(params.state);
   const profileIds = params.profileIds
     ? dedupeProfileIds([...params.profileIds])
-    : [...normalizedProviderIds].flatMap((provider) =>
+    : normalizedProviderIds.flatMap((provider) =>
         resolveAuthProfileOrder({ cfg: params.state.cfg, store, provider }),
       );
-  const credentials = profileIds
-    .map((id) => store.profiles[id])
-    .filter(
-      (
-        profile,
-      ): profile is
-        | { type: "api_key"; provider: string; key: string }
-        | { type: "token"; provider: string; token: string } =>
-        profile?.type === "api_key" || profile?.type === "token",
-    );
-  for (const credential of credentials) {
+  for (const profileId of profileIds) {
+    const credential = store.profiles[profileId];
+    if (!credential || (credential.type !== "api_key" && credential.type !== "token")) {
+      continue;
+    }
+    // Pinning skips account ordering, not credential eligibility. Otherwise a
+    // saved token's expiry or configured auth mode could be bypassed by usage.
+    if (
+      params.profileIds &&
+      !normalizedProviderIds.some(
+        (provider) =>
+          resolveAuthProfileEligibility({ cfg: params.state.cfg, store, provider, profileId })
+            .eligible,
+      )
+    ) {
+      continue;
+    }
     const value = normalizeSecretInput(
       credential.type === "api_key" ? credential.key : credential.token,
     );

@@ -168,6 +168,49 @@ describe("provider-usage.load", () => {
     },
   );
 
+  it.each(["sync", "async"])(
+    "respects selected-profile token expiry through the %s usage helper",
+    async (helper) => {
+      resolveProviderUsageAuthWithPluginMock.mockImplementation(async ({ context }) => {
+        const token =
+          helper === "sync"
+            ? context.resolveApiKeyFromConfigAndStore()
+            : (await context.resolveApiKeyCandidatesFromConfigAndStore?.())?.[0];
+        return token ? { token } : { handled: true };
+      });
+      const fetchMock = createProviderUsageFetch(async () => makeResponse(200, "{}"));
+      resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async ({ context }) => {
+        await context.fetchFn("https://usage.example.invalid", {
+          headers: { Authorization: `Bearer ${context.token}` },
+        });
+        return { provider: "zai", displayName: "Z.AI", windows: [] };
+      });
+      const options = {
+        authProfile: { provider: "zai", profileId: "zai:saved" },
+        authStore: {
+          version: 1,
+          profiles: {
+            "zai:saved": {
+              type: "token",
+              provider: "zai",
+              token: "synthetic-expired-token",
+              expires: Date.now() - 60_000,
+            },
+          },
+        },
+        config: {},
+        env: {},
+        fetch: fetchMock,
+      } satisfies Parameters<typeof loadProviderUsageSummary>[0];
+      const summary = await loadProviderUsageSummary(options);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(summary.providers).toEqual([]);
+      options.authStore.profiles["zai:saved"].expires = Date.now() + 60_000;
+      await loadProviderUsageSummary(options);
+      expect(fetchMock).toHaveBeenCalledOnce();
+    },
+  );
+
   it("does not fetch an account fallback for provider-only billing", async () => {
     resolveProviderUsageAuthWithPluginMock.mockResolvedValueOnce({
       token: "account-token",

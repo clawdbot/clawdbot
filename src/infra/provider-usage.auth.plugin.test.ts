@@ -19,7 +19,12 @@ const resolveApiKeyForProfileMock = vi.fn(
   async (..._args: unknown[]): Promise<{ apiKey: string; provider: string } | null> => null,
 );
 
-vi.mock("../agents/auth-profiles.js", () => ({
+vi.mock("../agents/auth-profiles.js", async () => ({
+  resolveAuthProfileEligibility: (
+    await vi.importActual<typeof import("../agents/auth-profiles/order.js")>(
+      "../agents/auth-profiles/order.js",
+    )
+  ).resolveAuthProfileEligibility,
   dedupeProfileIds: (profileIds: string[]) => [...new Set(profileIds)],
   ensureAuthProfileStore: () => ensureAuthProfileStoreMock(),
   ensureAuthProfileStoreWithoutExternalProfiles: () =>

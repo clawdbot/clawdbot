@@ -8,7 +8,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 
-vi.mock("../agents/auth-profiles.js", () => {
+vi.mock("../agents/auth-profiles.js", async () => {
+  const { resolveAuthProfileEligibility } = await vi.importActual<
+    typeof import("../agents/auth-profiles/order.js")
+  >("../agents/auth-profiles/order.js");
   const normalizeProvider = (provider?: string | null): string =>
     (provider ?? "")
       .trim()
@@ -129,6 +132,7 @@ vi.mock("../agents/auth-profiles.js", () => {
     listProfilesForProvider,
     resolveApiKeyForProfile,
     resolveAuthProfileOrder,
+    resolveAuthProfileEligibility,
   };
 });
 
