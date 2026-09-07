@@ -6,6 +6,7 @@ import {
   captureWarmImage,
   commandResult,
   createWarmProvider,
+  openWarmImageStore,
   provisionWarmProfile,
   LEASE_ID,
   OPERATION_ID,
@@ -65,6 +66,15 @@ describe("Crabbox provisioning cancellation", () => {
     });
     if (warm) {
       await captureWarmImage(provider, profile);
+      if (phase === "checkpoint inspect") {
+        // Completed captures skip inspection; exercise a persisted pending checkpoint.
+        const store = openWarmImageStore();
+        const image = store.entries()[0]!;
+        store.register(image.key, {
+          ...image.value,
+          image: { ...image.value.image!, state: "pending" },
+        });
+      }
       calls.length = 0;
     }
     armed = true;

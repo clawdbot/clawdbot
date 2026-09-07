@@ -13,6 +13,7 @@ await runCliWithExitFinalization({
       { root, env: process.env },
       async () => {
         await finishUpdate({
+          mutationStarted: true,
           result: {
             status: "error",
             mode: "git",

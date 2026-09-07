@@ -101,18 +101,18 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
       context: {
         weight: undefined,
         loading: false,
-        status: { error: null, hasLoaded: false, stale: false },
+        status: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
       },
       timeSeriesMode: "cumulative",
       timeSeriesBreakdownMode: "total",
       timeSeries: null,
       timeSeriesLoading: false,
-      timeSeriesStatus: { error: null, hasLoaded: false, stale: false },
+      timeSeriesStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
       timeSeriesCursorStart: null,
       timeSeriesCursorEnd: null,
       sessionLogs: null,
       sessionLogsLoading: false,
-      sessionLogsStatus: { error: null, hasLoaded: false, stale: false },
+      sessionLogsStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
       sessionLogsExpanded: false,
       logFilters: {
         roles: [],
@@ -161,9 +161,6 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
         onTimeSeriesModeChange: noop,
         onTimeSeriesBreakdownChange: noop,
         onTimeSeriesCursorRangeChange: noop,
-        onRetryTimeSeries: noop,
-        onRetrySessionLogs: noop,
-        onRetryContextWeight: noop,
       },
     },
     ...overrides,
@@ -710,6 +707,8 @@ describe("renderUsage", () => {
                     limit: 20,
                     unit: "USD",
                   },
+                  { type: "budget", used: 12.5, limit: 20, unit: " jPy " },
+                  { type: "budget", used: 1.5, limit: 3, unit: " Credits " },
                 ],
               },
             ],
@@ -725,77 +724,12 @@ describe("renderUsage", () => {
     expect(card?.textContent).toContain("75% left");
     expect(card?.textContent).toContain("$64.50");
     expect(card?.textContent).toContain("$5.00 / $20.00");
-  });
-
-  it("renders provider-reported cost history and attribution", () => {
-    const container = document.createElement("div");
-
-    render(
-      renderUsage(
-        createUsageProps({
-          data: {
-            ...createUsageProps().data,
-            providerUsage: [
-              {
-                provider: "openai",
-                displayName: "OpenAI",
-                plan: "Admin API",
-                windows: [],
-                costHistory: {
-                  unit: "USD",
-                  periodDays: 30,
-                  daily: [
-                    {
-                      date: new Date().toISOString().slice(0, 10),
-                      amount: 12.5,
-                      requests: 42,
-                      inputTokens: 1_000,
-                      cacheReadTokens: 400,
-                      cacheWriteTokens: 0,
-                      outputTokens: 250,
-                      totalTokens: 1_250,
-                    },
-                    {
-                      date: "2026-01-01",
-                      amount: 0,
-                      requests: 1,
-                      inputTokens: 50,
-                      cacheReadTokens: 0,
-                      cacheWriteTokens: 0,
-                      outputTokens: 10,
-                      totalTokens: 60,
-                    },
-                  ],
-                  models: [
-                    {
-                      name: "gpt-5.5",
-                      requests: 42,
-                      inputTokens: 1_000,
-                      cacheReadTokens: 400,
-                      cacheWriteTokens: 0,
-                      outputTokens: 250,
-                      totalTokens: 1_250,
-                    },
-                  ],
-                  categories: [{ name: "Responses", amount: 12.5 }],
-                },
-              },
-            ],
-          },
-        }),
+    expect(
+      Array.from(
+        container.querySelectorAll(".provider-usage-billing-row strong"),
+        (value) => value.textContent,
       ),
-      container,
-    );
-
-    const card = container.querySelector(".provider-usage-card");
-    expect(card?.textContent).toContain("$12.50");
-    expect(card?.textContent).toContain("43 requests");
-    expect(card?.textContent).toContain("gpt-5.5");
-    expect(card?.textContent).toContain("Responses");
-    const bars = card?.querySelectorAll<HTMLElement>(".provider-cost-chart span");
-    expect(bars).toHaveLength(2);
-    expect(bars?.[0]?.style.height).toBe("100%");
-    expect(bars?.[1]?.style.height).toBe("0%");
+    ).toEqual(["$64.50", "$5.00 / $20.00", "¥13 / ¥20", "1.5  Credits  / 3  Credits "]);
   });
 
   it("filters visible sessions when an agent scope is selected", () => {

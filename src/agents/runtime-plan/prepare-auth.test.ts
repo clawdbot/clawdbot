@@ -1898,6 +1898,30 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     ).toThrow(/not configured for openai/u);
   });
 
+  it("keeps provider incompatibility for a config-only AWS SDK profile", () => {
+    const profileId = "amazon-bedrock:default";
+    expect(() =>
+      prepareAgentRuntimeAuthPlan({
+        ...virtualCodexAuthFixture(),
+        config: {
+          auth: { profiles: { [profileId]: { provider: "amazon-bedrock", mode: "aws-sdk" } } },
+          models: {
+            providers: {
+              "amazon-bedrock": {
+                auth: "aws-sdk",
+                baseUrl: "https://bedrock.example.test",
+                models: [],
+              },
+            },
+          },
+        },
+        authProfileStore: authStore({}),
+        sessionAuthProfileId: profileId,
+        sessionAuthProfileSource: "user",
+      }),
+    ).toThrow(/not configured for openai/u);
+  });
+
   it("rejects unavailable user-pinned OpenAI profiles on the virtual Codex provider", () => {
     expect(() =>
       prepareAgentRuntimeAuthPlan({
@@ -1913,7 +1937,13 @@ describe("prepareAgentRuntimeAuthPlan", () => {
         sessionAuthProfileId: "openai:missing",
         sessionAuthProfileSource: "user",
       }),
-    ).toThrow(/not configured for openai/u);
+    ).toThrow(
+      expect.objectContaining({
+        code: "selected_auth_profile_unavailable",
+        reason: "auth",
+        status: 401,
+      }),
+    );
   });
 
   it("does not reuse a routed plan across compaction model overrides", () => {

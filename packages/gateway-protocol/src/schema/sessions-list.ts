@@ -7,6 +7,8 @@ export const SessionsListParamsSchema = closedObject({
   limit: Type.Optional(Type.Integer({ minimum: 1 })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
   activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
+  /** Select sessions with current direct running or queued work before pagination. */
+  activeOnly: Type.Optional(Type.Boolean()),
   /** Require a real user/channel interaction; excludes synthetic isolated heartbeat rows. */
   requireLastInteraction: Type.Optional(Type.Boolean()),
   sortBy: Type.Optional(Type.Union([Type.Literal("updatedAt"), Type.Literal("lastInteractionAt")])),

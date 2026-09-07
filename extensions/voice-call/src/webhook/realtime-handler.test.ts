@@ -830,19 +830,7 @@ describe("RealtimeCallHandler path routing", () => {
         return makeBridge({ close });
       },
     );
-    const getCallByProviderCallId = vi.fn((): CallRecord => ({
-      callId: "call-1",
-      providerCallId: "CA-complete",
-      provider: "twilio",
-      direction: "inbound",
-      state: "ringing",
-      from: "+15550001234",
-      to: "+15550009999",
-      startedAt: Date.now(),
-      transcript: [],
-      processedEventIds: [],
-      metadata: {},
-    }));
+    const getCallByProviderCallId = vi.fn((): CallRecord => makeCallRecord("CA-complete"));
     const streamDisconnectLifecycle = createFinalizingStreamGrace(
       processEvent,
       "disconnect-grace-expired",
@@ -1005,19 +993,7 @@ describe("RealtimeCallHandler path routing", () => {
       | undefined;
     const sendAudio = vi.fn();
     const processEvent = vi.fn();
-    const call: CallRecord = {
-      callId: "call-1",
-      providerCallId: "CA-talk-events",
-      provider: "twilio",
-      direction: "inbound",
-      state: "ringing",
-      from: "+15550001234",
-      to: "+15550009999",
-      startedAt: Date.now(),
-      transcript: [],
-      processedEventIds: [],
-      metadata: {},
-    };
+    const call: CallRecord = makeCallRecord("CA-talk-events");
     const createBridge = vi.fn(
       (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
         callbacks = request;
@@ -1578,19 +1554,7 @@ describe("RealtimeCallHandler path routing", () => {
         return bridge;
       },
     );
-    const call: CallRecord = {
-      callId: "call-1",
-      providerCallId: "CA-tool",
-      provider: "twilio",
-      direction: "inbound",
-      state: "ringing",
-      from: "+15550001234",
-      to: "+15550009999",
-      startedAt: Date.now(),
-      transcript: [],
-      processedEventIds: [],
-      metadata: {},
-    };
+    const call: CallRecord = makeCallRecord("CA-tool");
     const getCallByProviderCallId = vi.fn((): CallRecord => call);
     const handler = makeHandler(undefined, {
       manager: {
@@ -1899,19 +1863,7 @@ describe("RealtimeCallHandler path routing", () => {
         return makeBridge({ submitToolResult });
       },
     );
-    const call: CallRecord = {
-      callId: "call-1",
-      providerCallId: "CA-cancelled-consult",
-      provider: "twilio",
-      direction: "inbound",
-      state: "ringing",
-      from: "+15550001234",
-      to: "+15550009999",
-      startedAt: Date.now(),
-      transcript: [],
-      processedEventIds: [],
-      metadata: {},
-    };
+    const call: CallRecord = makeCallRecord("CA-cancelled-consult");
     const handler = makeHandler(undefined, {
       manager: { getCallByProviderCallId: vi.fn(() => call) },
       realtimeProvider: makeRealtimeProvider(createBridge),
@@ -1991,19 +1943,7 @@ describe("RealtimeCallHandler path routing", () => {
       { consultPolicy: "always" },
       {
         manager: {
-          getCallByProviderCallId: vi.fn((): CallRecord => ({
-            callId: "call-1",
-            providerCallId: "CA-force",
-            provider: "twilio",
-            direction: "inbound",
-            state: "ringing",
-            from: "+15550001234",
-            to: "+15550009999",
-            startedAt: Date.now(),
-            transcript: [],
-            processedEventIds: [],
-            metadata: {},
-          })),
+          getCallByProviderCallId: vi.fn((): CallRecord => makeCallRecord("CA-force")),
         },
         realtimeProvider: makeRealtimeProvider(createBridge),
       },
@@ -2864,19 +2804,7 @@ describe("RealtimeCallHandler path routing", () => {
     const handler = makeHandler(undefined, {
       manager: {
         processEvent,
-        getCallByProviderCallId: vi.fn((): CallRecord => ({
-          callId: "call-1",
-          providerCallId: "CA-direct-turns",
-          provider: "twilio",
-          direction: "inbound",
-          state: "ringing",
-          from: "+15550001234",
-          to: "+15550009999",
-          startedAt: Date.now(),
-          transcript: [],
-          processedEventIds: [],
-          metadata: {},
-        })),
+        getCallByProviderCallId: vi.fn((): CallRecord => makeCallRecord("CA-direct-turns")),
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
@@ -2952,19 +2880,7 @@ describe("RealtimeCallHandler path routing", () => {
     );
     const handler = makeHandler(undefined, {
       manager: {
-        getCallByProviderCallId: vi.fn((): CallRecord => ({
-          callId: "call-1",
-          providerCallId: "CA-settle",
-          provider: "twilio",
-          direction: "inbound",
-          state: "ringing",
-          from: "+15550001234",
-          to: "+15550009999",
-          startedAt: Date.now(),
-          transcript: [],
-          processedEventIds: [],
-          metadata: {},
-        })),
+        getCallByProviderCallId: vi.fn((): CallRecord => makeCallRecord("CA-settle")),
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
@@ -3056,19 +2972,7 @@ describe("RealtimeCallHandler path routing", () => {
       { consultPolicy: "always" },
       {
         manager: {
-          getCallByProviderCallId: vi.fn((): CallRecord => ({
-            callId: "call-1",
-            providerCallId: "CA-native",
-            provider: "twilio",
-            direction: "inbound",
-            state: "ringing",
-            from: "+15550001234",
-            to: "+15550009999",
-            startedAt: Date.now(),
-            transcript: [],
-            processedEventIds: [],
-            metadata: {},
-          })),
+          getCallByProviderCallId: vi.fn((): CallRecord => makeCallRecord("CA-native")),
         },
         realtimeProvider: makeRealtimeProvider(createBridge),
       },
@@ -3148,19 +3052,7 @@ describe("RealtimeCallHandler path routing", () => {
       },
       {
         manager: {
-          getCallByProviderCallId: vi.fn((): CallRecord => ({
-            callId: "call-1",
-            providerCallId: "CA-fast",
-            provider: "twilio",
-            direction: "inbound",
-            state: "ringing",
-            from: "+15550001234",
-            to: "+15550009999",
-            startedAt: Date.now(),
-            transcript: [],
-            processedEventIds: [],
-            metadata: {},
-          })),
+          getCallByProviderCallId: vi.fn((): CallRecord => makeCallRecord("CA-fast")),
         },
         realtimeProvider: makeRealtimeProvider(createBridge),
       },
@@ -3218,19 +3110,7 @@ describe("RealtimeCallHandler websocket hardening", () => {
     );
     const handler = makeHandler(undefined, {
       manager: {
-        getCallByProviderCallId: vi.fn((): CallRecord => ({
-          callId: "call-1",
-          providerCallId: "CA-backpressure",
-          provider: "twilio",
-          direction: "inbound",
-          state: "ringing",
-          from: "+15550001234",
-          to: "+15550009999",
-          startedAt: Date.now(),
-          transcript: [],
-          processedEventIds: [],
-          metadata: {},
-        })),
+        getCallByProviderCallId: vi.fn((): CallRecord => makeCallRecord("CA-backpressure")),
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });

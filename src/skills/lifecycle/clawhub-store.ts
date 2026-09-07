@@ -9,6 +9,7 @@ import {
   type ClawHubSkillsShTrustState,
 } from "../../infra/clawhub-skills.js";
 import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
+import { statRegularFile } from "../../infra/fs-safe.js";
 import {
   JsonFileReadError,
   readJson,
@@ -286,6 +287,11 @@ export async function readClawHubSkillsLockfile(
 ): Promise<ClawHubSkillsLockfile> {
   for (const candidate of metadataPaths(workspaceDir, "lock.json")) {
     try {
+      // Missing metadata is normal before installation. Leave present-file races
+      // and uncertain paths to the strict reader, including its error diagnostics.
+      if ((await statRegularFile(candidate).catch(() => undefined))?.missing) {
+        continue;
+      }
       return parseClawHubSkillsLockfile(await readJson<Partial<ClawHubSkillsLockfile>>(candidate));
     } catch (err) {
       if (err instanceof JsonFileReadError && hasErrnoCode(err.cause, "ENOENT")) {

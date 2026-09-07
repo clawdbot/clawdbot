@@ -3,7 +3,10 @@ import crypto from "node:crypto";
 import { createServer, IncomingMessage, type ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import type { webhook } from "@line/bot-sdk";
-import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  buildChannelInboundEventContext,
+  type ChannelInboundTurnPlan,
+} from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -497,9 +500,8 @@ describe("monitorLineProvider lifecycle", () => {
   });
 
   it("resolves a reply's presentation into LINE controls before delivering it", async () => {
-    // The turn adapter owns this preparation: core renders presentations inside
-    // the outbound send pipeline, which replies delivered here never enter.
     const { setLineRuntime } = await import("./runtime.js");
+    type ResolvedTurn = Pick<ChannelInboundTurnPlan, "delivery">;
     let resolvedTurn: ResolvedTurn | undefined;
     const runTurn = async (params: {
       adapter: { resolveTurn: () => ResolvedTurn };
@@ -527,17 +529,20 @@ describe("monitorLineProvider lifecycle", () => {
         cfg: {},
       });
 
-      const prepared = resolvedTurn?.delivery.preparePayload?.({
-        text: "Approve this run?",
-        presentation: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [{ label: "Approve", action: { type: "callback", value: "approve" } }],
-            },
-          ],
+      const prepared = await resolvedTurn?.delivery.preparePayload?.(
+        {
+          text: "Approve this run?",
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Approve", action: { type: "callback", value: "approve" } }],
+              },
+            ],
+          },
         },
-      });
+        { kind: "final" },
+      );
       const line = prepared?.channelData?.line as { flexMessage?: unknown } | undefined;
 
       expect(prepared?.presentation).toBeUndefined();

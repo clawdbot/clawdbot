@@ -37,12 +37,13 @@ suite.define(() => {
         (url) => url.pathname.endsWith("/new") && url.search === "?agent=main",
       );
 
-      const messageA = pageA.locator(".new-session-page__message");
+      const newSessionA = pageA.locator("openclaw-new-session-page");
+      const messageA = newSessionA.locator(".new-session-page__message");
       await messageA.fill(staleText);
-      await pageA
+      await newSessionA
         .locator(".agent-chat__photo-input")
         .setInputFiles(path.join(process.cwd(), "ui/public/favicon-32.png"));
-      await pageA.getByRole("button", { name: `Open image ${staleFileName}` }).waitFor();
+      await newSessionA.getByRole("button", { name: `Open image ${staleFileName}` }).waitFor();
       await captureUiProof(suite, pageA, "new-session-draft-before-navigation.png");
 
       await existingSession.click();
@@ -51,22 +52,23 @@ suite.define(() => {
       const pageB = await context.newPage();
       await installMockGateway(pageB);
       await pageB.goto(`${suite.server.baseUrl}new?agent=main`);
-      const messageB = pageB.locator(".new-session-page__message");
+      const newSessionB = pageB.locator("openclaw-new-session-page");
+      const messageB = newSessionB.locator(".new-session-page__message");
       await expect.poll(() => messageB.inputValue()).toBe(staleText);
-      await pageB.getByRole("button", { name: `Open image ${staleFileName}` }).waitFor();
+      await newSessionB.getByRole("button", { name: `Open image ${staleFileName}` }).waitFor();
 
       await messageB.fill(durableText);
-      await pageB.getByRole("button", { name: "Remove attachment" }).click();
-      await pageB
+      await newSessionB.getByRole("button", { name: "Remove attachment" }).click();
+      await newSessionB
         .locator(".agent-chat__photo-input")
         .setInputFiles(path.join(process.cwd(), "ui/public/apple-touch-icon.png"));
-      await pageB.getByRole("button", { name: `Open image ${durableFileName}` }).waitFor();
+      await newSessionB.getByRole("button", { name: `Open image ${durableFileName}` }).waitFor();
       await waitForCommittedNewSessionDraft(pageB, durableText, [durableFileName]);
       await pageB.reload();
       await expect.poll(() => messageB.inputValue()).toBe(durableText);
-      await pageB.getByRole("button", { name: `Open image ${durableFileName}` }).waitFor();
+      await newSessionB.getByRole("button", { name: `Open image ${durableFileName}` }).waitFor();
       await expect(
-        pageB.getByRole("button", { name: `Open image ${staleFileName}` }).count(),
+        newSessionB.getByRole("button", { name: `Open image ${staleFileName}` }).count(),
       ).resolves.toBe(0);
       await pageB.close();
 
@@ -75,9 +77,9 @@ suite.define(() => {
         (url) => url.pathname.endsWith("/new") && url.search === "?agent=main",
       );
       await expect.poll(() => messageA.inputValue()).toBe(durableText);
-      await pageA.getByRole("button", { name: `Open image ${durableFileName}` }).waitFor();
+      await newSessionA.getByRole("button", { name: `Open image ${durableFileName}` }).waitFor();
       await expect(
-        pageA.getByRole("button", { name: `Open image ${staleFileName}` }).count(),
+        newSessionA.getByRole("button", { name: `Open image ${staleFileName}` }).count(),
       ).resolves.toBe(0);
       await captureUiProof(suite, pageA, "new-session-draft-restored.png");
       await pageA.close();

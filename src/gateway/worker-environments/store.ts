@@ -926,6 +926,23 @@ export function createWorkerEnvironmentStore(
     },
     get: (environmentId: string) => find(read(), required(environmentId, "id")),
     inventoryVersion: () => inventoryVersion,
+    hasNodeEnrollmentOwner(nodeId: string): boolean {
+      const db = read();
+      // Pairing can bind the node without changing inventoryVersion. Cleanup states
+      // still own enrollment until the environment reaches its terminal state.
+      return (
+        executeSqliteQueryTakeFirstSync(
+          db,
+          query(db)
+            .selectFrom("worker_environments")
+            .select("environment_id")
+            .where("node_device_id", "=", nodeId)
+            .where("node_setup_id", "is not", null)
+            .where("state", "not in", TERMINAL_STATES)
+            .limit(1),
+        ) !== undefined
+      );
+    },
     hasPendingNodeEnrollmentSetup(setupIdInput: string, deviceIdInput: string): boolean {
       const setupId = setupIdInput.trim();
       const deviceId = deviceIdInput.trim();

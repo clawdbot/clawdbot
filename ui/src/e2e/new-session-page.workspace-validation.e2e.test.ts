@@ -683,7 +683,13 @@ suite.define(() => {
               },
             ],
           },
-          "sessions.catalog.startTerminal": { sessionId: "claude-retarget" },
+          "sessions.catalog.startTerminal": {
+            sessionId: "claude-retarget",
+            agentId: "research",
+            shell: "claude",
+            cwd: "/home/peter/research",
+            confined: false,
+          },
         },
       });
       await page.goto(`${suite.server.baseUrl}new?agent=research`);

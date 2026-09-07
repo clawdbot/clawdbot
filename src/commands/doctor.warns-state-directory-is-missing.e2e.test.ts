@@ -9,13 +9,12 @@ import {
   createDoctorRuntime,
   ensureAuthProfileStore,
   mockDoctorConfigSnapshot,
+  writeConfigFile,
 } from "./doctor.e2e-harness.js";
-import { loadDoctorCommandForTest, terminalNoteMock } from "./doctor.note-test-helpers.js";
+import { terminalNoteMock } from "./doctor.note-test-helpers.js";
 import "./doctor.fast-path-mocks.js";
 
 let doctorCommand: typeof import("./doctor.js").doctorCommand;
-let defaultDoctorCommand: typeof import("./doctor.js").doctorCommand;
-let reloadDefaultDoctorCommand = false;
 
 const OPENAI_PROVIDER_ID = "openai";
 const LEGACY_CODEX_PROVIDER_ID = "openai-codex";
@@ -103,38 +102,14 @@ function requireTerminalNote(params: { title?: string; messageIncludes?: string 
   return note;
 }
 
-function mockDoctorBrowserFastPath(): void {
-  vi.doMock("./doctor-browser.js", () => ({
-    detectLegacyClawdBrowserProfileResidue: vi.fn().mockResolvedValue(null),
-    maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn().mockResolvedValue({
-      changes: [],
-      warnings: [],
-    }),
-    maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
-      changes: [],
-      warnings: [],
-    }),
-    noteChromeMcpBrowserReadiness: vi.fn().mockResolvedValue(undefined),
-  }));
-}
-
 describe("doctor command", () => {
   beforeAll(async () => {
-    defaultDoctorCommand = await loadDoctorCommandForTest({
-      unmockModules: ["../flows/doctor-health-contributions.js", "./doctor-state-integrity.js"],
-    });
+    vi.doUnmock("../flows/doctor-health-contributions.js");
+    vi.doUnmock("./doctor-state-integrity.js");
+    ({ doctorCommand } = await import("./doctor.js"));
   });
 
-  beforeEach(async () => {
-    if (reloadDefaultDoctorCommand) {
-      vi.doUnmock("../plugin-sdk/facade-loader.js");
-      mockDoctorBrowserFastPath();
-      defaultDoctorCommand = await loadDoctorCommandForTest({
-        unmockModules: ["../flows/doctor-health-contributions.js", "./doctor-state-integrity.js"],
-      });
-      reloadDefaultDoctorCommand = false;
-    }
-    doctorCommand = defaultDoctorCommand;
+  beforeEach(() => {
     terminalNoteMock.mockClear();
   });
 
@@ -156,50 +131,23 @@ describe("doctor command", () => {
     });
   });
 
-  it("routes browser readiness through health contributions and degrades gracefully when browser facade is unavailable", async () => {
-    const loadBundledPluginPublicSurfaceModuleSyncCore = vi.fn(() => {
-      throw new Error("missing browser doctor facade");
-    });
-    vi.doMock("../plugin-sdk/facade-loader.js", async () => {
-      const actual = await vi.importActual<typeof import("../plugin-sdk/facade-loader.js")>(
-        "../plugin-sdk/facade-loader.js",
-      );
-      return {
-        ...actual,
-        loadBundledPluginPublicSurfaceModuleSyncCore,
-      };
-    });
-    try {
-      doctorCommand = await loadDoctorCommandForTest({
-        unmockModules: [
-          "../flows/doctor-health-contributions.js",
-          "./doctor-browser.js",
-          "./doctor-state-integrity.js",
-        ],
-      });
-
-      mockDoctorConfigSnapshot({
-        config: {
-          browser: {
-            defaultProfile: "user",
-          },
+  it("routes browser readiness through health contributions", async () => {
+    const { noteChromeMcpBrowserReadiness } = await import("./doctor-browser.js");
+    const browserReadiness = vi.mocked(noteChromeMcpBrowserReadiness);
+    browserReadiness.mockClear();
+    mockDoctorConfigSnapshot({
+      config: {
+        browser: {
+          defaultProfile: "user",
         },
-      });
+      },
+    });
 
-      await runDoctorNonInteractive();
+    await runDoctorNonInteractive();
 
-      expect(loadBundledPluginPublicSurfaceModuleSyncCore).toHaveBeenCalledWith({
-        dirName: "browser",
-        artifactBasename: "browser-doctor.js",
-      });
-      const browserFallbackNote = requireTerminalNote({
-        title: "Browser",
-        messageIncludes: "Browser health check is unavailable",
-      });
-      expect(String(browserFallbackNote[0])).toContain("missing browser doctor facade");
-    } finally {
-      reloadDefaultDoctorCommand = true;
-    }
+    expect(browserReadiness).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ browser: { defaultProfile: "user" } }),
+    );
   });
 
   it("warns about active OpenCode provider overrides", async () => {
@@ -431,9 +379,11 @@ describe("doctor command", () => {
     expect(String(gatewayAuthNote[0])).toContain(
       "Gateway token SecretRef could not be resolved: gateway.auth.token SecretRef is unresolved",
     );
-    expect(String(gatewayAuthNote[0])).toContain(
-      "Doctor will not overwrite gateway.auth.token with a plaintext value.",
-    );
+    requireTerminalNote({
+      title: "Gateway auth",
+      messageIncludes: "Doctor will not overwrite gateway.auth.token with a plaintext value.",
+    });
+    expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("does not let OPENCLAW_GATEWAY_TOKEN hide an unresolved SecretRef-managed token", async () => {
@@ -1136,4 +1086,3 @@ describe("doctor command", () => {
     expect(warned).toBe(false);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

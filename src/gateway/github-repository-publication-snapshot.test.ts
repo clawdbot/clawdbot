@@ -1,7 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -16,10 +15,8 @@ import {
 import { readActualWorkspaceManifest } from "./worker-environments/workspace-reconcile-core.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
-const env = {
+const baseEnv = {
   ...process.env,
-  GIT_CONFIG_GLOBAL: os.devNull,
-  GIT_CONFIG_SYSTEM: os.devNull,
   GIT_AUTHOR_NAME: "Snapshot Fixture",
   GIT_AUTHOR_EMAIL: "snapshot@example.test",
   GIT_COMMITTER_NAME: "Snapshot Fixture",
@@ -30,6 +27,9 @@ async function fixture(linked: false | "linked" | "linked-config" = false) {
   const root = temporary.make("github-repository-snapshot-");
   let cwd = path.join(root, "worker");
   await fs.mkdir(cwd);
+  const gitConfig = path.join(root, "empty.gitconfig");
+  await fs.writeFile(gitConfig, "");
+  const env = { ...baseEnv, GIT_CONFIG_GLOBAL: gitConfig, GIT_CONFIG_SYSTEM: gitConfig };
   const git = (...args: string[]) =>
     execFileSync("git", args, { cwd, env, encoding: "utf8" }).trim();
   git("init", "--quiet");
@@ -57,7 +57,7 @@ async function fixture(linked: false | "linked" | "linked-config" = false) {
       ["-e", REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS, cwd, base, output],
       { env, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
     ).trim();
-  return { cwd, root, git, base, output, capture };
+  return { cwd, root, git, base, output, capture, env };
 }
 
 describe("repository publication checkpoint capture", () => {
@@ -182,12 +182,12 @@ describe("repository publication checkpoint capture", () => {
           "-C",
           restored,
           "-c",
-          `core.hooksPath=${os.devNull}`,
+          `core.hooksPath=${path.join(f.root, "unused-hooks")}`,
           "-c",
           "core.fsmonitor=false",
           ...args,
         ],
-        { env, encoding: "utf8" },
+        { env: f.env, encoding: "utf8" },
       ).trim();
     const hooks = path.join(restored, ".git", "test-hooks");
     const sentinel = path.join(f.root, "unexpected-hook-or-filter");
@@ -214,7 +214,7 @@ describe("repository publication checkpoint capture", () => {
       for (const command of commands) {
         execFileSync(process.execPath, command.argv.slice(1), {
           cwd: restored,
-          env,
+          env: f.env,
           input: command.input,
           stdio: "pipe",
         });

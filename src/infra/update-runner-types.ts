@@ -1,3 +1,4 @@
+import type { PluginUpdateOutcome } from "../plugins/update.js";
 import type { CommandOptions } from "../process/exec.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import type { UpdateChannel } from "./update-channels.js";
@@ -60,21 +61,7 @@ export type UpdateRunResult = {
       };
       npm: {
         changed: boolean;
-        outcomes: Array<{
-          pluginId: string;
-          status: "updated" | "unchanged" | "skipped" | "error";
-          message: string;
-          currentVersion?: string;
-          nextVersion?: string;
-          channelFallback?: {
-            requestedSpec: string;
-            usedSpec: string;
-            requestedLabel: string;
-            usedLabel: string;
-            reason: "unavailable" | "failed";
-            message: string;
-          };
-        }>;
+        outcomes: PluginUpdateOutcome[];
       };
       integrityDrifts: Array<{
         pluginId: string;

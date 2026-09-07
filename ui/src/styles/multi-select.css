@@ -1,0 +1,202 @@
+/* Multi-value combobox (openclaw-multi-select). The field mirrors the
+   settings input treatment; the menu mirrors the shared picker listbox. */
+openclaw-multi-select {
+  display: block;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+}
+
+.multi-select {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 38px;
+  padding: 5px 34px 5px 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  color: var(--text);
+  cursor: text;
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
+}
+
+.multi-select:focus-within,
+.multi-select--open {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border) 45%);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.multi-select[data-disabled] {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.multi-select__input,
+.multi-select__input:focus-visible {
+  flex: 1 1 120px;
+  min-width: 120px;
+  padding: 3px 2px;
+  border: none;
+  background: transparent;
+  outline: none;
+  box-shadow: none;
+  font: inherit;
+  font-size: var(--control-ui-text-sm);
+  color: var(--text);
+}
+
+.multi-select__input::placeholder {
+  color: var(--muted);
+}
+
+.multi-select__chevron {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  display: inline-flex;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.multi-select__chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+.multi-select--open .multi-select__chevron {
+  transform: translateY(-50%) rotate(180deg);
+}
+
+.multi-select__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  color: var(--text);
+}
+
+.multi-select__chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multi-select__chip-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+
+.multi-select__chip-icon.provider-brand-icon--fallback {
+  font-size: 8px;
+}
+
+.multi-select__chip .chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--muted);
+  line-height: 1;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    opacity var(--duration-fast) var(--ease-out);
+}
+
+.multi-select__chip .chip-remove svg {
+  width: 12px;
+  height: 12px;
+}
+
+.multi-select__chip .chip-remove:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.multi-select__chip .chip-remove:focus-visible:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.multi-select__chip .chip-remove:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.multi-select__popup::part(popup) {
+  z-index: var(--z-dropdown);
+}
+
+.multi-select__menu {
+  max-height: min(320px, var(--auto-size-available-height, calc(100vh - 48px)));
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--overlay-border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--overlay-shadow);
+  color: var(--text);
+}
+
+.multi-select__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: calc(var(--radius-md) - 4px);
+  font-size: var(--control-ui-text-sm);
+  cursor: var(--cursor-action);
+}
+
+.multi-select__option[aria-selected="true"] {
+  background: var(--bg-hover);
+}
+
+.multi-select__option-icon {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+}
+
+.multi-select__option-icon.provider-brand-icon--fallback {
+  font-size: 9px;
+}
+
+.multi-select__empty {
+  padding: 8px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+/* Forced colors replace shadows and fills, so both keyboard targets need outlines. */
+@media (forced-colors: active) {
+  .multi-select:focus-within,
+  .multi-select--open {
+    outline: 2px solid SelectedItem;
+    outline-offset: 2px;
+  }
+
+  .multi-select__option[aria-selected="true"] {
+    outline: 2px solid SelectedItem;
+    outline-offset: -2px;
+  }
+}

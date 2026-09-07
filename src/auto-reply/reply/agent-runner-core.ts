@@ -435,8 +435,8 @@ export async function cleanupReplyAgentRun(context: {
   // markDispatchIdle(), but if the dispatcher exits early, errors,
   // or the reply path doesn't go through it cleanly, the second
   // signal never fires and the typing keepalive loop runs forever.
-  // Calling this twice is harmless — cleanup() is guarded by the
-  // `active` flag.  Same pattern as the followup runner fix (#26881).
+  // Repeated completion signals are harmless: cleanup() is guarded by
+  // the typing controller's sealed flag.
   typing.markDispatchIdle();
 }
 

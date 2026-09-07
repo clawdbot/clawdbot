@@ -211,10 +211,9 @@ local server returns context-length errors.
 
 `recallMaxChars` bounds the `before_prompt_build` auto-recall query, the
 `memory_recall` tool, the `memory_forget` query path, and `openclaw ltm search`.
-Auto-recall embeds the latest user message from the turn and falls back to the
-full prompt only when no user message is present, keeping channel metadata and
-large prompt blocks out of the embedding request. It also bounds each recalled
-item after prompt escaping before that text reaches the model.
+Auto-recall embeds the current turn's prompt after removing media attachment
+notes and normalizing whitespace. The same limit bounds each recalled item
+after prompt escaping before that text reaches the model.
 
 `captureMaxChars` gates whether a user message from the turn's `agent_end`
 event is short enough to be considered for auto-capture. `memory_store` rejects

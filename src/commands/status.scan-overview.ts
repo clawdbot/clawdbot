@@ -106,7 +106,7 @@ export type StatusScanOverviewResult = {
   >;
   runtimeDegradation: Pick<
     StatusSummary,
-    "degradedSecretOwners" | "degradedPlugins" | "startupMigrationWarning"
+    "degradedSecretOwners" | "degradedPlugins" | "startupMigrationWarning" | "secretEgressProxy"
   > | null;
   channelsStatus: unknown;
   channelIssues: ReturnType<typeof collectChannelStatusIssuesFn>;
@@ -267,6 +267,7 @@ export async function collectStatusScanOverview(params: {
       degradedSecretOwners: status.degradedSecretOwners ?? [],
       degradedPlugins: status.degradedPlugins ?? [],
       startupMigrationWarning: status.startupMigrationWarning,
+      secretEgressProxy: status.secretEgressProxy,
     };
   }
 

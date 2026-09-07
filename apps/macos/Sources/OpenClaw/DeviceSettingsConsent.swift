@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 
 @MainActor
 enum DeviceSettingsConsent: Equatable {

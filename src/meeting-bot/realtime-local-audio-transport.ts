@@ -239,6 +239,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
     stop: () => {
       stopPromise ??= (async () => {
         stopped = true;
+        outputLoopbackVerifier.cancelOutput();
         releaseOutputWriteWaiters();
         await Promise.all([
           terminateMeetingBridgeProcess(inputProcess, {

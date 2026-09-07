@@ -26,6 +26,48 @@ afterEach(() => {
 });
 
 describe("type suppression inventory", () => {
+  it.each(["\n", "\r\n"])("reports comment markers once with %j line endings", (newline) => {
+    const fixtureRoot = createFixture({
+      "src/comments.ts": [
+        'const text = "\u{1f680} @ts-expect-error string";',
+        "const template = `@ts-expect-error template`;",
+        "function example() {",
+        "  /* @ts-expect-error first",
+        "   * @ts-expect-error second",
+        "   */",
+        "} // @ts-expect-error trailing",
+        'consume("\u96ea"); /* @ts-expect-error left */ /* @ts-expect-error right */',
+        "consume(",
+        "  1",
+        "  // @ts-expect-error closing token",
+        ");",
+        "// @ts-expect-error eof",
+      ].join(newline),
+    });
+
+    const report = collectTypeSuppressionReport({
+      files: ["src/comments.ts"],
+      repoRoot: fixtureRoot,
+    });
+
+    expect(report.findings).toEqual(
+      [
+        { excerpt: "@ts-expect-error first", line: 4 },
+        { excerpt: "@ts-expect-error second", line: 5 },
+        { excerpt: "@ts-expect-error trailing", line: 7 },
+        { excerpt: "@ts-expect-error left */", line: 8 },
+        { excerpt: "@ts-expect-error right */", line: 8 },
+        { excerpt: "@ts-expect-error closing token", line: 11 },
+        { excerpt: "@ts-expect-error eof", line: 13 },
+      ].map(({ excerpt, line }) => ({
+        excerpt,
+        line,
+        file: "src/comments.ts",
+        kind: "expect-error",
+      })),
+    );
+  });
+
   it("detects syntax suppressions without counting prose", () => {
     const fixtureRoot = createFixture({
       "src/example.ts": `

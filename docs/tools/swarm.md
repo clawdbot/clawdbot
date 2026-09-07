@@ -18,6 +18,15 @@ There is no graph DSL and no separate workflow format. The program is the
 orchestration. Swarm adds awaitable collector children, structured results,
 bounded concurrency, and progress reporting to that program.
 
+## When to use Swarm
+
+Use ordinary `sessions_spawn` announcing runs for one or a few children. Reserve
+Swarm for large parallel fan-out: several similar children (about five or more),
+typically driven by Code Mode `agents.run` with control flow such as `Promise.all`.
+Collectors (`collect: true`) send no completion notification and cannot be steered;
+their results must be explicitly collected. Use `outputSchema` for structured
+results and `groupId` to group a batch.
+
 ## Enable Swarm
 
 Swarm needs no enablement setting. Omitted `tools.swarm`, an empty object, or
@@ -223,8 +232,13 @@ launches, progress notes, and result waits queue automatically when those slots
 are full. Queued requests retain their original arguments across snapshot
 resumes; stopping the run discards requests that have not been admitted.
 `maxConcurrent` still limits running children, and group child limits still
-apply. Raw tool calls do not use this Swarm queue and must remain within the
-bridge-call limit.
+apply. Ordinary tool calls and timers share this guest queue but have their own
+128-request waiting quota, separate from the in-flight bridge cap. Swarm launches,
+notes, and result waits do not consume that quota and retain their existing group,
+VM memory, and snapshot limits. Exceeding the ordinary quota fails the synchronous
+frontier before any new calls from it are dispatched; await smaller ordinary
+batches instead. See [Code Mode](/tools/code-mode#nested-tool-execution)
+for queue, cancellation, and resource-limit semantics.
 
 ### Loop on a decision gate
 
@@ -372,7 +386,10 @@ explicit count when more groups are active. Each card displays at most 64 marker
 and 64 child details; its counts include every accepted group member.
 
 The latest completed group's counts remain visible after the children finish,
-including when the parent fails before writing its final response. These are
+including when the parent fails before writing its final response. Groups whose
+children all succeed use a compact completion row; activate the row to expand
+child details and the final-response reminder. Running, queued, and failed groups
+keep their visible status markers and counts. These are
 child outcomes, not confirmation that the parent produced a synthesis. Counts
 come from retained collector records, so reloading the page or cleaning up a
 child session does not reduce the reported total. They expire with the existing

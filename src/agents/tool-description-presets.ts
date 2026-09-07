@@ -116,7 +116,7 @@ export function describeSubagentSpawnContext(threadAvailable: boolean): string {
 }
 
 export const SESSIONS_SPAWN_COLLECTOR_GUIDANCE =
-  "`collect=true` (swarm): parallel fan-out collector children with no completion notification; explicitly collect their results; structured result per `outputSchema`; `groupId` groups a batch.";
+  "Default to ordinary spawn for one or a few children. Reserve `collect=true` (swarm) for large parallel fan-out (several similar children, about five or more). Collectors send no completion notification and cannot be steered; explicitly collect their results; structured result per `outputSchema`; `groupId` groups a batch.";
 
 /** Describes the sessions_spawn tool for model-facing instructions. */
 export function describeSessionsSpawnTool(options?: {
@@ -184,6 +184,6 @@ export function describeSecretsTool(): string {
     "Request waits for human; value goes straight to shared store, never model/chat. Use the returned store SecretRef for supported config fields.",
     "Gateway egress only: enabled proxy + exact allowedHosts required; no hosts blocks egress, not config refs. No plaintext fallback.",
     SECRET_EGRESS_USAGE_PROMPT,
-    "Operator-set env entries are readable; never request them here. no_answer: report blocker or use best judgment, never ask for credentials in chat.",
+    "Operator-set env entries are readable and managed separately from this protected store. no_answer means no credential was supplied.",
   ].join(" ");
 }

@@ -53,7 +53,7 @@ Bun remains usable as an optional package-script runner. The default package man
 
 Bun blocks dependency lifecycle scripts unless explicitly trusted. For this repo, the commonly blocked scripts are not required:
 
-- `baileys` `preinstall`: checks Node major >= 20 (OpenClaw requires Node 22.22.3+, 24.15+, or 25.9+, with Node 26 recommended)
+- `baileys` `preinstall`: checks Node major >= 20 (OpenClaw requires Node 24.16+ or 26.1+, with Node 26 recommended)
 - `protobufjs` `postinstall`: emits warnings about incompatible version schemes (no build artifacts)
 
 If you hit a runtime issue that needs these scripts, trust them explicitly:
@@ -66,11 +66,16 @@ bun pm trust baileys protobufjs
 
 On macOS, Bun uses Apple's system SQLite, which omits native extension loading.
 OpenClaw can open ordinary agent databases without extension loading when that
-library meets the WAL safety floor. Operations that require extensions, including `sqlite-vec`, need an
-extension-capable SQLite library. Use Node, or preload a compatible SQLite
-library with Bun's [custom SQLite setup](https://bun.sh/docs/runtime/sqlite#loadextension)
-before opening any database. OpenClaw does not select a different SQLite library
-automatically.
+library meets the WAL safety floor. For native `sqlite-vec` KNN memory queries on
+macOS, use Node. When the KNN child's SQLite cannot load extensions, memory search
+uses a batched embedding scan with the same provider and source filters and
+cancellation checks between batches. This can be slower on large indexes.
+
+Bun's [custom SQLite setup](https://bun.sh/docs/runtime/sqlite#loadextension) can
+enable extensions in the parent process when configured before opening any
+database. That selection does not reach the KNN child, whose environment
+intentionally omits Node and Bun preload options. OpenClaw does not select a
+different SQLite library automatically.
 
 Some package scripts hardcode `pnpm` internally (for example `check:docs`, `ui:*`, `protocol:check`). Running them via `bun run` still shells out to `pnpm`, so just run those via `pnpm` directly.
 

@@ -289,7 +289,7 @@ describe("Row-overflow table delivery through production outbound adapter over l
     const payload = { text: "Deployment details. ".repeat(1_500), presentation };
     const prepared =
       delivery === "reply"
-        ? prepareLineReplyPayload(payload)
+        ? await prepareLineReplyPayload(payload)
         : await lineOutboundAdapter.renderPresentation!({
             payload,
             presentation: adaptMessagePresentationForChannel({

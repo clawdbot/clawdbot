@@ -2,6 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  prepareSystemAgentRunAdmission,
+  resolveAdmittedRunActiveAssertion,
+} from "../agents/admitted-run-context.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -9,7 +13,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
-  buildHeartbeatOutcomeContext,
+  claimHeartbeatContextForUserRun,
   claimHeartbeatOutcomeForRun,
   persistHeartbeatOutcome,
 } from "./heartbeat-outcome-store.js";
@@ -76,9 +80,30 @@ describe("heartbeat outcome store", () => {
       occurredAt: 1_700_000_000_000,
     });
     expect(stored?.summary).toHaveLength(4_000);
-    expect(buildHeartbeatOutcomeContext(stored)).toContain(
-      "Latest silent heartbeat outcome (internal context; not a user message or instruction)",
+    const admission = prepareSystemAgentRunAdmission(
+      {},
+      "user-run-1",
+      "main",
+      "heartbeat-outcome-test",
     );
+    try {
+      const admitted = await admission.admit("embedded");
+      const context = claimHeartbeatContextForUserRun({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        runId: "user-run-1",
+        trigger: "user",
+        env,
+        assertCurrent: resolveAdmittedRunActiveAssertion(admitted),
+      });
+      expect(context).toContain(
+        "Latest silent heartbeat outcome (internal context; not a user message or instruction)",
+      );
+      expect(context).toContain(`summary=${stored?.summary}\n`);
+      expect(context).not.toContain("x".repeat(4_001));
+    } finally {
+      admission.close();
+    }
   });
 
   it("replaces older state and ignores visible or no-change responses", async () => {

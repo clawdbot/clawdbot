@@ -5,8 +5,15 @@ import { ChannelType } from "discord-api-types/v10";
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedDiscordAccount } from "./accounts.js";
+import { createDiscordLivePolicyReader } from "./monitor/live-policy.js";
+import type { MonitorDiscordOpts } from "./monitor/provider.js";
 import * as sendModule from "./send.js";
 import { createDiscordSendReceipt } from "./send.receipt.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "./test-support/config.js";
@@ -169,6 +176,96 @@ beforeEach(async () => {
 beforeAll(async () => {
   ({ discordPlugin } = await import("./channel.js"));
   ({ setDiscordRuntime } = await import("./runtime.js"));
+});
+
+describe("discordPlugin policy status", () => {
+  it.each([
+    {
+      name: "explicit empty allowlist",
+      accountId: "default",
+      warning: true,
+      channels: { discord: { token: "discord-token", groupPolicy: "allowlist" } },
+    },
+    {
+      name: "inherited default policy",
+      accountId: "default",
+      warning: true,
+      channels: { defaults: { groupPolicy: "allowlist" }, discord: { token: "discord-token" } },
+    },
+    {
+      name: "named account override",
+      accountId: "ops",
+      warning: true,
+      channels: {
+        discord: {
+          groupPolicy: "open",
+          accounts: {
+            ops: {
+              token: "discord-token",
+              groupPolicy: "allowlist",
+              guilds: {},
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "explicit default account overrides top-level guilds",
+      accountId: "default",
+      warning: true,
+      channels: {
+        discord: {
+          token: "discord-token",
+          groupPolicy: "allowlist",
+          guilds: { "*": {} },
+          accounts: { default: { guilds: {} } },
+        },
+      },
+    },
+    {
+      name: "wildcard guild",
+      accountId: "default",
+      warning: false,
+      channels: {
+        discord: { token: "discord-token", groupPolicy: "allowlist", guilds: { "*": {} } },
+      },
+    },
+    {
+      name: "open policy",
+      accountId: "default",
+      warning: false,
+      channels: { discord: { token: "discord-token", groupPolicy: "open" } },
+    },
+    {
+      name: "disabled account",
+      accountId: "default",
+      warning: false,
+      channels: { discord: { token: "discord-token", groupPolicy: "allowlist", enabled: false } },
+    },
+  ])(
+    "reports effective guild policy for $name without probing",
+    async ({ channels, accountId, warning }) => {
+      const cfg = { channels } as OpenClawConfig;
+      const account = resolveAccount(cfg, accountId);
+      const snapshot = await discordPlugin.status!.buildAccountSnapshot!({
+        account,
+        cfg,
+        runtime: { accountId, running: true, connected: true, lastError: null },
+      });
+      const issues = discordPlugin.status!.collectStatusIssues!([snapshot]);
+      expect(
+        issues.some((issue) => issue.kind === "config" && issue.message.includes("no guilds")),
+      ).toBe(warning);
+      expect(snapshot).toMatchObject({ running: account.enabled, lastError: null });
+      if (account.enabled) {
+        expect(snapshot.connected).toBe(true);
+      }
+      if (warning && accountId === "default") {
+        expect(issues[0]?.fix).toContain("channels.discord.accounts.default.guilds");
+      }
+      expect(probeDiscordMock).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("discordPlugin outbound", () => {
@@ -773,6 +870,55 @@ describe("discordPlugin outbound", () => {
 
     await expectDiscordStartupDelay(cfg, "alpha", 0);
     await expectDiscordStartupDelay(cfg, "zeta", 10_000);
+  });
+
+  it("follows live policy published during a staggered account start", async () => {
+    prepareDiscordStartupMocks();
+    const cfg: OpenClawConfig = {
+      channels: {
+        discord: {
+          accounts: {
+            alpha: { token: "alpha-token" },
+            zeta: { token: "zeta-token", allowFrom: ["111"] },
+          },
+        },
+      },
+    };
+    const ready = createDeferred<undefined>();
+    sleepWithAbortMock.mockReturnValueOnce(ready.promise);
+    let readPolicy: ReturnType<typeof createDiscordLivePolicyReader> | undefined;
+    monitorDiscordProviderMock.mockImplementationOnce((opts: MonitorDiscordOpts) => {
+      readPolicy = createDiscordLivePolicyReader({
+        cfg: opts.config!,
+        accountId: opts.accountId!,
+        readConfig: opts.readConfig,
+      });
+    });
+    setRuntimeConfigSnapshot(cfg, cfg);
+    try {
+      const pending = startDiscordAccount(cfg, "zeta");
+      await vi.waitFor(() => expect(sleepWithAbortMock).toHaveBeenCalled());
+      const next: OpenClawConfig = {
+        channels: {
+          discord: {
+            ...cfg.channels?.discord,
+            accounts: {
+              ...cfg.channels?.discord?.accounts,
+              zeta: { token: "zeta-token", allowFrom: ["222"] },
+            },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(next, next);
+      ready.resolve(undefined);
+      await pending;
+      expect((await readPolicy!()).allowFrom).toEqual(["222"]);
+      setRuntimeConfigSnapshot(cfg, cfg);
+      expect((await readPolicy!()).allowFrom).toEqual(["111"]);
+    } finally {
+      ready.resolve(undefined);
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it("starts the configured default account before staggering secondary accounts", async () => {

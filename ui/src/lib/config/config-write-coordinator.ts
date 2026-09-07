@@ -14,6 +14,7 @@ import {
   executeConfigExternalMutation,
   loadConfig,
   refreshDraft,
+  refreshConfigAfterMutation,
   submitConfigDraft,
   type ConfigSubmission,
   type ConfigSubmissionObserver,
@@ -723,8 +724,7 @@ export function createConfigWriteCoordinator({
               task,
               options,
               async () => {
-                // Do not join a config.get that started before the external RPC.
-                const refresh = run(() => loadConfig(state));
+                const refresh = run(() => refreshConfigAfterMutation(state));
                 void trackLoad("config", refresh);
                 return await refresh;
               },

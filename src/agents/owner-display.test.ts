@@ -1,11 +1,7 @@
-// Verifies owner display hashing uses a dedicated secret and raw mode disables it.
+// Verifies bounded owner prompt identities and retired secret-generation behavior.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  ensureOwnerDisplaySecret,
-  resolveOwnerDisplaySetting,
-  resolveOwnerPromptNumbers,
-} from "./owner-display.js";
+import { ensureOwnerDisplaySecret, resolveOwnerPromptNumbers } from "./owner-display.js";
 
 describe("resolveOwnerPromptNumbers", () => {
   it("preserves small owner lists and omits empty lists", () => {
@@ -60,36 +56,6 @@ describe("resolveOwnerPromptNumbers", () => {
         owners.slice(0, 16),
       );
     }
-  });
-});
-
-describe("resolveOwnerDisplaySetting", () => {
-  it("always uses raw owner ids after hash configuration retirement", () => {
-    const cfg = {
-      commands: {
-        ownerDisplay: "hash",
-        ownerDisplaySecret: "  owner-secret  ",
-      },
-    } as OpenClawConfig;
-
-    expect(resolveOwnerDisplaySetting(cfg)).toEqual({
-      ownerDisplay: "raw",
-      ownerDisplaySecret: undefined,
-    });
-  });
-
-  it("disables owner hash secret when display mode is raw", () => {
-    const cfg = {
-      commands: {
-        ownerDisplay: "raw",
-        ownerDisplaySecret: "owner-secret", // pragma: allowlist secret
-      },
-    } as OpenClawConfig;
-
-    expect(resolveOwnerDisplaySetting(cfg)).toEqual({
-      ownerDisplay: "raw",
-      ownerDisplaySecret: undefined,
-    });
   });
 });
 

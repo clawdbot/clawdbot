@@ -32,6 +32,8 @@ Agent runs automatically recover from temporary rate limits, overloads, and prov
 
 Recovery continues the existing transcript with an instruction to preserve completed work and inspect interrupted actions before deciding whether to repeat them. It can recover a throttle after tool activity or partial output without resubmitting the original user request. The run shows one transient retry indicator while waiting and remains cancellable. Recovered attempts do not leave persisted assistant errors; only terminal failure retains one error. Billing failures, authentication errors, and provider refusals do not use this transient retry budget.
 
+Exhausted subscription, daily, weekly, or monthly usage windows go directly to eligible auth-profile or model fallback. A long `Retry-After` value alone does not establish usage-window exhaustion: temporary throttles still honor the provider's minimum wait.
+
 The [model failover controller](/concepts/model-failover#model-fallback) owns this recovery budget. Once it is exhausted, OpenClaw follows eligible auth-profile or model fallback paths, or surfaces the final failure. Native harnesses may retry individual requests internally before returning a terminal failure to OpenClaw; those internal retries are separate from OpenClaw's continuation budget.
 
 ChatGPT SSE errors preserve HTTP status and `Retry-After` together, so a transient HTTP response remains retryable even when its message or provider code is unfamiliar. The ChatGPT transport separately reconnects once for `websocket_connection_limit_reached` before streaming; this is not an SSE HTTP-response retry.

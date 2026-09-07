@@ -941,6 +941,8 @@ jobs:
       prepublish_plugin_registry_json: ${{ steps.registry_identity.outputs.json }}
       source_sha: ${{ steps.package.outputs.source_sha || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageSourceSha }}
       upgrade_baseline: ${{ steps.upgrade_baseline.outputs.value }}
+      upgrade_survivor_baselines: ${{ steps.upgrade_survivor_profile.outputs.baselines }}
+      upgrade_survivor_scenarios: ${{ steps.upgrade_survivor_profile.outputs.scenarios }}
     steps:
       - name: Checkout trusted workflow ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1223,6 +1225,65 @@ jobs:
               "$(jq -r '.prepublishPluginRegistryArtifactRunAttempt' <<< "$CANDIDATE_ARTIFACT_JSON")"
           fi
 
+      - name: Select candidate-compatible upgrade survivor profile
+        id: upgrade_survivor_profile
+        if: needs.resolve_target.outputs.package_acceptance_scheduled == 'true'
+        env:
+          CANDIDATE_REF: ${{ needs.resolve_target.outputs.ref }}
+          CANDIDATE_PUBLISHED: ${{ needs.resolve_target.outputs.candidate_published }}
+          CANDIDATE_SOURCE_SHA: ${{ steps.package.outputs.source_sha || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageSourceSha }}
+          CANDIDATE_VERSION: ${{ steps.package.outputs.package_version || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageVersion }}
+          PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ needs.resolve_target.outputs.package_acceptance_package_spec }}
+          RUN_RELEASE_SOAK: ${{ needs.resolve_target.outputs.run_release_soak }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import { execFileSync } from "node:child_process";
+          import { appendFileSync, readFileSync } from "node:fs";
+          import { compareReleaseVersions, parseReleaseVersion } from "./scripts/lib/release-version.mjs";
+          import { parseUpgradeSurvivorScenarios } from "./scripts/lib/upgrade-survivor-policy.mjs";
+
+          const candidate = parseReleaseVersion(process.env.CANDIDATE_VERSION);
+          const workflow = parseReleaseVersion(JSON.parse(readFileSync("package.json", "utf8")).version);
+          assert(candidate && workflow, "Candidate and workflow package versions must be valid release versions.");
+          const context = (process.env.TARGET_CONTEXT_REF || "").replace(/^refs\/heads\//u, "");
+          const ref = (process.env.CANDIDATE_REF || "").replace(/^refs\/heads\//u, "");
+          assert(["true", "false"].includes(process.env.CANDIDATE_PUBLISHED),
+            "Candidate publication state is required.");
+          const currentLine = process.env.CANDIDATE_PUBLISHED === "false" &&
+            !process.env.PACKAGE_ACCEPTANCE_PACKAGE_SPEC &&
+            !context.startsWith("extended-stable/") &&
+            !ref.startsWith("extended-stable/") &&
+            compareReleaseVersions(candidate.baseVersion, workflow.baseVersion) >= 0;
+          let supportsOperatorScenario = false;
+          if (currentLine) {
+            const sha = process.env.CANDIDATE_SOURCE_SHA;
+            assert(/^[a-f0-9]{40}$/u.test(sha || ""), "Candidate source SHA is required.");
+            // Inspect immutable source metadata; never execute a historical candidate's harness.
+            const names = JSON.parse(execFileSync("gh", ["api",
+              `repos/${process.env.GITHUB_REPOSITORY}/contents/scripts/e2e/lib/upgrade-survivor?ref=${sha}`,
+              "--jq", "[.[].name]"], { encoding: "utf8", timeout: 60_000 }));
+            assert(Array.isArray(names) && names.every((name) => typeof name === "string"),
+              "Candidate survivor directory metadata was invalid.");
+            supportsOperatorScenario = names.includes("legacy-operator-state.mjs");
+          }
+          const baselines = supportsOperatorScenario ? "supported-lines" : "";
+          // The child prepares/reuses a registry only for unpublished artifacts.
+          // Published qualification cannot satisfy this fixture's artifact checks.
+          const legacyOperator = supportsOperatorScenario && process.env.CANDIDATE_PUBLISHED === "false";
+          const soak = process.env.RUN_RELEASE_SOAK === "true";
+          // Targets without the fixture registry retain the preexisting scenario
+          // inventory. This does not opt into frozen-target scenario omissions.
+          const scenarios = legacyOperator
+            ? (soak ? "reported-issues" : "base legacy-operator-state")
+            : (soak ? parseUpgradeSurvivorScenarios("reported-issues")
+                .filter((scenario) => scenario !== "legacy-operator-state").join(" ") : "base");
+          appendFileSync(process.env.GITHUB_OUTPUT,
+            `baselines=${baselines}\nscenarios=${scenarios}\n`);
+          NODE
+
       - name: Prepare prerelease plugin registry identity
         id: registry_identity
         env:
@@ -1469,7 +1530,8 @@ jobs:
       suite_profile: custom
       docker_lanes: release-typed-onboarding doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor update-first-hop-compat published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update plugin-binding-command-escape
       published_upgrade_survivor_baseline: ${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && format('openclaw@{0}', needs.prepare_release_package.outputs.upgrade_baseline) || 'openclaw@latest' }}
-      published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}
+      published_upgrade_survivor_baselines: ${{ needs.prepare_release_package.outputs.upgrade_survivor_baselines }}
+      published_upgrade_survivor_scenarios: ${{ needs.prepare_release_package.outputs.upgrade_survivor_scenarios }}
       telegram_mode: ${{ (needs.resolve_target.outputs.telegram_waiver != '' || needs.resolve_target.outputs.skip_package_telegram_e2e == 'true') && 'none' || 'mock-openai' }}
       telegram_advisory: true
       shared_image_artifact_namespace: release-package

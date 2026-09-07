@@ -520,7 +520,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           ? nothing
           : html`<div
               class="chat-group-footer ${
-                normalizedRole === "user" && avatarPlacement !== "footer"
+                normalizedRole === "user" && (isPeerGroup || avatarPlacement !== "footer")
                   ? "chat-group-footer--persistent-identity"
                   : ""
               }${sendFailure ? " chat-group-footer--send-failure" : ""}"

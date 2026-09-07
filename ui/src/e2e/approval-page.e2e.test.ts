@@ -499,7 +499,9 @@ suite.define(() => {
       await captureDocumentProof(surface.page, "after-remote-gateway-confirmation.png");
       await pauseRecordedProof(surface.page);
 
-      await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
+      await confirmation
+        .getByRole("button", { name: "Switch to remote-gateway.example", exact: true })
+        .click();
       await waitForApprovalPage(surface.page);
       const request = await surface.gateway.waitForRequest("approval.get");
       expect(request.params).toEqual({ id: APPROVAL_ID });

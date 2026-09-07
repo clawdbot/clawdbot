@@ -14,6 +14,10 @@ describe("SidebarCatalogMenuController", () => {
       requestUpdate: vi.fn(),
       terminalAvailable: () => true,
       navigate: vi.fn(),
+      beginMutation: vi.fn(),
+      isMutationCurrent: vi.fn(),
+      archive: vi.fn(),
+      afterDelete: vi.fn(),
     });
 
     controller.open(
@@ -23,6 +27,8 @@ describe("SidebarCatalogMenuController", () => {
         routeId: "chat",
         navigation: {},
         canOpenTerminal: true,
+        canDelete: false,
+        name: "Shared session",
         meta: "now",
       },
       10,

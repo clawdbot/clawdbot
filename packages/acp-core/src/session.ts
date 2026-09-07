@@ -1,4 +1,3 @@
-// ACP Core module implements session behavior.
 import { randomUUID } from "node:crypto";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import type { AcpSession } from "./types.js";

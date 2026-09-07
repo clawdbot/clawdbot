@@ -2,6 +2,8 @@
 summary: "Control UI routes, focus presentations, stable session links, and connection handoff parameters"
 read_when:
   - You need to bookmark or share a Control UI session
+  - You need to publish or revoke a world-readable session transcript
+  - You run the Control UI behind a login proxy and need social previews to unfurl
   - You are adding or changing a Control UI route
   - You need a terminal, desktop, approval, onboarding, or remote Gateway URL
 title: "Control UI URLs"
@@ -196,11 +198,17 @@ access from this feature.
 
 ## Public session transcripts
 
-Session owners and Gateway admins can open the session's sharing menu and select
+Session creators and Gateway admins can open the session's sharing menu and select
 **Public access → Enable public access**. Confirming publishes the session's
 existing and future conversation text to anyone with its public URL. Recipients
 do not need an account or Gateway credentials. **Copy public link** copies that
-URL; **Disable public access** revokes it.
+URL; **Disable public access** revokes it. The chat header shows **Public** while
+access is enabled.
+
+Assigning another owner does not transfer public-sharing authority. If the public
+controls are unavailable, confirm that the session is saved, is not incognito,
+and you are its creator or a Gateway admin. See
+[Multi-user mode](/concepts/multi-user#world-readable-session-links).
 
 Public access is separate from teammate visibility and editing permissions.
 Publishing does not let anonymous visitors send messages, invoke tools, open

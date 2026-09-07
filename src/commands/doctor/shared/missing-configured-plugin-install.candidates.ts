@@ -67,6 +67,7 @@ export async function resolveConfiguredPluginInstallContext(params: {
   configuredChannelIds: ReadonlySet<string>;
   blockedPluginIds?: ReadonlySet<string>;
   baselineRecords?: Record<string, PluginInstallRecord>;
+  coreVersion?: string;
 }) {
   const realpathCache = new Map<string, string>();
   const resolvePathIdentity = (value: string): string => {
@@ -102,7 +103,7 @@ export async function resolveConfiguredPluginInstallContext(params: {
     });
   const records =
     params.baselineRecords ?? (await loadInstalledPluginIndexInstallRecords({ env: params.env }));
-  const currentVersion = resolveCompatibilityHostVersion(params.env);
+  const currentVersion = params.coreVersion ?? resolveCompatibilityHostVersion(params.env);
   const updateChannel = resolveRegistryUpdateChannel({
     configChannel: normalizeUpdateChannel(params.cfg.update?.channel),
     currentVersion,

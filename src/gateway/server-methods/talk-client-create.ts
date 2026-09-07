@@ -24,6 +24,7 @@ import {
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL } from "../../talk/describe-view-tool.js";
 import {
   cancelInternalRealtimeVoiceBrowserSession,
+  projectInternalRealtimeVoicePublicConfig,
   type InternalRealtimeVoiceBrowserSessionCreateRequest,
 } from "../../talk/provider-internal.js";
 import {
@@ -404,7 +405,11 @@ export const createTalkClient: GatewayRequestHandler = async ({
           respond(
             true,
             {
-              ...session,
+              ...projectInternalRealtimeVoicePublicConfig({
+                provider: resolution.provider,
+                providerConfig: resolution.providerConfig,
+                config: session,
+              }),
               voiceSessionId,
               ...(clientControl ? { clientControl } : {}),
             },

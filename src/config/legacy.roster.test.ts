@@ -92,12 +92,14 @@ describe("persisted implicit-main roster migration", () => {
           path: ["agents", "entries"],
           kind: "single",
           hasSiblingOverrides: false,
+          hasArrayAncestor: false,
           targetPath: path.join(configDir, "entries.json"),
         },
         {
           path: [],
           kind: "single",
           hasSiblingOverrides: true,
+          hasArrayAncestor: false,
           targetPath: path.join(configDir, "base.json"),
         },
       ]);
