@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createNativeApprovalControlRegistry } from "./approval-native-controls.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { createNativeApprovalControlRegistry } from "./approval-runtime.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -16,7 +17,7 @@ describe("native approval controls", () => {
       vi.useFakeTimers();
       vi.setSystemTime(1_000);
       const controls = createNativeApprovalControlRegistry({ releaseClaimOnLookupExpiry });
-      const finish = Promise.withResolvers<void>();
+      const finish = createDeferred<void>();
       controls.register({ token: "rebound", expiresAtMs: 2_000 });
       const pending = controls.settle("rebound", () => finish.promise);
       try {

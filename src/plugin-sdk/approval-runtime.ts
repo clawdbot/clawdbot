@@ -76,3 +76,4 @@ export {
   formatApprovalDecisionLabel,
   formatChannelApprovalResolvedLabel,
 } from "./approval-terminal.js";
+export { createNativeApprovalControlRegistry } from "./approval-native-controls.js";

@@ -50,30 +50,24 @@ type ApprovalResolverParams = {
   request: ApprovalRequest;
 };
 
-type ChannelApprovalForwardingEvaluatorParams = {
-  channel: string;
-  isTransportEnabled: (params: { cfg: OpenClawConfig; accountId?: string | null }) => boolean;
-  hasMatchingTarget: (params: {
-    cfg: OpenClawConfig;
-    config: ExecApprovalForwardingConfig;
-    accountId?: string | null;
-    target?: ChannelApprovalForwardTarget;
-  }) => boolean;
-  hasOriginOrSessionTarget: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    request: ApprovalRequest;
-  }) => boolean;
-};
-
-type ApprovalTransportChecker = ChannelApprovalForwardingEvaluatorParams["isTransportEnabled"];
+type ApprovalTransportChecker = (params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}) => boolean;
 type ApprovalForwardingModeResolver = (
   config: ExecApprovalForwardingConfig,
 ) => ExecApprovalForwardingMode;
-type ApprovalForwardingTargetMatcher =
-  ChannelApprovalForwardingEvaluatorParams["hasMatchingTarget"];
-type ApprovalOriginOrSessionTargetChecker =
-  ChannelApprovalForwardingEvaluatorParams["hasOriginOrSessionTarget"];
+type ApprovalForwardingTargetMatcher = (params: {
+  cfg: OpenClawConfig;
+  config: ExecApprovalForwardingConfig;
+  accountId?: string | null;
+  target?: ChannelApprovalForwardTarget;
+}) => boolean;
+type ApprovalOriginOrSessionTargetChecker = (params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  request: ApprovalRequest;
+}) => boolean;
 
 /** Inputs for checking whether one approval request can use session-native forwarding. */
 export type ChannelApprovalForwardingEligibilityParams = {
@@ -530,71 +524,6 @@ function isExplicitTargetApprovalEligibleViaForwarding(
     accountId: params.accountId,
     target: params.target,
   });
-}
-
-/** Build reusable forwarding gates for channels with custom target matching logic. */
-export function createChannelApprovalForwardingEvaluator(
-  params: ChannelApprovalForwardingEvaluatorParams,
-) {
-  const resolveForwardingMode = (config: ExecApprovalForwardingConfig) => config.mode ?? "session";
-
-  const isPotentialRoute = (input: ChannelApprovalPotentialRouteParams): boolean => {
-    return canApprovalPotentiallyRoute({
-      ...input,
-      isTransportEnabled: params.isTransportEnabled,
-      resolveMode: resolveForwardingMode,
-      hasMatchingTarget: params.hasMatchingTarget,
-    });
-  };
-
-  const isSessionEligible = (input: ChannelApprovalForwardingEligibilityParams): boolean => {
-    return isSessionApprovalEligibleViaForwarding({
-      ...input,
-      channel: params.channel,
-      isTransportEnabled: params.isTransportEnabled,
-      resolveMode: resolveForwardingMode,
-      hasOriginOrSessionTarget: params.hasOriginOrSessionTarget,
-    });
-  };
-
-  const isExplicitTargetEligible = (
-    input: ChannelApprovalExplicitTargetEligibilityParams,
-  ): boolean => {
-    return isExplicitTargetApprovalEligibleViaForwarding({
-      ...input,
-      isTransportEnabled: params.isTransportEnabled,
-      resolveMode: resolveForwardingMode,
-      hasMatchingTarget: params.hasMatchingTarget,
-    });
-  };
-
-  const canAnyPotentiallyRoute = (input: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    nativeSessionOnly?: boolean;
-  }): boolean =>
-    isPotentialRoute({
-      ...input,
-      approvalKind: "exec",
-    }) ||
-    isPotentialRoute({
-      ...input,
-      approvalKind: "plugin",
-    });
-
-  const shouldHandleRequest = (input: ApprovalResolverParams): boolean =>
-    isSessionEligible({
-      ...input,
-      approvalKind: resolveApprovalKind(input.request, input.approvalKind),
-    });
-
-  return {
-    canAnyPotentiallyRoute,
-    isExplicitTargetEligible,
-    isPotentialRoute,
-    isSessionEligible,
-    shouldHandleRequest,
-  };
 }
 
 /** Create the standard route gates for native channel approval forwarding. */
