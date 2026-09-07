@@ -140,6 +140,7 @@ export async function spawnSubagentDirect(
       targetAgentId,
       sandboxMode,
       swarmEnabled: swarmConfig.enabled,
+      requesterSandboxed: ctx.sandboxed,
     });
     if (!childPlan.ok) {
       return childPlan.result;

@@ -293,7 +293,7 @@ describe("prepareModelForSimpleCompletion", () => {
 
     const registeredStream = ensureCustomApiRegistered.mock.calls.at(-1)?.[2] as StreamFn;
     await registeredStream(result, { messages: [] }, {});
-    expect(pluginStreamFn).toHaveBeenCalledOnce();
+    expect(pluginStreamFn).toHaveBeenCalledExactlyOnceWith(model, { messages: [] }, {});
   });
 
   it("carries the source API into wrappers after provider stream projection", () => {
@@ -358,7 +358,7 @@ describe("prepareModelForSimpleCompletion", () => {
     void finalStreamFn(result, { messages: [] }, {});
 
     expect(pluginStreamFn).toHaveBeenCalledWith(
-      expect.objectContaining({ api: dispatchApi }),
+      expect.objectContaining({ api: model.api }),
       { messages: [] },
       {},
     );

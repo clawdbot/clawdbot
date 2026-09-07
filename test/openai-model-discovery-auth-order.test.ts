@@ -3,6 +3,7 @@ import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-cata
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import chutesPlugin from "../extensions/chutes/index.js";
 import { buildOpenAIProvider } from "../extensions/openai/api.js";
+import xaiPlugin from "../extensions/xai/index.js";
 import {
   createExpiredOauthStore,
   readAuthProfileStoreForTest,
@@ -10,6 +11,7 @@ import {
 import type { AuthProfileStore, OAuthCredential } from "../src/agents/auth-profiles/types.js";
 import { planOpenClawModelsJson } from "../src/agents/models-config.plan.js";
 import * as catalogContext from "../src/agents/models-config.providers.catalog-context.js";
+import { resolveImplicitProviders } from "../src/agents/models-config.providers.implicit.js";
 import { prepareModelCatalogPublication } from "../src/agents/prepared-model-runtime.full-catalog.js";
 import type { ModelProviderConfig } from "../src/config/types.models.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
@@ -49,6 +51,7 @@ describe("Provider model discovery auth preparation", () => {
   afterEach(async () => {
     clearLiveCatalogCacheForTests();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     discovery.providers = [];
     await state?.cleanup();
   });
@@ -60,6 +63,7 @@ describe("Provider model discovery auth preparation", () => {
       providerId?: string;
       outcomes?: ProviderCatalogOutcome[];
       timeoutMs?: number;
+      env?: NodeJS.ProcessEnv;
     } = {},
   ) {
     return planOpenClawModelsJson({
@@ -68,7 +72,7 @@ describe("Provider model discovery auth preparation", () => {
         discoveryAuthConfig: config,
         sourceConfigForSecrets: config,
         agentDir,
-        env: {},
+        env: options.env ?? {},
         envFingerprint: {},
         providerDiscoveryProviderIds: [options.providerId ?? "openai"],
         providerDiscoveryTimeoutMs: options.timeoutMs,
@@ -163,85 +167,128 @@ describe("Provider model discovery auth preparation", () => {
     expect(plan.action === "write" ? plan.contents : "").not.toContain(keyA);
   });
 
-  it("continues from failed OAuth to the next configured API-key profile", async () => {
-    const profileA = "openai:oauth-a";
-    const profileB = "openai:api-key-b";
-    const keyB = "selected-profile-b";
-    const config: OpenClawConfig = {
-      auth: {
-        order: {
-          openai: [profileA, profileB],
+  it.each([
+    { providerId: "openai", source: "profile", modelId: "gpt-5.5" },
+    { providerId: "xai", source: "profile", modelId: "grok-4.3" },
+    { providerId: "xai", source: "config", modelId: "grok-4.3" },
+    { providerId: "xai", source: "env", modelId: "grok-4.3" },
+  ])(
+    "continues from failed $providerId OAuth to $source API-key auth without repeating refresh",
+    async ({ providerId, source, modelId }) => {
+      if (providerId === "xai") {
+        xaiPlugin.register(
+          createTestPluginApi({
+            registerProvider: (provider) => {
+              discovery.providers = [provider];
+            },
+          }),
+        );
+      }
+      const profileA = `${providerId}:oauth-a`;
+      const profileB = `${providerId}:api-key-b`;
+      const keyB = "selected-profile-b";
+      const config: OpenClawConfig = {
+        auth: {
+          order: {
+            [providerId]: [profileA, profileB],
+          },
         },
-      },
-    };
-    const store = createExpiredOauthStore({
-      profileId: profileA,
-      provider: "openai",
-      access: "rejected-oauth-a",
-      refresh: "refresh-a",
-    });
-    store.profiles[profileB] = {
-      type: "api_key",
-      provider: "openai",
-      key: keyB,
-    };
-    await state.writeAuthProfiles(store);
-    const events: string[] = [];
-    // Diagnostic copy is independent of refresh selection and loads the full plugin runtime.
-    vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(undefined);
-    const refresh = vi
-      .spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin")
-      .mockImplementation(async ({ credential }) => {
-        events.push(`refresh:${credential.access}`);
-        throw new Error("synthetic OAuth refresh failure");
+      };
+      const store = createExpiredOauthStore({
+        profileId: profileA,
+        provider: providerId,
+        access: "rejected-oauth-a",
+        refresh: "refresh-a",
       });
-    const { resolveApiKeyForProvider } = providerAuthRuntime;
-    const runtimeAuth = vi
-      .spyOn(providerAuthRuntime, "resolveApiKeyForProvider")
-      .mockImplementation(async (params) => {
-        events.push(`resolve:${params.profileId}`);
-        return resolveApiKeyForProvider(params);
+      if (source === "profile") {
+        store.profiles[profileB] = { type: "api_key", provider: providerId, key: keyB };
+      } else if (source === "config") {
+        config.models = {
+          providers: {
+            [providerId]: {
+              baseUrl: "https://api.x.ai/v1",
+              api: "openai-responses",
+              apiKey: keyB,
+              models: [],
+            },
+          },
+        };
+      } else {
+        vi.stubEnv("XAI_API_KEY", keyB);
+      }
+      await state.writeAuthProfiles(store);
+      const events: string[] = [];
+      // Diagnostic copy is independent of refresh selection and loads the full plugin runtime.
+      vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(
+        undefined,
+      );
+      const refresh = vi
+        .spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin")
+        .mockImplementation(async ({ credential }) => {
+          events.push(`refresh:${credential.access}`);
+          throw new Error("synthetic OAuth refresh failure");
+        });
+      const { resolveApiKeyForProvider } = providerAuthRuntime;
+      const runtimeAuth = vi
+        .spyOn(providerAuthRuntime, "resolveApiKeyForProvider")
+        .mockImplementation(async (params) => {
+          events.push(`resolve:${params.profileId}`);
+          return resolveApiKeyForProvider(params);
+        });
+      const requests: string[] = [];
+      const outcomes: ProviderCatalogOutcome[] = [];
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+        events.push("catalog");
+        requests.push(new Headers(init?.headers).get("authorization") ?? "");
+        return Response.json({ data: [{ id: modelId, object: "model" }] });
       });
-    const requests: string[] = [];
-    const outcomes: ProviderCatalogOutcome[] = [];
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
-      events.push("catalog");
-      requests.push(new Headers(init?.headers).get("authorization") ?? "");
-      return Response.json({ data: [{ id: "gpt-5.5", object: "model" }] });
-    });
 
-    const plan = await planCatalog(config, store, { outcomes });
+      const plan = await planCatalog(config, store, {
+        providerId,
+        outcomes,
+        ...(source === "env" ? { env: { XAI_API_KEY: keyB } } : {}),
+      });
 
-    expect(refresh).toHaveBeenCalledOnce();
-    expect(refresh).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        refresh: true,
-        credential: expect.objectContaining({
-          type: "oauth",
-          provider: "openai",
-          access: "rejected-oauth-a",
-          refresh: "refresh-a",
+      expect(refresh).toHaveBeenCalledOnce();
+      expect(refresh).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: providerId,
+          refresh: true,
+          credential: expect.objectContaining({
+            type: "oauth",
+            provider: providerId,
+            access: "rejected-oauth-a",
+            refresh: "refresh-a",
+          }),
         }),
-      }),
-    );
-    expect(events).toEqual(["refresh:rejected-oauth-a", `resolve:${profileB}`, "catalog"]);
-    expect({
-      runtimeProfiles: runtimeAuth.mock.calls.map(([params]) => ({
-        profileId: params.profileId,
-        lockedProfile: params.lockedProfile,
-      })),
-      requests,
-      outcomes,
-      action: plan.action,
-    }).toEqual({
-      runtimeProfiles: [{ profileId: profileB, lockedProfile: true }],
-      requests: [`Bearer ${keyB}`],
-      outcomes: [{ provider: "openai", profileId: profileB, status: "ready" }],
-      action: "write",
-    });
-    expect(plan.action === "write" ? plan.contents : "").not.toContain("rejected-oauth-a");
-  });
+      );
+      const resolvedProfile = source === "profile" ? profileB : undefined;
+      expect(events).toEqual(["refresh:rejected-oauth-a", `resolve:${resolvedProfile}`, "catalog"]);
+      expect({
+        runtimeProfiles: runtimeAuth.mock.calls.map(([params]) => ({
+          profileId: params.profileId,
+          lockedProfile: params.lockedProfile,
+        })),
+        requests,
+        outcomes,
+        action: plan.action,
+      }).toEqual({
+        runtimeProfiles: [
+          { profileId: resolvedProfile, lockedProfile: resolvedProfile ? true : undefined },
+        ],
+        requests: [`Bearer ${keyB}`],
+        outcomes: [
+          {
+            provider: providerId,
+            ...(resolvedProfile ? { profileId: resolvedProfile } : {}),
+            status: "ready",
+          },
+        ],
+        action: "write",
+      });
+      expect(plan.action === "write" ? plan.contents : "").not.toContain("rejected-oauth-a");
+    },
+  );
 
   it.each(["oauth", "token"] as const)(
     "uses subscription discovery for configured literal %s credentials without a profile",
@@ -356,14 +403,16 @@ describe("Provider model discovery auth preparation", () => {
   });
 
   it.each([
-    { providerId: "chutes", profileCount: 1 },
-    { providerId: "chutes", profileCount: 2 },
-    { providerId: "openai", profileCount: 1 },
+    { providerId: "chutes", profileCount: 1, plugin: chutesPlugin },
+    { providerId: "chutes", profileCount: 2, plugin: chutesPlugin },
+    { providerId: "openai", profileCount: 1, plugin: null },
+    { providerId: "xai", profileCount: 1, plugin: xaiPlugin },
+    { providerId: "xai", profileCount: 2, plugin: xaiPlugin },
   ])(
     "retains the $providerId catalog when all $profileCount OAuth profiles fail preparation",
-    async ({ providerId, profileCount }) => {
-      if (providerId === "chutes") {
-        chutesPlugin.register(
+    async ({ providerId, profileCount, plugin }) => {
+      if (plugin) {
+        plugin.register(
           createTestPluginApi({
             registerProvider: (provider) => {
               discovery.providers = [provider];
@@ -659,6 +708,167 @@ describe("Provider model discovery auth preparation", () => {
           independentModel.id,
         );
       }
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe("provider catalog late-result finalization", () => {
+  const providerId = "catalog-late-fixture";
+  const profileId = `${providerId}:oauth`;
+  const peerId = "catalog-peer-fixture";
+  const model = {
+    id: "account-only",
+    name: "Account Model",
+    reasoning: false,
+    input: ["text" as const],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 32_768,
+    maxTokens: 8_192,
+  };
+
+  let state: OpenClawTestState;
+  let store: AuthProfileStore;
+
+  beforeEach(async () => {
+    state = await createOpenClawTestState({ prefix: "catalog-late-result-", agentEnv: "main" });
+    store = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: providerId,
+          access: "expired-fixture-access",
+          refresh: "fixture-refresh",
+          expires: Date.now() - 60_000,
+        },
+      },
+    };
+    await state.writeAuthProfiles(store);
+    vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(undefined);
+    vi.spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin").mockRejectedValue(
+      new Error("fixture refresh failed"),
+    );
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    discovery.providers = [];
+    await state.cleanup();
+  });
+
+  it.each([
+    { shape: "provider", timedOut: false },
+    { shape: "providers", timedOut: false },
+    { shape: "outcomes", timedOut: false },
+    { shape: "provider", timedOut: true },
+    { shape: "providers", timedOut: true },
+    { shape: "outcomes", timedOut: true },
+  ] as const)(
+    "consumes $shape only for an active owner (late: $timedOut)",
+    async ({ shape, timedOut }) => {
+      const entered = createDeferredCore();
+      const completion = createDeferredCore();
+      const catalog = vi.spyOn(providerDiscovery, "runProviderCatalog");
+      const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected HTTP"));
+      const ready: ProviderCatalogOutcome[] = [{ provider: providerId, status: "ready" }];
+      if (shape === "providers") {
+        ready.push({ provider: peerId, status: "ready" });
+      }
+      let reads = 0;
+      const readProvider = (): ModelProviderConfig => ({
+        baseUrl: "https://catalog.invalid/v1",
+        api: "openai-completions",
+        models: reads++ === 0 ? [model] : [],
+      });
+      discovery.providers = [
+        {
+          id: providerId,
+          label: "Catalog Fixture",
+          auth: [
+            {
+              id: "oauth",
+              label: "OAuth",
+              kind: "oauth",
+              run: async () => {
+                throw new Error("interactive auth is outside this fixture");
+              },
+            },
+          ],
+          catalog: {
+            run: async (ctx) => {
+              expect(ctx.resolveProviderAuth(providerId).preparationFailed).toBe(true);
+              entered.resolve();
+              if (timedOut) {
+                await completion.promise;
+              }
+              if (shape === "outcomes") {
+                return {
+                  providers: {},
+                  get outcomes() {
+                    return reads++ === 0 ? ready : [];
+                  },
+                };
+              }
+              return shape === "provider"
+                ? {
+                    get provider() {
+                      return readProvider();
+                    },
+                    outcomes: ready,
+                  }
+                : {
+                    get providers() {
+                      const provider = readProvider();
+                      return { [providerId]: provider, [peerId]: provider };
+                    },
+                    outcomes: ready,
+                  };
+            },
+          },
+        },
+      ];
+      const outcomes: ProviderCatalogOutcome[] = [];
+      const discover = (timeoutMs?: number) =>
+        resolveImplicitProviders({
+          config: { auth: { order: { [providerId]: [profileId] } } },
+          agentDir: state.agentDir(),
+          authStore: store,
+          env: {},
+          providerDiscoveryTimeoutMs: timeoutMs,
+          onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
+        });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const pending = discover(timedOut ? 25 : undefined);
+      try {
+        await Promise.race([entered.promise, pending]);
+        if (timedOut) {
+          await vi.advanceTimersByTimeAsync(25);
+          expect(await pending).toEqual({});
+        }
+      } finally {
+        completion.resolve();
+        await Promise.allSettled(catalog.mock.results.map((result) => result.value));
+      }
+      const first = await pending;
+      let accepted = first;
+      const lateReads = reads;
+      if (timedOut) {
+        expect(outcomes).toEqual([{ provider: providerId, status: "unavailable" }]);
+        outcomes.length = 0;
+        accepted = await discover();
+      }
+      expect({ lateReads, reads }).toEqual({ lateReads: timedOut ? 0 : 1, reads: 1 });
+      if (shape === "outcomes") {
+        expect(accepted).toEqual({});
+      } else {
+        expect(accepted?.[providerId]?.models).toEqual([model]);
+      }
+      if (shape === "providers") {
+        expect(accepted?.[peerId]?.models).toEqual([model]);
+      }
+      expect(outcomes).toEqual(ready);
       expect(fetch).not.toHaveBeenCalled();
     },
   );

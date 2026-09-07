@@ -4,6 +4,7 @@ import { resolveGatewayService } from "../../daemon/service.js";
 import type { UpdateRepairValidation } from "../../infra/update-repair-protocol.js";
 import { recordUpdateRunStep, recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { verifyUpdateServing } from "../../infra/update-serving-verification.js";
 import { defaultRuntime } from "../../runtime.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
@@ -15,7 +16,6 @@ import {
   type GatewayRestartSnapshot,
 } from "../daemon-cli/restart-health.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import { runUpdateInferenceProbe } from "./update-command-inference.js";
 import type { PostUpdateLaunchAgentRecoveryResult } from "./update-command-launch-agent-recovery.js";
 import {
   formatPostUpdateGatewayRecoveryInstructions,
@@ -121,38 +121,67 @@ export async function verifyUpdatedGateway(params: {
   }
   const serviceRunning = !params.requireRunningService || health.runtime.status === "running";
   if (health.healthy && serviceRunning && readyz) {
-    params.onVerified?.(Date.now());
-    const inference = await runUpdateInferenceProbe({
-      root: params.result.root,
-      env: params.serviceEnv,
-      nodeRunner: params.nodeRunner,
-      ...(params.signal ? { signal: params.signal } : {}),
-    });
+    const run = params.opts.run;
+    const expectedVersion = params.expectedVersion;
+    // A healthy port does not prove this update served or persisted a turn.
+    // Missing transaction/artifact identity cannot be replaced with the observed boot.
+    const serving =
+      run && expectedVersion && health.gatewayBootId
+        ? await verifyUpdateServing({
+            runId: run.runId,
+            config: context.config,
+            env: params.serviceEnv,
+            gatewayPort: params.gatewayPort,
+            expectedVersion,
+            expectedBuildId: params.expectedBuildId,
+            expectedBootId: health.gatewayBootId,
+            ...(params.signal ? { signal: params.signal } : {}),
+          })
+        : !run || !expectedVersion
+          ? ({ status: "failed", reason: "invalid-request" } as const)
+          : ({ status: "unavailable", reason: "identity-unavailable" } as const);
     params.signal?.throwIfAborted();
-    if (params.opts.run) {
+    if (run) {
       recordUpdateRunVerification(
-        params.opts.run.runId,
-        { inferenceProbe: inference ? "passed" : "unavailable" },
-        { env: params.opts.run.env },
+        run.runId,
+        {
+          inferenceProbe:
+            serving.status === "verified"
+              ? "passed"
+              : serving.status === "unavailable"
+                ? "unavailable"
+                : "failed",
+        },
+        { env: run.env },
       );
       recordUpdateRunStep(
-        params.opts.run.runId,
-        { step: "gateway verification", status: "completed", endedAtMs: Date.now() },
-        { env: params.opts.run.env },
+        run.runId,
+        {
+          step: "gateway verification",
+          status: serving.status === "verified" ? "completed" : "failed",
+          endedAtMs: Date.now(),
+          ...(serving.status === "verified" ? {} : { detail: serving.reason }),
+        },
+        { env: run.env },
       );
     }
-    if (!inference && !params.opts.json) {
-      defaultRuntime.log(
-        theme.warn("Inference: unavailable (advisory; Gateway verification passed)."),
-      );
+    if (serving.status !== "verified") {
+      // Only public-safe producer reasons leave this boundary; the receipt is private.
+      const reason = `serving-verification-${serving.reason}`;
+      defaultRuntime.error(`Gateway serving verification failed: ${serving.reason}.`);
+      return { ok: false, score: 7, summary: reason };
     }
+    params.onVerified?.(serving.receipt.verifiedAtMs);
     if (!params.opts.json) {
-      defaultRuntime.log(theme.success("Gateway: restarted and verified."));
+      defaultRuntime.log(
+        theme.success("Gateway: restarted, served a turn, and verified persistence."),
+      );
     }
     return {
       ok: true,
-      score: 7,
-      summary: "Gateway service, version, plugins, channels, and readiness verified.",
+      score: 8,
+      summary:
+        "Gateway service, version, plugins, channels, readiness, and persisted turn verified.",
     };
   }
   const diagnosticLines: [string, ...string[]] = [

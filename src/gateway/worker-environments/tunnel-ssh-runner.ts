@@ -183,7 +183,10 @@ export function createWorkerSshRunner(): WorkerSshRunner {
                 );
               }
             }
-          })());
+          })().catch((error: unknown) => {
+            stopPromise = undefined;
+            throw error;
+          }));
         },
       };
     },

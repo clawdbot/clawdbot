@@ -335,19 +335,7 @@ class ClawComponentsTest {
           }
           val labels = listOfNotNull(row.title, row.subtitle, row.metadata, "Oublier".takeIf { row.slots == ListRowSlots.Gateway }, "Setup".takeIf { row.slots == ListRowSlots.Skill })
           for (label in labels) {
-            val layouts = mutableListOf<TextLayoutResult>()
-            composeRule
-              .onNodeWithText(label, useUnmergedTree = true)
-              .performScrollTo()
-              .assertIsDisplayed()
-              .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action -> assertTrue(action(layouts)) }
-            val layout = layouts.single()
-            // Paragraph width can exceed a tight Text node even when every glyph fits.
-            assertFalse("${row.slots}/$rowWidth/$scale: $label must retain every line", layout.multiParagraph.didExceedMaxLines)
-            assertTrue("$label must fit vertically", layout.multiParagraph.height <= layout.size.height + 1f)
-            assertTrue("${row.slots}/$rowWidth/$scale: $label must fit horizontally", (0 until layout.lineCount).all { layout.getLineLeft(it) >= -1f && layout.getLineRight(it) <= layout.size.width + 1f })
-            assertTrue("$label must not be ellipsized", (0 until layout.lineCount).none(layout::isLineEllipsized))
-            assertEquals(label.length, layout.getLineEnd(layout.lineCount - 1, visibleEnd = true))
+            composeRule.onNodeWithText(label, useUnmergedTree = true).assertCompleteText(label)
           }
           if (row.slots == ListRowSlots.Skill) {
             assertEquals(
@@ -549,6 +537,74 @@ class ClawComponentsTest {
   }
 
   @Test
+  fun longActionLabelsWrapWithoutLosingTheirClickOrDisabledState() {
+    val enabled = mutableStateOf(true)
+    var primaryClicks = 0
+    var secondaryClicks = 0
+    val primary = "Reconnecter"
+    val secondary = "Déconnecter"
+    composeRule.setContent {
+      DeviceConfigurationOverride(DeviceConfigurationOverride.FontScale(2f)) {
+        ClawDesignTheme {
+          LazyColumn(Modifier.width(280.dp)) {
+            item {
+              Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ClawPrimaryButton(primary, { primaryClicks++ }, Modifier.weight(1f), enabled.value, Icons.Default.Cloud)
+                ClawSecondaryButton(secondary, { secondaryClicks++ }, Modifier.weight(1f), enabled.value)
+              }
+            }
+          }
+        }
+      }
+    }
+    for (label in listOf(primary, secondary)) {
+      composeRule.onNodeWithText(label, useUnmergedTree = true).assertCompleteText(label)
+      composeRule.onNodeWithText(label).performScrollTo().performClick()
+    }
+    composeRule.runOnIdle {
+      assertEquals(1, primaryClicks)
+      assertEquals(1, secondaryClicks)
+      enabled.value = false
+    }
+    for (label in listOf(primary, secondary)) {
+      composeRule
+        .onNodeWithText(label)
+        .assertIsNotEnabled()
+        .performScrollTo()
+        .performClick()
+      composeRule.onNodeWithText(label, useUnmergedTree = true).assertCompleteText(label)
+    }
+    composeRule.runOnIdle {
+      assertEquals(1, primaryClicks)
+      assertEquals(1, secondaryClicks)
+    }
+  }
+
+  @Test
+  fun securityLabelsWrapInsideTheirSegmentsWithoutRegrouping() {
+    val options = listOf("Non chiffré", "Sécurisé (TLS)")
+    val selected = mutableStateOf(options.first())
+    composeRule.setContent {
+      DeviceConfigurationOverride(DeviceConfigurationOverride.FontScale(2f)) {
+        ClawDesignTheme {
+          LazyColumn(Modifier.width(280.dp)) {
+            item {
+              ClawSegmentedControl(options, selected.value, { selected.value = it })
+            }
+          }
+        }
+      }
+    }
+    for (label in options) composeRule.onNodeWithText(label, useUnmergedTree = true).assertCompleteText(label)
+    val first = composeRule.onNodeWithText(options.first()).fetchSemanticsNode().boundsInRoot
+    val second = composeRule.onNodeWithText(options.last()).fetchSemanticsNode().boundsInRoot
+    assertTrue("Segments stay beside one another; their labels gain height", first.right <= second.left && first.top == second.top)
+    composeRule.onNodeWithText(options.first()).assertIsSelected()
+    composeRule.onNodeWithText(options.last()).performClick().assertIsSelected()
+    composeRule.onNodeWithText(options.first()).assertIsNotSelected()
+  }
+
+  @Test
   fun filterPillsExposeAndUpdateTheirSelection() {
     val selected = mutableStateOf("All")
     composeRule.setContent {
@@ -609,6 +665,19 @@ class ClawComponentsTest {
     assertEquals(listOf(4, 3, 3), rows.map { it.size })
     assertEquals((1..10).map(Int::toString), rows.flatten())
   }
+}
+
+internal fun SemanticsNodeInteraction.assertCompleteText(label: String) {
+  val layouts = mutableListOf<TextLayoutResult>()
+  performScrollTo().assertIsDisplayed().performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
+  val layout = layouts.single()
+  assertEquals(label, layout.layoutInput.text.text)
+  assertFalse("$label must retain every line", layout.multiParagraph.didExceedMaxLines)
+  assertTrue("$label must fit vertically", layout.multiParagraph.height <= layout.size.height + 1f)
+  // Paragraph width can exceed a tight Text node even when every glyph fits.
+  assertTrue("$label must fit horizontally", (0 until layout.lineCount).all { layout.getLineLeft(it) >= -1f && layout.getLineRight(it) <= layout.size.width + 1f })
+  assertTrue("$label must not be ellipsized", (0 until layout.lineCount).none(layout::isLineEllipsized))
+  assertEquals("$label must display its final character", label.length, layout.getLineEnd(layout.lineCount - 1, visibleEnd = true))
 }
 
 internal data class ContrastThemeCase(

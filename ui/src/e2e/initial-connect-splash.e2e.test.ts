@@ -338,7 +338,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     const sectionTitles = [
       "Found on this Gateway",
       "Run a model locally",
-      "Sign in with a provider",
+      "Connect an AI provider",
       "Connect with an API key or token",
     ];
     const loadingSectionTops = await Promise.all(

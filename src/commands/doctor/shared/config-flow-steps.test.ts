@@ -118,6 +118,7 @@ describe("doctor config flow steps", () => {
           path: ["diagnostics"],
           kind: "multiple",
           hasSiblingOverrides: false,
+          hasArrayAncestor: false,
           targetPaths: ["/tmp/a.json5", "/tmp/b.json5"],
         },
       ],

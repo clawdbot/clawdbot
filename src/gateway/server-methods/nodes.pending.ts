@@ -68,30 +68,7 @@ function resolveAllowedPendingNodeActions(params: {
   return allowed;
 }
 
-function ackPendingNodeActions(
-  nodeId: string,
-  ids: string[],
-  pairingGeneration: string,
-): PendingNodeAction[] {
-  if (ids.length === 0) {
-    return listPendingNodeActions({
-      nodeId,
-      pairingGeneration,
-      ttlMs: nodeInvokePolicy.pendingActionTtlMs,
-    });
-  }
-  return acknowledgePendingNodeActions({
-    nodeId,
-    pairingGeneration,
-    ids,
-    ttlMs: nodeInvokePolicy.pendingActionTtlMs,
-  });
-}
-
 export function toPendingParamsJSON(params: unknown): string | undefined {
-  if (params === undefined) {
-    return undefined;
-  }
   try {
     return JSON.stringify(params);
   } catch {
@@ -169,7 +146,12 @@ export const nodePendingActionHandlers: GatewayRequestHandlers = {
         return;
       }
       const ackIds = normalizeUniqueTrimmedStringList(params.ids);
-      const remaining = ackPendingNodeActions(trimmedNodeId, ackIds, generation.key);
+      const remaining = acknowledgePendingNodeActions({
+        nodeId: trimmedNodeId,
+        pairingGeneration: generation.key,
+        ids: ackIds,
+        ttlMs: nodeInvokePolicy.pendingActionTtlMs,
+      });
       if (!(await isNodePairingGenerationCurrent(generation))) {
         respondPairingChanged(respond);
         return;

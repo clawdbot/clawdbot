@@ -1,8 +1,6 @@
 // Keep the real lifecycle/version guards across the old-parent and fresh-CLI boundaries.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
@@ -15,6 +13,7 @@ import {
 } from "../../daemon/launchd-service-files.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
+import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as runtimeUtils from "../../utils.js";
@@ -22,10 +21,13 @@ import { VERSION } from "../../version.js";
 import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import * as startRepair from "../daemon-cli/start-repair.js";
+import type { UpdateCommandOptions } from "./shared.js";
 import { registerGenerationRecoveryTests } from "./update-command-generation.test-support.js";
 import { assertGatewayServiceManagementAllowedForUpdate } from "./update-command-service-plan.js";
 import {
+  createServiceActivationFixture,
   readyRecoveryHealth,
+  verifiedServingResult,
   registerRecoveryTests,
   writeRecoveryConfig,
 } from "./update-command-service-recovery.test-support.js";
@@ -169,8 +171,9 @@ vi.mock("../daemon-cli/restart-health.js", async (importOriginal) => ({
   waitForGatewayHealthyRestart: mocks.health,
   waitForGatewayHttpReadiness: async () => ({ healthz: 200, readyz: 200 }),
 }));
-vi.mock("./update-command-inference.js", () => ({
-  runUpdateInferenceProbe: async () => true,
+vi.mock("../../infra/update-serving-verification.js", () => ({
+  verifyUpdateServing: (...args: Parameters<typeof verifiedServingResult>) =>
+    verifiedServingResult(...args),
 }));
 vi.mock("./update-command-convergence.js", () => ({
   convergeUpdatePlugins: async (params: { result: unknown }) => ({
@@ -185,56 +188,17 @@ vi.mock("../daemon-cli/lifecycle-audit.js", () => ({
 
 let root: string;
 let configPath: string;
-let envSnapshot: ReturnType<typeof captureEnv>;
+let run: NonNullable<UpdateCommandOptions["run"]>;
+let envSnapshot: Awaited<ReturnType<typeof createServiceActivationFixture>>["envSnapshot"];
 const writeConfig = (version: string) => writeRecoveryConfig(configPath, version);
 
 beforeEach(async () => {
   vi.clearAllMocks();
   mocks.exit.mockReset();
   mockProcessPlatform("linux");
-  root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-activation-")));
-  vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: root });
-  const keys = [
-    "HOME",
-    "OPENCLAW_HOME",
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_CONFIG_PATH",
-    "OPENCLAW_PROFILE",
-    "OPENCLAW_GATEWAY_PORT",
-    "OPENCLAW_SERVICE_MARKER",
-    "OPENCLAW_SERVICE_KIND",
-    "OPENCLAW_SUPERVISOR_MODE",
-    "OPENCLAW_SYSTEMD_UNIT",
-    "OPENCLAW_LAUNCHD_LABEL",
-    "OPENCLAW_UPDATE_IN_PROGRESS",
-    "OPENCLAW_UPDATE_RUN_HANDOFF",
-    "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR",
-    "OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS",
-  ];
-  envSnapshot = captureEnv(keys);
-  for (const key of keys) {
-    delete process.env[key];
-  }
-  process.env.HOME = root;
-  // This fixture models an installed service even though its manager calls are simulated.
-  const unitPath = path.join(root, ".config/systemd/user/openclaw-gateway.service");
-  await fs.mkdir(path.dirname(unitPath), { recursive: true });
-  await fs.writeFile(unitPath, "[Service]\nExecStart=/fixture/openclaw gateway\n");
-  configPath = path.join(root, ".openclaw", "openclaw.json");
-  await fs.mkdir(path.dirname(configPath));
-  await fs.mkdir(path.join(root, "dist"));
-  await fs.writeFile(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: VERSION, type: "module" }),
-  );
-  await fs.writeFile(path.join(root, "dist", "index.js"), "export {};\n");
-  const worker = "dist/infra/update-candidate-state.worker.js";
-  await fs.mkdir(path.dirname(path.join(root, worker)), { recursive: true });
-  await fs.writeFile(
-    path.join(root, worker),
-    `import ${JSON.stringify(pathToFileURL(path.resolve(worker)).href)};\n`,
-  );
-  await writeConfig(VERSION);
+  ({ root, configPath, envSnapshot } = await createServiceActivationFixture());
+  const runEnv = { ...process.env };
+  run = { runId: createUpdateRun({ trigger: "cli" }, { env: runEnv }).runId, env: runEnv };
   mocks.ports.mockImplementation(async (port) => ({
     port,
     status: "free",
@@ -292,7 +256,7 @@ afterEach(async () => {
 });
 
 describe("preserved update activation with real version guards", () => {
-  registerRestartOutcomeTests(() => ({ root, mocks }));
+  registerRestartOutcomeTests(() => ({ root, run, mocks }));
 
   it.each([
     ...(
@@ -420,6 +384,7 @@ describe("preserved update activation with real version guards", () => {
           server: {
             version: VERSION,
             connId: "fixture",
+            bootId: "service-boot",
             ...(outcome === "missing build"
               ? {}
               : { buildId: outcome === "stale build" ? "old-build" : "new-build" }),
@@ -454,7 +419,7 @@ describe("preserved update activation with real version guards", () => {
           before: { version: "2026.1.1" },
           after: { version: VERSION, buildId: "new-build" },
         },
-        opts: { json },
+        opts: { json, run },
         refreshServiceEnv: late,
         serviceUpdateVerdict: before.serviceUpdateVerdict,
         serviceEnv: before.serviceEnv,
@@ -575,7 +540,7 @@ describe("preserved update activation with real version guards", () => {
         durationMs: 0,
         after: { version: VERSION },
       },
-      opts: { json: true },
+      opts: { json: true, run },
       refreshServiceEnv: false,
       serviceUpdateVerdict: before.serviceUpdateVerdict,
       serviceEnv: before.serviceEnv,
@@ -591,11 +556,11 @@ describe("preserved update activation with real version guards", () => {
     expect(mocks.health).not.toHaveBeenCalled();
   });
 
-  registerRecoveryTests({ root: () => root, configPath: () => configPath, mocks });
+  registerRecoveryTests({ root: () => root, configPath: () => configPath, run: () => run, mocks });
 
   registerGenerationRecoveryTests(() => ({ root, configPath, mocks }));
 
-  registerInstallRootTransitionTests(() => ({ root, mocks }));
+  registerInstallRootTransitionTests(() => ({ root, run, mocks }));
 
   it.each(["metadata", "profile", "unit"])(
     "pins writable service identity across %s changes",
@@ -702,7 +667,7 @@ describe("preserved update activation with real version guards", () => {
           before: { version: VERSION },
           after: { version: "9999.1.1" },
         },
-        opts: {},
+        opts: { run },
         refreshServiceEnv: false,
         serviceUpdateVerdict: verdict,
         serviceEnv: state.env,
@@ -887,6 +852,7 @@ describe("preserved update activation with real version guards", () => {
     if (demandOnly) {
       mocks.health.mockImplementation(async ({ port }) => ({
         healthy: nativeRunning,
+        gatewayBootId: "service-boot",
         staleGatewayPids: [],
         runtime: { status: nativeRunning ? "running" : "stopped" },
         portUsage: { port, status: nativeRunning ? "busy" : "free", listeners: [], hints: [] },
@@ -946,7 +912,7 @@ describe("preserved update activation with real version guards", () => {
           durationMs: 0,
           after: { version: VERSION },
         },
-        opts: { json: true },
+        opts: { json: true, run },
         refreshServiceEnv: lateDenial,
         serviceUpdateVerdict: verdict,
         serviceEnv: process.env,

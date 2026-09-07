@@ -122,7 +122,7 @@ describe("worker provider node teardown", () => {
         expect(support.testState.store.getCredential(environmentId)).toEqual(credential);
         expect(destroy).not.toHaveBeenCalled();
         await start();
-        await expect(service.destroy(environmentId)).rejects.toMatchObject({
+        await expect(service.requestDestroy(environmentId)).rejects.toMatchObject({
           code: "provider_failure",
         });
         expect(nodeTunnels.status(environmentId)).toBe("stopped");
@@ -133,6 +133,13 @@ describe("worker provider node teardown", () => {
           destroyRequestedAtMs: support.testState.nowMs,
         });
         expect(support.testState.store.getCredential(environmentId)).toBeUndefined();
+
+        const pending = support.testState.store.get(environmentId);
+        await expect(service.requestDestroy(environmentId)).rejects.toThrow(
+          "provider destruction is indeterminate",
+        );
+        expect(support.testState.store.get(environmentId)).toEqual(pending);
+        expect(destroy).toHaveBeenCalledOnce();
 
         if (retry === "destroy") {
           await service.destroy(environmentId);

@@ -276,6 +276,7 @@ export function loadLegacySessionStore(
       archiveStaleDashboardEntries(sessionStore, maintenance.archiveDashboardAfterMs, {
         log: false,
         preserveKeys: preserveSessionKeys,
+        preserveRecentMs: maintenance.preserveRecentMs,
       });
       if (shouldRunModelRunPrune({ maintenance, entryCount: beforeCount })) {
         pruneStaleModelRunEntries(sessionStore, maintenance.modelRunPruneAfterMs, {

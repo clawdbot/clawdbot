@@ -22,11 +22,10 @@ import { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
 import { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
 import { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
-import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 export async function runEmbeddedAttemptExecutionPhase(
-  input: EmbeddedAttemptExecutionPhaseInput & { attempt: EmbeddedRunAttemptInternalParams },
+  input: EmbeddedAttemptExecutionPhaseInput,
 ): Promise<EmbeddedRunAttemptResult> {
   const { attempt, state } = input;
   const { sessionRuntime, systemPrompt, toolBase } = input.prepared;

@@ -1049,6 +1049,7 @@ const SkillCollectionReviewStatusSchema = closedObject({
 const SkillExperienceReviewStatusSchema = closedObject({
   attemptedAtMs: Type.Number(),
   outcome: Type.Union([
+    Type.Literal("completed"),
     Type.Literal("applied"),
     Type.Literal("proposed"),
     Type.Literal("nothing"),

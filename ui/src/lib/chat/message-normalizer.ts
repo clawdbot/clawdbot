@@ -26,6 +26,7 @@ import {
 } from "../../../../src/media/parse.js";
 import { getMediaFileExtension } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem } from "./chat-types.ts";
+import { projectImportedMessageForDisplay } from "./imported-message-display.ts";
 import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
 import { formatSenderLabel, normalizeSenderIdentity } from "./sender-label.ts";
 
@@ -438,7 +439,7 @@ function expandTextContent(
  * Normalize a raw message object into a consistent structure.
  */
 export function normalizeMessage(message: unknown): NormalizedMessage {
-  const m = asOptionalRecord(message) ?? {};
+  const m = asOptionalRecord(projectImportedMessageForDisplay(message)) ?? {};
   const role = resolveMessageRole(m);
   const contentRaw = m.content;
   const contentItems = Array.isArray(contentRaw) ? contentRaw : null;

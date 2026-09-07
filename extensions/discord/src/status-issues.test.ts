@@ -4,6 +4,47 @@ import { describe, expect, it } from "vitest";
 import { collectDiscordStatusIssues } from "./status-issues.js";
 
 describe("collectDiscordStatusIssues", () => {
+  it("reports an empty guild allowlist with the resolved account config path", () => {
+    const issues = collectDiscordStatusIssues([
+      {
+        accountId: "ops",
+        enabled: true,
+        configured: true,
+        groupPolicy: "allowlist",
+        guildsConfigured: 0,
+      } as ChannelAccountSnapshot,
+    ]);
+
+    expect(issues).toEqual([
+      {
+        channel: "discord",
+        accountId: "ops",
+        kind: "config",
+        message:
+          'Discord guild messages are blocked: effective groupPolicy is "allowlist", but no guilds are configured.',
+        fix: "Add your server under channels.discord.accounts.ops.guilds. Refresh channel status after the configuration reload applies.",
+      },
+    ]);
+  });
+
+  it("explains the top-level and explicit default-account guild config paths", () => {
+    const issues = collectDiscordStatusIssues([
+      {
+        accountId: "default",
+        enabled: true,
+        configured: true,
+        groupPolicy: "allowlist",
+        guildsConfigured: 0,
+      } as ChannelAccountSnapshot,
+    ]);
+
+    expect(issues[0]?.fix).toContain("channels.discord.guilds");
+    expect(issues[0]?.fix).toContain(
+      "If channels.discord.accounts.default.guilds is set, add it there instead.",
+    );
+    expect(issues[0]?.fix).toContain("after the configuration reload applies");
+  });
+
   it("reports disabled message content intent and unresolved channel ids", () => {
     const issues = collectDiscordStatusIssues([
       {

@@ -7,7 +7,10 @@ import {
   collectNestedErrorCandidates,
   extractErrorCode,
 } from "@openclaw/normalization-core/error-coercion";
-import { SESSION_WORK_START_CHANGED_ERROR_CODE } from "../../config/sessions/work-start-error.js";
+import {
+  SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
+  SESSION_WORK_START_CHANGED_ERROR_CODE,
+} from "../../config/sessions/work-start-error.js";
 import { computeBackoff } from "../../infra/backoff.js";
 
 export const DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS = 8;
@@ -46,12 +49,6 @@ type IngressFailureDisposition =
       attempt: number;
       message: string;
     };
-
-function isSessionStartConflictFailure(error: unknown): boolean {
-  return collectNestedErrorCandidates(error).some(
-    (candidate) => extractErrorCode(candidate) === SESSION_WORK_START_CHANGED_ERROR_CODE,
-  );
-}
 
 function resolveConfig(config?: IngressRetryPolicyConfig) {
   return {
@@ -121,7 +118,17 @@ export function resolveIngressFailureDisposition(params: {
       attempt,
     };
   }
-  if (attempt >= maxAttempts && isSessionStartConflictFailure(params.err)) {
+  const errorCodes = new Set(collectNestedErrorCandidates(params.err).map(extractErrorCode));
+  // Retrying this terminal generation blocks the authorized reset behind it.
+  if (errorCodes.has(SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE)) {
+    return {
+      kind: "fail",
+      reason: "restart-recovery-tombstone",
+      message,
+      attempt,
+    };
+  }
+  if (attempt >= maxAttempts && errorCodes.has(SESSION_WORK_START_CHANGED_ERROR_CODE)) {
     return {
       kind: "fail",
       reason: "session-start-conflict-retry-limit",

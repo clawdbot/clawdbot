@@ -35,6 +35,7 @@ export const SessionRunStatusSchema = Type.Union([
 export const SessionEntryArchiveReasonSchema = Type.Union([
   Type.Literal("manual"),
   Type.Literal("active-session-cap"),
+  Type.Literal("age-retention"),
   Type.Literal("stale-dashboard"),
   Type.Literal("restart-recovery"),
 ]);

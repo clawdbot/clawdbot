@@ -121,6 +121,7 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
         return;
       }
       stopped = true;
+      outputLoopbackVerifier.cancelOutput();
       try {
         await params.runtime.nodes.invoke({
           nodeId: params.nodeId,

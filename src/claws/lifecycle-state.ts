@@ -526,9 +526,7 @@ export async function applyClawRemovePlan(
       expectedState: record.agentState,
       fallbackWorkspace: record.install.workspace,
       config: options.config,
-      commitConfig: options.commitConfig,
       stateDatabase: options,
-      trashPath: options.trashPath,
       onModified: () =>
         new ClawRemoveError("agent_modified", "Agent config changed during remove."),
       quiesceMonitors: (operationId) => monitorGateway.quiesce(agentId, operationId, monitors),
@@ -608,20 +606,18 @@ export async function applyClawRemovePlan(
       } catch (error) {
         return partial("monitor_cleanup_failed", coerceErrorMessage(error));
       }
-      if (!options.commitConfig || options.purgeSessions) {
-        const purgeSessions =
-          options.purgeSessions ??
-          (await import("../config/sessions/cleanup-service.js")).purgeAgentSessionStoreEntries;
-        const purgeFailed = await purgeSessions(configBeforeDelete, agentId, {
-          env: options.env,
-          runDatabaseCleanup: configRemoval.runDatabaseCleanup,
-        });
-        if (purgeFailed) {
-          return partial(
-            "session_cleanup_failed",
-            "Session cleanup failed; correct the reported error and retry Claw removal.",
-          );
-        }
+      const purgeSessions =
+        options.purgeSessions ??
+        (await import("../config/sessions/cleanup-service.js")).purgeAgentSessionStoreEntries;
+      const purgeFailed = await purgeSessions(configBeforeDelete, agentId, {
+        env: options.env,
+        runDatabaseCleanup: configRemoval.runDatabaseCleanup,
+      });
+      if (purgeFailed) {
+        return partial(
+          "session_cleanup_failed",
+          "Session cleanup failed; correct the reported error and retry Claw removal.",
+        );
       }
       result.packages = await applyClawPackageRemovals(
         packageDecisions.toSorted(
@@ -651,7 +647,7 @@ export async function applyClawRemovePlan(
       if (bootstrap?.action === "error") {
         cleanupErrors.push(bootstrap.message ?? `Could not remove ${bootstrap.path}.`);
       }
-      if (cleanupErrors.length === 0 && cleanupTargets) {
+      if (cleanupErrors.length === 0) {
         const workspaceHasRemainingEntries = await workspaceContainsUntrackedEntries(
           cleanupTargets.workspaceDir,
           record.workspaceFiles.map((file) => file.path),
