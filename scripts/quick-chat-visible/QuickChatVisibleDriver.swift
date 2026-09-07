@@ -114,9 +114,19 @@ final class QuickChatVisibleDriver {
     }
 
     func requireFocus() throws {
-        guard self.application.isRunning,
-              NSWorkspace.shared.frontmostApplication?.processIdentifier == self.application.processIdentifier
-        else { throw DriverFailure.stopped("Owned app is not frontmost; input withheld") }
+        try Task.checkCancellation()
+        let isRunning = self.application.isRunning
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        guard isRunning, frontmostPID == self.application.processIdentifier else {
+            var observation: [String: Any] = [
+                "kind": "input-focus-withheld",
+                "pid": self.application.processIdentifier,
+                "isRunning": isRunning,
+            ]
+            if let frontmostPID { observation["frontmostPID"] = frontmostPID }
+            try self.emit(observation)
+            throw DriverFailure.stopped("Owned app is not frontmost; input withheld")
+        }
         guard AXIsProcessTrusted(), CGPreflightPostEventAccess() else {
             throw DriverFailure.stopped("Control permission no longer available")
         }
@@ -169,8 +179,7 @@ final class QuickChatVisibleDriver {
                 throw DriverFailure.stopped("Normal app exited during readiness")
             }
             if let running = NSRunningApplication(processIdentifier: self.application.processIdentifier),
-               running.isFinishedLaunching,
-               running.activate(options: [])
+               running.isFinishedLaunching
             {
                 try self.emit(["kind": "normal-app-started", "pid": self.application.processIdentifier])
                 return
@@ -178,6 +187,55 @@ final class QuickChatVisibleDriver {
             try await Task.sleep(for: .milliseconds(100))
         }
         throw DriverFailure.stopped("Normal app readiness deadline reached")
+    }
+
+    func activateForInput() async throws {
+        try self.permissionProbe()
+        try Task.checkCancellation()
+        guard self.application.isRunning,
+              let running = NSRunningApplication(processIdentifier: self.application.processIdentifier)
+        else { throw DriverFailure.stopped("Owned normal app is not running") }
+        let started = Date()
+        var accepted: Bool?
+        func observe(_ kind: String) throws {
+            var observation: [String: Any] = [
+                "kind": kind,
+                "pid": self.application.processIdentifier,
+                "isRunning": self.application.isRunning,
+                "isTerminated": running.isTerminated,
+                "isFinishedLaunching": running.isFinishedLaunching,
+                "activationPolicy": running.activationPolicy.rawValue,
+                "isActive": running.isActive,
+                "elapsedSeconds": Date().timeIntervalSince(started),
+            ]
+            if let accepted { observation["accepted"] = accepted }
+            if let frontmost = NSWorkspace.shared.frontmostApplication {
+                observation["frontmostPID"] = frontmost.processIdentifier
+            }
+            try self.emit(observation)
+        }
+        try observe("activation-before-request")
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier != self.application.processIdentifier {
+            accepted = running.activate(options: [])
+            try observe("activation-requested")
+            guard accepted == true else {
+                throw DriverFailure.stopped("Owned app activation was refused; input withheld")
+            }
+        }
+        let deadline = started.addingTimeInterval(30)
+        while Date() < deadline {
+            try Task.checkCancellation()
+            try observe("activation-state")
+            guard self.application.isRunning else { throw DriverFailure.stopped("Owned app exited before activation") }
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == self.application.processIdentifier {
+                try self.requireFocus()
+                try observe("normal-app-frontmost")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        try observe("activation-not-observed")
+        throw DriverFailure.stopped("Owned app did not become frontmost; input withheld")
     }
 
     func openQuickChat() async throws {
@@ -380,10 +438,11 @@ struct QuickChatDriverMain {
         do {
             try driver.permissionProbe()
             try driver.emit(["kind": "ready-for-command"])
-            while let line = readLine() {
+            for try await line in FileHandle.standardInput.bytes.lines {
                 let command = try JSONDecoder().decode(DriverCommand.self, from: Data(line.utf8))
                 switch command.action {
                 case "start": try await driver.start()
+                case "activate": try await driver.activateForInput()
                 case "open": try await driver.openQuickChat()
                 case "ready": try await driver.waitForModelControl()
                 case "draft":

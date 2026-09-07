@@ -113,6 +113,7 @@ try {
     const status = await control("/status");
     return hasOperatorTransport({ records: wire(), status });
   });
+  await action("activate");
   const openWatermark = wire().at(-1).record;
   record("quick-chat-open-watermark", { wireRecord: openWatermark, sessionKey: "agent:a:main", agentId: "a" });
   await action("open");
