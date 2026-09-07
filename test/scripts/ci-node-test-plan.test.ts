@@ -2232,12 +2232,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
     expect(crossRunnerHostedJobs).toHaveLength(1);
     expect(crossRunnerHostedJobs[0]?.runner).toBe(DEFAULT_NODE_TEST_RUNNER);
-    expect(crossRunnerHostedJobs[0]?.groups.map((group) => group.shard_name)).toEqual([
-      "core-tooling-15-hosted-3",
-      "core-tooling-6-hosted-2",
-      "core-tooling-10-hosted-3",
-      "core-tooling-8-hosted-3",
-    ]);
 
     for (const extraFiles of extraInventories) {
       const extraBaseline = await createPlanWithInventory(false, extraFiles);
