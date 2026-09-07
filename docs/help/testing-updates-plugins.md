@@ -296,10 +296,23 @@ tolerance, stale plugin dependency cleanup, offline plugin coverage, plugin
 update behavior, and Telegram package QA on the same resolved artifact without
 making the default release package gate walk every published release.
 
-Routine release checks use the same `supported-lines` baseline expansion,
-resolved once to exact packages before Docker fanout. The default scenario set
-includes `base` and `legacy-operator-state`; release soak runs `reported-issues`.
-The candidate remains the selected package-under-test tarball. The per-PR
+Current source release checks use the same `supported-lines` baseline expansion,
+resolved once to exact packages before Docker fanout. Candidate source metadata
+must expose the new harness, and its `YYYY.M.PATCH` base version must be at least
+the trusted workflow package's base version; prerelease suffixes are ignored
+for this comparison. The child prepares or reuses the prerelease plugin registry.
+The default scenario set includes `base` and `legacy-operator-state`; release
+soak runs `reported-issues`.
+
+Older source targets, extended-stable qualification, older published packages,
+and separate npm overrides retain a candidate-relative predecessor. A modern
+published candidate can expand baselines when it contains the harness and is
+not older than npm's current `latest`, but it retains the previous scenario set:
+published qualification does not prepare the registry required by the new
+operator-state scenario. Historical soak keeps every preexisting reported-issue
+fixture; it does not automatically enable frozen-target scenario omissions.
+See [release qualification](/ci/release-validation#suite-profiles) for the exact
+boundary. The candidate remains the selected package-under-test tarball. The per-PR
 `docker-seed-e2e` tripwire stays limited to `latest` and `legacy-operator-state`
 and also runs on every canonical `main` push.
 
