@@ -37,6 +37,8 @@ import {
 } from "../agents/harness/structured-input.js";
 import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
 import { inferToolMetaFromArgsCore } from "../agents/tool-display.js";
+import { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
+import { expandToolGroups } from "../agents/tool-policy-shared.js";
 import {
   buildWatchedSessionsPromptLines,
   prepareWatchedSessionsPrompt,
@@ -645,5 +647,4 @@ function hasVisibleAssistantText(assistantTexts: readonly string[]): boolean {
   return assistantTexts.some((text) => text.trim().length > 0);
 }
 
-export { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
-export { expandToolGroups } from "../agents/tool-policy-shared.js";
+export const toolPolicy = Object.freeze({ createToolPolicyMatcher, expandToolGroups });

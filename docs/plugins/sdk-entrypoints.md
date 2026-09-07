@@ -24,12 +24,13 @@ plugin supports.
 
 ## Tool policy vocabulary
 
-`openclaw/plugin-sdk/agent-harness-runtime` exposes core's synchronous policy primitives:
+`openclaw/plugin-sdk/agent-harness-runtime` exposes core's synchronous policy
+primitives through `toolPolicy`:
 
-- `expandToolGroups(list?)` normalizes tool aliases, drops blank entries, expands
+- `toolPolicy.expandToolGroups(list?)` normalizes tool aliases, drops blank entries, expands
   core groups, and returns unique tool ids in first-seen order. Members of each
   expanded group follow that group's catalog order.
-- `createToolPolicyMatcher(policy?, writeAllowsApplyPatch = true)` returns a
+- `toolPolicy.createToolPolicyMatcher(policy?, writeAllowsApplyPatch = true)` returns a
   matcher for tool names. Deny entries win, an empty allow list is unrestricted,
   and `*` patterns and aliases use core normalization. Set the second argument
   to `false` to disable the runtime compatibility where allowing `write` also
