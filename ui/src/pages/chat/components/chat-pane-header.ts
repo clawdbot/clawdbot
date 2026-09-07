@@ -184,12 +184,12 @@ function renderSessionCrumb(props: ChatPaneHeaderProps) {
       @input=${(event: InputEvent) =>
         props.onRenameInput((event.currentTarget as HTMLInputElement).value)}
       @keydown=${(event: KeyboardEvent) => {
-        if (event.key === "Enter") {
+        if (event.isComposing || event.keyCode === 229) {
+          return;
+        }
+        if (event.key === "Enter" || event.key === "Escape") {
           event.preventDefault();
-          props.onCommitRename();
-        } else if (event.key === "Escape") {
-          event.preventDefault();
-          props.onCancelRename();
+          (event.key === "Enter" ? props.onCommitRename : props.onCancelRename)();
         }
       }}
       @blur=${props.onCommitRename}

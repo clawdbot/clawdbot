@@ -215,7 +215,7 @@ export function clearChatModelSearchOnEscape(event: KeyboardEvent): boolean {
 function handleModelSearchKeydown(event: KeyboardEvent): void {
   const input = event.currentTarget as HTMLInputElement;
   const menu = pickerMenu(input);
-  if (!menu) {
+  if (!menu || event.isComposing || event.keyCode === 229) {
     return;
   }
   const rows = selectableModelRows(menu);
