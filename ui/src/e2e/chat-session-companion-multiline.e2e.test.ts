@@ -73,7 +73,7 @@ suite.define(() => {
           .toBeLessThan(cappedHeight);
         await input.press("Enter");
         const request = await gateway.waitForRequest("sessions.companion.ask");
-        expect(request.params.question).toBe("First paragraph.\nSecond paragraph.");
+        expect(request.params).toMatchObject({ question: "First paragraph.\nSecond paragraph." });
         await companion.getByText("Both paragraphs arrived together.", { exact: true }).waitFor();
         await expect.poll(() => input.inputValue()).toBe("");
         await expect
