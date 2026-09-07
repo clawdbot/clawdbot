@@ -189,7 +189,7 @@ suite.define(() => {
       await work.click();
       await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/work" });
       await gateway.waitForRequest("chat.startup", {
-        match: { sessionKey: "global", agentId: "work" },
+        match: { sessionKey: "agent:work:main", agentId: "work" },
       });
     });
   });
