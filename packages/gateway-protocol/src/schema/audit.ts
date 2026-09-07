@@ -4,13 +4,22 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
-const AuditEventKindSchema = Type.Union([Type.Literal("agent_run"), Type.Literal("tool_action")]);
+const AuditEventKindSchema = Type.Union([
+  Type.Literal("agent_run"),
+  Type.Literal("tool_action"),
+  Type.Literal("skill_selection"),
+]);
 
 const AuditEventActionSchema = Type.Union([
   Type.Literal("agent.run.started"),
   Type.Literal("agent.run.finished"),
   Type.Literal("tool.action.started"),
   Type.Literal("tool.action.finished"),
+  Type.Literal("skill.selection.explicit_trigger"),
+  Type.Literal("skill.selection.natural_prompt"),
+  Type.Literal("skill.selection.none"),
+  Type.Literal("overlay.selection.explicit_trigger"),
+  Type.Literal("overlay.selection.natural_prompt"),
 ]);
 
 const AuditEventStatusSchema = Type.Union([
@@ -20,6 +29,9 @@ const AuditEventStatusSchema = Type.Union([
   Type.Literal("cancelled"),
   Type.Literal("timed_out"),
   Type.Literal("blocked"),
+  Type.Literal("deterministic"),
+  Type.Literal("heuristic"),
+  Type.Literal("none"),
   Type.Literal("unknown"),
 ]);
 
@@ -55,6 +67,24 @@ export const AuditEventSchema = closedObject({
   runId: NonEmptyString,
   toolCallId: Type.Optional(NonEmptyString),
   toolName: Type.Optional(NonEmptyString),
+  selectedSkill: Type.Optional(NonEmptyString),
+  selectedOverlay: Type.Optional(NonEmptyString),
+  selectionSource: Type.Optional(
+    Type.Union([
+      Type.Literal("explicit_trigger"),
+      Type.Literal("natural_prompt"),
+      Type.Literal("none"),
+    ]),
+  ),
+  selectionConfidence: Type.Optional(AuditEventStatusSchema),
+  selectionRule: Type.Optional(
+    Type.Union([
+      Type.Literal("explicit_trigger"),
+      Type.Literal("deterministic_guardrail"),
+      Type.Literal("token_overlap"),
+      Type.Literal("none"),
+    ]),
+  ),
   redaction: Type.Literal("metadata_only"),
 });
 

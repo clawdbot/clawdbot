@@ -16,6 +16,7 @@ import { listAuditEvents } from "../../audit/audit-event-store.js";
 import type {
   AgentRunAuditEventRecord,
   AuditEventRecord,
+  SkillSelectionAuditEventRecord,
   ToolActionAuditEventRecord,
 } from "../../audit/audit-event-types.js";
 import {
@@ -29,6 +30,8 @@ import { assertValidParams } from "./validation.js";
 
 const DEFAULT_AUDIT_LIST_LIMIT = 100;
 const MAX_AUDIT_LIST_LIMIT = 500;
+type AuditSelectionSource = "explicit_trigger" | "natural_prompt" | "none";
+type AuditSelectionRule = "explicit_trigger" | "deterministic_guardrail" | "token_overlap" | "none";
 
 function serializeAuditRunInspectResult(
   inspected: InternalAuditRunInspectResult,
@@ -55,12 +58,46 @@ function isOwnerDecisionCursor(value: string): boolean {
 
 /** Preserve the shipped audit.list result shape for run/tool-only clients. */
 function mapLegacyAuditEvent(
-  event: AgentRunAuditEventRecord | ToolActionAuditEventRecord,
+  event: AgentRunAuditEventRecord | ToolActionAuditEventRecord | SkillSelectionAuditEventRecord,
 ): AuditEvent {
   const { schemaVersion: _schemaVersion, actorType, actorId, ...legacyEvent } = event;
+  const selectedSkill =
+    event.kind === "skill_selection" &&
+    event.action.startsWith("skill.selection.") &&
+    event.action !== "skill.selection.none"
+      ? event.toolName
+      : undefined;
+  const selectedOverlay =
+    event.kind === "skill_selection" && event.action.startsWith("overlay.selection.")
+      ? event.toolName
+      : undefined;
+  const selectionSource: AuditSelectionSource | undefined =
+    event.kind === "skill_selection"
+      ? event.action.endsWith(".explicit_trigger")
+        ? "explicit_trigger"
+        : event.action.endsWith(".natural_prompt")
+          ? "natural_prompt"
+          : "none"
+      : undefined;
+  const selectionRule: AuditSelectionRule | undefined =
+    event.kind !== "skill_selection"
+      ? undefined
+      : selectionSource === "explicit_trigger"
+        ? "explicit_trigger"
+        : selectionSource === "natural_prompt" && event.status === "deterministic"
+          ? "deterministic_guardrail"
+          : selectionSource === "natural_prompt" && event.status === "heuristic"
+            ? "token_overlap"
+            : "none";
   return {
     ...legacyEvent,
     actor: { type: actorType, id: actorId },
+    ...(selectedSkill ? { selectedSkill } : {}),
+    ...(selectedOverlay ? { selectedOverlay } : {}),
+    ...(selectionSource ? { selectionSource } : {}),
+    ...(event.kind === "skill_selection"
+      ? { selectionConfidence: event.status, selectionRule }
+      : {}),
   };
 }
 
@@ -72,6 +109,9 @@ function mapAuditActivityEvent(event: AuditEventRecord): AuditActivityEventV1 {
   if (event.kind === "tool_action") {
     const { actorType, actorId, ...activity } = event;
     return { ...activity, eventType: "tool_action", actor: { type: actorType, id: actorId } };
+  }
+  if (event.kind === "skill_selection") {
+    throw new Error("audit.activity.list does not project skill_selection records");
   }
   if (event.direction === "inbound") {
     const { actorType, actorId, ...activity } = event;
@@ -189,7 +229,9 @@ export const auditHandlers: GatewayRequestHandlers = {
       },
     });
     respond(true, {
-      events: page.events.map(mapAuditActivityEvent),
+      events: page.events
+        .filter((event) => event.kind !== "skill_selection")
+        .map(mapAuditActivityEvent),
       ...(page.nextCursor !== undefined ? { nextCursor: String(page.nextCursor) } : {}),
     });
   },

@@ -29,6 +29,7 @@ import {
   type InboundMessageAuditEventRecord,
   type MessageAuditEventInput,
   type OutboundMessageAuditEventRecord,
+  type SkillSelectionAuditEventRecord,
   type ToolActionAuditEventRecord,
 } from "./audit-event-types.js";
 import {
@@ -59,6 +60,13 @@ function getAuditKysely(db: DatabaseSync) {
 
 const RUN_ACTIONS = ["agent.run.started", "agent.run.finished"] as const;
 const TOOL_ACTIONS = ["tool.action.started", "tool.action.finished"] as const;
+const SKILL_SELECTION_ACTIONS = [
+  "skill.selection.explicit_trigger",
+  "skill.selection.natural_prompt",
+  "skill.selection.none",
+  "overlay.selection.explicit_trigger",
+  "overlay.selection.natural_prompt",
+] as const;
 const CONVERSATION_KINDS = ["direct", "group", "channel", "unknown"] as const;
 const DELIVERY_KINDS = ["text", "media", "other"] as const;
 const FAILURE_STAGES = ["platform_send", "queue", "unknown"] as const;
@@ -273,6 +281,28 @@ function parseToolActionRow(row: AuditEventRow): ToolActionAuditEventRecord {
   return { ...common, action, ...terminal };
 }
 
+function parseSkillSelectionRow(row: AuditEventRow): SkillSelectionAuditEventRecord {
+  requireNull(row, "tool_call_id");
+  requireNull(row, "error_code");
+  const toolName = optionalText(row, row.tool_name, "toolName");
+  const common = {
+    ...parseAgentRecordFields(row),
+    kind: "skill_selection" as const,
+    ...(toolName ? { toolName } : {}),
+  };
+  const action = requiredEnum(row, row.action, "action", SKILL_SELECTION_ACTIONS);
+  if (action === "skill.selection.none") {
+    requireNull(row, "tool_name");
+    requiredEnum(row, row.status, "status", ["none"]);
+    return { ...common, action, status: "none" };
+  }
+  if (!toolName) {
+    corruptAuditRow(row, "missing selected skill name");
+  }
+  const status = requiredEnum(row, row.status, "status", ["deterministic", "heuristic"]);
+  return { ...common, action, status };
+}
+
 function parseMessageRecordFields(row: AuditEventRow) {
   requireNullColumns(row, ["session_key", "session_id", "tool_call_id", "tool_name"]);
   const agentId = optionalText(row, row.agent_id, "agentId");
@@ -471,6 +501,9 @@ export function rowToAuditEvent(row: AuditEventRow): AuditEventRecord {
   if (row.kind === "tool_action") {
     return parseToolActionRow(row);
   }
+  if (row.kind === "skill_selection") {
+    return parseSkillSelectionRow(row);
+  }
   if (row.kind !== "message") {
     corruptAuditRow(row, "invalid kind");
   }
@@ -530,7 +563,10 @@ function bindAuditEvent(db: DatabaseSync, input: AuditEventInput): Insertable<Au
     session_id: input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? null : (input.sessionId ?? null),
     run_id: input.runId ?? null,
     tool_call_id: input.kind === "tool_action" ? (input.toolCallId ?? null) : null,
-    tool_name: input.kind === "tool_action" ? input.toolName : null,
+    tool_name:
+      input.kind === "tool_action" || input.kind === "skill_selection"
+        ? (input.toolName ?? null)
+        : null,
     direction: input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? input.direction : null,
     channel: input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? input.channel : null,
     conversation_kind: input.kind === "message" ? input.conversationKind : null,
@@ -624,19 +660,17 @@ export function recordAuditEvent(
   try {
     return runOpenClawStateWriteTransaction(({ db }) => {
       countCacheDatabase = db;
-      // Read losslessly so Node's rowid decoding cannot preempt the safe-integer guard.
-      const insert = executeSqliteQueryTakeFirstSync(
+      const insert = executeSqliteQuerySync(
         db,
         getAuditKysely(db)
           .insertInto("audit_events")
           .values(bindAuditEvent(db, input))
-          .onConflict((conflict) => conflict.column("source_id").doNothing())
-          .returning((eb) => eb.cast<string>("sequence", "text").as("sequence")),
+          .onConflict((conflict) => conflict.column("source_id").doNothing()),
       );
-      if (insert === undefined) {
+      if (insert.insertId === undefined) {
         return undefined;
       }
-      const insertedSequence = Number(insert.sequence);
+      const insertedSequence = Number(insert.insertId);
       if (!Number.isSafeInteger(insertedSequence) || insertedSequence < 1) {
         throw new Error("audit event sequence is outside the supported integer range");
       }

@@ -51,6 +51,31 @@ describe("legacy audit protocol schemas", () => {
     expect(validate.Check({ ...event, schemaVersion: 1 })).toBe(false);
     expect(validate.Check({ ...event, result: "secret" })).toBe(false);
   });
+
+  it("accepts metadata-only skill selection records", () => {
+    const validate = Compile(AuditEventSchema);
+    expect(
+      validate.Check({
+        eventId: "event-skill-1",
+        sequence: 1,
+        sourceSequence: 2,
+        occurredAt: 3,
+        kind: "skill_selection",
+        action: "skill.selection.natural_prompt",
+        status: "deterministic",
+        actor: { type: "agent", id: "main" },
+        agentId: "main",
+        sessionKey: "agent:main:discord:channel:c1",
+        runId: "run-1",
+        toolName: "runtime-skill-loading-diagnostics",
+        selectedSkill: "runtime-skill-loading-diagnostics",
+        selectionSource: "natural_prompt",
+        selectionConfidence: "deterministic",
+        selectionRule: "deterministic_guardrail",
+        redaction: "metadata_only",
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("audit activity protocol schemas", () => {

@@ -261,7 +261,7 @@ describe("audit event persistence", () => {
     const database = createDatabaseOptions();
     const { db } = openOpenClawStateDatabase(database);
     db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('audit_events', ?)").run(
-      BigInt(Number.MAX_SAFE_INTEGER),
+      Number.MAX_SAFE_INTEGER,
     );
 
     expect(() => recordAuditEvent(auditInput(), database)).toThrow(
@@ -341,6 +341,53 @@ describe("agent activity audit projection", () => {
       actorId: "unknown",
       agentId: "unknown",
     });
+  });
+
+  it("projects deterministic skill-selection metadata without prompt content", () => {
+    const projected = projectAgentEventToAudit(
+      agentEvent({
+        stream: "skill_selection",
+        data: {
+          kind: "skill_selection",
+          selectedSkill: "runtime-skill-loading-diagnostics",
+          selectionSource: "natural_prompt",
+          selectionConfidence: "deterministic",
+          selectionRule: "deterministic_guardrail",
+          redaction: "metadata_only",
+        },
+      }),
+    );
+
+    expect(projected).toMatchObject({
+      kind: "skill_selection",
+      action: "skill.selection.natural_prompt",
+      status: "deterministic",
+      toolName: "runtime-skill-loading-diagnostics",
+      agentId: "coder",
+      sessionKey: "agent:coder:main",
+    });
+    expect(JSON.stringify(projected)).not.toContain("PRIVATE_PROMPT_CONTENT");
+  });
+
+  it("projects negative-control skill selection as none", () => {
+    const projected = projectAgentEventToAudit(
+      agentEvent({
+        stream: "skill_selection",
+        data: {
+          kind: "skill_selection",
+          selectionSource: "none",
+          selectionConfidence: "none",
+          redaction: "metadata_only",
+        },
+      }),
+    );
+
+    expect(projected).toMatchObject({
+      kind: "skill_selection",
+      action: "skill.selection.none",
+      status: "none",
+    });
+    expect(projected).not.toHaveProperty("toolName");
   });
 
   it("does not share reused run id provenance across recorder instances", () => {
