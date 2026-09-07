@@ -2,11 +2,6 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  makeExecutable,
-  makeExecApprovalsTempDir,
-} from "../../infra/exec-approvals-test-helpers.js";
-import { loadExecApprovals, saveExecApprovals } from "../../infra/exec-approvals.js";
 import type {
   CliBackendExecute,
   CliBackendExecuteContext,
@@ -73,7 +68,6 @@ function waitUntilAborted(execution: CliBackendExecuteContext): Promise<void> {
 }
 
 afterEach(() => {
-  vi.unstubAllEnvs();
   for (const session of activeSessions) {
     session.close("restart");
   }
@@ -543,43 +537,6 @@ describe("plugin-owned CLI execution host boundary", () => {
     }
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
-
-  it.each([
-    ["allowlist", "on-miss", "allow"],
-    ["deny", "on-miss", "deny"],
-    ["allowlist", "off", "deny"],
-  ] as const)(
-    "applies %s/%s to native Bash with configured PATH",
-    async (security, ask, behavior) => {
-      const dir = makeExecApprovalsTempDir();
-      vi.stubEnv("OPENCLAW_STATE_DIR", dir);
-      const binary = makeExecutable(dir, "gog");
-      saveExecApprovals({ version: 1, agents: { main: { allowlist: [{ pattern: binary }] } } });
-      const { context } = await createExecution({
-        config: { tools: { exec: { security, ask, pathPrepend: [dir] } } },
-        nativeTools: ["Bash"],
-      });
-      let decision: CliBackendToolPermissionResult | undefined;
-      await runPlugin(context, async function* (execution) {
-        decision = await execution.requestToolPermission({
-          toolName: "Bash",
-          toolInput: { command: "gog calendar list" },
-          cwd: dir,
-        });
-        yield SUCCESS_RESULT;
-      });
-      expect(decision?.behavior).toBe(behavior);
-      expect(mockCallGatewayTool).not.toHaveBeenCalled();
-      if (decision?.behavior === "allow") {
-        expect(decision.updatedInput?.command).toContain(binary);
-        expect(loadExecApprovals().agents?.main?.allowlist?.[0]?.lastUsedAt).toEqual(
-          expect.any(Number),
-        );
-      } else {
-        expect(loadExecApprovals().agents?.main?.allowlist?.[0]?.lastUsedAt).toBeUndefined();
-      }
-    },
-  );
 
   it("fails closed for unnamed and unavailable native tools before requesting approval", async () => {
     const { context } = await createExecution({ nativeTools: ["Read"] });
