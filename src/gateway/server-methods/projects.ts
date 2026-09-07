@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -33,7 +34,6 @@ import {
   removeProjectRegistry,
   resolveProjectRegistry,
 } from "../../projects/project-registry.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { listProfiles, resolveUserProfileId } from "../../state/user-profiles.js";
@@ -158,9 +158,8 @@ function sanitizeProjectRecord(project: ProjectRecord): ProjectRecord {
 function resolvePathProject(
   projects: readonly ProjectRegistryEntry[],
   folder: string,
-  sessionKey: string,
+  sessionAgentId: string,
 ): ProjectRegistryEntry | undefined {
-  const sessionAgentId = parseAgentSessionKey(sessionKey)?.agentId;
   return projects
     .filter((project) => project.repoRoot === folder)
     .toSorted((left, right) => {
@@ -179,7 +178,9 @@ function listProjectRecents(
   profileIds: ReadonlySet<string>,
   projects: readonly ProjectRegistryEntry[],
 ): ProjectRecent[] {
-  const store = loadCombinedSessionStoreForGatewayCore(cfg, { projection: "list" }).store;
+  const { store, targetsBySessionKey } = loadCombinedSessionStoreForGatewayCore(cfg, {
+    projection: "list",
+  });
   const candidates = Object.entries(store)
     .filter(
       ([, entry]) =>
@@ -194,13 +195,15 @@ function listProjectRecents(
   const seen = new Set<string>();
   const recents: ProjectRecent[] = [];
   for (const [sessionKey, entry] of candidates) {
+    // Reserved rows such as `global` carry no owner in their logical key. Keep the prepared
+    // combined-store owner so repository and project recents resolve to the session's agent.
+    const owner = expectDefined(targetsBySessionKey.get(sessionKey), "recent session owner");
     if (entry.repositoryWorkspaceId) {
       const repository = getSessionRepositoryWorkspaceStore().get(entry.repositoryWorkspaceId);
-      const sessionAgentId = parseAgentSessionKey(sessionKey)?.agentId;
       if (
         !repository ||
         repository.sessionKey !== sessionKey ||
-        (sessionAgentId && repository.agentId !== sessionAgentId) ||
+        repository.agentId !== owner.agentId ||
         seen.has(repository.url)
       ) {
         continue;
@@ -223,7 +226,7 @@ function listProjectRecents(
     const execCwd = normalizeOptionalString(entry.execCwd);
     const folder = worktreeRoot ?? spawnedCwd ?? execCwd;
     const project =
-      explicitProject ?? (folder ? resolvePathProject(projects, folder, sessionKey) : undefined);
+      explicitProject ?? (folder ? resolvePathProject(projects, folder, owner.agentId) : undefined);
     const key = project
       ? `project:${project.id}`
       : folder

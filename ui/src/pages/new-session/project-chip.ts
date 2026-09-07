@@ -50,6 +50,7 @@ export function resolveProjectChip(params: {
   const folder = params.folder.trim();
   const selectedProject = params.projects.find((project) => project.id === params.projectId);
   const normalizedQuery = params.projectQuery.trim().toLowerCase();
+  const recents = normalizedQuery ? [] : params.recents;
   const localProjects = normalizedQuery
     ? params.projects.filter((project) =>
         [project.displayName, project.originUrl ?? "", project.repoRoot ?? ""]
@@ -57,7 +58,10 @@ export function resolveProjectChip(params: {
           .toLowerCase()
           .includes(normalizedQuery),
       )
-    : params.projects;
+    : params.projects.filter(
+        (project) =>
+          !recents.some((recent) => recent.kind === "project" && recent.projectId === project.id),
+      );
   return {
     label: selectedProject
       ? selectedProject.displayName
@@ -67,7 +71,7 @@ export function resolveProjectChip(params: {
           ? folderDisplayName(folder)
           : folderDisplayName(params.workspace) || t("newSession.folderPlaceholder"),
     localProjects,
-    recents: normalizedQuery ? [] : params.recents.filter((recent) => recent.kind !== "project"),
+    recents,
     showWorkspace:
       !normalizedQuery ||
       [folderDisplayName(params.workspace), params.workspace]

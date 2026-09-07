@@ -598,8 +598,10 @@ suite.define(() => {
       const trigger = page.locator("#new-session-project-trigger");
       await trigger.click();
       expect(await page.locator('[data-value="recent:/shared"]').count()).toBe(0);
-      expect(await page.locator('[data-value="recent-project:registered"]').count()).toBe(0);
-      const project = page.locator('[data-value="project:registered"]');
+      const project = page
+        .locator(".new-session-page__project-popover")
+        .getByRole("button", { name: "Registered", exact: true });
+      expect(await project.count()).toBe(1);
       const recentFolder = page.locator(`[data-value="recent:${WORKSPACE}/scratch"]`);
       await project.waitFor();
       await recentFolder.waitFor();

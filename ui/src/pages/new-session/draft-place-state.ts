@@ -500,11 +500,9 @@ export class DraftPlaceState {
     if (
       snapshot.submitting ||
       snapshot.pendingPlacementSessionKey ||
-      catalog.isTarget(snapshot.data)
+      catalog.isTarget(snapshot.data) ||
+      normalizeAgentId(agentId) === normalizeAgentId(this.agentIdValue)
     ) {
-      return;
-    }
-    if (normalizeAgentId(agentId) === normalizeAgentId(this.agentIdValue)) {
       return;
     }
     this.agentIdValue = normalizeAgentId(agentId);
@@ -547,10 +545,12 @@ export class DraftPlaceState {
 
   selectProjectId(projectId: string) {
     const project = this.browser.projects.find((candidate) => candidate.id === projectId);
-    if (!project) {
-      return;
+    if (project) {
+      if (project.agentId) {
+        this.selectAgentId(project.agentId);
+      }
+      this.selectProject({ kind: "local", id: project.id });
     }
-    this.selectProject({ kind: "local", id: project.id });
   }
 
   selectRemoteProject(project: DraftRemoteProject) {
