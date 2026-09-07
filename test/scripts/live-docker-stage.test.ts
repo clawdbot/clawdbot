@@ -413,26 +413,34 @@ export function parseRegistryNpmSpec(spec: string) {
       cwd: root,
       encoding: "utf8",
     }).trim();
+    const resolveCoreDialects = [
+      "-c",
+      'set -euo pipefail; source "$1"; openclaw_resolve_frozen_core_harness_capabilities "$2"; printf "%s %s\\n" "$OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE" "$OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE"',
+      "test",
+      stageScriptPath,
+      root,
+    ] as const;
 
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        'set -euo pipefail; source "$1"; openclaw_resolve_frozen_core_harness_capabilities "$2"; printf "%s %s\\n" "$OPENCLAW_FROZEN_TARGET_SESSION_REPAIR_MODE" "$OPENCLAW_FROZEN_TARGET_MCP_CODE_MODE_CATALOG_MODE"',
-        "test",
-        stageScriptPath,
-        root,
-      ],
-      {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
-          OPENCLAW_SELECTED_SHA: selectedSha,
-          OPENCLAW_TOOLING_SHA: "b".repeat(40),
-        },
+    const strictResult = spawnSync("bash", resolveCoreDialects, {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "0",
       },
-    );
+    });
+
+    expect(strictResult.status, strictResult.stderr).toBe(0);
+    expect(strictResult.stdout.trim()).toBe("sqlite current");
+
+    const result = spawnSync("bash", resolveCoreDialects, {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
+        OPENCLAW_SELECTED_SHA: selectedSha,
+        OPENCLAW_TOOLING_SHA: "b".repeat(40),
+      },
+    });
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim()).toBe("jsonl legacy");
