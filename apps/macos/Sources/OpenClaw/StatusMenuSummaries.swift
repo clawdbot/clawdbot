@@ -16,7 +16,7 @@ final class StatusMenuSummaries: NSObject {
         let revision: UInt64?
         var lease: GatewayConnection.ServerLease?
         var usage: GatewayUsageSummary?
-        var cost: GatewayCostUsageSummary?
+        var cost: (summary: GatewayCostUsageSummary, dates: CostUsageMenuDateParser)?
         var costError: String?
         var usageUpdatedAt: Date?
         var costUpdatedAt: Date?
@@ -56,7 +56,7 @@ final class StatusMenuSummaries: NSObject {
         self.currentUsageState?.usage
     }
 
-    private var cachedCost: GatewayCostUsageSummary? {
+    private var cachedCost: (summary: GatewayCostUsageSummary, dates: CostUsageMenuDateParser)? {
         self.currentUsageState?.cost
     }
 
@@ -99,7 +99,7 @@ final class StatusMenuSummaries: NSObject {
     func refresh(onUpdate: @escaping @MainActor () -> Void) {
         self.updateHandler = onUpdate
         self.nodes.start()
-        self.cron.start(.statusMenu)
+        self.cron.start()
         if self.eventTask == nil {
             GatewayPushSubscription.restartTask(
                 task: &self.eventTask,
@@ -114,7 +114,7 @@ final class StatusMenuSummaries: NSObject {
     func menuDidClose() {
         self.updateHandler = nil
         self.nodes.stop()
-        self.cron.stop(.statusMenu)
+        self.cron.stop()
         SimpleTaskSupport.stop(task: &self.eventTask)
         self.cancelRefresh()
         self.usageState?.retryAttempts = 0
@@ -144,11 +144,12 @@ final class StatusMenuSummaries: NSObject {
     }
 
     func configureAutomations(_ item: NSMenuItem) {
-        let jobs = self.enabledJobs
+        let summary = self.cron.summary
+        let jobs = summary.jobs
         let detail = if let next = jobs.compactMap(\.nextRunDate).min() {
-            "\(jobs.count) · \(Self.relativeRun(next))"
+            "\(summary.total) · \(Self.relativeRun(next))"
         } else {
-            String(jobs.count)
+            String(summary.total)
         }
         item.title = String(localized: "Automations")
         item.image = nil
@@ -160,7 +161,7 @@ final class StatusMenuSummaries: NSObject {
                 detail: detail),
             highlights: true)
 
-        var entries = jobs.prefix(8).map { job in
+        var entries = jobs.prefix(CronJobsSummary.previewLimit).map { job in
             MenuEntry(id: "cron.job.\(job.id)") { [weak self] item in
                 item.title = job.displayName
                 item.target = self
@@ -213,14 +214,15 @@ final class StatusMenuSummaries: NSObject {
             entries.append(.info(id: "usage.loading", title: String(localized: "Loading usage…")))
         }
 
-        if let summary = self.cachedCost, !summary.daily.isEmpty {
+        if let cost = self.cachedCost, !cost.summary.daily.isEmpty {
             if !entries.isEmpty {
                 entries.append(.separator(id: "usage.cost.separator"))
             }
             entries.append(MenuEntry(id: "usage.cost.chart") { item in
                 item.title = String(localized: "Usage cost (30 days)")
                 item.isEnabled = false
-                StatusMenuRenderer.configureHostedView(item, rootView: CostUsageHistoryMenuView(summary: summary))
+                StatusMenuRenderer.configureHostedView(
+                    item, rootView: CostUsageHistoryMenuView(summary: cost.summary, dates: cost.dates))
             })
         } else if let error = self.costError {
             if !entries.isEmpty {
@@ -300,12 +302,6 @@ final class StatusMenuSummaries: NSObject {
             item.state = gateway.isPrimary ? .on : .off
         }
         item.title = StatusMenuMetrics.fittedTitle(item.title)
-    }
-
-    private var enabledJobs: [CronJob] {
-        self.cron.jobs.filter(\.enabled).sorted { lhs, rhs in
-            (lhs.nextRunDate ?? .distantFuture) < (rhs.nextRunDate ?? .distantFuture)
-        }
     }
 
     private var usageRows: [UsageRow] {
@@ -422,10 +418,12 @@ final class StatusMenuSummaries: NSObject {
     private func loadCost(_ refresh: Refresh, enabled: Bool) async {
         guard enabled, self.isCurrent(refresh), let lease = refresh.lease else { return }
         do {
+            let dates = CostUsageMenuDateParser(timeZone: .current)
             let data = try await self.control.request(
-                method: "usage.cost", timeoutMs: 7000, ifCurrentServerLease: lease)
+                method: "usage.cost", params: dates.requestParameters, timeoutMs: 7000, ifCurrentServerLease: lease)
             guard self.isCurrent(refresh) else { return }
-            self.usageState?.cost = try JSONDecoder().decode(GatewayCostUsageSummary.self, from: data)
+            // Cached buckets retain the request's day boundaries if the Mac changes time zones.
+            self.usageState?.cost = try (JSONDecoder().decode(GatewayCostUsageSummary.self, from: data), dates)
             self.usageState?.costError = nil
             self.usageState?.costUpdatedAt = Date()
         } catch {
@@ -472,7 +470,7 @@ final class StatusMenuSummaries: NSObject {
         DashboardManager.shared.confirmSetPrimary(target)
     }
 
-    private static func gatewayImage(health: DashboardGatewayHealth, name: String) -> NSImage? {
+    static func gatewayImage(health: DashboardGatewayHealth, name: String) -> NSImage? {
         let (symbol, color, accessibility): (String, NSColor, String) = switch health {
         case .ok:
             ("circle.fill", .systemGreen, String(format: String(localized: "%@, healthy"), name))

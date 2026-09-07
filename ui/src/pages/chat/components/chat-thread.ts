@@ -1,7 +1,5 @@
-// Public chat transcript renderer and DOM shell.
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
-import { sessionRefFromPath } from "../../../app-session-route-paths.ts";
 import { markdownBlocks } from "../../../components/markdown-blocks.ts";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import {
@@ -9,7 +7,6 @@ import {
   markdownFileLinkFromKeyboardEvent,
 } from "../../../components/markdown-file-links.ts";
 import {
-  markdownSessionHref,
   markdownSessionLinkFromEvent,
   markdownSessionLinkFromKeyboardEvent,
 } from "../../../components/markdown-session-links.ts";
@@ -22,6 +19,7 @@ import {
   CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
   renderChatHistoryBoundary,
 } from "./chat-history-boundary.ts";
+import { renderChatPositionRail } from "./chat-position-rail.ts";
 import {
   handleTranscriptContextMenu,
   handleTranscriptPointerUp,
@@ -88,7 +86,7 @@ function renderTranscriptShell(
   return html`
     <div
       class="chat-thread ${projection.isDirectThread ? "chat-thread--direct" : ""}"
-      ${markdownBlocks()}
+      ${markdownBlocks(props.transcriptVisible ?? true)}
       ${ref((element) => {
         if (element instanceof HTMLElement) {
           hydrateLinkFavicons(element, props.fetchLinkFavicon);
@@ -108,13 +106,8 @@ function renderTranscriptShell(
           props.onOpenWorkspaceFile?.(target);
           return;
         }
-        const sessionTarget =
-          markdownSessionLinkFromKeyboardEvent(event) ??
-          (event.key === "Enter"
-            ? markdownSessionHref(event, sessionRefFromPath, props.basePath)
-            : null);
+        const sessionTarget = markdownSessionLinkFromKeyboardEvent(event, props.basePath);
         if (sessionTarget) {
-          event.preventDefault();
           props.onOpenSessionLink?.(sessionTarget);
           return;
         }
@@ -136,9 +129,7 @@ function renderTranscriptShell(
           props.onOpenWorkspaceFile?.(target);
           return;
         }
-        const sessionTarget =
-          markdownSessionLinkFromEvent(event) ??
-          markdownSessionHref(event, sessionRefFromPath, props.basePath);
+        const sessionTarget = markdownSessionLinkFromEvent(event, props.basePath);
         if (sessionTarget && shouldHandleNavigationClick(event)) {
           event.preventDefault();
           props.onOpenSessionLink?.(sessionTarget);
@@ -154,6 +145,11 @@ function renderTranscriptShell(
         aria-atomic="true"
         >${transcript.liveAnnouncementText}</span
       >
+      ${renderChatPositionRail({
+        messages: projection.positionMessages,
+        transcript,
+        requestUpdate: props.onRequestUpdate ?? (() => {}),
+      })}
       ${transcriptContents}
     </div>
   `;

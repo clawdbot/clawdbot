@@ -58,7 +58,7 @@ function shouldRenderCodeBlockInteraction(env: unknown): boolean {
   return codeBlockRenderEnv(env)?.codeBlockInteraction === "interactive";
 }
 
-function encodeBlockArtCodeBlockCopyPayload(value: string): string {
+function encodeCodeBlockCopyPayload(value: string): string {
   return `${blockArtCopyPayloadPrefix}${JSON.stringify(value)}`;
 }
 
@@ -95,9 +95,10 @@ export function handleMarkdownCodeBlockClick(event: Event): void {
   const code = decodeCodeBlockCopyPayload(button.dataset.code ?? "", button.dataset.codeEncoding);
   const attempt = (codeBlockCopyAttempts.get(button) ?? 0) + 1;
   codeBlockCopyAttempts.set(button, attempt);
-  void copyToClipboard(code).then((copied) => {
+  const isCurrent = () => button.isConnected && codeBlockCopyAttempts.get(button) === attempt;
+  void copyToClipboard(code, isCurrent).then((copied) => {
     // Clipboard writes can finish out of click order; older attempts must not own feedback.
-    if (codeBlockCopyAttempts.get(button) !== attempt) {
+    if (!isCurrent()) {
       return;
     }
     button.classList.toggle("copied", copied);
@@ -200,18 +201,10 @@ function renderCodeBlockHeader(lang: string, actions: string): string {
   return `<div class="code-block-header"><span class="code-block-lang">${language}</span><div class="code-block-actions">${actions}</div></div>`;
 }
 
-function renderCodeBlockCopyButton(
-  text: string,
-  blockArt: boolean,
-  copyTextOverride: string | undefined,
-): string {
-  const copyText = copyTextOverride ?? text;
-  const copyPayload = blockArt ? encodeBlockArtCodeBlockCopyPayload(copyText) : copyText;
-  const attrSafe = escapeMarkdownHtml(copyPayload);
-  const encodingAttr = blockArt
-    ? ` data-code-encoding="${blockArtCodeBlockCopyPayloadEncoding}"`
-    : "";
-  return `<button type="button" class="code-block-copy" data-code="${attrSafe}"${encodingAttr} aria-label="${escapeMarkdownHtml(t("common.copyCode"))}"><span class="code-block-copy__idle" aria-hidden="true"></span><span class="code-block-copy__done" aria-hidden="true"></span><span class="code-block-copy__failed" aria-hidden="true">!</span></button>`;
+function renderCodeBlockCopyButton(text: string): string {
+  // Attribute sanitization trims plain values; encode copied whitespace with the text.
+  const attrSafe = escapeMarkdownHtml(encodeCodeBlockCopyPayload(text));
+  return `<button type="button" class="code-block-copy" data-code="${attrSafe}" data-code-encoding="${blockArtCodeBlockCopyPayloadEncoding}" aria-label="${escapeMarkdownHtml(t("common.copyCode"))}"><span class="code-block-copy__idle" aria-hidden="true"></span><span class="code-block-copy__done" aria-hidden="true"></span><span class="code-block-copy__failed" aria-hidden="true">!</span></button>`;
 }
 
 export function renderMarkdownCodeBlock(
@@ -226,7 +219,7 @@ export function renderMarkdownCodeBlock(
     return codeBlock;
   }
   const copyButton = shouldRenderCodeBlockCopy(env)
-    ? renderCodeBlockCopyButton(text, blockArt, options.copyText)
+    ? renderCodeBlockCopyButton(options.copyText ?? text)
     : "";
   // Reveal and wrap controls are inert without a host that runs the code-block
   // lifecycle, so only interaction-owning hosts get the collapsible markup.

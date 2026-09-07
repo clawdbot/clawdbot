@@ -1,5 +1,6 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { isPathInside } from "../../infra/fs-safe.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
   serializeWorkerWorkspaceManifest,
@@ -19,6 +20,8 @@ export type NodeWorkspaceTransferSnapshot = {
   manifestRef: string;
   rawManifest: string;
   root: string;
+  /** Sparse checkpoint payloads contain only these paths from the complete manifest. */
+  blobPaths?: ReadonlySet<string>;
 };
 
 export async function prepareNodeWorkspaceTransferSnapshot(params: {
@@ -71,4 +74,12 @@ export async function prepareNodeWorkspaceTransferSnapshot(params: {
     rawManifest: serializeWorkerWorkspaceManifest(actual.manifest),
     root,
   };
+}
+
+export function nodeWorkspaceTransferEntryPath(root: string, relative: string): string {
+  const candidate = path.join(root, ...relative.split("/"));
+  if (candidate !== root && !isPathInside(root, candidate)) {
+    throw new Error("Workspace transfer entry escaped its staging root");
+  }
+  return candidate;
 }

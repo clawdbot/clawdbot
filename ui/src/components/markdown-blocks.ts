@@ -11,11 +11,15 @@ const initializedCodeBlocks = new WeakSet<HTMLElement>();
 class MarkdownBlocksDirective extends AsyncDirective {
   private root: HTMLElement | undefined;
   private scanPending = false;
+  private active = true;
   private readonly observedNodes = new Set<HTMLElement>();
   private readonly resizeObserver =
     typeof ResizeObserver === "undefined"
       ? null
       : new ResizeObserver((entries) => {
+          if (!this.active || !this.isConnected) {
+            return;
+          }
           const wrappers = new Set(
             entries.map(({ target }) => target.closest<HTMLElement>(".code-block-wrapper")),
           );
@@ -26,18 +30,27 @@ class MarkdownBlocksDirective extends AsyncDirective {
           }
         });
 
-  render() {
+  render(_active = true) {
     return nothing;
   }
 
-  override update(part: ElementPart) {
+  override update(part: ElementPart, [active = true]: [boolean?]) {
     this.root = part.element instanceof HTMLElement ? part.element : undefined;
-    this.scheduleScan();
+    this.active = active;
+    if (active) {
+      this.scheduleScan();
+    } else {
+      this.release();
+    }
     return nothing;
   }
 
   protected override disconnected(): void {
-    // A final route-away has no later scan to release detached transcript trees.
+    this.release();
+  }
+
+  private release(): void {
+    // Hidden retained DOM keeps its controls, but must release foreground observers.
     this.resizeObserver?.disconnect();
     this.observedNodes.clear();
     if (this.root) {
@@ -50,7 +63,7 @@ class MarkdownBlocksDirective extends AsyncDirective {
   }
 
   private scheduleScan(): void {
-    if (this.scanPending || !this.isConnected) {
+    if (this.scanPending || !this.active || !this.isConnected) {
       return;
     }
     this.scanPending = true;
@@ -58,7 +71,7 @@ class MarkdownBlocksDirective extends AsyncDirective {
     // and fence queued scans when the host is removed before the microtask runs.
     queueMicrotask(() => {
       this.scanPending = false;
-      if (this.isConnected && this.root?.isConnected) {
+      if (this.active && this.isConnected && this.root?.isConnected) {
         this.scan(this.root);
       }
     });
@@ -70,6 +83,7 @@ class MarkdownBlocksDirective extends AsyncDirective {
       void import("./markdown-mermaid.ts").then(
         ({ mountMermaidBlocks }) => {
           if (
+            this.active &&
             this.isConnected &&
             this.root === root &&
             root.isConnected &&
@@ -79,9 +93,12 @@ class MarkdownBlocksDirective extends AsyncDirective {
           }
         },
         () => {
+          if (!this.active || !this.isConnected || this.root !== root || !root.isConnected) {
+            return;
+          }
           for (const block of root.querySelectorAll(".markdown-mermaid")) {
             block.classList.remove("markdown-mermaid");
-            block.prepend(t("chat.mermaid.error"));
+            block.prepend(t("chat.mermaid.rendererError"));
           }
         },
       );

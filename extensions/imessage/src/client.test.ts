@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IMessagePrivateApiStatus } from "./private-api-status.js";
 
@@ -21,10 +22,11 @@ vi.mock("./cli-output.js", () => ({
 // real gateway surfaces as an uncaughtException and crashes the process (#75438
 // covered stdin only). The mock child mirrors that stdio shape so we can assert
 // each stream's `error` is caught and routed to failAll.
+type MockStream = EventEmitter & { errored: Error | null };
 type MockChild = EventEmitter & {
-  stdout: EventEmitter;
-  stderr: EventEmitter;
-  stdin: EventEmitter & {
+  stdout: MockStream;
+  stderr: MockStream;
+  stdin: MockStream & {
     write: (line: string, cb?: (err?: Error | null) => void) => boolean;
     end: () => void;
   };
@@ -34,9 +36,9 @@ type MockChild = EventEmitter & {
 
 function createMockChild(): MockChild {
   const child = new EventEmitter() as MockChild;
-  child.stdout = new EventEmitter();
-  child.stderr = new EventEmitter();
-  const stdin = new EventEmitter() as MockChild["stdin"];
+  child.stdout = Object.assign(new EventEmitter(), { errored: null });
+  child.stderr = Object.assign(new EventEmitter(), { errored: null });
+  const stdin = Object.assign(new EventEmitter(), { errored: null }) as MockChild["stdin"];
   // Resolve every write cleanly so the pending request only settles via the
   // stream error path under test.
   stdin.write = (_line, cb) => {
@@ -71,6 +73,153 @@ afterAll(() => {
   vi.resetModules();
 });
 
+describe("IMessageRpcClient LF framing", () => {
+  let child: ReturnType<typeof createMockChild> & {
+    stdin: PassThrough;
+    stdout: PassThrough;
+    stderr: PassThrough;
+  };
+  let client: InstanceType<typeof IMessageRpcClient>;
+  const runtimeError = vi.fn();
+  const onNotification = vi.fn();
+
+  beforeEach(async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("VITEST", "");
+    child = Object.assign(createMockChild(), {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+    });
+    spawnMock.mockReset().mockReturnValue(child);
+    runtimeError.mockReset();
+    onNotification.mockReset();
+    client = new IMessageRpcClient({
+      runtime: { error: runtimeError, exit: vi.fn(), log: vi.fn() },
+      onNotification,
+    });
+    await client.start();
+  });
+
+  afterEach(async () => {
+    child.emit("close", 0, null);
+    await client.stop();
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    ["U+2028", "\u2028"],
+    ["U+2029", "\u2029"],
+    ["four-byte UTF-8", "\u{1f680}"],
+  ])("preserves split %s inside an LF-delimited response", async (_, separator) => {
+    const pending = client.request("chats.list");
+    const text = `line one${separator}line two`;
+    const bytes = Buffer.from(`${JSON.stringify({ id: 1, result: { messages: [{ text }] } })}\n`);
+    const split = bytes.indexOf(Buffer.from(separator)) + 1;
+
+    child.stdout.write(bytes.subarray(0, split));
+    child.stdout.write(bytes.subarray(split));
+
+    await expect(pending).resolves.toEqual({ messages: [{ text }] });
+    expect(runtimeError).not.toHaveBeenCalled();
+  });
+
+  it("delivers multiple LF responses and notifications in order, trimming CRLF and blanks", async () => {
+    const responses: unknown[] = [];
+    const first = client.request("first").then((value) => responses.push(value));
+    const second = client.request("second").then((value) => responses.push(value));
+    child.stdout.setEncoding("utf8");
+    child.stdout.write(
+      ' \r\n{"id":2,"result":"second"}\r\n{"method":"first"}\n{"id":1,"result":"first"}\n{"method":"second"}\r',
+    );
+    expect(onNotification.mock.calls).toEqual([[{ method: "first", params: undefined }]]);
+
+    child.stdout.write("\n");
+
+    expect(onNotification.mock.calls).toEqual([
+      [{ method: "first", params: undefined }],
+      [{ method: "second", params: undefined }],
+    ]);
+    await Promise.all([first, second]);
+    expect(responses).toEqual(["second", "first"]);
+    expect(runtimeError).not.toHaveBeenCalled();
+  });
+
+  it("keeps interleaved stdout/stderr decoder state independent and bypasses decoding strings", async () => {
+    const pending = client.request("ping");
+    const stdout = Buffer.from('{"id":1,"result":"\u20ac"}\n');
+    const stderr = Buffer.from("notice \u732b\r\n");
+    const stdoutSplit = stdout.indexOf(Buffer.from("\u20ac")) + 1;
+    const stderrSplit = stderr.indexOf(Buffer.from("\u732b")) + 1;
+
+    child.stdout.write(stdout.subarray(0, stdoutSplit));
+    child.stderr.write(stderr.subarray(0, stderrSplit));
+    // A string data event must not consume a buffered partial UTF-8 sequence.
+    child.stdout.emit("data", "prefix ");
+    child.stderr.emit("data", "prefix ");
+    child.stderr.write(stderr.subarray(stderrSplit));
+    child.stdout.write(stdout.subarray(stdoutSplit));
+
+    await expect(pending).resolves.toBe("prefix \u20ac");
+    expect(runtimeError.mock.calls).toEqual([["imsg rpc: notice prefix \u732b"]]);
+  });
+
+  it("resolves an unterminated stdout response before rejecting remaining requests on child close", async () => {
+    const response = client.request("first");
+    const remaining = expect(client.request("second")).rejects.toThrow("imsg rpc exited (code 1)");
+    child.stdout.write('{"id":1,"result":"final"}');
+    child.stdout.emit("close");
+    child.emit("close", 1, null);
+
+    await expect(response).resolves.toBe("final");
+    await remaining;
+    await expect(client.waitForClose()).rejects.toThrow("imsg rpc exited (code 1)");
+  });
+
+  it("flushes stdout then stderr only on child close, before choosing the terminal diagnostic", async () => {
+    const order: string[] = [];
+    onNotification.mockImplementation(() => order.push("stdout"));
+    runtimeError.mockImplementation(() => order.push("stderr"));
+    const pending = expect(client.request("ping")).rejects.toThrow(
+      "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+    );
+    child.stdout.write('{"method":"final"}');
+    child.stderr.write("notice Full Disk Access denied for chat.db");
+
+    child.stdout.emit("close");
+    child.stderr.emit("close");
+    expect(order).toEqual([]);
+    child.emit("close", 1, null);
+
+    expect(order).toEqual(["stdout", "stderr"]);
+    expect(runtimeError).toHaveBeenCalledExactlyOnceWith(
+      "imsg rpc: notice Full Disk Access denied for chat.db",
+    );
+    await pending;
+  });
+
+  it("flushes incomplete UTF-8 and preserves internal CRs in unterminated stderr", async () => {
+    const bytes = Buffer.from("first\rsecond \u20ac");
+    child.stderr.write(bytes.subarray(0, -1));
+    expect(runtimeError).not.toHaveBeenCalled();
+
+    child.emit("close", 1, null);
+
+    expect(runtimeError).toHaveBeenCalledExactlyOnceWith("imsg rpc: first\rsecond \ufffd");
+  });
+
+  it("ignores both streams from a stale child after stop", async () => {
+    child.stdin.once("finish", () => child.emit("close", 0, null));
+    await client.stop();
+
+    child.stdout.write('{"method":"messages.changed","params":{}}\n');
+    child.stderr.write("late diagnostic\n");
+
+    expect(onNotification).not.toHaveBeenCalled();
+    expect(runtimeError).not.toHaveBeenCalled();
+  });
+});
+
 describe("IMessageRpcClient child stream error handling", () => {
   let child: MockChild;
   const tempDirs: string[] = [];
@@ -94,9 +243,16 @@ describe("IMessageRpcClient child stream error handling", () => {
     );
   });
 
-  it.each(["stdout", "stderr", "stdin"] as const)(
-    "catches a %s stream error and rejects in-flight requests instead of crashing",
-    async (streamName) => {
+  it.each(
+    (["stdout", "stderr", "stdin"] as const).flatMap((streamName) =>
+      (["error event then close", "errored close only"] as const).map((notification) => ({
+        streamName,
+        notification,
+      })),
+    ),
+  )(
+    "catches a $streamName stream error via $notification and rejects in-flight requests instead of crashing",
+    async ({ streamName, notification }) => {
       const client = new IMessageRpcClient({ cliPath: "imsg" });
       await client.start();
 
@@ -106,15 +262,22 @@ describe("IMessageRpcClient child stream error handling", () => {
       pending.catch(() => {});
 
       const streamError = new Error(`${streamName} broke`);
-      expect(() => child[streamName].emit("error", streamError)).not.toThrow();
-
-      await expect(pending).rejects.toThrow(`${streamName} broke`);
-      await expect(client.waitForClose()).rejects.toThrow(`${streamName} broke`);
-      expect(child.kill).toHaveBeenCalledOnce();
-      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
-
-      child.emit("close", null, "SIGTERM");
-      await client.stop();
+      child[streamName].errored = streamError;
+      try {
+        expect(() => {
+          if (notification === "error event then close") {
+            child[streamName].emit("error", streamError);
+          }
+          child[streamName].emit("close");
+        }).not.toThrow();
+        expect(child.kill).toHaveBeenCalledOnce();
+        expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+        await expect(pending).rejects.toThrow(`${streamName} broke`);
+        await expect(client.waitForClose()).rejects.toThrow(`${streamName} broke`);
+      } finally {
+        child.emit("close", null, "SIGTERM");
+        await client.stop();
+      }
     },
   );
 
@@ -316,6 +479,7 @@ describe("IMessageRpcClient child stream error handling", () => {
     const pending = client.request("ping", {}, { timeoutMs: 0 });
     pending.catch(() => {});
     child.stderr.emit("data", Buffer.from("unrelated warning"));
+    child.stderr.emit("close");
     child.emit("close", 1, null);
 
     await expect(pending).rejects.toThrow("imsg rpc exited (code 1)");

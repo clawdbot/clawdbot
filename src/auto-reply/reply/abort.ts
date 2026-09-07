@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
+import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-manager-api.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveActiveEmbeddedRunSessionId } from "../../agents/embedded-agent-runner/active-run-projections.js";
 import { abortEmbeddedAgentRun } from "../../agents/embedded-agent-runner/runs.js";
@@ -45,6 +46,7 @@ export { isAbortRequestText, isAbortTrigger, setAbortMemory };
 export function abortSessionRunTargetWithOutcome(params: { key?: string; sessionId?: string }): {
   active: boolean;
   aborted: boolean;
+  retirement?: Promise<void>;
 } {
   const sessionIds = new Set<string>();
   const key = normalizeOptionalString(params.key);
@@ -65,7 +67,19 @@ export function abortSessionRunTargetWithOutcome(params: { key?: string; session
   for (const sessionId of sessionIds) {
     aborted = abortEmbeddedAgentRun(sessionId) || aborted;
   }
-  return { active, aborted };
+  // Stop owns these captured IDs; a later turn may rebind the session key.
+  const retirement =
+    !active || aborted
+      ? Promise.all(
+          [...sessionIds].map((sessionId) =>
+            retireSessionMcpRuntime({
+              sessionId,
+              reason: "session-stop",
+            }),
+          ),
+        ).then(() => undefined)
+      : undefined;
+  return { active, aborted, retirement };
 }
 
 export function formatAbortReplyText(
@@ -190,6 +204,7 @@ export async function stopSubagentsForRequester(params: {
 export async function tryFastAbortFromMessage(params: {
   ctx: FinalizedRuntimeMsgContext;
   cfg: OpenClawConfig;
+  isCommandTargetCurrent?: () => boolean;
 }): Promise<{
   handled: boolean;
   aborted: boolean;
@@ -282,6 +297,9 @@ export async function tryFastAbortFromMessage(params: {
         requesterSessionKey,
         requesterAgentId: agentId,
         beforeKill: () => {
+          if (params.isCommandTargetCurrent?.() === false) {
+            throw new Error("The selected session changed before it could be stopped.");
+          }
           try {
             const sourceAbortKey =
               commandSessionKey &&
@@ -304,6 +322,9 @@ export async function tryFastAbortFromMessage(params: {
                 key: abortTargetKey,
                 sessionId: sessionIdsByKey.get(abortTargetKey),
               });
+              if (outcome.retirement) {
+                acpCancellations.push(outcome.retirement);
+              }
               activeAbortRejected ||= outcome.active && !outcome.aborted;
               aborted = outcome.aborted || aborted;
             }
@@ -316,6 +337,9 @@ export async function tryFastAbortFromMessage(params: {
                 key: sourceAbortKey,
                 sessionId: sourceSessionId,
               });
+              if (outcome.retirement) {
+                acpCancellations.push(outcome.retirement);
+              }
               activeAbortRejected ||= outcome.active && !outcome.aborted;
               aborted = outcome.aborted || aborted;
             }
@@ -366,6 +390,7 @@ export async function tryFastAbortFromMessage(params: {
         let persistedAbortTarget: SessionAbortTargetResult | null = null;
         try {
           persistedAbortTarget = await markSessionAbortTarget({
+            isCurrent: params.isCommandTargetCurrent,
             scope: {
               agentId,
               sessionKey: targetKey,
@@ -388,7 +413,12 @@ export async function tryFastAbortFromMessage(params: {
         const hasAbortTargetEntry = Boolean(
           persistedAbortTarget?.entry ?? resolvedAbortTarget?.entry,
         );
-        if (persistedAbortTarget?.persisted !== true && abortMemoryKey && !hasAbortTargetEntry) {
+        if (
+          persistedAbortTarget?.persisted !== true &&
+          abortMemoryKey &&
+          !hasAbortTargetEntry &&
+          params.isCommandTargetCurrent?.() !== false
+        ) {
           setAbortMemory(abortMemoryKey, true);
         }
       }

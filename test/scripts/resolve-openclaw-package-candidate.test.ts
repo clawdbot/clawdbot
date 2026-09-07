@@ -23,6 +23,7 @@ import {
   runCommandForTest,
   validateOpenClawPackageSpec,
 } from "../../scripts/resolve-openclaw-package-candidate.mts";
+import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import {
   isProcessAlive,
   waitForChildClose,
@@ -581,8 +582,8 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
         await releaseAndWait();
       } finally {
         killSpy.mockRestore();
-        if (childPid !== undefined && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
+        if (childPid !== undefined) {
+          killPidIfAlive(childPid);
           await waitForDead(childPid, 2_000);
         }
       }
@@ -623,8 +624,8 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
       try {
         await releaseAndWait();
       } finally {
-        if (childPid !== undefined && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
+        if (childPid !== undefined) {
+          killPidIfAlive(childPid);
           await waitForDead(childPid, 2_000);
         }
       }
@@ -674,8 +675,8 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
       try {
         await releaseAndWait();
       } finally {
-        if (childPid !== undefined && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
+        if (childPid !== undefined) {
+          killPidIfAlive(childPid);
           await waitForDead(childPid, 2_000);
         }
       }
@@ -743,8 +744,8 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
           }
         }
       } finally {
-        if (childPid !== undefined && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
+        if (childPid !== undefined) {
+          killPidIfAlive(childPid);
           await waitForDead(childPid, 2_000);
         }
       }

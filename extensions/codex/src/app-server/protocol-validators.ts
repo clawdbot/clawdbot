@@ -19,7 +19,6 @@ import {
   type CodexModelListResponse,
   type CodexThread,
   type CodexThreadForkResponse,
-  type CodexThreadForkParams,
   type CodexThreadItem,
   type CodexThreadResumeResponse,
   type CodexThreadStartResponse,
@@ -331,21 +330,6 @@ export function assertCodexThreadForkResponse(value: unknown): CodexThreadForkRe
   return assertCodexShape(validateThreadStartResponse, normalized, "thread/fork response");
 }
 
-/** Asserts the experimental beforeTurnId request field before it crosses the app-server boundary. */
-export function assertCodexThreadForkParams(value: unknown): CodexThreadForkParams {
-  if (
-    !isRecord(value) ||
-    typeof value.threadId !== "string" ||
-    !value.threadId.trim() ||
-    (value.beforeTurnId !== undefined &&
-      value.beforeTurnId !== null &&
-      typeof value.beforeTurnId !== "string")
-  ) {
-    throw new Error("Invalid Codex app-server thread/fork params");
-  }
-  return value as CodexThreadForkParams;
-}
-
 /** Asserts and normalizes a Codex thread/resume response. */
 export function assertCodexThreadResumeResponse(value: unknown): CodexThreadResumeResponse {
   const normalized = normalizeWithDefaults(threadResumeResponseSchema, value);
@@ -374,10 +358,7 @@ export function assertCodexThreadAcceptsDirectInput(
 
 /** Asserts and normalizes a Codex turn/start response. */
 export function assertCodexTurnStartResponse(value: unknown): CodexTurnStartResponse {
-  const normalized = normalizeWithDefaults(
-    turnStartResponseSchema,
-    normalizeTurnStartResponse(value),
-  );
+  const normalized = normalizeWithDefaults(turnStartResponseSchema, normalizeTurnEnvelope(value));
   return assertCodexShape(validateTurnStartResponse, normalized, "turn/start response");
 }
 
@@ -451,10 +432,7 @@ export function readCodexTurnCompletedNotification(
 ): CodexTurnCompletedNotification | undefined {
   return readCodexShape(
     validateTurnCompletedNotification,
-    normalizeWithDefaults(
-      turnCompletedNotificationSchema,
-      normalizeTurnCompletedNotification(value),
-    ),
+    normalizeWithDefaults(turnCompletedNotificationSchema, normalizeTurnEnvelope(value)),
   );
 }
 
@@ -512,17 +490,7 @@ function normalizeThreadItem(value: unknown): unknown {
   }
 }
 
-function normalizeTurnStartResponse(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value) || !("turn" in value)) {
-    return value;
-  }
-  return {
-    ...value,
-    turn: normalizeTurn((value as { turn?: unknown }).turn),
-  };
-}
-
-function normalizeTurnCompletedNotification(value: unknown): unknown {
+function normalizeTurnEnvelope(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value) || !("turn" in value)) {
     return value;
   }

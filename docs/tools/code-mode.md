@@ -66,7 +66,10 @@ before the call settles.
   compact input hints, and compact declared output hints when a
   trusted tool provides an output schema. It omits descriptions, full schemas,
   MCP entries, and overflow entries; callable `catalog.search(...)` results are
-  the fallback.
+  the fallback. Input hints retain integer and numeric bounds as comments, such
+  as `offset?: number /* integer, >= 1 */`. Other validation details remain in
+  the full schema available through `describe()`; these hints do not change
+  tool validation or output contracts.
 - Guest code calls globals directly or searches the hidden catalog for callable
   handles. A handle exposes bounded metadata and `describe()`, but never the
   exact internal catalog id. Calls use the same execution path as normal agent
@@ -265,43 +268,21 @@ one from an unawaited call or timer callback, fails the cell instead of silently
 reporting success. Handlers attached after a suspension still handle their
 original promises.
 
-JavaScript syntax errors, TypeScript transform errors, and tool failures proven
-to occur before execution become failed `exec` results that the model can read
-and correct across successive turns. A failed `exec` or `wait` does not automatically
-end the agent run when OpenClaw's host execution record proves that no potentially
-mutating nested action started, including before a suspended run resumed.
+JavaScript syntax errors, TypeScript transform errors, and uncaught nested tool
+failures become failed `exec` or `wait` results. The model can read the error,
+correct its code, inspect the current state, and continue with the normal tool
+surface. A failed cell does not impose a separate recovery mode or mutation budget.
 
-An exec host-policy rejection can carry this proof even after hooks, approval
-resolution, and tool implementation entry: the host owns the narrower fact that
-no command process or remote dispatch started. A corrected call runs the ordinary
-hooks and approvals again. Consumed voice confirmations stay consumed; recovery
-does not restore a grant or authorize replay.
+OpenClaw does not automatically replay a failed program. Earlier calls may have
+changed state, and a failed call may have partially applied. Inspect authoritative
+state before deciding what remains, and do not repeat completed actions. This
+also applies when `wait` resumes a suspended cell: its earlier calls belong to the
+same program.
 
-Catalog search, handle `describe()`, `skills.list()`, and `skills.read()` are
-read-only discovery. A guest error after only these operations still allows
-ordinary recovery from a failed `exec`; discovery does not count as a mutation.
-
-OpenClaw does not automatically replay a failed program. If earlier calls
-may have changed state or a failed call may have partially applied, OpenClaw
-deliberately permits one temporary read-only recovery attempt to inspect the
-current state. The internal instruction identifies OpenClaw as its source. It
-does not expose writes, sends, shell commands, or other mutations during that
-inspection.
-
-If inspection finds unfinished work, the model can request one bounded recovery.
-Code Mode stays disabled, and OpenClaw restores the normal direct-tool or Tool
-Search surface with its real tool names and argument schemas. Host-recorded
-nested-call facts block an exact repeat whose earlier effect was committed or
-uncertain. The recovery permits one mutation attempt; reads and schema discovery
-remain available afterward, but a later mutation does not run blindly when the
-first attempt fails. If no work remains, the inspection report ends the run
-without another model turn. Cancellation, explicitly terminal tool outcomes,
-sandbox restrictions, approval requirements, and tool-policy denials retain
-their existing behavior.
-
-Computer observations, including window and cursor queries, cropped screenshots,
-browser state, and dialog inspection, do not spend that mutation attempt. Browser
-preparation, input, and dialog acceptance or dismissal still count as mutations.
+Every subsequent call runs the ordinary hooks and approvals again. Consumed voice
+confirmations stay consumed; continuing after an error does not restore a grant.
+Cancellation, explicitly terminal tool outcomes, sandbox restrictions, approval
+requirements, and tool-policy denials retain their existing behavior.
 
 ### Verify the active surface
 
@@ -322,11 +303,21 @@ With code mode active, the logged model-facing tool names should be `exec` and
 ## Use Swarm for agent fan-out
 
 [Swarm](/tools/swarm) adds `agents.run()`, `phase()`, and `log()` guest globals
-for orchestrating concurrent sub-agents from Code Mode scripts. Enable
-`tools.swarm`, and ensure Code Mode engages through `"auto"` or `true`, then use
-normal JavaScript control flow for fan-out, decision gates, and structured
-collection. Swarm is a separate opt-in gate; engaging Code Mode alone does not
-expose the `agents.*` API.
+for orchestrating concurrent sub-agents from Code Mode scripts. Swarm is enabled
+by default; Code Mode remains separately opt-in through `"auto"` or `true`.
+Use normal JavaScript control flow for fan-out, decision gates, and structured
+collection.
+
+The Swarm globals, `API.read("agents.d.ts")`, and Swarm prompt hints appear only
+when Swarm is enabled and the native OpenClaw `sessions_spawn` tool is present
+in the Code Mode catalog and permitted by the run's execution allowlist. An MCP
+tool with the same name does not qualify. Code Mode waits for collector results
+internally, so `agents.run()` does not require the standalone `agents_wait`
+tool. Direct low-level Swarm use requires both tools allowed.
+
+Set `tools.swarm: false` or `tools.swarm.enabled: false` to opt out, globally or
+under an agent's `tools`. Engaging Code Mode does not override that opt-out or
+grant access to tools denied by policy.
 
 ## Technical tour
 
@@ -399,6 +390,14 @@ Provider-owned tools such as remote Python sandboxes are separate tools. See
 | `snapshotTtlSeconds`  | `900`                          | `1`-`86400`                                     |
 | `searchDefaultLimit`  | `8`                            | clamped to `maxSearchLimit`                     |
 | `maxSearchLimit`      | `50`                           | `1`-`50`                                        |
+
+`timeoutMs` is a wall-clock budget per `exec` or `wait` call. Worker preparation, guest
+computation, and inline tool waits share that budget; approval waits pause it.
+The model-facing `exec` description includes the effective limit. Blocking guest
+computation that exhausts the budget fails with `timeout`. Unfinished tool calls
+can instead return `waiting`, so a later `wait` can resume them with a fresh call
+budget. When the shell `exec` tool is available, use it for heavier computation
+and keep guest JavaScript focused on coordinating tools and processing results.
 
 If code mode is enabled but QuickJS-WASI cannot load, OpenClaw fails closed
 for that run; it does not silently expose normal tools as a fallback. This
@@ -567,9 +566,9 @@ Rules:
   explicitly requests replay after a gateway restart, and never for `write`,
   `edit`, `exec`, or any mutation. Every catalog call must be explicitly
   replay-safe. OpenClaw rejects unmarked catalog tools and namespace
-  surfaces that are not proven replay-safe, and restart-safe runs do not
-  auto-drain pending calls. A generic exec surface is not replay-safe merely
-  because one command appears read-only; use audited read, grep, or find tools.
+  surfaces that are not proven replay-safe. A generic exec surface is not
+  replay-safe merely because one command appears read-only; use audited read,
+  grep, or find tools.
   Suspended results are marked replay-safe so
   [restart recovery](/gateway/restart-recovery) can reconstruct an interrupted
   turn from its transcript instead of restoring the process-local snapshot.
@@ -720,6 +719,12 @@ declare function json(value: unknown): void;
 declare function yield_control(reason?: string): Promise<void>;
 ```
 
+`TextEncoder` and `TextDecoder` are available for local text and byte transforms.
+Encoder and decoder instances survive `wait` snapshot restoration. They run
+inside the QuickJS sandbox and grant no filesystem, module, or network access.
+Returned values still use the JSON-only bridge; emit decoded text or an array of
+byte values rather than a binary attachment.
+
 Guest timers are bridged through the host, so they survive QuickJS snapshot/resume and remain bounded by the Code Mode execution and snapshot limits.
 `clearTimeout` also cancels a timer created before an earlier suspension; this
 applies to interactive Code Mode and headless automation scripts.
@@ -794,8 +799,8 @@ type ToolCatalog = {
 ```
 
 `catalog.search(...)` returns a frozen array of callable handles, or an empty
-array when no tools match. If the matching callable names exceed the output
-budget, search rejects with guidance to narrow the query or lower `limit`.
+array when no tools match. If the matching callable names exceed the available program-data
+inbox capacity, search rejects with guidance to narrow the request.
 It never silently substitutes an empty or partial match list. A narrower search
 remains available after the error.
 
@@ -833,6 +838,23 @@ const hits = await search({ query: "OpenClaw code mode" });
 Calling a global or catalog handle returns the normal tool's JSON `details`
 value directly. Exact catalog ids and raw `{ tool, result }` envelopes are not
 guest-visible.
+
+The `ls`, `find`, and `grep` tools include their bounded listing or search text
+in `content`, including empty-result messages and truncation notices. Directory
+pages retain `nextAfter`; search results retain their existing limit and
+truncation metadata.
+
+### Reading paginated file data
+
+For text file pages, `read(...)` returns file text in `content`; filename-resolution
+and pagination notices stay in the human-readable tool display, not the structured
+file data. Existing file redaction still applies. Check `kind` before parsing:
+`"truncated"` means more data is available at `continuation`. Read that next page
+with the same path and the returned `offset`, optional `cursor`, and optional
+`limit`. Join line continuations with `"\n"`; append cursor continuations directly.
+Do not strip display-notice patterns from file data: those strings may be actual
+file contents. Each call still honors its explicit `limit`; if more file data
+remains, the result is `"truncated"` and its continuation describes the next page.
 
 ## Declared output contracts
 
@@ -990,6 +1012,13 @@ declare namespace MCP.github {
 }
 ```
 
+Dictionary inputs retain their value types. Nullable enums and fields marked
+`nullable: true` include `null`, unless an explicit enum excludes it.
+Top-level fields with defaults may be omitted from calls.
+These declarations approximate JSON Schema; for constraints that TypeScript
+cannot express, inspect the original schema with
+`MCP.<server>.$api("<tool>", { schema: true })`.
+
 MCP tool calls return their original JSON-safe content blocks, including block
 annotations and block-level `_meta`, plus top-level `structuredContent` and
 `isError` when provided. Top-level MCP `_meta` and private app metadata never
@@ -1029,13 +1058,44 @@ the bridge as JSON-compatible values with explicit size caps.
 type CodeModeOutput = { type: "text"; text: string } | { type: "json"; value: unknown };
 ```
 
-Output order matches guest calls. Each nested tool result is bounded separately
-by `maxOutputBytes`. Cumulative guest output and the final value or failure
-diagnostic share one `maxOutputBytes` serialized UTF-8 budget across all waits. Oversized errors retain their leading cause and end
-with `[error truncated]`; truncation does not turn a failure into success.
-Catalog search rejects when its callable-name array cannot fit this budget;
-narrow the query or lower `limit` and retry. For other successful results that
-exceed the budget, OpenClaw returns a bounded value
+Await async values before emitting them or returning arrays or plain objects that
+contain them. Unawaited Promises appear as a diagnostic string with `await` and
+`Promise.all` guidance. For example, use
+`return await Promise.all(handles.map((tool) => tool.describe()));` to return tool
+descriptions. Output serialization does not await nested Promises for you.
+
+Handled `Error` values retain their `name`, `message`, and JSON-compatible
+enumerable custom fields in `text(...)`, `json(...)`, and returned arrays or
+plain objects. Error-specific `toJSON` methods are not invoked. This includes
+rejected reasons from `Promise.allSettled(...)`. Handling an error does not fail
+the cell; uncaught errors still produce a failed result.
+
+Nested tool data and model-visible output have separate limits. A successful
+bridge reply reaches the guest as its complete normalized JSON value, or its
+promise rejects with a catchable program-data resource error. The transport
+never substitutes a successful truncation marker. This also applies to catalog
+discovery and whole applicable skill instructions: intact or explicitly refused.
+
+Each cell has an aggregate pending-reply inbox of
+`min(memoryLimitBytes, maxSnapshotBytes)` encoded UTF-8 bytes: 10 MiB by default,
+up to 256 MiB under the existing configuration clamps. Successful values and
+bounded tool errors consume this allowance when they settle, before retention.
+The allowance spans inline execution and every wait; it is reusable after the
+host and worker release delivered replies, not a cumulative pagination quota.
+On saturation, a fixed, bounded failure diagnostic remains available without
+retaining tool data; these control replies are bounded by pending-call slots.
+Cancellation and expiry close admission and release undelivered replies.
+
+This is an additional logical host-data allowance, not a total RSS limit or a
+guarantee that large data can be suspended. Guest heap and whole-VM snapshot
+limits remain unchanged; worker handoff and JSON conversion can temporarily
+retain additional copies. Narrow or paginate requests after an admission error.
+
+Output order matches guest calls. Cumulative guest output and the final value
+or failure diagnostic still share one `maxOutputBytes` serialized UTF-8 budget
+across all waits. Oversized errors retain their leading cause and end with
+`[error truncated]`; truncation does not turn a failure into success. For
+successful emitted or returned output that exceeds this budget, OpenClaw returns a bounded value
 with `truncated: true`, a UTF-8-safe `prefix`, `omittedBytes`, and guidance to
 rerun with narrower arguments. Treat that marker as a successful partial result:
 reduce the search scope, paginate, select fewer files, or return a smaller
@@ -1154,20 +1214,36 @@ reconstructed from source code or outer results.
 
 Nested tool failures cross into the guest as catchable JavaScript errors. If
 guest code does not catch an error, `exec` or `wait` returns a failed tool
-result. Proven no-start failures and errors after only audited read-only work
-allow ordinary model recovery, including when `wait` resumes a suspended cell.
-This proof covers the cell's entire execution, not just the latest resume.
-Failed waits without that host proof remain terminal; serialized result fields
-cannot grant recovery. Possible nested side effects in a failed `exec` require
-the [read-only inspection and bounded recovery](#recover-from-tool-errors) flow
-before any further action. Network-controlled tool output and errors retain
-their existing untrusted-content wrapping and sanitization; recovering from a
-failure does not grant new permissions or replay completed side effects.
+result and the agent can continue normally. Follow the
+[tool-error guidance](#recover-from-tool-errors) to inspect possible partial
+effects before choosing another action. Network-controlled tool output and errors
+retain their existing untrusted-content wrapping and sanitization; continuing
+after a failure does not grant new permissions or replay completed side effects.
 
-Parallel nested calls are allowed up to `maxPendingToolCalls`. An oversized raw
-tool batch fails before any call in that batch is dispatched. [Swarm](/tools/swarm)
-launches, notes, and result waits instead queue for available bridge slots;
-they do not raise that limit or bypass the run's cancellation and policy checks.
+Nested calls honor each tool’s `executionMode`. A `"sequential"` tool waits for
+earlier catalog calls to finish and blocks later calls until its result has been
+accepted. Parallel-capable calls can overlap before the next sequential call.
+Scheduling is shared across cells using the same run catalog; separate catalogs
+remain independent. Queued calls are canceled when their caller or catalog closes.
+
+`maxPendingToolCalls` caps in-flight bridge requests, not the size of an ordinary
+`Promise.all` batch. Calls and timers beyond that cap wait in the guest alongside
+[Swarm](/tools/swarm) requests. At most 128 ordinary requests can be queued,
+independently of the configured in-flight cap, using the existing accepted
+bridge-limit ceiling. Swarm launches, notes, and result waits do not consume this
+ordinary quota; their existing group, VM memory, and snapshot limits still apply.
+Queued inputs and request identities survive snapshot/resume; `clearTimeout`
+removes a queued timer without starting a host timer. A queued timer's delay begins
+when it gets a bridge slot. Guest continuations run before waiting requests refill
+available slots, and fast requests still drain within the same `exec` or `wait`.
+
+Creating more ordinary requests than their queue quota allows fails the worker leg with
+`invalid_input` and guidance to await smaller batches. Catching the immediate
+JavaScript error does not admit a partial batch: no new calls from that
+synchronous frontier are dispatched. Earlier worker legs may already have run
+tools; inspect their effects rather than replaying the cell. Queueing does not
+raise memory, snapshot, time, or headless total tool-call limits, or bypass
+cancellation and policy checks.
 
 ## Run and snapshot lifecycle
 
@@ -1315,6 +1391,15 @@ Telemetry must not include secrets, raw environment values, or unredacted
 tool inputs beyond existing OpenClaw trajectory policy.
 
 ## Debugging
+
+JavaScript failure frames labeled `openclaw-code-mode:user.js` use line numbers
+from the submitted code, excluding internal wrappers and headless setup. For
+TypeScript, compiler diagnostics labeled `openclaw-code-mode:user.ts` refer to
+the submitted TypeScript; runtime frames labeled `openclaw-code-mode:generated.js`
+refer to the transformed JavaScript. Internal wrapper and controller frames are
+omitted from new cells' failures; error messages still share the existing output
+budget. Resumed older snapshots without location metadata retain their previous
+stack format.
 
 Use targeted model transport logging when code mode behaves differently from
 a normal tool run:

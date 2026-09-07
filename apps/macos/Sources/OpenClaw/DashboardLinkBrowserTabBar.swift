@@ -125,11 +125,11 @@ final class DashboardLinkBrowserTabBar: NSView {
             self.scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
             self.scrollView.topAnchor.constraint(equalTo: topAnchor),
             self.scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            // The document keeps its natural size: capped tabs must not pin the
+            // browser width, and hiding the viewport must not collapse tab contents.
             self.stackView.leadingAnchor.constraint(equalTo: self.scrollView.contentView.leadingAnchor),
             self.stackView.topAnchor.constraint(equalTo: self.scrollView.contentView.topAnchor),
-            self.stackView.bottomAnchor.constraint(equalTo: self.scrollView.contentView.bottomAnchor),
-            self.stackView.heightAnchor.constraint(equalTo: self.scrollView.contentView.heightAnchor),
-            self.stackView.trailingAnchor.constraint(greaterThanOrEqualTo: self.scrollView.contentView.trailingAnchor),
+            self.stackView.heightAnchor.constraint(equalToConstant: DashboardWindowLayout.linkBrowserTabBarHeight),
             separator.leadingAnchor.constraint(equalTo: leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: trailingAnchor),
             separator.bottomAnchor.constraint(equalTo: bottomAnchor),

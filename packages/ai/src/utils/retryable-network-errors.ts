@@ -6,6 +6,8 @@ import {
 // Keep transient network policy aligned across retries and process-level handling.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
+export const WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE = "ERR_WEBSOCKET_NON_RETRYABLE_CLOSE";
+
 const TRANSIENT_NETWORK_CODES = new Set([
   "ECONNRESET",
   "ECONNREFUSED",
@@ -29,6 +31,7 @@ const TRANSIENT_NETWORK_CODES = new Set([
   "EPROTO",
   "ERR_SSL_WRONG_VERSION_NUMBER",
   "ERR_SSL_PROTOCOL_RETURNED_AN_ERROR",
+  "ERR_WEBSOCKET_TRANSPORT",
 ]);
 
 const TRANSIENT_NETWORK_ERROR_NAMES = new Set([
@@ -79,7 +82,16 @@ export function isTransientNetworkError(err: unknown): boolean {
   if (!err) {
     return false;
   }
-  for (const candidate of collectNestedErrorCandidates(err)) {
+  const candidates = collectNestedErrorCandidates(err);
+  if (
+    candidates.some(
+      (candidate) =>
+        extractErrorCodeOrErrno(candidate) === WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE,
+    )
+  ) {
+    return false;
+  }
+  for (const candidate of candidates) {
     const code = extractErrorCodeOrErrno(candidate);
     if (code && TRANSIENT_NETWORK_CODES.has(code)) {
       return true;

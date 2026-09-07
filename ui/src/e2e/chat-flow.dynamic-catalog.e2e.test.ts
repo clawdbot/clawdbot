@@ -8,6 +8,7 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const rosterMatch = { includeGlobal: true };
 let dynamicCatalogProofDir: string | null;
 beforeEach(() => {
   dynamicCatalogProofDir =
@@ -117,7 +118,7 @@ suite.define(() => {
 
       await page.keyboard.press("Escape");
       await gateway.setMethodResponse("sessions.list", sessionResponse(discoveredLevels, 65_536));
-      const sessionListCount = (await gateway.getRequests("sessions.list")).length;
+      const sessionListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       await modelSelect.click();
       const modelsRequest = await gateway.waitForRequest("models.list");
       expect(modelsRequest.params).toEqual({
@@ -127,6 +128,7 @@ suite.define(() => {
       });
       const refreshedSessionsRequest = await gateway.waitForRequest("sessions.list", {
         after: sessionListCount,
+        match: rosterMatch,
       });
       expect(refreshedSessionsRequest.params).toMatchObject({ agentId: "main" });
       const modelOption = main.locator(

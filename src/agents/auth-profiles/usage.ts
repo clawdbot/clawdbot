@@ -18,10 +18,8 @@ import { readProviderJsonResponse } from "../provider-http-errors.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { notifyAuthProfileFailureHook, setAuthProfileFailureHook } from "./failure-hook.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
-import {
-  resolvePersistedAuthProfileOwnerAgentDir,
-  updateAuthProfileStoreWithLock,
-} from "./store.js";
+import { updateAuthProfileStoreWithLock } from "./store-runtime.js";
+import { resolvePersistedAuthProfileOwnerAgentDir } from "./store.js";
 import type {
   AuthProfileBlockedSource,
   AuthProfileCooldownClassification,
@@ -34,6 +32,8 @@ import {
   isActiveUnusableWindow,
   isAuthCooldownBypassedForProvider,
   isModelScopedCooldownReason,
+  resetAuthProfileFailureState,
+  resolveInlineProviderApiKeyUsageId,
   resolveProfileUnusableUntil,
 } from "./usage-state.js";
 
@@ -42,6 +42,7 @@ export {
   clearExpiredCooldowns,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
+  resolveInlineProviderApiKeyUsageId,
 } from "./usage-state.js";
 
 const authProfileUsageDeps = {
@@ -103,12 +104,6 @@ async function updateOwnedAuthProfileUsage(
     store.usageStats = { ...store.usageStats, [profileId]: usage };
   }
   return updated;
-}
-
-const INLINE_API_KEY_USAGE_ID_PREFIX = "inline-api-key:";
-
-export function resolveInlineProviderApiKeyUsageId(provider: string): string {
-  return `${INLINE_API_KEY_USAGE_ID_PREFIX}${normalizeProviderId(provider)}`;
 }
 
 const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
@@ -780,15 +775,16 @@ const DISABLED_FAILURE_BACKOFF_POLICIES = {
     maxMs: (cfg) => cfg.billingMaxMs,
   },
   auth_permanent: {
-    // Keep high-confidence permanent-auth failures in the disabled lane, but
-    // recover much sooner than billing because some providers surface
-    // auth-looking payloads transiently during incidents.
+    // Recover quickly because some providers surface auth-looking payloads
+    // transiently during incidents.
     baseMs: (cfg) => cfg.authPermanentBackoffMs,
     maxMs: (cfg) => cfg.authPermanentMaxMs,
   },
 } as const satisfies Record<DisabledFailureReason, DisabledFailureBackoffPolicy>;
 
-const DEFAULT_BILLING_BACKOFF_HOURS = 5;
+// Keep the initial billing disable short so inline API keys can retry soon
+// after recharge, even though they cannot probe during an active window.
+const DEFAULT_BILLING_BACKOFF_MINUTES = 10;
 const DEFAULT_BILLING_MAX_HOURS = 24;
 const DEFAULT_AUTH_PERMANENT_BACKOFF_MINUTES = 10;
 const DEFAULT_AUTH_PERMANENT_MAX_MINUTES = 60;
@@ -796,7 +792,7 @@ const DEFAULT_FAILURE_WINDOW_HOURS = 24;
 
 function resolveAuthCooldownConfig(): ResolvedAuthCooldownConfig {
   return {
-    billingBackoffMs: DEFAULT_BILLING_BACKOFF_HOURS * 60 * 60 * 1000,
+    billingBackoffMs: DEFAULT_BILLING_BACKOFF_MINUTES * 60 * 1000,
     billingMaxMs: DEFAULT_BILLING_MAX_HOURS * 60 * 60 * 1000,
     authPermanentBackoffMs: DEFAULT_AUTH_PERMANENT_BACKOFF_MINUTES * 60 * 1000,
     authPermanentMaxMs: DEFAULT_AUTH_PERMANENT_MAX_MINUTES * 60 * 1000,
@@ -846,43 +842,6 @@ export function resolveProfileUnusableUntilForDisplay(
   return resolveProfileUnusableUntil(stats);
 }
 
-export function resolveInlineProviderApiKeyUnusableUntil(
-  store: AuthProfileStore,
-  provider: string,
-): number | null {
-  if (isAuthCooldownBypassedForProvider(provider)) {
-    return null;
-  }
-  const stats = store.usageStats?.[resolveInlineProviderApiKeyUsageId(provider)];
-  if (!stats) {
-    return null;
-  }
-  return resolveProfileUnusableUntil(stats);
-}
-
-function resetUsageStats(
-  existing: ProfileUsageStats | undefined,
-  overrides?: Partial<ProfileUsageStats>,
-): ProfileUsageStats {
-  return {
-    ...existing,
-    errorCount: 0,
-    blockedUntil: undefined,
-    blockedReason: undefined,
-    blockedSource: undefined,
-    blockedModel: undefined,
-    blockedScope: undefined,
-    cooldownUntil: undefined,
-    cooldownReason: undefined,
-    cooldownClassification: undefined,
-    cooldownModel: undefined,
-    disabledUntil: undefined,
-    disabledReason: undefined,
-    failureCounts: undefined,
-    ...overrides,
-  };
-}
-
 function updateUsageStatsEntry(
   store: AuthProfileStore,
   profileId: string,
@@ -892,9 +851,9 @@ function updateUsageStatsEntry(
   store.usageStats[profileId] = updater(store.usageStats[profileId]);
 }
 
-function notifyAuthProfileFailureSafely(): void {
+function notifyAuthProfileFailureSafely(reason: AuthProfileFailureReason): void {
   try {
-    notifyAuthProfileFailureHook();
+    notifyAuthProfileFailureHook(reason);
   } catch (err) {
     // Hook errors must not break failure recording; log and continue.
     authProfileUsageLog.warn("auth profile failure hook threw", {
@@ -1127,7 +1086,7 @@ export async function markAuthProfileFailure(params: {
         now: updateTime,
       });
     }
-    notifyAuthProfileFailureSafely();
+    notifyAuthProfileFailureSafely(reason);
     return;
   }
   if (updated === null) {
@@ -1294,7 +1253,7 @@ export async function markInlineProviderApiKeyFailure(params: {
         now: updateTime,
       });
     }
-    notifyAuthProfileFailureSafely();
+    notifyAuthProfileFailureSafely(reason);
     return;
   }
   if (updated === null) {
@@ -1335,11 +1294,12 @@ export async function clearAuthProfileCooldown(params: {
   const updated = await updateOwnedAuthProfileUsage(store, profileId, {
     agentDir,
     updater: (freshStore) => {
-      if (!freshStore.usageStats?.[profileId]) {
+      const existing = freshStore.usageStats?.[profileId];
+      if (!existing) {
         return false;
       }
 
-      updateUsageStatsEntry(freshStore, profileId, (existing) => resetUsageStats(existing));
+      updateUsageStatsEntry(freshStore, profileId, () => resetAuthProfileFailureState(existing));
       return true;
     },
   });

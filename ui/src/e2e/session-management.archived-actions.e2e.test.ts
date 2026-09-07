@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   activateSelfRemovingControl,
   captureUiProof,
@@ -189,7 +190,9 @@ suite.define(() => {
               ),
           ).toBe(true);
         }
-        await captureUiProof(suite, page, `archived-actions-${viewport.label}.png`);
+        await captureUiProof(suite, page, `archived-actions-${viewport.label}.png`, menu, [
+          actions.first(),
+        ]);
         expect(
           await page.evaluate(() => {
             const portal = document.querySelector<HTMLElement>(".chat-reply-context-menu");
@@ -236,11 +239,7 @@ suite.define(() => {
   }
 
   it("shows the archived notice when an archived session is cold-loaded outside the active list", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const archived = sessionRow(
       "agent:main:dashboard:cold-archive",

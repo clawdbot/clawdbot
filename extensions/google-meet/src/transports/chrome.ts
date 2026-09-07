@@ -210,43 +210,14 @@ export async function launchChromeMeet(params: {
 
   await checkRealtimeAudioPrerequisites();
 
-  if (!params.config.chrome.launch) {
-    const recovered = await recoverMeetingBrowserTab({
-      adapter: GOOGLE_MEET_PLATFORM_ADAPTER,
-      allowSessionAdoption: true,
-      autoJoin: params.config.chrome.autoJoin,
-      callBrowser: await resolveLocalMeetingBrowserRequest(params.runtime),
-      captureCaptions: shouldCaptureCaptions(params.mode, params.fullConfig),
-      config: params.config.chrome,
-      locationLabel: "in local Chrome",
-      meetingSessionId: params.meetingSessionId,
-      mode: params.mode,
-      requestedMeetingUrl: params.url,
-      trackedMeetingUrl: params.url,
-      trackedTargetId: undefined,
-    });
-    const audioBridge = MeetingPlatformAdapter.isRealtimeRouteReady(params.mode, recovered.browser)
-      ? await startRealtimeAudioBridge()
-      : undefined;
-    return {
-      launched: false,
-      audioBackend: audio?.backend,
-      audioBridge,
-      browser: recovered.browser,
-      tab: recovered.targetId ? { targetId: recovered.targetId, openedByPlugin: false } : undefined,
-    };
-  }
-
-  const result = await openMeetingWithBrowser({
-    adapter: GOOGLE_MEET_PLATFORM_ADAPTER,
+  const result = await openOrRecoverMeetWithBrowser({
     callBrowser: await resolveLocalMeetingBrowserRequest(params.runtime),
-    config: params.config.chrome,
-    session: {
-      captureCaptions: shouldCaptureCaptions(params.mode, params.fullConfig),
-      meetingSessionId: params.meetingSessionId,
-      mode: params.mode,
-      url: params.url,
-    },
+    config: params.config,
+    captureCaptions: shouldCaptureCaptions(params.mode, params.fullConfig),
+    locationLabel: "in local Chrome",
+    meetingSessionId: params.meetingSessionId,
+    mode: params.mode,
+    url: params.url,
   });
   const shouldStartRealtimeBridge = MeetingPlatformAdapter.isRealtimeRouteReady(
     params.mode,
@@ -366,33 +337,24 @@ export async function readChromeMeetTranscript(
   });
 }
 
-async function openMeetWithBrowserProxy(params: {
-  runtime: PluginRuntime;
-  nodeId: string;
+async function openOrRecoverMeetWithBrowser(params: {
+  callBrowser: MeetingBrowserRequestCaller;
+  locationLabel: string;
   config: GoogleMeetConfig;
   captureCaptions: boolean;
   mode: GoogleMeetMode;
   meetingSessionId: string;
   url: string;
 }): Promise<{ launched: boolean; browser?: GoogleMeetChromeHealth; tab?: GoogleMeetBrowserTab }> {
-  const callBrowser: MeetingBrowserRequestCaller = async (request) =>
-    await callBrowserProxyOnNode({
-      runtime: params.runtime,
-      nodeId: params.nodeId,
-      method: request.method,
-      path: request.path,
-      body: request.body,
-      timeoutMs: request.timeoutMs,
-    });
   if (!params.config.chrome.launch) {
     const recovered = await recoverMeetingBrowserTab({
       adapter: GOOGLE_MEET_PLATFORM_ADAPTER,
       allowSessionAdoption: true,
       autoJoin: params.config.chrome.autoJoin,
-      callBrowser,
+      callBrowser: params.callBrowser,
       captureCaptions: params.captureCaptions,
       config: params.config.chrome,
-      locationLabel: "on the selected Chrome node",
+      locationLabel: params.locationLabel,
       meetingSessionId: params.meetingSessionId,
       mode: params.mode,
       requestedMeetingUrl: params.url,
@@ -407,7 +369,7 @@ async function openMeetWithBrowserProxy(params: {
   }
   return await openMeetingWithBrowser({
     adapter: GOOGLE_MEET_PLATFORM_ADAPTER,
-    callBrowser,
+    callBrowser: params.callBrowser,
     config: params.config.chrome,
     session: {
       captureCaptions: params.captureCaptions,
@@ -533,9 +495,9 @@ export async function launchChromeMeetOnNode(params: {
         }),
       )
     : undefined;
-  const browserControl = await openMeetWithBrowserProxy({
-    runtime: params.runtime,
-    nodeId,
+  const browserControl = await openOrRecoverMeetWithBrowser({
+    callBrowser: chromeNodeBrowserRequest(params.runtime, nodeId),
+    locationLabel: "on the selected Chrome node",
     config: params.config,
     captureCaptions: shouldCaptureCaptions(params.mode, params.fullConfig),
     mode: params.mode,

@@ -176,6 +176,8 @@ function markGoogleTurnOrderingMarker(sessionState: ProviderReplaySessionState):
 /** @deprecated Google provider replay helper; prefer provider-local replay hooks. */
 export function buildGoogleGeminiReplayPolicy(): ProviderReplayPolicy {
   return {
+    // Managed explicit caching projects the current volatile system suffix here.
+    appendOnlyRuntimeContext: false,
     sanitizeMode: "full",
     sanitizeToolCallIds: true,
     toolCallIdMode: "strict",

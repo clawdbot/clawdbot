@@ -190,6 +190,7 @@ async function runWithModelFallbackInternal<T>(
       })
     : null;
   const attempts: FallbackAttempt[] = [];
+  const profileIdsByCandidate = new Map<ModelFallbackCandidate, string[]>();
   let lastError: unknown;
   let latestClassifiedResult: ModelFallbackClassifiedResult<T> | undefined;
   let exhaustionResult: ModelFallbackExhaustionResult<T> | undefined;
@@ -332,6 +333,7 @@ async function runWithModelFallbackInternal<T>(
                 ...orderedProfileIds.filter((profileId) => profileId !== userLockedAuthProfileId),
               ]
             : orderedProfileIds;
+        profileIdsByCandidate.set(candidate, candidateAuthProfileIds);
         authRuntime.maybeReprobeWhamBlockedProfiles({
           store: authStore,
           profileIds: candidateAuthProfileIds,
@@ -421,7 +423,6 @@ async function runWithModelFallbackInternal<T>(
 
           // Only record terminal session suspension when no remaining candidate
           // can serve the turn. Provider cooldown state prevents repeat probes.
-          const hasRemainingCandidates = hasRemainingCandidate;
           if (params.sessionId) {
             emitFailoverEvent({
               sessionId: params.sessionId,
@@ -429,9 +430,9 @@ async function runWithModelFallbackInternal<T>(
               fromProvider: candidate.provider,
               fromModel: candidate.model,
               reason: decision.reason,
-              suspended: !hasRemainingCandidates,
+              suspended: !hasRemainingCandidate,
             });
-            if (!hasRemainingCandidates) {
+            if (!hasRemainingCandidate) {
               deferredSuspension.pending = undefined;
               void suspendSession({
                 cfg: params.cfg,
@@ -767,10 +768,10 @@ async function runWithModelFallbackInternal<T>(
       }`,
     soonestCooldownExpiry: resolveFallbackSoonestCooldownExpiry({
       authRuntime,
-      authStore,
+      userLockedAuthProfileId,
       agentDir: params.agentDir,
       cfg: params.cfg,
-      candidates,
+      profileIdsByCandidate,
     }),
     attribution: { sessionId: params.sessionId, lane: params.lane },
     cfg: params.cfg,

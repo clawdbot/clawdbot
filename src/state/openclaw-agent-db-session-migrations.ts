@@ -14,6 +14,20 @@ import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 type MigratedConversationEntry = Record<string, unknown>;
 
+export function dropLegacySessionTranscriptSearchSchema(db: DatabaseSync): void {
+  // The pre-landing sessions_search branch tracked JSONL file watermarks and
+  // stored session_key inside the FTS table. Both are derived caches; drop
+  // them so reconcile rebuilds the row-native index shape.
+  db.exec("DROP TABLE IF EXISTS session_transcript_files;");
+  const columns = db.prepare("PRAGMA table_info(session_transcript_fts)").all();
+  if (columns.some((row) => row.name === "session_key")) {
+    db.exec(`
+      DROP TABLE IF EXISTS session_transcript_fts;
+      DROP TABLE IF EXISTS session_transcript_index_state;
+    `);
+  }
+}
+
 function parseConversationEntry(value: unknown): MigratedConversationEntry | undefined {
   return typeof value === "string" ? safeParseJsonRecord(value) : undefined;
 }

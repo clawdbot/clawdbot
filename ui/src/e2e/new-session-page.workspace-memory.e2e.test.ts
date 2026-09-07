@@ -2,6 +2,7 @@ import path from "node:path";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import {
   MOVED_WORKSPACE,
   PICKED,
@@ -99,6 +100,18 @@ async function withNewSessionPage(
   } finally {
     await context.close();
   }
+}
+
+function projectProofRecording(): BrowserContextOptions {
+  return captureUiProofEnabled
+    ? {
+        recordVideo: {
+          dir: path.join(suite.artifactDir, "project-registry"),
+          size: { height: 900, width: 1280 },
+        },
+        viewport: { height: 900, width: 1280 },
+      }
+    : {};
 }
 
 suite.define(() => {
@@ -289,9 +302,9 @@ suite.define(() => {
         .toBe(true);
       const secondShortcut = secondModel.locator('[data-chat-model-shortcut-number="2"]');
       await expect.poll(() => secondShortcut.count()).toBe(1);
-      // wa-popup updates its anchored position asynchronously. Gate the atomic
-      // baseline on that settlement. After focus, poll the same exact geometry so
-      // transient frames settle before enforcing the opacity-only no-reflow contract.
+      // Finish the picker's opening scale before recording its baseline. The top
+      // transform origin keeps the anchor gap stable while box geometry still grows.
+      await picker.locator('wa-popup [part~="popup"]').evaluate(finishElementAnimations);
       const menuGeometry = () =>
         page.evaluate(() => {
           const anchor = document.querySelector('[data-chat-model-select="true"]');
@@ -537,17 +550,8 @@ suite.define(() => {
 
   it("uses identity-scoped server recents without duplicating registered projects", async () => {
     const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      ...(captureUiProofEnabled
-        ? {
-            recordVideo: {
-              dir: path.join(suite.artifactDir, "project-registry"),
-              size: { height: 900, width: 1280 },
-            },
-            viewport: { height: 900, width: 1280 },
-          }
-        : {}),
+      ...BASE_CONTEXT,
+      ...projectProofRecording(),
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -599,7 +603,10 @@ suite.define(() => {
       const recentFolder = page.locator(`[data-value="recent:${WORKSPACE}/scratch"]`);
       await project.waitFor();
       await recentFolder.waitFor();
-      await captureProjectUiProof(suite, page, "identity-project-recents-after.png");
+      await captureProjectUiProof(suite, page, "identity-project-recents-after.png", {
+        surface: page.locator('.new-session-page__project-popover wa-popup [part="popup"]'),
+        content: [project, recentFolder],
+      });
       await project.click();
       await page.locator(".new-session-page__message").fill("continue registered work");
       await page.getByRole("button", { name: "Start session" }).click();
@@ -617,14 +624,7 @@ suite.define(() => {
     await withNewSessionPage(
       {
         ...DESKTOP_CONTEXT,
-        ...(captureUiProofEnabled
-          ? {
-              recordVideo: {
-                dir: path.join(suite.artifactDir, "project-registry"),
-                size: { height: 900, width: 1280 },
-              },
-            }
-          : {}),
+        ...projectProofRecording(),
       },
       async (page) => {
         const appUrl = new URL(suite.server.baseUrl);
@@ -716,9 +716,10 @@ suite.define(() => {
           .toBe(1);
 
         await gateway.deferNext("users.prefs.set");
-        const modelSelect = page.locator('[data-chat-model-select="true"]');
+        const newSession = page.locator("openclaw-new-session-page");
+        const modelSelect = newSession.locator('[data-chat-model-select="true"]');
         await modelSelect.click();
-        await page.locator('[data-chat-model-option="openai/gpt-5.5"]').click();
+        await newSession.locator('[data-chat-model-option="openai/gpt-5.5"]').click();
         await expect
           .poll(async () => (await gateway.getRequests("users.prefs.set")).length)
           .toBe(2);
@@ -802,9 +803,10 @@ suite.define(() => {
         .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
         .click();
       await page.keyboard.press("Escape");
-      const modelSelect = page.locator('[data-chat-model-select="true"]');
+      const newSession = page.locator("openclaw-new-session-page");
+      const modelSelect = newSession.locator('[data-chat-model-select="true"]');
       await modelSelect.click();
-      await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+      await newSession.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
 
       await navigateInApp(page, "chat");
       await waitForCommittedChatRoute(page);
@@ -892,9 +894,9 @@ suite.define(() => {
         "openclaw-next",
       );
 
-      const modelSelect = page.locator('[data-chat-model-select="true"]');
-      await modelSelect.click();
-      await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
+      const newSession = page.locator("openclaw-new-session-page");
+      await newSession.locator('[data-chat-model-select="true"]').click();
+      await newSession.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
       const storedPreference = await readMainPreference(page);
       expect(storedPreference).toMatchObject({
         workspace: MOVED_WORKSPACE,

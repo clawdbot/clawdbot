@@ -28,6 +28,60 @@ const basePlanParams: AgentToolSurfacePlanParams = {
 
 describe("resolveAgentToolSurfacePlan", () => {
   it.each([
+    { toolSearch: undefined, expected: true, expectedMode: "tools" },
+    { toolSearch: false, expected: false, expectedMode: undefined },
+    { toolSearch: { enabled: false }, expected: false, expectedMode: undefined },
+    {
+      toolSearch: { enabled: true, mode: "directory" as const },
+      expected: true,
+      expectedMode: "directory",
+    },
+  ])(
+    "honors explicit Tool Search $toolSearch over the model preference",
+    ({ toolSearch, expected, expectedMode }) => {
+      const config: OpenClawConfig = {
+        tools: { toolSearch },
+        agents: {
+          ownership: "explicit",
+          defaults: { experimental: { localModelLean: false } },
+          entries: { local: {}, hosted: {} },
+        },
+      };
+      const plan = resolveAgentToolSurfacePlan({
+        ...basePlanParams,
+        config,
+        agentId: "local",
+        model: { toolSearchMode: "tools" },
+      });
+      expect(plan.toolSearchControlsEnabled).toBe(expected);
+      if (expectedMode) {
+        expect(plan.toolSearchConfig.mode).toBe(expectedMode);
+      }
+      expect(config.tools?.toolSearch).toBe(toolSearch);
+    },
+  );
+
+  it("reevaluates derived Tool Search for sibling agents and fallback models without changing config", () => {
+    const config: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { local: {}, hosted: {} } },
+    };
+    const params = { ...basePlanParams, config, agentId: "local" };
+    expect(
+      resolveAgentToolSurfacePlan({ ...params, model: { toolSearchMode: "tools" } })
+        .toolSearchControlsEnabled,
+    ).toBe(true);
+    expect(
+      resolveAgentToolSurfacePlan({ ...params, model: { toolSearchMode: false } })
+        .toolSearchControlsEnabled,
+    ).toBe(false);
+    expect(
+      resolveAgentToolSurfacePlan({ ...params, agentId: "hosted", model: {} })
+        .toolSearchControlsEnabled,
+    ).toBe(false);
+    expect(config.tools).toBeUndefined();
+    expect(config.agents?.defaults).toBeUndefined();
+  });
+  it.each([
     { codeModeOverride: false, modelOverride: true, expected: false },
     { codeModeOverride: true, modelOverride: false, expected: true },
     { codeModeOverride: "auto", modelOverride: false, expected: true },
@@ -138,11 +192,17 @@ describe("resolveAgentToolSurfacePlan", () => {
       config: { tools: { codeMode: false, toolSearch: true } },
       forceCodeModeControls: true,
     },
+    {
+      name: "automatic model Tool Search",
+      config: {},
+      model: { toolSearchMode: "tools" },
+    },
   ] satisfies Array<{
     name: string;
     config: OpenClawConfig;
     toolsAllow?: string[];
     forceCodeModeControls?: boolean;
+    model?: { toolSearchMode: "tools" };
   }>)("does not add $name controls to a completion-private message-only run", (run) => {
     const plan = resolveAgentToolSurfacePlan({
       ...basePlanParams,
@@ -150,6 +210,7 @@ describe("resolveAgentToolSurfacePlan", () => {
       forceDirectMessageTool: true,
       toolsAllow: run.toolsAllow ?? ["message"],
       forceCodeModeControls: run.forceCodeModeControls,
+      model: run.model,
     });
     const result = applyAgentToolSurfaceCatalog({
       tools: [createStubTool("message")],

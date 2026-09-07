@@ -17,10 +17,6 @@ import {
   resolveCanonicalInstallTarget,
 } from "../infra/install-target.js";
 import { readJson } from "../infra/json-files.js";
-import {
-  finalizeNpmSpecArchiveInstall,
-  installFromNpmSpecArchiveWithInstaller,
-} from "../infra/npm-pack-install.js";
 import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { resolveCompatibilityHostVersion, resolveRuntimeServiceVersion } from "../version.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
@@ -48,9 +44,7 @@ export {
   detectBundleManifestFormat,
   ensureInstallTargetAvailable,
   pathExists as fileExists,
-  finalizeNpmSpecArchiveInstall,
   getPackageManifestMetadata,
-  installFromNpmSpecArchiveWithInstaller,
   installPackageDir,
   isPathInside,
   loadBundleManifest,

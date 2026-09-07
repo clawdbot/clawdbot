@@ -16,13 +16,14 @@ const saveIndicator = () => ({
   applying: false,
   applyDisabled: false,
   onRetry: vi.fn(),
+  onSave: vi.fn(),
   onReload: vi.fn(),
   onApply: vi.fn(),
 });
 
 const inactiveRefresh = {
   refreshRequired: false,
-  onRefresh: () => undefined,
+  onRefresh: async () => false,
 };
 
 beforeEach(async () => {
@@ -38,6 +39,41 @@ afterEach(async () => {
 });
 
 describe("settings sidebar search", () => {
+  it("keeps save recovery available in the embedded page header", async () => {
+    const onRetry = vi.fn();
+    render(
+      renderSettingsSidebar({
+        presentation: "embed-page",
+        basePath: "",
+        activeRouteId: "appearance",
+        offline: false,
+        lastError: null,
+        gatewayVersion: "",
+        updateAvailable: null,
+        updateBusy: false,
+        onUpdate: vi.fn(),
+        ...inactiveRefresh,
+        searchQuery: "",
+        onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
+        onNavigate: vi.fn(),
+        onSearchQueryChange: vi.fn(),
+        preloadTimers: new Map(),
+        saveIndicator: { ...saveIndicator(), status: "error", lastError: "Save failed", onRetry },
+      }),
+      container,
+    );
+    expect(container.querySelector(".settings-sidebar")).toBeNull();
+    await vi.waitFor(() => {
+      const retry = container.querySelector<HTMLButtonElement>(
+        ".native-embed-header .settings-save-indicator__action",
+      );
+      expect(retry?.textContent?.trim()).toBe("Retry");
+    });
+    container.querySelector<HTMLButtonElement>(".settings-save-indicator__action")!.click();
+    expect(onRetry).toHaveBeenCalledOnce();
+  });
+
   it("keeps Models selected while its setup flow is open", () => {
     render(
       renderSettingsSidebar({
@@ -575,7 +611,15 @@ describe("settings sidebar search", () => {
     expect(container.querySelector(".sidebar-footer-bar__status")).toBeNull();
     expect(container.querySelector("openclaw-settings-save-indicator")).not.toBeNull();
 
+    // A Gateway-confirmed suspension outranks the ordinary offline pill while reconnecting.
     renderSidebar(true, "connection refused?token=settings-secret", 3, false, "prepared");
+    expect(container.querySelector(".sidebar-footer-bar__status--suspended")?.textContent).toBe(
+      "Suspended",
+    );
+    expect(container.querySelector("button.sidebar-footer-bar__status")).toBeNull();
+    expect(container.querySelector("openclaw-settings-save-indicator")).toBeNull();
+
+    renderSidebar(true, "connection refused?token=settings-secret", 3);
     expect(container.querySelector("openclaw-settings-save-indicator")).toBeNull();
     const button = container.querySelector<HTMLButtonElement>(".sidebar-footer-bar__status");
     expect(button?.hasAttribute("title")).toBe(false);

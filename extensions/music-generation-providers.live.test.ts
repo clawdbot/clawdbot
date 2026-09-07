@@ -31,7 +31,7 @@ import {
   resolveConfiguredLiveMusicModels,
   resolveLiveMusicAuthStore,
 } from "openclaw/plugin-sdk/test-media-generation";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import falPlugin from "./fal/index.js";
 import googlePlugin from "./google/index.js";
 import minimaxPlugin from "./minimax/index.js";
@@ -137,6 +137,7 @@ function expectMusicLiveSweepPassed(params: {
   attempted: string[];
   failures: string[];
   providerFilter: Set<string> | null;
+  skip: (note: string) => void;
   skipped: string[];
 }): void {
   if (params.attempted.length === 0) {
@@ -146,7 +147,9 @@ function expectMusicLiveSweepPassed(params: {
         `[live:music-generation] requested provider filter produced no live attempts: ${formatProviderFilter(params.providerFilter)}; skipped=${params.skipped.join(", ") || "none"}`,
       );
     }
-    console.warn("[live:music-generation] no provider had usable auth; skipping assertions");
+    params.skip(
+      `[live:music-generation] no live music attempt completed; skipped=${params.skipped.join(", ") || "none"}`,
+    );
     return;
   }
   expect(params.failures).toStrictEqual([]);
@@ -195,7 +198,7 @@ function resolveLiveMusicSkipReason(providerId: string, error: unknown): string 
 describeLive("music generation provider live", () => {
   it(
     "covers generate plus declared edit paths with shell/profile auth",
-    async () => {
+    async ({ skip }) => {
       const cfg = withPluginsEnabled(await readLiveTestConfig());
       const configuredModels = resolveConfiguredLiveMusicModels(cfg);
       const agentDir = resolveDefaultAgentDir(cfg as never);
@@ -325,21 +328,40 @@ describeLive("music generation provider live", () => {
         `[live:music-generation] attempted=${attempted.join(", ") || "none"} skipped=${skipped.join(", ") || "none"} failures=${failures.join(" | ") || "none"} shellEnv=${getShellEnvAppliedKeys().join(", ") || "none"}`,
       );
 
-      expectMusicLiveSweepPassed({ attempted, failures, providerFilter, skipped });
+      expectMusicLiveSweepPassed({ attempted, failures, providerFilter, skip, skipped });
     },
     10 * 60_000,
   );
 });
 
 describe("music generation live provider filter coverage", () => {
+  it("skips unfiltered sweeps when no provider is attempted", () => {
+    const skip = vi.fn();
+    expect(() =>
+      expectMusicLiveSweepPassed({
+        attempted: [],
+        failures: [],
+        providerFilter: null,
+        skip,
+        skipped: ["minimax: no usable auth", "google: no model configured"],
+      }),
+    ).not.toThrow();
+    expect(skip).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("minimax: no usable auth, google: no model configured"),
+    );
+  });
+
   it("fails filtered sweeps when no requested provider is attempted", () => {
+    const skip = vi.fn();
     expect(() =>
       expectMusicLiveSweepPassed({
         attempted: [],
         failures: [],
         providerFilter: new Set(["minimax"]),
+        skip,
         skipped: ["minimax: no usable auth"],
       }),
     ).toThrow(/requested provider filter produced no live attempts: minimax/u);
+    expect(skip).not.toHaveBeenCalled();
   });
 });

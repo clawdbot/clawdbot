@@ -2,10 +2,10 @@
 import {
   defineLegacyConfigMigration,
   getRecord,
-  mergeMissing,
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
+import { mergeMissing } from "../../../config/merge-missing.js";
 import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
 import { visitAgentEntries } from "./legacy-config-record-shared.js";
 

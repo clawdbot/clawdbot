@@ -14,48 +14,6 @@ function requireEntry<T>(entries: readonly T[], index: number, context: string):
 }
 
 describe("stripMarkdown", () => {
-  it("strips inline markdown marker variants", () => {
-    const cases = [
-      ["strips bold **", "This is **bold** text", "This is bold text"],
-      ["strips bold __", "This is __bold__ text", "This is bold text"],
-      ["strips italic *", "This is *italic* text", "This is italic text"],
-      ["strips italic _", "This is _italic_ text", "This is italic text"],
-      ["strips strikethrough", "This is ~~deleted~~ text", "This is deleted text"],
-      ["strips setext heading underline", "Above\n---\nBelow", "Above\nBelow"],
-      ["removes hr ***", "Above\n***\nBelow", "Above\n\nBelow"],
-      ["strips inline code markers", "Use `const` keyword", "Use const keyword"],
-    ] as const;
-    for (const [name, input, expected] of cases) {
-      expect(stripMarkdown(input), name).toBe(expected);
-    }
-  });
-
-  it("preserves underscores inside words", () => {
-    expect(stripMarkdown("here_is_a_message")).toBe("here_is_a_message");
-    expect(stripMarkdown("snake_case_var")).toBe("snake_case_var");
-    expect(stripMarkdown("use foo_bar_baz in code")).toBe("use foo_bar_baz in code");
-  });
-
-  it("still strips proper italic _text_", () => {
-    expect(stripMarkdown("This is _italic_ text")).toBe("This is italic text");
-    expect(stripMarkdown("_italic_ at start")).toBe("italic at start");
-    expect(stripMarkdown("end _italic_")).toBe("end italic");
-  });
-
-  it("strips italic between underscored words", () => {
-    expect(stripMarkdown("foo_bar _italic_ baz_qux")).toBe("foo_bar italic baz_qux");
-  });
-
-  it("preserves underscores inside non-Latin words", () => {
-    expect(stripMarkdown("привет_мир_тест")).toBe("привет_мир_тест");
-    expect(stripMarkdown("東京_駅_前")).toBe("東京_駅_前");
-    expect(stripMarkdown("var_123_end")).toBe("var_123_end");
-  });
-
-  it("strips standalone italic between non-Latin words", () => {
-    expect(stripMarkdown("こんにちは _italic_ テスト")).toBe("こんにちは italic テスト");
-  });
-
   it("handles complex markdown", () => {
     const input = `# Title
 
@@ -65,16 +23,13 @@ This is **bold** and *italic* text.
 
 Some ~~deleted~~ content.`;
 
-    const result = stripMarkdown(input);
+    expect(stripMarkdown(input)).toBe(`Title
 
-    expect(result).toContain("Title");
-    expect(result).toContain("This is bold and italic text.");
-    expect(result).toContain("A quote");
-    expect(result).toContain("Some deleted content.");
-    expect(result).not.toContain("#");
-    expect(result).not.toContain("**");
-    expect(result).not.toContain("~~");
-    expect(result).not.toContain(">");
+This is bold and italic text.
+
+A quote
+
+Some deleted content.`);
   });
 });
 

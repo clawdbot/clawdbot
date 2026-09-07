@@ -22,14 +22,12 @@ import {
   resolveUsableAgentCredentialModes,
 } from "./agent-auth-credentials.js";
 import { resolveAmbientAgentCredentialsForDiscovery } from "./agent-auth-discovery.js";
-import { overlayExternalAuthProfiles } from "./auth-profiles/external-auth.js";
+import { overlayExternalAuthProfiles } from "./auth-profiles/external-auth-runtime.js";
 import { listExternalCliSyncProviderIds } from "./auth-profiles/external-cli-sync.js";
 import { mergeRuntimeExternalProfileReferences } from "./auth-profiles/runtime-external-profile-references.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
-import {
-  loadAuthProfileStoreWithoutExternalProfiles,
-  preserveResolvedSecretBackedCredentials,
-} from "./auth-profiles/store.js";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store-runtime.js";
+import { preserveResolvedSecretBackedCredentials } from "./auth-profiles/store.js";
 import { resolveImplicitProviderDiscoveryScope } from "./models-config.providers.discovery-scope.js";
 import {
   fingerprintPreparedModelCatalogGeneration,
@@ -285,7 +283,11 @@ export async function runPreparedModelCatalogWorkerRequest(
         value.preferBuiltPluginArtifacts,
       );
       pluginGenerationScope.pluginRegistry = catalogRegistry;
-      catalogGeneration = Object.freeze({ ...catalogGeneration, pluginRegistry: catalogRegistry });
+      catalogGeneration = Object.freeze({
+        ...catalogGeneration,
+        pluginRegistry: catalogRegistry,
+        providerStaticModels: undefined,
+      });
     }
     const source = await prepareAgentCatalogSource(
       exactAgentFacts,
@@ -297,18 +299,23 @@ export async function runPreparedModelCatalogWorkerRequest(
     const facts = await prepareFullCatalogFacts(exactAgentFacts, catalogGeneration, "live", source);
     // Full discovery can publish routes absent from startup config. Pair those exact rows with
     // provider-owned synthetic auth before the catalog and auth modes cross the worker boundary.
-    const catalogCredentials = resolveSyntheticCredentials(
-      [...facts.modelCatalog.entries, ...facts.modelCatalog.routeVariants]
-        .map((entry) => entry.provider)
-        .filter((provider) => !startupProviderIds.has(normalizeProviderId(provider))),
-    );
+    const catalogCredentials = {
+      ...resolveSyntheticCredentials(
+        [...facts.modelCatalog.entries, ...facts.modelCatalog.routeVariants]
+          .map((entry) => entry.provider)
+          .filter((provider) => !startupProviderIds.has(normalizeProviderId(provider))),
+      ),
+      ...credentials,
+    };
     return {
       status: "ok",
       kind: "catalog",
       generationFingerprint,
       snapshot: facts.modelCatalog,
+      configuredRuntimeModels: facts.configuredRuntimeModels,
+      credentials: catalogCredentials,
       authStore,
-      authModes: resolveUsableAgentCredentialModes({ ...catalogCredentials, ...credentials }),
+      authModes: resolveUsableAgentCredentialModes(catalogCredentials),
     };
   } catch (error) {
     return {

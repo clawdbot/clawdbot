@@ -17,7 +17,7 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
-import { ensureAuthProfileStore } from "./auth-profiles/store.js";
+import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import {
   encodePluginModelCatalogRelativePath,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
@@ -26,7 +26,10 @@ import {
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import { getPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuildBatch } from "./prepared-model-runtime.build.js";
-import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
+import type {
+  PreparedModelRuntimeOwner,
+  PreparedModelRuntimeSnapshot,
+} from "./prepared-model-runtime.types.js";
 import { writeSyntheticAuthDiscoveryFixture } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
 export const PROVIDER_ID = "worker-catalog-fixture";
@@ -179,6 +182,11 @@ module.exports = {
       id: ${JSON.stringify(PROVIDER_ID)},
       label: "Worker catalog fixture",
       auth: [],
+      resolveDynamicModel(context) {
+        if (context.modelId !== "configured-dynamic-model") return undefined;
+        const template = context.modelRegistry.find(context.provider, "sqlite-model");
+        return template && { ...template, id: context.modelId, name: "Configured dynamic model" };
+      },
       resolveExternalAuthProfiles() {
         const credentialPath = process.env[${JSON.stringify(EXTERNAL_AUTH_PATH_ENV)}];
         if (!credentialPath || !fs.existsSync(credentialPath)) {
@@ -418,7 +426,17 @@ async function expectNativeHarnessModelsPublished(params: {
   const previousRegistry = captureActivePluginRegistrySnapshot();
   setActivePluginRegistry(createEmptyPluginRegistry());
   try {
+    expect(params.snapshot.modelCatalog.entries).toContainEqual(
+      expect.objectContaining({ provider: PROVIDER_ID, id: "configured-dynamic-model" }),
+    );
     const catalog = await params.snapshot.loadFullModelCatalog?.();
+    expect(catalog?.staticEntries).toContainEqual(
+      expect.objectContaining({
+        provider: PROVIDER_ID,
+        id: "configured-dynamic-model",
+        name: "Configured dynamic model",
+      }),
+    );
     const nativeEntry = catalog?.entries.find(({ id }) => id === "account-scoped-model");
     expect(nativeEntry).toMatchObject({ provider: PROVIDER_ID, nativeRuntime: HARNESS_ID });
     if (!catalog) {
@@ -462,6 +480,17 @@ async function expectNativeHarnessModelsPublished(params: {
         available: true,
       }),
     );
+    expect(preparedModels.models).toContainEqual(
+      expect.objectContaining({
+        provider: PROVIDER_ID,
+        id: "configured-dynamic-model",
+        name: "Configured dynamic model",
+        available: false,
+      }),
+    );
+    expect(catalog.staticEntries).not.toContainEqual(
+      expect.objectContaining({ provider: PROVIDER_ID, id: "unresolved-configured-model" }),
+    );
 
     const chatMetadata = createGatewayChatMetadataRuntime({
       getConfig: () => params.config,
@@ -494,6 +523,7 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
   makeTempDir: (prefix: string) => string;
   retireAfterTest: (retire: () => void) => void;
 }): Promise<void> {
+  const inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory"> = {};
   const root = params.makeTempDir("openclaw-native-model-catalog-worker-");
   const stateDir = path.join(root, "state");
   const agentDir = path.join(stateDir, "agents", "main", "agent");
@@ -509,6 +539,8 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
         models: {
           [`${PROVIDER_ID}/sqlite-model`]: { agentRuntime: { id: HARNESS_ID } },
           [`${PROVIDER_ID}/account-scoped-model`]: { agentRuntime: { id: HARNESS_ID } },
+          [`${PROVIDER_ID}/configured-dynamic-model`]: { agentRuntime: { id: "openclaw" } },
+          [`${PROVIDER_ID}/unresolved-configured-model`]: { agentRuntime: { id: "openclaw" } },
         },
       },
     },
@@ -578,6 +610,7 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
         {
           input,
           catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
+          inventoryOwner,
           isGenerationCurrent: () => current,
           isBuildCurrent: () => current,
         },
@@ -592,4 +625,19 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
     metadataSnapshot: build.pluginGeneration.pluginMetadataSnapshot,
     snapshot: build.snapshot,
   });
+  expect(
+    inventoryOwner.catalogInventory?.catalog.entries.some(
+      (entry) => entry.id === "configured-dynamic-model",
+    ),
+  ).toBe(false);
+  expect(
+    inventoryOwner.catalogInventory?.catalog.routeVariants.some(
+      (entry) => entry.id === "configured-dynamic-model",
+    ),
+  ).toBe(false);
+  expect(
+    inventoryOwner.catalogInventory?.catalog.staticEntries?.some(
+      (entry) => entry.id === "configured-dynamic-model",
+    ),
+  ).toBe(false);
 }

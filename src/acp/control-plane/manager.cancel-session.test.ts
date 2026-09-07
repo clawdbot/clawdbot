@@ -7,6 +7,7 @@ import {
   withAcpManagerTaskStateDir,
 } from "../../../test/helpers/acp-manager-task-state.js";
 import {
+  AcpRuntimeError,
   AcpSessionManager,
   baseCfg,
   createRuntime,
@@ -16,10 +17,53 @@ import {
   installAcpSessionManagerTestLifecycle,
   mockParentedAcpSessionEntries,
   mockCallArg,
+  readySessionMeta,
 } from "./manager.test-helpers.js";
 
 describe("AcpSessionManager cancelSession", () => {
   installAcpSessionManagerTestLifecycle();
+
+  it.each(["generic", "acp"] as const)(
+    "records idle cancellation failures without losing %s error identity",
+    async (kind) => {
+      const runtimeState = createRuntime();
+      const error =
+        kind === "generic"
+          ? new Error("Cancel transport failed")
+          : new AcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "Cancel backend unavailable", {
+              detailCode: "CANCEL_UNAVAILABLE",
+            });
+      runtimeState.cancel.mockRejectedValue(error);
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      const sessionKey = "agent:codex:acp:idle-cancel";
+      hoisted.readAcpSessionEntryMock.mockReturnValue({
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: readySessionMeta(),
+      });
+
+      const cancellation = new AcpSessionManager().cancelSession({
+        cfg: baseCfg,
+        sessionKey,
+        reason: "manual-cancel",
+      });
+      if (kind === "generic") {
+        await expect(cancellation).rejects.toMatchObject({
+          code: "ACP_TURN_FAILED",
+          message: error.message,
+          cause: error,
+        });
+      } else {
+        await expect(cancellation).rejects.toBe(error);
+      }
+      expect(runtimeState.cancel).toHaveBeenCalledOnce();
+      expectRecordFields(mockCallArg(runtimeState.cancel), { reason: "manual-cancel" });
+      expect(extractStatesFromUpserts().at(-1)).toBe("error");
+    },
+  );
 
   it("preempts an active turn on cancel and returns to idle state", async () => {
     await withAcpManagerTaskStateDir(async () => {

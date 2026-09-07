@@ -115,7 +115,8 @@ enum MacChatTranscriptCache {
         return self.makeContext(gatewayID: gatewayID)
     }
 
-    /// Explicit profile context for windows whose route is independent of the app-wide gateway.
+    /// Explicit profile context. Browser profiles supply their issuer-verified
+    /// account namespace so token renewal preserves data without crossing accounts.
     @MainActor
     static func makeContext(gatewayID: String) -> Context? {
         guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first

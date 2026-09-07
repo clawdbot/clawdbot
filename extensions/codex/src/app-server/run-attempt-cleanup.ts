@@ -4,6 +4,7 @@ import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
   unsubscribeCodexThreadBestEffort,
+  terminateCodexBackgroundTerminals,
 } from "./attempt-client-cleanup.js";
 import { resolveCodexAppServerClientInstanceId } from "./client.js";
 import { scheduleCodexNativeHookRelayUnregister } from "./native-hook-relay.js";
@@ -58,7 +59,16 @@ export async function cleanupCodexAttempt(
     : undefined;
   // Join late cancellation before releasing the subscription, but do not let a
   // failed terminal RPC skip resource cleanup. Surface that failure below.
-  await state.abortCleanup.catch(() => undefined);
+  if (params.oneShotCliRun) {
+    await runCleanupStep("codex-abort-cleanup", () => state.abortCleanup);
+  } else {
+    await state.abortCleanup?.catch(() => {});
+  }
+  if (params.oneShotCliRun) {
+    await runCleanupStep("codex-one-shot-terminals", () =>
+      terminateCodexBackgroundTerminals(resourceState.client, resourceState.thread.threadId, true),
+    );
+  }
   try {
     steeringQueueRef.current?.cancel();
     if (params.isFinalFallbackAttempt !== false) {
@@ -89,15 +99,16 @@ export async function cleanupCodexAttempt(
     }
     await runCleanupStep("codex-trajectory-flush", () => trajectoryRecorder?.flush());
     const retainLiveIncognitoThread =
-      (terminalState.turnSucceeded ||
+      (terminalState.settledTurnStatus === "completed" ||
         (state.permissionChangeRestart === "confirmed" && !params.abortSignal?.aborted)) &&
       isIncognitoSessionKey(params.sessionKey);
-    // Incognito uses the same generation owner but retains its creation policy
-    // without idle eviction. Native-preserved and supervised lifetimes stay separate.
+    // Incognito retains its creation policy without idle eviction; supervision stays separate.
+    // Ordinary failed turns keep loaded configuration too: native unsubscribe delays unload.
+    // Retain that configuration owner so later input can reuse the same thread.
     const retainedOrdinaryThread =
       ((retainLiveIncognitoThread &&
         resourceState.thread.liveThreadEphemeralPolicy !== undefined) ||
-        (terminalState.turnSucceeded &&
+        (terminalState.settledTurnStatus !== undefined &&
           !isIncognitoSessionKey(params.sessionKey) &&
           params.cleanupBundleMcpOnRunEnd !== true &&
           resourceState.thread.liveThreadConfigFingerprint !== undefined &&
@@ -148,6 +159,11 @@ export async function cleanupCodexAttempt(
         if (!released) {
           // Never reuse a client whose previous thread may still publish notifications.
           await closeCodexStartupClientBestEffort(resourceState.client);
+          if (params.oneShotCliRun) {
+            await runCleanupStep("codex-one-shot-unsubscribe", async () => {
+              throw new Error("Codex one-shot thread unsubscribe was not confirmed");
+            });
+          }
         }
       }
     }
@@ -157,15 +173,27 @@ export async function cleanupCodexAttempt(
     );
     await runCleanupStep("codex-turn-deadline-clear", () => deadlines.dispose());
     await runCleanupStep("codex-dynamic-tool-cleanup", async () => {
-      const cleanupReason = terminalState.turnSucceeded
-        ? "completion"
-        : state.timeout
-          ? "timeout"
-          : runAbortController.signal.aborted
-            ? "cancel"
-            : "error";
+      const cleanupReason =
+        terminalState.settledTurnStatus === "completed"
+          ? "completion"
+          : state.timeout
+            ? "timeout"
+            : runAbortController.signal.aborted
+              ? "cancel"
+              : "error";
       const cleanups = prompt.context.attemptTools.runCleanups.splice(0);
-      await Promise.allSettled(cleanups.map(async (cleanup) => await cleanup(cleanupReason)));
+      const settled = await Promise.allSettled(
+        cleanups.map(async (cleanup) => await cleanup(cleanupReason)),
+      );
+      const errors = settled.filter(
+        (result): result is PromiseRejectedResult => result.status === "rejected",
+      );
+      if (params.oneShotCliRun && errors.length) {
+        throw new AggregateError(
+          errors.map((result) => result.reason),
+          "Codex tool cleanup failed",
+        );
+      }
     });
     await runCleanupStep("codex-route-release", releaseCurrentRoute);
     await checkpointCleanup;
@@ -179,7 +207,7 @@ export async function cleanupCodexAttempt(
       if (!nativeHookRelay) {
         return;
       }
-      if (state.shouldDelayNativeHookRelayUnregister) {
+      if (state.shouldDelayNativeHookRelayUnregister && !params.oneShotCliRun) {
         // Native hook subprocesses can finish shortly after turn completion.
         scheduleCodexNativeHookRelayUnregister({
           relay: nativeHookRelay,
@@ -190,12 +218,6 @@ export async function cleanupCodexAttempt(
       }
     });
     await runCleanupStep("codex-sandbox-release", releaseSandboxExecEnvironment);
-    await runCleanupStep("codex-scoped-mcp-dispose", () =>
-      prompt.context.attemptTools.scopedMcpTools?.dispose(),
-    );
-    await runCleanupStep("codex-configured-mcp-dispose", () =>
-      prompt.context.attemptTools.configuredMcp?.dispose(),
-    );
     await runCleanupStep("codex-abort-listener-remove", () => {
       runAbortController.signal.removeEventListener("abort", abortListener);
     });

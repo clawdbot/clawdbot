@@ -48,7 +48,12 @@ type PrepareInput = Parameters<typeof prepareEmbeddedAttemptSessionRuntime>[0];
 
 function createFixture() {
   const order: string[] = [];
-  const sessionManager = { kind: "manager", getBranch: () => [] };
+  const activeMarker = { type: "custom", customType: "openclaw.cache-ttl", data: "active" };
+  const sessionManager = {
+    kind: "manager",
+    getBranch: () => [activeMarker],
+    getEntries: () => [activeMarker, { ...activeMarker, data: "sibling" }],
+  };
   const activeSession = {
     messages: [{ role: "user" }, { role: "assistant" }],
     sessionId: "active-session",
@@ -143,14 +148,23 @@ function createFixture() {
     return transport;
   });
 
-  const lifecycle = {
-    onContextGuardsInstalled: vi.fn(() => order.push("own-context-guards")),
-    onSessionCreated: vi.fn(() => order.push("own-session")),
-    onSessionManagerCreated: vi.fn(() => order.push("own-manager")),
-    onSessionSettleTrackerReady: vi.fn(() => order.push("own-settle-tracker")),
-    onSessionYieldReady: vi.fn(() => order.push("own-yield")),
-    onTrajectoryRecorderCreated: vi.fn(() => order.push("own-trajectory")),
+  const resourceEvents: Record<string, string> = {
+    session: "own-session",
+    sessionManager: "own-manager",
+    removeToolResultContextGuard: "own-context-guards",
+    buildAbortSettlePromise: "own-settle-tracker",
+    trajectoryRecorder: "own-trajectory",
   };
+  const resources = new Proxy<PrepareInput["resources"]>(
+    { trajectoryRecorder: null, buildAbortSettlePromise: () => null },
+    {
+      set: (target, key, value) => {
+        order.push(resourceEvents[String(key)]!);
+        return Reflect.set(target, key, value);
+      },
+    },
+  );
+  const onSessionYieldReady = vi.fn(() => order.push("own-yield"));
   const externalAbortController = {
     setActiveSessionAbort: vi.fn(() => order.push("arm-session-abort")),
   };
@@ -164,39 +178,41 @@ function createFixture() {
       workspaceDir: "/workspace",
     },
     agentDir: "/agent",
-    effectiveCwd: "/workspace",
-    effectiveWorkspace: "/workspace",
-    initialSystemPrompt: "initial prompt",
     isRawModelRun: false,
-    nestedToolActivities: [],
-    sessionManager: {
-      replayAllowedToolNames: new Set(["read"]),
-      resolveActiveContextEnginePluginId: vi.fn(),
+    resolveActiveContextEnginePluginId: vi.fn(),
+    setup: {
+      agentCoreThinkingLevel: "medium",
+      effectiveCwd: "/workspace",
+      effectiveWorkspace: "/workspace",
+      getCurrentAttemptPluginMetadataSnapshot: vi.fn(),
+      getProviderRuntimeHandle: vi.fn(),
+      prepStages: { mark: vi.fn() },
+      providerThinkingLevel: "medium",
       sessionAgentId: "main",
+      sandboxSessionKey: "sandbox-1",
+    },
+    toolBase: {
+      computerContextEpoch: { value: 0 },
+      localModelLeanEnabled: false,
+      codeModeControlsEnabledForRun: false,
+    },
+    toolCatalog: {
+      effectiveTools: Array.from({ length: 4 }, (_, i) => ({ name: `tool-${i}` })),
+      toolSearchRunPlan: { replayAllowedToolNames: new Set(["read"]) },
+    },
+    bundleTools: { clientTools: [], uncompactedEffectiveTools: [] },
+    systemPrompt: { systemPromptText: "initial prompt" },
+    sessionLock: {
       transcriptLifecycle: {},
       withOwnedTranscriptWrite: vi.fn(async (operation: () => unknown) => {
         order.push("owned-boundary");
         return await operation();
       }),
     },
-    agentSession: {
-      agentCoreThinkingLevel: "medium",
-      clientToolPreparation: {},
-      getCurrentAttemptPluginMetadataSnapshot: vi.fn(),
-      markStage: vi.fn(),
-      runAbortSignal: new AbortController().signal,
-    },
-    contextGuards: { computerContextEpoch: { value: 0 } },
-    trajectory: { effectiveToolCount: 4, localModelLeanEnabled: false },
-    transport: {
-      abortSignal: new AbortController().signal,
-      codeModeControlsEnabled: false,
-      getProviderRuntimeHandle: vi.fn(),
-      providerThinkingLevel: "medium",
-      sandboxSessionKey: "sandbox-1",
-    },
+    runAbortSignal: new AbortController().signal,
     externalAbortController,
-    lifecycle,
+    resources,
+    onSessionYieldReady,
   } as unknown as PrepareInput;
 
   return {
@@ -210,7 +226,8 @@ function createFixture() {
     externalAbortController,
     getUserTranscriptContexts,
     input,
-    lifecycle,
+    resources,
+    onSessionYieldReady,
     order,
     promptState,
     sessionManager,
@@ -230,6 +247,10 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
 
     const result = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
 
+    expect(mocks.restoreProjections).toHaveBeenCalledWith(
+      fixture.promptState.toolResults,
+      fixture.sessionManager.getBranch(),
+    );
     expect(fixture.order).toEqual([
       "manager",
       "own-manager",
@@ -271,7 +292,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     });
     expect(mocks.prepareSessionBoundary).toHaveBeenCalledWith(
       expect.objectContaining({
-        abortSignal: fixture.input.agentSession.runAbortSignal,
+        abortSignal: fixture.input.runAbortSignal,
         getUserTranscriptContexts: fixture.getUserTranscriptContexts,
         preparedUserTurnMessage: { role: "user", content: "hello" },
       }),
@@ -279,10 +300,8 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     expect(fixture.externalAbortController.setActiveSessionAbort).toHaveBeenCalledWith(
       fixture.abortActiveSession,
     );
-    expect(fixture.lifecycle.onSessionSettleTrackerReady).toHaveBeenCalledWith(
-      fixture.buildAbortSettlePromise,
-    );
-    expect(fixture.lifecycle.onSessionYieldReady).toHaveBeenCalledWith({
+    expect(fixture.resources.buildAbortSettlePromise).toBe(fixture.buildAbortSettlePromise);
+    expect(fixture.onSessionYieldReady).toHaveBeenCalledWith({
       abortActiveSession: fixture.abortActiveSession,
       activeSession: fixture.activeSession,
     });
@@ -309,17 +328,11 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       "transport failed",
     );
 
-    expect(fixture.lifecycle.onSessionManagerCreated).toHaveBeenCalledWith(fixture.sessionManager);
-    expect(fixture.lifecycle.onSessionCreated).toHaveBeenCalledWith(fixture.activeSession);
-    expect(fixture.lifecycle.onContextGuardsInstalled).toHaveBeenCalledWith(
-      fixture.contextGuards.remove,
-    );
-    expect(fixture.lifecycle.onSessionSettleTrackerReady).toHaveBeenCalledWith(
-      fixture.buildAbortSettlePromise,
-    );
-    expect(fixture.lifecycle.onTrajectoryRecorderCreated).toHaveBeenCalledWith(
-      fixture.trajectoryRecorder,
-    );
+    expect(fixture.resources.sessionManager).toBe(fixture.sessionManager);
+    expect(fixture.resources.session).toBe(fixture.activeSession);
+    expect(fixture.resources.removeToolResultContextGuard).toBe(fixture.contextGuards.remove);
+    expect(fixture.resources.buildAbortSettlePromise).toBe(fixture.buildAbortSettlePromise);
+    expect(fixture.resources.trajectoryRecorder).toBe(fixture.trajectoryRecorder);
   });
 
   it("settles pending user-turn persistence before reconciling the session boundary", async () => {

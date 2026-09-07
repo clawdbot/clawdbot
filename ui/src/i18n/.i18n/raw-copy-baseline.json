@@ -41,6 +41,13 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
+      "text": "login screen"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/lazy-custom-element.ts",
       "text": "terminal panel"
     },
     {
@@ -200,23 +207,9 @@
     {
       "count": 1,
       "kind": "html-attribute",
-      "name": "alt",
-      "path": "ui/src/components/login-gate.ts",
-      "text": "OpenClaw"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
       "name": "placeholder",
       "path": "ui/src/components/login-gate.ts",
-      "text": "OPENCLAW_GATEWAY_TOKEN ("
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "placeholder",
-      "path": "ui/src/components/login-gate.ts",
-      "text": "ws://127.0.0.1:18789"
+      "text": "wss://gateway.example:443"
     },
     {
       "count": 1,
@@ -464,7 +457,7 @@
       "text": "OpenClaw"
     },
     {
-      "count": 2,
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/skill-workshop/view.ts",

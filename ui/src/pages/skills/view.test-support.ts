@@ -24,6 +24,10 @@ export function createSkill(overrides: Partial<SkillStatusEntry> = {}): SkillSta
     blockedByAllowlist: false,
     blockedByAgentFilter: false,
     eligible: true,
+    platformIncompatible: false,
+    modelVisible: true,
+    userInvocable: true,
+    commandVisible: true,
     requirements: {
       anyBins: [],
       bins: [],

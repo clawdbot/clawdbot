@@ -2,6 +2,7 @@
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { VERSION_BOUND_RUNTIME_PLUGIN_IDS } from "../../commands/doctor/shared/configured-runtime-plugin-installs.js";
 import { runPostCorePluginConvergence } from "../../commands/doctor/shared/post-core-plugin-convergence.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -231,9 +232,9 @@ export async function updatePluginsAfterCoreUpdate(params: {
 
   const cohort = await convergePluginReleaseCohort({
     config: withPluginInstallRecords(params.configSnapshot.sourceConfig, pluginInstallRecords),
-    installRecords: pluginInstallRecords,
     channel: pluginUpdateChannel,
     coreVersion: coreVersion ?? undefined,
+    versionBoundPluginIds: VERSION_BOUND_RUNTIME_PLUGIN_IDS,
     timeoutMs: params.timeoutMs,
     workspaceDir: params.root,
     externalizedBundledPluginBridges: await listPersistedBundledPluginLocationBridges({

@@ -3,8 +3,8 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { resolvePromptBuildHookResult } from "../../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
-import { resolveAttemptWorkspaceSandbox } from "../../agents/embedded-agent-runner/run/attempt-setup.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
+import { resolveAttemptWorkspaceSandbox } from "../../agents/workspace-sandbox.js";
 import {
   loadSessionEntryReadOnly,
   replaceSessionEntry,

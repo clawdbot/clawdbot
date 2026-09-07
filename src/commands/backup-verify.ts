@@ -370,7 +370,6 @@ function resolveSqliteExtractionBytes(entries: SqliteSnapshotEntry[]): number {
 function assertSqliteExtractionBudget(params: {
   entries: SqliteSnapshotEntry[];
   tempRoot: string;
-  readDiskSpace?: typeof tryReadDiskSpace;
 }): void {
   const totalBytes = resolveSqliteExtractionBytes(params.entries);
   if (totalBytes > MAX_SQLITE_SNAPSHOT_EXTRACT_BYTES) {
@@ -379,7 +378,7 @@ function assertSqliteExtractionBudget(params: {
     );
   }
 
-  const diskSpace = (params.readDiskSpace ?? tryReadDiskSpace)(params.tempRoot);
+  const diskSpace = tryReadDiskSpace(params.tempRoot);
   if (
     diskSpace &&
     totalBytes + SQLITE_SNAPSHOT_FREE_SPACE_RESERVE_BYTES > diskSpace.availableBytes
@@ -640,7 +639,7 @@ async function verifyResolvedBackupArchive(archivePath: string): Promise<Prepare
     assertArchiveSymbolicLinkTarget({
       ...link,
       archiveRoot: manifest.archiveRoot,
-      assetArchivePaths: manifest.assets.map((asset) => asset.archivePath),
+      assets: manifest.assets,
     });
   }
   await verifySqliteSnapshots({ archivePath, entries, manifest });
@@ -687,7 +686,3 @@ export async function backupVerifyCommand(
   }
   return result;
 }
-
-export const testApi = {
-  assertSqliteExtractionBudget,
-};

@@ -606,7 +606,7 @@ describe("createOpenClawCodingTools", () => {
     expect(
       buildEmptyExplicitToolAllowlistError({
         sources: [{ label: "runtime toolsAllow", entries: ["automations"] }],
-        callableToolNames: allowed.map((tool) => tool.name),
+        hasCallableTools: allowed.length > 0,
         toolsEnabled: true,
       }),
     ).toBeNull();
@@ -2052,16 +2052,16 @@ describe("createOpenClawCodingTools", () => {
     expect(latestCreateOpenClawToolsOptions().agentChannel).toBe("discord");
   });
 
-  it("filters session tools for sub-agent sessions by default", () => {
+  it("gives sub-agent sessions orchestration tools by default", () => {
     const tools = createOpenClawCodingTools({
       sessionKey: "agent:main:subagent:test",
     });
     const names = new Set(tools.map((tool) => tool.name));
-    expect(names.has("sessions_list")).toBe(false);
-    expect(names.has("sessions_history")).toBe(false);
+    expect(names.has("sessions_list")).toBe(true);
+    expect(names.has("sessions_history")).toBe(true);
     expect(names.has("sessions_send")).toBe(false);
-    expect(names.has("sessions_spawn")).toBe(false);
-    expect(names.has("subagents")).toBe(false);
+    expect(names.has("sessions_spawn")).toBe(true);
+    expect(names.has("subagents")).toBe(true);
 
     expect(names.has("read")).toBe(true);
     expect(names.has("exec")).toBe(true);
@@ -3370,6 +3370,8 @@ describe("createOpenClawCodingTools read behavior", () => {
 
     expect(extractToolText(yamlResult)).toBe(`api_key: ${credential}`);
     expect(extractToolText(envResult)).not.toContain(credential);
+    expect(JSON.stringify(envResult.details)).not.toContain(credential);
+    expect(envResult.details).toEqual({ kind: "text", content: extractToolText(envResult) });
     expect(extractToolText(sourceResult)).toBe(source);
     expect(extractToolText(envrcResult)).toBe(source);
   });

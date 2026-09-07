@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { runDoctorRepairSequence } from "./repair-sequencing.js";
+import { registerSharedRuntimeReaderDoctorTests } from "./repair-sequencing.shared-runtime.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   applyPluginAutoEnable: vi.fn(),
@@ -236,13 +237,6 @@ vi.mock("./shared/exec-safe-bins.js", () => ({
   }),
 }));
 
-vi.mock("./shared/plugin-dependency-cleanup.js", () => ({
-  cleanupLegacyPluginDependencyState: async () => ({
-    changes: [],
-    warnings: [],
-  }),
-}));
-
 describe("doctor repair sequencing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -331,6 +325,8 @@ describe("doctor repair sequencing", () => {
       changes: [],
     }));
   });
+
+  registerSharedRuntimeReaderDoctorTests();
 
   it.each([
     {
@@ -814,8 +810,13 @@ describe("doctor repair sequencing", () => {
     );
   });
 
-  it("installs an external provider before validating configured model references", async () => {
+  it("installs an external provider and migrates auth before validating model references", async () => {
     let mistralInstalled = false;
+    let authMigrated = false;
+    mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockImplementationOnce(async () => {
+      authMigrated = true;
+      return { detected: [], changes: [], warnings: [] };
+    });
     mocks.repairMissingConfiguredPluginInstalls.mockImplementationOnce(async () => {
       mistralInstalled = true;
       return {
@@ -825,22 +826,27 @@ describe("doctor repair sequencing", () => {
         pluginInventoryChanged: true,
       };
     });
-    mocks.repairStaleAgentModelRefs.mockImplementationOnce((cfg: OpenClawConfig) => ({
-      config: mistralInstalled
-        ? cfg
-        : {
-            ...cfg,
-            agents: {
-              ...cfg.agents,
-              defaults: {
-                ...cfg.agents?.defaults,
-                model: { primary: "openai/gpt-5.6-sol" },
+    mocks.repairStaleAgentModelRefs.mockImplementationOnce((cfg: OpenClawConfig) => {
+      if (!authMigrated) {
+        throw new Error("model route auth requires legacy credential migration");
+      }
+      return {
+        config: mistralInstalled
+          ? cfg
+          : {
+              ...cfg,
+              agents: {
+                ...cfg.agents,
+                defaults: {
+                  ...cfg.agents?.defaults,
+                  model: { primary: "openai/gpt-5.6-sol" },
+                },
               },
             },
-          },
-      changes: mistralInstalled ? [] : ["replaced Mistral model before plugin repair"],
-      warnings: [],
-    }));
+        changes: mistralInstalled ? [] : ["replaced Mistral model before plugin repair"],
+        warnings: [],
+      };
+    });
     const config = {
       plugins: {
         allow: ["mistral"],

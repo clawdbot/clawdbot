@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw nodes` (status, pairing, invoke, camera/sc
 read_when:
   - You're managing paired nodes (cameras, screen, or the macOS widget panel)
   - You need to approve requests or invoke node commands
-title: "Nodes"
+title: "Nodes CLI"
 ---
 
 # `openclaw nodes`
@@ -32,7 +32,7 @@ summary in its `Stats` row. Load is the 1-minute average followed by CPU count,
 memory is used/total, and byte values use binary scaling with GB/TB labels.
 Unavailable load or disk readings are omitted. Offline nodes show the saved
 snapshot with an age such as `(last known 27d ago)`, measured from the snapshot's
-original timestamp. See [Node host stats](/gateway/protocol#node-host-stats).
+original timestamp. See [Node host stats](/gateway/protocol/presence#node-host-stats).
 
 `--node` accepts an exact ID, IP address, display name, or ID prefix of at least six characters. Exact ID and IP matches take precedence over names and prefixes. Within the strongest match, connected nodes take precedence. If current clients share a name, use an exact ID to disambiguate; client type does not choose the target. The legacy migration exception prefers a unique OpenClaw client only when every other tied entry is a known Clawdbot or Moldbot client.
 
@@ -49,6 +49,7 @@ openclaw nodes rename --node <id|name|ip> --name <displayName>
 These commands manage the node's approved command/capability surface on its paired-device record. Device pairing (`openclaw devices approve`) gates the node's WebSocket `connect` handshake. See [Nodes](/nodes) for how the two relate.
 
 - `remove` revokes the device's `node` role and clears its approved and pending command/capability surfaces. It disconnects the device's node-role sessions. A mixed-role device keeps its record and other roles; a node-only device record is deleted.
+- Removal stays effective even if worker cleanup reports an error: revoked node connections still close.
 - `pending` only needs `operator.pairing` scope.
 - `gateway.nodes.pairing.autoApproveCidrs` can skip the pending step for explicitly trusted, first-time `role: node` device pairing. Off by default; does not approve role upgrades.
 - `gateway.nodes.pairing.sshVerify` (on by default) auto-approves first-time `role: node` device pairing when the gateway can verify the device key over SSH to the node host; the first capability surface is approved in the same step. See [Node pairing](/gateway/pairing#ssh-verified-device-auto-approval-default).

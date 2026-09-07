@@ -245,17 +245,17 @@ describe("sanitizeForPlainText", () => {
     expect(sanitizeForPlainText("See <https://example.com/path?q=1> now")).toBe(
       "See https://example.com/path?q=1 now",
     );
-    expect(sanitizeForPlainText("<https://example.com/a.pdf|Manual>")).toBe(
-      "https://example.com/a.pdf|Manual",
-    );
   });
 
   it.each([
+    ["<https://example.com/a.pdf|Manual>", "Manual"],
+    ["<https://example.com|Docs>", "Docs"],
+    ["<mailto:support@example.com|Help>", "Help"],
     ["<https://example.com/a.pdf|User Manual>", "User Manual"],
     ["See <http://example.com/a.pdf|User Manual> now", "See User Manual now"],
     ["<mailto:support@example.com|Contact Support>", "Contact Support"],
     ["<mailto:a/b@example.com|Contact Support>", "Contact Support"],
-  ])("keeps the visible label from spaced angle links in %s", (input, expected) => {
+  ])("keeps the visible label from labeled angle links in %s", (input, expected) => {
     expect(sanitizeForPlainText(input)).toBe(expected);
   });
 
@@ -272,6 +272,8 @@ describe("sanitizeForPlainText", () => {
   it("keeps labeled angle text literal inside code", () => {
     const link = "<https://example.com/a.pdf|User Manual>";
     expect(sanitizeForPlainText(`\`${link}\` ${link}`)).toBe(`\`${link}\` User Manual`);
+    const unspaced = "<https://example.com/a.pdf|Manual>";
+    expect(sanitizeForPlainText(`\`${unspaced}\` ${unspaced}`)).toBe(`\`${unspaced}\` Manual`);
   });
 
   it("preserves angle-addr email addresses", () => {
@@ -353,6 +355,47 @@ describe("stripInternalRuntimeScaffolding", () => {
       text: example,
       channelData: { example, leaked: "" },
     });
+  });
+
+  it.each([
+    { strip: false, nullPrototype: false },
+    { strip: false, nullPrototype: true },
+    { strip: true, nullPrototype: false },
+    { strip: true, nullPrototype: true },
+  ])("preserves payload shape and identity for %j", ({ strip, nullPrototype }) => {
+    const sibling = { text: "keep" };
+    const items = [sibling];
+    items.length = 2;
+    const symbol = Symbol("metadata");
+    let reads = 0;
+    const channelData = {
+      get label() {
+        reads += 1;
+        return strip ? "visible<previous_response>internal</previous_response>" : "visible";
+      },
+      sibling,
+      items,
+      [symbol]: "metadata",
+    };
+    Object.defineProperty(channelData, "hidden", { value: "metadata" });
+    if (nullPrototype) {
+      Object.setPrototypeOf(channelData, null);
+    }
+    const payload = { text: "hello", channelData };
+
+    const result = stripInternalRuntimeScaffoldingFromPayload(payload);
+
+    expect(reads).toBe(1);
+    expect(result.channelData?.label).toBe("visible");
+    expect(result.channelData?.sibling).toBe(sibling);
+    expect(result.channelData?.items).toBe(items);
+    if (strip) {
+      expect(result).not.toBe(payload);
+      expect(Object.getPrototypeOf(result.channelData)).toBe(Object.prototype);
+      expect(Reflect.ownKeys(result.channelData!)).toEqual(["label", "sibling", "items"]);
+    } else {
+      expect(result).toBe(payload);
+    }
   });
 
   it("does not let Markdown fences bypass private runtime scaffolding removal", () => {

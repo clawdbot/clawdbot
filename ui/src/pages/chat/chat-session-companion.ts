@@ -36,7 +36,7 @@ function exchangeKey(exchange: SessionCompanionExchange): string {
   return JSON.stringify([exchange.question, exchange.answer, exchange.ts]);
 }
 
-function errorDetailCode(error: unknown): string | null {
+function errorDetailString(error: unknown, field: "code" | "reason"): string | null {
   if (!error || typeof error !== "object") {
     return null;
   }
@@ -44,20 +44,8 @@ function errorDetailCode(error: unknown): string | null {
   if (!details || typeof details !== "object") {
     return null;
   }
-  const code = (details as { code?: unknown }).code;
-  return typeof code === "string" ? code : null;
-}
-
-function errorDetailReason(error: unknown): string | null {
-  if (!error || typeof error !== "object") {
-    return null;
-  }
-  const details = (error as { details?: unknown }).details;
-  if (!details || typeof details !== "object") {
-    return null;
-  }
-  const reason = (details as { reason?: unknown }).reason;
-  return typeof reason === "string" ? reason : null;
+  const value = (details as { code?: unknown; reason?: unknown })[field];
+  return typeof value === "string" ? value : null;
 }
 
 function errorIsRetryable(error: unknown): boolean {
@@ -202,9 +190,9 @@ export class ChatSessionCompanionThreads {
       }
       thread.failedQuestion = normalized;
       thread.failedQuestionKnownExchanges = knownExchanges;
-      const reason = errorDetailReason(error);
+      const reason = errorDetailString(error, "reason");
       thread.hint =
-        errorDetailCode(error) === COMPANION_BUSY_DETAIL_CODE
+        errorDetailString(error, "code") === COMPANION_BUSY_DETAIL_CODE
           ? "busy"
           : reason === "context-unavailable"
             ? "history-unavailable"

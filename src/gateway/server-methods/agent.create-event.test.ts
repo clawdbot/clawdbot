@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import {
   forgetActiveSessionForShutdown,
   listActiveSessionsForShutdown,
@@ -106,6 +107,7 @@ describe("agent handler session create events", () => {
         },
         respond,
         context: {
+          trackExecution: trackAsyncWork,
           dedupe: new Map(),
           deps: {} as never,
           logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() } as never,

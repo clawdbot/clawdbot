@@ -15,11 +15,7 @@ import { context, diag, DiagLogLevel, metrics, propagation, trace } from "@opent
 import { logs } from "@opentelemetry/api-logs";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import { resourceFromAttributes } from "@opentelemetry/resources";
-import {
-  BasicTracerProvider,
-  InMemorySpanExporter,
-  SimpleSpanProcessor,
-} from "@opentelemetry/sdk-trace-base";
+import { BasicTracerProvider, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 import {
@@ -27,151 +23,21 @@ import {
   createDiagnosticTraceContext,
   emitTrustedDiagnosticEventWithPrivateData,
   parseDiagnosticTraceparent,
-  resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { runModelCallAndCaptureTraceparent } from "../../../test/e2e/qa-lab/runtime/otel-model-call.test-support.js";
 import { startLocalOtlpReceiver } from "../../../test/e2e/qa-lab/runtime/otel-test-support.js";
 import { createDiagnosticsOtelService } from "./service.js";
+import { installRealOtelSdkTestHarness, PRELOAD_ENV } from "./service.real-sdk.test-support.js";
 import {
   createOtelContext,
   emitRealSdkSignals,
   startOtelService,
   startOtlpReceiver,
-  stopStartedOtelServices,
 } from "./service.test-helpers.js";
 
-const PRELOAD_ENV = "OPENCLAW_OTEL_PRELOADED";
-const ENDPOINT_ENV_KEYS = [
-  "OTEL_SDK_DISABLED",
-  "OTEL_TRACES_EXPORTER",
-  "OTEL_METRICS_EXPORTER",
-  "OTEL_LOGS_EXPORTER",
-  "OTEL_EXPORTER_OTLP_ENDPOINT",
-  "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-  "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
-  "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
-  "OTEL_EXPORTER_OTLP_PROTOCOL",
-  "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
-  "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
-  "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
-  "OTEL_EXPORTER_OTLP_HEADERS",
-  "OTEL_EXPORTER_OTLP_TIMEOUT",
-  "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
-  "OTEL_EXPORTER_OTLP_CERTIFICATE",
-  "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE",
-  "OTEL_EXPORTER_OTLP_CLIENT_KEY",
-  "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE",
-  "OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE",
-  "OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY",
-  "OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE",
-  "OTEL_EXPORTER_OTLP_METRICS_CLIENT_CERTIFICATE",
-  "OTEL_EXPORTER_OTLP_METRICS_CLIENT_KEY",
-  "OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE",
-  "OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE",
-  "OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY",
-  "OTEL_LOG_LEVEL",
-] as const;
-const OTEL_GLOBAL_API_KEY = Symbol.for("opentelemetry.js.api.1");
-const OTEL_GLOBAL_LOGS_KEY = Symbol.for("io.opentelemetry.js.api.logs");
-
-type OtelGlobalRegistrations = {
-  context?: Parameters<typeof context.setGlobalContextManager>[0];
-  diag?: Parameters<typeof diag.setLogger>[0];
-  metrics?: Parameters<typeof metrics.setGlobalMeterProvider>[0];
-  propagation?: Parameters<typeof propagation.setGlobalPropagator>[0];
-  trace?: Parameters<typeof trace.setGlobalTracerProvider>[0];
-};
-
-let exporter: InMemorySpanExporter;
-let provider: BasicTracerProvider;
-let originalPreloaded: string | undefined;
-let originalEndpointEnv: Record<(typeof ENDPOINT_ENV_KEYS)[number], string | undefined>;
-let originalOtelGlobals: OtelGlobalRegistrations;
-let originalLogsProvider: ReturnType<typeof logs.getLoggerProvider> | undefined;
-
-function registeredOtelGlobals(): OtelGlobalRegistrations | undefined {
-  return (globalThis as unknown as Record<symbol, OtelGlobalRegistrations | undefined>)[
-    OTEL_GLOBAL_API_KEY
-  ];
-}
-
-beforeEach(() => {
-  originalPreloaded = process.env[PRELOAD_ENV];
-  originalEndpointEnv = Object.fromEntries(
-    ENDPOINT_ENV_KEYS.map((key) => [key, process.env[key]]),
-  ) as Record<(typeof ENDPOINT_ENV_KEYS)[number], string | undefined>;
-  for (const key of ENDPOINT_ENV_KEYS) {
-    delete process.env[key];
-  }
-  originalOtelGlobals = { ...registeredOtelGlobals() };
-  originalLogsProvider = Object.hasOwn(globalThis, OTEL_GLOBAL_LOGS_KEY)
-    ? logs.getLoggerProvider()
-    : undefined;
-  process.env[PRELOAD_ENV] = "1";
-  exporter = new InMemorySpanExporter();
-  provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
-  trace.setGlobalTracerProvider(provider);
-});
-
-afterEach(async () => {
-  await stopStartedOtelServices();
-  await provider.shutdown();
-  const currentGlobals = registeredOtelGlobals();
-  if (currentGlobals?.context !== originalOtelGlobals.context) {
-    context.disable();
-    if (originalOtelGlobals.context) {
-      context.setGlobalContextManager(originalOtelGlobals.context);
-    }
-  }
-  if (currentGlobals?.propagation !== originalOtelGlobals.propagation) {
-    propagation.disable();
-    if (originalOtelGlobals.propagation) {
-      propagation.setGlobalPropagator(originalOtelGlobals.propagation);
-    }
-  }
-  if (currentGlobals?.metrics !== originalOtelGlobals.metrics) {
-    metrics.disable();
-    if (originalOtelGlobals.metrics) {
-      metrics.setGlobalMeterProvider(originalOtelGlobals.metrics);
-    }
-  }
-  if (currentGlobals?.trace !== originalOtelGlobals.trace) {
-    trace.disable();
-    if (originalOtelGlobals.trace) {
-      trace.setGlobalTracerProvider(originalOtelGlobals.trace);
-    }
-  }
-  if (Object.hasOwn(globalThis, OTEL_GLOBAL_LOGS_KEY) || originalLogsProvider) {
-    logs.disable();
-    if (originalLogsProvider) {
-      logs.setGlobalLoggerProvider(originalLogsProvider);
-    }
-  }
-  exporter.reset();
-  if (originalPreloaded === undefined) {
-    delete process.env[PRELOAD_ENV];
-  } else {
-    process.env[PRELOAD_ENV] = originalPreloaded;
-  }
-  for (const key of ENDPOINT_ENV_KEYS) {
-    const value = originalEndpointEnv[key];
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-  diag.disable();
-  if (originalOtelGlobals.diag) {
-    diag.setLogger(originalOtelGlobals.diag, {
-      logLevel: DiagLogLevel.ALL,
-      suppressOverrideMessage: true,
-    });
-  }
-  resetDiagnosticEventsForTest();
-});
+const sdk = installRealOtelSdkTestHarness();
 
 const emit = (event: Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0]) =>
   emitTrustedDiagnosticEventWithPrivateData(event, {});
@@ -639,7 +505,7 @@ test("uses the real preloaded model span as the mid-turn propagation root", asyn
   await waitForDiagnosticEventsDrained();
   await service.stop?.(ctx);
 
-  const modelSpan = spanNamed(exporter.getFinishedSpans(), "openclaw.model.call");
+  const modelSpan = spanNamed(sdk.exporter.getFinishedSpans(), "openclaw.model.call");
   expect(modelSpan?.parentSpanContext).toBeUndefined();
   expect(outboundTraceparent).toBe(
     `00-${modelSpan?.spanContext().traceId}-${modelSpan?.spanContext().spanId}-01`,
@@ -730,7 +596,7 @@ test("keeps a whole turn on one trace when children arrive after their parent en
   await waitForDiagnosticEventsDrained();
   await service.stop?.(ctx);
 
-  const spans = exporter.getFinishedSpans();
+  const spans = sdk.exporter.getFinishedSpans();
   const messageSpan = spanNamed(spans, "openclaw.message.processed");
   const harnessSpan = spanNamed(spans, "openclaw.harness.run");
   const runSpan = spanNamed(spans, "openclaw.run");
@@ -786,7 +652,7 @@ test("keeps a late child on the trace when the turn ended in harness.run.error",
   await waitForDiagnosticEventsDrained();
   await service.stop?.(ctx);
 
-  const spans = exporter.getFinishedSpans();
+  const spans = sdk.exporter.getFinishedSpans();
   const harnessSpan = spanNamed(spans, "openclaw.harness.run");
   const toolSpan = spanNamed(spans, "openclaw.tool.execution");
 
@@ -819,7 +685,7 @@ test("leaves exec spans parentless rather than naming a span nobody exported", a
   await waitForDiagnosticEventsDrained();
   await service.stop?.(ctx);
 
-  const execSpan = spanNamed(exporter.getFinishedSpans(), "openclaw.exec");
+  const execSpan = spanNamed(sdk.exporter.getFinishedSpans(), "openclaw.exec");
   expect(execSpan).toBeDefined();
   expect(execSpan?.parentSpanContext).toBeUndefined();
 }, 30_000);

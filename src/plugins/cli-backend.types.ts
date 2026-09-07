@@ -226,6 +226,8 @@ export type CliBackendLiveSessionHandle = {
 export type CliBackendLiveSessionCapability = {
   fingerprint: string;
   current(): CliBackendLiveSessionHandle | undefined;
+  /** Retires the current process and awaits host-owned cleanup before replacement. */
+  restart(): Promise<void>;
   register(handle: CliBackendLiveSessionHandle): void;
   /** Rebinds this exact admitted turn to the registered process's stable capture. */
   activate(handle: CliBackendLiveSessionHandle): void;
@@ -241,6 +243,8 @@ export type CliBackendPromptContext = {
 /** Exact prepared local process facts consumed by a plugin-owned execution transport. */
 export type CliBackendExecuteContext = {
   command: string;
+  /** Preserve a verified invocation name when command resolves through a PATH shim. */
+  argv0?: string;
   args: readonly string[];
   cwd: string;
   env: Record<string, string>;
@@ -527,6 +531,19 @@ type CliBackendPluginBase = {
   resolveModelId?: (ctx: CliBackendResolveModelIdContext) => string;
   /** How this backend enforces an exact per-run `toolAvailability` contract. */
   toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
+  /**
+   * Exact-tool execution suppresses ambient instruction files, skills, hooks,
+   * and plugins so the host-prepared instruction snapshot remains authoritative.
+   * Required for rooted runs; omission keeps those runs unavailable.
+   */
+  isolatesInstructionsWithExactTools?: true;
+  /**
+   * Maps the observed native list, intersected with the host selection, to equivalent
+   * cron capabilities: read/write/edit/apply_patch/exec/process/web_search/web_fetch.
+   * Never infer capabilities decided by unobserved model or sandbox settings.
+   * Core rejects other names before grant/capture and excludes node/tool-disabled runs.
+   */
+  projectNativeToolAuthority?: (nativeTools: readonly string[]) => readonly string[];
   /**
    * Backend-owned JSONL line parser for provider-specific stream formats.
    *

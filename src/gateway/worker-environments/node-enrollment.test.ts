@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { Agent, fetch as fetchWithDispatcher } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.js";
 import { ensureDevicePairSetupBootstrapToken } from "../../infra/device-bootstrap.js";
@@ -160,6 +161,10 @@ describe("worker node enrollment", () => {
     "169.254.10.2",
     "0.0.0.0",
     "[::]",
+    "[::ffff:0.0.0.0]",
+    "[::ffff:0:0]",
+    "[64:ff9b::0.0.0.0]",
+    "[64:ff9b::]",
     "[fe80::1]",
     "[febf::1]",
   ])("rejects unreachable cloud Gateway host %s before preparing artifacts", async (host) => {
@@ -171,7 +176,7 @@ describe("worker node enrollment", () => {
 
     await expect(manager.prepare(createRequested())).rejects.toThrow(
       new Error(
-        `Cloud node bootstrap resolved a Gateway address that a cloud worker cannot reach (ws://${host}:19821, from plugins.entries.device-pair.config.publicUrl). Set gateway.publicOrigin (or plugins.entries.device-pair.config.publicUrl) to a URL reachable from the worker, such as a Tailscale Funnel or a reverse-proxied public origin with gateway.trustedProxies, then redispatch.`,
+        `Cloud node bootstrap resolved a Gateway address that a cloud worker cannot reach (ws://${new URL(`http://${host}`).hostname}:19821, from plugins.entries.device-pair.config.publicUrl). Set gateway.publicOrigin (or plugins.entries.device-pair.config.publicUrl) to a URL reachable from the worker, such as a Tailscale Funnel or a reverse-proxied public origin with gateway.trustedProxies, then redispatch.`,
       ),
     );
     expect(prepareArtifact).not.toHaveBeenCalled();
@@ -352,6 +357,25 @@ describe("worker node enrollment", () => {
   );
 
   it("serves both preparation archives through HTTP only while their exact owner is current", async () => {
+    const dispatcher = new Agent({ connections: 1 });
+    const resumeEof = createDeferredCore();
+    const openFile = transfer.openFile.bind(transfer);
+    // Delay the last archive's EOF, after all advertised bytes have reached the client.
+    // Replacing preparation must not abort a completed response's keep-alive socket.
+    vi.spyOn(transfer, "openFile").mockImplementation(async (...args) => {
+      const file = await openFile(...args);
+      if (file?.bytes === bundle().tarballBytes) {
+        const read = file.handle.read.bind(file.handle);
+        vi.spyOn(file.handle, "read").mockImplementation(async (...readArgs) => {
+          const result = await read(...readArgs);
+          if (result.bytesRead === 0) {
+            await resumeEof.promise;
+          }
+          return result;
+        });
+      }
+      return file;
+    });
     const callback = createWorkerBootstrapArtifactTransferHttpCallback(transfer);
     const server = http.createServer((req, res) => {
       void handleWorkerBootstrapArtifactTransferHttpRequest({
@@ -361,6 +385,8 @@ describe("worker node enrollment", () => {
         callback,
       }).catch(() => res.writeHead(500).end());
     });
+    const connected = vi.fn();
+    server.on("connection", connected);
     await new Promise<void>((resolve) => {
       server.listen(0, "127.0.0.1", resolve);
     });
@@ -391,7 +417,8 @@ describe("worker node enrollment", () => {
           // Route the advertised public URL to this test's local HTTP server.
           const downloadUrl = new URL(descriptor.url);
           expect(downloadUrl.origin).toBe(PUBLIC_ORIGIN);
-          const response = await fetch(new URL(downloadUrl.pathname, testOrigin), {
+          const response = await fetchWithDispatcher(new URL(downloadUrl.pathname, testOrigin), {
+            dispatcher,
             headers: { authorization: `Bearer ${descriptor.token}` },
           });
           expect(response.status).toBe(status);
@@ -410,6 +437,7 @@ describe("worker node enrollment", () => {
       const current = await manager.prepareRuntime(record, preparedBundle);
       await requestPair(previous, 404);
       await requestPair(current, 200);
+      expect(connected).toHaveBeenCalledOnce();
       expect(ensureEnrollment).not.toHaveBeenCalled();
       expect(ensureDevicePairSetupBootstrapToken).not.toHaveBeenCalled();
       expect(store.get(record.environmentId)).toMatchObject({
@@ -417,6 +445,8 @@ describe("worker node enrollment", () => {
         nodeDeviceId: null,
       });
     } finally {
+      resumeEof.resolve();
+      await dispatcher.destroy();
       server.closeAllConnections();
       await new Promise<void>((resolve) => {
         server.close(() => resolve());

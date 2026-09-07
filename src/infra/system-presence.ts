@@ -38,14 +38,6 @@ export type SystemPresence = {
   ts: number;
 };
 
-type SystemPresenceUpdate = {
-  key: string;
-  previous?: SystemPresence;
-  next: SystemPresence;
-  changes: Partial<SystemPresence>;
-  changedKeys: (keyof SystemPresence)[];
-};
-
 type StoredPresence = {
   presence: SystemPresence;
   freshness: number;
@@ -211,7 +203,7 @@ function mergeStringList(...values: Array<string[] | undefined>): string[] | und
   return out.size > 0 ? [...out] : undefined;
 }
 
-export function updateSystemPresence(payload: SystemPresencePayload): SystemPresenceUpdate {
+export function updateSystemPresence(payload: SystemPresencePayload) {
   const parsed = parsePresence(payload.text);
   const key =
     normalizePresenceKey(payload.deviceId) ||
@@ -221,7 +213,6 @@ export function updateSystemPresence(payload: SystemPresencePayload): SystemPres
     parsed.ip ||
     truncateUtf16Safe(parsed.text, 64) ||
     normalizeLowercaseStringOrEmpty(os.hostname());
-  const hadExisting = entries.has(key);
   const existing = entries.get(key)?.presence ?? ({} as SystemPresence);
   const merged: SystemPresence = {
     ...existing,
@@ -247,24 +238,12 @@ export function updateSystemPresence(payload: SystemPresencePayload): SystemPres
   };
   setPresence(key, merged);
   const trackKeys = ["host", "ip", "version", "mode", "reason"] as const;
-  type TrackKey = (typeof trackKeys)[number];
-  const changes: Partial<Pick<SystemPresence, TrackKey>> = {};
-  const changedKeys: TrackKey[] = [];
-  for (const k of trackKeys) {
-    const prev = existing[k];
-    const next = merged[k];
-    if (prev !== next) {
-      changes[k] = next;
-      changedKeys.push(k);
-    }
-  }
+  const changedKeys = trackKeys.filter((field) => existing[field] !== merged[field]);
   return {
     key,
-    previous: hadExisting ? existing : undefined,
     next: merged,
-    changes,
     changedKeys,
-  } satisfies SystemPresenceUpdate;
+  };
 }
 
 export function upsertPresence(key: string, presence: Partial<SystemPresence>) {

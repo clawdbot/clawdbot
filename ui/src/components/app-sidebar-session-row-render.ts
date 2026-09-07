@@ -38,10 +38,7 @@ import {
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 import type { SessionDataController } from "./session-data-controller.ts";
-import {
-  describeSessionTrailingState,
-  renderSessionLeadingState,
-} from "./session-leading-indicator.ts";
+import { describeSessionState, renderSessionLeadingState } from "./session-leading-indicator.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import { renderSidebarSessionSubtitle } from "./session-row-subtitle.ts";
@@ -225,22 +222,17 @@ export function renderRecentSession(params: {
         gateway.connection.password.trim()),
     ),
   };
-  const { running, leadingIndicator, trailingIndicator, renderedIdentities } =
-    renderSessionLeadingState(
-      session,
-      leadingOwner,
-      ownerAttribution,
-      ownerViewing,
-      channelAvatarAuth,
-    );
-  const trailingDescription = session.isChild
-    ? running && session.unread
-      ? t("sessionsView.unread")
-      : ""
-    : describeSessionTrailingState(session);
+  const { running, leadingIndicator, renderedIdentities } = renderSessionLeadingState(
+    session,
+    leadingOwner,
+    ownerAttribution,
+    ownerViewing,
+    channelAvatarAuth,
+  );
+  const stateDescription = describeSessionState(session);
   const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
   const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
-  const stateId = trailingDescription ? sidebarSessionStateId(session.key) : undefined;
+  const stateId = stateDescription ? sidebarSessionStateId(session.key) : undefined;
   const openMenuFromEvent = (event: MouseEvent | KeyboardEvent) =>
     handleContextMenuEvent(
       event,
@@ -303,6 +295,7 @@ export function renderRecentSession(params: {
       session.forkSource
         ? html`<span
             class="sidebar-session-fork-indicator"
+            aria-hidden=${session.isChild ? nothing : "true"}
             role="img"
             aria-label=${t("sessionsView.forkedSession")}
             >${icons.gitFork}</span
@@ -404,19 +397,11 @@ export function renderRecentSession(params: {
                 ),
               })}
               ${
-                trailingIndicator === nothing
-                  ? trailingDescription
-                    ? html`<span class="sr-only" id=${stateId}>${trailingDescription}</span>`
-                    : nothing
-                  : html`<span class="session-row-aside">
-                      <span
-                        class="session-row-state"
-                        id=${stateId}
-                        role="img"
-                        aria-label=${trailingDescription}
-                        >${trailingIndicator}</span
-                      >
-                    </span>`
+                stateDescription
+                  ? html`<span class="sr-only" id=${stateId} aria-hidden="true"
+                      >${stateDescription}</span
+                    >`
+                  : nothing
               }
               ${
                 hasTrail
@@ -459,6 +444,11 @@ export function renderRecentSession(params: {
                   : "sessionsView.showChildSessions",
                 { count: String(session.childSessionKeys.length), session: label },
               )}
+              aria-description=${
+                !childrenExpanded && session.runningChildCount > 0
+                  ? t("sessionsView.activeRun")
+                  : nothing
+              }
               @click=${() => host.toggleSessionChildren(session)}
             >
               <span class="sidebar-child-session-toggle__icon" aria-hidden="true"
@@ -477,7 +467,7 @@ export function renderRecentSession(params: {
       <span class="sidebar-recent-session__aside session-row-aside">
         <span class="session-row-actions">
           ${
-            session.isChild
+            !session.pinnable
               ? nothing
               : html`<button
                   class="session-action session-action--pin"
@@ -592,7 +582,12 @@ export function renderSessionTree(params: {
             ${renderChildSessionLoadError(host, session.key)}
             ${
               session.loadingChildren && session.children.length === 0
-                ? html`<span class="sidebar-session-tree__loading">${t("common.loading")}</span>`
+                ? html`<span
+                    class="sidebar-session-tree__loading skeleton skeleton-line skeleton-line--medium"
+                    role="status"
+                    aria-busy="true"
+                    aria-label=${t("common.loading")}
+                  ></span>`
                 : nothing
             }
           </div>`

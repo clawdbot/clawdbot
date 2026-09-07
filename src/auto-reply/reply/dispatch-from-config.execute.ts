@@ -4,7 +4,10 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { isAskUserPromptPending } from "../../agents/tools/ask-user-tool.js";
+import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
+import { logVerbose } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
@@ -117,9 +120,12 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   },
                   onSessionMetadataChanges: notifySessionMetadataChanges,
                   onSessionPrepared: state.notePreparedSession,
+                  onRunVerbosityResolved: (settings) => {
+                    state.noteRunVerbosity(settings);
+                    params.replyOptions?.onRunVerbosityResolved?.(settings);
+                  },
                 } satisfies InternalReplyResolverOptions),
                 onObservedReplyDelivery: state.markObservedReplyDelivery,
-                suppressToolErrorWarnings: state.suppressToolErrorWarnings,
                 typingPolicy: typing.typingPolicy,
                 suppressTyping: typing.suppressTyping,
                 onPartialReply: deferFinalTtsText
@@ -138,6 +144,25 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 onAssistantMessageStart: wrapProgressCallback(
                   params.replyOptions?.onAssistantMessageStart,
                 ),
+                onQueuedFollowupSettled: params.replyOptions?.onQueuedFollowupSettled
+                  ? async () => {
+                      // Retained block callbacks only enqueue; cleanup must join their
+                      // delivery even when this dispatch has already returned.
+                      try {
+                        await waitForPendingDirectBlockReplyDelivery();
+                      } catch (error) {
+                        try {
+                          await params.replyOptions?.onQueuedFollowupSettled?.();
+                        } catch (cleanupError) {
+                          logVerbose(
+                            `dispatch-from-config: queued cleanup failed; preserving delivery error: ${formatErrorMessage(cleanupError)}`,
+                          );
+                        }
+                        throw error;
+                      }
+                      await params.replyOptions?.onQueuedFollowupSettled?.();
+                    }
+                  : undefined,
                 onBlockReplyQueued: wrapProgressCallback(params.replyOptions?.onBlockReplyQueued),
                 onToolStart: wrapProgressCallback(params.replyOptions?.onToolStart, {
                   allowWhenToolSummariesHidden:
@@ -192,59 +217,77 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     markInboundDedupeReplayUnsafe();
                     // Buffered commentary preceded this tool; land it before the summary.
                     await flushPendingCommentaryProgress();
-                    // Tool-error suppression covers visible progress and warnings regardless of source delivery mode.
-                    if (
-                      payload.isError === true &&
-                      replyConfig.messages?.suppressToolErrors === true
-                    ) {
-                      return;
-                    }
                     const isFastModeAutoProgress = isFastModeAutoProgressPayload(payload);
-                    const isFastModeAutoProgressDelivery =
-                      isFastModeAutoProgress &&
-                      state.shouldDeliverFastModeAutoProgressDespiteSourceSuppression();
                     const isForcedToolProgress =
                       state.shouldDeliverForcedToolProgressDespiteSourceSuppression();
                     const forceToolResultProgress =
                       params.replyOptions?.forceToolResultProgress === true;
+                    const allowProgressCallbacksWhenSourceDeliverySuppressed =
+                      params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed ===
+                        true && ctx.InboundEventKind !== "room_event";
                     const durableToolResult = requiresDurableToolResultDelivery(payload);
                     const requiresDurableToolResult = forceToolResultProgress && durableToolResult;
+                    const shouldDeliverFastModeAutoProgress =
+                      isFastModeAutoProgress &&
+                      ((!state.suppressAutomaticSourceDelivery &&
+                        (forceToolResultProgress || state.shouldSendToolSummaries())) ||
+                        isForcedToolProgress ||
+                        state.shouldDeliverVerboseProgressDespiteSourceSuppression());
                     if (params.replyOptions?.suppressToolProgressMessages && !durableToolResult) {
                       return;
                     }
-                    const shouldForwardToolResultProgress = isFastModeAutoProgress
-                      ? shouldForwardProgressCallback({
-                          forwardWhenSourceDeliverySuppressed: true,
+                    const shouldForwardToolResultProgress = forceToolResultProgress
+                      ? !requiresDurableToolResult &&
+                        (isFastModeAutoProgress || !state.shouldEmitVerboseProgress()) &&
+                        shouldForwardProgressCallback({
+                          forwardWhenSourceDeliverySuppressed:
+                            allowProgressCallbacksWhenSourceDeliverySuppressed,
                         })
-                      : forceToolResultProgress
-                        ? !requiresDurableToolResult &&
-                          !state.shouldEmitVerboseProgress() &&
-                          shouldForwardProgressCallback({
-                            forwardWhenSourceDeliverySuppressed: true,
-                          })
-                        : state.shouldSendToolSummaries() && shouldForwardProgressCallback();
+                      : (state.shouldSendToolSummaries() ||
+                          (isFastModeAutoProgress &&
+                            params.replyOptions?.allowToolLifecycleWhenProgressHidden === true)) &&
+                        shouldForwardProgressCallback(
+                          isFastModeAutoProgress
+                            ? {
+                                forwardWhenSourceDeliverySuppressed:
+                                  allowProgressCallbacksWhenSourceDeliverySuppressed,
+                              }
+                            : undefined,
+                        );
                     const toolResultProgressCallback = shouldForwardToolResultProgress
                       ? onToolResultFromReplyOptions
                       : undefined;
+                    let toolResultProgressVisible = false;
                     if (toolResultProgressCallback) {
-                      await toolResultProgressCallback(payload);
+                      toolResultProgressVisible = (
+                        await settleProgressVisibilityCallbackResult(
+                          toolResultProgressCallback(payload),
+                        )
+                      ).visible;
                     }
                     if (isDispatchOperationAborted()) {
                       return;
                     }
                     if (
                       toolResultProgressCallback &&
-                      (isFastModeAutoProgress || forceToolResultProgress)
+                      forceToolResultProgress &&
+                      !isFastModeAutoProgress
                     ) {
                       return;
+                    }
+                    if (toolResultProgressCallback && isFastModeAutoProgress) {
+                      if (toolResultProgressVisible || !shouldDeliverFastModeAutoProgress) {
+                        return;
+                      }
                     }
                     if (state.sendPolicyDenied) {
                       return;
                     }
+                    const bypassToolSummarySuppression =
+                      isForcedToolProgress || shouldDeliverFastModeAutoProgress;
                     if (
                       state.shouldSuppressProgressDelivery() &&
-                      !isFastModeAutoProgressDelivery &&
-                      !isForcedToolProgress &&
+                      !bypassToolSummarySuppression &&
                       !hasAskUserPayload(payload)
                     ) {
                       return;
@@ -252,7 +295,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     const visibleToolPayload = preparePayload(
                       dispatcher,
                       "tool",
-                      isForcedToolProgress ? payload : resolveToolDeliveryPayload(payload),
+                      bypassToolSummarySuppression ? payload : resolveToolDeliveryPayload(payload),
                       state.progressState,
                     );
                     if (!visibleToolPayload) {
@@ -268,7 +311,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       accountId: replyRoute.accountId,
                     });
                     const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
-                    const deliveryPayload = isForcedToolProgress
+                    const deliveryPayload = bypassToolSummarySuppression
                       ? normalizedPayload
                       : resolveToolDeliveryPayload(normalizedPayload);
                     if (!deliveryPayload) {
@@ -279,8 +322,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     }
                     if (
                       state.shouldSuppressLateTextOnlyToolProgress(deliveryPayload) &&
-                      !isFastModeAutoProgressPayload(deliveryPayload) &&
-                      !isForcedToolProgress
+                      !bypassToolSummarySuppression
                     ) {
                       return;
                     }
@@ -289,8 +331,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     }
                     if (
                       shouldSuppressDefaultToolProgressMessages() &&
-                      !isFastModeAutoProgressPayload(deliveryPayload) &&
-                      !isForcedToolProgress
+                      !bypassToolSummarySuppression
                     ) {
                       if (!requiresDurableToolResultDelivery(deliveryPayload)) {
                         return;
@@ -548,7 +589,11 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       markInboundDedupeReplayUnsafe();
                       const admitted = state.sendTrackedBlockReply(normalizedPayload);
                       if (admitted) {
-                        state.progressState.hasPendingDirectBlockReplyDelivery = true;
+                        // Capture admission's drain; concurrent or aborted waiters must
+                        // not consume another callback's delivery obligation.
+                        const pending = dispatcher.waitForIdle().then(() => undefined);
+                        void pending.catch(() => undefined);
+                        state.progressState.pendingDirectBlockReplyDelivery = pending;
                       }
                       if (
                         admitted &&

@@ -82,12 +82,12 @@ from model names. Unknown IDs can still be configured explicitly; listing alone
 does not prove chat compatibility. This is not a complete automatic catalog of
 every NVIDIA model.
 
-Both public fetches use fixed HTTPS hosts and send no credentials. If the
-featured feed fails, available bundled chat models still appear. If the
-inventory is unavailable or malformed, browse and setup retain the bundled
-fallback, while the fresh-live catalog stays empty. A successful empty inventory
-does not restore stale bundled entries. Without NVIDIA auth, browsing uses the
-bundled catalog without fetching.
+Both public fetches use fixed HTTPS hosts and send no credentials. A failed
+inventory or featured request marks discovery unavailable and retains the last
+successful catalog for the same provider configuration and credentials. Failed
+featured metadata cannot silently remove previously discovered models. A
+successful empty inventory clears discovered models, even if the featured feed
+fails. Without NVIDIA auth, browsing uses the bundled catalog without fetching.
 
 ## Nemotron 3.5 Lightning
 

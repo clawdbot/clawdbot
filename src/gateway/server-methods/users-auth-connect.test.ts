@@ -57,8 +57,8 @@ vi.mock("../../state/user-model-accounts.js", () => ({
 vi.mock("../../agents/auth-profiles/shared-main-dir.js", () => ({
   resolveSharedMainAuthAgentDir: () => "/tmp/shared-main-agent",
 }));
-vi.mock("../../agents/auth-profiles/store.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../agents/auth-profiles/store.js")>()),
+vi.mock("../../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles/store-runtime.js")>()),
   ensureAuthProfileStoreWithoutExternalProfiles,
 }));
 vi.mock("../../logging/secret-redaction-registry.js", () => ({ registerSecretValueForRedaction }));

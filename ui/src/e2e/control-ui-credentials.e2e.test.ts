@@ -6,6 +6,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from "playwrig
 import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
   controlUiE2eWaitTimeoutMs,
@@ -121,7 +122,7 @@ describeControlUiE2e("Control UI token and password credentials E2E", () => {
       "unauthorized: gateway token required",
     );
 
-    const tokenInput = tokenFlow.page.getByLabel(/Gateway token/i);
+    const tokenInput = tokenFlow.page.getByLabel("Credential", { exact: true });
     const tokenConnectCount = (await tokenFlow.gateway.getRequests("connect")).length;
     await tokenFlow.gateway.deferNext("connect");
     await tokenInput.fill("token-accepted-by-mock");
@@ -135,10 +136,12 @@ describeControlUiE2e("Control UI token and password credentials E2E", () => {
     await tokenFlow.gateway.resolveDeferred("connect");
     await tokenFlow.page.locator("openclaw-app-shell").waitFor();
     expect(await tokenFlow.page.locator("openclaw-login-gate").count()).toBe(0);
-    await tokenFlow.page.screenshot({
-      fullPage: true,
-      path: path.join(artifactDir, "01-token-connected.png"),
-    });
+    await writeFile(
+      path.join(artifactDir, "01-token-connected.png"),
+      await takeControlUiViewportScreenshot(tokenFlow.page, tokenFlow.page.locator(".shell"), [
+        tokenFlow.page.locator("#control-ui-main"),
+      ]),
+    );
     expect(tokenPageErrors).toEqual([]);
     await tokenFlow.context.close();
     openContexts.delete(tokenFlow.context);
@@ -153,7 +156,7 @@ describeControlUiE2e("Control UI token and password credentials E2E", () => {
       "unauthorized: gateway password required",
     );
 
-    const passwordInput = passwordFlow.page.getByLabel(/Password \(not stored\)/i);
+    const passwordInput = passwordFlow.page.getByLabel("Credential", { exact: true });
     const rejectedConnectCount = (await passwordFlow.gateway.getRequests("connect")).length;
     await passwordFlow.gateway.deferNext("connect");
     await passwordInput.fill("password-rejected-by-mock");
@@ -172,16 +175,21 @@ describeControlUiE2e("Control UI token and password credentials E2E", () => {
 
     const failure = passwordFlow.page.locator(".login-gate__failure");
     await failure.waitFor();
-    expect(await failure.getAttribute("role")).toBe("alert");
+    expect(await failure.getAttribute("role")).toBe("status");
+    expect(await failure.getAttribute("aria-live")).toBe("polite");
     expect(
       (await failure.locator(".login-gate__failure-raw").textContent())?.toLowerCase(),
     ).toContain("gateway password mismatch");
     expect(await failure.locator(".login-gate__failure-steps").isVisible()).toBe(true);
     expect(await passwordFlow.page.locator("openclaw-app-shell").count()).toBe(0);
-    await passwordFlow.page.screenshot({
-      fullPage: true,
-      path: path.join(artifactDir, "02-password-rejected.png"),
-    });
+    await writeFile(
+      path.join(artifactDir, "02-password-rejected.png"),
+      await takeControlUiViewportScreenshot(
+        passwordFlow.page,
+        passwordFlow.page.locator(".login-gate__card"),
+        [failure.locator(".login-gate__failure-steps")],
+      ),
+    );
 
     const recoveredConnectCount = (await passwordFlow.gateway.getRequests("connect")).length;
     await passwordFlow.gateway.deferNext("connect");
@@ -196,10 +204,14 @@ describeControlUiE2e("Control UI token and password credentials E2E", () => {
     await passwordFlow.gateway.resolveDeferred("connect");
     await passwordFlow.page.locator("openclaw-app-shell").waitFor();
     expect(await passwordFlow.page.locator("openclaw-login-gate").count()).toBe(0);
-    await passwordFlow.page.screenshot({
-      fullPage: true,
-      path: path.join(artifactDir, "03-password-recovered.png"),
-    });
+    await writeFile(
+      path.join(artifactDir, "03-password-recovered.png"),
+      await takeControlUiViewportScreenshot(
+        passwordFlow.page,
+        passwordFlow.page.locator(".shell"),
+        [passwordFlow.page.locator("#control-ui-main")],
+      ),
+    );
     expect(passwordPageErrors).toEqual([]);
 
     await writeFile(

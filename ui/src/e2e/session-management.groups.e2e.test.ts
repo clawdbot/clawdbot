@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   actionOpacity,
   activateSelfRemovingControl,
@@ -86,11 +87,7 @@ suite.define(() => {
   });
 
   it("recovers an empty group catalog after a transient load failure", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.groups.list"],
@@ -124,11 +121,7 @@ suite.define(() => {
   });
 
   it("keeps a rejected sidebar mutation visible until the user dismisses it", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.patch"],
@@ -206,7 +199,13 @@ suite.define(() => {
       const name = dialog.getByRole("textbox", { name: "Rename session" });
       await name.waitFor({ state: "visible" });
       await expect.poll(() => name.inputValue()).toBe("Original name");
-      await captureUiProof(suite, page, "sidebar-session-rename-dialog.png");
+      await captureUiProof(
+        suite,
+        page,
+        "sidebar-session-rename-dialog.png",
+        dialog.locator("dialog"),
+        [name],
+      );
       await name.fill("Renamed session");
       await dialog.getByRole("button", { name: "Save" }).click();
 
@@ -320,7 +319,9 @@ suite.define(() => {
       await expect.poll(rowNames).toEqual(["Data migration", "Research notes"]);
       const sidebarMigration = sidebarRows.filter({ hasText: "Data migration" });
       await expect
-        .poll(() => sidebarMigration.locator(".session-run-spinner").isVisible())
+        .poll(() =>
+          sidebarMigration.locator(".sidebar-session-indicator .session-glyph__ring").isVisible(),
+        )
         .toBe(true);
 
       // Hover-revealed management actions on sidebar rows.
@@ -432,11 +433,7 @@ suite.define(() => {
   });
 
   it("sorts threads from the keyboard and identifies destructive selection targets", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await installMockGateway(page, {
       methodResponses: {
@@ -490,11 +487,7 @@ suite.define(() => {
   });
 
   it("shows a rejected Sessions-page custom group instead of leaking a page error", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.groups.put"],
@@ -540,11 +533,7 @@ suite.define(() => {
 
   it("renames, deletes, and toggles sidebar session groups", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: {
@@ -724,11 +713,7 @@ suite.define(() => {
 
   it("preserves a collapsed sidebar group when its rename is rejected", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     await page.addInitScript(
       ({ key, value }) => {
@@ -808,11 +793,7 @@ suite.define(() => {
 
   it("pages sidebar sessions and supports complete drag-managed groups", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const sessions = Array.from({ length: 13 }, (_, index) =>
       sessionRow(`agent:main:session-${index}`, `Session ${index}`, baseTime - index * 60_000, {
@@ -956,11 +937,7 @@ suite.define(() => {
   });
 
   it("keeps a new empty group visible before the first saved session", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: {
@@ -1000,11 +977,7 @@ suite.define(() => {
   });
 
   it("keeps empty gateway groups compact for the selected agent", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       assistantName: "Ivan",

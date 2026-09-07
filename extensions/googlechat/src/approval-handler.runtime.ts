@@ -1,13 +1,16 @@
-import type {
-  ChannelApprovalCapabilityHandlerContext,
-  ChannelApprovalKind,
-  ExpiredApprovalView,
-  PendingApprovalView,
-  ResolvedApprovalView,
+import {
+  createChannelApprovalNativeRuntimeAdapter,
+  type ChannelApprovalCapabilityHandlerContext,
+  type ChannelApprovalKind,
+  type ExpiredApprovalView,
+  type PendingApprovalView,
+  type ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
-import type { ExecApprovalDecision } from "openclaw/plugin-sdk/approval-runtime";
+import {
+  formatChannelApprovalResolvedLabel,
+  type ExecApprovalDecision,
+} from "openclaw/plugin-sdk/approval-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -15,12 +18,11 @@ import { resolveGoogleChatAccount, type ResolvedGoogleChatAccount } from "./acco
 import { sendGoogleChatMessage, updateGoogleChatMessage } from "./api.js";
 import {
   buildGoogleChatApprovalActionParameters,
-  createGoogleChatApprovalToken,
+  googleChatApprovalControls,
   GOOGLECHAT_APPROVAL_ACTION,
   registerGoogleChatApprovalCardBinding,
   registerGoogleChatManualApprovalFollowupSuppression,
   unregisterGoogleChatManualApprovalFollowupSuppression,
-  unregisterGoogleChatApprovalCardBindings,
 } from "./approval-card-actions.js";
 import { escapeGoogleChatApprovalCardText as escapeGoogleChatText } from "./approval-card-text.js";
 import {
@@ -99,14 +101,6 @@ function buildMetadataText(metadata: readonly { label: string; value: string }[]
       (item) => `<b>${escapeGoogleChatText(item.label)}:</b> ${escapeGoogleChatText(item.value)}`,
     )
     .join("<br>");
-}
-
-function formatDecision(decision: ExecApprovalDecision): string {
-  return decision === "allow-once"
-    ? "Allowed once"
-    : decision === "allow-always"
-      ? "Allowed always"
-      : "Denied";
 }
 
 function buildMainTextWidget(text: string) {
@@ -195,7 +189,7 @@ function buildActionSection(params: { actionFunction: string; view: PendingAppro
 } {
   const { actionFunction, view } = params;
   const actionTokens = view.actions.map((action) => ({
-    token: createGoogleChatApprovalToken(),
+    token: googleChatApprovalControls.createToken(),
     decision: action.decision,
   }));
   return {
@@ -275,14 +269,7 @@ function resolveApprovalActionFunction(params: ChannelApprovalCapabilityHandlerC
 
 function buildResolvedPayload(view: ResolvedApprovalView): GoogleChatFinalDelivery {
   const resolvedBy = normalizeOptionalString(view.resolvedBy);
-  const decisionLabel =
-    view.approvalKind === "system-agent" && view.terminalStatus === "cancelled"
-      ? "Cancelled"
-      : view.approvalKind === "system-agent" && view.applicationStatus === "applied"
-        ? "Applied"
-        : view.approvalKind === "system-agent" && view.applicationStatus === "not-applied"
-          ? "Not applied"
-          : formatDecision(view.decision);
+  const decisionLabel = formatChannelApprovalResolvedLabel(view);
   const card: GoogleChatCardV2 = {
     cardId: GOOGLECHAT_APPROVAL_CARD_ID,
     card: {
@@ -435,10 +422,10 @@ export const googleChatApprovalNativeRuntime = createChannelApprovalNativeRuntim
       return tokens.length > 0 ? tokens : null;
     },
     unbindPending: ({ binding }) => {
-      unregisterGoogleChatApprovalCardBindings(binding);
+      googleChatApprovalControls.unregister(binding);
     },
     cancelDelivered: ({ entry }) => {
-      unregisterGoogleChatApprovalCardBindings(
+      googleChatApprovalControls.unregister(
         entry.actionTokens.map((actionToken) => actionToken.token),
       );
     },

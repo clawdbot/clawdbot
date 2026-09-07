@@ -43,9 +43,12 @@ type HistoryMessage = {
   role?: unknown;
   content?: unknown;
   summary?: unknown;
+  toolName?: unknown;
+  isError?: unknown;
   timestamp?: unknown;
 };
 type RawTranscriptReseedReason =
+  | "auth-unknown"
   | "auth-profile"
   | "auth-epoch"
   | "message-policy"
@@ -117,9 +120,11 @@ function renderHistoryMessage(message: unknown): string | undefined {
       ? "Assistant"
       : entry.role === "user"
         ? "User"
-        : entry.role === "compactionSummary"
-          ? "Compaction summary"
-          : undefined;
+        : entry.role === "toolResult"
+          ? `Tool result${typeof entry.toolName === "string" ? ` (${entry.toolName})` : ""}${entry.isError === true ? " [error]" : ""}`
+          : entry.role === "compactionSummary"
+            ? "Compaction summary"
+            : undefined;
   if (!role) {
     return undefined;
   }
@@ -403,6 +408,17 @@ export async function loadCliSessionReseedMessages(
     rawTranscriptReseedReason?: RawTranscriptReseedReason;
   },
 ): Promise<unknown[]> {
+  // Summaries and caller-owned history contain the same private context as the raw tail.
+  if (
+    params.rawTranscriptReseedReason === "auth-profile" ||
+    params.rawTranscriptReseedReason === "auth-epoch" ||
+    params.rawTranscriptReseedReason === "auth-unknown"
+  ) {
+    cliBackendLog.warn(
+      `cli session history refused across auth boundary: reason=${params.rawTranscriptReseedReason}`,
+    );
+    return [];
+  }
   const entries = await loadCliSessionEntries(params);
   // This freshly loaded branch is reseed-owned; use persistence rather than provider timestamps.
   for (const entry of entries) {
@@ -434,6 +450,12 @@ export async function loadCliSessionReseedMessages(
     const timestamp = timestampMsToIsoString(message.timestamp);
     return message.role === "compactionSummary"
       ? { role: message.role, summary: message.summary.trim(), timestamp }
-      : { role: message.role, content: message.content, timestamp };
+      : {
+          role: message.role,
+          content: message.content,
+          timestamp,
+          toolName: message.role === "toolResult" ? message.toolName : undefined,
+          isError: message.role === "toolResult" ? message.isError : undefined,
+        };
   });
 }

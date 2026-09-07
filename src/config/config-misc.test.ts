@@ -735,6 +735,19 @@ describe("plugins.entries.*.hooks", () => {
   });
 });
 
+describe("mcp.sessionIdleTtlMs", () => {
+  it.each([0, 1000.9, 7_200_000])("accepts the historical value %s", (sessionIdleTtlMs) => {
+    expect(OpenClawSchema.safeParse({ mcp: { sessionIdleTtlMs } }).success).toBe(true);
+  });
+
+  it.each([-1, Number.NaN, Number.POSITIVE_INFINITY, "1000"])(
+    "rejects invalid idle TTL %s",
+    (sessionIdleTtlMs) => {
+      expect(OpenClawSchema.safeParse({ mcp: { sessionIdleTtlMs } }).success).toBe(false);
+    },
+  );
+});
+
 describe("mcp.apps.enabled", () => {
   it.each([true, false])("accepts %s", (enabled) => {
     expect(OpenClawSchema.safeParse({ mcp: { apps: { enabled } } }).success).toBe(true);

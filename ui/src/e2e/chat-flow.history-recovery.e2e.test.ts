@@ -1,8 +1,10 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
 import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -18,17 +20,14 @@ import {
   waitForChatScrollIdle,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 type ChatFlowTestApp = HTMLElement & { runtime?: { context: ApplicationContext } };
 
 suite.define(() => {
   it("keeps an unrelated retained transcript after another tab deletes a session", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const sessionA = "agent:main:session-a";
     const sessionB = "agent:main:session-b";
@@ -242,10 +241,12 @@ suite.define(() => {
       await sessionLink(sessionB).click();
       await expectTrace();
       if (artifactDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "trace-after-first-navigation.png"),
-        });
+        await writeFile(
+          path.join(artifactDir, "trace-after-first-navigation.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.getByText(visibleAnswer, { exact: true }),
+          ]),
+        );
       }
 
       await sessionLink(sessionA).click();
@@ -255,10 +256,12 @@ suite.define(() => {
       await expectTrace();
       expect(await gateway.getRequests("chat.history")).toHaveLength(historyRequestsBeforeReturn);
       if (artifactDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(artifactDir, "trace-after-return.png"),
-        });
+        await writeFile(
+          path.join(artifactDir, "trace-after-return.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.getByText(visibleAnswer, { exact: true }),
+          ]),
+        );
       }
     } finally {
       await suite.closeBrowserContext(context);
@@ -266,11 +269,7 @@ suite.define(() => {
   });
 
   it("keeps valid assistant history visible after a malformed transcript block", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const visibleAnswer = "The valid assistant answer remains visible.";
     const gateway = await installMockGateway(page, {
@@ -295,11 +294,7 @@ suite.define(() => {
   });
 
   it("shows persisted user messages after opening History and scrolling mixed history", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const baseTs = Date.now() - 100_000;
     const currentSessionMessages = [
@@ -442,10 +437,12 @@ suite.define(() => {
       if (!artifactDir) {
         return;
       }
-      await page.screenshot({
-        path: path.join(artifactDir, `${name}.png`),
-        fullPage: true,
-      });
+      await writeFile(
+        path.join(artifactDir, `${name}.png`),
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+          page.locator('openclaw-chat-pane[aria-hidden="false"] .chat-thread'),
+        ]),
+      );
       // Keep post-assertion route states legible in the optional proof recording.
       await page.waitForTimeout(300);
     };
@@ -687,10 +684,12 @@ suite.define(() => {
       expect(returnedSamples.every((sample) => !sample.loading)).toBe(true);
       await expectRequestCountStable(gateway, "chat.history", historyRequestsBeforeReturn);
       if (artifactDir) {
-        await page.screenshot({
-          path: `${artifactDir}/retained-history-return.png`,
-          fullPage: true,
-        });
+        await writeFile(
+          `${artifactDir}/retained-history-return.png`,
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.getByText(/^older retained message 1\n/),
+          ]),
+        );
       }
     } finally {
       await suite.closeBrowserContext(context);
@@ -804,7 +803,10 @@ suite.define(() => {
       const storedProof = await readStoredProof();
       const storedRunId = requireString(storedProof.runId, "stored offline send idempotency key");
       if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/01-offline-queued.png`, fullPage: true });
+        await writeFile(
+          `${artifactDir}/01-offline-queued.png`,
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [queue]),
+        );
       }
 
       await page.reload();
@@ -837,16 +839,15 @@ suite.define(() => {
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
       if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/02-reconnected-active.png`, fullPage: true });
+        await writeFile(
+          `${artifactDir}/02-reconnected-active.png`,
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator(".chat-thread").getByText(prompt),
+          ]),
+        );
       }
       await expectRequestCountStable(gateway, "chat.send", 1);
       const requestsAfterReconnect = await gateway.getRequests("chat.send");
-      await gateway.setHistoryMessages([
-        {
-          role: "user",
-          __openclaw: { idempotencyKey: `${runId}:user` },
-        },
-      ]);
       await gateway.emitChatFinal({ runId, text: "Delivered after reconnect." });
       await queue.waitFor({ state: "detached", timeout: 10_000 });
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
@@ -863,7 +864,12 @@ suite.define(() => {
         .waitFor({ state: "detached" });
       await expectRequestCountStable(gateway, "chat.send", 1);
       if (artifactDir) {
-        await page.screenshot({ path: `${artifactDir}/03-online-delivered.png`, fullPage: true });
+        await writeFile(
+          `${artifactDir}/03-online-delivered.png`,
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+            page.locator(".chat-thread").getByText(prompt),
+          ]),
+        );
       }
       if (process.env.OPENCLAW_BEHAVIOR_PROOF === "1") {
         process.stdout.write(

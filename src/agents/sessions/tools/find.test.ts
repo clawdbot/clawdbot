@@ -87,7 +87,7 @@ describe("find tool", () => {
       {} as never,
     );
     expect(textContent(result)).toBe(expected);
-    expect(result.details).toBeUndefined();
+    expect(result.details).toEqual({ content: expected });
   });
 
   it("rejects fractional limits", async () => {
@@ -118,7 +118,7 @@ describe("find tool", () => {
     const result = await execute(tool, Number.POSITIVE_INFINITY);
 
     expect(textContent(result)).toBe("a.ts\nb.ts");
-    expect(result.details).toBeUndefined();
+    expect(result.details).toEqual({ content: "a.ts\nb.ts" });
   });
 
   it.each([

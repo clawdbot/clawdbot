@@ -1,7 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import type { AssistantMessage, Model } from "../../../llm/types.js";
+import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { makeZeroUsageSnapshot } from "../../usage.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
+import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -72,7 +78,49 @@ function createInput(overrides: Record<string, unknown> = {}) {
   };
 }
 
+const cacheModel: Model = {
+  id: "claude-sonnet-4-6",
+  name: "Synthetic cache model",
+  api: "anthropic-messages",
+  provider: "anthropic",
+  baseUrl: "http://127.0.0.1:1",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 2_048,
+  maxTokens: 1_024,
+};
+
+function prunableHistory(): AgentMessage[] {
+  const assistant = (text: string): AssistantMessage => ({
+    role: "assistant",
+    content: [{ type: "text", text }],
+    api: cacheModel.api,
+    provider: cacheModel.provider,
+    model: cacheModel.id,
+    usage: makeZeroUsageSnapshot(),
+    stopReason: "stop",
+    timestamp: 1,
+  });
+  return [
+    { role: "user", content: "first", timestamp: 1 },
+    assistant("a1"),
+    {
+      role: "toolResult",
+      toolCallId: "old-tool",
+      toolName: "read",
+      content: [{ type: "text", text: "x".repeat(5_000) }],
+      isError: false,
+      timestamp: 1,
+    },
+    assistant("a2"),
+    assistant("a3"),
+    assistant("a4"),
+  ];
+}
+
 describe("installEmbeddedAttemptContextGuards", () => {
+  afterEach(() => vi.useRealTimers());
   beforeEach(() => {
     vi.clearAllMocks();
     hoisted.installContextEngineLoopHook.mockReturnValue(vi.fn());
@@ -209,6 +257,131 @@ describe("installEmbeddedAttemptContextGuards", () => {
     expect(input.activeSession.agent.transformContext).toBe(originalTransform);
   });
 
+  it.each([
+    { scenario: "warm cache", age: 290_000, thresholdCrossing: false, outcome: "success" },
+    { scenario: "threshold crossing", age: 310_000, thresholdCrossing: true, outcome: "success" },
+    {
+      scenario: "failure before dispatch",
+      age: 290_000,
+      thresholdCrossing: false,
+      outcome: "throw",
+    },
+    { scenario: "provider error", age: 290_000, thresholdCrossing: false, outcome: "error" },
+    { scenario: "aborted request", age: 290_000, thresholdCrossing: false, outcome: "aborted" },
+    {
+      scenario: "stream without terminal result",
+      age: 290_000,
+      thresholdCrossing: false,
+      outcome: "empty",
+    },
+  ] as const)(
+    "uses successful request start for pruning after $scenario",
+    async ({ age, thresholdCrossing, outcome }) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const requestStart = 1_000_000;
+      vi.setSystemTime(requestStart);
+      hoisted.isCacheTtlEligibleProvider.mockReturnValue(true);
+      hoisted.readLastCacheTtlTimestamp.mockReturnValue(requestStart - age);
+      const input = createInput();
+      input.attempt = {
+        ...input.attempt,
+        contextTokenBudget: thresholdCrossing ? 10_000 : 1_024,
+        config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } } as never,
+      };
+      const guards = installEmbeddedAttemptContextGuards(input as never);
+      const history = prunableHistory();
+      const project = (messages: AgentMessage[]) =>
+        input.activeSession.agent.transformContext!(messages, new AbortController().signal);
+      const first = await project(history);
+      expect(JSON.stringify(first)).toBe(JSON.stringify(history));
+      const response: AssistantMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: "continue" }],
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        usage: makeZeroUsageSnapshot(),
+        stopReason: outcome === "error" || outcome === "aborted" ? outcome : "toolUse",
+        timestamp: requestStart,
+      };
+      const onSucceeded = vi.fn(guards.recordCacheTouch);
+      const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+        () => {
+          if (outcome === "throw") {
+            throw new Error("failed before dispatch");
+          }
+          const stream = createAssistantMessageEventStream();
+          // Completion is deliberately later than request start; using completion time
+          // would incorrectly keep the cache warm past the final idle check below.
+          vi.setSystemTime(Date.now() + 10_000);
+          if (outcome === "empty") {
+            stream.end();
+          } else if (outcome === "error" || outcome === "aborted") {
+            stream.push({ type: "error", reason: outcome, error: response });
+          } else {
+            stream.push({ type: "done", reason: "toolUse", message: response });
+          }
+          return stream;
+        },
+        {
+          runId: "cache-ttl-clock",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          trace: createDiagnosticTraceContext(),
+          nextCallId: () => "cache-ttl-request",
+          onSucceeded,
+        },
+      );
+      try {
+        if (outcome === "throw") {
+          expect(() => wrapped(cacheModel, { messages: [] })).toThrow("failed before dispatch");
+        } else {
+          const stream = await wrapped(cacheModel, { messages: [] });
+          for await (const _ of stream) {
+            // Consume the provider completion.
+          }
+          if (outcome !== "empty") {
+            await stream.result();
+          }
+        }
+        vi.setSystemTime(requestStart + 20_000);
+        const expanded = thresholdCrossing
+          ? [
+              ...history,
+              {
+                role: "toolResult" as const,
+                toolCallId: "new-tool",
+                toolName: "read",
+                content: [{ type: "text" as const, text: "y".repeat(10_000) }],
+                isError: false,
+                timestamp: Date.now(),
+              },
+            ]
+          : history;
+        const second = await project(expanded);
+        if (outcome === "success") {
+          expect(JSON.stringify(second)).toBe(JSON.stringify(expanded));
+          expect(onSucceeded).toHaveBeenCalledExactlyOnceWith(requestStart);
+          // A second successful request starts its own TTL window.
+          const nextStream = await wrapped(cacheModel, { messages: [] });
+          await nextStream.result();
+          expect(onSucceeded).toHaveBeenCalledTimes(2);
+          expect(onSucceeded).toHaveBeenLastCalledWith(requestStart + 20_000);
+          vi.setSystemTime(requestStart + 320_000);
+          const expired = await project(expanded);
+          expect(JSON.stringify(expired)).toContain("[Tool result trimmed:");
+          expect(JSON.stringify(expired)).not.toBe(JSON.stringify(expanded));
+        } else {
+          expect(onSucceeded).not.toHaveBeenCalled();
+          expect(JSON.stringify(second)).toContain("[Tool result trimmed:");
+        }
+        expect(JSON.stringify(history)).toContain("x".repeat(5_000));
+      } finally {
+        guards.remove();
+      }
+    },
+  );
+
   it.each([false, true])(
     "keeps cache-TTL tool-loop bytes stable with server clearing=%s",
     async (serverClearing) => {
@@ -225,16 +398,15 @@ describe("installEmbeddedAttemptContextGuards", () => {
         // from the transcript marker) must keep replaying under server clearing.
         const key = "tool:old-tool:1";
         input.toolResultPromptProjectionState.replacements.set(key, {
-          message: {
-            role: "toolResult",
-            toolCallId: "old-tool",
-            toolName: "read",
-            content: [{ type: "text", text: earlierProjection }],
-            timestamp: 1,
-          } as AgentMessage,
+          content: [{ type: "text", text: earlierProjection }],
           cacheTtl: "soft",
         });
-        input.toolResultPromptProjectionState.sourceTextByKey.set(key, ["x".repeat(5_000)]);
+        input.toolResultPromptProjectionState.sourceHashByKey.set(
+          key,
+          createHash("sha256")
+            .update(JSON.stringify(["x".repeat(5_000)]))
+            .digest("base64url"),
+        );
         input.toolResultPromptProjectionState.frozen.add(key);
       }
       input.attempt = {
@@ -258,20 +430,7 @@ describe("installEmbeddedAttemptContextGuards", () => {
           agent.transformContext = previous;
         });
       });
-      const messages = [
-        { role: "user", content: "first", timestamp: 1 },
-        { role: "assistant", content: [{ type: "text", text: "a1" }], timestamp: 1 },
-        {
-          role: "toolResult",
-          toolCallId: "old-tool",
-          toolName: "read",
-          content: [{ type: "text", text: "x".repeat(5_000) }],
-          timestamp: 1,
-        },
-        { role: "assistant", content: [{ type: "text", text: "a2" }], timestamp: 1 },
-        { role: "assistant", content: [{ type: "text", text: "a3" }], timestamp: 1 },
-        { role: "assistant", content: [{ type: "text", text: "a4" }], timestamp: 1 },
-      ] as AgentMessage[];
+      const messages = prunableHistory();
 
       const guards = installEmbeddedAttemptContextGuards(input as never);
       expect(hoisted.isCacheTtlEligibleProvider).toHaveBeenCalledExactlyOnceWith(

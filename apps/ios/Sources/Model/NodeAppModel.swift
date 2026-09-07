@@ -368,7 +368,13 @@ final class NodeAppModel {
 
     private(set) var isDesktopObserveAvailable: Bool = false
 
-    private(set) var hasOperatorAdminScope: Bool = false
+    // Privileged requests must notice authority loss even if UI observation coalesces a reconnect.
+    @ObservationIgnored private(set) var operatorAuthorityGeneration: UInt64 = 0
+    private(set) var hasOperatorAdminScope: Bool = false {
+        didSet {
+            if oldValue != self.hasOperatorAdminScope { self.operatorAuthorityGeneration &+= 1 }
+        }
+    }
 
     var gatewayServerName: String?
     var gatewayRemoteAddress: String?
@@ -403,6 +409,9 @@ final class NodeAppModel {
     var gatewayAgents: [AgentSummary] = []
     var lastShareEventText: String = "No share events yet."
     var openChatRequestID: Int = 0
+    @ObservationIgnored private var consumedOpenChatRequestID: Int = 0
+    private(set) var pendingLiveVoiceStart = false
+    var liveVoiceStartError: String?
     var newChatRequestID: Int = 0
     // RootTabs has one chat destination; keep its acknowledgement here so recreating
     // that destination cannot replay a request that the prior view already handled.
@@ -564,7 +573,12 @@ final class NodeAppModel {
     private var completedPendingForegroundActionIDsByGateway: [String: Set<String>] = [:]
 
     var gatewayConnected = false
-    private var operatorConnected = false
+    private var operatorConnected = false {
+        didSet {
+            if oldValue != self.operatorConnected { self.operatorAuthorityGeneration &+= 1 }
+        }
+    }
+
     private var shareDeliveryChannel: String?
     private var shareDeliveryTo: String?
     private var apnsDeviceTokenHex: String?
@@ -936,7 +950,13 @@ final class NodeAppModel {
         }
     }
 
-    var activeGatewayConnectConfig: GatewayConnectConfig?
+    var activeGatewayConnectConfig: GatewayConnectConfig? {
+        didSet {
+            if oldValue?.controlUIInputs != self.activeGatewayConnectConfig?.controlUIInputs {
+                self.operatorAuthorityGeneration &+= 1
+            }
+        }
+    }
 
     private static let watchExecApprovalBridgeStateKey = "watch.execApproval.bridge.state.v1"
     private static let backgroundAliveLastSuccessAtMsKey = "gateway.backgroundAlive.lastSuccessAtMs"
@@ -1312,6 +1332,7 @@ final class NodeAppModel {
     }
 
     func setVoiceWakeEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: VoiceWakePreferences.enabledKey)
         self.voiceWake.setEnabled(enabled)
         if enabled {
             // If talk is enabled, voice wake should not grab the mic.
@@ -1369,18 +1390,6 @@ final class NodeAppModel {
                 enabled: enabled,
                 phase: enabled ? "enabled" : "disabled")
         }
-    }
-
-    func setTalkProviderSelection(_ rawValue: String) {
-        let selection = TalkModeProviderSelection.resolved(rawValue)
-        UserDefaults.standard.set(selection.rawValue, forKey: TalkModeProviderSelection.storageKey)
-        self.talkMode.applyProviderSelectionChanged()
-    }
-
-    func setTalkRealtimeVoiceSelection(_ rawValue: String) {
-        let voice = TalkModeRealtimeVoiceSelection.resolvedOverride(rawValue) ?? ""
-        UserDefaults.standard.set(voice, forKey: TalkModeRealtimeVoiceSelection.storageKey)
-        self.talkMode.applyProviderSelectionChanged()
     }
 
     private func requestTalkPermissionUpgrade() {
@@ -1561,14 +1570,19 @@ final class NodeAppModel {
         self.talkMode.applyAudioRoutePreferenceChanged()
     }
 
-    func requestLocationPermissions(mode: OpenClawLocationMode) async -> Bool {
+    func requestLocationPermissions(
+        mode: OpenClawLocationMode,
+        isCurrent: @MainActor () -> Bool = { true }) async -> Bool
+    {
+        guard !Task.isCancelled, isCurrent() else { return false }
         guard mode != .off else {
             self.reconcileSignificantLocationMonitoring(
                 mode: mode,
                 authorizationStatus: self.locationService.authorizationStatus())
             return true
         }
-        let status = await locationService.ensureAuthorization(mode: mode)
+        let status = await locationService.ensureAuthorization(mode: mode, isCurrent: isCurrent)
+        guard !Task.isCancelled, isCurrent() else { return false }
         switch status {
         case .authorizedAlways:
             self.reconcileSignificantLocationMonitoring(mode: mode, authorizationStatus: status)
@@ -1651,10 +1665,7 @@ final class NodeAppModel {
                 paramsJSON: #"{"keys":["ui.accent"]}"#,
                 timeoutSeconds: 8,
                 ifCurrentRoute: sourceRoute)
-            guard let json = try JSONSerialization.jsonObject(with: res) as? [String: Any],
-                  json["status"] as? String == "ok"
-            else { return nil }
-            return ColorHexSupport.profileAccentHex(entries: json["entries"] as? [String: Any])
+            return try GatewayUserPreferences.decodeProfileAccentHex(res)
         } catch {
             return nil
         }
@@ -1751,24 +1762,6 @@ final class NodeAppModel {
             Task { [weak self] in
                 await self?.refreshShareRouteFromGateway()
             }
-        }
-    }
-
-    func setGlobalWakeWords(_ words: [String]) async {
-        let sanitized = VoiceWakePreferences.sanitizeTriggerWords(words)
-
-        struct Payload: Codable {
-            var triggers: [String]
-        }
-        let payload = Payload(triggers: sanitized)
-        guard let data = try? JSONEncoder().encode(payload),
-              let json = String(data: data, encoding: .utf8)
-        else { return }
-
-        do {
-            _ = try await self.operatorGateway.request(method: "voicewake.set", paramsJSON: json, timeoutSeconds: 12)
-        } catch {
-            // Best-effort only.
         }
     }
 
@@ -3296,6 +3289,9 @@ extension NodeAppModel {
                 NSLocalizedDescriptionKey: "The iPhone connection needs operator.admin access.",
             ])
         }
+        guard let route = await self.operatorGateway.currentRoute() else {
+            throw CancellationError()
+        }
         let status = await watchMessagingService.status()
         guard status.supported, status.paired, status.appInstalled else {
             throw NSError(domain: "WatchDirectSetup", code: 3, userInfo: [
@@ -3305,8 +3301,9 @@ extension NodeAppModel {
 
         let response = try await operatorGateway.request(
             method: "device.pair.setupCode",
-            paramsJSON: #"{"includeQr":false,"bootstrapProfile":"node"}"#,
-            timeoutSeconds: 20)
+            paramsJSON: #"{"includeQr":false,"bootstrapProfile":"voice-node"}"#,
+            timeoutSeconds: 20,
+            ifCurrentRoute: route)
         let setup = try JSONDecoder().decode(SetupCodeResponse.self, from: response)
         guard let setupLink = GatewayConnectDeepLink.fromSetupCode(setup.setupCode),
               setupLink.connectionEndpoints.contains(where: \.tls)
@@ -3315,6 +3312,8 @@ extension NodeAppModel {
                 NSLocalizedDescriptionKey: "Direct Apple Watch mode requires a trusted HTTPS Gateway endpoint.",
             ])
         }
+        try Task.checkCancellation()
+        guard await self.operatorGateway.currentRoute() == route else { throw CancellationError() }
         return try await self.watchMessagingService.sendDirectNodeSetup(setupCode: setup.setupCode)
     }
 
@@ -3451,6 +3450,40 @@ extension NodeAppModel {
     func openChat(sessionKey: String?) {
         self.focusChatSession(sessionKey)
         self.openChatRequestID &+= 1
+    }
+
+    func consumeOpenChatRequest(_ requestID: Int) -> Bool {
+        guard requestID != 0,
+              requestID == self.openChatRequestID,
+              requestID != self.consumedOpenChatRequestID
+        else { return false }
+        self.consumedOpenChatRequestID = requestID
+        return true
+    }
+
+    func requestLiveVoiceStart() {
+        self.pendingLiveVoiceStart = true
+    }
+
+    func consumeLiveVoiceStartRequest(
+        isSceneActive: Bool,
+        isOnboardingPresented: Bool,
+        hasGatewayConfiguration: Bool)
+    {
+        guard self.pendingLiveVoiceStart, isSceneActive else { return }
+        // Consume before admission: finishing onboarding must not start a forgotten request.
+        self.pendingLiveVoiceStart = false
+        self.liveVoiceStartError = nil
+        guard !isOnboardingPresented, hasGatewayConfiguration else {
+            self.liveVoiceStartError = String(localized: "Connect to your Gateway, then run Start Live Voice again.")
+            return
+        }
+        self.openChat(sessionKey: self.chatSessionKey)
+        guard !self.talkMode.isEnabled else { return }
+        self.setTalkEnabled(true)
+        if !self.talkMode.isEnabled {
+            self.liveVoiceStartError = self.talkMode.statusText
+        }
     }
 
     func requestNewChat() {
@@ -5344,24 +5377,6 @@ extension NodeAppModel {
         } catch {
             // Best-effort only.
         }
-    }
-
-    func runSharePipelineSelfTest() async {
-        self.recordShareEvent("Share self-test running…")
-
-        let payload = SharedContentPayload(
-            title: "OpenClaw Share Self-Test",
-            url: URL(string: "https://openclaw.ai/share-self-test"),
-            text: "Validate iOS share->deep-link->gateway forwarding.")
-        guard let deepLink = ShareToAgentDeepLink.buildURL(
-            from: payload,
-            instruction: "Reply with: SHARE SELF-TEST OK")
-        else {
-            self.recordShareEvent("Self-test failed: could not build deep link.")
-            return
-        }
-
-        await handleDeepLink(url: deepLink)
     }
 
     func refreshLastShareEventFromRelay() {
@@ -9863,6 +9878,9 @@ extension NodeAppModel {
             self.stageGatewaySetupLink(link)
         case .dashboard:
             self.dashboardNavigationRequestID &+= 1
+        case .gatewayAdd:
+            self.recordShareEvent(
+                "This browser sign-in link is for the OpenClaw Mac app. Use a device pairing link on iOS.")
         }
     }
 

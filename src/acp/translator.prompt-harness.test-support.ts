@@ -4,8 +4,12 @@ import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { expect, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
-import { AcpGatewayAgent } from "./translator.js";
-import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
+import type { AcpGatewayAgent } from "./translator.js";
+import {
+  createAcpConnection,
+  createAcpGateway,
+  createAcpGatewayAgent,
+} from "./translator.test-helpers.js";
 
 type PendingPromptHarness = {
   agent: AcpGatewayAgent;
@@ -33,7 +37,7 @@ export function createSessionAgentHarness(
     cwd: options.cwd ?? "/tmp",
   });
   const connection = createAcpConnection();
-  const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+  const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
     sessionStore,
   });
 

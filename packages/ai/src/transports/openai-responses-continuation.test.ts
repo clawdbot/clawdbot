@@ -34,7 +34,7 @@ const assistantOutput = {
       logprobs: [{ token: "answer", logprob: -0.1, bytes: [], top_logprobs: [] }],
     },
   ],
-};
+} satisfies ResponsesContinuationState["lastResponseItems"][number];
 
 function continuationState(): ResponsesContinuationState {
   return {
@@ -46,7 +46,7 @@ function continuationState(): ResponsesContinuationState {
       input: [firstUser] as never,
     },
     lastResponseId: "resp_1",
-    lastResponseItems: [assistantOutput] as never,
+    lastResponseItems: [assistantOutput],
   };
 }
 
@@ -119,6 +119,48 @@ describe("OpenAI Responses continuation", () => {
     expect(resolveResponsesContinuationRequest(continuationState(), explicit)).toEqual({
       request: explicit,
       continuationStatus: "explicit_previous_response_id",
+    });
+  });
+
+  it("continues across user turns when runtime context stays before the prior tool round", () => {
+    const state = continuationState();
+    const carrier = (text: string) => ({
+      type: "message" as const,
+      role: "user" as const,
+      content: [
+        {
+          type: "input_text" as const,
+          text: `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n${text}\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>`,
+        },
+      ],
+    });
+    const firstCarrier = carrier("first turn metadata");
+    state.lastRequest.input = [
+      ...(state.lastRequest.input ?? []),
+      firstCarrier,
+      { type: "function_call", call_id: "call_1", name: "lookup", arguments: "{}" },
+      { type: "function_call_output", call_id: "call_1", output: "lookup result" },
+    ];
+    const nextTurn = [
+      { type: "message", role: "user", content: [{ type: "input_text", text: "second" }] },
+      carrier("second turn metadata"),
+    ] satisfies NonNullable<ResponsesContinuationRequest["input"]>;
+    const request: ResponsesContinuationRequest = {
+      ...state.lastRequest,
+      input: [...(state.lastRequest.input ?? []), assistantOutput, ...nextTurn],
+    };
+
+    expect(resolveResponsesContinuationRequest(state, request)).toMatchObject({
+      continuationStatus: "continued",
+      request: { previous_response_id: "resp_1", input: nextTurn },
+    });
+    const withoutPreviousCarrier = {
+      ...request,
+      input: request.input?.filter((item) => item !== firstCarrier),
+    };
+    expect(resolveResponsesContinuationRequest(state, withoutPreviousCarrier)).toEqual({
+      continuationStatus: "history_changed",
+      request: withoutPreviousCarrier,
     });
   });
 
@@ -353,6 +395,37 @@ describe("OpenAI Responses continuation", () => {
 
     const next = claim({ request: nextRequest() });
     expect(next?.request.previous_response_id).toBeUndefined();
+    next?.release();
+  });
+
+  it("keeps preparation exclusive and preserves a cleanup-time replacement after failure", () => {
+    claim({})?.commit(continuationState().lastRequest, {
+      id: "resp_first",
+      output: continuationState().lastResponseItems,
+    });
+    let replacement: ReturnType<typeof claim>;
+    const request = {
+      ...nextRequest(),
+      metadata: {
+        value: {
+          toJSON() {
+            expect(claim({})).toBeUndefined();
+            cleanupSessionResources("session-1");
+            replacement = claim({});
+            throw new Error("serialization failed after replacement");
+          },
+        },
+      },
+    };
+    expect(() => claim({ request })).toThrow("serialization failed after replacement");
+    expect(replacement).toBeDefined();
+    expect(claim({})).toBeUndefined();
+    replacement?.commit(continuationState().lastRequest, {
+      id: "resp_replacement",
+      output: continuationState().lastResponseItems,
+    });
+    const next = claim({ request: nextRequest() });
+    expect(next?.request.previous_response_id).toBe("resp_replacement");
     next?.release();
   });
 

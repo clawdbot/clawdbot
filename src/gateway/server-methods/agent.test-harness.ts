@@ -17,6 +17,7 @@ import type {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
   resetTaskRegistryForTests,
@@ -80,7 +81,6 @@ const mocks = vi.hoisted(() => ({
       lastInteractionAt: entry?.lastInteractionAt,
     }),
   ),
-  hasTerminalMainSessionTranscriptNewerThanRegistrySync: vi.fn(() => false),
   lifecycleGeneration: "test-generation",
 }));
 
@@ -134,8 +134,6 @@ vi.mock("../../config/sessions.js", async () => {
       return m?.[1] ?? "main";
     },
     resolveExplicitAgentSessionKey: mocks.resolveExplicitAgentSessionKey,
-    hasTerminalMainSessionTranscriptNewerThanRegistrySync:
-      mocks.hasTerminalMainSessionTranscriptNewerThanRegistrySync,
     resolveAgentMainSessionKey: ({
       cfg,
       agentId,
@@ -312,10 +310,12 @@ vi.mock("../../infra/agent-events.js", () => ({
   registerAgentRunContext: mocks.registerAgentRunContext,
   onAgentEvent: vi.fn(),
 }));
-vi.mock("../../infra/agent-run-registry.js", () => ({
+vi.mock("../../infra/agent-run-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/agent-run-registry.js")>()),
   claimAgentRunContext: mocks.registerAgentRunContext,
   clearAgentRunContext: mocks.clearAgentRunContext,
   getAgentRunContext: vi.fn(() => undefined),
+  getAgentRunLifecycleGeneration: () => mocks.lifecycleGeneration,
   resolveProjectedAgentRunProgressState: vi.fn(() => undefined),
   registerAgentRunContext: mocks.registerAgentRunContext,
 }));
@@ -399,6 +399,7 @@ vi.mock("../../channels/message/runtime.js", async () => {
 
 export const makeContext = (): GatewayRequestContext =>
   ({
+    trackExecution: trackAsyncWork,
     dedupe: new Map(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
@@ -1076,6 +1077,7 @@ export async function invokeAgentIdentityGet(
     respond?: ReturnType<typeof vi.fn>;
     reqId?: string;
     context?: GatewayRequestContext;
+    client?: AgentHandlerArgs["client"];
   },
 ) {
   const respond = options?.respond ?? vi.fn();
@@ -1091,7 +1093,7 @@ export async function invokeAgentIdentityGet(
       id: options?.reqId ?? "agent-identity-test-req",
       method: "agent.identity.get",
     },
-    client: null,
+    client: options?.client ?? null,
     isWebchatConnect: () => false,
   });
   return respond;
@@ -1163,7 +1165,6 @@ export const describe0AfterEach0 = () => {
         lastInteractionAt: entry?.lastInteractionAt,
       }),
     );
-  mocks.hasTerminalMainSessionTranscriptNewerThanRegistrySync.mockReset().mockReturnValue(false);
   mocks.lifecycleGeneration = "test-generation";
   dateOnlyFakeClockActive = false;
   vi.useRealTimers();

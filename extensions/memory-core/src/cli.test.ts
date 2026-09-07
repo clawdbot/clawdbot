@@ -92,6 +92,7 @@ vi.mock("./cli.host.runtime.js", async () => {
     {
       defaultRuntime,
       formatErrorMessage,
+      formatCliJsonFailure,
       getMemoryEmbeddingCommandSecretTargetIds,
       setVerbose,
       shortenHomeInString,
@@ -111,6 +112,7 @@ vi.mock("./cli.host.runtime.js", async () => {
   return {
     defaultRuntime,
     formatErrorMessage,
+    formatCliJsonFailure,
     getMemoryEmbeddingCommandSecretTargetIds,
     getMemorySearchManager,
     listMemoryFiles,
@@ -158,6 +160,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  process.exitCode = 0;
   getMemorySearchManager.mockReset();
   forgetMemoryEntries.mockReset();
   getRuntimeConfig.mockReset().mockReturnValue({});
@@ -172,7 +175,7 @@ afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  process.exitCode = undefined;
+  process.exitCode = 0;
   setVerbose(false);
 });
 
@@ -790,7 +793,7 @@ describe("memory cli", () => {
     params.beforeExpect?.();
     expect(close).toHaveBeenCalled();
     expect(error).toHaveBeenCalledWith("Memory manager close failed: close boom");
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
   }
 
   it("prints vector status when available", async () => {
@@ -803,6 +806,13 @@ describe("memory cli", () => {
           files: 2,
           chunks: 5,
           sourceCounts: [{ source: "memory", files: 2, chunks: 5, chunkBytes: 2048 }],
+          storage: {
+            databaseBytes: 1048576,
+            walBytes: 2048,
+            reusableBytes: 524288,
+            embeddingCacheBytes: 4096,
+            embeddingCacheEntries: 123,
+          },
           cache: { enabled: true, entries: 123, maxEntries: 50000 },
           fts: { enabled: true, available: true },
           vector: {
@@ -830,6 +840,8 @@ describe("memory cli", () => {
     expectLogged(log, "FTS: ready");
     expectLogged(log, "2.0 KiB text + embeddings");
     expectLogged(log, "Embedding cache: enabled (123 entries)");
+    expectLogged(log, "Agent database: 1.0 MiB · WAL 2.0 KiB · reusable 512.0 KiB");
+    expectLogged(log, "Stored embedding cache: 4.0 KiB · 123 entries");
     expect(close).toHaveBeenCalled();
   });
 
@@ -1739,7 +1751,7 @@ describe("memory cli", () => {
     expectNotLogged(log, "Memory index complete");
     await expectPathMissing(path.join(workspaceDir, "memory"));
     expect(close).toHaveBeenCalled();
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
   });
 
   it("reports a truthful no-op when the memory directory is missing", async () => {
@@ -1774,7 +1786,7 @@ describe("memory cli", () => {
     expectNotLogged(log, "Memory index updated");
     await expectPathMissing(path.join(workspaceDir, "memory"));
     expect(close).toHaveBeenCalled();
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
   });
 
   it("reports the indexed file count and closes the manager after index", async () => {
@@ -1847,7 +1859,7 @@ describe("memory cli", () => {
       "Memory index WARNING (main): chunks_vec not updated — sqlite-vec unavailable: load failed. Vector recall degraded.",
     );
     expect(close).toHaveBeenCalled();
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
   });
 
   it("warns on stderr when index has vector store but no semantic vectors", async () => {
@@ -1882,7 +1894,7 @@ describe("memory cli", () => {
       "Memory index WARNING (main): chunks_vec not updated — semantic vector embeddings unavailable — no vector dimensions resolved. Vector recall degraded.",
     );
     expect(close).toHaveBeenCalled();
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
   });
 
   it("logs close failures without failing the command", async () => {
@@ -1970,13 +1982,131 @@ describe("memory cli", () => {
     expect(hasLoggedInactiveSecretDiagnostic(error)).toBe(true);
   });
 
-  it("logs default message when memory manager is missing", async () => {
+  describe.each([
+    {
+      availability: "disabled",
+      managerError: undefined,
+      expectedExitCode: 0,
+    },
+    {
+      availability: "failed",
+      managerError: "fixture memory acquisition failed",
+      expectedExitCode: 1,
+    },
+  ])("missing-manager JSON output ($availability)", ({ managerError, expectedExitCode }) => {
+    it.each([
+      ["search", ["search", "--query", "fixture query"]],
+      ["promote", ["promote"]],
+      ["promote-explain", ["promote-explain", "fixture candidate"]],
+      ["rem-harness", ["rem-harness"]],
+      ["rem-backfill", ["rem-backfill", "--rollback"]],
+      ["session-backfill", ["session-backfill"]],
+    ])("reports unavailable %s once without claiming completed work", async (_name, args) => {
+      getMemorySearchManager.mockResolvedValueOnce({
+        manager: null,
+        ...(managerError ? { error: managerError } : {}),
+      });
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      const errors = spyRuntimeErrors(defaultRuntime);
+      spyRuntimeLogs(defaultRuntime);
+
+      await runMemoryCli([...args, "--json"]);
+
+      expect(writeJson).toHaveBeenCalledTimes(1);
+      expect(firstWrittenJsonArg(writeJson)).toEqual(
+        managerError
+          ? {
+              agentId: "main",
+              ok: false,
+              error: {
+                type: "cli_error",
+                message: `memory ${args[0]} failed (main): ${managerError}`,
+              },
+            }
+          : { agentId: "main", status: "disabled" },
+      );
+      expect(process.exitCode).toBe(expectedExitCode);
+      if (managerError) {
+        expect(errors).toHaveBeenCalledWith(`memory ${args[0]} failed (main): ${managerError}`);
+      } else {
+        expect(errors).not.toHaveBeenCalled();
+      }
+    });
+  });
+
+  it.each([
+    { name: "all disabled", healthyOps: false, managerError: undefined, exitCode: 0 },
+    { name: "one disabled", healthyOps: true, managerError: undefined, exitCode: 0 },
+    {
+      name: "one failed",
+      healthyOps: true,
+      managerError: "fixture memory acquisition failed",
+      exitCode: 1,
+    },
+  ])(
+    "keeps one aggregate JSON status document with $name",
+    async ({ healthyOps, managerError, exitCode }) => {
+      getRuntimeConfig.mockReturnValue(configuredAgents);
+      const healthyStatus = makeMemoryStatus({ workspaceDir: undefined });
+      const close = vi.fn(async () => {});
+      getMemorySearchManager.mockImplementation(async ({ agentId }: { agentId: string }) =>
+        healthyOps && agentId === "ops"
+          ? { manager: { status: () => healthyStatus, close } }
+          : { manager: null, ...(managerError ? { error: managerError } : {}) },
+      );
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      spyRuntimeErrors(defaultRuntime);
+      spyRuntimeLogs(defaultRuntime);
+
+      await runMemoryCli(["status", "--json"]);
+
+      expect(writeJson).toHaveBeenCalledTimes(1);
+      const output = firstWrittenJsonArg<Array<{ agentId: string; status: unknown }>>(writeJson);
+      if (healthyOps) {
+        expect(output).toHaveLength(1);
+        expect(output).toMatchObject([{ agentId: "ops", status: healthyStatus }]);
+        expect(close).toHaveBeenCalledTimes(1);
+      } else {
+        expect(output).toEqual([]);
+      }
+      expect(process.exitCode).toBe(exitCode);
+    },
+  );
+
+  it("keeps an enabled empty search distinct from unavailable JSON", async () => {
+    getRuntimeConfig.mockReturnValue({
+      plugins: { entries: { "memory-core": { config: { dreaming: { enabled: false } } } } },
+    });
+    const close = vi.fn(async () => {});
+    mockManager({
+      search: vi.fn(async () => []),
+      status: () => makeMemoryStatus({ workspaceDir: undefined }),
+      close,
+    });
+    const writeJson = spyRuntimeJson(defaultRuntime);
+
+    await runMemoryCli(["search", "--query", "absent fixture query", "--json"]);
+
+    expect(writeJson).toHaveBeenCalledTimes(1);
+    expect(firstWrittenJsonArg(writeJson)).toEqual({ results: [] });
+    expect(process.exitCode).toBe(0);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["status", ["status"]],
+    ["search", ["search", "fixture query"]],
+    ["index", ["index"]],
+  ])("preserves disabled human %s output without adding JSON", async (_name, args) => {
     getMemorySearchManager.mockResolvedValueOnce({ manager: null });
 
     const log = spyRuntimeLogs(defaultRuntime);
-    await runMemoryCli(["status"]);
+    const writeJson = spyRuntimeJson(defaultRuntime);
+    await runMemoryCli(args);
 
     expect(log).toHaveBeenCalledWith("Memory search disabled.");
+    expect(writeJson).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(0);
   });
 
   it.each([
@@ -2013,7 +2143,6 @@ describe("memory cli", () => {
           sources: ["memory"],
           store: { vector: { enabled: false } },
           cache: { enabled: false },
-          sync: { watch: false, onSessionStart: false, onSearch: false },
           query: { hybrid: { enabled: true } },
         },
       },
@@ -2105,7 +2234,7 @@ describe("memory cli", () => {
     });
     expect(log).toHaveBeenCalledWith("No matches.");
     expect(close).toHaveBeenCalled();
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
   });
 
   it("prefers --query when positional and flag are both provided", async () => {
@@ -2215,7 +2344,7 @@ describe("memory cli", () => {
 
       expect(log).toHaveBeenCalledWith("No short-term recall candidates.");
       expect(close).toHaveBeenCalled();
-      expect(process.exitCode).toBeUndefined();
+      expect(process.exitCode).toBe(0);
     });
   });
 
@@ -2939,7 +3068,7 @@ describe("memory cli", () => {
     });
   });
 
-  it("names the filter for each candidate rejected during promote apply", async () => {
+  it("names apply-time rejections without ranking blocked origins", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const relativePath = "memory/2026-04-02.md";
       await writeDailyMemoryNote(workspaceDir, "2026-04-02", [
@@ -3019,7 +3148,7 @@ describe("memory cli", () => {
         "0",
       ]);
 
-      expectLogged(log, `Skipped ${relativePath}:1-1: origin filter (untrusted).`);
+      expectNotLogged(log, `${relativePath}:1-1`);
       expectLogged(log, `Skipped ${relativePath}:2-2: signal threshold (1 < 2).`);
       expectLogged(log, `Skipped ${relativePath}:3-3: contamination filter after rehydration.`);
       expectNotLogged(log, "No candidates met apply criteria.");
@@ -3067,12 +3196,13 @@ describe("memory cli", () => {
     });
   });
 
-  it("preserves score order for mixed applied and rejected promotion output", async () => {
+  it("keeps preview limits available and preserves mixed apply output order", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const relativePath = "memory/2026-04-03.md";
       await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
         "High-score untrusted candidate.",
         "Lower-score trusted candidate.",
+        "High-score rare trusted candidate.",
       ]);
       await recordShortTermRecalls({
         workspaceDir,
@@ -3119,22 +3249,37 @@ describe("memory cli", () => {
         status: () => makeMemoryStatus({ workspaceDir }),
         close: vi.fn(async () => {}),
       };
-      const args = [
-        "promote",
-        "--apply",
-        "--limit",
-        "2",
-        "--min-score",
-        "0",
-        "--min-recall-count",
-        "0",
-        "--min-unique-queries",
-        "0",
-      ];
+      const args = ["promote", "--min-score", "0", "--min-unique-queries", "0"];
 
       mockManager(manager);
       const writeJson = spyRuntimeJson(defaultRuntime);
-      await runMemoryCli([...args, "--json"]);
+      await runMemoryCli([...args, "--limit", "1", "--min-recall-count", "0", "--json"]);
+      const preview = firstWrittenJsonArg<{ candidates: Array<{ startLine: number }> }>(writeJson);
+      expect(preview?.candidates.map((candidate) => candidate.startLine)).toEqual([2]);
+
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "rare candidate",
+        results: [
+          {
+            path: relativePath,
+            startLine: 3,
+            endLine: 3,
+            score: 0.99,
+            snippet: "High-score rare trusted candidate.",
+            source: "memory",
+            provenance: {
+              originClass: "owner",
+              sessionKind: "interactive",
+              observedAt: Date.now(),
+            },
+          },
+        ],
+      });
+      const applyArgs = [...args, "--apply", "--limit", "2", "--min-recall-count", "2"];
+      writeJson.mockClear();
+      mockManager(manager);
+      await runMemoryCli([...applyArgs, "--json"]);
       const payload = firstWrittenJsonArg<{
         candidates: Array<{ startLine: number }>;
         apply: {
@@ -3142,11 +3287,16 @@ describe("memory cli", () => {
           rejectedCandidates: Array<{ candidate: { startLine: number } }>;
         };
       }>(writeJson);
-      expect(payload?.candidates.map((candidate) => candidate.startLine)).toEqual([1, 2]);
+      expect(payload?.candidates.map((candidate) => candidate.startLine)).toEqual([3, 2]);
       expect(payload?.apply.appliedCandidates.map((candidate) => candidate.startLine)).toEqual([2]);
       expect(
         payload?.apply.rejectedCandidates.map((rejection) => rejection.candidate.startLine),
-      ).toEqual([1]);
+      ).toEqual([3]);
+
+      const memory = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8");
+      expect(memory).toContain("Lower-score trusted candidate.");
+      expect(memory).not.toContain("High-score untrusted candidate.");
+      expect(memory).not.toContain("High-score rare trusted candidate.");
 
       const store = await shortTermTesting.readRecallStore(workspaceDir, new Date().toISOString());
       for (const entry of Object.values(store.entries)) {
@@ -3157,9 +3307,10 @@ describe("memory cli", () => {
 
       mockManager(manager);
       const log = spyRuntimeLogs(defaultRuntime);
-      await runMemoryCli(args);
+      await runMemoryCli(applyArgs);
       const output = loggedOutput(log);
-      const rejectedIndex = output.indexOf(`${relativePath}:1-1`);
+      expect(output).not.toContain(`${relativePath}:1-1`);
+      const rejectedIndex = output.indexOf(`${relativePath}:3-3`);
       const appliedIndex = output.indexOf(`${relativePath}:2-2`);
       expect(rejectedIndex).toBeGreaterThanOrEqual(0);
       expect(rejectedIndex).toBeLessThan(appliedIndex);

@@ -1,7 +1,4 @@
-import {
-  isFastModeAutoProgressPayload,
-  resolveSendableOutboundReplyParts,
-} from "openclaw/plugin-sdk/reply-payload";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import { type AgentPlanStep, formatPlanChecklistLines } from "../../channels/streaming.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
@@ -30,7 +27,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   const {
     cfg,
     ctx,
-    dispatcher,
     isDispatchOperationAborted,
     markInboundDedupeReplayUnsafe,
     markProgress,
@@ -99,7 +95,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     acceptedReplyPayload: false,
     blockCount: 0,
     channelTransformSuppressed: false,
-    hasPendingDirectBlockReplyDelivery: false,
+    pendingDirectBlockReplyDelivery: Promise.resolve(),
     progressCallbackStartTail: Promise.resolve(),
   };
   const cleanBlockTtsDirectiveText = shouldCleanTtsDirectiveText({
@@ -132,9 +128,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     if (hasAskUserPayload(payload)) {
       return payload;
     }
-    if (isFastModeAutoProgressPayload(payload)) {
-      return payload;
-    }
     // Group/native flows intentionally suppress tool summary text, but media-only
     // tool results (for example TTS audio) must still be delivered.
     const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
@@ -152,7 +145,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   const shouldSuppressProgressDelivery = () =>
     state.sendPolicyDenied ||
     (state.suppressDelivery && !state.shouldDeliverVerboseProgressDespiteSourceSuppression());
-  const suppressToolErrorWarnings = params.replyOptions?.suppressToolErrorWarnings;
   const onToolResultFromReplyOptions = params.replyOptions?.onToolResult;
   const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
   const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
@@ -166,16 +158,11 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     options?.requiresToolSummaryVisibility === true &&
     (params.replyOptions?.suppressDefaultToolProgressMessages === true ||
       options.allowWhenToolSummariesHidden === true);
-  const waitForPendingDirectBlockReplyDelivery = async (abortSignal?: AbortSignal) => {
-    if (!progressState.hasPendingDirectBlockReplyDelivery) {
-      return;
-    }
-    // Direct block replies are queued asynchronously so lightweight replies do
-    // not wait for dispatcher idle. Flush only before later tool/progress
-    // callbacks and final completion where external ordering is visible.
-    progressState.hasPendingDirectBlockReplyDelivery = false;
-    await waitForReplyDispatcherIdle(dispatcher, abortSignal);
-  };
+  const waitForPendingDirectBlockReplyDelivery = (abortSignal?: AbortSignal) =>
+    waitForReplyDispatcherIdle(
+      { waitForIdle: () => progressState.pendingDirectBlockReplyDelivery },
+      abortSignal,
+    );
   const shouldForwardProgressCallback = (options?: {
     allowWhenToolSummariesHidden?: boolean;
     forwardWhenSourceDeliverySuppressed?: boolean;
@@ -359,7 +346,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     resolveToolDeliveryPayload,
     typing,
     shouldSuppressProgressDelivery,
-    suppressToolErrorWarnings,
     onToolResultFromReplyOptions,
     onPlanUpdateFromReplyOptions,
     onApprovalEventFromReplyOptions,

@@ -18,8 +18,8 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-function renderCodeCopyButton(): HTMLButtonElement {
-  document.body.innerHTML = toSanitizedMarkdownHtml("```ts\nconst answer = 42;\n```");
+function renderCodeCopyButton(text = "const answer = 42;"): HTMLButtonElement {
+  document.body.innerHTML = toSanitizedMarkdownHtml(`\`\`\`ts\n${text}\n\`\`\``);
   const button = document.querySelector<HTMLButtonElement>(".code-block-copy");
   if (!button) {
     throw new Error("Expected Markdown code-copy button");
@@ -52,10 +52,9 @@ it("reobserves reused Markdown DOM while fencing scans queued before disconnect"
       tableInteractions: "enabled",
     },
   );
-  const part = render(
-    html`<section class="chat-text" ${markdownBlocks()}>${unsafeHTML(content)}</section>`,
-    container,
-  );
+  const view = (active = true) =>
+    html`<section class="chat-text" ${markdownBlocks(active)}>${unsafeHTML(content)}</section>`;
+  const part = render(view(), container);
   const code = container.querySelector("code");
   const tableViewport = container.querySelector(".markdown-table__viewport");
 
@@ -79,12 +78,42 @@ it("reobserves reused Markdown DOM while fencing scans queued before disconnect"
     expect(container.querySelector(".markdown-table__viewport")).toBe(tableViewport);
     expect(observed.has(tableViewport!)).toBe(true);
     expect(observed.size).toBe(3);
+
+    render(view(false), container);
+    await Promise.resolve();
+    expect(observed.size).toBe(0);
+    expect(container.querySelector("code")).toBe(code);
+    render(view(true), container);
+    render(view(false), container);
+    await Promise.resolve();
+    expect(observed.size).toBe(0);
+    render(view(true), container);
+    await Promise.resolve();
+    expect(observed.size).toBe(3);
+    expect(observed.has(code!)).toBe(true);
+    expect(observed.has(tableViewport!)).toBe(true);
   } finally {
     render(nothing, container);
   }
 });
 
 describe("Markdown code-block clipboard feedback", () => {
+  it.each([
+    { name: "indentation and a final newline", source: "  const answer = 42;\n" },
+    { name: "boundary blank lines", source: "\n\nconst answer = 42;\n\n" },
+    { name: "whitespace-only content", source: " \n\t " },
+  ])("preserves $name when copying ordinary code", async ({ source }) => {
+    vi.useFakeTimers();
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const button = renderCodeCopyButton(source);
+
+    button.click();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(writeText).toHaveBeenCalledWith(source);
+  });
+
   it("visibly reports both denied clipboard paths and restores the idle state", async () => {
     vi.useFakeTimers();
     const writeText = vi.fn(async () => {

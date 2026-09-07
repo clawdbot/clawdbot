@@ -1,30 +1,9 @@
-const WIDGET_THEME_TOKENS = [
-  "surface",
-  "card",
-  "elevated",
-  "text",
-  "text-strong",
-  "muted",
-  "border",
-  "border-strong",
-  "accent",
-  "accent-fill",
-  "accent-fg",
-  "ok",
-  "warn",
-  "danger",
-  "info",
-  "radius",
-  "radius-full",
-  "scrollbar-size",
-  "scrollbar-thumb-inset",
-  "scrollbar-thumb",
-  "scrollbar-thumb-hover",
-  "font-body",
-  "font-mono",
-] as const;
-
-type WidgetThemeToken = (typeof WIDGET_THEME_TOKENS)[number];
+import {
+  WIDGET_THEME_MESSAGE_TYPE,
+  WIDGET_THEME_TOKENS,
+  type WidgetThemeMessage,
+  type WidgetThemeToken,
+} from "../../../src/shared/widget-theme.ts";
 
 const HOST_TOKEN_SOURCES: Record<WidgetThemeToken, string> = {
   surface: "--bg",
@@ -63,15 +42,11 @@ function collectWidgetThemeTokens(read: (hostVar: string) => string): Record<str
   return tokens;
 }
 
-export function buildWidgetThemeMessage(): {
-  type: "openclaw:widget-theme";
-  mode: "light" | "dark";
-  tokens: Record<string, string>;
-} {
+export function buildWidgetThemeMessage(): WidgetThemeMessage {
   const root = document.documentElement;
   const styles = getComputedStyle(root);
   return {
-    type: "openclaw:widget-theme",
+    type: WIDGET_THEME_MESSAGE_TYPE,
     mode: root.dataset.themeMode === "light" ? "light" : "dark",
     tokens: collectWidgetThemeTokens((hostVar) => styles.getPropertyValue(hostVar)),
   };
@@ -82,6 +57,19 @@ export function postWidgetTheme(frame: HTMLIFrameElement, targetOrigin = "*"): v
 }
 
 const widgetThemeObserverWindows = new WeakSet<Window>();
+const widgetThemeFrames = new WeakMap<Window, Map<HTMLIFrameElement, string>>();
+
+/** Explicit registration also reaches widgets inside a chat component's shadow root. */
+export function registerWidgetThemeFrame(frame: HTMLIFrameElement, origin: string): () => void {
+  let frames = widgetThemeFrames.get(window);
+  if (!frames) {
+    frames = new Map();
+    widgetThemeFrames.set(window, frames);
+  }
+  frames.set(frame, origin);
+  installWidgetThemeObserver();
+  return () => frames.delete(frame);
+}
 
 export function installWidgetThemeObserver(): void {
   if (
@@ -97,10 +85,20 @@ export function installWidgetThemeObserver(): void {
   widgetThemeObserverWindows.add(window);
   const root = document.documentElement;
   new MutationObserver(() => {
+    const registered = widgetThemeFrames.get(window);
     for (const frame of document.querySelectorAll<HTMLIFrameElement>(
       ".chat-tool-card__preview-frame, .board-widget__frame",
     )) {
-      postWidgetTheme(frame);
+      if (!registered?.has(frame)) {
+        postWidgetTheme(frame);
+      }
+    }
+    for (const [frame, origin] of registered ?? []) {
+      if (frame.isConnected) {
+        postWidgetTheme(frame, origin);
+      } else {
+        registered?.delete(frame);
+      }
     }
   }).observe(root, {
     attributes: true,

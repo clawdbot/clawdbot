@@ -14,7 +14,10 @@ import { getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
 import type { PluginCommandExecutionReplyOptions } from "../../plugins/plugin-command-runtime.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { ReplyPayload } from "../reply-payload.js";
-import { DispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
+import {
+  DispatchReplyOperationAbortedError,
+  runWithDispatchAbortSignal,
+} from "./dispatch-from-config.abort.js";
 import { shouldBypassPluginOwnedBindingForCommand } from "./dispatch-from-config.plugin-binding.js";
 import type { PrepareDispatchOperationContextReadyState } from "./dispatch-from-config.prepare-context.js";
 import {
@@ -115,7 +118,11 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       result: attachSourceReplyDeliveryMode({ queuedFinal, counts }),
     };
   };
-  const fastAbort = await fastAbortResolver({ ctx, cfg });
+  const fastAbort = await fastAbortResolver({
+    ctx,
+    cfg,
+    isCommandTargetCurrent: params.replyOptions?.isCommandTargetCurrent,
+  });
   if (fastAbort.handled) {
     return await finishFastCommand({
       payload: {
@@ -228,7 +235,11 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       });
       const targetedClaimOutcome = hookRunner?.runInboundClaimForPluginOutcome
         ? await (async () => {
-            await state.prepareHookMediaMetadata();
+            await runWithDispatchAbortSignal(
+              state.getPreDispatchAbortSignal(),
+              state.prepareHookMediaMetadata,
+              state.trackDispatchLifecycleWork,
+            );
             if (isPreDispatchOperationAborted()) {
               throw new DispatchReplyOperationAbortedError();
             }

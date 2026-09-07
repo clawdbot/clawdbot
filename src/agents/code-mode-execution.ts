@@ -2,7 +2,7 @@ import {
   observeAgentRunApprovalWait,
   type AgentRunApprovalWait,
 } from "./agent-run-approval-wait.js";
-import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
+import { codeModeReplayIdForToolCall, isCodeModeSwarmAvailable } from "./code-mode-bridge.js";
 import {
   createCodeModeCatalogProjection,
   type CodeModeCatalogProjection,
@@ -12,7 +12,6 @@ import {
   createCodeModeNamespaceRuntime,
   type CodeModeNamespaceRuntime,
 } from "./code-mode-namespaces.js";
-import { registerRepairableCodeModeFailure } from "./code-mode-repair-provenance.js";
 import {
   CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
   codeModeFailureCode,
@@ -23,7 +22,7 @@ import {
   type CodeModeLanguage,
   type CodeModeSettlementMode,
   type CodeModeWorkerResult,
-  type SettledBridgeRequest,
+  type PendingBridgeRequest,
 } from "./code-mode-runtime.js";
 import {
   activeRuns,
@@ -35,14 +34,13 @@ import {
   createCodeModeRunOwner,
   createPendingBridgeStates,
   disposeCodeModeRun,
-  isCodeModeBridgeRepairEligible,
   pendingBridgeRequestsReplaySafe,
   pendingBridgeStatesForSettlement,
   pendingToolCalls,
   removeExpiredRuns,
   reserveActiveRunSlot,
   resumingRunIds,
-  settledBridgeRequestsInCompletionOrder,
+  takeSettledBridgeRequests,
   storeSnapshotState,
   telemetry,
   waitForPendingBridgeSettlement,
@@ -52,7 +50,6 @@ import {
 } from "./code-mode-state.js";
 import { runCodeModeWorker } from "./code-mode-worker.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
-import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import type { ToolResultBudget } from "./tool-result-limits.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchToolContext } from "./tool-search-types.js";
@@ -81,10 +78,7 @@ export async function runCodeModeExec(params: {
   const bridgeDispatch = createCodeModeBridgeDispatchState();
   const deadlineMs = performance.now() + config.timeoutMs;
   const namespaceCatalog = runtime.namespaceEntries();
-  const swarmEnabled = resolveSwarmConfig(
-    params.ctx.runtimeConfig ?? params.ctx.config,
-    params.ctx.agentId,
-  ).enabled;
+  const swarmEnabled = isCodeModeSwarmAvailable(params.ctx, namespaceCatalog);
   const codeModeReplayId = codeModeReplayIdForToolCall(
     params.ctx,
     params.toolCallId,
@@ -97,7 +91,7 @@ export async function runCodeModeExec(params: {
   });
   const apiFiles = createCodeModeApiFilesForRun(namespaceRuntime, swarmEnabled);
   const approvalWait = observeAgentRunApprovalWait(params.ctx);
-  const owner = createCodeModeRunOwner(params.ctx);
+  const owner = createCodeModeRunOwner(params.ctx, config);
   const signal = owner.bindCall(params.signal);
   const output = new CodeModeOutputState(config.maxOutputBytes, params.resultBudget);
   try {
@@ -275,6 +269,47 @@ async function settleCodeModeResult(params: {
   // the worker.
   const settleDeadline = () => params.deadlineMs + params.approvalWait.pausedMs;
   const abortedResult = () => codeModeAbortedResult(params);
+  const dispatchNewRequests = (requests: PendingBridgeRequest[]) => {
+    const pendingIds = new Set(pending.map((entry) => entry.id));
+    const newPendingRequests = requests.filter((request) => !pendingIds.has(request.id));
+    pending.push(
+      ...createPendingBridgeStates(newPendingRequests, {
+        config: params.config,
+        inbox: params.owner.inbox,
+        runtime: params.runtime,
+        catalogProjection: params.catalogProjection,
+        namespaceRuntime: params.namespaceRuntime,
+        parentToolCallId: params.parentToolCallId,
+        codeModeRunId: params.codeModeReplayId,
+        remainingMs: settleDeadline() - performance.now(),
+        activeRunId,
+        ctx: params.ctx,
+        signal: params.signal,
+        onUpdate: params.onUpdate,
+        bridgeDispatch: params.bridgeDispatch,
+      }),
+    );
+  };
+  const parkSnapshot = (
+    waiting: Extract<CodeModeWorkerResult, { status: "waiting" }>,
+    replaySafe: boolean,
+  ) =>
+    storeSnapshotState({
+      owner: params.owner,
+      replayId: params.codeModeReplayId,
+      pending,
+      replaySafe,
+      settlementMode: waiting.settlementMode,
+      snapshot: waiting.snapshot,
+      parentToolCallId: params.parentToolCallId,
+      ctx: params.ctx,
+      config: params.config,
+      runtime: params.runtime,
+      catalogProjection: params.catalogProjection,
+      namespaceRuntime: params.namespaceRuntime,
+      output,
+      bridgeDispatch: params.bridgeDispatch,
+    });
   // Bridge tool calls (search/describe/call/namespace) run through the same
   // policy-checked executor whether the model awaits them one at a time or in a
   // batch, so resolve them inline within the exec deadline and resume the VM
@@ -309,26 +344,7 @@ async function settleCodeModeResult(params: {
       if (!params.reservedActiveRunSlot) {
         releaseReservation = reserveActiveRunSlot();
       }
-      const pendingIds = new Set(pending.map((entry) => entry.id));
-      const newPendingRequests = result.pendingRequests.filter(
-        (request) => !pendingIds.has(request.id),
-      );
-      pending.push(
-        ...createPendingBridgeStates(newPendingRequests, {
-          config: params.config,
-          runtime: params.runtime,
-          catalogProjection: params.catalogProjection,
-          namespaceRuntime: params.namespaceRuntime,
-          parentToolCallId: params.parentToolCallId,
-          codeModeRunId: params.codeModeReplayId,
-          remainingMs: settleDeadline() - performance.now(),
-          activeRunId,
-          ctx: params.ctx,
-          signal: params.signal,
-          onUpdate: params.onUpdate,
-          bridgeDispatch: params.bridgeDispatch,
-        }),
-      );
+      dispatchNewRequests(result.pendingRequests);
       const ready = await waitForPending(
         pending,
         result.settlementMode,
@@ -349,46 +365,34 @@ async function settleCodeModeResult(params: {
         }
         // Parked rather than resumed: without a usable budget the restore alone
         // would burn the remaining deadline and fail a recoverable run.
-        return storeSnapshotState({
-          owner: params.owner,
-          replayId: params.codeModeReplayId,
-          pending,
-          replaySafe: params.replaySafe,
-          settlementMode: result.settlementMode,
-          snapshot: result.snapshot,
-          parentToolCallId: params.parentToolCallId,
-          ctx: params.ctx,
-          config: params.config,
-          runtime: params.runtime,
-          catalogProjection: params.catalogProjection,
-          namespaceRuntime: params.namespaceRuntime,
-          output,
-          bridgeDispatch: params.bridgeDispatch,
-        });
+        return parkSnapshot(result, params.replaySafe);
       }
       // Deliver the settled frontier only. Unresolved sibling promises remain
       // attached to their original bridge ids across the restored snapshot.
-      const settledRequests: SettledBridgeRequest[] =
-        settledBridgeRequestsInCompletionOrder(pending);
+      const delivery = takeSettledBridgeRequests(pending);
       pending = pending.filter((entry) => !entry.settled);
       // The resumed guest inherits only the remaining shared budget as its
       // QuickJS interrupt deadline; the extra host margin is watchdog grace,
       // not extra guest run time.
-      result = await runCodeModeWorker(
-        {
-          kind: "resume",
-          snapshot: result.snapshot,
-          config: {
-            ...params.config,
-            timeoutMs: resumeBudgetMs,
+      try {
+        result = await runCodeModeWorker(
+          {
+            kind: "resume",
+            snapshot: result.snapshot,
+            config: {
+              ...params.config,
+              timeoutMs: resumeBudgetMs,
+            },
+            settledRequests: delivery.requests,
+            pendingRequests: pending.map(({ id, method, args }) => ({ id, method, args })),
           },
-          settledRequests,
-          pendingRequests: pending.map(({ id, method, args }) => ({ id, method, args })),
-        },
-        resumeBudgetMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
-        undefined,
-        params.signal,
-      );
+          resumeBudgetMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
+          undefined,
+          params.signal,
+        );
+      } finally {
+        delivery.release();
+      }
       output.append(result.output);
       if (result.status === "waiting") {
         cancelPendingBridgeStatesById(pending, result.canceledRequestIds);
@@ -424,7 +428,7 @@ async function settleCodeModeResult(params: {
         {
           error: result.pendingRequests.every((request) => request.method === "namespace")
             ? "restart-safe code mode cannot call namespace tools."
-            : "restart-safe code mode cannot call tool surfaces that are not proven replay-safe; recovery runs must use audited read, grep, or find tools.",
+            : "restart-safe code mode cannot call tool surfaces that are not proven replay-safe; use audited read, grep, or find tools.",
         },
         params.runtime.hasNetworkContent(),
       );
@@ -436,42 +440,8 @@ async function settleCodeModeResult(params: {
       if (!params.reservedActiveRunSlot) {
         releaseReservation = reserveActiveRunSlot();
       }
-      const pendingIds = new Set(pending.map((entry) => entry.id));
-      const newPendingRequests = result.pendingRequests.filter(
-        (request) => !pendingIds.has(request.id),
-      );
-      pending.push(
-        ...createPendingBridgeStates(newPendingRequests, {
-          config: params.config,
-          runtime: params.runtime,
-          catalogProjection: params.catalogProjection,
-          namespaceRuntime: params.namespaceRuntime,
-          parentToolCallId: params.parentToolCallId,
-          codeModeRunId: params.codeModeReplayId,
-          remainingMs: settleDeadline() - performance.now(),
-          activeRunId,
-          ctx: params.ctx,
-          signal: params.signal,
-          onUpdate: params.onUpdate,
-          bridgeDispatch: params.bridgeDispatch,
-        }),
-      );
-      return storeSnapshotState({
-        owner: params.owner,
-        replayId: params.codeModeReplayId,
-        pending,
-        replaySafe: params.replaySafe && pendingReplaySafe,
-        settlementMode: result.settlementMode,
-        snapshot: result.snapshot,
-        parentToolCallId: params.parentToolCallId,
-        ctx: params.ctx,
-        config: params.config,
-        runtime: params.runtime,
-        catalogProjection: params.catalogProjection,
-        namespaceRuntime: params.namespaceRuntime,
-        output,
-        bridgeDispatch: params.bridgeDispatch,
-      });
+      dispatchNewRequests(result.pendingRequests);
+      return parkSnapshot(result, params.replaySafe && pendingReplaySafe);
     } catch (error) {
       cancelPendingBridgeStates(pending);
       throw error;
@@ -498,11 +468,7 @@ async function settleCodeModeResult(params: {
     replaySafe: params.replaySafe,
     telemetry: telemetry(params.runtime),
   };
-  const finalized = output.takeResult(metadata, channels, params.runtime.hasNetworkContent());
-  if (finalized.status === "failed" && isCodeModeBridgeRepairEligible(params.bridgeDispatch)) {
-    registerRepairableCodeModeFailure(finalized);
-  }
-  return finalized;
+  return output.takeResult(metadata, channels, params.runtime.hasNetworkContent());
 }
 
 export async function runWait(params: {
@@ -579,30 +545,33 @@ export async function runWait(params: {
       );
     }
 
-    const settledRequests: SettledBridgeRequest[] = settledBridgeRequestsInCompletionOrder(
-      state.pending,
-    );
     const pending = state.pending.filter((entry) => !entry.settled);
     // Keep the run's existing slot reserved while its live sibling calls and
     // snapshot move through the worker; a new exec must not claim this slot.
     releaseActiveRunSlot = reserveActiveRunSlot(state.runId);
+    const delivery = takeSettledBridgeRequests(state.pending);
     // The resumed guest inherits only the remaining shared budget as its QuickJS
     // interrupt deadline; the extra host margin is watchdog grace only.
-    const result = await runCodeModeWorker(
-      {
-        kind: "resume",
-        snapshot: state.snapshot,
-        config: {
-          ...state.config,
-          timeoutMs: resumeBudgetMs,
+    let result: CodeModeWorkerResult;
+    try {
+      result = await runCodeModeWorker(
+        {
+          kind: "resume",
+          snapshot: state.snapshot,
+          config: {
+            ...state.config,
+            timeoutMs: resumeBudgetMs,
+          },
+          settledRequests: delivery.requests,
+          pendingRequests: pending.map(({ id, method, args }) => ({ id, method, args })),
         },
-        settledRequests,
-        pendingRequests: pending.map(({ id, method, args }) => ({ id, method, args })),
-      },
-      resumeBudgetMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
-      undefined,
-      signal,
-    );
+        resumeBudgetMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
+        undefined,
+        signal,
+      );
+    } finally {
+      delivery.release();
+    }
     state.output.append(result.output);
     return await settleCodeModeResult({
       owner: state.owner,
@@ -649,5 +618,3 @@ export async function runWait(params: {
     }
   }
 }
-
-/** Create the exec/wait control tools for one Code Mode run context. */

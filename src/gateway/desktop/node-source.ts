@@ -6,6 +6,8 @@ import type { NodeRegistry, NodeSession } from "../node-registry.js";
 import { DesktopCredentialsRequiredError } from "./host-source-errors.js";
 import type { NodeDesktopStreamBroker } from "./node-stream-broker.js";
 import { mintDesktopObserverToken } from "./observe-bridge.js";
+import type { DesktopObserveRequester } from "./observe-requester.js";
+import type { RfbPreauthDescriptor } from "./rfb-preauth.js";
 import type { DesktopSessionRegistry } from "./session-registry.js";
 
 type NodeDesktopObserveResult = {
@@ -154,6 +156,7 @@ export function createNodeDesktopService(params: {
     async observe(request: {
       nodeId: string;
       control: boolean;
+      requester?: DesktopObserveRequester;
       credentials?: { username?: string; password?: string };
     }): Promise<NodeDesktopObserveResult> {
       const node = params.nodeRegistry.get(request.nodeId);
@@ -224,9 +227,9 @@ export function createNodeDesktopService(params: {
         active.stream = attached.stream;
         assertAuthorized();
 
-        let password: string | undefined;
+        let preauth: RfbPreauthDescriptor;
         if (attached.auth === "vnc-password") {
-          password = attached.vncPassword ?? request.credentials?.password;
+          const password = attached.vncPassword ?? request.credentials?.password;
           if (!password) {
             throw new DesktopCredentialsRequiredError(
               "vnc-password",
@@ -234,16 +237,18 @@ export function createNodeDesktopService(params: {
             );
           }
           registerSecretValueForRedaction(password);
+          preauth = { auth: attached.auth, credentials: { password } };
         } else {
           const username = request.credentials?.username?.trim() ?? "";
-          const ardPassword = request.credentials?.password ?? "";
-          if (!username || !ardPassword) {
+          const password = request.credentials?.password ?? "";
+          if (!username || !password) {
             throw new DesktopCredentialsRequiredError(
               "ard-account",
               "macOS account credentials are required to observe this node",
             );
           }
-          registerSecretValueForRedaction(ardPassword);
+          registerSecretValueForRedaction(password);
+          preauth = { auth: attached.auth, credentials: { username, password } };
         }
 
         const attachment = params.desktopRegistry.publishStream({
@@ -256,30 +261,17 @@ export function createNodeDesktopService(params: {
           throw new Error("node desktop session was superseded before publication");
         }
         active.reservationTransferred = true;
-        const credentials = request.credentials;
-        const preauth =
-          attached.auth === "ard-account"
-            ? {
-                auth: attached.auth,
-                credentials: {
-                  username: credentials?.username?.trim() ?? "",
-                  password: credentials?.password ?? "",
-                },
-              }
-            : {
-                auth: attached.auth,
-                credentials: { password: password ?? credentials?.password ?? "" },
-              };
         const minted = mintDesktopObserverToken({
           sourceKey,
           ownerEpoch: session.ownerEpoch,
           control: request.control,
+          requester: request.requester,
           attachment,
           preauth,
         });
         active.unclaimedTimer = setTimeout(
           () => {
-            if (params.desktopRegistry.hasPendingStream(attachment)) {
+            if (params.desktopRegistry.hasPendingStream(sourceKey, attachment)) {
               void stopActiveStream(active).then(() => session.active.delete(active));
             }
           },

@@ -407,6 +407,59 @@ describe("provider model route adapter", () => {
     });
   });
 
+  it("captures separate override facts for canonical duplicate rows", () => {
+    const firstHeaders: Record<string, string> = {};
+    const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
+      kind: "indeterminate" as const,
+    }));
+    const resolveRoutes = createProviderModelRoutesResolver({
+      provider: "openai",
+      env: {},
+      config: {
+        models: {
+          providers: {
+            openai: {
+              models: [
+                { id: "gpt-5.4", api: "openai-responses", headers: firstHeaders },
+                {
+                  id: "gpt-5.4-codex",
+                  api: "openai-completions",
+                  baseUrl: "https://model.example.test/v1",
+                  headers: { "x-later-row": "ignored" },
+                },
+                { id: "second", params: { azureApiVersion: "2025-01-01" } },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      surface: {
+        normalizeModelCatalogId: ({ modelId }) =>
+          modelId === "gpt-5.4-codex" ? "gpt-5.4" : modelId,
+        resolveModelRoutes,
+      },
+    });
+
+    firstHeaders["x-after-preparation"] = "not part of the prepared route";
+    for (const modelId of ["gpt-5.4-codex", "second", "missing"]) {
+      resolveRoutes({ modelId });
+    }
+    expect(
+      resolveModelRoutes.mock.calls.map(([context]) => [
+        context.modelId,
+        context.requestTransportOverrides,
+      ]),
+    ).toEqual([
+      ["gpt-5.4", "none"],
+      ["second", "present"],
+      ["missing", "none"],
+    ]);
+    expect(resolveModelRoutes.mock.calls[0]?.[0].configuredModel).toEqual({
+      api: "openai-responses",
+      baseUrl: "https://model.example.test/v1",
+    });
+  });
+
   it("keeps case-distinct provider keys and unknown model ids separate", () => {
     const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
       kind: "indeterminate" as const,
@@ -490,9 +543,44 @@ describe("provider model route adapter", () => {
     });
   });
 
-  it("returns null when the provider artifact has no route hook", () => {
+  it.each([
+    ["missing", undefined],
+    ["null", null],
+    ["without a route hook", {}],
+  ] as const)("returns null for a %s route surface despite configured facts", (_label, surface) => {
+    const config = {
+      models: {
+        providers: {
+          "fixture:routes": {
+            api: "openai-completions",
+            baseUrl: "https://provider.example.test/v1",
+            models: [{ id: "demo", api: "openai-responses" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
     expect(
-      resolveProviderModelRoutes({ provider: "fixture", modelId: "demo", surface: {} }),
+      resolveProviderModelRoutes({
+        provider: "fixture:routes",
+        modelId: "demo",
+        api: "openai-responses",
+        baseUrl: "https://observed.example.test/v1",
+        config,
+        env: {},
+        surface,
+      }),
     ).toBeNull();
+  });
+
+  it("keeps a missing route hook captured while fresh resolvers see a later hook", () => {
+    const surface: { resolveModelRoutes?: () => { kind: "indeterminate" } } = {};
+    const resolveRoutes = createProviderModelRoutesResolver({ provider: "fixture", surface });
+    surface.resolveModelRoutes = () => ({ kind: "indeterminate" });
+
+    expect(resolveRoutes({ modelId: "demo" })).toBeNull();
+    expect(resolveProviderModelRoutes({ provider: "fixture", modelId: "demo", surface })).toEqual({
+      kind: "indeterminate",
+    });
   });
 });

@@ -46,22 +46,7 @@ export function readCodexThreadContextSnapshot(params: JsonObject): {
   };
 }
 
-export function projectCodexThreadUsageUpdate(
-  params: JsonObject,
-  currentUsage: ReturnType<typeof normalizeUsage>,
-  applyUsage: (usage: ReturnType<typeof normalizeUsage>) => void,
-  emitContext: (context: ReturnType<typeof readCodexThreadContextSnapshot>) => void,
-): void {
-  applyUsage(readCodexThreadTokenUsage(params) ?? currentUsage);
-  const context = readCodexThreadContextSnapshot(params);
-  if (Object.keys(context).length > 0) {
-    emitContext(context);
-  }
-}
-
-export function normalizeCodexResponseTokenUsage(
-  record: JsonObject,
-): ReturnType<typeof normalizeUsage> {
+function normalizeCodexResponseTokenUsage(record: JsonObject): ReturnType<typeof normalizeUsage> {
   // v2 TokenUsageBreakdown. inputTokens includes cached input; OpenClaw usage
   // tracks uncached input, cache reads, and cache writes separately.
   const totalTokens = readTokenCount(record, "totalTokens");
@@ -104,17 +89,33 @@ export function normalizeCodexResponseTokenUsage(
   };
 }
 
-export class CodexResponseCompletionProjection {
+export class CodexUsageProjection {
   // Replayed notifications keep one upstream response equal to one model iteration.
   private readonly responseIds = new Set<string>();
-  usage: ReturnType<typeof normalizeUsage>;
+  private responseUsage: ReturnType<typeof normalizeUsage>;
+  private threadUsage: ReturnType<typeof normalizeUsage>;
+  private contextUsage: NonNullable<ReturnType<typeof normalizeUsage>>["contextUsage"];
+
+  get usage(): ReturnType<typeof normalizeUsage> {
+    const usage = this.responseUsage ?? this.threadUsage;
+    return usage ? { ...usage, contextUsage: this.contextUsage } : undefined;
+  }
 
   get modelIterations(): number {
     return this.responseIds.size;
   }
 
-  clear(): void {
-    this.usage = undefined;
+  invalidateContext(): void {
+    this.contextUsage = { state: "unavailable" };
+  }
+
+  recordThread(params: JsonObject): ReturnType<typeof readCodexThreadContextSnapshot> {
+    const usage = readCodexThreadTokenUsage(params);
+    this.threadUsage = usage ?? this.threadUsage;
+    if (!this.responseUsage && usage) {
+      this.contextUsage = usage.contextUsage;
+    }
+    return readCodexThreadContextSnapshot(params);
   }
 
   record(params: JsonObject, reportOutputTokens?: (outputTokens: number) => void): void {
@@ -123,11 +124,26 @@ export class CodexResponseCompletionProjection {
       return;
     }
     this.responseIds.add(responseId);
-    const usage = isJsonObject(params.usage) ? params.usage : undefined;
-    // Every provider completion replaces the prior response snapshot. A final
-    // response with missing or malformed usage must leave freshness unknown.
-    this.usage = usage ? normalizeCodexResponseTokenUsage(usage) : undefined;
-    const outputTokens = this.usage?.output;
+    const usage = isJsonObject(params.usage)
+      ? normalizeCodexResponseTokenUsage(params.usage)
+      : undefined;
+    // Billing sums completed calls; context belongs only to the latest call.
+    // Missing usage or a retry invalidates context without erasing paid work.
+    this.contextUsage = usage?.contextUsage ?? { state: "unavailable" };
+    this.responseUsage ??= {};
+    for (const field of [
+      "input",
+      "output",
+      "cacheRead",
+      "cacheWrite",
+      "reasoningTokens",
+      "total",
+    ] as const) {
+      if (usage?.[field] !== undefined) {
+        this.responseUsage[field] = (this.responseUsage[field] ?? 0) + usage[field];
+      }
+    }
+    const outputTokens = usage?.output;
     if (outputTokens !== undefined) {
       reportOutputTokens?.(outputTokens);
     }

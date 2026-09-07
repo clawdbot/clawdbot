@@ -26,6 +26,7 @@ import { isTelegramExtensionRoot } from "../../test/vitest/vitest.extension-tele
 import { isVoiceCallExtensionRoot } from "../../test/vitest/vitest.extension-voice-call-paths.mjs";
 import { isWhatsAppExtensionRoot } from "../../test/vitest/vitest.extension-whatsapp-paths.mjs";
 import { isZaloExtensionRoot } from "../../test/vitest/vitest.extension-zalo-paths.mjs";
+import { isPluginControlUiPath } from "../../test/vitest/vitest.ui-paths.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX, BUNDLED_PLUGIN_ROOT_DIR } from "./bundled-plugin-paths.mjs";
 import { listAvailableExtensionIds } from "./changed-extensions.mts";
 import { parsePositiveInt } from "./numeric-options.mjs";
@@ -161,9 +162,10 @@ function isPathInsideRepo(relativePath: string) {
 }
 
 function isSkippedTrackedTestFile(relativePath: string) {
-  return relativePath
-    .split("/")
-    .some((segment) => segment === "dist" || segment === "node_modules");
+  return (
+    isPluginControlUiPath(relativePath) ||
+    relativePath.split("/").some((segment) => segment === "dist" || segment === "node_modules")
+  );
 }
 
 let trackedRepoTestFiles: string[] | null | undefined;
@@ -174,7 +176,7 @@ export const GIT_LS_FILES_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 export function listTrackedTestPlanFiles(cwd: string, pathspecs: readonly string[]) {
   // Query only the planner-owned tree: a full-repo inventory can overflow
   // spawnSync's buffer and either truncate the plan or force directory walks.
-  const result = spawnSync("git", ["ls-files", "--", ...pathspecs], {
+  const result = spawnSync("git", ["ls-files", "-z", "--", ...pathspecs], {
     cwd,
     encoding: "utf8",
     maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
@@ -183,10 +185,7 @@ export function listTrackedTestPlanFiles(cwd: string, pathspecs: readonly string
   if (result.status !== 0 || result.error) {
     return null;
   }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim().replaceAll("\\", "/"))
-    .filter(Boolean);
+  return result.stdout.split("\0").filter(Boolean);
 }
 
 function loadTrackedRepoTestFiles() {
@@ -232,6 +231,9 @@ function listFilesystemTestFiles(rootPath: string) {
     }
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const fullPath = path.join(current, entry.name);
+      if (isPluginControlUiPath(normalizeRelative(path.relative(repoRoot, fullPath)))) {
+        continue;
+      }
       if (entry.isDirectory()) {
         if (entry.name === "node_modules" || entry.name === "dist") {
           continue;

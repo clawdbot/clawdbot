@@ -119,8 +119,6 @@ describe.skipIf(process.platform === "win32")("supervisor forced settlement outp
       const run = await supervisor.spawn({
         mode: "child",
         argv: [process.execPath, rootPath],
-        sessionId: "forced-settlement-real",
-        backendId: "forced-settlement-real",
         cwd,
         captureOutput: false,
         onStdout: consume(stdoutHash, "stdout"),
@@ -141,7 +139,7 @@ describe.skipIf(process.platform === "win32")("supervisor forced settlement outp
       // Exactly what the CLI runner does with the terminal result it just read.
       const digests = [stdoutHash.digest("hex"), stderrHash.digest("hex")];
       const settledDelivered = [...delivered];
-      const settledOutputAtMs = supervisor.getRecord(run.runId)?.lastOutputAtMs;
+      const settledOutputAtMs = run.activity.lastOutputAtMs;
       const settledTicks = readTickCount(leakTickPath);
       await new Promise<void>((resolve) => {
         setTimeout(resolve, LATE_OUTPUT_OBSERVATION_MS);
@@ -156,7 +154,8 @@ describe.skipIf(process.platform === "win32")("supervisor forced settlement outp
       expect(readTickCount(leakTickPath)).toBeGreaterThan(settledTicks);
       expect(hashFailures).toEqual([]);
       expect(delivered).toEqual(settledDelivered);
-      expect(supervisor.getRecord(run.runId)?.lastOutputAtMs).toBe(settledOutputAtMs);
+      expect(run.activity.lastOutputAtMs).toBe(settledOutputAtMs);
+      await expect(supervisor.shutdown()).rejects.toThrow("cleanup could not be confirmed");
     },
     FORCED_SETTLEMENT_TEST_TIMEOUT_MS,
   );

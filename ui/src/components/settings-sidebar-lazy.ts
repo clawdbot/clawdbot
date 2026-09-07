@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { titleForRoute } from "../app-navigation.ts";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
 
@@ -23,6 +24,21 @@ export function renderLazySettingsSidebar(
   const failed = host.settingsSidebarLoadFailed;
   if (!failed) {
     host.loadSettingsSidebarRenderer();
+  }
+  if (props.presentation === "embed-list" || props.presentation === "embed-page") {
+    return html`<section
+      class=${props.presentation === "embed-list" ? "settings-embed-list" : "native-embed-header"}
+      aria-busy=${failed ? "false" : "true"}
+    >
+      ${props.presentation === "embed-page" ? html`<button class="native-embed-header__back btn btn--ghost" type="button" @click=${props.onExit}>${t("common.back")}</button>` : nothing}
+      <h1 class="page-title">
+        ${props.presentation === "embed-list" ? t("nav.settings") : titleForRoute(props.activeRouteId)}
+      </h1>
+      <p role=${failed ? "alert" : "status"}>
+        ${t(failed ? "nav.settingsLoadFailed" : "common.loading")}
+      </p>
+      ${failed ? html`<button class="btn" @click=${() => host.retrySettingsSidebarRenderer()}>${t("common.retry")}</button>` : nothing}
+    </section>`;
   }
   return html`<aside class="settings-sidebar" aria-busy=${failed ? nothing : "true"}>
     <header class="settings-sidebar__header">

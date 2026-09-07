@@ -24,6 +24,7 @@ import {
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { findSessionTranscriptHeader } from "./session-entry-codec.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
@@ -31,6 +32,7 @@ import {
   type InternalSessionEntry as SessionEntry,
   type SessionCompactionCheckpoint,
 } from "./types.js";
+import { MIN_READABLE_SESSION_VERSION } from "./version.js";
 
 // Compaction checkpoint branch/restore owner.
 
@@ -144,7 +146,11 @@ async function applySqliteCompactionCheckpointSessionOperation(
         result,
       };
     }, toDatabaseOptions(resolved));
-    emitCommittedSessionIdentityDiff(committed.previousIdentity, committed.currentIdentity);
+    emitCommittedSessionIdentityDiff(
+      resolved.agentId,
+      committed.previousIdentity,
+      committed.currentIdentity,
+    );
     return committed.result;
   });
 }
@@ -267,6 +273,7 @@ function forkSqliteCheckpointTranscriptInTransaction(
     createSessionTranscriptHeader({
       cwd: readTranscriptHeaderCwd(selectedEvents),
       sessionId,
+      version: findSessionTranscriptHeader(selectedEvents)?.version ?? MIN_READABLE_SESSION_VERSION,
     }),
     ...selectedEvents.filter((event) => !isSessionTranscriptHeader(event)),
   ]);
