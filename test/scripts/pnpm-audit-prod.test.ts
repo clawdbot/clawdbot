@@ -573,23 +573,16 @@ snapshots:
   });
 
   it("clamps oversized bulk advisory request timers before scheduling", async () => {
+    // Keep this regression on real time while retry backoff stays mocked.
+    const { setTimeout: realDelay } =
+      await vi.importActual<typeof import("node:timers/promises")>("node:timers/promises");
     let signal: AbortSignal | undefined;
     const request = fetchBulkAdvisories({
       payload: { axios: ["1.0.0"] },
       timeoutMs: Number.MAX_SAFE_INTEGER,
       fetchImpl: (async (_url, init) => {
         signal = init?.signal ?? undefined;
-        await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(resolve, 25);
-          signal?.addEventListener(
-            "abort",
-            () => {
-              clearTimeout(timer);
-              reject(new Error("aborted"));
-            },
-            { once: true },
-          );
-        });
+        await realDelay(25, undefined, { signal });
         return new Response("{}", { status: 200 });
       }) as typeof fetch,
     });
@@ -958,9 +951,7 @@ ${packageNames.map((name) => `  ${name}@1.0.0: {}`).join("\n")}
               throw new Error("Expected a JSON request body");
             }
             payloads.push(JSON.parse(init.body));
-            const url =
-              input instanceof URL ? input.href : input instanceof Request ? input.url : input;
-            expect(url).toMatch(/\/-\/npm\/v1\/security\/advisories\/bulk$/u);
+            expect(input).toMatch(/\/-\/npm\/v1\/security\/advisories\/bulk$/u);
             return new Response(
               JSON.stringify(
                 blocked
