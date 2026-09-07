@@ -165,6 +165,9 @@ export async function createFixture(
   } satisfies TranscriptRecorder;
   const attempt = {
     agentId: "main",
+    hostCapabilities: {
+      assertActive: vi.fn(),
+    } as unknown as NonNullable<AttemptParamsLike["hostCapabilities"]>,
     prompt: "inspect both files",
     runId: "run-1",
     sessionId: target.sessionId,

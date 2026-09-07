@@ -1,4 +1,4 @@
-// Copilot plugin module implements tool bridge behavior.
+import { isDeepStrictEqual } from "node:util";
 import {
   convertMcpCallToolResult,
   type Tool as SdkTool,
@@ -25,6 +25,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createAgentHarnessToolSurfaceRuntime } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { toStringifiedError as toCopilotToolError } from "openclaw/plugin-sdk/error-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isRawCopilotModelRun } from "./attempt-mode.js";
 
 type CreateOpenClawCodingTools =
@@ -41,6 +42,11 @@ type ScheduleToolExecution = (
   executionMode: AnyAgentTool["executionMode"],
   execute: () => Promise<ToolResultObject>,
 ) => Promise<ToolResultObject>;
+type CopilotToolReplay = Readonly<{
+  toolName: string;
+  args: unknown;
+  resultPromise: Promise<ToolResultObject>;
+}>;
 
 /**
  * Mutable holder populated by `attempt.ts` *after* `client.createSession()`
@@ -143,6 +149,9 @@ interface CopilotToolBridgeInput {
    */
   onYieldDetected?: (message?: string, acknowledgment?: string) => void;
   onToolCompleted?: (completion: CopilotToolCompletion) => void | Promise<void>;
+  onSuspendableToolCompleted?: (
+    completion: CopilotToolCompletion & { providerResult: ToolResultObject },
+  ) => Promise<void>;
   createOpenClawCodingTools?: CreateOpenClawCodingToolsForBridge;
   beforeExecute?: (ctx: {
     toolName: string;
@@ -315,11 +324,15 @@ export async function createCopilotToolBridge(
     }
     return run;
   };
+  const replayRegistry = new Map<string, CopilotToolReplay>();
   const sdkTools = exposedTools.map((sourceTool) =>
-    convertOpenClawToolToSdkTool(sourceTool, input, scheduleToolExecution),
+    convertOpenClawToolToSdkTool(sourceTool, input, scheduleToolExecution, replayRegistry),
   );
   return {
-    cleanup: toolSurfaceRuntime.cleanup,
+    cleanup: () => {
+      replayRegistry.clear();
+      toolSurfaceRuntime.cleanup?.();
+    },
     // Harness runs resolve `tools.codeMode: "auto"` inside the tool surface
     // bridge, so this is the only place that knows whether the turn actually
     // got code-mode controls. Without it the run reports `codeModeEngaged`
@@ -494,6 +507,7 @@ function convertOpenClawToolToSdkTool(
   sourceTool: AnyAgentTool,
   input: CopilotToolBridgeInput,
   scheduleToolExecution: ScheduleToolExecution,
+  replayRegistry: Map<string, CopilotToolReplay>,
 ): SdkTool {
   if (typeof sourceTool.name !== "string" || sourceTool.name.trim().length === 0) {
     throw new Error("[copilot-tool-bridge] tool name must be a non-empty string");
@@ -561,6 +575,7 @@ function convertOpenClawToolToSdkTool(
   const executeOnce = async (
     args: unknown,
     invocation: ToolInvocation,
+    onDurability: (receipt: Promise<void> | undefined) => void,
   ): Promise<ToolResultObject> => {
     const startedAt = Date.now();
     if (input.abortSignal?.aborted) {
@@ -639,22 +654,58 @@ function convertOpenClawToolToSdkTool(
       ...(ownerMutation ? { ownerMutation } : {}),
     });
     notifyToolResult(sanitizedResult, resultIsError);
-    notifyToolCompleted({
+    const completion = {
       toolName: sourceTool.name,
       toolCallId: invocation.toolCallId,
       args: toToolStartArgs(preparedArgs),
       result: sanitizedResult,
       ...(resultError ? { error: resultError } : {}),
       startedAt,
-    });
+    };
+    notifyToolCompleted(completion);
+    if (
+      (sourceTool.name === "exec" || sourceTool.name === "wait") &&
+      asOptionalRecord(sanitizedResult.details)?.status === "waiting"
+    ) {
+      onDurability(
+        input.onSuspendableToolCompleted?.({
+          ...completion,
+          providerResult: sdkResult,
+        }),
+      );
+    }
     return sdkResult;
   };
 
   return {
     description: sourceTool.description,
     defer: sourceTool.catalogMode === "direct-only" ? "never" : undefined,
-    handler: (args, invocation) =>
-      scheduleToolExecution(sourceTool.executionMode, () => executeOnce(args, invocation)),
+    handler: (args, invocation) => {
+      const argsSnapshot = structuredClone(args);
+      const replay = replayRegistry.get(invocation.toolCallId);
+      if (replay) {
+        return replay.toolName === sourceTool.name && isDeepStrictEqual(replay.args, argsSnapshot)
+          ? replay.resultPromise
+          : Promise.reject(
+              new Error(
+                `[copilot-tool-bridge] tool call '${invocation.toolCallId}' replay changed tool or arguments`,
+              ),
+            );
+      }
+      let durability: Promise<void> | undefined;
+      const resultPromise = scheduleToolExecution(sourceTool.executionMode, () =>
+        executeOnce(args, invocation, (receipt) => (durability = receipt)),
+      ).then(async (value) => {
+        await durability;
+        return value;
+      });
+      replayRegistry.set(invocation.toolCallId, {
+        toolName: sourceTool.name,
+        args: argsSnapshot,
+        resultPromise,
+      });
+      return resultPromise;
+    },
     name: sourceTool.name,
     // Copilot built-ins share coding-tool names. Explicit overrides keep calls
     // on OpenClaw's host-bound tools instead of rejecting registration.

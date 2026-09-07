@@ -45,6 +45,7 @@ import type {
   CopilotAttemptParams,
 } from "./attempt-types.js";
 import { createCopilotByokProxy } from "./byok-proxy.js";
+import { buildSuspendableToolResultMessage } from "./event-bridge-transcript.js";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
 import { createCopilotNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
 import { classifyResumeFailure, decideReplayAction } from "./replay-shim.js";
@@ -313,6 +314,17 @@ export async function runCopilotExecution(context: {
               ...(error ? { error } : {}),
               startedAt,
             });
+          },
+          onSuspendableToolCompleted: (completion) => {
+            if (!transcriptJournal) {
+              throw new Error("Copilot waiting result arrived before transcript journal");
+            }
+            return transcriptJournal.recordProviderToolResult(
+              buildSuspendableToolResultMessage({
+                ...completion,
+                resultContentSource: resultContentSourceByToolName.get(completion.toolName),
+              }),
+            );
           },
         });
         cleanupToolBridge = toolBridge.cleanup;

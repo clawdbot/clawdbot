@@ -61,6 +61,79 @@ const prefix = {
   ],
 };
 
+function toolGroupPrefix() {
+  return {
+    entries: [
+      {
+        eventId: "provider-assistant",
+        identity: "provider:assistant",
+        message: {
+          role: "assistant" as const,
+          content: [
+            { type: "toolCall" as const, id: "call-a", name: "read", arguments: {} },
+            { type: "toolCall" as const, id: "call-b", name: "read", arguments: {} },
+          ],
+          api: "openai-responses",
+          provider: "openai",
+          model: "gpt-test",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "toolUse" as const,
+          timestamp: 1,
+        },
+      },
+      {
+        eventId: "provider-result-a",
+        identity: "provider:result-a",
+        message: {
+          role: "toolResult" as const,
+          toolCallId: "call-a",
+          toolName: "read",
+          content: [{ type: "text" as const, text: "a" }],
+          isError: false,
+        },
+      },
+      {
+        eventId: "provider-result-b",
+        identity: "provider:result-b",
+        message: {
+          role: "toolResult" as const,
+          toolCallId: "call-b",
+          toolName: "read",
+          content: [{ type: "text" as const, text: "b" }],
+          isError: false,
+        },
+      },
+    ],
+  };
+}
+
+function isExpectedToolGroup(messages: readonly { role: string }[]): boolean {
+  const [assistant, first, second] = messages as Array<{
+    role: string;
+    content?: Array<{ id?: string; text?: string }>;
+    toolCallId?: string;
+  }>;
+  return (
+    messages.length === 3 &&
+    assistant?.role === "assistant" &&
+    assistant.content
+      ?.filter((part) => part.id)
+      .map((part) => part.id)
+      .join(",") === "call-a,call-b" &&
+    first?.role === "toolResult" &&
+    first.toolCallId === "call-a" &&
+    second?.role === "toolResult" &&
+    second.toolCallId === "call-b"
+  );
+}
+
 function appendUnkeyedBase(scope: ReturnType<typeof target>) {
   const result = appendTranscriptMessageSync(scope, {
     eventId: "base-event",
@@ -145,6 +218,87 @@ it("commits a rewritten source once and replays it without rerunning the hook", 
       results: [],
     });
     expect(emptyPrepare).not.toHaveBeenCalled();
+  });
+});
+
+it("validates the complete provider prefix after hooks and replays content-only rewrites", async () => {
+  await withOpenClawTestState({ label: "authority-provider-validator" }, async (state) => {
+    const scope = target(state);
+    const authority = new CodeModeTranscriptAuthority(scope);
+    const providerPrefix = toolGroupPrefix();
+    const validate = vi.fn(isExpectedToolGroup);
+    const result = await authority.commitPrefix(
+      {
+        ...providerPrefix,
+        validatePreparedPrefix: validate,
+      },
+      (message) =>
+        message.role === "toolResult"
+          ? {
+              ...message,
+              content: [{ type: "text", text: `rewritten-${message.toolCallId}` }],
+            }
+          : message,
+    );
+    expect(result).toMatchObject({ kind: "committed" });
+    expect(validate).toHaveBeenCalledOnce();
+    expect(validate.mock.calls[0]?.[0]).toMatchObject([
+      { role: "assistant" },
+      { role: "toolResult", content: [{ text: "rewritten-call-a" }] },
+      { role: "toolResult", content: [{ text: "rewritten-call-b" }] },
+    ]);
+
+    const replayPrepare = vi.fn();
+    await expect(
+      authority.commitPrefix(
+        {
+          ...providerPrefix,
+          validatePreparedPrefix: isExpectedToolGroup,
+        },
+        replayPrepare,
+      ),
+    ).resolves.toMatchObject({ kind: "replayed" });
+    expect(replayPrepare).not.toHaveBeenCalled();
+  });
+});
+
+it.each([
+  {
+    name: "deleted result",
+    prepare: (message: ReturnType<typeof toolGroupPrefix>["entries"][number]["message"]) =>
+      message.role === "toolResult" && message.toolCallId === "call-b" ? null : message,
+    expected: { kind: "suppressed" },
+  },
+  {
+    name: "reordered assistant calls",
+    prepare: (message: ReturnType<typeof toolGroupPrefix>["entries"][number]["message"]) =>
+      message.role === "assistant"
+        ? { ...message, content: [...message.content].reverse() }
+        : message,
+    expected: { kind: "conflict", reason: "prepared-prefix-invalid" },
+  },
+  {
+    name: "mutated result id",
+    prepare: (message: ReturnType<typeof toolGroupPrefix>["entries"][number]["message"]) =>
+      message.role === "toolResult" && message.toolCallId === "call-b"
+        ? { ...message, toolCallId: "call-forged" }
+        : message,
+    expected: { kind: "conflict", reason: "prepared-prefix-invalid" },
+  },
+])("rejects a structurally $name provider prefix before SQLite", async ({ prepare, expected }) => {
+  await withOpenClawTestState({ label: "authority-provider-invalid" }, async (state) => {
+    const scope = target(state);
+    const authority = new CodeModeTranscriptAuthority(scope);
+    await expect(
+      authority.commitPrefix(
+        {
+          ...toolGroupPrefix(),
+          validatePreparedPrefix: isExpectedToolGroup,
+        },
+        prepare as never,
+      ),
+    ).resolves.toMatchObject(expected);
+    expect(loadTranscriptEventsSync(scope).filter((event) => event.type === "message")).toEqual([]);
   });
 });
 
