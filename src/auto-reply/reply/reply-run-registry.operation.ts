@@ -36,9 +36,11 @@ import {
   markReplyRunDiagnosticProgress,
   notifyReplyRunEnded,
   operationsByUpstreamAbortSignal,
+  prepareReplyRunKeyUpdate,
   registerFollowupAdmissionBarrier,
   registerWaitSessionId,
   replyRunState,
+  resolveReplyOperationAgentId,
   retainStateUntilCompleteOperations,
   type ReplyRunAdmissionBarrier,
   runAfterReplyOperationClear,
@@ -54,6 +56,7 @@ type ReplyOperationAbortCode = Extract<ReplyOperationResult, { kind: "aborted" }
 export function createReplyOperation(params: {
   sessionKey: string;
   sessionId: string;
+  agentId?: string;
   turnKind?: ReplyTurnKind;
   resetTriggered: boolean;
   routeThreadId?: string | number;
@@ -87,6 +90,7 @@ export function createReplyOperation(params: {
   // adoption); every closure below must read this, never params.sessionKey.
   let currentSessionKey = sessionKey;
   let currentSessionId = sessionId;
+  let currentAgentId = resolveReplyOperationAgentId(sessionKey, params.agentId);
   let phase: ReplyOperationPhase = "queued";
   let phaseBeforeGlobalLaneWait: "queued" | "running" | undefined;
   let staleExpiryReason: replyRunSettle.ReplyOperationStaleReason | undefined;
@@ -224,6 +228,9 @@ export function createReplyOperation(params: {
     },
     get sessionId() {
       return currentSessionId;
+    },
+    get agentId() {
+      return currentAgentId;
     },
     turnKind: params.turnKind ?? "visible",
     lifecycleGeneration,
@@ -407,30 +414,20 @@ export function createReplyOperation(params: {
         reason: "reply_operation:session_updated",
       });
     },
-    updateSessionKey(nextSessionKey) {
-      const normalizedNextKey = normalizeOptionalString(nextSessionKey);
-      if (!normalizedNextKey) {
-        throw new Error("Reply operations require a canonical sessionKey");
-      }
-      if (normalizedNextKey === currentSessionKey) {
+    updateSessionKey(nextSessionKey, agentId) {
+      const update = prepareReplyRunKeyUpdate(operation, nextSessionKey, agentId, stateCleared);
+      if (!update) {
         return;
       }
-      // Only a queued reservation may move slots: once the run started (or the
-      // operation settled), abort/steer/wait paths already resolved this key.
-      if (result || stateCleared || phase !== "queued") {
-        throw new Error(`Cannot rekey reply operation ${currentSessionKey} in phase ${phase}`);
-      }
-      if (replyRunState.activeRunsByKey.has(normalizedNextKey)) {
-        throw new ReplyRunAlreadyActiveError(normalizedNextKey);
-      }
-      if (replyRunState.successorAdmissionBarriersByKey.has(normalizedNextKey)) {
-        throw new ReplyRunSuccessorAdmissionBlockedError(normalizedNextKey);
-      }
       recordActivity();
+      currentAgentId = update.agentId;
+      if (update.sessionKey === currentSessionKey) {
+        return;
+      }
       const previousKey = currentSessionKey;
       replyRunState.activeRunsByKey.delete(previousKey);
       replyRunState.activeSessionIdsByKey.delete(previousKey);
-      currentSessionKey = normalizedNextKey;
+      currentSessionKey = update.sessionKey;
       replyRunState.activeRunsByKey.set(currentSessionKey, operation);
       replyRunState.activeSessionIdsByKey.set(currentSessionKey, currentSessionId);
       replyRunState.activeKeysBySessionId.set(currentSessionId, currentSessionKey);

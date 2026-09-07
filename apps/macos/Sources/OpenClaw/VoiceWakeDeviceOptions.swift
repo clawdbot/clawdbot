@@ -4,12 +4,7 @@ import OpenClawKit
 import Speech
 
 enum VoiceWakeDeviceOptions {
-    struct Option: Identifiable, Encodable, Equatable {
-        let id: String
-        let name: String
-    }
-
-    static func microphones() -> [Option] {
+    static func microphones() -> [DeviceSettingsSnapshot.Option] {
         let discovery = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.external, .microphone],
             mediaType: .audio,
@@ -19,7 +14,7 @@ enum VoiceWakeDeviceOptions {
         let devices = aliveUIDs.isEmpty
             ? connectedDevices
             : connectedDevices.filter { aliveUIDs.contains($0.uniqueID) }
-        return devices.map { Option(id: $0.uniqueID, name: $0.localizedName) }
+        return devices.map { DeviceSettingsSnapshot.Option(id: $0.uniqueID, name: $0.localizedName) }
     }
 
     static func localeSettings(
@@ -39,14 +34,14 @@ enum VoiceWakeDeviceOptions {
 
     static func locales(
         systemLocale: Locale = .current,
-        supportedLocales: Set<Locale> = SFSpeechRecognizer.supportedLocales()) -> [Option]
+        supportedLocales: Set<Locale> = SFSpeechRecognizer.supportedLocales()) -> [DeviceSettingsSnapshot.Option]
     {
-        let system = Option(
+        let system = DeviceSettingsSnapshot.Option(
             id: systemLocale.identifier,
             name: String(format: String(localized: "%@ (System)"), self.friendlyName(for: systemLocale)))
         var seen = Set([self.localeKey(system.id)])
         let supported = supportedLocales
-            .map { Option(id: $0.identifier, name: self.friendlyName(for: $0)) }
+            .map { DeviceSettingsSnapshot.Option(id: $0.identifier, name: self.friendlyName(for: $0)) }
             .sorted {
                 let order = $0.name.localizedCaseInsensitiveCompare($1.name)
                 return order == .orderedSame ? $0.id < $1.id : order == .orderedAscending

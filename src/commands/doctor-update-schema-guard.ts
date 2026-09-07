@@ -1,11 +1,6 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { parse as parseSemver } from "semver";
+import { formatCliJsonFailure } from "../cli/failure-output.js";
 import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
-import {
-  clearNodeSqliteKyselyCacheForDatabase,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
+import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -16,50 +11,14 @@ import {
 } from "../state/openclaw-database-preflight.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
-import type { DB } from "../state/openclaw-state-db.generated.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { readStateSchemaPublicationBlocker } from "../state/openclaw-state-schema-publication.js";
+import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 import { VERSION } from "../version.js";
 
-// 2026.9.2 introduced the ledger without fencing post-Doctor access. Earlier
-// updaters never reopen state; #138839 fenced every 2026.9.3-and-later build.
-// Compare the parsed release line so 2026.9.2 rebuilds are included and
-// 2026.9.3 prereleases are excluded, independently of this checkout's VERSION.
-const UNFENCED_LEDGER_UPDATER_RELEASE = "2026.9.2";
-
-/** A pre-transaction updater would reopen the migrated ledger with its old code. */
-class DoctorUpdateSchemaRefusalError extends Error {
-  readonly code = "update-schema-bump-unfenced";
-  readonly targetVersion = VERSION;
-  readonly commands: string[];
-
-  constructor(
-    readonly databases: NonNullable<OpenClawDatabaseSchemaPreflight["pendingMigrations"]>,
-    readonly updaterVersion: string,
-  ) {
-    const commands = [
-      "openclaw gateway stop",
-      `npm install -g openclaw@${VERSION} --allow-scripts=openclaw`,
-      "openclaw doctor --fix",
-      "openclaw gateway start",
-    ];
-    super(
-      `Doctor refused update-time schema repair driven by OpenClaw ${updaterVersion}: this updater reopens the ledger with old code after migration. ` +
-        databases
-          .map(
-            (database) =>
-              `${database.kind} database ${database.path}: on-disk schema ${database.foundVersion}, this build's schema ${database.supportedVersion}.`,
-          )
-          .join(" ") +
-        " No doctor repairs were applied. Let the updater restore the previous package, then update manually: " +
-        `${commands.join(" && ")}. ` +
-        `Use the package manager that owns this install (pnpm: pnpm add -g --allow-build=openclaw openclaw@${VERSION}; Bun: bun add -g --trust openclaw@${VERSION}). On npm 11.15 and earlier, omit --allow-scripts=openclaw.`,
-    );
-    this.name = "DoctorUpdateSchemaRefusalError";
-    this.commands = commands;
-  }
-}
-
-async function readDrivingUpdaterVersion(): Promise<string | undefined> {
+async function readDrivingUpdater(): Promise<
+  { version: string; canDeferStateSchema: boolean } | undefined
+> {
   // The runtime ledger reader consults quarantine state. This diagnostic must
   // not open any live database, including a quarantine store needing recovery.
   const snapshot = await prepareSqliteReadOnlyLocation(resolveOpenClawStateSqlitePath(), {
@@ -68,21 +27,13 @@ async function readDrivingUpdaterVersion(): Promise<string | undefined> {
   try {
     const database = openNodeSqliteDatabase(snapshot.location, { readOnly: true });
     try {
-      if (!tableExists(database, "update_runs")) {
-        return undefined;
-      }
-      const row = executeSqliteQueryTakeFirstSync(
-        database,
-        getNodeSqliteKysely<Pick<DB, "update_runs">>(database)
-          .selectFrom("update_runs")
-          .select("before_json")
-          .where("status", "=", "running")
-          .orderBy("created_at_ms", "desc")
-          .orderBy("run_id", "desc")
-          .limit(1),
-      );
-      const before: unknown = row ? JSON.parse(row.before_json) : undefined;
-      return isRecord(before) && typeof before.version === "string" ? before.version : undefined;
+      const blocker = readStateSchemaPublicationBlocker(database);
+      return blocker
+        ? {
+            version: blocker.updaterVersion,
+            canDeferStateSchema: tableExists(database, "config_machine_state"),
+          }
+        : undefined;
     } finally {
       clearNodeSqliteKyselyCacheForDatabase(database);
       database.close();
@@ -113,36 +64,26 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
   if (!schemas.pendingMigrations?.length) {
     return;
   }
-  let updaterVersion: string | undefined;
+  let updater: Awaited<ReturnType<typeof readDrivingUpdater>>;
   try {
-    updaterVersion = await readDrivingUpdaterVersion();
+    updater = await readDrivingUpdater();
   } catch {
     // A missing or unreadable run cannot prove that the driver writes the ledger.
   }
-  if (!updaterVersion) {
+  if (!updater) {
     return;
   }
-  const driver = parseSemver(updaterVersion);
-  if (
-    !driver ||
-    `${driver.major}.${driver.minor}.${driver.patch}` !== UNFENCED_LEDGER_UPDATER_RELEASE
-  ) {
+  const blockedMigrations = schemas.pendingMigrations.filter(
+    (database) => database.kind === "agent" || !updater.canDeferStateSchema,
+  );
+  if (blockedMigrations.length === 0) {
     return;
   }
-  const error = new DoctorUpdateSchemaRefusalError(schemas.pendingMigrations, updaterVersion);
+  const error = new UpdateSchemaRefusalError(blockedMigrations, updater.version, {
+    targetVersion: VERSION,
+  });
   if (options.json) {
-    writeRuntimeJson(options.runtime, {
-      ok: false,
-      error: {
-        type: "cli_error",
-        code: error.code,
-        message: error.message,
-        databases: error.databases,
-        updaterVersion: error.updaterVersion,
-        targetVersion: error.targetVersion,
-        commands: error.commands,
-      },
-    });
+    writeRuntimeJson(options.runtime, formatCliJsonFailure(error));
     exitCliAfterOutput(options.runtime, 1);
   }
   throw error;

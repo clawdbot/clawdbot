@@ -6,6 +6,11 @@ import UIKit
 @testable import OpenClaw
 
 @Suite(.serialized) struct OpenClawAppDelegateTests {
+    @Test func `live voice description is available to App Intents consumers`() {
+        let intentType: any AppIntent.Type = StartLiveVoiceIntent.self
+        #expect(intentType.description != nil)
+    }
+
     @Test @MainActor func `resolves registry model before view task assigns delegate model`() {
         let registryModel = NodeAppModel()
         OpenClawAppModelRegistry.appModel = registryModel
@@ -83,6 +88,11 @@ import UIKit
         #expect(!delegate.application(UIApplication.shared, open: url))
     }
 
+    @Test func `live voice intent exposes its description through the AppIntent protocol`() {
+        let intent: any AppIntent.Type = StartLiveVoiceIntent.self
+        #expect(intent.description != nil)
+    }
+
     @Test @MainActor func `live voice intent survives cold launch and waits for an active scene`() async throws {
         try await withUserDefaults(["talk.enabled": false]) {
             let previousModel = OpenClawAppModelRegistry.appModel
@@ -122,7 +132,8 @@ import UIKit
         }
     }
 
-    @Test @MainActor func `warm live voice intent opens the selected chat without toggling existing voice`() async throws {
+    @Test @MainActor
+    func `warm live voice intent opens the selected chat without toggling existing voice`() async throws {
         try await withUserDefaults(["talk.enabled": false]) {
             let model = NodeAppModel(audioAdmissionInitiallyAllowed: false)
             let previousModel = OpenClawAppModelRegistry.appModel

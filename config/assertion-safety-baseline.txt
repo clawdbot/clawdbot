@@ -193,7 +193,7 @@ extensions/codex/src/app-server/plugin-approval-roundtrip.ts	1
 extensions/codex/src/app-server/plugin-inventory.ts	6
 extensions/codex/src/app-server/plugin-metadata-cache.ts	5
 extensions/codex/src/app-server/plugin-thread-app-admission.ts	1
-extensions/codex/src/app-server/protocol-validators.ts	8
+extensions/codex/src/app-server/protocol-validators.ts	7
 extensions/codex/src/app-server/rate-limits.ts	1
 extensions/codex/src/app-server/reasoning-effort.ts	1
 extensions/codex/src/app-server/remote-workspace-media.ts	6
@@ -275,7 +275,7 @@ extensions/cua-computer/src/driver-artifact-verification.ts	2
 extensions/cua-computer/src/driver-artifacts.ts	1
 extensions/cua-computer/src/driver-client.ts	15
 extensions/cua-computer/src/driver-result.ts	9
-extensions/cua-computer/src/mcp-driver-client.ts	5
+extensions/cua-computer/src/mcp-driver-client.ts	4
 extensions/cua-computer/src/window-actions.ts	3
 extensions/deepinfra/provider-models.ts	2
 extensions/deepinfra/video-generation-provider.ts	2
@@ -547,7 +547,7 @@ extensions/imessage/src/approval-handler.runtime.ts	2
 extensions/imessage/src/approval-native.ts	1
 extensions/imessage/src/approval-polls.ts	6
 extensions/imessage/src/approval-reaction-poller.ts	1
-extensions/imessage/src/approval-reactions.ts	3
+extensions/imessage/src/approval-reactions.ts	2
 extensions/imessage/src/approval-target-keys.ts	1
 extensions/imessage/src/channel.runtime.ts	1
 extensions/imessage/src/channel.ts	4
@@ -911,7 +911,6 @@ extensions/openshell/src/fs-bridge.ts	2
 extensions/parallel/src/parallel-free-web-search-provider.runtime.ts	1
 extensions/parallel/src/parallel-search-normalize.ts	1
 extensions/parallel/src/parallel-web-search-provider.runtime.ts	2
-extensions/perplexity/src/perplexity-web-search-provider.runtime.ts	5
 extensions/perplexity/src/perplexity-web-search-provider.shared.ts	1
 extensions/pixverse/video-generation-provider.ts	2
 extensions/policy/src/cli.ts	1
@@ -1326,7 +1325,6 @@ extensions/whatsapp/src/agent-tools-call.ts	1
 extensions/whatsapp/src/agent-tools-login.ts	6
 extensions/whatsapp/src/approval-handler.runtime.ts	1
 extensions/whatsapp/src/approval-native.ts	1
-extensions/whatsapp/src/approval-reactions.ts	1
 extensions/whatsapp/src/auth-store.ts	3
 extensions/whatsapp/src/auto-reply/monitor.ts	2
 extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts	4
@@ -1920,7 +1918,7 @@ src/agents/session-placement-admission.ts	1
 src/agents/session-raw-append-message.ts	2
 src/agents/session-suspension.ts	1
 src/agents/session-tool-result-guard.ts	23
-src/agents/session-transcript-repair.ts	14
+src/agents/session-transcript-repair.ts	7
 src/agents/sessions/agent-session-base.ts	3
 src/agents/sessions/agent-session-extensions.ts	1
 src/agents/sessions/agent-session-models.ts	2
@@ -2012,7 +2010,7 @@ src/agents/tools/gateway-tool.ts	5
 src/agents/tools/gateway.ts	1
 src/agents/tools/goal-tools.ts	4
 src/agents/tools/heartbeat-response-tool.ts	1
-src/agents/tools/image-generate-tool.ts	14
+src/agents/tools/image-generate-tool.ts	2
 src/agents/tools/image-tool.helpers.ts	2
 src/agents/tools/image-tool.ts	3
 src/agents/tools/in-process-gateway.ts	1
@@ -2254,7 +2252,7 @@ src/cli/acp-cli.ts	7
 src/cli/attach-cli.ts	3
 src/cli/capability-cli/audio.ts	3
 src/cli/capability-cli/embedding.ts	3
-src/cli/capability-cli/image.ts	17
+src/cli/capability-cli/image.ts	12
 src/cli/capability-cli/model.ts	4
 src/cli/capability-cli/shared.ts	4
 src/cli/capability-cli/tts.ts	6
@@ -3131,7 +3129,6 @@ src/infra/system-presence.ts	2
 src/infra/system-run-approval-binding.ts	3
 src/infra/system-run-approval-context.ts	6
 src/infra/tailscale.ts	9
-src/infra/terminal-file-upload.ts	2
 src/infra/tmp-openclaw-dir.ts	3
 src/infra/unhandled-rejections.ts	6
 src/infra/update-check-package-target.ts	3

@@ -148,7 +148,7 @@ For the full key index and the other top-level config domains, see [Configuratio
 }
 ```
 
-Agent display names, emoji, and avatars belong to each agent's `identity` block under `agents.entries`; see [Agent configuration](/gateway/config-agents#agentsentries-per-agent-overrides).
+Agent display names, emoji, and avatars belong to each agent's `identity` block under `agents.entries`; see [Agent configuration](/gateway/config-agents/entries-and-multi-agent#agentsentries-per-agent-overrides).
 
 - `seamColor`: operator accent color for native app UI chrome (Talk Mode bubble
   tint, etc.). The Control UI user accent (`ui.prefs.accent`) takes precedence in

@@ -547,8 +547,8 @@ until they can be bound to the active placement.
 The managed placement workspace is not an OS sandbox: approved processes and
 files have the node account's full access. Use a separate least-privilege node
 account when isolation is required.
-See [Run Codex on a paired device](/plugins/codex-harness#run-codex-on-a-paired-device)
-and [Run Codex on a cloud worker](/plugins/codex-harness#run-codex-on-a-cloud-worker).
+See [Run Codex on a paired device](/plugins/codex-harness/placement#run-codex-on-a-paired-device)
+and [Run Codex on a cloud worker](/plugins/codex-harness/placement#run-codex-on-a-cloud-worker).
 
 ## Auth and environment isolation
 

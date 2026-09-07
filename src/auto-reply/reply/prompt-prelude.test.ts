@@ -327,6 +327,7 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.prefixedCommandBody).toBe(body);
     expect(envelope.queuedBody).toBe(body);
     expect(envelope.transcriptCommandBody).toBe(body);
+    expect(envelope.inboundMediaIndexes).toEqual([]);
     expect(envelope.media).toEqual([
       {
         path: "/tmp/tlon.png",
@@ -336,6 +337,54 @@ describe("buildReplyPromptEnvelope", () => {
         transcribed: false,
         messageId: undefined,
       },
+    ]);
+  });
+
+  it("keeps sparse inbound positions separate from appended preprojected media", () => {
+    const sharedPath = "/tmp/shared.png";
+    const sessionCtx = finalizeInboundContext({
+      Body: "inspect these",
+      media: [
+        {},
+        { path: "/tmp/voice.ogg", contentType: "audio/ogg", transcribed: true },
+        { path: sharedPath, contentType: "image/png" },
+        { path: sharedPath, contentType: "image/png" },
+      ],
+    });
+    const params = {
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "inspect these",
+      hasUserBody: true,
+      inboundUserContext: "",
+      isBareSessionReset: false,
+      startupAction: "new" as const,
+      media: [{ path: "/tmp/preprojected.pdf", contentType: "application/pdf" }],
+    };
+    const first = buildReplyPromptEnvelope(params);
+    const rebuilt = buildReplyPromptEnvelope({
+      ...params,
+      ctx: { ...sessionCtx, media: [...(sessionCtx.media ?? []), { path: "/tmp/later.png" }] },
+      systemEventBlocks: ["context changed"],
+    });
+
+    expect(first.inboundMediaIndexes).toEqual([2, 3]);
+    expect(first.media?.map((fact) => fact.path)).toEqual([
+      sharedPath,
+      sharedPath,
+      "/tmp/preprojected.pdf",
+    ]);
+    expect(rebuilt.inboundMediaIndexes).toEqual([2, 3, 4]);
+    expect(first.prefixedCommandBody).toBe(
+      `[media attached: 2 files]\n[media attached 1/2: ${sharedPath} (image/png)]\n[media attached 2/2: ${sharedPath} (image/png)]\ninspect these`,
+    );
+    expect(first.queuedBody).toBe(first.prefixedCommandBody);
+    expect(first.transcriptCommandBody).toBe(first.prefixedCommandBody);
+    expect(sessionCtx.media?.map((fact) => fact.path)).toEqual([
+      undefined,
+      "/tmp/voice.ogg",
+      sharedPath,
+      sharedPath,
     ]);
   });
 

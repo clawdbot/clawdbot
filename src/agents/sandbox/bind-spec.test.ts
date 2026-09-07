@@ -29,4 +29,22 @@ describe("splitSandboxBindSpec", () => {
   it("returns null when no host/container separator exists", () => {
     expect(splitSandboxBindSpec("/tmp/no-separator")).toBeNull();
   });
+
+  it("keeps Windows container drive handling opt-in", () => {
+    expect(splitSandboxBindSpec("C:\\host:D:\\container:ro")).toEqual({
+      host: "C:\\host",
+      container: "D",
+      options: "\\container:ro",
+    });
+  });
+
+  it.each([
+    { container: "D:\\container", suffix: ":ro", options: "ro" },
+    { container: "D:/container", suffix: "", options: "" },
+    { container: "D:/container", suffix: ":RW, ro", options: "RW, ro" },
+  ])("preserves opted-in container path $container$suffix", ({ container, suffix, options }) => {
+    expect(
+      splitSandboxBindSpec(`C:\\host:${container}${suffix}`, { allowWindowsContainerPath: true }),
+    ).toEqual({ host: "C:\\host", container, options });
+  });
 });

@@ -59,10 +59,6 @@ enum OpenClawType {
         scaledBody(weight: Body.regular, size: 13, relativeTo: .footnote)
     }
 
-    static var footnoteMedium: Font {
-        scaledBody(weight: Body.medium, size: 13, relativeTo: .footnote)
-    }
-
     static var footnoteSemiBold: Font {
         scaledBody(weight: Body.semiBold, size: 13, relativeTo: .footnote)
     }
@@ -119,10 +115,6 @@ enum OpenClawType {
 
     static var monoSmallMedium: Font {
         scaledMono(name: Mono.medium, size: 12, relativeTo: .caption1)
-    }
-
-    static var monoCaption2: Font {
-        scaledMono(name: Mono.regular, size: 11, relativeTo: .caption2)
     }
 
     static var monoFootnote: Font {

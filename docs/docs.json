@@ -1496,7 +1496,23 @@
                   },
                   "channels/msteams",
                   "channels/signal",
-                  "channels/slack",
+                  {
+                    "group": "Slack",
+                    "pages": [
+                      "channels/slack",
+                      "channels/slack/setup",
+                      "channels/slack/transports",
+                      "channels/slack/enterprise-grid",
+                      "channels/slack/manifest-and-scopes",
+                      "channels/slack/access-control",
+                      "channels/slack/threads-and-sessions",
+                      "channels/slack/messaging",
+                      "channels/slack/media",
+                      "channels/slack/rich-messages",
+                      "channels/slack/events",
+                      "channels/slack/troubleshooting"
+                    ]
+                  },
                   "channels/sms",
                   "channels/telegram",
                   "channels/whatsapp"
@@ -1653,6 +1669,20 @@
                     "pages": [
                       "plugins/codex-computer-use",
                       "plugins/codex-harness",
+                      {
+                        "group": "Codex harness",
+                        "pages": [
+                          "plugins/codex-harness/placement",
+                          "plugins/codex-harness/routing",
+                          "plugins/codex-harness/configuration",
+                          "plugins/codex-harness/app-server",
+                          "plugins/codex-harness/config-fields",
+                          "plugins/codex-harness/commands",
+                          "plugins/codex-harness/runtime-behavior",
+                          "plugins/codex-harness/native-features",
+                          "plugins/codex-harness/troubleshooting"
+                        ]
+                      },
                       "plugins/codex-native-plugins",
                       "plugins/codex-supervision"
                     ]
@@ -1729,6 +1759,19 @@
                 "pages": [
                   "automation/index",
                   "automation/cron-jobs",
+                  {
+                    "group": "Automations",
+                    "pages": [
+                      "automation/cron-jobs/how-it-works",
+                      "automation/cron-jobs/schedules",
+                      "automation/cron-jobs/payloads",
+                      "automation/cron-jobs/delivery",
+                      "automation/cron-jobs/managing-jobs",
+                      "automation/cron-jobs/webhooks",
+                      "automation/cron-jobs/gmail",
+                      "automation/cron-jobs/troubleshooting"
+                    ]
+                  },
                   "automation/imap",
                   "automation/tasks",
                   "automation/taskflow",
@@ -2059,6 +2102,19 @@
                       "gateway/configuration",
                       "gateway/configuration-reference",
                       "gateway/config-agents",
+                      {
+                        "group": "Agents",
+                        "pages": [
+                          "gateway/config-agents/workspace-and-bootstrap",
+                          "gateway/config-agents/models",
+                          "gateway/config-agents/runtime-and-cli-backends",
+                          "gateway/config-agents/heartbeat-compaction-and-streaming",
+                          "gateway/config-agents/sandbox",
+                          "gateway/config-agents/entries-and-multi-agent",
+                          "gateway/config-agents/sessions",
+                          "gateway/config-agents/messages-and-talk"
+                        ]
+                      },
                       "gateway/config-automation",
                       "gateway/config-browser-ui-desktop",
                       "gateway/config-channels",
@@ -2132,6 +2188,19 @@
                     "group": "Protocols and APIs",
                     "pages": [
                       "gateway/protocol",
+                      {
+                        "group": "Gateway protocol",
+                        "pages": [
+                          "gateway/protocol/transport",
+                          "gateway/protocol/handshake",
+                          "gateway/protocol/presence",
+                          "gateway/protocol/rpc-methods",
+                          "gateway/protocol/ledgers",
+                          "gateway/protocol/operator-methods",
+                          "gateway/protocol/versioning",
+                          "gateway/protocol/auth"
+                        ]
+                      },
                       "gateway/clients",
                       "gateway/embedding",
                       "gateway/openai-http-api",
@@ -2404,6 +2473,19 @@
                   "plugins/sdk-subpaths",
                   "plugins/sdk-entrypoints",
                   "plugins/sdk-runtime",
+                  {
+                    "group": "Plugin runtime helpers",
+                    "pages": [
+                      "plugins/sdk-runtime/config-and-utilities",
+                      "plugins/sdk-runtime/agent",
+                      "plugins/sdk-runtime/models",
+                      "plugins/sdk-runtime/background-work",
+                      "plugins/sdk-runtime/gateway-and-nodes",
+                      "plugins/sdk-runtime/media",
+                      "plugins/sdk-runtime/state-and-system",
+                      "plugins/sdk-runtime/channel"
+                    ]
+                  },
                   "plugins/sdk-agent-harness",
                   "plugins/sdk-setup",
                   "plugins/sdk-testing"
