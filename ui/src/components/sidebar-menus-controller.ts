@@ -110,7 +110,7 @@ interface SidebarMenusControllerHost
       | "sessionResultsByAgent"
       | "sessionsLoading"
       | "sessionsResult"
-      | "refreshSessionCatalogs"
+      | "invalidateSessionCatalogs"
     >;
   readonly sessionDataContext: ApplicationContext<RouteId> | undefined;
   readonly sessionOrganizer: SessionOrganizerController;
@@ -212,7 +212,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
       isMutationCurrent: (scope) => host.sessionData.isSessionMutationScopeCurrent(scope),
       archive: (scope, params) => scope.client.request("sessions.catalog.archive", params),
       afterDelete: async (scope, key) => {
-        await host.sessionData.refreshSessionCatalogs();
+        host.sessionData.invalidateSessionCatalogs();
         if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
           return;
         }

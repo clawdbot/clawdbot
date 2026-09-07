@@ -7,7 +7,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { TERMINAL_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../../lib/sessions/catalog-key.ts";
-import { createGatewayHarness, createSessions, mountSidebar } from "../app-sidebar.ts";
+import { createGatewayHarness, createSessions, deferred, mountSidebar } from "../app-sidebar.ts";
 import {
   answerConfirmDialog,
   installDialogPolyfill,
@@ -194,6 +194,22 @@ describe("AppSidebar catalog terminal ownership", () => {
   });
 });
 
+async function selectCatalogDelete(sidebar: Awaited<ReturnType<typeof mountWithCatalog>>) {
+  sidebar
+    .querySelector('[data-session-key*="thread-1"]')!
+    .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  await vi.advanceTimersByTimeAsync(0);
+  const item = sidebar.querySelector('wa-dropdown-item[value="delete"]');
+  expect(item).not.toBeNull();
+  item!.dispatchEvent(
+    new CustomEvent("wa-select", {
+      bubbles: true,
+      detail: { item: { value: "delete" } },
+    }),
+  );
+  return waitForConfirmDialogActions();
+}
+
 describe("AppSidebar catalog deletion", () => {
   it.each([
     { canArchive: true, archive: true, visible: true },
@@ -233,29 +249,15 @@ describe("AppSidebar catalog deletion", () => {
         sidebar.activeRouteId = "chat";
         sidebar.onNavigate = vi.fn();
         await sidebar.updateComplete;
-        const selectDelete = async () => {
-          sidebar
-            .querySelector('[data-session-key*="thread-1"]')!
-            .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
-          await vi.advanceTimersByTimeAsync(0);
-          const item = sidebar.querySelector('wa-dropdown-item[value="delete"]');
-          expect(item).not.toBeNull();
-          item!.dispatchEvent(
-            new CustomEvent("wa-select", {
-              bubbles: true,
-              detail: { item: { value: "delete" } },
-            }),
-          );
-          return waitForConfirmDialogActions();
-        };
-        const cancelled = await selectDelete();
+        const cancelled = await selectCatalogDelete(sidebar);
         expect(request).not.toHaveBeenCalledWith("sessions.catalog.archive", expect.anything());
         answerConfirmDialog(cancelled, "cancel");
         await vi.advanceTimersByTimeAsync(0);
         expect(request).not.toHaveBeenCalledWith("sessions.catalog.archive", expect.anything());
+        await vi.advanceTimersByTimeAsync(50);
         request.mockClear();
         request.mockResolvedValue(catalogList([]));
-        const actions = await selectDelete();
+        const actions = await selectCatalogDelete(sidebar);
         answerConfirmDialog(actions, "confirm");
         await vi.advanceTimersByTimeAsync(0);
         expect(request).toHaveBeenCalledWith("sessions.catalog.archive", {
@@ -285,4 +287,52 @@ describe("AppSidebar catalog deletion", () => {
       }
     },
   );
+
+  it("discards an in-flight pre-delete list and immediately requests fresh rows", async () => {
+    vi.useFakeTimers();
+    const restoreDialog = installDialogPolyfill();
+    try {
+      const result = catalogList([{ threadId: "thread-1", name: "Shared session" }]);
+      const request = vi.fn().mockResolvedValue(result);
+      const sidebar = await mountWithCatalog(result, undefined, request);
+      await vi.advanceTimersByTimeAsync(50);
+      const staleList = deferred<SessionsCatalogListResult>();
+      const archive = deferred<unknown>();
+      const freshList = deferred<SessionsCatalogListResult>();
+      request.mockClear();
+      request
+        .mockReturnValueOnce(staleList.promise)
+        .mockReturnValueOnce(archive.promise)
+        .mockReturnValueOnce(freshList.promise);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(request.mock.calls.map(([method]) => method)).toEqual(["sessions.catalog.list"]);
+
+      const actions = await selectCatalogDelete(sidebar);
+      answerConfirmDialog(actions, "confirm");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "sessions.catalog.list",
+        "sessions.catalog.archive",
+      ]);
+      archive.resolve({});
+      await vi.advanceTimersByTimeAsync(0);
+      staleList.resolve(catalogList([{ threadId: "thread-1", name: "Stale deleted session" }]));
+      await vi.advanceTimersByTimeAsync(1);
+      await sidebar.updateComplete;
+      expect(sidebar.textContent).not.toContain("Stale deleted session");
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "sessions.catalog.list",
+        "sessions.catalog.archive",
+        "sessions.catalog.list",
+      ]);
+
+      freshList.resolve(catalogList([]));
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+      expect(sidebar.querySelector('[data-session-key*="thread-1"]')).toBeNull();
+    } finally {
+      restoreDialog();
+      vi.useRealTimers();
+    }
+  });
 });
