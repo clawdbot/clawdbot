@@ -153,7 +153,168 @@ describe("UsagePage detail requests", () => {
     expect(payload!.deref()).toBeUndefined();
     expect(page.isConnected).toBe(true);
   });
-  it("loads context only for the selected session and fences superseded replies through retry", async () => {
+
+  it("keeps unavailable timeline and conversation details pending and refreshes them when admission reopens", async () => {
+    const snapshot = cacheSnapshot("sessions", "fresh");
+    const session = {
+      key: "agent:main:detail",
+      label: "Detail session",
+      usage: snapshot.result.totals,
+    };
+    let unavailable = true;
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.usage") {
+        return { ...snapshot.result, sessions: [session] };
+      }
+      if (method === "usage.cost") {
+        return snapshot.costSummary;
+      }
+      if (method === "usage.status") {
+        return { providers: [] };
+      }
+      if (unavailable) {
+        throw new GatewayRequestError({
+          code: "UNAVAILABLE",
+          message: "Gateway is suspending",
+          retryable: true,
+          details: { reason: "gateway-suspending", phase: "draining" },
+        });
+      }
+      return method === "sessions.usage.logs"
+        ? { logs: [{ timestamp: Date.now(), role: "user", content: "Recovered conversation" }] }
+        : {
+            points: [0, 1].map((offset) => ({
+              timestamp: Date.now() + offset,
+              totalTokens: 100,
+              cost: 0.1,
+              input: 100,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              cumulativeTokens: 100,
+              cumulativeCost: 0.1,
+            })),
+          };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const context = contextWithClient(client);
+    const page = await createPage(client, true, context);
+    await preloadUsage(page);
+    context.setGatewaySnapshot({ suspensionPhase: "draining" });
+    page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
+    await vi.waitFor(() => {
+      expect(page.details.timeSeries.status.awaitingGateway).toBe(true);
+      expect(page.details.sessionLogs.status.awaitingGateway).toBe(true);
+    });
+    await page.updateComplete;
+    expect(page.querySelector(".usage-detail-error--timeline")).toBeNull();
+    expect(page.querySelector(".usage-detail-error--conversation")).toBeNull();
+    expect(page.querySelector(".session-logs-compact")?.textContent).toContain("Loading");
+
+    unavailable = false;
+    context.setGatewaySnapshot({ suspensionPhase: "accepting" });
+    context.setGatewaySnapshot({ suspensionPhase: "accepting" });
+    await vi.waitFor(() => expect(page.textContent).toContain("Recovered conversation"));
+    expect(page.querySelector(".timeseries-svg")).not.toBeNull();
+    for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
+      expect(request.mock.calls.filter(([called]) => called === method)).toHaveLength(2);
+    }
+  });
+
+  it("waits for pending detail failures before retrying when admission reopens first", async () => {
+    const pending = deferred<never>();
+    let recovered = false;
+    const request = vi.fn(async (method: string) => {
+      if (!recovered) {
+        return pending.promise;
+      }
+      return method === "sessions.usage.logs"
+        ? { logs: [{ timestamp: 1, role: "user", content: "Recovered after late rejection" }] }
+        : { points: [{ timestamp: 1 }] };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const context = contextWithClient(client);
+    const page = await createPage(client, false, context);
+    page.usageSelectedSessions = ["agent:main:detail"];
+    const timeline = page.details.timeSeries.load("agent:main:detail");
+    const conversation = page.details.sessionLogs.load("agent:main:detail");
+    context.setGatewaySnapshot({ suspensionPhase: "draining" });
+    context.setGatewaySnapshot({ suspensionPhase: "accepting" });
+    context.setGatewaySnapshot({ suspensionPhase: "draining" });
+    context.setGatewaySnapshot({ suspensionPhase: "accepting" });
+    expect(request).toHaveBeenCalledTimes(2);
+
+    recovered = true;
+    pending.reject(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Gateway was suspending",
+        retryable: true,
+        details: { reason: "gateway-suspending", phase: "draining" },
+      }),
+    );
+    await Promise.all([timeline, conversation]);
+    await vi.waitFor(() =>
+      expect(page.details.sessionLogs.data?.[0]?.content).toBe("Recovered after late rejection"),
+    );
+    expect(page.details.timeSeries.data?.points).toHaveLength(1);
+    expect(request).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not transfer queued detail recovery to a replacement selection", async () => {
+    const first = deferred<never>();
+    const second = deferred<never>();
+    const request = vi.fn((_method: string, params: { key: string }) =>
+      params.key === "agent:main:first" ? first.promise : second.promise,
+    );
+    const client = { request } as unknown as GatewayBrowserClient;
+    const context = contextWithClient(client);
+    const page = await createPage(client, false, context);
+    page.usageSelectedSessions = ["agent:main:first"];
+    const firstLoad = page.details.timeSeries.load("agent:main:first");
+    context.setGatewaySnapshot({ suspensionPhase: "draining" });
+    context.setGatewaySnapshot({ suspensionPhase: "accepting" });
+
+    page.usageSelectedSessions = ["agent:main:second"];
+    const secondLoad = page.details.timeSeries.load("agent:main:second");
+    second.reject(new Error("Selected timeline unavailable"));
+    await secondLoad;
+    first.reject(new Error("Retired timeline unavailable"));
+    await firstLoad;
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(page.details.timeSeries.data).toBeNull();
+    expect(page.details.timeSeries.status.error).toBe("Selected timeline unavailable");
+  });
+
+  it("retries interrupted detail requests on immediate same-client reconnect and fences their old replies", async () => {
+    const pending = deferred<never>();
+    let disconnected = false;
+    const request = vi.fn(async (method: string) => {
+      if (!disconnected) {
+        return pending.promise;
+      }
+      return method === "sessions.usage.logs"
+        ? { logs: [{ timestamp: 1, role: "user", content: "Recovered" }] }
+        : { points: [{ timestamp: 1 }] };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const context = contextWithClient(client);
+    const page = await createPage(client, false, context);
+    page.usageSelectedSessions = ["agent:main:detail"];
+    const timeline = page.details.timeSeries.load("agent:main:detail");
+    const conversation = page.details.sessionLogs.load("agent:main:detail");
+    context.setGatewaySnapshot({ phase: "stopped" });
+    disconnected = true;
+    context.setGatewaySnapshot({ phase: "connected" });
+    await vi.waitFor(() => expect(page.details.sessionLogs.data?.[0]?.content).toBe("Recovered"));
+    pending.reject(new Error("gateway closed (1006): disconnected"));
+    await Promise.all([timeline, conversation]);
+    expect(page.details.timeSeries.status.error).toBeNull();
+    expect(page.details.sessionLogs.status.error).toBeNull();
+    expect(request).toHaveBeenCalledTimes(4);
+  });
+
+  it("loads context only for the selected session and fences superseded replies through automatic recovery", async () => {
     const snapshot = cacheSnapshot("sessions", "fresh");
     const keys = ["agent:main:first", "agent:main:second", "global"];
     const result = {
@@ -188,7 +349,9 @@ describe("UsagePage detail requests", () => {
           : { providers: [], logs: [], points: [] };
       },
     );
-    const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const context = contextWithClient(client);
+    const page = await createPage(client, true, context);
     await preloadUsage(page);
     const initial = request.mock.calls.find(([method]) => method === "sessions.usage")!;
     expect(initial[1]).toMatchObject({ includeContextWeight: false });
@@ -244,7 +407,9 @@ describe("UsagePage detail requests", () => {
           }
         : { logs: [], points: [] },
     );
-    page.querySelector<HTMLButtonElement>(".usage-detail-error--context button")!.click();
+    expect(page.querySelector(".usage-detail-error--context button")).toBeNull();
+    context.setGatewaySnapshot({ suspensionPhase: "draining" });
+    context.setGatewaySnapshot({ suspensionPhase: "accepting" });
     await vi.waitFor(() =>
       expect(page.querySelector(".context-details-panel")?.textContent).toContain(
         "selected-context",
@@ -609,17 +774,28 @@ describe("UsagePage detail requests", () => {
       error: "timeline unavailable",
       hasLoaded: true,
       stale: true,
+      awaitingGateway: false,
     });
     expect(page.details.timeSeries.data).toBe(previous);
 
     const retryLoad = page.details.timeSeries.load("agent:main:detail");
-    expect(page.details.timeSeries.status).toEqual({ error: null, hasLoaded: true, stale: true });
+    expect(page.details.timeSeries.status).toEqual({
+      error: null,
+      hasLoaded: true,
+      stale: true,
+      awaitingGateway: false,
+    });
     const result = { points: [] } as unknown as SessionUsageTimeSeries;
     retry.resolve(result);
     await retryLoad;
 
     expect(page.details.timeSeries.data).toBe(result);
-    expect(page.details.timeSeries.status).toEqual({ error: null, hasLoaded: true, stale: false });
+    expect(page.details.timeSeries.status).toEqual({
+      error: null,
+      hasLoaded: true,
+      stale: false,
+      awaitingGateway: false,
+    });
   });
 
   it("surfaces a session-log failure and clears it after a successful retry", async () => {
@@ -639,7 +815,12 @@ describe("UsagePage detail requests", () => {
     expect(page.details.sessionLogs.data).toEqual([
       { timestamp: 1, role: "user", content: "hello" },
     ]);
-    expect(page.details.sessionLogs.status).toEqual({ error: null, hasLoaded: true, stale: false });
+    expect(page.details.sessionLogs.status).toEqual({
+      error: null,
+      hasLoaded: true,
+      stale: false,
+      awaitingGateway: false,
+    });
   });
 
   it("does not retain detail data when the selected session changes", async () => {
@@ -665,12 +846,14 @@ describe("UsagePage detail requests", () => {
       error: "timeline unavailable",
       hasLoaded: false,
       stale: false,
+      awaitingGateway: false,
     });
     expect(page.details.sessionLogs.data).toBeNull();
     expect(page.details.sessionLogs.status).toEqual({
       error: "logs unavailable",
       hasLoaded: false,
       stale: false,
+      awaitingGateway: false,
     });
   });
 
@@ -699,12 +882,14 @@ describe("UsagePage detail requests", () => {
       error: "This connection is missing operator.read, so usage details cannot be loaded yet.",
       hasLoaded: false,
       stale: false,
+      awaitingGateway: false,
     });
     expect(page.details.sessionLogs.data).toBeNull();
     expect(page.details.sessionLogs.status).toEqual({
       error: "This connection is missing operator.read, so usage details cannot be loaded yet.",
       hasLoaded: false,
       stale: false,
+      awaitingGateway: false,
     });
   });
 });

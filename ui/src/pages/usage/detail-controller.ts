@@ -4,7 +4,9 @@ import {
   beginPanelRefresh,
   completePanelRefresh,
   createPanelRefreshStatus,
+  failPanelRefresh,
 } from "../../components/panel-refresh-status.ts";
+import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import {
   requestSessionUsageContextWeight,
   requestSessionUsageLogs,
@@ -24,17 +26,21 @@ function createUsageDetailRequest<T>(
 ) {
   let value: { sessionKey: string; data: T } | null = null;
   let status = createPanelRefreshStatus();
+  let pending: Promise<void> | null = null;
+  let generation = 0;
   const task = createUsageRequest(host, {
     task: async ([client, sessionKey]: readonly [GatewayBrowserClient, string], { signal }) => ({
       sessionKey,
       data: await request(client, sessionKey, signal),
     }),
     onComplete: (result) => {
+      pending = null;
       value = result;
       status = completePanelRefresh();
     },
     onError: (error) => {
-      const failure = failUsageDetailRefresh(status, error);
+      pending = null;
+      const failure = failUsageDetailRefresh(status, error, gateway.snapshot);
       if (failure.clearData) {
         value = null;
       }
@@ -42,6 +48,14 @@ function createUsageDetailRequest<T>(
     },
   });
 
+  const cancel = () => {
+    if (pending && gateway.snapshot && !isGatewayAvailable(gateway.snapshot)) {
+      status = failPanelRefresh(status, undefined, gateway.snapshot);
+    }
+    pending = null;
+    generation += 1;
+    task.cancel();
+  };
   return {
     get data() {
       return value?.data ?? null;
@@ -50,7 +64,19 @@ function createUsageDetailRequest<T>(
       return status;
     },
     get loading() {
-      return task.pending;
+      return pending !== null;
+    },
+    async recover(sessionKey: string, loadInitial = false): Promise<void> {
+      const current = generation;
+      await pending;
+      if (
+        current === generation &&
+        gateway.snapshot &&
+        isGatewayAvailable(gateway.snapshot) &&
+        (status.awaitingGateway || status.error !== null || (loadInitial && !status.hasLoaded))
+      ) {
+        void this.load(sessionKey);
+      }
     },
     load(sessionKey: string): Promise<void> {
       const client = gateway.client;
@@ -63,17 +89,18 @@ function createUsageDetailRequest<T>(
         status = createPanelRefreshStatus();
       }
       if (!enabled) {
-        task.cancel();
+        cancel();
         return Promise.resolve();
       }
       status = beginPanelRefresh(status);
-      return task.run([client, sessionKey]);
+      generation += 1;
+      return (pending = task.run([client, sessionKey]));
     },
-    cancel: task.cancel,
+    cancel,
     clear() {
       value = null;
       status = createPanelRefreshStatus();
-      task.cancel();
+      cancel();
     },
   };
 }

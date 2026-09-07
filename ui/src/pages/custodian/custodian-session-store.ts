@@ -51,7 +51,10 @@ export class CustodianSessionStore {
   wizardSecretVisible = false;
   questionReplyUncertain = false;
   error: string | null = null;
-  transcript = new CustodianTranscriptLoader(() => this.emit());
+  transcript = new CustodianTranscriptLoader(
+    () => this.emit(),
+    () => this.context?.gateway.snapshot,
+  );
   dismissedQuestions = new Set<string>();
   answeredQuestions = new Set<string>();
   activeClient: GatewayBrowserClient | null = null;
@@ -104,7 +107,10 @@ export class CustodianSessionStore {
       this.agentCleanup?.();
       this.eventCleanup?.();
       this.context = context;
+      const recover = this.transcript.watchAvailability(() => void this.refreshTranscriptIfIdle());
       this.gatewayCleanup = context.gateway.subscribe(() => {
+        // Reconnect hydration supersedes the queued availability recovery.
+        recover();
         this.synchronizeClient();
         this.emit();
       });
@@ -180,7 +186,9 @@ export class CustodianSessionStore {
 
   async refreshTranscriptIfIdle(): Promise<void> {
     const client = this.activeClient;
-    if (!client || !this.canRefreshTranscript()) {
+    // hasUnresolvedQuestion() also covers a pending wizard step.
+    const blocked = this.sending || this.hasUnresolvedQuestion() || this.transcript.refreshing;
+    if (!client || !this.sessionStarted || !this.chatAvailable || blocked) {
       return;
     }
     const refreshed = await this.refreshTranscriptHistory(client, this.requestEpoch);
@@ -188,12 +196,6 @@ export class CustodianSessionStore {
       this.abandonedTurnOutcomeUnknown = false;
       this.emit();
     }
-  }
-
-  canRefreshTranscript(): boolean {
-    // hasUnresolvedQuestion() also covers a pending wizard step.
-    const blocked = this.sending || this.hasUnresolvedQuestion() || this.transcript.refreshing;
-    return this.activeClient !== null && this.sessionStarted && this.chatAvailable && !blocked;
   }
 
   canRetry(): boolean {

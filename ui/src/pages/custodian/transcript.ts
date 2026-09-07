@@ -6,6 +6,7 @@ import type {
 import { html, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { WizardStep } from "../../api/types.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   beginPanelRefresh,
   completePanelRefresh,
@@ -19,6 +20,7 @@ import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { renderChatDivider } from "../chat/components/chat-divider.ts";
 import { renderMessageGroup } from "../chat/components/chat-message.ts";
 import { renderCustodianQuestionCard } from "./custodian-question-card.ts";
@@ -113,7 +115,7 @@ function toCustodianMessageGroup(message: CustodianMessage): MessageGroup {
 
 type CustodianTranscriptResult =
   | { ok: true; turns: SystemAgentChatHistoryResult["turns"] }
-  | { ok: false; error: string };
+  | { ok: false; error: unknown };
 
 async function readCustodianTranscript(
   client: GatewayBrowserClient,
@@ -126,7 +128,7 @@ async function readCustodianTranscript(
     );
     return { ok: true, turns: result.turns };
   } catch (error) {
-    return { ok: false, error: custodianErrorMessage(error) };
+    return { ok: false, error };
   }
 }
 
@@ -139,10 +141,40 @@ export class CustodianTranscriptLoader {
     promise: Promise<CustodianTranscriptResult>;
   } | null = null;
 
-  constructor(private readonly onStatusChange: () => void) {}
+  constructor(
+    private readonly onStatusChange: () => void,
+    private readonly getGatewaySnapshot: () => ApplicationGatewaySnapshot | undefined,
+  ) {}
 
   get refreshing(): boolean {
     return this.inFlight !== null;
+  }
+
+  watchAvailability(refresh: () => void): () => void {
+    let previous = this.getGatewaySnapshot();
+    return () => {
+      const next = this.getGatewaySnapshot();
+      const becameAvailable =
+        next && isGatewayAvailable(next) && (!previous || !isGatewayAvailable(previous));
+      previous = next;
+      if (becameAvailable) {
+        void this.recover(refresh);
+      }
+    };
+  }
+
+  private async recover(refresh: () => void): Promise<void> {
+    const generation = this.generation;
+    await this.inFlight?.promise;
+    const snapshot = this.getGatewaySnapshot();
+    if (
+      generation === this.generation &&
+      snapshot &&
+      isGatewayAvailable(snapshot) &&
+      (this.status.awaitingGateway || this.status.error !== null)
+    ) {
+      refresh();
+    }
   }
 
   invalidate(): void {
@@ -177,7 +209,7 @@ export class CustodianTranscriptLoader {
       }
       this.status = result.ok
         ? completePanelRefresh()
-        : failPanelRefresh(this.status, result.error);
+        : failPanelRefresh(this.status, result.error, this.getGatewaySnapshot());
       return result;
     } finally {
       if (this.inFlight?.promise === promise) {
