@@ -81,6 +81,55 @@ describe("Claude CLI output validation", () => {
     expect(parseLifecycle({ type: "system", subtype: "compact_boundary" })).toBeNull();
   });
 
+  it("projects an automatic compaction boundary that emits no status record", () => {
+    const backend = buildAnthropicCliBackend();
+    const parseLifecycle = (event: unknown) =>
+      backend.parseJsonlLifecycleEvent?.(JSON.stringify(event), {
+        backendId: backend.id,
+        backend: backend.config,
+      });
+
+    // Automatic compaction reports no `status: "compacting"` and no
+    // `compact_result`; the boundary is the only record it emits.
+    expect(
+      parseLifecycle({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: { trigger: "auto", pre_tokens: 1_001_529, post_tokens: 10_687 },
+        uuid: "00000000-0000-4000-8000-000000000005",
+        session_id: "00000000-0000-4000-8000-000000000002",
+      }),
+    ).toEqual({ kind: "compaction", phase: "end", completed: true });
+
+    // Claude Code's on-disk transcripts spell the same payload camelCase.
+    expect(
+      parseLifecycle({
+        type: "system",
+        subtype: "compact_boundary",
+        compactMetadata: { trigger: "auto", preTokens: 1_001_529, postTokens: 10_687 },
+      }),
+    ).toEqual({ kind: "compaction", phase: "end", completed: true });
+
+    // A manual boundary stays excluded: the status lifecycle already reports
+    // that compaction's success and failure, so projecting it would double-report.
+    expect(
+      parseLifecycle({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: { trigger: "manual", pre_tokens: 400_000 },
+      }),
+    ).toBeNull();
+
+    // An unrecognized or absent trigger infers nothing, as before.
+    expect(
+      parseLifecycle({
+        type: "system",
+        subtype: "compact_boundary",
+        compact_metadata: { pre_tokens: 400_000 },
+      }),
+    ).toBeNull();
+  });
+
   it("rejects mocked raw tool protocol returned as terminal assistant text", () => {
     expect(parseResult(MOCK_RAW_TOOL_OUTPUT)).toEqual({
       kind: "result",
