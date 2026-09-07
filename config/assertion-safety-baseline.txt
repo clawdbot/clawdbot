@@ -2533,7 +2533,7 @@ src/config/doc-baseline.ts	8
 src/config/docs-config-examples.ts	1
 src/config/future-version-guard.ts	2
 src/config/gateway-dispatch-config.ts	2
-src/config/group-policy.ts	2
+src/config/group-policy.ts	1
 src/config/implicit-mentions.ts	1
 src/config/includes-scan.ts	1
 src/config/io.audit.ts	3
