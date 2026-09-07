@@ -5026,6 +5026,69 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenCalledTimes(2);
     });
 
+    it("records a chain-stopped diagnostic naming the terminal-abort condition", async () => {
+      const warnLogs = createWarnLogCapture("openclaw-model-fallback-chain-stop-test");
+      try {
+        const cfg = makeCfg();
+        const run = vi.fn().mockRejectedValue(new Error("provider call failed"));
+
+        const timeoutReason = new Error("request timed out");
+        timeoutReason.name = "TimeoutError";
+        const controller = new AbortController();
+        controller.abort(timeoutReason);
+
+        await expect(
+          runWithModelFallback({
+            cfg,
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            run,
+            abortSignal: controller.signal,
+          }),
+        ).rejects.toBeInstanceOf(Error);
+
+        // Behaviour is unchanged: the chain still stops at the first candidate.
+        expect(run).toHaveBeenCalledTimes(1);
+        expect(await warnLogs.findText("model fallback chain stopped")).toBeDefined();
+        expect(await warnLogs.findText("caller_signal_aborted")).toBeDefined();
+        // Never attributed to the candidate as a provider/model failure.
+        expect(await warnLogs.findText("decision=candidate_failed")).toBeUndefined();
+      } finally {
+        warnLogs.cleanup();
+      }
+    });
+
+    it("names an agent-run terminal timeout as the reason the chain stopped", async () => {
+      const warnLogs = createWarnLogCapture("openclaw-model-fallback-chain-stop-timeout-test");
+      try {
+        const cfg = makeCfg();
+        const terminalTimeout = new AgentRunTerminalOutcomeError(
+          new Error("attempt aborted before prompt submission"),
+          {
+            reason: "hard_timeout",
+            status: "timeout",
+            timeoutPhase: "provider",
+            providerStarted: true,
+          },
+        );
+        const run = vi.fn().mockRejectedValue(terminalTimeout);
+
+        await expect(
+          runWithModelFallback({
+            cfg,
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            run,
+          }),
+        ).rejects.toBe(terminalTimeout);
+
+        expect(run).toHaveBeenCalledTimes(1);
+        expect(await warnLogs.findText("agent_run_terminal_timeout")).toBeDefined();
+      } finally {
+        warnLogs.cleanup();
+      }
+    });
+
     it("rethrows terminal abort even when error resembles a failover-normalizable error", async () => {
       const cfg = makeCfg();
 
