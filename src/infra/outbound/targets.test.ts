@@ -1618,6 +1618,35 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved).toMatchObject({ channel: "telegram", to: "telegram:456" });
   });
 
+  it.each([
+    { target: undefined, source: false, purpose: "heartbeat-owner" },
+    { target: "owner", source: false, purpose: "heartbeat-owner" },
+    { target: "whatsapp", source: false, purpose: undefined },
+    { target: "owner", source: true, purpose: undefined },
+  ] as const)(
+    "marks only owner-derived plugin routes: target=$target, source=$source",
+    async ({ target, source, purpose }) => {
+      const plugin = createOwnerAllowlistTargetTestPlugin({
+        id: "whatsapp",
+        label: "WhatsApp",
+        ownerId: "+15555550166",
+        inferTargetChatType: () => "direct",
+      });
+      const resolveRoute = vi.fn().mockResolvedValue(null);
+      plugin.messaging = { ...plugin.messaging, resolveOutboundSessionRoute: resolveRoute };
+      setActivePluginRegistry(createTargetsTestRegistry([plugin]));
+      const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+        cfg: { channels: { whatsapp: { allowFrom: ["+15555550166"] } } },
+        agentId: "main",
+        heartbeat: { target, to: "+15555550166" },
+        turnSource: source ? { channel: "whatsapp", to: "+15555550166" } : undefined,
+      });
+      expect(resolved).toMatchObject({ channel: "whatsapp", to: "+15555550166" });
+      expect(resolveRoute).toHaveBeenCalledOnce();
+      expect(resolveRoute.mock.calls[0]?.[0].deliveryPurpose).toBe(purpose);
+    },
+  );
+
   it("delivers a classifier-proven WhatsApp E.164 owner route", async () => {
     const inferTargetChatType = vi.fn(({ to }: { to: string }) =>
       /^\+\d+$/.test(to) ? ("direct" as const) : undefined,

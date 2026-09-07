@@ -469,6 +469,10 @@ normalizes numeric thread ids the same way core does, so prefer it over ad hoc
 should expose `messaging.resolveOutboundSessionRoute(...)` so core gets
 provider-native session and thread identity without parser shims.
 
+Owner-derived heartbeat routes pass `deliveryPurpose: "heartbeat-owner"` to this
+resolver. Plugins can use it to resolve missing operator delivery context without
+relaxing destination requirements for other outbound callers.
+
 ### Conversation route ownership
 
 Implement `messaging.resolveConversationRouteOwner(...)` when generic route

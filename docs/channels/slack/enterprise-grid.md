@@ -261,7 +261,11 @@ client and require `reactions:write`.
 
 OpenClaw records Enterprise Grid destinations as
 `team:<team-id>:channel:<channel-id>` or `team:<team-id>:user:<user-id>`.
-Current-conversation Slack tool actions inherit that workspace. Detached or
+Current-conversation Slack tool actions inherit that workspace. Heartbeat owner
+routing can resolve a bare user ID by verifying the recipient's membership against
+the sending bot's installed workspaces, then selecting one shared workspace.
+An explicit workspace-qualified owner target is preserved. If that verification
+fails, the detached-send guard remains in effect. Other detached or
 proactive calls must provide a workspace-qualified target; bare channel and
 user IDs fail closed because those IDs can be reused by different workspaces.
 Actions without a destination parameter, such as `member-info` and
