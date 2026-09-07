@@ -64,7 +64,7 @@ const results = await makeResults();
 const held = await collect();
 // Inspect only after GC: string assertions/serialization can flatten slices and hide retention.
 for (const [index, result] of results.entries()) {
-  const expected =
+  const expected: string =
     mode === "range"
       ? `${line(index)}\n${line(index)}`
       : line(index).slice(mode === "cursor" ? 10 : 0);
