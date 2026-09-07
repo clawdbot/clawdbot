@@ -34,14 +34,15 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.subscribe");
       await page.waitForTimeout(1_200);
 
-      await gateway.deferNext("sessions.list");
-      const before = (await gateway.getRequests("sessions.list")).length;
+      const pageQuery = { includeUnknown: false };
+      await gateway.deferNext("sessions.list", pageQuery);
+      const before = (await gateway.getRequests("sessions.list", pageQuery)).length;
       await gateway.emitGatewayEvent("sessions.changed", {
         sessionKey: key,
         reason: "update",
         updatedAt: 2,
       });
-      await gateway.waitForRequest("sessions.list", { after: before });
+      await gateway.waitForRequest("sessions.list", { after: before, match: pageQuery });
       heldRequest = true;
       await page.waitForTimeout(50);
       await captureUiProof(suite, page, "sessions-background-refresh.png");
