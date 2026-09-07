@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
 import type { CompactionForegroundContext } from "../../packages/agent-core/src/harness/compaction/compaction.js";
+import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { Context, Model } from "../llm/types.js";
-import type { normalizeMessagesForLlmBoundary } from "./embedded-agent-runner/run/attempt-llm-boundary.js";
-import type { AgentMessage } from "./runtime/index.js";
 import { convertToLlm } from "./sessions/messages.js";
 
-type PrefixBoundaryOptions = Pick<
-  NonNullable<Parameters<typeof normalizeMessagesForLlmBoundary>[1]>,
-  "timezone" | "includeTimestamp" | "appendOnlyRuntimeContext"
->;
+type PrefixBoundaryOptions = {
+  timezone?: string;
+  includeTimestamp?: boolean;
+  appendOnlyRuntimeContext?: boolean;
+};
 
 /** Session-owned prefix data, without transcript bodies or executable tools. */
 export type CompactionPrefixSnapshot = {
