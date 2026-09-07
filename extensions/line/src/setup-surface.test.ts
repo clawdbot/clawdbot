@@ -132,6 +132,35 @@ describe("line setup wizard", () => {
     });
   });
 
+  it("does not ask for the credential the account already has while the other is missing", async () => {
+    const asked: string[] = [];
+    const prompter = createTestWizardPrompter({
+      confirm: vi.fn(async ({ message }: { message: string }) => {
+        asked.push(message);
+        return true;
+      }) as WizardPrompter["confirm"],
+      text: vi.fn(async ({ message }: { message: string }) => {
+        asked.push(message);
+        if (message === "Enter LINE channel secret") {
+          return "typed-secret";
+        }
+        throw new Error(`Unexpected prompt: ${message}`);
+      }) as WizardPrompter["text"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: lineConfigure,
+      cfg: { channels: { line: { channelAccessToken: "plain-token" } } } as OpenClawConfig,
+      prompter,
+    });
+
+    // Half-finished setup is the common case, and the token is right there in the config.
+    expect(asked).toContain("LINE channel access token already configured. Keep it?");
+    expect(asked).toContain("Enter LINE channel secret");
+    expect(result.cfg.channels?.line?.channelAccessToken).toBe("plain-token");
+    expect(result.cfg.channels?.line?.channelSecret).toBe("typed-secret");
+  });
+
   it("treats a configured reference as configured while it stays unresolved", () => {
     const credential = lineSetupWizard.credentials?.[0];
     if (!credential?.inspect) {
