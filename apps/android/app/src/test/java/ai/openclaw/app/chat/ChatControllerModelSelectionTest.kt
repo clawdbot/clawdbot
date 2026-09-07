@@ -2231,7 +2231,12 @@ class ChatControllerModelSelectionTest {
       controller.handleGatewayEvent("chat.metadata.changed", "{}")
       advanceUntilIdle()
       assertNull(controller.errorText.value)
-      assertEquals(true, controller.modelCatalog.value.single().available)
+      assertEquals(
+        true,
+        controller.modelCatalog.value
+          .single()
+          .available,
+      )
     }
 
   @Test
