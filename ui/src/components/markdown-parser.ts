@@ -41,6 +41,7 @@ const BARE_URL_CLASS = "markdown-bare-url";
 // Anchors minted from a code span that held only a GitHub URL; they carry a
 // generated label exactly like linkify output.
 const CODE_SPAN_LINK_MARKUP = "code-span-url";
+const CODE_SPAN_URL_BREAK_RE = /[\s\p{Cc}]/u;
 
 function isGitHubHost(hostname: string): boolean {
   const host = hostname.toLowerCase();
@@ -525,12 +526,13 @@ export function createMarkdownParser(): MarkdownItParser {
           continue;
         }
         if (open?.type === "code_inline" && linkDepth === 0) {
-          // The URL parser percent-encodes whitespace instead of failing, so a
-          // span with prose beside the URL would fold that prose into the href.
-          // CommonMark has already stripped symmetric padding; anything left is
-          // content, and only a span that is entirely one URL is promoted.
+          // The URL parser strips or percent-encodes whitespace and control
+          // characters instead of failing, so a span with prose beside the URL
+          // would fold that prose into the href. CommonMark has already stripped
+          // symmetric padding; anything left is content, and only a span that is
+          // entirely one URL is promoted.
           const content = open.content;
-          const codeUrl = /\s/.test(content) ? null : parseWebLinkHref(content);
+          const codeUrl = CODE_SPAN_URL_BREAK_RE.test(content) ? null : parseWebLinkHref(content);
           if (!codeUrl || !isGitHubHost(codeUrl.hostname)) {
             continue;
           }
