@@ -750,6 +750,53 @@ describe("channelsLogsCommand", () => {
     }
   });
 
+  it("keeps committed records anchored when an incomplete suffix shrinks", async () => {
+    vi.useFakeTimers();
+    try {
+      const complete = logLine({
+        module: "gateway/channels/slack/send",
+        message: "complete-before-suffix-repair",
+      });
+      const pending = logLine({
+        module: "gateway/channels/slack/send",
+        message: "pending-record-with-a-longer-suffix",
+      }).trimEnd();
+      const repaired = logLine({
+        module: "gateway/channels/slack/send",
+        message: "repaired",
+      });
+      await fs.writeFile(logPath, `${complete}${pending}`);
+
+      const follow = channelsLogsCommand(
+        { channel: "slack", follow: true, interval: 10, json: true },
+        runtime,
+      );
+      await vi.waitFor(() => expect(runtime.log).toHaveBeenCalledTimes(2));
+      await vi.advanceTimersByTimeAsync(10);
+
+      await fs.writeFile(logPath, `${complete}${repaired}`);
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.waitFor(() => {
+        expect(
+          runtime.log.mock.calls.some(([value]) => {
+            const record = JSON.parse(String(value));
+            return record.type === "log" && record.message === "repaired";
+          }),
+        ).toBe(true);
+      });
+      process.emit("SIGINT");
+      await follow;
+
+      const records = runtime.log.mock.calls.map(([value]) => JSON.parse(String(value)));
+      expect(
+        records.filter((record) => record.type === "log").map((record) => record.message),
+      ).toEqual(["complete-before-suffix-repair", "repaired"]);
+      expect(records.filter((record) => record.type === "notice")).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("waits quietly while the configured log file is absent", async () => {
     vi.useFakeTimers();
     try {

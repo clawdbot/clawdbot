@@ -360,7 +360,9 @@ function isSameFileGeneration(
   return (
     current?.file === previous.file &&
     current.identity === previous.identity &&
-    current.size >= previous.size &&
+    // A pending unterminated record may shrink while the committed prefix stays intact.
+    // Compare against the consumed cursor so that suffix repair does not replay the tail.
+    current.size >= previous.cursor &&
     current.prefixLength >= previous.prefixLength &&
     currentPrefix?.subarray(0, previous.prefixLength).equals(previousPrefix) === true &&
     current.validationContentHash === previous.contentHash &&
