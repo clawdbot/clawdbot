@@ -760,6 +760,18 @@ export type CompactionSummaryPrompt =
   | { kind: "turn-prefix" }
   | { kind: "custom"; instructions: string };
 
+/** Resolves the completion budget shared by compaction planning and execution. */
+export function resolveSummaryOutputTokens(params: {
+  reserveTokens: number;
+  modelMaxTokens: number;
+  reserveRatio?: number;
+}): number {
+  return Math.min(
+    Math.floor((params.reserveRatio ?? 0.8) * params.reserveTokens),
+    params.modelMaxTokens > 0 ? params.modelMaxTokens : Number.POSITIVE_INFINITY,
+  );
+}
+
 /** Generate or update a conversation summary for compaction. */
 export async function generateSummary(
   currentMessages: AgentMessage[],
@@ -775,10 +787,11 @@ export async function generateSummary(
   runtime?: AgentCoreCompletionRuntimeDeps,
   summaryPrompt?: CompactionSummaryPrompt,
 ): Promise<Result<string, CompactionError>> {
-  const maxTokens = Math.min(
-    Math.floor((summaryPrompt?.kind === "turn-prefix" ? 0.5 : 0.8) * reserveTokens),
-    model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
-  );
+  const maxTokens = resolveSummaryOutputTokens({
+    reserveTokens,
+    modelMaxTokens: model.maxTokens,
+    reserveRatio: summaryPrompt?.kind === "turn-prefix" ? 0.5 : 0.8,
+  });
   const selectedPrompt =
     summaryPrompt?.kind === "turn-prefix"
       ? TURN_PREFIX_SUMMARIZATION_PROMPT

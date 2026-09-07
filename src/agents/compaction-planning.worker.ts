@@ -32,7 +32,10 @@ export type CompactionPlanningWorkerValue =
       smallMessageIndexes: number[];
       oversizedNotes: string[];
     }
-  | ({ kind: "stageSplit" } & ({ mode: "single" } | { mode: "split"; chunkIndexes: number[][] }))
+  | ({ kind: "stageSplit" } & (
+      | { mode: "single"; fitsWholeRequest?: boolean }
+      | { mode: "split"; chunkIndexes: number[][] }
+    ))
   | {
       kind: "adaptiveChunkRatio";
       ratio: number;
@@ -97,7 +100,7 @@ export function runCompactionPlanningWorkerInput(input: unknown): CompactionPlan
             mode: "split",
             chunkIndexes: plan.chunks.map(createMessageIndexer(input.messages)),
           }
-        : { kind: input.kind, mode: "single" };
+        : { kind: input.kind, mode: "single", fitsWholeRequest: plan.fitsWholeRequest };
     }
     case "adaptiveChunkRatio":
       return {

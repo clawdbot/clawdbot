@@ -122,6 +122,8 @@ export async function buildStageSplitPlanWithWorker(params: {
   maxChunkTokens: number;
   parts?: number;
   minMessagesForSplit?: number;
+  contextWindow?: number;
+  summaryOutputTokens?: number;
   signal?: AbortSignal;
 }): Promise<StageSplitPlan> {
   const { signal, ...planningInput } = params;
@@ -135,7 +137,8 @@ export async function buildStageSplitPlanWithWorker(params: {
             mode: "split",
             chunks: value.chunkIndexes.map((indexes) => restoreIndexedMessages(messages, indexes)),
           }
-        : { mode: "single" },
+        : // Dropping this flag here would silently re-bound a verified single-pass plan.
+          { mode: "single", fitsWholeRequest: value.fitsWholeRequest },
   });
 }
 

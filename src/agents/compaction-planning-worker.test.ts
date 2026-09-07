@@ -3,7 +3,10 @@ import { createAssistantMessageEventStream } from "@openclaw/llm-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { serializeConversation } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { estimateTokens } from "../../packages/agent-core/src/harness/compaction/compaction.js";
+import {
+  estimateTokens,
+  resolveSummaryOutputTokens,
+} from "../../packages/agent-core/src/harness/compaction/compaction.js";
 import * as compactionPlanningWorkerRuntime from "./compaction-planning-worker-runtime.js";
 import {
   CompactionPlanningWorkerError,
@@ -373,8 +376,13 @@ describe("compaction planning worker", () => {
 
     expect(summary).toBe("Compact summary.");
     expect(inputTokens.length).toBeGreaterThan(0);
-    expect(Math.max(...inputTokens)).toBeLessThanOrEqual(model.contextWindow);
-    expect(Math.max(...inputTokens)).toBeLessThanOrEqual(maxChunkTokens);
+    expect(
+      Math.max(...inputTokens) +
+        resolveSummaryOutputTokens({
+          reserveTokens: 4_096,
+          modelMaxTokens: model.maxTokens,
+        }),
+    ).toBeLessThanOrEqual(model.contextWindow);
     expect([...seen].toSorted()).toEqual(markers.toSorted());
     expect(omissionNotes).toBe(false);
     expect(summary).not.toMatch(/\[Large .*omitted from summary\]|\[Partial summary:/);
