@@ -597,7 +597,42 @@ export function handleTranscriptContextMenu(event: MouseEvent, props: Transcript
         nextEvent.stopPropagation();
         removeReplyContextMenu();
         props.onFocusComposer?.();
+        return;
       }
+      // The menu declares menu/menuitem semantics, so it must offer menu
+      // keyboard behavior: Arrow/Home/End move among enabled items (wrapping,
+      // skipping disabled), and Tab dismisses the menu (see #127321).
+      if (nextEvent.key === "Tab") {
+        removeReplyContextMenu();
+        return;
+      }
+      if (
+        nextEvent.key !== "ArrowDown" &&
+        nextEvent.key !== "ArrowUp" &&
+        nextEvent.key !== "Home" &&
+        nextEvent.key !== "End"
+      ) {
+        return;
+      }
+      const enabledItems = focusCandidates.filter(
+        (button) => !button.disabled && button.isConnected,
+      );
+      if (enabledItems.length === 0) {
+        return;
+      }
+      nextEvent.preventDefault();
+      nextEvent.stopPropagation();
+      const currentIndex = enabledItems.findIndex((item) => item === document.activeElement);
+      let target: HTMLButtonElement | undefined;
+      if (nextEvent.key === "Home" || (nextEvent.key === "ArrowDown" && currentIndex === -1)) {
+        target = enabledItems[0];
+      } else if (nextEvent.key === "End" || (nextEvent.key === "ArrowUp" && currentIndex === -1)) {
+        target = enabledItems[enabledItems.length - 1];
+      } else {
+        const delta = nextEvent.key === "ArrowDown" ? 1 : -1;
+        target = enabledItems[(currentIndex + delta + enabledItems.length) % enabledItems.length];
+      }
+      target?.focus();
     };
     const { signal } = owner.listeners;
     document.addEventListener("click", handleOutsideEvent, { signal });

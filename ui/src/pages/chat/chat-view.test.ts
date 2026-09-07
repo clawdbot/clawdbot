@@ -9510,6 +9510,85 @@ describe("right-click Reply", () => {
     expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
   });
 
+  it("moves menu focus with Arrow keys, Home, and End with wrapping", () => {
+    const flushFrames = stubAnimationFrames();
+    const { bubble } = renderChatBubble(
+      { onRewindMessage: vi.fn(), onForkMessage: vi.fn(), onSetReply: vi.fn() },
+      {
+        entryId: "persisted-user",
+        groupClass: "chat-group user",
+        messageId: "message-1",
+        text: "hello",
+      },
+    );
+    dispatchContextMenu(bubble);
+    flushFrames();
+
+    const items = [
+      ...document.querySelectorAll<HTMLButtonElement>(
+        '.chat-reply-context-menu button[role="menuitem"]',
+      ),
+    ];
+    expect(items.map((button) => button.textContent?.trim())).toEqual([
+      "Reply",
+      "Rewind to here",
+      "Fork from here",
+    ]);
+    expect(document.activeElement).toBe(items[0]);
+    const press = (key: string) =>
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
+      );
+
+    press("ArrowDown");
+    expect(document.activeElement).toBe(items[1]);
+    press("ArrowDown");
+    expect(document.activeElement).toBe(items[2]);
+    press("ArrowDown");
+    expect(document.activeElement).toBe(items[0]);
+    press("ArrowUp");
+    expect(document.activeElement).toBe(items[2]);
+    press("Home");
+    expect(document.activeElement).toBe(items[0]);
+    press("End");
+    expect(document.activeElement).toBe(items[2]);
+    expect(document.querySelector(".chat-reply-context-menu")).not.toBeNull();
+  });
+
+  it("skips disabled menu items and dismisses the menu on Tab", () => {
+    const flushFrames = stubAnimationFrames();
+    const { bubble } = renderChatBubble(
+      { onRewindMessage: vi.fn(), onForkMessage: vi.fn(), onSetReply: vi.fn() },
+      {
+        entryId: "persisted-user",
+        groupClass: "chat-group user",
+        messageId: "message-1",
+        text: "hello",
+      },
+    );
+    dispatchContextMenu(bubble);
+    flushFrames();
+
+    const items = [
+      ...document.querySelectorAll<HTMLButtonElement>(
+        '.chat-reply-context-menu button[role="menuitem"]',
+      ),
+    ];
+    expect(items).toHaveLength(3);
+    items[1]!.disabled = true;
+    expect(document.activeElement).toBe(items[0]);
+
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
+    );
+    expect(document.activeElement).toBe(items[2]);
+
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }),
+    );
+    expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
+  });
+
   it("renders reply preview bar with quote text and dismiss button", () => {
     const container = renderReply({ replyTarget: { ...replyTarget, text: "quoted message" } });
 
