@@ -76,7 +76,7 @@ try {
       assert.equal(nativeBuildLaunch[key], preflight[key]);
     assert.equal(nativeBuildLaunch.kind, "native-build-test");
     assert.equal(nativeBuildLaunch.command, "xcodebuild");
-    assert.equal(nativeBuildLaunch.args[0], "test");
+    assert.equal(nativeBuildLaunch.args[0], "build-for-testing");
     assert(Number.isSafeInteger(nativeBuildLaunch.pid) && nativeBuildLaunch.pid > 0);
     outcomes.build = "native-build-test-started";
   }

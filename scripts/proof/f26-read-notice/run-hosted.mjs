@@ -344,7 +344,7 @@ function start(name, command, args, env = environment) {
     }
   });
   if (child.pid) processGroups.add(child.pid);
-  if (name === "native-ui" && child.pid !== undefined) {
+  if (name === "native-build" && child.pid !== undefined) {
     writeFileSync(
       path.join(publicOutput, "native-build-launch.json"),
       JSON.stringify({
@@ -490,6 +490,61 @@ try {
     path.join(publicOutput, "test-overlay.patch"),
     read("git", ["diff", "--", ...expectedPaths]) + "\n",
   );
+  const unit = await start("shared-unit", "swift", [
+    "test",
+    "--package-path",
+    "apps/shared/OpenClawKit",
+    "--scratch-path",
+    path.join(privateOutput, "swift-tests"),
+    "--jobs",
+    "2",
+    "--no-parallel",
+    "--filter",
+    "ChatViewModelTests.f26",
+  ]).result;
+  record("shared-unit-terminal", unit);
+  const build = await start("native-build", "xcodebuild", [
+    "build-for-testing",
+    "-project",
+    "apps/ios/OpenClaw.xcodeproj",
+    "-scheme",
+    "OpenClawUITests",
+    "-configuration",
+    "Debug",
+    "-destination",
+    "generic/platform=iOS Simulator",
+    "-jobs",
+    "2",
+    "-parallel-testing-enabled",
+    "NO",
+  ]).result;
+  record("native-build-terminal", build);
+  assert.equal(build.code, 0, "App/UI-test build failed; retained exact exit and output");
+  const available = JSON.parse(read("xcrun", ["simctl", "list", "devices", "available", "--json"]));
+  const runtimes = Object.entries(available.devices).filter(([runtime]) =>
+    runtime.includes("iOS-26"),
+  );
+  const selected = runtimes.flatMap(([runtime, devices]) =>
+    devices
+      .filter((device) => device.isAvailable && device.name.startsWith("iPhone"))
+      .map((device) => ({ runtime, device })),
+  )[0];
+  assert(selected, "No existing iOS 26 iPhone runtime; no image download");
+  const types = JSON.parse(read("xcrun", ["simctl", "list", "devicetypes", "--json"])).devicetypes;
+  const deviceType = types.find((type) => type.name === selected.device.name);
+  assert(deviceType, "No exact simulator device type");
+  simulator = read("xcrun", [
+    "simctl",
+    "create",
+    `F26-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`,
+    deviceType.identifier,
+    selected.runtime,
+  ]);
+  record("owned-simulator", {
+    simulator,
+    runtime: selected.runtime,
+    deviceType: deviceType.identifier,
+  });
   await run("gateway-build", process.execPath, [
     "--import",
     "./scripts/tsx.mjs",
@@ -578,31 +633,6 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   assert(existsSync(path.join(publicOutput, "fixture-ready.json")));
-  const available = JSON.parse(read("xcrun", ["simctl", "list", "devices", "available", "--json"]));
-  const runtimes = Object.entries(available.devices).filter(([runtime]) =>
-    runtime.includes("iOS-26"),
-  );
-  const selected = runtimes.flatMap(([runtime, devices]) =>
-    devices
-      .filter((device) => device.isAvailable && device.name.startsWith("iPhone"))
-      .map((device) => ({ runtime, device })),
-  )[0];
-  assert(selected, "No existing iOS 26 iPhone runtime; no image download");
-  const types = JSON.parse(read("xcrun", ["simctl", "list", "devicetypes", "--json"])).devicetypes;
-  const deviceType = types.find((type) => type.name === selected.device.name);
-  assert(deviceType, "No exact simulator device type");
-  simulator = read("xcrun", [
-    "simctl",
-    "create",
-    `F26-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`,
-    deviceType.identifier,
-    selected.runtime,
-  ]);
-  record("owned-simulator", {
-    simulator,
-    runtime: selected.runtime,
-    deviceType: deviceType.identifier,
-  });
   const testEnv = {
     ...environment,
     TEST_RUNNER_OPENCLAW_IOS_LIVE_GATEWAY: "1",
@@ -618,7 +648,7 @@ try {
     "native-ui",
     "xcodebuild",
     [
-      "test",
+      "test-without-building",
       "-project",
       "apps/ios/OpenClaw.xcodeproj",
       "-scheme",
@@ -662,9 +692,7 @@ try {
     destination: `platform=iOS Simulator,id=${simulator}`,
     phase: "tested",
     baseline,
-    buildStepOutcome: result.signal
-      ? `native-build-test-signal-${result.signal}`
-      : `native-build-test-exit-${result.code}`,
+    buildStepOutcome: `build-for-testing-exit-${build.code}`,
   });
   await run("app-archive", "tar", [
     "-czf",
@@ -681,19 +709,6 @@ try {
       sourceIdentity: "tested-app-product.json",
     }) + "\n",
   );
-  const unit = await start("shared-unit", "swift", [
-    "test",
-    "--package-path",
-    "apps/shared/OpenClawKit",
-    "--scratch-path",
-    path.join(privateOutput, "swift-tests"),
-    "--jobs",
-    "2",
-    "--no-parallel",
-    "--filter",
-    "ChatViewModelTests.f26",
-  ]).result;
-  record("shared-unit-terminal", unit);
   process.exitCode = result.code === 0 && unit.code === 0 ? 0 : 1;
 } catch (error) {
   record("phase-failure", { error: String(error) });
