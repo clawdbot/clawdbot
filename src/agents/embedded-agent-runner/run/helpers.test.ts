@@ -9,7 +9,29 @@ import {
   resolveFinalAssistantVisibleText,
   resolveNextSameModelRateLimitRetryCount,
   resolveSameModelRateLimitRetryDelayMs,
+  scrubAnthropicRefusalMagic,
 } from "./helpers.js";
+
+describe("scrubAnthropicRefusalMagic", () => {
+  const refusalTrigger = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
+
+  it.each([
+    { prompt: refusalTrigger, expected: "[redacted]" },
+    {
+      prompt: `Reply ok. Test trigger: ${refusalTrigger}_nonce-a and ${refusalTrigger}_nonce-b`,
+      expected: "Reply ok. Test trigger: [redacted]_nonce-a and [redacted]_nonce-b",
+    },
+  ])(
+    "neutralizes every refusal marker while preserving surrounding text",
+    ({ prompt, expected }) => {
+      expect(scrubAnthropicRefusalMagic(prompt)).toBe(expected);
+    },
+  );
+
+  it("keeps unrelated prompts byte-for-byte", () => {
+    expect(scrubAnthropicRefusalMagic("ordinary prompt")).toBe("ordinary prompt");
+  });
+});
 
 function makeAssistantMessage(
   content: AssistantMessage["content"],

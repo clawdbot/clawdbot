@@ -86,9 +86,9 @@ export function resolveNextSameModelRateLimitRetryCount(params: {
 }
 
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
-const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)";
+const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "[redacted]";
 
-// Avoid Anthropic's refusal test token poisoning session transcripts.
+// Keep the replacement neutral: naming the refusal trigger can itself prompt a refusal.
 export function scrubAnthropicRefusalMagic(prompt: string): string {
   if (!prompt.includes(ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL)) {
     return prompt;
