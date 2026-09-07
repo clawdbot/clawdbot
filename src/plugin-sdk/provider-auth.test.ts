@@ -424,9 +424,12 @@ async function runFallbackStoreCase(): Promise<FallbackStoreCaseResult> {
     },
   );
 
-  vi.doMock("../agents/agent-scope-config.js", () => ({
-    resolveDefaultAgentDir: () => "/tmp/openclaw-agent",
-  }));
+  vi.doMock("../agents/agent-scope-config.js", async () => {
+    const { resolveAgentDir } = await vi.importActual<
+      typeof import("../agents/agent-scope-config.js")
+    >("../agents/agent-scope-config.js");
+    return { resolveAgentDir, resolveDefaultAgentDir: () => "/tmp/openclaw-agent" };
+  });
   vi.doMock("../agents/auth-profiles/oauth.js", () => ({
     resolveApiKeyForProfile,
   }));
@@ -436,13 +439,17 @@ async function runFallbackStoreCase(): Promise<FallbackStoreCaseResult> {
         .filter(([, profile]) => profile.provider === provider)
         .map(([profileId]) => profileId),
   }));
-  vi.doMock("../agents/auth-profiles/store.js", () => ({
-    ensureAuthProfileStore: vi.fn(() => primaryStore),
-    ensureAuthProfileStoreForLocalUpdate: vi.fn(() => primaryStore),
-    loadAuthProfileStoreForSecretsRuntime: vi.fn(() => primaryStore),
-    loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => fallbackStore),
-    updateAuthProfileStoreWithLock: vi.fn(),
-  }));
+  vi.doMock("../plugins/provider-auth-availability.js", async () => {
+    const { createProviderAuthAvailability } =
+      await import("../plugins/provider-auth-availability-core.js");
+    const { findPersistedAuthProfileCredential } = await import("../agents/auth-profiles/store.js");
+    return createProviderAuthAvailability({
+      findPersistedAuthProfileCredential,
+      ensureAuthProfileStore: vi.fn(() => primaryStore),
+      loadAuthProfileStoreForSecretsRuntime: vi.fn(() => primaryStore),
+      loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => fallbackStore),
+    });
+  });
 
   const { listUsableProviderAuthProfileIds, resolveProviderAuthProfileApiKey } =
     await import("./provider-auth.js");
@@ -820,7 +827,7 @@ describe("provider auth profile helpers", () => {
     vi.doUnmock("../agents/auth-profiles/external-cli-discovery.js");
     vi.doUnmock("../agents/auth-profiles/oauth.js");
     vi.doUnmock("../agents/auth-profiles/order.js");
-    vi.doUnmock("../agents/auth-profiles/store.js");
+    vi.doUnmock("../plugins/provider-auth-availability.js");
     vi.resetModules();
   });
 
@@ -883,9 +890,12 @@ describe("provider auth profile helpers", () => {
       },
     );
 
-    vi.doMock("../agents/agent-scope-config.js", () => ({
-      resolveDefaultAgentDir: () => "/tmp/openclaw-agent",
-    }));
+    vi.doMock("../agents/agent-scope-config.js", async () => {
+      const { resolveAgentDir } = await vi.importActual<
+        typeof import("../agents/agent-scope-config.js")
+      >("../agents/agent-scope-config.js");
+      return { resolveAgentDir, resolveDefaultAgentDir: () => "/tmp/openclaw-agent" };
+    });
     vi.doMock("../agents/auth-profiles/oauth.js", () => ({
       resolveApiKeyForProfile,
     }));
@@ -901,13 +911,18 @@ describe("provider auth profile helpers", () => {
           .filter(([, profile]) => profile.provider === provider)
           .map(([profileId]) => profileId),
     }));
-    vi.doMock("../agents/auth-profiles/store.js", () => ({
-      ensureAuthProfileStore: vi.fn(() => store),
-      ensureAuthProfileStoreForLocalUpdate: vi.fn(() => store),
-      loadAuthProfileStoreForSecretsRuntime: vi.fn(() => store),
-      loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
-      updateAuthProfileStoreWithLock: vi.fn(),
-    }));
+    vi.doMock("../plugins/provider-auth-availability.js", async () => {
+      const { createProviderAuthAvailability } =
+        await import("../plugins/provider-auth-availability-core.js");
+      const { findPersistedAuthProfileCredential } =
+        await import("../agents/auth-profiles/store.js");
+      return createProviderAuthAvailability({
+        findPersistedAuthProfileCredential,
+        ensureAuthProfileStore: vi.fn(() => store),
+        loadAuthProfileStoreForSecretsRuntime: vi.fn(() => store),
+        loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
+      });
+    });
 
     const { resolveProviderAuthProfileApiKey } = await import("./provider-auth.js");
 
@@ -948,9 +963,12 @@ describe("provider auth profile helpers", () => {
         options?.externalCli ? externalStore : primaryStore,
     );
 
-    vi.doMock("../agents/agent-scope-config.js", () => ({
-      resolveDefaultAgentDir: () => "/tmp/openclaw-agent",
-    }));
+    vi.doMock("../agents/agent-scope-config.js", async () => {
+      const { resolveAgentDir } = await vi.importActual<
+        typeof import("../agents/agent-scope-config.js")
+      >("../agents/agent-scope-config.js");
+      return { resolveAgentDir, resolveDefaultAgentDir: () => "/tmp/openclaw-agent" };
+    });
     vi.doMock("../agents/auth-profiles/external-cli-discovery.js", () => ({
       externalCliDiscoveryForProviderAuth: vi.fn(() => externalCli),
     }));
@@ -969,13 +987,18 @@ describe("provider auth profile helpers", () => {
           .filter(([, profile]) => profile.provider === provider)
           .map(([profileId]) => profileId),
     }));
-    vi.doMock("../agents/auth-profiles/store.js", () => ({
-      ensureAuthProfileStore: vi.fn(() => primaryStore),
-      ensureAuthProfileStoreForLocalUpdate: vi.fn(() => primaryStore),
-      loadAuthProfileStoreForSecretsRuntime,
-      loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
-      updateAuthProfileStoreWithLock: vi.fn(),
-    }));
+    vi.doMock("../plugins/provider-auth-availability.js", async () => {
+      const { createProviderAuthAvailability } =
+        await import("../plugins/provider-auth-availability-core.js");
+      const { findPersistedAuthProfileCredential } =
+        await import("../agents/auth-profiles/store.js");
+      return createProviderAuthAvailability({
+        findPersistedAuthProfileCredential,
+        ensureAuthProfileStore: vi.fn(() => primaryStore),
+        loadAuthProfileStoreForSecretsRuntime,
+        loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
+      });
+    });
 
     const { isProviderAuthProfileConfigured } = await import("./provider-auth.js");
 

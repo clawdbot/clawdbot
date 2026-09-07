@@ -7,16 +7,7 @@ import type { FailoverReason } from "./embedded-agent-helpers.js";
 export function shouldAllowCooldownProbeForReason(
   reason: FailoverReason | null | undefined,
 ): boolean {
-  return (
-    reason === "rate_limit" ||
-    reason === "overloaded" ||
-    reason === "billing" ||
-    reason === "unknown" ||
-    reason === "empty_response" ||
-    reason === "no_error_details" ||
-    reason === "unclassified" ||
-    reason === "timeout"
-  );
+  return reason === "billing" || shouldUseTransientCooldownProbeSlot(reason);
 }
 
 /** Returns true when a transient failure should consume a cooldown probe slot. */

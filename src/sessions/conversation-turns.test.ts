@@ -176,6 +176,151 @@ describe("conversation turn correlation", () => {
     await expect(first.wait()).resolves.toBeUndefined();
   });
 
+  it("claims an exact reply without visiting unrelated pending turns", async () => {
+    const turns = Array.from({ length: 64 }, (_, index) =>
+      registerPendingConversationTurn({
+        agentId: `agent-${index % 4}`,
+        id: `turn-${index}`,
+        conversationRef: `conv-${(index * 7) % 13}`,
+        sessionId: `session-${(index * 11) % 17}`,
+        timeoutMs: 5_000,
+      }),
+    );
+    for (const [index, turn] of turns.entries()) {
+      turn.setOutboundMessageId(`outbound-${index}`);
+      turn.markReady();
+    }
+
+    const registry: Map<unknown, unknown> | undefined = Object.getOwnPropertyDescriptor(
+      globalThis,
+      Symbol.for("openclaw.pendingConversationTurns"),
+    )?.value;
+    if (!registry) {
+      throw new Error("pending-turn registry was not initialized");
+    }
+    const valuesDescriptor = Object.getOwnPropertyDescriptor(registry, "values");
+    registry.values = () => {
+      throw new Error("exact reply scanned the global pending-turn registry");
+    };
+    try {
+      const target = 37;
+      const claim = await claimPendingConversationTurnReply({
+        agentId: `agent-${target % 4}`,
+        conversationRef: `conv-${(target * 7) % 13}`,
+        sessionId: `session-${(target * 11) % 17}`,
+        messageId: "inbound-target",
+        replyToId: `outbound-${target}`,
+        text: "exact high-cardinality reply",
+      });
+      expect(claim?.turnId).toBe(`turn-${target}`);
+      claim?.complete();
+    } finally {
+      if (valuesDescriptor) {
+        Object.defineProperty(registry, "values", valuesDescriptor);
+      } else {
+        Reflect.deleteProperty(registry, "values");
+      }
+      for (const turn of turns) {
+        turn.cancel();
+      }
+    }
+  });
+
+  it("isolates outbound id collisions and claims the oldest eligible turn", async () => {
+    const wrongSession = registerPendingConversationTurn({
+      agentId: "collision-agent",
+      id: "wrong-session",
+      conversationRef: "collision-conv",
+      sessionId: "other-session",
+      timeoutMs: 5_000,
+    });
+    const oldestEligible = registerPendingConversationTurn({
+      agentId: "collision-agent",
+      id: "oldest-eligible",
+      conversationRef: "collision-conv",
+      sessionId: "collision-session",
+      timeoutMs: 5_000,
+    });
+    const newerEligible = registerPendingConversationTurn({
+      agentId: "collision-agent",
+      id: "newer-eligible",
+      conversationRef: "collision-conv",
+      sessionId: "collision-session",
+      timeoutMs: 5_000,
+    });
+    for (const turn of [wrongSession, oldestEligible, newerEligible]) {
+      turn.setOutboundMessageId("provider-collision");
+      turn.markReady();
+    }
+
+    const claim = await claimPendingConversationTurnReply({
+      agentId: "collision-agent",
+      conversationRef: "collision-conv",
+      sessionId: "collision-session",
+      messageId: "collision-reply",
+      replyToId: "provider-collision",
+      text: "oldest eligible",
+    });
+    expect(claim?.turnId).toBe("oldest-eligible");
+    claim?.complete();
+    wrongSession.cancel();
+    newerEligible.cancel();
+  });
+
+  it("retires replaced and timed-out outbound index entries before turn id reuse", async () => {
+    const replaced = registerPendingConversationTurn({
+      agentId: "main",
+      id: "replaced-turn",
+      conversationRef: "conv_replaced",
+      sessionId: "session-main",
+      timeoutMs: 5_000,
+    });
+    replaced.setOutboundMessageId("outbound-old");
+    replaced.setOutboundMessageId("outbound-new");
+    replaced.markReady();
+    await expect(
+      claimPendingConversationTurnReply({
+        agentId: "main",
+        conversationRef: "conv_replaced",
+        sessionId: "session-main",
+        messageId: "reply-old",
+        replyToId: "outbound-old",
+        text: "stale replacement",
+      }),
+    ).resolves.toBeUndefined();
+
+    const expired = registerPendingConversationTurn({
+      agentId: "main",
+      id: "retired-turn",
+      conversationRef: "conv_retired",
+      sessionId: "session-main",
+      timeoutMs: 0,
+    });
+    expired.setOutboundMessageId("outbound-retired");
+    expired.markReady();
+    await expect(expired.wait()).resolves.toBeUndefined();
+    const reused = registerPendingConversationTurn({
+      agentId: "main",
+      id: "retired-turn",
+      conversationRef: "conv_retired",
+      sessionId: "session-main",
+      timeoutMs: 5_000,
+    });
+    reused.setOutboundMessageId("outbound-retired");
+    reused.markReady();
+    const claim = await claimPendingConversationTurnReply({
+      agentId: "main",
+      conversationRef: "conv_retired",
+      sessionId: "session-main",
+      messageId: "reply-current",
+      replyToId: "outbound-retired",
+      text: "current reuse",
+    });
+    expect(claim?.turnId).toBe("retired-turn");
+    claim?.complete();
+    replaced.cancel();
+  });
+
   it("does not consume an unsolicited message when only one turn is pending", async () => {
     const pending = register();
     pending.setOutboundMessageId("outbound-1");

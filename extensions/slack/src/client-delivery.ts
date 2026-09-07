@@ -370,8 +370,8 @@ export async function uploadSlackFile(params: {
   }
 
   await params.onPlatformSendDispatch?.();
-  // Slack allows this finalize call only once. Keep only the pre-connect DNS
-  // retry; a timeout or broader retry would create an unknown-send state.
+  // Completion is single-use after acceptance. Slack's method contract permits
+  // the write client's explicit-429 retries; this owner retries pre-connect DNS only.
   // Dispatch is already recorded above, so this call is the ambiguous send:
   // no rejection here may claim non-dispatch, however definitive its code reads.
   const completionClient = params.completionClient ?? params.client;

@@ -79,31 +79,16 @@ const mediaMetadataPlugins = vi.hoisted(() => [
   },
 ]);
 
-vi.mock("../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: () => ({
-    plugins: mediaMetadataPlugins,
-    diagnostics: [],
-  }),
-  loadPluginRegistrySnapshotWithMetadata: () => ({
-    source: "derived",
-    snapshot: { plugins: [] },
-    diagnostics: [],
-  }),
-}));
-
-vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
-  loadManifestMetadataSnapshot: () => ({
-    index: { plugins: [] },
-    plugins: mediaMetadataPlugins,
-  }),
-}));
-
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
-  getCurrentPluginMetadataSnapshot: () => ({
-    plugins: mediaMetadataPlugins,
-  }),
-}));
+vi.mock("../plugins/manifest-contract-eligibility.js", () => {
+  const manifestRegistry = { plugins: mediaMetadataPlugins, diagnostics: [] };
+  return {
+    loadManifestMetadataSnapshot: () => ({
+      index: { plugins: [] },
+      plugins: mediaMetadataPlugins,
+      manifestRegistry,
+    }),
+  };
+});
 
 import {
   providerSupportsNativePdfDocument,

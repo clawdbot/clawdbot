@@ -106,19 +106,22 @@ extension DashboardWindowController {
         self.gatewaySnapshot = snapshot
         let controller = self.webView.configuration.userContentController
         controller.removeAllUserScripts()
-        Self.installNativeChromeScript(into: controller)
-        Self.installNativeGatewaysScript(into: controller, snapshot: snapshot)
+        Self.installNativeChromeScript(into: controller, url: self.currentURL)
+        Self.installNativeGatewaysScript(into: controller, url: self.currentURL, snapshot: snapshot)
         Self.installNativeAuthScript(into: controller, url: self.currentURL, auth: self.auth)
-        self.webView.evaluateJavaScript(Self.nativeGatewaysScriptSource(snapshot: snapshot, dispatch: true))
+        self.webView.evaluateJavaScript(Self.scopedDashboardScript(
+            Self.nativeGatewaysScriptSource(snapshot: snapshot, dispatch: true), url: self.currentURL))
     }
 
     static func installNativeGatewaysScript(
         into userContentController: WKUserContentController,
+        url: URL,
         snapshot: DashboardGatewaySnapshot?)
     {
         guard let snapshot else { return }
         userContentController.addUserScript(WKUserScript(
-            source: self.nativeGatewaysScriptSource(snapshot: snapshot, dispatch: false),
+            source: self.scopedDashboardScript(
+                self.nativeGatewaysScriptSource(snapshot: snapshot, dispatch: false), url: url),
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true))
     }

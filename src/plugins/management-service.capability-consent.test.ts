@@ -86,12 +86,9 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
     mocks.officialCatalog(...args),
 }));
 
-const {
-  clearManagedPluginOfficialCatalogCache,
-  inspectManagedPlugin,
-  listManagedPlugins,
-  setManagedPluginEnabled,
-} = await import("./management-service.js");
+const { clearManagedPluginOfficialCatalogCache } = await import("./management-catalog.js");
+const { inspectManagedPlugin, listManagedPlugins } = await import("./management-service.js");
+const { setManagedPluginEnabled } = await import("./management-mutations.js");
 
 const trackedArtifactDirs: string[] = [];
 
@@ -225,6 +222,70 @@ describe("managed plugin capability consent", () => {
       ).resolves.toBeUndefined();
       expect(onCapabilityConsent).not.toHaveBeenCalled();
       expect(handler.applyAcceptedSurface("diffs", sourceRecord)).toEqual(sourceRecord);
+    },
+  );
+
+  it.each(
+    officialSources.flatMap((sourceRecord) =>
+      (["accept", "decline", "missing", "unchanged"] as const).map((decision) => ({
+        sourceRecord,
+        decision,
+      })),
+    ),
+  )(
+    "reviews official $sourceRecord.source artifacts when requested: $decision",
+    async ({ sourceRecord, decision }) => {
+      const rootDir = officialArtifact();
+      const declared = resolvePluginArtifactDeclaredSurface(rootDir);
+      const order: string[] = [];
+      const onCapabilityConsent = vi.fn<PluginCapabilityConsentHandler>(async (review) => {
+        order.push("review");
+        await Promise.resolve();
+        order.push(decision === "accept" ? "accepted" : "declined");
+        return decision === "accept" ? { reviewToken: review.reviewToken } : undefined;
+      });
+      const previousRecord: PluginInstallRecord = {
+        ...sourceRecord,
+        installPath: rootDir,
+        acceptedSurface: declared,
+        acceptedSurfaceHash: computeDeclaredSurfaceHash(declared),
+        acceptedSurfaceIntegrity: sourceRecord.integrity,
+        acceptedSurfaceAt: "2026-01-01T00:00:00.000Z",
+      };
+      const handler = createManagedPluginArtifactConsentHandler({
+        config: {},
+        source: sourceRecord.source,
+        spec: sourceRecord.spec,
+        reviewOfficialArtifacts: true,
+        ...(decision === "unchanged" ? { previousRecords: { diffs: previousRecord } } : {}),
+        ...(decision !== "missing" ? { onCapabilityConsent } : {}),
+        beforePersistentEffect: () => {
+          order.push("commit");
+        },
+      });
+      const pending = handler.onBeforePluginArtifactCommit({
+        pluginId: "diffs",
+        stagedArtifactDir: rootDir,
+        mode: decision === "unchanged" ? "update" : "install",
+        sourceRecord,
+      });
+      if (decision === "decline" || decision === "missing") {
+        await expect(pending).rejects.toMatchObject({ capabilityConsent: { pluginId: "diffs" } });
+        expect(order).toEqual(decision === "decline" ? ["review", "declined"] : []);
+        expect(() => handler.applyAcceptedSurface("diffs", sourceRecord)).toThrow(
+          "did not expose its verified artifact",
+        );
+        return;
+      }
+      await pending;
+      expect(order).toEqual(decision === "accept" ? ["review", "accepted", "commit"] : ["commit"]);
+      expect(onCapabilityConsent).toHaveBeenCalledTimes(decision === "accept" ? 1 : 0);
+      expect(handler.applyAcceptedSurface("diffs", sourceRecord)).toMatchObject({
+        acceptedSurface: declared,
+        acceptedSurfaceHash: computeDeclaredSurfaceHash(declared),
+        acceptedSurfaceIntegrity: sourceRecord.integrity,
+        acceptedSurfaceAt: expect.any(String),
+      });
     },
   );
 

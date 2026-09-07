@@ -14,7 +14,6 @@ import type {
 import type { SessionRefreshOptions } from "../../lib/sessions/session-capability.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { sessionsPageListQuery, type SessionsRouteData } from "./route.ts";
-import type { TranscriptSearchState } from "./view.ts";
 import "./sessions-page.ts";
 
 export type TestSessionsPage = HTMLElement & {
@@ -36,7 +35,6 @@ export type TestSessionsPage = HTMLElement & {
   checkpointBusyKey: string | null;
   sessionMutationPending: boolean;
   transcriptSearchQuery: string;
-  transcriptSearch: TranscriptSearchState;
   updateTranscriptSearchQuery: (query: string) => void;
   runTranscriptSearch: () => Promise<void>;
   loadCheckpoint: (sessionKey: string) => Promise<void>;
@@ -61,7 +59,7 @@ export type TestSessionsPage = HTMLElement & {
   forkSession: (key: string, fromLastCompleted?: boolean) => Promise<void>;
   branchCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
   restoreCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
-  addToWorkboard: (session: GatewaySessionRow) => Promise<void>;
+  runPluginAction: (id: string, session: GatewaySessionRow) => Promise<void>;
 };
 
 type MutableGateway = {
@@ -212,9 +210,9 @@ export function createContext(
     },
     channels: { subscribe },
     runtimeConfig: { state: { configSnapshot: null }, subscribe },
-    workboard: {
-      state: { cards: [], capturingSessionKeys: new Set() },
-      notify: vi.fn(),
+    plugins: {
+      registrations: vi.fn(() => []),
+      reportError: vi.fn(),
       subscribe,
     },
     navigate: vi.fn(),

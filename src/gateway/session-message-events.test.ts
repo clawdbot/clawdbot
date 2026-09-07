@@ -24,7 +24,9 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveCronDeliveryPlan } from "../cron/delivery-plan.js";
 import { dispatchCronDelivery } from "../cron/isolated-agent/delivery-dispatch.js";
+import type { CronJob } from "../cron/types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../infra/agent-run-registry.js";
 import * as secureRandom from "../infra/secure-random.js";
@@ -1021,24 +1023,25 @@ describe("session.message websocket events", () => {
       });
       await rpcReq(webWs, "sessions.messages.subscribe", { key: sessionKey });
 
+      const job: CronJob = {
+        id: "job-webchat",
+        name: "Current WebChat completion",
+        sessionTarget: "current",
+        sessionKey,
+        wakeMode: "now",
+        enabled: true,
+        state: {},
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        schedule: { kind: "at", at: "2030-01-01T00:00:00.000Z" },
+        payload: { kind: "agentTurn", message: "Finish later" },
+      };
       const liveEventPromise = waitForSessionMessageEvent(webWs, sessionKey);
       const dispatched = await dispatchCronDelivery({
         cfg: { session: { store: storePath } },
         cfgWithAgentDefaults: { session: { store: storePath } },
         deps: {},
-        job: {
-          id: "job-webchat",
-          name: "Current WebChat completion",
-          sessionTarget: "current",
-          sessionKey,
-          wakeMode: "now",
-          enabled: true,
-          state: {},
-          createdAtMs: 1,
-          updatedAtMs: 1,
-          schedule: { kind: "at", at: "2030-01-01T00:00:00.000Z" },
-          payload: { kind: "agentTurn", message: "Finish later" },
-        },
+        job,
         agentId: "main",
         agentSessionKey: "cron:job-webchat",
         sourceSessionKey: sessionKey,
@@ -1059,6 +1062,7 @@ describe("session.message websocket events", () => {
           mode: "implicit",
           error: new Error("WebChat uses canonical session events"),
         },
+        deliveryPlan: resolveCronDeliveryPlan(job),
         deliveryRequested: true,
         undeliveredRunStatus: "ok",
         spawnOnlyHandoff: false,
@@ -2733,6 +2737,7 @@ describe("session.message websocket events", () => {
     const ledger: WorkerTranscriptCommitStore = {
       begin: () => ({ kind: "claimed" }),
       complete: ({ outcome }) => outcome,
+      discardUncommitted: () => {},
     };
     const committer = createWorkerTranscriptCommitter({ getConfig: () => config, store: ledger });
     const identity: WorkerConnectionIdentity = {
@@ -2793,6 +2798,7 @@ describe("session.message websocket events", () => {
         ),
       );
       const outcome = await committer.commit({
+        assertCurrent: () => undefined,
         identity,
         request: {
           runEpoch: identity.ownerEpoch,

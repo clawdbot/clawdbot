@@ -15,18 +15,19 @@ import {
   projectChatDisplayMessageMock,
   readSessionMessageByIdAsyncMock,
   readSessionMessageCountAsyncMock,
-  resolveEmbeddedAgentRunProgressStateMock,
+  resolveEmbeddedAgentSessionProgressStateMock,
   resolveTranscriptSessionKeyBySessionIdMock,
   runtimeConfigState,
   sessionRow,
   storedMessage,
   subscribePluginSessionsChanged,
 } from "./server-session-events.test-support.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 
 describe("createTranscriptUpdateBroadcastHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    resolveEmbeddedAgentRunProgressStateMock.mockReturnValue(undefined);
+    resolveEmbeddedAgentSessionProgressStateMock.mockReturnValue(undefined);
     listAccessorSessionEntriesReadOnlyMock.mockReturnValue([]);
     loadAccessorSessionEntryReadOnlyMock.mockReturnValue(undefined);
     loadGatewaySessionEntryReadOnlyMock.mockReturnValue({ entry: undefined, storePath: "" });
@@ -515,7 +516,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   });
 
   it("keeps transcript snapshots active for embedded or channel reply runs", async () => {
-    resolveEmbeddedAgentRunProgressStateMock.mockImplementation((sessionId) =>
+    resolveEmbeddedAgentSessionProgressStateMock.mockImplementation((sessionId) =>
       sessionId === "sess-main" ? "running" : undefined,
     );
 
@@ -530,7 +531,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         activeRunIds: null,
       },
     });
-    expect(resolveEmbeddedAgentRunProgressStateMock).toHaveBeenCalledWith("sess-main");
+    expect(resolveEmbeddedAgentSessionProgressStateMock).toHaveBeenCalledWith("sess-main");
   });
 
   it.each([
@@ -656,7 +657,9 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   it("publishes message-phase changes to plugins without websocket subscribers", async () => {
     const received = vi.fn();
     const unsubscribe = subscribePluginSessionsChanged(received);
-    const { broadcastToConnIds } = createGatewayBroadcaster({ clients: new Set() });
+    const { broadcastToConnIds } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry(),
+    });
     const handler = createTranscriptUpdateBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set() },

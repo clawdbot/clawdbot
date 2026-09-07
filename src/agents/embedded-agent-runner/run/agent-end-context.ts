@@ -72,6 +72,8 @@ export function buildEmbeddedForegroundPromptContext(
     githubPublicationAvailable: run.githubPublicationAvailable,
     conversationRecall: run.conversationRecall,
     toolOverrides: run.toolOverrides,
+    permissionMode: run.permissionMode,
+    execOverrides: run.execOverrides,
     skillsSnapshot: run.skillsSnapshot,
     currentInboundEventKind: run.currentInboundEventKind,
     clientTools: run.clientTools,

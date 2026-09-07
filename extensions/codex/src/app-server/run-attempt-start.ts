@@ -90,6 +90,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       data: { phase: "startup" },
     });
     const startupResult = await startCodexAttemptThread({
+      assertCurrent: connection.assertCurrent,
       attemptClientFactory,
       bindingStore,
       runtime: connection.options.runtime,
@@ -220,7 +221,9 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
         clientId: state.client.getInstanceId(),
       },
     });
-    if (applyNoContextEngineContinuityProjection(state.thread.lifecycle.action, state.thread)) {
+    if (
+      await applyNoContextEngineContinuityProjection(state.thread.lifecycle.action, state.thread)
+    ) {
       await rebuildCodexTurnPromptTextFromCurrentProjection();
     }
     trajectoryRecorder?.recordEvent("session.started", {

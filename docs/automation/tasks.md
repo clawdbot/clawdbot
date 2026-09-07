@@ -58,7 +58,7 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
   </Tab>
   <Tab title="Cancel and notify">
     ```bash
-    # Cancel a running task (kills the child session)
+    # Cancel a running task through its execution owner
     openclaw tasks cancel <lookup>
 
     # Change notification policy for a task
@@ -241,7 +241,9 @@ openclaw tasks notify <lookup> state_changes
     openclaw tasks cancel <lookup>
     ```
 
-    For ACP and subagent tasks, this kills the child session; ACP and automation cancellations route through the running Gateway (`tasks.cancel`). For CLI-tracked tasks, cancellation is recorded in the task registry (there is no separate child runtime handle). Status transitions to `cancelled` and a delivery notification is sent when applicable.
+    For ACP and subagent tasks, this kills the child session; ACP and automation cancellations route through the running Gateway (`tasks.cancel`). Ordinary Gateway-owned CLI tasks also require the owning Gateway to be running. Cancellation aborts only the selected live run and its pending approvals, and reports success only after that run settles as `cancelled`. Background `exec` tasks keep their process-control cancellation path. Delivery notifications are sent when applicable.
+
+    Missing, already-terminal, ownerless, or unconfirmed runs do not report a new cancellation success. If a crash or restart removed the live owner, keep the Gateway running so its existing maintenance can reconcile the task as `lost`. Use `openclaw tasks audit` and `openclaw tasks maintenance` to inspect the record; offline maintenance cannot establish Gateway liveness. See [task maintenance](/cli/tasks#maintenance).
 
   </Accordion>
   <Accordion title="tasks retry | dismiss">

@@ -33,7 +33,7 @@ const HANDOFF_PROBE_TIMEOUT_MS = 5_000;
 
 type BrowserHatchTarget = {
   config: OpenClawConfig;
-  dashboardUrl: string;
+  links: ControlUiHandoffTarget["links"];
   documentUrl: string;
   sshHint?: string;
   port: number;
@@ -98,7 +98,7 @@ async function resolveBrowserHatchTarget(
   const setupAuthValue = authMode === "password" ? credentials.password : undefined;
   const target: BrowserHatchTarget = {
     config,
-    dashboardUrl: shared.links.httpUrl,
+    links: shared.links,
     documentUrl: shared.documentUrl,
     port: shared.port,
     ...(shared.loopbackAliasHost ? { loopbackAliasHost: shared.loopbackAliasHost } : {}),
@@ -128,10 +128,15 @@ function isConnectedControlUi(entry: SystemPresence): boolean {
   );
 }
 
-function retargetBrowserHandoffUrl(browserUrl: string, visibleBaseUrl: string): string {
+function retargetBrowserHandoffUrl(
+  browserUrl: string,
+  links: ControlUiHandoffTarget["links"],
+): string {
   const issued = new URL(browserUrl);
-  const visible = new URL(visibleBaseUrl);
-  visible.hash = issued.hash;
+  const visible = new URL(links.httpUrl);
+  const fragment = new URLSearchParams(issued.hash.slice(1));
+  fragment.set("gatewayUrl", links.wsUrl);
+  visible.hash = fragment.toString();
   return visible.toString();
 }
 
@@ -267,7 +272,7 @@ export async function runBrowserHatchHandoff(
   let browserUrl: string;
   try {
     const browserHandoff = await (deps.issueBrowserHandoff ?? issueControlUiBrowserHandoff)(
-      target.dashboardUrl,
+      target.links,
     );
     browserUrl = browserHandoff.browserUrl;
   } catch {
@@ -314,18 +319,16 @@ export async function runBrowserHatchHandoff(
             : undefined))
         : undefined;
     const sshHint = tunnelHint ? `\n\n${tunnelHint}` : "";
-    const visibleBaseUrl = directRemoteDisplay
-      ? (
-          await resolveAdvertisedControlUiLinks({
-            bind,
-            port: target.port,
-            customBindHost: target.config.gateway?.customBindHost,
-            basePath: target.config.gateway?.controlUi?.basePath,
-            tlsEnabled: target.tlsConfig?.enabled === true,
-          })
-        ).httpUrl
-      : target.dashboardUrl;
-    const visibleUrl = retargetBrowserHandoffUrl(browserUrl, visibleBaseUrl);
+    const visibleLinks = directRemoteDisplay
+      ? await resolveAdvertisedControlUiLinks({
+          bind,
+          port: target.port,
+          customBindHost: target.config.gateway?.customBindHost,
+          basePath: target.config.gateway?.controlUi?.basePath,
+          tlsEnabled: target.tlsConfig?.enabled === true,
+        })
+      : target.links;
+    const visibleUrl = retargetBrowserHandoffUrl(browserUrl, visibleLinks);
     await params.prompter.note(
       `${t("wizard.guided.browserHandoffCopy", { url: visibleUrl })}${sshHint}`,
       t("wizard.guided.browserHandoffTitle"),

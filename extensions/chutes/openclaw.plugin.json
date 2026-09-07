@@ -65,6 +65,9 @@
     "properties": {}
   },
   "modelCatalog": {
+    "modelsDev": {
+      "chutes": "chutes"
+    },
     "providers": {
       "chutes": {
         "baseUrl": "https://llm.chutes.ai/v1",

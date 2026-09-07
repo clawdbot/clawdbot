@@ -286,69 +286,558 @@ esac
     },
   );
 
-  it.skipIf(process.platform === "win32").each([
-    { status: "queued", conclusion: null, exitCode: 16, output: "TIMEOUT" },
-    { status: "in_progress", conclusion: null, exitCode: 16, output: "TIMEOUT" },
-    { status: "completed", conclusion: "success", exitCode: 0, output: "GREEN" },
-    {
-      status: "completed",
-      conclusion: "failure",
-      exitCode: 15,
-      output: "FAILING checks=CI workflow (failure)",
-    },
-  ])(
-    "uses attached $status/$conclusion CI instead of a prior pull-request failure",
-    async ({ status, conclusion, exitCode, output }) => {
-      const run = { id: 201, workflow_id: 10, status, conclusion };
-      const pr = {
-        state: "OPEN",
-        mergeable: true,
-        headRefOid: sha,
-        statusCheckRollup: {
-          state: "FAILURE",
-          contexts: {
-            totalCount: 1,
-            pageInfo: { hasNextPage: false, endCursor: null },
-            nodes: [
-              {
-                kind: "CheckRun",
-                databaseId: 1_000,
-                name: "old matrix shard",
-                status: "COMPLETED",
-                conclusion: "FAILURE",
-                checkSuite: {
-                  workflowRun: {
-                    databaseId: 100,
-                    event: "pull_request",
-                    workflow: { databaseId: 10 },
-                  },
-                },
-              },
-            ],
+  describe.skipIf(process.platform === "win32")("PR run replacement ownership", () => {
+    const association = (number = 42, baseRef = "main") => ({
+      number,
+      head: { sha },
+      base: { ref: baseRef, sha: "b".repeat(40) },
+    });
+
+    it.each<{
+      label: string;
+      status?: string;
+      conclusion?: string | null;
+      runPatch?: Record<string, unknown>;
+      previousPatch?: Record<string, unknown>;
+      lastPreviousPatch?: Record<string, unknown>;
+      olderRunOutsidePage?: boolean;
+      oldRunCount?: number;
+      expectedMetadataReads?: number;
+      afterMetadata?: Record<string, unknown>;
+      afterMetadataState?: string;
+      rollupState?: string;
+      slowMetadata?: boolean;
+      slowFinalRun?: boolean;
+      slowWatchPr?: boolean;
+      checkSuiteId?: number | null;
+      oldConclusion?: "FAILURE" | "CANCELLED" | "SUCCESS";
+      checkEvent?: string;
+      newCheckName?: string;
+      newCheckEvent?: string | null;
+      newCheckConclusion?: string;
+      expectedRun?: number;
+      completion?: "ci-run";
+      exitCode?: number;
+      output?: string;
+    }>([
+      {
+        label: "queued replacement",
+        status: "queued",
+        conclusion: null,
+        exitCode: 16,
+        output: "TIMEOUT",
+      },
+      {
+        label: "running replacement",
+        status: "in_progress",
+        conclusion: null,
+        exitCode: 16,
+        output: "TIMEOUT",
+      },
+      { label: "successful replacement", exitCode: 0, output: "GREEN" },
+      {
+        label: "ci-run slow final run",
+        completion: "ci-run",
+        slowFinalRun: true,
+        exitCode: 16,
+        output: "TIMEOUT",
+      },
+      {
+        label: "ci-run slow watch PR read",
+        completion: "ci-run",
+        slowWatchPr: true,
+        exitCode: 16,
+        output: "TIMEOUT",
+      },
+      ...[33, 65].map((oldRunCount) => ({
+        label: `${oldRunCount}-run authoritative SUCCESS`,
+        oldRunCount,
+        olderRunOutsidePage: true,
+        rollupState: "SUCCESS",
+        oldConclusion: "SUCCESS" as const,
+        expectedMetadataReads: 0,
+        exitCode: 0,
+        output: "GREEN",
+      })),
+      {
+        label: "65-run refreshed SUCCESS",
+        oldRunCount: 65,
+        olderRunOutsidePage: true,
+        afterMetadataState: "SUCCESS",
+        expectedMetadataReads: 32,
+        exitCode: 0,
+        output: "GREEN",
+      },
+      {
+        label: "65-run SUCCESS with failed attached run",
+        oldRunCount: 65,
+        olderRunOutsidePage: true,
+        rollupState: "SUCCESS",
+        oldConclusion: "SUCCESS",
+        conclusion: "failure",
+        expectedMetadataReads: 0,
+        output: "FAILING checks=CI workflow (failure)",
+      },
+      ...[32, 33, 65].map((oldRunCount) => ({
+        label: `${oldRunCount}-run metadata progress`,
+        oldRunCount,
+        olderRunOutsidePage: true,
+        exitCode: 0,
+        output: "GREEN",
+      })),
+      {
+        label: "33-run unknown association",
+        oldRunCount: 33,
+        olderRunOutsidePage: true,
+        previousPatch: { pull_requests: [] },
+        expectedMetadataReads: 32,
+      },
+      {
+        label: "33-run foreign association",
+        oldRunCount: 33,
+        olderRunOutsidePage: true,
+        previousPatch: { pull_requests: [association(43)] },
+        expectedMetadataReads: 32,
+      },
+      {
+        label: "33-run failed attached run",
+        oldRunCount: 33,
+        olderRunOutsidePage: true,
+        conclusion: "failure",
+        expectedMetadataReads: 32,
+        output: "FAILING checks=CI workflow (failure)",
+      },
+      {
+        label: "33-run moved head",
+        oldRunCount: 33,
+        olderRunOutsidePage: true,
+        afterMetadata: { headRefOid: "c".repeat(40) },
+        expectedMetadataReads: 32,
+        exitCode: 11,
+        output: "HEAD-MOVED",
+      },
+      {
+        label: "33-run deferred unknown association",
+        oldRunCount: 33,
+        olderRunOutsidePage: true,
+        lastPreviousPatch: { pull_requests: [] },
+      },
+      {
+        label: "33-run deferred foreign association",
+        oldRunCount: 33,
+        olderRunOutsidePage: true,
+        lastPreviousPatch: { pull_requests: [association(43)] },
+      },
+      {
+        label: "33-run independent failed check",
+        oldRunCount: 33,
+        olderRunOutsidePage: true,
+        newCheckName: "new required job",
+        newCheckConclusion: "FAILURE",
+        expectedMetadataReads: 32,
+        output: "FAILING checks=new required job",
+      },
+      {
+        label: "33-run new failure during metadata",
+        oldRunCount: 33,
+        olderRunOutsidePage: true,
+        afterMetadata: {
+          statusCheckRollup: {
+            state: "FAILURE",
+            contexts: {
+              totalCount: 1,
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [{ kind: "StatusContext", context: "new required check", state: "FAILURE" }],
+            },
           },
         },
-      };
-      const result = await runWatcher(
-        `#!/usr/bin/env node
+        expectedMetadataReads: 32,
+        output: "FAILING checks=new required check",
+      },
+      {
+        label: "21-run same-PR replacement",
+        olderRunOutsidePage: true,
+        exitCode: 0,
+        output: "GREEN",
+      },
+      {
+        label: "21-run same-PR cancellation replacement",
+        olderRunOutsidePage: true,
+        oldConclusion: "CANCELLED",
+        exitCode: 0,
+        output: "GREEN",
+      },
+      {
+        label: "21-run unknown older association",
+        olderRunOutsidePage: true,
+        previousPatch: { pull_requests: [] },
+      },
+      {
+        label: "21-run foreign older association",
+        olderRunOutsidePage: true,
+        previousPatch: { pull_requests: [association(43)] },
+      },
+      ...[
+        { label: "wrong returned run", previousPatch: { id: 99 } },
+        { label: "wrong returned head", previousPatch: { head_sha: "c".repeat(40) } },
+        { label: "wrong returned suite", previousPatch: { check_suite_id: 999 } },
+        { label: "wrong returned event", previousPatch: { event: "pull_request_target" } },
+        { label: "wrong returned workflow", previousPatch: { workflow_id: 20 } },
+        {
+          label: "moved head",
+          afterMetadata: { headRefOid: "c".repeat(40) },
+          exitCode: 11,
+          output: "HEAD-MOVED",
+        },
+        {
+          label: "closed PR",
+          afterMetadata: { state: "CLOSED" },
+          exitCode: 10,
+          output: "PR-CLOSED",
+        },
+        {
+          label: "conflicting PR",
+          afterMetadata: { mergeable: false },
+          exitCode: 14,
+          output: "CONFLICTING-MID-WAIT",
+        },
+        {
+          label: "new failing check",
+          afterMetadata: {
+            statusCheckRollup: {
+              state: "FAILURE",
+              contexts: {
+                totalCount: 1,
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [{ kind: "StatusContext", context: "new required check", state: "FAILURE" }],
+              },
+            },
+          },
+          output: "FAILING checks=new required check",
+        },
+        { label: "slow metadata", slowMetadata: true, exitCode: 16, output: "TIMEOUT" },
+        { label: "slow final run", slowFinalRun: true, exitCode: 16, output: "TIMEOUT" },
+        {
+          label: "running replacement",
+          status: "in_progress",
+          conclusion: null,
+          exitCode: 16,
+          output: "TIMEOUT",
+        },
+      ].map((entry) =>
+        Object.assign(entry, { label: `21-run ${entry.label}`, olderRunOutsidePage: true }),
+      ),
+      {
+        label: "same-PR unique cancellation replacement",
+        oldConclusion: "CANCELLED",
+        newCheckName: "new matrix shard",
+        exitCode: 0,
+        output: "GREEN",
+      },
+      {
+        label: "unassociated unique cancellation replacement",
+        oldConclusion: "CANCELLED",
+        newCheckName: "new matrix shard",
+        runPatch: { pull_requests: [] },
+      },
+      {
+        label: "another PR's unique cancellation replacement",
+        oldConclusion: "CANCELLED",
+        newCheckName: "new matrix shard",
+        runPatch: { pull_requests: [association(43)] },
+        expectedRun: 100,
+      },
+      {
+        label: "unique target cancellation with unbound newer checks",
+        oldConclusion: "CANCELLED",
+        checkEvent: "pull_request_target",
+        newCheckName: "new matrix shard",
+      },
+      {
+        label: "unique target cancellation with unbound newer run metadata",
+        oldConclusion: "CANCELLED",
+        checkEvent: "pull_request_target",
+      },
+      {
+        label: "same-name replacement from a different event",
+        checkEvent: "pull_request_target",
+        newCheckName: "old matrix shard",
+        newCheckEvent: "pull_request",
+      },
+      {
+        label: "same-name replacement with an unknown event",
+        checkEvent: "pull_request_target",
+        newCheckName: "old matrix shard",
+        newCheckEvent: null,
+      },
+      {
+        label: "same-name same-event target replacement",
+        oldConclusion: "CANCELLED",
+        checkEvent: "pull_request_target",
+        newCheckName: "old matrix shard",
+        exitCode: 0,
+        output: "GREEN",
+      },
+
+      {
+        label: "failed replacement",
+        conclusion: "failure",
+        output: "FAILING checks=CI workflow (failure)",
+      },
+      {
+        label: "another PR with the same head and a different base",
+        runPatch: { pull_requests: [association(43, "release/2026.9")] },
+        expectedRun: 100,
+      },
+      { label: "missing replacement association", runPatch: { pull_requests: undefined } },
+      { label: "empty replacement association", runPatch: { pull_requests: [] } },
+      {
+        label: "ambiguous replacement association",
+        runPatch: { pull_requests: [association(), association(43)] },
+      },
+      {
+        label: "malformed replacement association",
+        runPatch: { pull_requests: [association(), { number: "43", head: { sha } }] },
+      },
+      { label: "empty prior association", previousPatch: { pull_requests: [] } },
+      {
+        label: "another PR's prior graph",
+        previousPatch: { pull_requests: [association(43, "release/2026.9")] },
+      },
+      {
+        label: "ambiguous prior association",
+        previousPatch: { pull_requests: [association(), association(43)] },
+      },
+      { label: "different replacement event", runPatch: { event: "workflow_dispatch" } },
+      { label: "different replacement head", runPatch: { head_sha: "c".repeat(40) } },
+      {
+        label: "different association head",
+        runPatch: { pull_requests: [{ ...association(), head: { sha: "c".repeat(40) } }] },
+      },
+      { label: "different prior event", previousPatch: { event: "workflow_dispatch" } },
+      { label: "different prior head", previousPatch: { head_sha: "c".repeat(40) } },
+      { label: "different workflow", runPatch: { workflow_id: 20 } },
+      { label: "missing replacement suite", runPatch: { check_suite_id: undefined } },
+      { label: "missing prior suite", previousPatch: { check_suite_id: undefined } },
+      { label: "mismatched prior check suite", checkSuiteId: 999 },
+      { label: "missing prior check suite", checkSuiteId: null },
+      {
+        label: "same PR rerun after its base changed",
+        runPatch: { pull_requests: [association(42, "release/2026.9")] },
+        exitCode: 0,
+        output: "GREEN",
+      },
+      {
+        label: "existing ci-run completion policy",
+        runPatch: { pull_requests: [association(43, "release/2026.9")] },
+        completion: "ci-run",
+        exitCode: 0,
+        output: "GREEN",
+      },
+    ])(
+      "preserves replacement ownership for $label",
+      async ({
+        status = "completed",
+        conclusion = "success",
+        runPatch,
+        previousPatch,
+        lastPreviousPatch,
+        olderRunOutsidePage = false,
+        oldRunCount = 1,
+        expectedMetadataReads = oldRunCount,
+        afterMetadata,
+        afterMetadataState,
+        rollupState = "FAILURE",
+        slowMetadata = false,
+        slowFinalRun = false,
+        slowWatchPr = false,
+        checkSuiteId = 10_000,
+        oldConclusion = "FAILURE",
+        checkEvent = "pull_request",
+        newCheckName,
+        newCheckEvent = checkEvent,
+        newCheckConclusion = "SUCCESS",
+        expectedRun = 201,
+        completion,
+        exitCode = 15,
+        output = "FAILING checks=old matrix shard",
+      }) => {
+        const identity = {
+          workflow_id: 10,
+          event: "pull_request",
+          head_sha: sha,
+          pull_requests: [association()],
+        };
+        const run = {
+          ...identity,
+          id: 201,
+          check_suite_id: 20_000,
+          status,
+          conclusion,
+          ...runPatch,
+        };
+        const previous = {
+          ...identity,
+          id: 100,
+          check_suite_id: 10_000,
+          status: "completed",
+          conclusion: oldConclusion.toLowerCase(),
+          ...previousPatch,
+        };
+        const previousRuns = Array.from({ length: oldRunCount }, (_, index) => ({
+          ...previous,
+          id: previous.id - index,
+          check_suite_id:
+            typeof previous.check_suite_id === "number"
+              ? previous.check_suite_id - index
+              : undefined,
+          ...(index === oldRunCount - 1 ? lastPreviousPatch : undefined),
+        }));
+        const pr = {
+          state: "OPEN",
+          mergeable: true,
+          headRefOid: sha,
+          statusCheckRollup: {
+            state: rollupState,
+            contexts: {
+              totalCount: newCheckName ? 2 : 1,
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [
+                {
+                  kind: "CheckRun",
+                  databaseId: 1_000,
+                  name: "old matrix shard",
+                  status: "COMPLETED",
+                  conclusion: oldConclusion,
+                  checkSuite: {
+                    databaseId: checkSuiteId ?? undefined,
+                    workflowRun: {
+                      databaseId: 100,
+                      event: checkEvent,
+                      workflow: { databaseId: 10 },
+                    },
+                  },
+                },
+                ...(newCheckName
+                  ? [
+                      {
+                        kind: "CheckRun",
+                        databaseId: 2_000,
+                        name: newCheckName,
+                        status: "COMPLETED",
+                        conclusion: newCheckConclusion,
+                        checkSuite: {
+                          databaseId: 20_000,
+                          workflowRun: {
+                            databaseId: 201,
+                            event: newCheckEvent ?? undefined,
+                            workflow: { databaseId: 10 },
+                          },
+                        },
+                      },
+                    ]
+                  : []),
+              ],
+            },
+          },
+        };
+        const listedRuns = olderRunOutsidePage
+          ? [run, ...Array.from({ length: 19 }, (_, index) => ({ ...run, id: 200 - index }))]
+          : [run, previous];
+        for (let index = 1; index < oldRunCount; index += 1) {
+          const old = pr.statusCheckRollup.contexts.nodes[0]!;
+          pr.statusCheckRollup.contexts.nodes.push({
+            ...old,
+            databaseId: 1_000 + index,
+            name: `old matrix shard ${index + 1}`,
+            checkSuite: {
+              databaseId: 10_000 - index,
+              workflowRun: {
+                databaseId: 100 - index,
+                event: "pull_request",
+                workflow: { databaseId: 10 },
+              },
+            },
+          });
+          pr.statusCheckRollup.contexts.totalCount += 1;
+        }
+        if (olderRunOutsidePage) {
+          // Multiple visible jobs share one exact old-run metadata read.
+          pr.statusCheckRollup.contexts.nodes.push({
+            ...pr.statusCheckRollup.contexts.nodes[0]!,
+            databaseId: 9_001,
+            name: "old matrix shard 2",
+          });
+          pr.statusCheckRollup.contexts.totalCount += 1;
+        }
+        const result = await withTempDir("openclaw-watch-pr-ci-ownership-", async (root) => {
+          const calls = join(root, "calls.jsonl");
+          writeFileSync(calls, "");
+          const watched = await runWatcher(
+            `#!/usr/bin/env node
+const fs = require("node:fs");
 const args = process.argv.slice(2);
-const pr = ${JSON.stringify(pr)};
-const run = ${JSON.stringify(run)};
+const calls = fs.readFileSync(${JSON.stringify(calls)}, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
+fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
+const metadataRead = calls.some((call) => call[1] === "repos/openclaw/openclaw/actions/runs/100");
+const pr = { ...${JSON.stringify(pr)}, ...(metadataRead ? ${JSON.stringify(afterMetadata ?? {})} : {}) };
+if (metadataRead && ${Boolean(afterMetadataState)}) pr.statusCheckRollup.state = ${JSON.stringify(afterMetadataState)};
+const runs = ${JSON.stringify(listedRuns)};
+const previousRuns = ${JSON.stringify(previousRuns)};
 let value;
-if (args[0] === "pr" && args[1] === "view") value = pr;
-else if (args[0] === "run" && args[1] === "view") value = run;
+if (args[0] === "pr" && args[1] === "view") {
+  if (${slowWatchPr} && calls.some((call) => call[0] === "pr" && call[1] === "view")) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
+  value = pr;
+}
+else if (args[0] === "run" && args[1] === "view") {
+  if (${slowFinalRun} && calls.some((call) => call[0] === "run" && call[1] === "view")) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
+  value = runs.find((run) => String(run.id) === args[2]);
+}
 else if (args[0] === "api" && args[1] === "graphql") value = { data: { repository: { pullRequest: pr } } };
-else if (args.includes("repos/openclaw/openclaw/actions/workflows/ci.yml/runs")) value = { workflow_runs: [run] };
+else if (args.includes("repos/openclaw/openclaw/actions/workflows/ci.yml/runs")) value = { total_count: ${olderRunOutsidePage ? 21 : 2}, workflow_runs: runs };
+else if (args[1]?.startsWith("repos/openclaw/openclaw/actions/runs/")) {
+  if (${slowMetadata}) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
+  value = previousRuns[100 - Number(args[1].split("/").at(-1))];
+}
+else if (args[1]?.includes("/actions/runs?event=pull_request_target")) value = { workflow_runs: [{ ...runs[0], event: "pull_request_target", pull_requests: [] }] };
 else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
 console.log(JSON.stringify(value));
 `,
-      );
-
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
-      expect(result.stdout).toContain("ATTACHED run=201");
-      expect(result.stdout).toContain(output);
-      expect(result.stdout).not.toContain("FAILING checks=old matrix shard");
-    },
-  );
+            sha,
+            completion ? ["--completion", completion] : oldRunCount > 1 ? ["--timeout", "6"] : [],
+            slowMetadata || slowFinalRun || slowWatchPr ? "wall" : "poll",
+          );
+          return {
+            ...watched,
+            calls: readFileSync(calls, "utf8")
+              .trim()
+              .split("\n")
+              .map((line) => JSON.parse(line) as string[]),
+          };
+        });
+        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
+        expect(result.stdout).toContain(`ATTACHED run=${expectedRun}`);
+        expect(result.stdout).toContain(output);
+        expect(
+          result.calls.filter((call) => call[1] === "repos/openclaw/openclaw/actions/runs/100"),
+        ).toHaveLength(olderRunOutsidePage && expectedMetadataReads > 0 ? 1 : 0);
+        const metadataReads = result.calls.filter((call) =>
+          call[1]?.startsWith("repos/openclaw/openclaw/actions/runs/"),
+        );
+        expect(metadataReads).toHaveLength(olderRunOutsidePage ? expectedMetadataReads : 0);
+        let readsThisPoll = 0;
+        for (const call of result.calls) {
+          if (call[0] === "run" && call[1] === "view") {
+            readsThisPoll = 0;
+          }
+          if (call[1]?.startsWith("repos/openclaw/openclaw/actions/runs/")) {
+            readsThisPoll += 1;
+          }
+          expect(readsThisPoll).toBeLessThanOrEqual(32);
+        }
+      },
+    );
+  });
 
   describe.skipIf(process.platform === "win32")("queued placeholder CLI evidence", () => {
     it.each([
@@ -1066,6 +1555,7 @@ console.log(JSON.stringify(value));
             {
               kind: "CheckRun",
               name: "Real behavior proof",
+              databaseId: 1_000,
               status: "COMPLETED",
               conclusion: "CANCELLED",
               checkSuite: {
@@ -1075,6 +1565,7 @@ console.log(JSON.stringify(value));
             {
               kind: "CheckRun",
               name: "Real behavior proof",
+              databaseId: 2_000,
               status: "IN_PROGRESS",
               conclusion: null,
               checkSuite: {
@@ -1093,78 +1584,6 @@ console.log(JSON.stringify(value));
       }),
     ).toEqual({ verdict: "PENDING", pendingCount: 2, failingNames: [], supersededCount: 1 });
   });
-
-  it.each<{
-    label: string;
-    name?: string;
-    conclusion?: string;
-    event?: string | null;
-    workflowId?: number | null;
-    newerRunId?: number;
-    newerWorkflowId?: number | null;
-    ciStatus?: string;
-    verdict?: string;
-  }>([
-    { label: "pending CI", ciStatus: "IN_PROGRESS", verdict: "PENDING" },
-    { label: "successful CI with a different check name", name: "target guard", verdict: "GREEN" },
-    { label: "latest target cancellation", newerRunId: 100 },
-    { label: "real target failure", conclusion: "FAILURE" },
-    { label: "another event's cancellation", event: "pull_request" },
-    { label: "another workflow", newerWorkflowId: 20 },
-    { label: "unknown event", event: null },
-    { label: "unknown visible workflow identity", workflowId: null },
-    { label: "unknown replacement workflow identity", newerWorkflowId: null },
-  ])(
-    "uses newer same-workflow target-run identity without hiding $label",
-    ({
-      name = "dispatch",
-      conclusion = "CANCELLED",
-      event = "pull_request_target",
-      workflowId = 10,
-      newerRunId = 200,
-      newerWorkflowId = 10,
-      ciStatus = "COMPLETED",
-      verdict = "FAILING",
-    }) => {
-      expect(
-        classifyRollup(
-          {
-            state: "FAILURE",
-            contexts: {
-              nodes: [
-                {
-                  kind: "CheckRun",
-                  name,
-                  status: "COMPLETED",
-                  conclusion,
-                  checkSuite: {
-                    workflowRun: {
-                      databaseId: 100,
-                      event: event ?? undefined,
-                      workflow: { databaseId: workflowId ?? undefined },
-                    },
-                  },
-                },
-                {
-                  kind: "CheckRun",
-                  name: "CI",
-                  status: ciStatus,
-                  conclusion: ciStatus === "COMPLETED" ? "SUCCESS" : null,
-                  checkSuite: { workflowRun: { databaseId: 200, workflow: { databaseId: 20 } } },
-                },
-              ],
-            },
-          },
-          [{ id: newerRunId, workflow_id: newerWorkflowId ?? undefined }],
-        ),
-      ).toEqual({
-        verdict,
-        pendingCount: ciStatus === "IN_PROGRESS" ? 1 : 0,
-        failingNames: verdict === "FAILING" ? [name] : [],
-        supersededCount: verdict === "FAILING" ? 0 : 1,
-      });
-    },
-  );
 
   it("keeps only the newest same-run check attempt while its replacement is pending", () => {
     expect(
@@ -1222,7 +1641,7 @@ console.log(JSON.stringify(value));
     ).toEqual({ verdict: "GREEN", pendingCount: 0, failingNames: [], supersededCount: 1 });
   });
 
-  it("accepts newest successful runs when the aggregate remains failed", () => {
+  it("retains unique cancellations across independent workflows", () => {
     expect(
       classifyRollup({
         state: "FAILURE",
@@ -1263,7 +1682,12 @@ console.log(JSON.stringify(value));
           ],
         },
       }),
-    ).toEqual({ verdict: "GREEN", pendingCount: 0, failingNames: [], supersededCount: 2 });
+    ).toEqual({
+      verdict: "FAILING",
+      pendingCount: 0,
+      failingNames: ["old CI", "old proof"],
+      supersededCount: 0,
+    });
   });
 
   it("preserves a genuine failure from the newest workflow run", () => {
@@ -1274,7 +1698,7 @@ console.log(JSON.stringify(value));
           nodes: [
             {
               kind: "CheckRun",
-              name: "superseded cancellation",
+              name: "older cancelled check",
               status: "COMPLETED",
               conclusion: "CANCELLED",
               checkSuite: { workflowRun: { databaseId: 100, workflow: { databaseId: 20 } } },
@@ -1292,8 +1716,8 @@ console.log(JSON.stringify(value));
     ).toEqual({
       verdict: "FAILING",
       pendingCount: 0,
-      failingNames: ["unit"],
-      supersededCount: 1,
+      failingNames: ["older cancelled check", "unit"],
+      supersededCount: 0,
     });
   });
 
@@ -1330,112 +1754,10 @@ console.log(JSON.stringify(value));
     ).toEqual({
       verdict: "FAILING",
       pendingCount: 0,
-      failingNames: ["unit"],
-      supersededCount: 1,
+      failingNames: ["old deploy", "unit"],
+      supersededCount: 0,
     });
   });
-
-  it.each<{
-    label: string;
-    event?: string;
-    workflowId?: number;
-    attachedRun?: { id: number; workflow_id?: number };
-    superseded?: boolean;
-  }>([
-    { label: "no attached run", event: "pull_request", workflowId: 20 },
-    {
-      label: "newer attached pull-request run",
-      event: "pull_request",
-      workflowId: 20,
-      attachedRun: { id: 400, workflow_id: 20 },
-      superseded: true,
-    },
-    {
-      label: "manual invocation",
-      event: "workflow_dispatch",
-      workflowId: 20,
-      attachedRun: { id: 400, workflow_id: 20 },
-    },
-    {
-      label: "unknown event",
-      workflowId: 20,
-      attachedRun: { id: 400, workflow_id: 20 },
-    },
-    {
-      label: "unknown check workflow",
-      event: "pull_request",
-      attachedRun: { id: 400, workflow_id: 20 },
-    },
-    {
-      label: "unknown attached workflow",
-      event: "pull_request",
-      workflowId: 20,
-      attachedRun: { id: 400 },
-    },
-    {
-      label: "different workflow",
-      event: "pull_request",
-      workflowId: 20,
-      attachedRun: { id: 400, workflow_id: 30 },
-    },
-    {
-      label: "current run",
-      event: "pull_request",
-      workflowId: 20,
-      attachedRun: { id: 300, workflow_id: 20 },
-    },
-    {
-      label: "newer run",
-      event: "pull_request",
-      workflowId: 20,
-      attachedRun: { id: 200, workflow_id: 20 },
-    },
-  ])(
-    "keeps unique older failures unless replaced: $label",
-    ({ event, workflowId, attachedRun, superseded = false }) => {
-      expect(
-        classifyRollup(
-          {
-            state: "FAILURE",
-            contexts: {
-              nodes: [
-                {
-                  kind: "CheckRun",
-                  databaseId: 1_000,
-                  name: "nightly-special",
-                  status: "COMPLETED",
-                  conclusion: "FAILURE",
-                  checkSuite: {
-                    workflowRun: {
-                      databaseId: 300,
-                      event,
-                      workflow: { databaseId: workflowId },
-                    },
-                  },
-                },
-                {
-                  kind: "CheckRun",
-                  databaseId: 2_000,
-                  name: "unit",
-                  status: "COMPLETED",
-                  conclusion: "SUCCESS",
-                  checkSuite: { workflowRun: { databaseId: 400, workflow: { databaseId: 20 } } },
-                },
-              ],
-            },
-          },
-          [],
-          undefined,
-          attachedRun,
-        ),
-      ).toEqual({
-        verdict: superseded ? "GREEN" : "FAILING",
-        pendingCount: 0,
-        failingNames: superseded ? [] : ["nightly-special"],
-        supersededCount: superseded ? 1 : 0,
-      });
-    },
-  );
 
   it("supersedes same-name checks across runs of the same workflow", () => {
     expect(
@@ -1474,7 +1796,8 @@ console.log(JSON.stringify(value));
           nodes: [
             {
               kind: "CheckRun",
-              name: "old CI",
+              name: "CI",
+              databaseId: 1_000,
               status: "COMPLETED",
               conclusion: "CANCELLED",
               checkSuite: { workflowRun: { databaseId: 100, workflow: { databaseId: 20 } } },
@@ -1482,6 +1805,7 @@ console.log(JSON.stringify(value));
             {
               kind: "CheckRun",
               name: "CI",
+              databaseId: 2_000,
               status: "COMPLETED",
               conclusion: "SUCCESS",
               checkSuite: { workflowRun: { databaseId: 200, workflow: { databaseId: 20 } } },

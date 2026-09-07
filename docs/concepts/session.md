@@ -32,6 +32,8 @@ With `session.scope: "global"`, the selected agent still owns its session.
 The shared key `global` does not merge different agents' conversations:
 commands, skills, replies, and background task notifications retain the
 agent selected by the route or explicit request.
+Session lists, model filters, previews, and sharing controls also retain the
+stored conversation's agent, rather than the aggregate view's default agent.
 
 ## DM isolation
 

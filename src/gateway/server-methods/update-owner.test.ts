@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { createGatewayTool } from "../../agents/tools/gateway-tool.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { listUpdateRuns } from "../../infra/update-run-ledger.js";
 import type { GatewayRequestContext } from "./types.js";
 import {
   adoptUpdateCampaignMock,
@@ -85,6 +86,14 @@ describe("update.run current owner authority", () => {
             `openclaw config set commands.ownerAllowFrom '${JSON.stringify(change === "revoked" ? ["slack:owner"] : ["replacement", "slack:owner"])}'`,
           ),
         });
+        expect(listUpdateRuns()).toEqual([
+          expect.objectContaining({
+            trigger: "chat",
+            phase: "finished",
+            status: "failed",
+            reason: "owner_required",
+          }),
+        ]);
         expect(adoptUpdateCampaignMock).not.toHaveBeenCalled();
         expect(sendGatewayLifecycleNoticeMock).not.toHaveBeenCalled();
         expect(runGatewayUpdateMock).not.toHaveBeenCalled();
@@ -101,6 +110,13 @@ describe("update.run current owner authority", () => {
       createGatewayTool({ senderIsOwner: true, requesterSenderId: "owner" }),
     );
     expect(result.details).toMatchObject({ ok: true });
+    expect(listUpdateRuns()).toEqual([
+      expect.objectContaining({
+        origin: expect.objectContaining({
+          requester: { channel: "slack", accountId: "primary", senderId: "owner" },
+        }),
+      }),
+    ]);
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
         requester: { channel: "slack", accountId: "primary", senderId: "owner" },

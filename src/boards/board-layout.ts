@@ -14,6 +14,7 @@ export const BOARD_SIZE_PRESETS = {
 } as const;
 
 export type BoardSize = keyof typeof BOARD_SIZE_PRESETS;
+export const BOARD_WIDGET_PROPS_MAX_BYTES = 8 * 1024;
 type BoardLayout = Pick<BoardSnapshot, "tabs" | "widgets">;
 type BoardValidationErrorCode = "conflict" | "invalid_operation" | "not_found";
 

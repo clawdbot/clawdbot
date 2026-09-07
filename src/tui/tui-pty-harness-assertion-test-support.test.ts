@@ -14,6 +14,31 @@ const hasHistoricalExpected = (raw: string, dimensions = TERMINAL) =>
   oracle.hasHistoricalSynchronizedFrameRow(raw, MARKERS, EXPECTED, dimensions);
 
 describe("hasSynchronizedFrameRow", () => {
+  it("authenticates a bidi-isolated disconnect row before reconnect erases it", () => {
+    const markers = ["T08Ia", "T08Ib", "T08Ic", "T08Id"];
+    const status = "local runtime stopped: T08IaT08Ib café 東京 👩🏽‍💻 T08Ic مرحبا שלום T08Id";
+    const isolatedStatus = `\u2067${status}\u2069`;
+    const expected = `${status} | idle`;
+    const dimensions = { cols: 120, rows: 18 };
+    const reconnect = frame("\x1b[2J\x1b[Hlocal ready | idle");
+    const raw = frame(`${isolatedStatus} | idle`) + reconnect;
+    expect(oracle.hasHistoricalSynchronizedFrameRow(raw, markers, expected, dimensions)).toBe(true);
+    expect(oracle.hasSynchronizedFrameRow(raw, markers, expected, dimensions)).toBe(false);
+
+    for (const invalid of [
+      frame(`${isolatedStatus}\r\n | idle`) + reconnect,
+      frame(isolatedStatus) + reconnect,
+      isolatedStatus + frame(" | idle") + reconnect,
+      frame(`${isolatedStatus} | idle\r\x1b[2Klocal ready | idle`) + reconnect,
+      frame(`${isolatedStatus.replace("東京", "")} | idle`) + reconnect,
+      raw + FRAME_START,
+    ]) {
+      expect(oracle.hasHistoricalSynchronizedFrameRow(invalid, markers, expected, dimensions)).toBe(
+        false,
+      );
+    }
+  });
+
   it("requires exact single-space text and all markers on one completed row", () => {
     expect(hasExpected(frame(EXPECTED))).toBe(true);
     expect(hasExpected(frame("T08A safe\r\nT08B"))).toBe(false);

@@ -4,6 +4,7 @@ import {
   boundCodeModeValue,
   captureCodeModeOutput,
   captureCodeModeValue,
+  CodeModeOutputState,
   toCodeModeJsonSafe,
 } from "./code-mode-json.js";
 
@@ -58,7 +59,7 @@ describe("Code Mode JSON normalization", () => {
     });
   });
 
-  it("keeps structured values detached from later mutation", () => {
+  it("keeps captured and delivered structured values detached from later mutation", async () => {
     const input = { nested: { label: "before" }, items: ["before"] };
     const normalized = toCodeModeJsonSafe(input);
     const captured = captureCodeModeValue(input, 1_024);
@@ -69,6 +70,25 @@ describe("Code Mode JSON normalization", () => {
       kind: "complete",
       json: '{"nested":{"label":"before"},"items":["before"]}',
     });
+
+    const state = new CodeModeOutputState(65_536, { maxChars: 2_048, maxContextChars: 4_096 });
+    state.append(captureCodeModeOutput([{ type: "text", text: "x".repeat(10_000) }], 65_536));
+    const first = state.takeResult({ status: "completed" }, { value: captured });
+    expect(first.value).toEqual(normalized);
+    expect(first.output).toEqual([expect.objectContaining({ truncated: true })]);
+    if (!first.value || typeof first.value !== "object") {
+      throw new Error("Expected a structured delivered value");
+    }
+    Object.assign(first.value, { nested: { label: "changed after delivery" } });
+    await Promise.resolve();
+
+    const second = state.takeResult({ status: "completed" }, { value: captured });
+    expect(second).toMatchObject({ value: normalized, output: [] });
+    state.append(captureCodeModeOutput([{ type: "text", text: "next" }], 65_536));
+    expect(
+      state.takeResult({ status: "completed" }, { value: captureCodeModeValue(null, 65_536) })
+        .value,
+    ).toBeNull();
   });
 
   it("retains cycle fallbacks and normalizes each output entry with the root toJSON key", () => {
