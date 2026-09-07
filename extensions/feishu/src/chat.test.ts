@@ -8,6 +8,10 @@ const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const chatGetMock = vi.hoisted(() => vi.fn());
 const chatMembersGetMock = vi.hoisted(() => vi.fn());
 const contactUserGetMock = vi.hoisted(() => vi.fn());
+const chatCreateMock = vi.hoisted(() => vi.fn());
+const chatUpdateMock = vi.hoisted(() => vi.fn());
+const membersCreateMock = vi.hoisted(() => vi.fn());
+const membersDeleteMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
@@ -567,5 +571,113 @@ describe("registerFeishuChatTools", () => {
 
     expect(result.details.error).toContain("pagination repeated token");
     expect(chatMembersGetMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("chat group management functions", () => {
+  let createFeishuChat: typeof import("./chat.js").createFeishuChat;
+  let renameFeishuChat: typeof import("./chat.js").renameFeishuChat;
+  let addFeishuChatMember: typeof import("./chat.js").addFeishuChatMember;
+  let removeFeishuChatMember: typeof import("./chat.js").removeFeishuChatMember;
+
+  function buildClient() {
+    return {
+      im: {
+        chat: { create: chatCreateMock, update: chatUpdateMock },
+        chatMembers: { create: membersCreateMock, delete: membersDeleteMock },
+      },
+    } as never;
+  }
+
+  beforeAll(async () => {
+    ({ createFeishuChat, renameFeishuChat, addFeishuChatMember, removeFeishuChatMember } =
+      await import("./chat.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    chatCreateMock.mockResolvedValue({ code: 0, data: { chat_id: "oc_new" } });
+    chatUpdateMock.mockResolvedValue({ code: 0, data: {} });
+    membersCreateMock.mockResolvedValue({ code: 0, data: {} });
+    membersDeleteMock.mockResolvedValue({ code: 0, data: {} });
+  });
+
+  it("createFeishuChat posts name, description, and member ids", async () => {
+    const result = await createFeishuChat(buildClient(), {
+      name: "team",
+      description: "the crew",
+      userIds: ["ou_1", "ou_2"],
+      userIdType: "open_id",
+    });
+    expect(chatCreateMock).toHaveBeenCalledWith({
+      params: { user_id_type: "open_id" },
+      data: { name: "team", description: "the crew", user_id_list: ["ou_1", "ou_2"] },
+    });
+    expect(result).toEqual({ chat_id: "oc_new" });
+  });
+
+  it("createFeishuChat omits optional fields when absent", async () => {
+    await createFeishuChat(buildClient(), { name: "team" });
+    expect(chatCreateMock).toHaveBeenCalledWith({
+      data: { name: "team" },
+    });
+  });
+
+  it("renameFeishuChat patches the chat name", async () => {
+    const result = await renameFeishuChat(buildClient(), "oc_1", "renamed");
+    expect(chatUpdateMock).toHaveBeenCalledWith({
+      path: { chat_id: "oc_1" },
+      data: { name: "renamed" },
+    });
+    expect(result).toEqual({ chat_id: "oc_1", name: "renamed" });
+  });
+
+  it("addFeishuChatMember posts one member id", async () => {
+    await addFeishuChatMember(buildClient(), "oc_1", "ou_2", "open_id");
+    expect(membersCreateMock).toHaveBeenCalledWith({
+      path: { chat_id: "oc_1" },
+      params: { member_id_type: "open_id" },
+      data: { id_list: ["ou_2"] },
+    });
+  });
+
+  it("removeFeishuChatMember deletes one member id", async () => {
+    await removeFeishuChatMember(buildClient(), "oc_1", "ou_2", "open_id");
+    expect(membersDeleteMock).toHaveBeenCalledWith({
+      path: { chat_id: "oc_1" },
+      params: { member_id_type: "open_id" },
+      data: { id_list: ["ou_2"] },
+    });
+  });
+
+  it("throws the Lark error message on a non-zero chat create code", async () => {
+    chatCreateMock.mockResolvedValue({ code: 99991663, msg: "token invalid" });
+    await expect(createFeishuChat(buildClient(), { name: "team" })).rejects.toThrow(
+      "token invalid",
+    );
+  });
+
+  it("rejects createFeishuChat when Lark accepts the chat but rejects initial members", async () => {
+    chatCreateMock.mockResolvedValue({
+      code: 0,
+      data: { chat_id: "oc_new", invalid_id_list: ["ou_bad"], not_existed_id_list: ["ou_gone"] },
+    });
+    await expect(
+      createFeishuChat(buildClient(), {
+        name: "team",
+        userIds: ["ou_bad", "ou_gone"],
+        userIdType: "open_id",
+      }),
+    ).rejects.toThrow("rejected initial member");
+  });
+
+  it("rejects addFeishuChatMember with invalid member ids", async () => {
+    membersCreateMock.mockResolvedValue({
+      code: 0,
+      data: { invalid_id_list: ["ou_bad"] },
+    });
+    await expect(addFeishuChatMember(buildClient(), "oc_1", "ou_bad", "open_id")).rejects.toThrow(
+      "rejected member",
+    );
   });
 });

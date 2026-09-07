@@ -105,6 +105,15 @@ export type MessageActionInput = {
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
   /** @internal Revalidates caller authority immediately before recipient-visible I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
+  /**
+   * @internal Synchronous revalidation of delegated runtime authority, bound to
+   * the same closure as `onPlatformSendDispatch`. Plugin-owned privileged
+   * mutations (chat/membership changes) call it immediately before each
+   * provider I/O that follows awaited preparation, so a turn closing during
+   * that interval cannot reach the provider. Throws synchronously when
+   * authority is no longer active.
+   */
+  revalidateRuntimeAuthority?: () => void;
   /** @internal Keep ephemeral-authority sends out of replayable recovery. */
   skipQueue?: boolean;
   /** @internal Runs when broadcast converts a typed target denial into result text. */
