@@ -560,6 +560,34 @@ describe("createGatewayPluginUpgradeHandler", () => {
     expect(socket.destroyed).toBe(false);
     expect(socket.chunks).toStrictEqual([]);
   });
+
+  it("flushes HTTP 503 before destroy when handleUpgrade throws", async () => {
+    const handler = createGatewayPluginUpgradeHandler({
+      registry: createGatewayTestRegistry({
+        httpRoutes: [
+          createRoute({
+            path: "/plugin/ws",
+            auth: "plugin",
+            handleUpgrade: async () => {
+              throw new Error("upgrade boom");
+            },
+          }),
+        ],
+      }),
+      log: createPluginLog(),
+    });
+    const socket = createMockUpgradeSocket();
+
+    const handled = await handler(
+      { url: "/plugin/ws" } as IncomingMessage,
+      socket,
+      Buffer.alloc(0),
+    );
+
+    expect(handled).toBe(true);
+    expect(socket.chunks.join("")).toContain("HTTP/1.1 503");
+    expect(socket.destroyed).toBe(true);
+  });
 });
 
 describe("plugin HTTP route auth checks", () => {

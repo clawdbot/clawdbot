@@ -357,7 +357,7 @@ export function createGatewayPluginUpgradeHandler(params: {
         }
       } catch (err) {
         log.warn(`plugin http upgrade failed (${route.pluginId ?? "unknown"}): ${String(err)}`);
-        socket.destroy();
+        rejectWebSocketUpgrade(socket, { status: 503 });
         return true;
       }
     }
