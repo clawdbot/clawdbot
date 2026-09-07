@@ -60,6 +60,8 @@ did not name.
 - `channels resolve <entries...>`: `--channel <name>`, `--account <id>`, `--agent <id>`, `--kind <auto|user|group|channel>` (default `auto`), `--json`
 - `channels logs`: `--channel <name|all>` (default `all`), `--lines <n>` (default `200`), `--json`
 
+`channels logs --lines` requires a positive integer. Omit `--lines` to use the default of `200`; explicitly empty values are rejected.
+
 `channels logs --channel <name>` matches subsystem or module names rooted at `<name>`
 or `gateway/channels/<name>`, including slash-separated descendants. Similar names
 such as `discord-archive` do not match `discord`.
