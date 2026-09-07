@@ -181,11 +181,12 @@ core Gateway serves. A changed plugin snapshot requires a second measured
 activation window: full Doctor migrations under exclusive maintenance, then
 restart and verification. Unchanged plugins do not run another full Doctor pass.
 
-After activation, the updater verifies the managed service, the expected
-version/build identity, a 12-probe health settle, plugin activation, channels,
-and HTTP 200 from `/readyz`. A 15-second inference probe is advisory; provider
-unavailability alone records a warning and does not cause rollback. Verification
-facts and measured downtime are retained in the [update run report](/cli/update#run-history-and-reports).
+After activation, the updater verifies that the managed service is running and
+owns its port, the Gateway hello handshake matches the expected version/build
+identity, a 12-probe health settle passes, plugins and channels are healthy, and
+`/readyz` returns HTTP 200. Update verification does not use model inference.
+Verification facts and measured downtime are retained in the
+[update run report](/cli/update#run-history-and-reports).
 
 When a package fails verification, the updater compares the shared and affected
 per-agent SQLite `user_version` values and configuration content with their
@@ -261,7 +262,7 @@ generation across unchanged configuration and schemas and supplies a verified
 recovery decision, the helper starts and verifies it instead of leaving it
 stopped. Helper recovery verifies service liveness, version/build identity,
 plugin activation, and channel health. It does not repeat the separate `/readyz`
-or inference probes; those report fields remain unverified.
+probe; that report field remains unverified.
 The run then finishes `rolled-back` with the previous version and measured
 downtime. Missing recovery proof, migrated state, or failed restoration still
 requires repair before restart. A service that is observed stopped is recorded

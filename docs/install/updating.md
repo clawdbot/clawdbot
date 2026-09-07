@@ -661,7 +661,7 @@ made after the backup.
 If a newly activated package fails verification, `openclaw update` compares the
 shared and affected per-agent SQLite `user_version` values with their
 pre-activation values and checks that configuration content is unchanged.
-Databases first created during activation or serving verification are
+Databases first created during activation or verification are
 schema-neutral when their version matches the candidate's supported version for
 that database kind. A changed schema version or missing pre-existing database,
 or a new database at a foreign version, still blocks rollback. Before restoring
@@ -672,8 +672,9 @@ update, it stops the candidate and restores the previous generation: package,
 command shim, service definition, and config writer stamp. Owned, writable
 service metadata is refreshed; protected service definitions are preserved.
 The CLI verifies the restarted previous Gateway's service health, version/build
-identity, plugins, channels, and `/readyz` again, then requires a new successful
-agent turn and fresh readback of its saved request and response.
+identity, plugins, channels, and `/readyz` again. Update verification does not use
+model inference: the managed service must be running and own its port, and the
+Gateway hello handshake must match the expected artifact.
 
 The candidate may have advanced the config writer stamp without changing config
 content. Rollback restores that stamp and uses the existing intentional-recovery
@@ -687,19 +688,11 @@ measured from service stop through verified recovery. The headline is
 verification failure. The command still exits nonzero; recovery does not turn a
 rejected candidate into a successful update.
 
-Serving verification is required, not advisory. It uses configured inference and
-has a 60-second budget. The saved reply must include the run-specific verification
-token as a whole word; punctuation or a short sentence around it is accepted.
-Unavailable inference, timeout, an incomplete turn, a non-matching response, or
-missing saved messages fails verification. `response-mismatch` means the turn was
-saved but its reply did not contain the token; `persistence-missing` means no
-committed request/response pair was found. Use `openclaw update status` for the
-recorded reason and `openclaw triage` to diagnose a failed check. Recovery guidance
-reports whether the Gateway is running or stopped from the latest service
-observation, even when a running candidate did not pass verification.
-A restored Gateway must pass its own serving
-check before the run can finish as `rolled-back`; candidate proof cannot be reused
-after a restart or restoration.
+Use `openclaw update status` for the recorded reason and `openclaw triage` to
+diagnose a failed check. Recovery guidance reports whether the Gateway is running
+or stopped from the latest service observation, even when a running candidate did
+not pass verification. A restored Gateway must pass its own verification checks
+before the run can finish as `rolled-back`.
 
 If configuration content changed or the databases are not schema-neutral, rollback is refused with
 `state-migrated-no-rollback`. The updater attempts

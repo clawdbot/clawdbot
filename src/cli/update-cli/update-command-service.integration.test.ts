@@ -27,7 +27,6 @@ import { assertGatewayServiceManagementAllowedForUpdate } from "./update-command
 import {
   createServiceActivationFixture,
   readyRecoveryHealth,
-  verifiedServingResult,
   registerRecoveryTests,
   writeRecoveryConfig,
 } from "./update-command-service-recovery.test-support.js";
@@ -170,10 +169,6 @@ vi.mock("../daemon-cli/restart-health.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon-cli/restart-health.js")>()),
   waitForGatewayHealthyRestart: mocks.health,
   waitForGatewayHttpReadiness: async () => ({ healthz: 200, readyz: 200 }),
-}));
-vi.mock("../../infra/update-serving-verification.js", () => ({
-  verifyUpdateServing: (...args: Parameters<typeof verifiedServingResult>) =>
-    verifiedServingResult(...args),
 }));
 vi.mock("./update-command-convergence.js", () => ({
   convergeUpdatePlugins: async (params: { result: unknown }) => ({
@@ -852,7 +847,6 @@ describe("preserved update activation with real version guards", () => {
     if (demandOnly) {
       mocks.health.mockImplementation(async ({ port }) => ({
         healthy: nativeRunning,
-        gatewayBootId: "service-boot",
         staleGatewayPids: [],
         runtime: { status: nativeRunning ? "running" : "stopped" },
         portUsage: { port, status: nativeRunning ? "busy" : "free", listeners: [], hints: [] },

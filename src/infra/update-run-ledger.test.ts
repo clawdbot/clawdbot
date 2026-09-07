@@ -305,7 +305,6 @@ describe("update run ledger", () => {
         settled: true,
         channelsReady: true,
         pluginErrors: [],
-        inferenceProbe: "unavailable",
       },
       options,
     );

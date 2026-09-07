@@ -90,9 +90,6 @@ const unattendedRepair = vi.hoisted(() =>
   vi.fn<typeof import("../infra/update-repair-agent.js").prepareUnattendedUpdateRepair>(),
 );
 const httpReadiness = vi.hoisted(() => vi.fn());
-const servingVerification = vi.hoisted(() =>
-  vi.fn<typeof import("../infra/update-serving-verification.js").verifyUpdateServing>(),
-);
 const stateSchemaVersions = vi.hoisted(() => vi.fn());
 const mockedRunDaemonInstall = vi.fn();
 const serviceReadCommand = vi.fn();
@@ -179,9 +176,6 @@ vi.mock("../infra/update-repair-agent.js", () => ({
 }));
 vi.mock("../infra/update-candidate-canary.js", () => ({
   validateUpdateCandidateCanary: candidateValidation,
-}));
-vi.mock("../infra/update-serving-verification.js", () => ({
-  verifyUpdateServing: servingVerification,
 }));
 vi.mock("../infra/update-candidate-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-candidate-state.js")>()),
@@ -1670,7 +1664,7 @@ describe("update-cli", () => {
     expect([logs, ...vi.mocked(defaultRuntime.error).mock.calls.flat()].join("\n")).toContain(
       message,
     );
-    expect(logs).not.toContain("Gateway: restarted, served a turn, and verified persistence.");
+    expect(logs).not.toContain("Gateway: restarted and verified.");
     expect(logs).not.toContain("Update Result: OK");
   };
 
@@ -1899,28 +1893,7 @@ describe("update-cli", () => {
       }),
     );
     httpReadiness.mockResolvedValue({ healthz: 200, readyz: 200 });
-    servingVerification.mockImplementation(async (params) => ({
-      status: "verified",
-      receipt: {
-        runId: params.runId,
-        gateway: {
-          bootId: "test-gateway-boot",
-          version: params.expectedVersion,
-          buildId: params.expectedBuildId ?? null,
-        },
-        agentId: "main",
-        sessionKey: "agent:main:update-verification:test",
-        sessionId: "test-session",
-        agentRunId: "00000000-0000-4000-8000-000000000002",
-        transcript: {
-          generation: "test-generation",
-          maxSeq: 2,
-          user: { entryId: "user-entry", seq: 1 },
-          assistant: { entryId: "assistant-entry", seq: 2 },
-        },
-        verifiedAtMs: 123,
-      },
-    }));
+
     stateSchemaVersions.mockImplementation(
       async ({ stateDir, env }: { stateDir: string; env?: NodeJS.ProcessEnv }) => [
         { path: resolveOpenClawStateSqlitePath(env), userVersion: OPENCLAW_STATE_SCHEMA_VERSION },
@@ -2717,9 +2690,7 @@ describe("update-cli", () => {
       expect(serviceStop).toHaveBeenCalledOnce();
       expect(gatewayCommandCall(updatedEntrypoint, "install")).toBeDefined();
       expect(runRestartScript).toHaveBeenCalledOnce();
-      expect(getLogOutput()).toContain(
-        "Gateway: restarted, served a turn, and verified persistence.",
-      );
+      expect(getLogOutput()).toContain("Gateway: restarted and verified.");
       expect(spawnCall()?.[2]?.env).toMatchObject({
         OPENCLAW_PROFILE: "work",
         OPENCLAW_STATE_DIR: managedState,
@@ -2830,9 +2801,7 @@ describe("update-cli", () => {
     expect(spawn).not.toHaveBeenCalled();
     expect(gatewayCommandCall(updatedEntrypoint, "install")).toBeDefined();
     expect(runRestartScript).toHaveBeenCalledOnce();
-    expect(getLogOutput()).toContain(
-      "Gateway: restarted, served a turn, and verified persistence.",
-    );
+    expect(getLogOutput()).toContain("Gateway: restarted and verified.");
     const freshCalls = vi
       .mocked(runExec)
       .mock.calls.filter(([, args]) => ["doctor", "config"].includes(args[1] ?? ""));
@@ -7492,7 +7461,7 @@ describe("update-cli", () => {
         expect(getUpdateRun(requireValue(result.runId, "updated run id"))).toMatchObject({
           status: "succeeded",
           downtimeMs: expect.any(Number),
-          verification: { readyz: true, serviceRunning: true, inferenceProbe: "passed" },
+          verification: { readyz: true, serviceRunning: true },
         });
       } else {
         await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
@@ -7629,9 +7598,7 @@ describe("update-cli", () => {
       (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)
         ?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION,
     ).toBe("0");
-    expect(getLogOutput()).toContain(
-      "Gateway: restarted, served a turn, and verified persistence.",
-    );
+    expect(getLogOutput()).toContain("Gateway: restarted and verified.");
     const npmInstallCallIndex = vi
       .mocked(runCommandWithTimeout)
       .mock.calls.findIndex(
@@ -8243,7 +8210,6 @@ describe("update-cli", () => {
         healthy: fault === "none",
         staleGatewayPids: [],
         gatewayVersion: "1.0.0",
-        gatewayBootId: "test-gateway-boot",
         gatewayBuildId: "candidate-build",
         expectedVersion: "1.0.0",
         probeError: fault === "none" ? undefined : "candidate readiness failed",
@@ -11037,9 +11003,7 @@ describe("update-cli", () => {
         });
         expect(runRestartScript).toHaveBeenCalledTimes(1);
         expect(runDaemonRestart).not.toHaveBeenCalled();
-        expect(getLogOutput()).toContain(
-          "Gateway: restarted, served a turn, and verified persistence.",
-        );
+        expect(getLogOutput()).toContain("Gateway: restarted and verified.");
       },
     },
     {
@@ -11088,11 +11052,9 @@ describe("update-cli", () => {
         expect(logLines.some((line) => line.includes("Daemon restarted successfully."))).toBe(
           false,
         );
-        expect(
-          logLines.some((line) =>
-            line.includes("Gateway: restarted, served a turn, and verified persistence."),
-          ),
-        ).toBe(false);
+        expect(logLines.some((line) => line.includes("Gateway: restarted and verified."))).toBe(
+          false,
+        );
       },
     },
   ] as const)("updateCommand service refresh behavior: $name", runUpdateCliScenario);
@@ -11158,9 +11120,7 @@ describe("update-cli", () => {
       if (json) {
         expect(getErrorOutput()).toContain("Gateway install blocked: newer configuration");
       } else {
-        expect(getLogOutput()).toContain(
-          "Gateway: restarted, served a turn, and verified persistence.",
-        );
+        expect(getLogOutput()).toContain("Gateway: restarted and verified.");
       }
     },
   );
@@ -11314,9 +11274,7 @@ describe("update-cli", () => {
     expect(gatewayCommandCall(updatedEntrypoint, "restart")).toBeUndefined();
     expect(runRestartScript).not.toHaveBeenCalled();
     expect(gatewayHealthCall()).toMatchObject({ method: "health", scopes: ["operator.read"] });
-    expect(getLogOutput()).toContain(
-      "Gateway: restarted, served a turn, and verified persistence.",
-    );
+    expect(getLogOutput()).toContain("Gateway: restarted and verified.");
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
@@ -11534,12 +11492,6 @@ describe("update-cli", () => {
         // Install already serves the target version; verify that boot without
         // issuing a redundant second restart.
         expect(runRestartScript).not.toHaveBeenCalled();
-        expect(servingVerification).toHaveBeenCalledWith(
-          expect.objectContaining({
-            expectedVersion: "1.0.0",
-            expectedBootId: "test-gateway-boot",
-          }),
-        );
       },
     },
     {
