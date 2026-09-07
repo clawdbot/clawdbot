@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
-import type { CompactionForegroundContext } from "../../packages/agent-core/src/harness/compaction/compaction.js";
-import type { AgentMessage } from "../../packages/agent-core/src/types.js";
+import type { AgentMessage, CompactionForegroundContext } from "@openclaw/agent-core";
 import type { Context, Model } from "../llm/types.js";
 import { convertToLlm } from "./sessions/messages.js";
 

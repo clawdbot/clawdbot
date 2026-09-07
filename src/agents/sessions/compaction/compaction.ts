@@ -1,4 +1,4 @@
-import type { CompactionForegroundContext } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
+import type { CompactionForegroundContext } from "@openclaw/agent-core";
 /**
  * Session compaction compatibility bridge over the shared agent-core implementation.
  *

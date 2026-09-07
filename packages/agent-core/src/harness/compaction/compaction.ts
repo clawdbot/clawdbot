@@ -800,12 +800,14 @@ async function runSummarizationCompletion(params: {
     foreground.model.provider === model.provider &&
     foreground.model.api === model.api &&
     foreground.model.baseUrl === model.baseUrl &&
-    JSON.stringify(messages) ===
-      JSON.stringify(
-        foreground.sourceMessages
-          ? convertToLlm(foreground.sourceMessages)
-          : foreground.context.messages,
-      )
+    // The host already verified this exact summary source against the cached prefix.
+    (params.messages === foreground.sourceMessages ||
+      JSON.stringify(messages) ===
+        JSON.stringify(
+          foreground.sourceMessages
+            ? convertToLlm(foreground.sourceMessages)
+            : foreground.context.messages,
+        ))
   ) {
     if (params.signal?.aborted) {
       return err(new CompactionError("aborted", `${params.errorLabel} aborted`));
