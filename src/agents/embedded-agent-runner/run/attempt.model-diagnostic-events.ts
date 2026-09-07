@@ -80,6 +80,9 @@ async function* observeModelCallIterator<T>(
       lifecycle.observer.observeResponseChunk(lifecycle.startedAt, next.value);
       lifecycle.observer.maybeEmitStreamProgress(lifecycle.eventBase);
       yield next.value;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
     }
     lifecycle.emitCompleted();
   } catch (err) {
