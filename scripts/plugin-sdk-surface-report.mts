@@ -358,7 +358,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +7: card projection plus three rendering helpers on channel-outbound and its shipped barrel.
       // +2: shared diff-stat rendering on channel-outbound and its shipped barrel.
       // +1: shared static UI guidance, separate from per-turn harness delivery policy.
-      4446,
+      // +3: slim runtime barrels (sqlite-vec-runtime, node-sqlite-runtime, utf16-slice-runtime) for memory-search-knn child import slimming.
+      4449,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -485,7 +486,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +7: card projection plus three rendering helpers on channel-outbound and its shipped barrel.
       // +2: shared diff-stat rendering on channel-outbound and its shipped barrel.
       // +1: shared static UI guidance, separate from per-turn harness delivery policy.
-      2630,
+      // +3: slim runtime barrels (sqlite-vec-runtime, node-sqlite-runtime, utf16-slice-runtime) for memory-search-knn child import slimming.
+      2633,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
