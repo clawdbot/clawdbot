@@ -224,12 +224,13 @@ export class SidebarAttentionStoreController implements StoreController {
     if (!this.cronRefreshNeeded && this.cronRefresh?.generation !== generation) {
       const refresh = { generation, requested: true };
       this.cronRefresh = refresh;
+      const canRefreshCron = () => current() && document.visibilityState !== "hidden";
       void (async () => {
         try {
           // One scope owns both reads. Events during either read request one
           // trailing inventory; retired scopes never drain queued network work.
           while (refresh.requested && current()) {
-            if (document.visibilityState === "hidden") {
+            if (!canRefreshCron()) {
               this.cronRefreshNeeded = true;
               break;
             }
@@ -237,8 +238,16 @@ export class SidebarAttentionStoreController implements StoreController {
             const cron = createInitialCronState({ client, connected: true });
             cron.cronAgentId = agentScope.scopeId;
             await Promise.all([loadCronJobsPage(cron), loadCronStatus(cron)]);
+            while (
+              canRefreshCron() &&
+              cron.cronJobsHasMore &&
+              !cron.cronJobsError &&
+              !refresh.requested
+            ) {
+              await loadCronJobsPage(cron, { append: true });
+            }
             if (current()) {
-              if (!cron.cronJobsError) {
+              if (!cron.cronJobsError && !cron.cronJobsHasMore) {
                 this.cronJobs = cron.cronJobs;
               }
               if (!cron.cronError) {
@@ -255,6 +264,9 @@ export class SidebarAttentionStoreController implements StoreController {
                   !cron.cronError,
                 modelAuthAgentId: null,
               });
+              if (cron.cronJobsHasMore && !canRefreshCron()) {
+                this.cronRefreshNeeded = true;
+              }
             }
           }
         } finally {

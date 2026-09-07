@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import type { CronJobsListResult, CronStatus, ModelAuthStatusResult } from "../api/types.ts";
@@ -76,6 +77,47 @@ describe("sidebar attention source publication", () => {
       scopeUpgrade: hiddenScopeUpgradeCapability,
     });
   }
+
+  it("includes failed automations beyond the first inventory page", async () => {
+    const healthy = cronPage("healthy").jobs[0]!;
+    const jobs = [
+      ...Array.from({ length: 50 }, (_, index) => ({
+        ...healthy,
+        id: `healthy-${index}`,
+        state: { lastRunStatus: "ok" as const },
+      })),
+      ...cronPage("later-failure").jobs,
+    ];
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "cron.list") {
+        const pagination = isRecord(params) ? params : {};
+        const offset = Number(pagination.offset ?? 0);
+        const limit = Number(pagination.limit ?? 50);
+        const nextOffset = Math.min(offset + limit, jobs.length);
+        return {
+          jobs: jobs.slice(offset, nextOffset),
+          snapshotRevision: "all-jobs",
+          total: jobs.length,
+          offset,
+          limit,
+          hasMore: nextOffset < jobs.length,
+          nextOffset: nextOffset < jobs.length ? nextOffset : null,
+        };
+      }
+      return method === "cron.status"
+        ? { enabled: true, triggersEnabled: true, jobs: jobs.length }
+        : { ts: 1, providers: [] };
+    });
+    const harness = createGatewayHarness(mockClient(request));
+    store = createStore(harness.gateway);
+    store.activate(SidebarAttentionStoreController);
+
+    await waitForFast(() =>
+      expect(store?.entries).toMatchObject([
+        { type: "attention", kind: "cronFailed", label: "later-failure" },
+      ]),
+    );
+  });
 
   it.each(["list", "status"] as const)(
     "coalesces cron bursts until the whole inventory pair settles (%s first)",
@@ -270,13 +312,20 @@ describe("sidebar attention source publication", () => {
         });
       }
       pages[3]!.resolve({ ...cronPage("partial"), hasMore: true, total: 2, nextOffset: 1 });
-      await waitForFast(() => expect(store?.entries).toMatchObject([{ label: "partial" }]));
+      await waitForFast(() => expect(listCalls).toBe(5));
+      expect(store?.entries).toMatchObject([{ label: "current-2" }]);
       expect(loadDismissals(harness.gateway.connection.gatewayUrl)).toEqual({
         cronFailed: ["dismissed"],
       });
-      harness.emitEvent("cron", {});
-      pages[4]!.resolve(cronPage("fresh"));
-      await waitForFast(() => expect(store?.entries).toMatchObject([{ label: "fresh" }]));
+      pages[4]!.resolve({
+        ...cronPage("fresh"),
+        snapshotRevision: "partial",
+        total: 2,
+        offset: 1,
+      });
+      await waitForFast(() =>
+        expect(store?.entries).toMatchObject([{ label: "partial" }, { label: "fresh" }]),
+      );
       expect(loadDismissals(harness.gateway.connection.gatewayUrl)).toEqual({});
     } finally {
       store.dispose();
