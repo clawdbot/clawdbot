@@ -48,6 +48,7 @@ function codexPluginEntryEnabled(cfg: OpenClawConfig): boolean | undefined {
 function configuredRuntimeNeedsCodex(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  agentId?: string;
   modelId?: string;
   runtimeId?: string;
 }): boolean {
@@ -63,6 +64,7 @@ function configuredRuntimeNeedsCodex(params: {
       provider: OPENAI_PROVIDER_ID,
       modelId: params.modelId,
       config: params.cfg,
+      agentId: params.agentId,
       env: params.env,
     }) === CODEX_PLUGIN_ID
   );
@@ -87,6 +89,7 @@ export function configuredModelRouteNeedsCodex(params: {
   return configuredRuntimeNeedsCodex({
     cfg: params.cfg,
     env: params.env,
+    agentId: params.agentId,
     modelId: params.route.modelId,
     runtimeId: runtime,
   });
@@ -183,7 +186,7 @@ function configuredProviderPoliciesNeedCodex(
     }).policy;
     if (
       genericPolicy?.id?.trim() &&
-      configuredRuntimeNeedsCodex({ cfg, env, runtimeId: genericPolicy.id })
+      configuredRuntimeNeedsCodex({ cfg, env, agentId, runtimeId: genericPolicy.id })
     ) {
       return true;
     }
@@ -283,7 +286,7 @@ function defaultOpenAiRouteNeedsCodex(
       provider: OPENAI_PROVIDER_ID,
       agentId,
     }).policy?.id;
-    return configuredRuntimeNeedsCodex({ cfg, env, runtimeId });
+    return configuredRuntimeNeedsCodex({ cfg, env, agentId, runtimeId });
   });
 }
 

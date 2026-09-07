@@ -363,19 +363,32 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(stateIntegrityText()).toContain("CRITICAL: OAuth dir missing");
   });
 
-  it("warns about orphaned on-disk agent directories missing from agents.list", async () => {
-    createAgentDir("big-brain");
-    createAgentDir("cerebro");
+  it.each([
+    {
+      name: "list",
+      roster: { list: [{ id: "main", default: true }] },
+      path: "agents.list",
+      otherPath: "agents.entries",
+      orphanIds: ["big-brain", "cerebro"],
+    },
+    {
+      name: "keyed",
+      roster: { entries: { main: { default: true } } },
+      path: "agents.entries",
+      otherPath: "agents.list",
+      orphanIds: ["orphan"],
+    },
+  ])("preserves $name roster paths in orphaned agent recovery advice", async (testCase) => {
+    for (const agentId of testCase.orphanIds) {
+      createAgentDir(agentId);
+    }
+    const text = await runStateIntegrityText({ agents: testCase.roster });
 
-    const text = await runStateIntegrityText({
-      agents: {
-        list: [{ id: "main", default: true }],
-      },
-    });
-
-    expect(text).toContain("without a matching agents.list entry");
-    expect(text).toContain("Examples: big-brain, cerebro");
+    expect(text).toContain(`without a matching ${testCase.path} entry`);
+    expect(text).toContain(`Restore the missing ${testCase.path} entries`);
+    expect(text).toContain(`Examples: ${testCase.orphanIds.join(", ")}`);
     expect(text).toContain("config-driven routing, identity, and model selection will ignore them");
+    expect(text).not.toContain(testCase.otherPath);
   });
 
   it("detects orphaned agent dirs even when the on-disk folder casing differs", async () => {
@@ -429,7 +442,7 @@ describe("doctor state integrity oauth dir checks", () => {
       },
     });
 
-    expect(text).toContain("without a matching agents.list entry");
+    expect(text).toContain("without a matching agents.entries entry");
     expect(text).toContain("Examples: main");
   });
 

@@ -1,6 +1,10 @@
 // Doctor preview warning aggregation for config that can surprise users before repair.
 import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
-import { listAgentEntries, resolveAgentConfig } from "../../../agents/agent-scope-config.js";
+import {
+  listAgentEntries,
+  listAgentEntriesWithSource,
+  resolveAgentConfig,
+} from "../../../agents/agent-scope-config.js";
 import {
   normalizeToolProviderPolicyKey,
   resolveProviderToolPolicy,
@@ -440,12 +444,15 @@ function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): strin
     }),
   );
 
-  listAgentRecords(cfg).forEach((agent, index) => {
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
     const agentTools = hasRecord(agent.tools) ? agent.tools : undefined;
     const agentId = typeof agent.id === "string" ? agent.id : undefined;
     const agentConfig = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
     const modelRef = resolveDoctorPrimaryModelRef(cfg, agentConfig?.model);
-    const agentPath = `agents.list[${index}].tools`;
+    const agentPath =
+      source.kind === "entries"
+        ? `agents.entries.${source.key}.tools`
+        : `agents.list[${source.index}].tools`;
     const includeInheritedSections =
       agentTools !== undefined && typeof agentTools.profile !== "string";
     const ownAgentConfiguredEntries = collectConfiguredToolSectionGrantEntries({
@@ -479,7 +486,7 @@ function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): strin
         modelId: modelRef.model,
       }),
     );
-  });
+  }
   return warnings;
 }
 

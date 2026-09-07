@@ -7,6 +7,7 @@ import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configu
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import {
   clearAuthProfileMigrationDiagnostics,
@@ -210,11 +211,8 @@ function collectLegacyConfigAuthProfileProviderHints(
   const agents = isRecord(root.agents) ? root.agents : null;
   const defaults = agents && isRecord(agents.defaults) ? agents.defaults : null;
   addModelHints(defaults?.models);
-  const agentList = agents && Array.isArray(agents.list) ? agents.list : [];
-  for (const agent of agentList) {
-    if (isRecord(agent)) {
-      addModelHints(agent.models);
-    }
+  for (const agent of listAgentEntries(cfg)) {
+    addModelHints(agent.models);
   }
   return hints;
 }

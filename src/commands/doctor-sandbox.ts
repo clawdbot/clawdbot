@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
 import {
   DEFAULT_SANDBOX_BROWSER_IMAGE,
   DEFAULT_SANDBOX_COMMON_IMAGE,
@@ -442,7 +442,7 @@ export function noteSandboxScopeWarnings(cfg: OpenClawConfig) {
   const globalSandbox = cfg.agents?.defaults?.sandbox;
   const warnings: string[] = [];
 
-  for (const agent of listAgentEntries(cfg)) {
+  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
     const agentId = agent.id;
     const agentSandbox = agent.sandbox;
     if (!agentSandbox) {
@@ -472,9 +472,11 @@ export function noteSandboxScopeWarnings(cfg: OpenClawConfig) {
       continue;
     }
 
+    const agentPath =
+      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list (id "${agentId}")`;
     warnings.push(
       [
-        `- agents.entries.${agentId} sandbox ${overrides.join("/")} overrides ignored.`,
+        `- ${agentPath} sandbox ${overrides.join("/")} overrides ignored.`,
         `  scope resolves to "shared".`,
       ].join("\n"),
     );

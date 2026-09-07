@@ -727,25 +727,33 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("direct/DM targets by default");
   });
 
-  it("warns when a per-agent heartbeat relies on implicit directPolicy", async () => {
-    const cfg = {
+  it.each([
+    {
+      name: "list",
+      agents: { list: [{ id: "ops", heartbeat: { target: "last" as const } }] },
+      path: 'heartbeat.directPolicy for agent "ops"',
+    },
+    {
+      name: "keyed",
       agents: {
-        list: [
-          {
-            id: "ops",
-            heartbeat: {
-              target: "last",
-            },
-          },
-        ],
+        entries: {
+          main: { default: true },
+          ops: { heartbeat: { target: "last" as const } },
+        },
       },
-    } as OpenClawConfig;
-    await noteSecurityWarnings(cfg);
-    const message = lastMessage();
-    expect(message).toContain('Heartbeat agent "ops"');
-    expect(message).toContain('heartbeat.directPolicy for agent "ops"');
-    expect(message).toContain("direct/DM targets by default");
-  });
+      path: "agents.entries.ops.heartbeat.directPolicy",
+    },
+  ])(
+    "warns at the $name agent config path for implicit heartbeat directPolicy",
+    async (testCase) => {
+      await noteSecurityWarnings({ agents: testCase.agents } as OpenClawConfig);
+
+      const message = lastMessage();
+      expect(message).toContain('Heartbeat agent "ops"');
+      expect(message).toContain(testCase.path);
+      expect(message).toContain("direct/DM targets by default");
+    },
+  );
 
   it("degrades safely when channel account resolution fails in read-only security checks", async () => {
     pluginRegistry.list = [

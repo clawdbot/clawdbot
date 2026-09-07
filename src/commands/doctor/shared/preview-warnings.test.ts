@@ -5,6 +5,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { AgentToolsConfig } from "../../../config/types.tools.js";
 import { collectDoctorPreviewNotes } from "./preview-warnings.js";
 
 async function collectDoctorPreviewWarnings(
@@ -22,6 +23,23 @@ async function collectProfileConfiguredToolSectionWarningsThroughDoctor(
   });
   return warnings.filter((warning) => warning.includes("is configured, but configured sections"));
 }
+
+const agentRosterCases = [
+  {
+    name: "list",
+    path: "agents.list[0]",
+    otherPath: "agents.entries",
+    agents: (tools: AgentToolsConfig) => ({ list: [{ id: "sage", tools }] }),
+  },
+  {
+    name: "keyed",
+    path: "agents.entries.sage",
+    otherPath: "agents.list",
+    agents: (tools: AgentToolsConfig) => ({
+      entries: { main: { default: true }, sage: { tools } },
+    }),
+  },
+];
 
 async function collectVisibleReplyToolPolicyWarningsThroughDoctor(
   cfg: OpenClawConfig,
@@ -985,64 +1003,50 @@ describe("doctor preview warnings", () => {
     expect(warning).not.toContain("doctor --fix");
   });
 
-  it("does not suggest alsoAllow when configured section warnings already have allow", async () => {
-    const warnings = await collectProfileConfiguredToolSectionWarningsThroughDoctor({
-      tools: {
-        profile: "messaging",
-      },
-      agents: {
-        list: [
-          {
-            id: "sage",
-            tools: {
-              allow: ["message"],
-              exec: {
-                mode: "allowlist",
-              },
-            },
-          },
-        ],
-      },
-    });
+  it.each(agentRosterCases)(
+    "uses $name agent paths for restrictive tool profile advice",
+    async (testCase) => {
+      const warnings = await collectProfileConfiguredToolSectionWarningsThroughDoctor({
+        tools: {
+          profile: "messaging",
+        },
+        agents: testCase.agents({
+          allow: ["message"],
+          exec: { mode: "allowlist" },
+        }),
+      });
 
-    const warning = expectSingleWarningContaining(warnings, "agents.list[0].tools.profile");
-    expect(warning).toContain("Add these grants to agents.list[0].tools.allow");
-    expect(warning).toContain('set agents.list[0].tools.profile to "full"');
-    expect(warning).not.toContain("agents.list[0].tools.alsoAllow");
-  });
+      const warning = expectSingleWarningContaining(warnings, `${testCase.path}.tools.profile`);
+      expect(warning).toContain(`Add these grants to ${testCase.path}.tools.allow`);
+      expect(warning).toContain(`set ${testCase.path}.tools.profile to "full"`);
+      expect(warning).not.toContain(`${testCase.path}.tools.alsoAllow`);
+      expect(warning).not.toContain(testCase.otherPath);
+    },
+  );
 
-  it("warns when an agent tool section inherits a restrictive provider profile", async () => {
-    const warnings = await collectProfileConfiguredToolSectionWarningsThroughDoctor({
-      tools: {
-        byProvider: {
-          openai: {
-            profile: "messaging",
+  it.each(agentRosterCases)(
+    "uses $name agent paths for inherited provider profile advice",
+    async (testCase) => {
+      const warnings = await collectProfileConfiguredToolSectionWarningsThroughDoctor({
+        tools: {
+          byProvider: {
+            openai: { profile: "messaging" },
           },
         },
-      },
-      agents: {
-        list: [
-          {
-            id: "sage",
-            tools: {
-              exec: {
-                mode: "allowlist",
-              },
-            },
-          },
-        ],
-      },
-    });
+        agents: testCase.agents({ exec: { mode: "allowlist" } }),
+      });
 
-    const warning = expectSingleWarningContaining(
-      warnings,
-      'tools.byProvider.openai.profile is "messaging"',
-    );
-    expect(warning).toContain("agents.list[0].tools.exec is configured");
-    expect(warning).toContain(
-      'agents.list[0].tools.byProvider.openai.alsoAllow: ["exec", "process"]',
-    );
-  });
+      const warning = expectSingleWarningContaining(
+        warnings,
+        'tools.byProvider.openai.profile is "messaging"',
+      );
+      expect(warning).toContain(`${testCase.path}.tools.exec is configured`);
+      expect(warning).toContain(
+        `${testCase.path}.tools.byProvider.openai.alsoAllow: ["exec", "process"]`,
+      );
+      expect(warning).not.toContain(testCase.otherPath);
+    },
+  );
 
   it("uses inherited provider alsoAllow for agent provider profile warnings", async () => {
     const warnings = await collectProfileConfiguredToolSectionWarningsThroughDoctor({

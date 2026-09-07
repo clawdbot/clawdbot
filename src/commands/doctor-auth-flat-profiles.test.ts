@@ -1875,6 +1875,25 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
         now: 470,
       },
       {
+        profileId: "agent-work",
+        cfg: {
+          auth: { profiles: { "agent-work": { key: "sk-config" } } },
+          agents: {
+            entries: {
+              main: { default: true },
+              ops: {
+                models: {
+                  "openai/gpt-5.5": {
+                    agentRuntime: { authProfileId: "agent-work" },
+                  },
+                },
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        now: 472,
+      },
+      {
         profileId: "ordered",
         cfg: {
           auth: {
@@ -1910,6 +1929,44 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
       expect(fs.existsSync(authPath)).toBe(false);
       expectNoMigratedArchive(authPath);
     }
+  });
+
+  it("does not infer a credential provider from conflicting keyed-agent model hints", async () => {
+    const state = await makeTestState();
+    const cfg = {
+      auth: { profiles: { ambiguous: { key: "sk-config" } } },
+      agents: {
+        entries: {
+          main: {
+            default: true,
+            models: {
+              "openai/gpt-5.5": {
+                agentRuntime: { authProfileId: "ambiguous" },
+              },
+            },
+          },
+          ops: {
+            models: {
+              "anthropic/claude-sonnet-4-6": {
+                agentRuntime: { authProfileId: "ambiguous" },
+              },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg,
+      prompter: makePrompter(true),
+      now: () => 475,
+    });
+
+    expect(result.detected).toStrictEqual([]);
+    expect(result.configChanged).toBeUndefined();
+    expect(result.warnings).toStrictEqual([]);
+    expect(cfg.auth?.profiles?.ambiguous).toEqual({ key: "sk-config" });
+    expect(loadPersistedAuthProfileStore(state.agentDir())).toBeNull();
   });
 
   it("imports missing config credentials while preserving legacy JSON precedence", async () => {
