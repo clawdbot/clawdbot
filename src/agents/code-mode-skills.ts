@@ -40,8 +40,41 @@ function normalizeSkillRelativePath(relativePath: string): string {
   return trimmed;
 }
 
-function resolveNodeSkillRelativeLocator(skillFileLocator: string, relativePath: string): string {
+function normalizeNodeSkillRelativePath(relativePath: string): string {
   const trimmed = normalizeSkillRelativePath(relativePath);
+  let decoded = trimmed;
+  for (let pass = 0; pass < 4; pass += 1) {
+    let next: string;
+    try {
+      next = decodeURIComponent(decoded);
+    } catch {
+      throw new Error(`invalid skill relative path ${JSON.stringify(relativePath)}`);
+    }
+    if (next === decoded) {
+      break;
+    }
+    decoded = next;
+    if (pass === 3) {
+      throw new Error(`invalid skill relative path ${JSON.stringify(relativePath)}`);
+    }
+  }
+  const decodedPath = decoded.replaceAll("\\", "/");
+  const parsed = new URL(trimmed, "https://skill.invalid/root/");
+  if (
+    path.posix.isAbsolute(decodedPath) ||
+    path.win32.isAbsolute(decodedPath) ||
+    decodedPath.split("/").some((segment) => !segment || segment === "." || segment === "..") ||
+    !parsed.pathname.startsWith("/root/") ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    throw new Error(`invalid skill relative path ${JSON.stringify(relativePath)}`);
+  }
+  return trimmed;
+}
+
+function resolveNodeSkillRelativeLocator(skillFileLocator: string, relativePath: string): string {
+  const trimmed = normalizeNodeSkillRelativePath(relativePath);
   const normalized = skillFileLocator.replaceAll("\\", "/");
   const root = normalized.replace(/\/SKILL\.md$/i, "");
   if (!isNodeHostedSkillLocator(root)) {

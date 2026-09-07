@@ -254,6 +254,16 @@ describe("Code Mode skills and read tools", () => {
       location: "node://node-1/skills/demo/modules/during-dining.md",
       signal: undefined,
     });
+    for (const encodedEscape of [
+      "%2e%2e/other/SKILL.md",
+      "%252e%252e/other/SKILL.md",
+      "modules%2f..%2fsecret.md",
+    ]) {
+      await expect(readCodeModeSkill(skill, undefined, encodedEscape)).rejects.toThrow(
+        /invalid skill relative path/,
+      );
+    }
+    expect(reader).toHaveBeenCalledOnce();
     await expect(
       readCodeModeSkill({ ...skill, reader: undefined }, undefined, "modules/x.md"),
     ).rejects.toThrow(/node-hosted skill relative reads require a node skill reader/);
