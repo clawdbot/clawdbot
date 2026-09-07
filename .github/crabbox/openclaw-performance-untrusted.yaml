@@ -23,6 +23,7 @@ sync:
   include:
     - .github/crabbox/openclaw-performance-evidence.schema.json
     - scripts/openclaw-performance-crabbox.sh
+    - .artifacts/performance-control/helpers
 env:
   allow:
     - OPENCLAW_PERFORMANCE_NO_ENV

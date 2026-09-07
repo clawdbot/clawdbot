@@ -13,6 +13,19 @@ readonly MAX_ARTIFACT_BYTES=250000000
 readonly MAX_ARTIFACT_FILE_BYTES=50000000
 VERIFY_TMP=""
 
+build_helpers() {
+  local version
+  version="$(node -p 'require("./package.json").devDependencies.esbuild')"
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "esbuild must be pinned"
+  npm exec --yes --package="esbuild@$version" -- esbuild \
+    scripts/lib/kova-report-selector.mjs scripts/lib/kova-workflow-evidence.mts \
+    scripts/lib/kova-report-gate.mts scripts/kova-ci-summary.mts \
+    scripts/bench-cli-startup.ts scripts/openclaw-performance-source-summary.mts \
+    --bundle --platform=node --format=esm --target=node24 --outbase=scripts \
+    --outdir=.artifacts/performance-control/helpers --out-extension:.js=.mjs \
+    --alias:@openclaw/normalization-core/record-coerce=./packages/normalization-core/src/record-coerce.ts
+}
+
 die() {
   printf 'openclaw-performance-crabbox: %s\n' "$*" >&2
   exit 1
@@ -47,7 +60,7 @@ as_sut() {
     XDG_CACHE_HOME="/home/${SUT_USER}/.cache" \
     XDG_RUNTIME_DIR="/run/user/${uid}" \
     DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${uid}/bus" \
-    PATH="/home/${SUT_USER}/.local/bin:/opt/node-v${NODE_VERSION}/bin:/opt/ocm-${OCM_VERSION}:/usr/local/bin:/usr/bin:/bin" \
+    PATH="/opt/node-v${NODE_VERSION}/bin:/opt/ocm-${OCM_VERSION}:/usr/local/bin:/usr/bin:/bin:/home/${SUT_USER}/.local/bin" \
     GIT_CONFIG_GLOBAL=/dev/null \
     GIT_CONFIG_SYSTEM=/dev/null \
     GIT_TERMINAL_PROMPT=0 \
@@ -132,6 +145,7 @@ prepare_sut() {
 run_sut() {
   local lane="$1" root="$2" profile="$3" repeat="$4" contract="$5"
   local include_filters="$6" expected_entries="$7" fail_on_regression="$8"
+  local helpers="$9" model="${10}" require_instrumented="${11}"
   local openclaw="$root/openclaw" kova="$root/kova"
   local report_dir="$openclaw/.artifacts/kova/reports/$lane"
   local bundle_dir="$openclaw/.artifacts/kova/bundles/$lane"
@@ -142,71 +156,236 @@ run_sut() {
     return 42
   fi
 
-  npm --prefix "/home/${SUT_USER}/.local" install --no-audit --no-fund "pnpm@${PNPM_VERSION}"
+  npm --prefix "$HOME/.local" install --no-audit --no-fund "pnpm@${PNPM_VERSION}"
   pnpm install --frozen-lockfile
 
   if [[ "$lane" == "source" ]]; then
     local source_dir="$openclaw/.artifacts/openclaw-performance/source/mock-provider"
-    mkdir -p "$source_dir"
-    OPENCLAW_BUILD_PRIVATE_QA=1 node --import tsx scripts/build-all.mts sourcePerformance
+    mkdir -p "$source_dir/mock-hello"
+    if ! node -e "const fs=require('node:fs'); const scripts=require('./package.json').scripts||{}; const extensionProbe=['scripts/profile-extension-memory.mts','scripts/profile-extension-memory.mjs'].some((entry)=>fs.existsSync(entry)); process.exit(scripts['test:gateway:cpu-scenarios'] && scripts['test:extensions:memory'] && scripts.openclaw && fs.existsSync('openclaw.mjs') && extensionProbe ? 0 : 1)"; then
+      printf '# OpenClaw Source Performance\n\nSource probes skipped: required probe entry points are unavailable in this tested ref.\n' > "$source_dir/index.md"
+      return
+    fi
+    build_source_performance
+    local supported_startup_cases startup_case
+    local startup_case_args=()
+    supported_startup_cases="$(
+      node --import tsx scripts/bench-gateway-startup.ts --help |
+        sed -n 's/^  \([[:alnum:]_-][[:alnum:]_-]*\) (.*/\1/p'
+    )"
+    for startup_case in default skipChannels preparedRuntimeCatalogStall preparedRuntimeScaleOne preparedRuntimeScaleMany oneInternalHook allInternalHooks fiftyPlugins fiftyStartupLazyPlugins; do
+      if grep -Fxq "$startup_case" <<< "$supported_startup_cases"; then
+        startup_case_args+=(--startup-case "$startup_case")
+      fi
+    done
+    [[ " ${startup_case_args[*]} " == *" --startup-case default "* ]] ||
+      die "target startup benchmark did not advertise its required default case"
     pnpm test:gateway:cpu-scenarios \
       --output-dir "$source_dir/gateway-cpu" --runs "$repeat" --warmup 1 --skip-qa \
-      --startup-case default
+      "${startup_case_args[@]}"
     pnpm test:extensions:memory -- --json "$source_dir/extension-memory.json"
-    cat > "$source_dir/index.md" <<EOF
-# OpenClaw Source Performance
-
-- Tested SHA: $(git rev-parse HEAD)
-- Runs: ${repeat}
-- Execution: disposable AWS Crabbox SUT
-EOF
+    local run_index run_dir
+    for ((run_index = 1; run_index <= repeat; run_index++)); do
+      run_dir=".artifacts/openclaw-performance/source/mock-provider/mock-hello/run-$(printf '%03d' "$run_index")"
+      pnpm openclaw qa suite --provider-mode mock-openai --model "mock-openai/$model" \
+        --concurrency 1 --output-dir "$run_dir" --scenario channel-chat-baseline
+    done
+    source_cli_probes "$openclaw" "$source_dir" "$repeat" "$helpers"
+    if node -e "const fs=require('node:fs'); const scripts=require('./package.json').scripts||{}; process.exit(scripts['test:sqlite:perf:smoke'] && fs.existsSync('scripts/bench-sqlite-state.ts') ? 0 : 1)"; then
+      pnpm test:sqlite:perf:smoke
+      cp .artifacts/sqlite-perf/smoke.json "$source_dir/sqlite-perf-smoke.json"
+    else
+      echo "SQLite state smoke probe is unavailable in this tested ref; continuing with the remaining source probes."
+    fi
+    node "$helpers/openclaw-performance-source-summary.mjs" \
+      --source-dir "$source_dir" --output "$source_dir/index.md"
     return
   fi
 
   npm --prefix "$kova" ci --ignore-scripts --no-audit --no-fund
-  mkdir -p "/home/${SUT_USER}/.local/bin" "$report_dir" "$bundle_dir" "$summary_dir"
-  cat > "/home/${SUT_USER}/.local/bin/kova" <<EOF
+  mkdir -p "$HOME/.local/bin" "$report_dir" "$bundle_dir" "$summary_dir"
+  cat > "$HOME/.local/bin/kova" <<EOF
 #!/usr/bin/env bash
 export KOVA_HOME="/home/${SUT_USER}/.kova"
 exec node "$kova/bin/kova.mjs" "\$@"
 EOF
-  chmod 0755 "/home/${SUT_USER}/.local/bin/kova"
+  chmod 0755 "$HOME/.local/bin/kova"
 
-  OPENCLAW_BUILD_PRIVATE_QA=1 node --import tsx scripts/build-all.mts sourcePerformance
-  local deep=() gate=() timeout_ms=300000
-  [[ "$lane" == "mock-deep-profile" ]] && deep=(--deep-profile)
-  [[ "$fail_on_regression" == true ]] && gate=(--gate)
+  build_source_performance
+  local timeout_ms=300000
   [[ "$profile" == release ]] && timeout_ms=900000
+  local plan_json="$openclaw/.artifacts/kova/plans/$lane.json"
+  mkdir -p "$(dirname "$plan_json")"
   kova matrix plan \
     --profile "$profile" --target "local-build:$openclaw" --include "$include_filters" \
-    --parallel 1 --repeat "$repeat" --json > "$report_dir/plan.json"
-
+    --parallel 1 --repeat "$repeat" --json > "$plan_json"
+  node --input-type=module - "$plan_json" "$profile" "$include_filters" "$expected_entries" <<'NODE'
+import fs from "node:fs";
+const [file, profile, include, expected] = process.argv.slice(2);
+const plan = JSON.parse(fs.readFileSync(file, "utf8"));
+const filters = include.split(",");
+if (!Array.isArray(plan.controls?.include) ||
+    plan.controls.include.length !== filters.length ||
+    plan.controls.include.some((filter, index) => filter !== filters[index])) {
+  throw new Error("Kova plan did not preserve the requested include filters");
+}
+if (profile === "release") {
+  if (!Array.isArray(plan.entries)) throw new Error("Kova release plan did not contain entries");
+  const actual = plan.entries.map((entry) => {
+    if (entry.status !== "SELECTED" || !entry.scenario?.id || !entry.state?.id) {
+      throw new Error("Kova release plan contained an invalid selected entry");
+    }
+    return `${entry.scenario.id}:${entry.state.id}`;
+  }).sort();
+  const required = expected.split(",").sort();
+  if (actual.length !== required.length || actual.some((entry, index) => entry !== required[index])) {
+    throw new Error("Kova release plan entries did not match the required lane coverage");
+  }
+}
+NODE
+  local args=(
+    matrix run --profile "$profile" --target "local-build:$openclaw" --include "$include_filters"
+    --parallel 1 --repeat "$repeat" --auth mock --timeout-ms "$timeout_ms"
+    --report-dir "$report_dir" --execute --json
+  )
+  [[ "$lane" != "mock-deep-profile" ]] || args+=(--deep-profile)
+  [[ "$fail_on_regression" != true ]] || args+=(--gate)
   set +e
   KOVA_OPENCLAW_CONFIG_CONTRACT="$contract" KOVA_SCENARIO_TIMEOUT_MS="$timeout_ms" \
-    kova matrix run \
-      --profile "$profile" --target "local-build:$openclaw" --include "$include_filters" \
-      --parallel 1 --repeat "$repeat" --auth mock --timeout-ms "$timeout_ms" \
-      --report-dir "$report_dir" --execute --json "${deep[@]}" "${gate[@]}"
-  local status=$?
+    kova "${args[@]}" \
+      2>&1 | tee "$report_dir/$lane.log"
+  local status=${PIPESTATUS[0]}
   set -e
 
   local report
-  report="$(find "$report_dir" -maxdepth 1 -type f -name '*.json' ! -name plan.json ! -name '*.summary.json' -print -quit)"
-  [[ -n "$report" ]] || die "Kova did not produce a report"
-  kova report bundle "$report" --output-dir "$bundle_dir" --json > "$bundle_dir/bundle.json"
-  cat > "$summary_dir/${lane}.md" <<EOF
-# OpenClaw Kova Performance
+  report="$(node "$helpers/lib/kova-report-selector.mjs" --report-dir "$report_dir")"
+  local evidence_status=0 bundle_status=0 summary_status=0 effective_status="$status"
+  node "$helpers/lib/kova-workflow-evidence.mjs" \
+    --plan "$plan_json" --report "$report" --profile "$profile" \
+    --target "local-build:$openclaw" --repeat "$repeat" --include "$include_filters" \
+    --auth mock --model "$model" || evidence_status=$?
+  if [[ "$evidence_status" == 0 && "$fail_on_regression" == true && "$status" != 0 ]]; then
+    local gate_args=("$report")
+    [[ "$require_instrumented" != true ]] || gate_args+=(--require-instrumented-performance-contract)
+    if node "$helpers/lib/kova-report-gate.mjs" "${gate_args[@]}"; then
+      effective_status=0
+    fi
+  fi
+  kova report bundle "$report" --output-dir "$bundle_dir" --json > "$bundle_dir/bundle.json" || bundle_status=$?
+  node "$helpers/kova-ci-summary.mjs" --report "$report" \
+    --output "$summary_dir/$lane.md" --lane "$lane" || summary_status=$?
+  node --input-type=module - "$report" "$status" "$evidence_status" "$bundle_status" "$summary_status" <<'NODE'
+import fs from "node:fs";
+const [file, command, evidence, bundle, summary] = process.argv.slice(2);
+const metadata = fs.lstatSync(file);
+if (!metadata.isFile() || metadata.size > 50000000) throw new Error("invalid diagnostic report file");
+const report = JSON.parse(fs.readFileSync(file, "utf8"));
+const text = (value) => typeof value === "string" ? value.slice(0, 512)
+  .replace(/\/(?:Users|home|private|srv|work|tmp)\/[^\s"'<>]+/g, "<path>")
+  .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, "<address>") : "";
+const records = Array.isArray(report.records) ? report.records.slice(0, 32).map((record) => ({
+  scenario: text(record?.scenario), state: text(record?.state?.id), status: text(record?.status),
+  reason: text(record?.failureReason || record?.error?.message),
+})) : [];
+console.log("performance-kova " + JSON.stringify({
+  commandExit: Number(command), evidenceExit: Number(evidence),
+  bundleExit: Number(bundle), summaryExit: Number(summary), records,
+}));
+NODE
+  ((evidence_status == 0 && bundle_status == 0 && summary_status == 0)) ||
+    die "Kova evidence, bundle, or summary validation failed"
+  [[ -s "$bundle_dir/bundle.json" && -s "$summary_dir/$lane.md" ]] ||
+    die "Kova bundle or summary evidence is missing"
+  [[ "$fail_on_regression" != true ]] || return "$effective_status"
+}
 
-- Lane: ${lane}
-- Tested SHA: $(git rev-parse HEAD)
-- Kova SHA: $(git -C "$kova" rev-parse HEAD)
-- Expected release entries: ${expected_entries}
-- Exit code: ${status}
-EOF
-  if [[ "$fail_on_regression" == "true" ]]; then
-    return "$status"
+build_source_performance() {
+  if [[ -f scripts/build-all.mts ]] &&
+    node --import tsx scripts/build-all.mts --help | grep -Fxq '  sourcePerformance'; then
+    OPENCLAW_BUILD_PRIVATE_QA=1 node --import tsx scripts/build-all.mts sourcePerformance
+  elif [[ -f scripts/build-all.mjs ]] &&
+    node scripts/build-all.mjs --help | grep -Fxq '  sourcePerformance'; then
+    OPENCLAW_BUILD_PRIVATE_QA=1 node scripts/build-all.mjs sourcePerformance
+  else
+    pnpm build
   fi
 }
+
+source_cli_probes() (
+  local openclaw="$1" source_dir="$2" repeat="$3" helpers="$4"
+  local gateway_home gateway_readiness_home gateway_port gateway_token gateway_pid=""
+  gateway_home="$(mktemp -d)"
+  gateway_readiness_home="$(mktemp -d)"
+  cleanup_gateway() {
+    if [[ -n "$gateway_pid" ]] && kill -0 "$gateway_pid" 2>/dev/null; then
+      kill "$gateway_pid" 2>/dev/null || true
+      wait "$gateway_pid" 2>/dev/null || true
+    fi
+    rm -rf "$gateway_home" "$gateway_readiness_home"
+  }
+  trap cleanup_gateway EXIT
+  gateway_port="$(node -e "const net=require('node:net'); const s=net.createServer(); s.listen(0,'127.0.0.1',()=>{ console.log(s.address().port); s.close(); });")"
+  gateway_token="$(node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))")"
+  local gateway_state="$gateway_home/.openclaw" gateway_config="$gateway_home/.openclaw/openclaw.json"
+  local readiness_state="$gateway_readiness_home/.openclaw" readiness_config="$gateway_readiness_home/.openclaw/openclaw.json"
+  local gateway_log="$source_dir/cli-gateway.log" readiness_log="$source_dir/cli-gateway-readiness.log"
+  mkdir -p "$gateway_state" "$readiness_state"
+  local catalog_refresh_config=""
+  if grep -q 'catalogRefresh:' src/config/zod-schema.core.ts; then
+    catalog_refresh_config='"models": { "catalogRefresh": { "enabled": false } },'
+  fi
+  cat > "$gateway_config" <<EOF
+{
+  "agents": { "defaults": { "heartbeat": { "every": "0m" } } },
+  "browser": { "enabled": false },
+  ${catalog_refresh_config}
+  "update": { "checkOnStart": false },
+  "gateway": {
+    "mode": "local", "port": ${gateway_port}, "bind": "loopback",
+    "auth": { "mode": "token" }, "controlUi": { "enabled": false },
+    "tailscale": { "mode": "off" }
+  },
+  "plugins": { "enabled": true, "entries": { "browser": { "enabled": false } } }
+}
+EOF
+  cp "$gateway_config" "$readiness_config"
+  OPENCLAW_GATEWAY_TOKEN="$gateway_token" OPENCLAW_HOME="$gateway_home" \
+    OPENCLAW_STATE_DIR="$gateway_state" OPENCLAW_CONFIG_PATH="$gateway_config" \
+    OPENCLAW_GATEWAY_PORT="$gateway_port" OPENCLAW_SKIP_CHANNELS=1 OPENCLAW_SKIP_CRON=1 \
+    node dist/entry.js gateway run --bind loopback --port "$gateway_port" --auth token --allow-unconfigured --force \
+    > "$gateway_log" 2>&1 &
+  gateway_pid="$!"
+  local deadline=$((SECONDS + 120)) remaining probe_timeout
+  while true; do
+    remaining=$((deadline - SECONDS))
+    ((remaining > 0)) || die "timed out waiting for gateway HTTP health"
+    probe_timeout="$remaining"
+    ((probe_timeout <= 5)) || probe_timeout=5
+    if curl -fsS --connect-timeout 2 --max-time "$probe_timeout" "http://127.0.0.1:$gateway_port/healthz" >/dev/null; then
+      break
+    fi
+    kill -0 "$gateway_pid" 2>/dev/null || die "gateway exited before HTTP health"
+    sleep 1
+  done
+  while true; do
+    remaining=$((deadline - SECONDS))
+    ((remaining > 0)) || die "timed out waiting for gateway WebSocket health"
+    if OPENCLAW_GATEWAY_TOKEN="$gateway_token" OPENCLAW_HOME="$gateway_readiness_home" \
+      OPENCLAW_STATE_DIR="$readiness_state" OPENCLAW_CONFIG_PATH="$readiness_config" \
+      node dist/entry.js gateway health --port "$gateway_port" --timeout "$((remaining * 1000))" \
+      --json > "$readiness_log" 2>&1; then
+      break
+    fi
+    kill -0 "$gateway_pid" 2>/dev/null || die "gateway exited before WebSocket health"
+    ((SECONDS >= deadline)) || sleep 1
+  done
+  OPENCLAW_GATEWAY_TOKEN="$gateway_token" OPENCLAW_HOME="$gateway_home" \
+    OPENCLAW_STATE_DIR="$gateway_state" OPENCLAW_CONFIG_PATH="$gateway_config" \
+    OPENCLAW_GATEWAY_PORT="$gateway_port" \
+    node "$helpers/bench-cli-startup.mjs" --entry "$openclaw/openclaw.mjs" \
+    --case gatewayHealthJsonWarmState --case gatewayHealthJsonFreshState \
+    --case configGetGatewayPort --runs "$repeat" --warmup 1 --output "$source_dir/cli-startup.json"
+)
 
 quiesce_sut() {
   local uid deadline
@@ -218,6 +397,20 @@ quiesce_sut() {
   while pgrep -u "$uid" >/dev/null 2>&1; do
     ((SECONDS < deadline)) || die "SUT processes survived termination"
     sleep 1
+  done
+}
+
+artifact_metadata() {
+  local phase="$1" workspace="$2" lane="$3" path metadata
+  printf 'performance-export phase=%s uid=%s gid=%s workspace=%s\n' \
+    "$phase" "$(id -u)" "$(id -g)" "$(printf '%s' "$workspace" | sha256sum | cut -d' ' -f1)"
+  for path in .artifacts .artifacts/performance-crabbox ".artifacts/performance-crabbox/$lane" \
+    ".artifacts/performance-crabbox/$lane/payload.tar.gz" \
+    ".artifacts/performance-crabbox/$lane/remote-evidence.json"; do
+    metadata="$(stat -c 'uid=%u gid=%g mode=%a size=%s' "$workspace/$path" 2>/dev/null || printf unavailable)"
+    printf 'performance-export path=%s %s readable=%s searchable=%s\n' "$path" "$metadata" \
+      "$([[ -r "$workspace/$path" ]] && echo true || echo false)" \
+      "$([[ -x "$workspace/$path" ]] && echo true || echo false)"
   done
 }
 
@@ -235,6 +428,7 @@ write_payload() {
   case "$lane" in
     mock-provider | mock-deep-profile)
       paths=(
+        ".artifacts/kova/plans/$lane.json"
         ".artifacts/kova/reports/$lane"
         ".artifacts/kova/bundles/$lane"
         ".artifacts/kova/summaries/$lane.md"
@@ -244,7 +438,7 @@ write_payload() {
     *) die "unsupported payload lane $lane" ;;
   esac
 
-  install -d -m 0755 "$output"
+  [[ -d "$output" && ! -L "$output" ]] || die "collector export directory was not prepared"
   : > "$manifest"
   local file_count=0 total_bytes=0 path file rel size sha
   for path in "${paths[@]}"; do
@@ -252,21 +446,25 @@ write_payload() {
     while IFS= read -r -d '' file; do
       [[ ! -L "$file" ]] || die "artifact symlinks are forbidden"
       rel="${file#"$root/openclaw/"}"
-      [[ "$rel" == .artifacts/* && "$rel" != *"/../"* ]] || die "unsafe artifact path $rel"
-      size="$(file_size "$file")"
+      [[ "$rel" =~ ^\.artifacts/[A-Za-z0-9._/-]+$ && "$rel" != *"/../"* ]] ||
+        die "unsafe artifact path"
+      [[ "$(as_sut /usr/bin/realpath "$file")" == "$file" ]] || die "artifact symlink ancestors are forbidden"
+      size="$(as_sut /usr/bin/stat -c %s "$file")"
       ((size > 0 && size <= MAX_ARTIFACT_FILE_BYTES)) || die "artifact size is out of bounds: $rel"
-      sha="$(file_sha256 "$file")"
+      sha="$(as_sut /usr/bin/sha256sum "$file" | cut -d' ' -f1)"
       jq -cn --arg path "$rel" --argjson size "$size" --arg sha256 "$sha" \
         '{path:$path,size:$size,sha256:$sha256}' >> "$manifest"
       file_count=$((file_count + 1))
       total_bytes=$((total_bytes + size))
-    done < <(find "$root/openclaw/$path" -type f -print0 | sort -z)
+      ((file_count <= MAX_ARTIFACT_FILES && total_bytes <= MAX_ARTIFACT_BYTES)) ||
+        die "artifact payload is too large"
+    done < <(as_sut /usr/bin/find "$root/openclaw/$path" -type f -print0 | sort -z)
   done
   ((file_count > 0 && file_count <= MAX_ARTIFACT_FILES)) || die "artifact file count is out of bounds"
   ((total_bytes <= MAX_ARTIFACT_BYTES)) || die "artifact payload is too large"
   jq -sr 'sort_by(.path)' "$manifest" > "$output/artifacts.json"
-  jq -r '.[].path' "$output/artifacts.json" |
-    tar -C "$root/openclaw" -czf "$payload" -T -
+  jq -jr '.[] | .path + "\u0000"' "$output/artifacts.json" |
+    as_sut /usr/bin/tar --dereference -C "$root/openclaw" -czf - --null --verbatim-files-from -T - > "$payload"
 
   jq -n \
     --arg lane "$lane" --arg testedRef "$tested_ref" \
@@ -296,20 +494,29 @@ write_payload() {
       lease:{provider:"aws",market:"on-demand",cleanupPolicy:"always"}
     }' > "$output/remote-evidence.json"
   rm -f "$manifest" "$output/artifacts.json"
-  chmod -R a+rX "$output"
+  chmod 0644 "$payload" "$output/remote-evidence.json"
+  artifact_metadata producer "$control_workspace" "$lane"
 }
 
 remote_main() {
-  (($# == 14)) || die "remote mode requires 14 arguments"
+  (($# == 16)) || die "remote mode requires 16 arguments"
   local lane="$1" openclaw_sha="$2" kova_sha="$3" workflow_sha="$4" tested_ref="$5"
   local profile="$6" repeat="$7" contract="$8" include_filters="$9"
   local expected_entries="${10}" fail_on_regression="${11}" run_id="${12}" run_attempt="${13}"
   local crabbox_version="${14}"
+  local model="${15}" require_instrumented="${16}"
+  case "$lane" in
+    source | mock-provider | mock-deep-profile | cleanup-probe) ;;
+    *) die "unsupported lane $lane" ;;
+  esac
   require_sha openclaw_sha "$openclaw_sha"
   require_sha kova_sha "$kova_sha"
   require_sha workflow_sha "$workflow_sha"
   require_scalar tested_ref "$tested_ref"
   require_scalar crabbox_version "$crabbox_version"
+  require_scalar model "$model"
+  [[ "$require_instrumented" == true || "$require_instrumented" == false ]] ||
+    die "instrumented contract requirement must be boolean"
   [[ "$repeat" =~ ^[1-9][0-9]*$ ]] || die "repeat must be positive"
 
   if ((EUID != 0)); then
@@ -318,9 +525,18 @@ remote_main() {
     root_script="/usr/local/libexec/openclaw-performance-${self_sha}.sh"
     control_workspace="$(dirname "$(dirname "$(dirname "$(realpath "$0")")")")"
     [[ -d "$control_workspace/.crabbox/scripts" ]] || die "Crabbox workspace is invalid"
-    exec sudo /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c \
+    # The SSH collector must own each private ancestor before root writes the payload.
+    local path status=0
+    for path in .artifacts .artifacts/performance-crabbox ".artifacts/performance-crabbox/$lane"; do
+      [[ ! -L "$control_workspace/$path" ]] || die "collector export path is a symlink"
+      install -d -m 0700 "$control_workspace/$path"
+    done
+    artifact_metadata collector-before "$control_workspace" "$lane"
+    sudo /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash -c \
       'install -D -o root -g root -m 0755 "$1" "$2"; workspace=$3; shift 3; cd "$workspace"; exec "$0" "$@"' \
-      "$root_script" "$0" "$root_script" "$control_workspace" remote "$@"
+      "$root_script" "$0" "$root_script" "$control_workspace" remote "$@" || status=$?
+    artifact_metadata collector-after "$control_workspace" "$lane"
+    return "$status"
   fi
   [[ "$0" == /usr/local/libexec/openclaw-performance-*.sh ]] || die "root harness is not installed"
   [[ "$(stat -c '%U:%G:%a' "$0")" == "root:root:755" ]] || die "root harness ownership is invalid"
@@ -333,6 +549,14 @@ remote_main() {
   rm -rf "$root"
   install -d -m 0755 "$root"
   install_toolchain
+  local helpers="/usr/local/libexec/openclaw-performance-helpers"
+  local helper
+  for helper in lib/kova-report-selector.mjs lib/kova-workflow-evidence.mjs \
+    lib/kova-report-gate.mjs kova-ci-summary.mjs bench-cli-startup.mjs \
+    openclaw-performance-source-summary.mjs; do
+    install -D -o root -g root -m 0644 \
+      "$control_workspace/.artifacts/performance-control/helpers/$helper" "$helpers/$helper"
+  done
   prepare_sut
   clone_exact openclaw/openclaw "$openclaw_sha" "$root/openclaw"
   clone_exact openclaw/Kova "$kova_sha" "$root/kova"
@@ -340,7 +564,7 @@ remote_main() {
   set +e
   as_sut "$(realpath "$0")" __sut \
     "$lane" "$root" "$profile" "$repeat" "$contract" "$include_filters" \
-    "$expected_entries" "$fail_on_regression"
+    "$expected_entries" "$fail_on_regression" "$helpers" "$model" "$require_instrumented"
   status=$?
   set -e
   quiesce_sut
@@ -402,6 +626,9 @@ confirm_stop() {
 }
 
 case "${1:-}" in
+  build-helpers)
+    build_helpers
+    ;;
   remote)
     shift
     remote_main "$@"
@@ -419,6 +646,6 @@ case "${1:-}" in
     confirm_stop "$@"
     ;;
   *)
-    die "usage: $0 remote|verify|confirm-stop ..."
+    die "usage: $0 build-helpers|remote|verify|confirm-stop ..."
     ;;
 esac

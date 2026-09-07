@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve as resolvePath } from "node:path";
+import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -128,14 +128,9 @@ function runCandidateTrustClassification({
   return { outputs, result };
 }
 
-function runTargetResolution(contractStatus: "ahead" | "behind") {
-  const step = findStep("Resolve OpenClaw target ref", "resolve_target");
-  const root = tempDirs.make("openclaw-performance-resolve-");
+function createGitHubResolutionStub(root: string) {
   const bin = join(root, "bin");
-  const output = join(root, "output");
   const gh = join(bin, "gh");
-  const canonicalRef = "a".repeat(40);
-  const legacyRef = "b".repeat(40);
   mkdirSync(bin, { recursive: true });
   writeFileSync(
     gh,
@@ -149,6 +144,19 @@ esac
 `,
   );
   chmodSync(gh, 0o755);
+  return bin;
+}
+
+function runTargetResolution(
+  contractStatus: "ahead" | "behind" | "diverged",
+  contractOverride = "",
+) {
+  const step = findStep("Resolve OpenClaw target ref", "resolve_target");
+  const root = tempDirs.make("openclaw-performance-resolve-");
+  const bin = createGitHubResolutionStub(root);
+  const output = join(root, "output");
+  const canonicalRef = "a".repeat(40);
+  const legacyRef = "b".repeat(40);
   const result = spawnSync("bash", ["-c", step.run ?? ""], {
     encoding: "utf8",
     env: {
@@ -159,7 +167,7 @@ esac
       GITHUB_REF_NAME: "main",
       GITHUB_REPOSITORY: "openclaw/openclaw",
       KOVA_CANONICAL_CONFIG_REF: canonicalRef,
-      KOVA_CONFIG_CONTRACT_INPUT: "",
+      KOVA_CONFIG_CONTRACT_INPUT: contractOverride,
       KOVA_LEGACY_LIST_CONFIG_REF: legacyRef,
       KOVA_TRUSTED_LIVE_REF: canonicalRef,
       KOVA_REF_INPUT: "",
@@ -268,7 +276,12 @@ describe("OpenClaw performance workflow", () => {
     const guard = jobs?.vitest_pair_guard;
     const verify = findStep("Verify isolated Vitest pair result", "vitest_pair_guard");
 
-    for (const name of ["resolve_target", "kova", "source_performance", "external_performance"] as const) {
+    for (const name of [
+      "resolve_target",
+      "kova",
+      "source_performance",
+      "external_performance",
+    ] as const) {
       expect(jobs?.[name]?.if).toContain("inputs.mode != 'vitest-pair'");
     }
     expect(jobs?.publish?.if).toContain("inputs.mode != 'vitest-pair'");
@@ -384,12 +397,32 @@ describe("OpenClaw performance workflow", () => {
     expect(outputs.kova_config_contract).toBe("legacy-list");
   });
 
+  it.each(["", "canonical", "legacy-list"])(
+    "requires explicit contract evidence for divergent targets (override: %s)",
+    (override) => {
+      const { canonicalRef, legacyRef, outputs, result } = runTargetResolution(
+        "diverged",
+        override,
+      );
+      if (!override) {
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("set kova_config_contract explicitly");
+        expect(outputs).toEqual({});
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+        expect(outputs.kova_config_contract).toBe(override);
+        expect(outputs.kova_ref).toBe(override === "canonical" ? canonicalRef : legacyRef);
+      }
+    },
+  );
+
   it("keeps live credentials away from custom Kova refs", () => {
     const resolveTarget = findStep("Resolve OpenClaw target ref", "resolve_target");
     const decideLane = findStep("Decide lane");
     const configureLiveAuth = findStep("Configure live OpenAI auth");
     const runKova = findStep("Run Kova");
     const root = mkdtempSync(join(realpathSync(tmpdir()), "openclaw-kova-live-ref-"));
+    const bin = createGitHubResolutionStub(root);
     const trustedRef = "1fe2f4081877bb12b7f7ed355349f98b8a0a6882";
     const compatibleUntrustedRef = "0f9e678e239b45db46d2bd930b7983203580df78";
     const decideLaneRun = (decideLane.run ?? "")
@@ -406,13 +439,15 @@ describe("OpenClaw performance workflow", () => {
           ...process.env,
           GITHUB_OUTPUT: resolveOutput,
           GITHUB_REF_NAME: "fix/kova-runtime-major-baseline",
+          GITHUB_REPOSITORY: "openclaw/openclaw",
           KOVA_CANONICAL_CONFIG_REF: compatibleUntrustedRef,
           KOVA_CONFIG_CONTRACT_INPUT: "canonical",
           KOVA_LEGACY_LIST_CONFIG_REF: compatibleUntrustedRef,
           KOVA_REF_INPUT: kovaRef,
           KOVA_TRUSTED_LIVE_REF: trustedRef,
-          TARGET_CHECKOUT_DIR: process.cwd(),
-          CI_GIT_OWNER: resolvePath(".github/actions/git-owner/owner.py"),
+          KOVA_REPOSITORY: "openclaw/Kova",
+          PATH: `${bin}:${process.env.PATH ?? ""}`,
+          TARGET_SHA: "c".repeat(40),
           TARGET_REF_INPUT: "test-head",
         },
       });
