@@ -1,7 +1,7 @@
 // Memory Core plugin module implements the synchronous sqlite-vec KNN query body.
 import type { DatabaseSync } from "node:sqlite";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/utf16-slice-runtime";
 import { vectorToBlob } from "./vector-blob.js";
 
 const VECTOR_KNN_OVERSAMPLE_FACTOR = 8;
