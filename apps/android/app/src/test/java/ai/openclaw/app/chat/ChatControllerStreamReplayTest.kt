@@ -244,7 +244,7 @@ class ChatControllerStreamReplayTest {
             assertEquals(status, 1, controller.pendingRunCount.value)
             assertEquals(status, "Original output", controller.streamingAssistantText.value)
             assertEquals(status, originalTools, controller.pendingToolCalls.value)
-            if (status != "ok") assertEquals("Chat failed before the run started; try again.", controller.errorText.value)
+            if (status != "ok") assertEquals("OpenClaw request failed.", controller.errorText.value)
           } finally {
             release.complete(Unit)
           }

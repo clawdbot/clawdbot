@@ -2,10 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi, type Mock } from "vitest";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
 import * as startRepair from "../daemon-cli/start-repair.js";
+import type { UpdateCommandOptions } from "./shared.js";
+import { runUpdateFinalizationDoctorInFreshProcess } from "./update-command-fresh-doctor.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import {
   maybeRestartService,
@@ -15,6 +18,7 @@ import {
 
 type InstallRootTransitionFixture = {
   root: string;
+  run: NonNullable<UpdateCommandOptions["run"]>;
   mocks: {
     running: boolean;
     events: string[];
@@ -46,7 +50,7 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
   ] as const)(
     "refreshes a verified installed root with $scenario",
     async ({ scenario, mode, allowed }) => {
-      const { root, mocks } = getFixture();
+      const { root, run, mocks } = getFixture();
       const replacementRoot = path.join(root, "replacement");
       const replacementEntry = path.join(replacementRoot, "dist", "index.js");
       await fs.mkdir(path.dirname(replacementEntry), { recursive: true });
@@ -178,7 +182,7 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
           steps: [],
           durationMs: 0,
         },
-        opts: { json: true },
+        opts: { json: true, run },
         refreshServiceEnv: true,
         serviceUpdateVerdict: verdict,
         serviceEnv: state.env,
@@ -217,6 +221,7 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
 export function registerRestartOutcomeTests(
   getFixture: () => {
     root: string;
+    run: NonNullable<UpdateCommandOptions["run"]>;
     mocks: Pick<
       InstallRootTransitionFixture["mocks"],
       "child" | "health" | "configSnapshot" | "capability"
@@ -245,7 +250,7 @@ export function registerRestartOutcomeTests(
   ])(
     "carries the real lifecycle's serialized %s result through a child process",
     async (scenario, expected) => {
-      const { root, mocks } = getFixture();
+      const { root, run, mocks } = getFixture();
       const repairing = scenario.startsWith("repair ");
       if (repairing) {
         vi.spyOn(restartRepairOwner, "repairLoadedGatewayServiceForStart").mockResolvedValueOnce({
@@ -298,7 +303,7 @@ export function registerRestartOutcomeTests(
         await maybeRestartService({
           shouldRestart: true,
           result: { status: "ok", mode: "npm", root, steps: [], durationMs: 0 },
-          opts: { json: false },
+          opts: { json: false, run },
           refreshServiceEnv: false,
           serviceUpdateVerdict: {
             kind: "owned",
@@ -389,6 +394,164 @@ export function registerRestartOutcomeTests(
         name: scenario === "health" ? "GatewayRestartHealthError" : "Error",
       });
       expect(mocks.child.mock.lastCall?.[0]).toContain("--json");
+    },
+  );
+}
+
+type PluginMaintenanceFixture = InstallRootTransitionFixture & {
+  writeConfig: (version: string) => Promise<void>;
+  mocks: { log: Mock; start: Mock; restart: Mock; doctor: Mock };
+};
+
+export function registerPluginMaintenanceTests(getFixture: () => PluginMaintenanceFixture) {
+  it.each(
+    (["git", "npm"] as const).flatMap((mode) =>
+      (["stopped", "not-loaded", "unverified", "failed"] as const).map((stopResult) => ({
+        mode,
+        stopResult,
+      })),
+    ),
+  )(
+    "delegates $mode activation and post-handoff plugin maintenance after candidate doctor stamps newer config ($stopResult)",
+    async ({ mode, stopResult }) => {
+      const { root, run, mocks, writeConfig } = getFixture();
+      const before = await maybeStopManagedServiceBeforeMutableUpdate({
+        updateInstallKind: mode === "git" ? "git" : "package",
+        root,
+        shouldRestart: true,
+        jsonMode: true,
+      });
+      expect(before.stopped).toBe(true);
+      mocks.events.push("core updated");
+      await writeConfig("9999.1.1");
+      mocks.events.push("candidate doctor stamped config");
+      const service = resolveGatewayService();
+      const state = await readGatewayServiceState(service, { requireEffective: true });
+      const verdict = await revalidateManagedGatewayServiceAfterUpdate({
+        state,
+        root,
+        preManagedServiceStop: before,
+      });
+
+      const activated = await maybeRestartService({
+        shouldRestart: true,
+        result: {
+          status: "ok",
+          mode,
+          root,
+          steps: [],
+          durationMs: 0,
+          before: { version: VERSION },
+          after: { version: "9999.1.1" },
+        },
+        opts: { run },
+        refreshServiceEnv: false,
+        serviceUpdateVerdict: verdict,
+        serviceEnv: state.env,
+        gatewayPort: 19305,
+        requireRunningServiceAfterRestart: true,
+        timeoutMs: 1000,
+      });
+
+      expect(activated, mocks.log.mock.calls.flat().join("\n")).toBe("ok");
+      expect(mocks.events).toEqual([
+        "native stop",
+        "core updated",
+        "candidate doctor stamped config",
+        "fresh CLI restart",
+      ]);
+      const child = mocks.child.mock.calls[0];
+      expect(child?.[0].slice(1)).toEqual([
+        path.join(root, "dist", "index.js"),
+        "gateway",
+        "restart",
+        "--preserve-definition",
+        "--json",
+      ]);
+      expect(mocks.health.mock.calls[0]?.[0]).toMatchObject({
+        port: 19305,
+        expectedVersion: "9999.1.1",
+        requireRunningService: true,
+      });
+      expect(mocks.start).not.toHaveBeenCalled();
+      expect(mocks.restart).not.toHaveBeenCalled();
+      expect(mocks.doctor).not.toHaveBeenCalled();
+      // The old adapter still refuses the same config: delegation must not weaken its guard.
+      await expect(service.restart({ env: state.env, stdout: process.stdout })).rejects.toThrow(
+        "older than the config",
+      );
+
+      process.env.OPENCLAW_UPDATE_RUN_HANDOFF = "1";
+      mocks.child.mockImplementation(async () => {
+        mocks.events.push("fresh CLI stop");
+        mocks.running = false;
+        return {
+          code: stopResult === "failed" ? 1 : 0,
+          stdout:
+            stopResult === "unverified"
+              ? ""
+              : JSON.stringify({
+                  action: "stop",
+                  ok: stopResult !== "failed",
+                  result: stopResult,
+                }),
+          stderr: "",
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      });
+      const maintenance = maybeStopManagedServiceBeforeMutableUpdate({
+        root,
+        updateInstallKind: mode === "git" ? "git" : "package",
+        shouldRestart: true,
+        jsonMode: true,
+        expectedService: { serviceEnv: state.env, serviceUpdateVerdict: verdict },
+        activatedInstall: { packageUpdateNodeRunner: process.execPath },
+        timeoutMs: 1000,
+      });
+      if (stopResult === "unverified" || stopResult === "failed") {
+        await expect(maintenance).rejects.toThrow(
+          stopResult === "unverified"
+            ? "did not confirm the service stopped"
+            : "updated install stop failed",
+        );
+        return;
+      }
+      expect((await maintenance).stopped).toBe(true);
+      expect(mocks.child.mock.lastCall?.[0]).toEqual([
+        process.execPath,
+        path.join(root, "dist", "index.js"),
+        "gateway",
+        "stop",
+        "--force",
+        "--json",
+      ]);
+      expect(mocks.child.mock.lastCall?.[1]).toMatchObject({ cwd: root });
+      vi.mocked(runExec).mockResolvedValueOnce({ stdout: "", stderr: "" });
+      await runUpdateFinalizationDoctorInFreshProcess({
+        root,
+        phase: "post-plugin",
+        yes: true,
+        json: true,
+        timeoutMs: 1000,
+      });
+      expect(runExec).toHaveBeenLastCalledWith(
+        process.execPath,
+        [
+          path.join(root, "dist", "index.js"),
+          "doctor",
+          "--repair",
+          "--non-interactive",
+          "--no-workspace-suggestions",
+          "--yes",
+        ],
+        expect.objectContaining({ cwd: root }),
+      );
+      // Delegation must leave the stale parent's destructive-action guard intact.
+      await expect(service.stop({ env: state.env, stdout: process.stdout })).rejects.toThrow(
+        "older than the config",
+      );
     },
   );
 }

@@ -28,6 +28,7 @@ function createResultFixture(params?: {
   didSendViaMessagingTool?: boolean;
   yieldDetected?: boolean;
   yieldAcknowledgment?: string;
+  assistantTexts?: readonly string[];
   toolMetas?: Array<{
     toolName: string;
     toolCallId?: string;
@@ -71,7 +72,7 @@ function createResultFixture(params?: {
     messagesSnapshot: settled.messagesSnapshot,
   };
   const subscription = {
-    assistantTexts: [],
+    assistantTexts: [...(params?.assistantTexts ?? [])],
     didSendDeterministicApprovalPrompt: () => false,
     didSendViaMessagingTool: () => params?.didSendViaMessagingTool ?? false,
     getAcceptedSessionSpawns: () => [],
@@ -316,6 +317,12 @@ describe("attempt result projection", () => {
       expected: false,
     },
     {
+      label: "openai-completions truncated stream",
+      source: "prompt" as const,
+      error: new Error("Stream ended without finish_reason"),
+      expected: true,
+    },
+    {
       label: "precheck socket failure",
       source: "precheck" as const,
       error: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
@@ -361,6 +368,12 @@ describe("attempt result projection", () => {
       errorCode: undefined,
       expected: false,
     },
+    {
+      label: "an incomplete completions stream",
+      errorMessage: "Stream ended without finish_reason",
+      errorCode: undefined,
+      expected: true,
+    },
   ])(
     "captures settled-turn context from $label reported by the provider assistant=$expected",
     ({ errorMessage, errorCode, expected }) => {
@@ -371,6 +384,67 @@ describe("attempt result projection", () => {
           ...(errorCode ? { errorCode } : {}),
         }),
         messagesSnapshot: settledToolMessages(),
+      });
+
+      expect(Boolean(result.settledTurnFinalizationContext)).toBe(expected);
+    },
+  );
+
+  it.each([
+    {
+      label: "only pre-tool commentary",
+      assistantTexts: ["Checking the post-reboot state."],
+      messagesSnapshot: [
+        makeAssistantMessageFixture({
+          stopReason: "toolUse",
+          errorMessage: undefined,
+          timestamp: 1,
+          content: [
+            { type: "text", text: "Checking the post-reboot state." },
+            { type: "toolCall", id: "call-read", name: "read", arguments: {} },
+          ],
+        }),
+        ...settledToolMessages(),
+        makeAssistantMessageFixture({
+          stopReason: "error",
+          errorMessage: "Stream ended without finish_reason",
+          timestamp: 3,
+          content: [],
+        }),
+      ],
+      expected: true,
+    },
+    {
+      label: "unattributed visible text",
+      assistantTexts: ["here is the answer"],
+      messagesSnapshot: settledToolMessages(),
+      expected: false,
+    },
+    {
+      label: "post-tool authored text",
+      assistantTexts: ["here is the answer"],
+      messagesSnapshot: [
+        ...settledToolMessages(),
+        makeAssistantMessageFixture({
+          stopReason: "stop",
+          errorMessage: undefined,
+          timestamp: 2,
+          content: [{ type: "text", text: "here is the answer" }],
+        }),
+      ],
+      expected: false,
+    },
+  ])(
+    "keeps truncated-stream settled recovery for $label=$expected",
+    ({ assistantTexts, messagesSnapshot, expected }) => {
+      const result = completeResult({
+        terminal: {
+          kind: "failed",
+          source: "prompt",
+          error: new Error("Stream ended without finish_reason"),
+        },
+        assistantTexts,
+        messagesSnapshot,
       });
 
       expect(Boolean(result.settledTurnFinalizationContext)).toBe(expected);

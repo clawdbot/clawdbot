@@ -103,13 +103,18 @@ export function isCompletionReportInputProvenance(value: unknown): boolean {
     return false;
   }
   const sourceTool = normalizeOptionalString(provenance.sourceTool)?.toLowerCase();
-  return sourceTool === "subagent_announce" || isAgentMediatedCompletionSourceTool(sourceTool);
+  return (
+    sourceTool === "subagent_announce" ||
+    sourceTool === "subagent_settle" ||
+    isAgentMediatedCompletionSourceTool(sourceTool)
+  );
 }
 
 const USER_FACING_SESSION_STATE_PRESERVING_SOURCE_TOOLS: ReadonlySet<string> = new Set([
   ...AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS,
   "exec_approval_followup",
   "subagent_announce",
+  "subagent_settle",
   "subagent_interrupted_resume",
 ]);
 

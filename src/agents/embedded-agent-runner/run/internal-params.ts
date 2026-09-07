@@ -2,6 +2,7 @@ import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/se
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../prepared-model-runtime.types.js";
+import type { CompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
 import type { DeferredEmbeddedRunLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -32,6 +33,7 @@ export type CompactionAccountingFact = Readonly<
 >;
 
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
+  onCompactionRequestBudget?: (budget: CompactionRequestBudget | undefined) => void;
   onCompactionAccounting?: (fact: CompactionAccountingFact | undefined) => void;
   /** Attempt-local context observer, installed by the host loop before dispatch. */
   onContextAccountingEvent?: (event: EmbeddedContextAccountingEvent) => void;
@@ -54,7 +56,7 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
 };
 
 export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
-  Pick<RunEmbeddedAgentInternalParams, "onContextAccountingEvent"> & {
+  Pick<RunEmbeddedAgentInternalParams, "onContextAccountingEvent" | "onCompactionRequestBudget"> & {
     compactionCountOwner?: "subscription" | "caller";
   };
 

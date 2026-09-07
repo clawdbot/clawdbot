@@ -477,7 +477,7 @@ export function renderRecentSession(params: {
       <span class="sidebar-recent-session__aside session-row-aside">
         <span class="session-row-actions">
           ${
-            session.isChild
+            !session.pinnable
               ? nothing
               : html`<button
                   class="session-action session-action--pin"

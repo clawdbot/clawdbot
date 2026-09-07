@@ -309,7 +309,7 @@ export async function consumeAnthropicStream(params: {
         pendingThinkingSignatures.delete(index);
         if (contentBlock?.type === "text") {
           const text =
-            managed && typeof contentBlock.text === "string"
+            typeof contentBlock.text === "string"
               ? sanitizeTransportPayloadText(contentBlock.text)
               : "";
           const block: AnthropicStreamBlock = { type: "text", text, index };
@@ -332,13 +332,12 @@ export async function consumeAnthropicStream(params: {
           continue;
         }
         if (contentBlock?.type === "thinking") {
-          const thinking =
-            managed && typeof contentBlock.thinking === "string" ? contentBlock.thinking : "";
+          const thinking = typeof contentBlock.thinking === "string" ? contentBlock.thinking : "";
           const block: AnthropicStreamBlock = {
             type: "thinking",
             thinking,
             thinkingSignature:
-              managed && typeof contentBlock.signature === "string" ? contentBlock.signature : "",
+              typeof contentBlock.signature === "string" ? contentBlock.signature : "",
             index,
           };
           output.content.push(block);
@@ -526,13 +525,10 @@ export async function consumeAnthropicStream(params: {
           delta?.type === "signature_delta" &&
           typeof delta.signature === "string"
         ) {
-          if (!managed) {
-            block.thinkingSignature = (block.thinkingSignature || "") + delta.signature;
-            continue;
-          }
           const signatureIndex = eventIndexKey(event.index);
           const pendingSignature = pendingThinkingSignatures.get(signatureIndex);
           if (pendingSignature === undefined) {
+            // The streamed signature replaces any seed from content_block_start.
             block.thinkingSignature = "";
             pendingThinkingSignatures.set(signatureIndex, delta.signature);
           } else {

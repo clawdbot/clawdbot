@@ -24,6 +24,7 @@ import type {
 } from "./agent-session-types.js";
 import { replaceAgentMessageInPlace } from "./agent-session-utils.js";
 import { formatNoApiKeyFoundMessage } from "./auth-guidance.js";
+import type { CompactionRequestBudget } from "./compaction/request-budget.js";
 import {
   type ExtensionCommandContextActions,
   type ExtensionErrorListener,
@@ -880,6 +881,7 @@ export abstract class AgentSessionBase {
   protected abstract checkCompaction(
     assistantMessage: AssistantMessage,
     skipAbortedCheck?: boolean,
+    requestBudget?: CompactionRequestBudget,
   ): Promise<boolean>;
   abstract abortRetry(): void;
   abstract abortCompaction(): void;

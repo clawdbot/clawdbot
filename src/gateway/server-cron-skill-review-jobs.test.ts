@@ -36,6 +36,103 @@ function monitorJob(agentId: string, id = `job-${agentId}`): CronJob {
 }
 
 describe("reconcileSkillCollectionReviewJobs", () => {
+  it.each(["duplicate", "add", "stale"] as const)(
+    "lets the event loop progress between %s attempts after a row failure",
+    async (phase) => {
+      let progressed = false;
+      let checkpoint: Promise<void> | undefined;
+      const observed: Array<{ id: string; progressed: boolean }> = [];
+      const recordAttempt = (id: string) => {
+        observed.push({ id, progressed });
+        if (observed.length === 1) {
+          checkpoint = new Promise((resolve) => {
+            setImmediate(() => {
+              progressed = true;
+              resolve();
+            });
+          });
+          throw new Error("first mutation failed");
+        }
+      };
+      const add = vi.fn(async (input: { agentId: string }) => {
+        if (phase === "add") {
+          recordAttempt(input.agentId);
+        }
+        return monitorJob(input.agentId);
+      });
+      const remove = vi.fn(async (id: string) => {
+        if ((phase === "duplicate" && id.startsWith("duplicate-")) || phase === "stale") {
+          recordAttempt(id);
+        }
+        return { ok: true, removed: true };
+      });
+      const jobs =
+        phase === "duplicate"
+          ? [
+              monitorJob("a"),
+              ...["one", "two", "three"].map((id) => monitorJob("a", `duplicate-${id}`)),
+            ]
+          : phase === "stale"
+            ? [monitorJob("old-a"), monitorJob("old-b"), monitorJob("old-c")]
+            : [];
+      try {
+        const result = await reconcileSkillCollectionReviewJobs({
+          cron: { add, remove, list: vi.fn(async () => jobs) } as never,
+          cfg: { agents: { ownership: "explicit", entries: { a: {}, b: {}, c: {} } } },
+          logger,
+        });
+        expect(result).toEqual({ ok: false });
+        const ids =
+          phase === "duplicate"
+            ? ["duplicate-one", "duplicate-two", "duplicate-three"]
+            : phase === "stale"
+              ? ["job-old-a", "job-old-b", "job-old-c"]
+              : ["a", "b", "c"];
+        expect(observed).toEqual(ids.map((id, index) => ({ id, progressed: index > 0 })));
+      } finally {
+        await checkpoint;
+      }
+    },
+  );
+
+  it("rejects stale authority after yielding before another cleanup call", async () => {
+    const revoked = new Error("reconciliation revoked");
+    let current = true;
+    let checkpoint: Promise<void> | undefined;
+    const commitGuard = () => {
+      if (!current) {
+        throw revoked;
+      }
+    };
+    const remove = vi.fn(async (_id: string, options?: { commitGuard?: () => void }) => {
+      options?.commitGuard?.();
+      checkpoint ??= new Promise((resolve) => {
+        setImmediate(() => {
+          current = false;
+          resolve();
+        });
+      });
+      return { ok: true, removed: true };
+    });
+    try {
+      await expect(
+        reconcileSkillCollectionReviewJobs({
+          cron: {
+            remove,
+            add: vi.fn(async () => monitorJob("main")),
+            list: vi.fn(async () => [monitorJob("stale-a"), monitorJob("stale-b")]),
+          } as never,
+          cfg: { agents: { entries: { main: {} } } },
+          logger,
+          commitGuard,
+        }),
+      ).rejects.toBe(revoked);
+      expect(remove).toHaveBeenCalledTimes(1);
+    } finally {
+      await checkpoint;
+    }
+  });
+
   it("adds desired monitors, keeps disabled rows, and prunes stale monitors", async () => {
     const add = vi.fn(
       async (

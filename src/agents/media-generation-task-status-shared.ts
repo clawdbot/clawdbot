@@ -10,11 +10,13 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getRuntimeConfig } from "../config/config.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { listFreshTasksForOwnerKey } from "../tasks/runtime-internal.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
+import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 import { buildSessionAsyncTaskStatusDetails } from "./session-async-task-status.js";
 
 /** Marks media as ready while requester delivery is still being confirmed. */
@@ -498,35 +500,43 @@ function buildMediaGenerationTaskStatusListText(params: {
   return lines.join("\n");
 }
 
-/** Builds prompt context warning an agent about an active media generation task. */
+/** Builds bounded current-turn facts without instructions or elapsed-time fields. */
 function buildActiveMediaGenerationTaskPromptContextForSession(params: {
   sessionKey?: string;
   agentId?: string;
   taskKind: string;
   sourcePrefix: string;
-  nounLabel: string;
-  toolName: string;
-  completionLabel: string;
 }): string | undefined {
-  const task = findActiveMediaGenerationTaskForSession({
+  const tasks = listActiveMediaGenerationTasksForSession({
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     taskKind: params.taskKind,
     sourcePrefix: params.sourcePrefix,
     excludeDeliveringCompletion: true,
   });
-  if (!task) {
+  if (tasks.length === 0) {
     return undefined;
   }
-  const provider = getMediaGenerationTaskProviderId(task, params.sourcePrefix);
-  const lines = [
-    `An active ${normalizeLowercaseStringOrEmpty(params.nounLabel)} background task already exists for this session.`,
-    `Task ${task.taskId} is currently ${task.status}${provider ? ` via ${provider}` : ""}.`,
-    task.progressSummary ? `Current progress: ${task.progressSummary}.` : null,
-    `Do not call \`${params.toolName}\` again for the same request while that task is queued or running.`,
-    `If the user asks for progress or whether the work is async, explain the active task state or call \`${params.toolName}\` with \`action:"status"\` instead of starting a new generation.`,
-    `Only start a new \`${params.toolName}\` call if the user clearly asks for different/new ${params.completionLabel}.`,
-  ].filter((entry): entry is string => Boolean(entry));
+  const boundedLiteral = (value: string, maxChars: number) =>
+    truncateUtf16Safe(sanitizeForPromptLiteral(value), maxChars);
+  const lines = tasks
+    .toSorted((a, b) => (a.taskId < b.taskId ? -1 : a.taskId > b.taskId ? 1 : 0))
+    .slice(0, 8)
+    .map((task) => {
+      const provider = getMediaGenerationTaskProviderId(task, params.sourcePrefix);
+      return [
+        `- tool=${params.sourcePrefix}`,
+        `task=${boundedLiteral(task.taskId, 128)}`,
+        `status=${task.status}`,
+        ...(provider ? [`provider_json=${JSON.stringify(boundedLiteral(provider, 128))}`] : []),
+        ...(task.progressSummary
+          ? [`progress_json=${JSON.stringify(boundedLiteral(task.progressSummary, 320))}`]
+          : []),
+      ].join("; ");
+    });
+  if (tasks.length > lines.length) {
+    lines.push(`- additional_tasks=${tasks.length - lines.length}`);
+  }
   return lines.join("\n");
 }
 
@@ -598,10 +608,8 @@ export function createMediaGenerationTaskStatusOwner(params: {
     buildActiveTaskPromptContextForSession(this: void, sessionKey?: string, agentId?: string) {
       return buildActiveMediaGenerationTaskPromptContextForSession({
         ...taskIdentity,
-        ...taskPresentation,
         sessionKey,
         agentId,
-        completionLabel: params.promptCompletionLabel,
       });
     },
   };

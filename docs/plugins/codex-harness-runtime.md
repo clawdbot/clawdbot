@@ -56,8 +56,13 @@ OpenClaw developer instructions cover OpenClaw runtime concerns: source-channel
 delivery, OpenClaw dynamic tools, ACP delegation, adapter context, and the
 active agent workspace profile files. Skill catalogs and tool-routed
 `MEMORY.md` pointers are projected as turn-scoped collaboration developer
-instructions. When memory tools are unavailable, active `BOOTSTRAP.md` content
-and full `MEMORY.md` fall back to plain turn input context instead.
+instructions. Active `BOOTSTRAP.md` and, when memory tools are unavailable,
+bounded `MEMORY.md` content travel as plain turn input references. They are
+introduced on a new native thread, after a cold resume or native compaction,
+and when their rendered content changes. Consecutive warm turns omit unchanged
+references once the complete block has been submitted. References dropped or
+truncated by prompt fitting are introduced again on a later turn. Process-local
+tracking resets when the Gateway restarts.
 
 Delivery mode and the current message target requirement arrive as compact
 application context before each user turn. They explicitly supersede earlier

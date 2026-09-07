@@ -60,6 +60,17 @@ them with `listMessageReceiptPlatformIds(...)` or
 `resolveMessageReceiptPrimaryId(...)` instead of keeping parallel `messageIds`
 fields.
 
+For turn adapters that aggregate confirmed visible sends, use
+`createAcceptedChannelDeliveryResult(...)` from
+`openclaw/plugin-sdk/channel-inbound`. It combines native `results` followed by
+logical `deliveryResults`, including a partial-delivery error's accepted subset.
+A logical result's receipt takes precedence over its legacy message IDs.
+The result carries a receipt, `messageIds` (including an empty array), and
+`visibleReplySent: true`; routing fields stay in the receipt. Optional `content`
+is passed through, and `kind` and `replyToId` use the receipt builder's rules.
+Keep acceptance side effects, content joining,
+suppression, and whether an identityless outcome needs a receipt in the adapter.
+
 Channel actions and adapter capabilities come from the selected plugin
 registration. An omitted `actions`, `message`, or `outbound` surface is not
 filled from another plugin with the same channel ID. Prepared delivery handlers
@@ -489,6 +500,14 @@ Refreshing the same target session and target kind preserves omitted runtime
 metadata. Replacing either starts fresh target metadata, so a new session cannot
 inherit the previous plugin owner, agent, or label. Keep conversation transport
 details and explicit lifecycle settings separate from target metadata.
+
+Use `resolveThreadBindingLifecycle(...)` from
+`openclaw/plugin-sdk/thread-bindings-session-runtime` for standard idle and
+maximum-age expiration. Plugins with a different legacy timestamp contract can
+pass prepared `inactivityExpiresAt` and `maxAgeExpiresAt` values to
+`resolveThreadBindingExpiry(...)` on the same subpath. It selects the earlier
+deadline and its reason, preferring idle expiration on ties; omitted deadlines
+are disabled. The plugin still owns timestamp validation and duration defaults.
 
 Preserve opaque plugin ownership metadata when projecting binding records.
 Plugin-owned targets do not require an OpenClaw agent id; use

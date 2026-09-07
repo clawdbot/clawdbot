@@ -277,6 +277,75 @@ describe("package update recovery safety", () => {
     },
   );
 
+  it("replaces equal-version package bytes and rolls them back after verification fails", async () => {
+    await withTestDir({ prefix: "openclaw-package-equal-version-replacement-" }, async (base) => {
+      const prefix = path.join(base, "prefix");
+      const globalRoot = path.join(prefix, "lib", "node_modules");
+      const packageRoot = path.join(globalRoot, "openclaw");
+      const launcher = path.join(prefix, "bin", "openclaw");
+      await writePackageRoot(packageRoot, "1.0.0");
+      await fs.writeFile(path.join(packageRoot, "dist", "index.js"), "old runtime\n");
+      await fs.mkdir(path.dirname(launcher), { recursive: true });
+      await fs.writeFile(launcher, "old launcher\n");
+
+      const result = await runGlobalPackageUpdateSteps({
+        installTarget: createNpmTarget(globalRoot),
+        installSpec: "openclaw@1.0.0",
+        packageName: "openclaw",
+        packageRoot,
+        requirePackageReplacement: true,
+        runCommand: createRootRunner(globalRoot),
+        runStep: async ({ name, argv }) => {
+          const stagePrefix = argv[argv.indexOf("--prefix") + 1];
+          if (!stagePrefix) {
+            throw new Error("missing stage prefix");
+          }
+          const stageRoot = path.join(stagePrefix, "lib", "node_modules", "openclaw");
+          await writePackageRoot(stageRoot, "1.0.0");
+          await fs.writeFile(path.join(stageRoot, "dist", "index.js"), "new runtime\n");
+          await fs.mkdir(path.join(stagePrefix, "bin"), { recursive: true });
+          await fs.writeFile(path.join(stagePrefix, "bin", "openclaw"), "new launcher\n");
+          return { name, command: argv.join(" "), cwd: stagePrefix, durationMs: 0, exitCode: 0 };
+        },
+        validateCandidate: async (candidateRoot) => {
+          await expect(
+            fs.readFile(path.join(candidateRoot, "dist", "index.js"), "utf8"),
+          ).resolves.toBe("new runtime\n");
+          await expect(
+            fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8"),
+          ).resolves.toBe("old runtime\n");
+          return [];
+        },
+        beforeActivate: async () => {},
+        postVerifyStep: async (candidateRoot) => {
+          await expect(
+            fs.readFile(path.join(candidateRoot, "dist", "index.js"), "utf8"),
+          ).resolves.toBe("new runtime\n");
+          return {
+            name: "doctor",
+            command: "doctor --fix",
+            cwd: candidateRoot,
+            durationMs: 0,
+            exitCode: 1,
+          };
+        },
+        timeoutMs: 1000,
+      });
+
+      expect(result.reason).toBeUndefined();
+      expect(result.failedStep?.name).toBe("doctor");
+      expect(result.recovery).toEqual({
+        serviceRestartSafe: false,
+        reason: "runtime-verification-failed",
+        packageRollbackVerified: true,
+      });
+      await expect(fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8")).resolves.toBe(
+        "old runtime\n",
+      );
+      await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
+    });
+  });
+
   it("recovers the verified original when staging preparation fails before hooks run", async () => {
     await withTestDir({ prefix: "openclaw-package-stage-recovery-" }, async (base) => {
       const globalRoot = path.join(base, "lib", "node_modules");

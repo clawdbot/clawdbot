@@ -7,6 +7,7 @@ import { isHarnessOwnedSubagentTask } from "./harness-owned-subagent-task.js";
 import {
   getManagedTaskBackingInstance,
   hasAuthoritativeTaskBacking,
+  readTaskBackingInstance,
 } from "./task-backing-authority.js";
 import { isProvisionalSubagentKillTask } from "./task-cancellation-state.js";
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
@@ -114,6 +115,7 @@ export async function cancelTaskById(params: {
       return notCancelled("Task backing ownership could not be verified.");
     }
     const managedBacking = getManagedTaskBackingInstance(task);
+    const subagentBacking = managedBacking ?? readTaskBackingInstance(task.detail);
     ensureTaskCancellationReady(task);
     // A direct kill is only a provisional terminal projection. Re-read the
     // owning subagent run before promotion so its canonical completion can win.
@@ -237,9 +239,10 @@ export async function cancelTaskById(params: {
         await killSubagentRunAdmin({
           cfg: params.cfg,
           sessionKey: childSessionKey,
-          expectedRunId: task.runId,
-          ...(managedBacking?.runtime === "subagent"
-            ? { expectedGeneration: managedBacking.generation, expectedOwnerKey: task.ownerKey }
+          expectedTaskRunId: task.runId,
+          expectedOwnerKey: task.ownerKey,
+          ...(subagentBacking?.runtime === "subagent"
+            ? { expectedGeneration: subagentBacking.generation }
             : {}),
           onResult: (result) => {
             cancellation = reconcile(result);

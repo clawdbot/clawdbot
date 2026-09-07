@@ -10,6 +10,8 @@ minimumReleaseAgeStrict: true
 
 # Trusted Codex runtimes are outside the dependency cooldown.
 minimumReleaseAgeExclude:
+  # Reviewed Proxyline Bun runtime fix; remove after 2026-09-13 20:51 UTC.
+  - "@openclaw/proxyline@0.3.11"
   # GHSA-vp8m-p9jh-q5pm / GHSA-w293-vg96-wgc3 security fixes; remove after 2026-09-12.
   - "undici@8.10.2"
   - "undici@7.29.1"
@@ -32,15 +34,15 @@ minimumReleaseAgeExclude:
   - "zod@4.5.2"
   - "@openai/codex"
   - "@openai/codex-*"
-  # fs-safe 0.8.1 adds retainOnExit for fail-closed build locks; remove after 2026-09-11.
-  - "@openclaw/fs-safe@0.8.1"
-  - "@openclaw/fs-safe-darwin-arm64@0.8.1"
-  - "@openclaw/fs-safe-darwin-x64@0.8.1"
-  - "@openclaw/fs-safe-linux-arm64-gnu@0.8.1"
-  - "@openclaw/fs-safe-linux-arm64-musl@0.8.1"
-  - "@openclaw/fs-safe-linux-x64-gnu@0.8.1"
-  - "@openclaw/fs-safe-linux-x64-musl@0.8.1"
-  - "@openclaw/fs-safe-win32-x64-msvc@0.8.1"
+  # fs-safe 0.8.3 reviewed move authority/receipt patch; remove after 2026-09-14 01:24 UTC.
+  - "@openclaw/fs-safe@0.8.3"
+  - "@openclaw/fs-safe-darwin-arm64@0.8.3"
+  - "@openclaw/fs-safe-darwin-x64@0.8.3"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.8.3"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.8.3"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.8.3"
+  - "@openclaw/fs-safe-linux-x64-musl@0.8.3"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.8.3"
   # Bot API 10.3 types replace OpenClaw's temporary rich-message bridge.
   - "@grammyjs/types@5.0.0"
   - "grammy@1.46.0"

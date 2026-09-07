@@ -38,6 +38,10 @@ export type ModelSetupVerifyState =
   | { phase: "ok"; modelRef: string; latencyMs?: number }
   | { phase: "failed"; status: ModelSetupVerifyFailure["status"]; error: string };
 
+export type ModelSetupWizardResult =
+  | WizardNextResult
+  | { done: true; status: "not-admitted"; error: string };
+
 export type ModelSetupWizardState =
   | { phase: "idle" }
   | { phase: "starting"; authChoice: string }
@@ -107,7 +111,7 @@ export function mapVerifyResult(result: SystemAgentSetupVerifyResult): ModelSetu
 
 export function wizardStateFromResult(
   authChoice: string,
-  result: WizardNextResult,
+  result: ModelSetupWizardResult,
   fallbackError: string,
 ): ModelSetupWizardState {
   if (!result.done && result.step) {

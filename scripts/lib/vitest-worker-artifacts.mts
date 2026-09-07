@@ -10,6 +10,9 @@ export const runtimeProcessDeclarationEntries = {
 };
 export const vitestWorkerDeclarationEntries = {
   ...runtimeProcessDeclarationEntries,
+  "infra/update-managed-service-handoff-runtime-assets":
+    "src/infra/update-managed-service-handoff-runtime-assets.ts",
+  "infra/triage-runtime.test-support": "src/infra/triage-runtime.test-support.ts",
   "cli/cli-entrypoint.test-support": "src/cli/cli-entrypoint.test-support.ts",
   "test-support/channel-ingress-gateway-restart-entrypoint":
     "test/fixtures/channel-ingress-gateway-restart-entrypoint.ts",

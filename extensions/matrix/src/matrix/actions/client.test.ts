@@ -15,7 +15,6 @@ const {
   getMatrixRuntimeMock,
   acquireSharedMatrixClientMock,
   sharedLeaseReleaseMock,
-  isBunRuntimeMock,
   resolveMatrixAuthContextMock,
 } = matrixClientResolverMocks;
 
@@ -27,7 +26,6 @@ vi.mock("../../runtime.js", () => ({
 
 vi.mock("../client.js", () => ({
   acquireSharedMatrixClient: acquireSharedMatrixClientMock,
-  isBunRuntime: () => isBunRuntimeMock(),
   resolveMatrixAuthContext: resolveMatrixAuthContextMock,
 }));
 

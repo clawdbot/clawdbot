@@ -1,25 +1,10 @@
 // Assertions for browser CDP snapshot E2E fixtures.
 import fs from "node:fs";
+import { readPositiveIntEnvWithEmptyFallback } from "../env-limits.mjs";
 
 const DEFAULT_SNAPSHOT_MAX_BYTES = 512 * 1024;
 const SNAPSHOT_DIAGNOSTIC_MAX_BYTES = 32 * 1024;
 const snapshotPath = process.argv[2] ?? "/tmp/browser-cdp-snapshot.txt";
-
-function readPositiveIntEnv(name, fallback) {
-  const raw = process.env[name];
-  if (raw === undefined || raw === "") {
-    return fallback;
-  }
-  const text = raw.trim();
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`${name} must be a positive integer; got: ${raw}`);
-  }
-  const parsed = Number(text);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new Error(`${name} must be a positive integer; got: ${raw}`);
-  }
-  return parsed;
-}
 
 function readBoundedSnapshot(file, maxBytes) {
   const stats = fs.statSync(file);
@@ -47,7 +32,7 @@ function snapshotDiagnostic(snapshot) {
     .toString("utf8")}`;
 }
 
-const snapshotMaxBytes = readPositiveIntEnv(
+const snapshotMaxBytes = readPositiveIntEnvWithEmptyFallback(
   "OPENCLAW_BROWSER_CDP_SNAPSHOT_MAX_BYTES",
   DEFAULT_SNAPSHOT_MAX_BYTES,
 );

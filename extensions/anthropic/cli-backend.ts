@@ -179,6 +179,7 @@ export function buildAnthropicCliBackend(
     bundleMcpMode: "claude-config-file",
     nativeToolMode: "selectable",
     toolAvailabilityEnforcement: "execution-args",
+    isolatesInstructionsWithExactTools: true,
     projectNativeToolAuthority: projectClaudeNativeToolAuthority,
     sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,
@@ -272,23 +273,25 @@ export function buildAnthropicCliBackend(
               }
             : undefined;
         const env = {
+          // Claude rebuilds the startup Git snapshot on process resume, rewriting
+          // the conversation prefix after workspace edits or commits. OpenClaw
+          // supplies workspace instructions; Git state can be read with tools.
+          CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1",
           ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
           ...(context.contextWindow === "200k" ? { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" } : {}),
           ...resolveClaudeCliThinkingEnv(context.thinkingLevel, context.modelId),
           ...authInput?.env,
         };
-        return Object.keys(env).length > 0 || isolatedCompletion || cliExecution
-          ? {
-              env,
-              // The paired side-question argv projection disables settings, memory,
-              // hooks, session persistence, and tools before process launch.
-              ...(isolatedCompletion ? { isolatedCompletionEnforced: true as const } : {}),
-              ...(authInput?.clearEnv ? { clearEnv: authInput.clearEnv } : {}),
-              ...(authInput?.secretInput ? { secretInput: authInput.secretInput } : {}),
-              ...(authInput?.cleanup ? { cleanup: authInput.cleanup } : {}),
-              ...cliExecution,
-            }
-          : undefined;
+        return {
+          env,
+          // The paired side-question argv projection disables settings, memory,
+          // hooks, session persistence, and tools before process launch.
+          ...(isolatedCompletion ? { isolatedCompletionEnforced: true as const } : {}),
+          ...(authInput?.clearEnv ? { clearEnv: authInput.clearEnv } : {}),
+          ...(authInput?.secretInput ? { secretInput: authInput.secretInput } : {}),
+          ...(authInput?.cleanup ? { cleanup: authInput.cleanup } : {}),
+          ...cliExecution,
+        };
       };
       const supportProbe = options.ensureDynamicSystemPromptSectionsSupport?.();
       return supportProbe ? supportProbe.then(prepare) : prepare();

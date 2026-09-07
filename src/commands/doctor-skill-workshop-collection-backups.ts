@@ -62,7 +62,11 @@ export async function listPendingLegacyCollectionBackupRoots(
       if (!ownerAgentId) {
         throw new Error("workspace does not map to exactly one configured agent");
       }
-      assertWorkspaceStateMigrationReady({ workspaceDirs: [...workspaceDirs], env });
+      assertWorkspaceStateMigrationReady({
+        workspaceDirs: [...workspaceDirs],
+        env,
+        operation: "doctor",
+      });
       const destinationRoot = resolveSkillCollectionBackupRoot(config, ownerAgentId, env);
       const alreadyArchived = await Promise.all(
         backups.map((backup) =>

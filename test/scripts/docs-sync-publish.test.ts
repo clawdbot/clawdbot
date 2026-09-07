@@ -389,6 +389,8 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
       "reference/test",
       "ci",
       "help/scripts",
+      "concepts/qa-e2e-automation",
+      "concepts/personal-agent-benchmark-pack",
     ];
     expect(collectPages(releaseTab)).toEqual(releaseRoutes);
     expect(new Set(releaseRoutes)).toHaveLength(releaseRoutes.length);
