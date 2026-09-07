@@ -648,8 +648,7 @@ async function buildParams(
         compat.supportsCacheControlOnTools ? cacheControl : undefined,
       )
     : undefined;
-  const tools = convertedTools?.tools;
-  const toolProjection = convertedTools?.projection;
+  const tools = convertedTools?.tools, toolProjection = convertedTools?.projection;
   const messageCacheControlLimit = Math.max(
     0,
     ANTHROPIC_CACHE_CONTROL_LIMIT -
