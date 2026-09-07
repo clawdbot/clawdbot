@@ -313,8 +313,8 @@ export async function handleFeishuMessage(params: {
     turnAdoptionLifecycle,
   } = params;
 
-  // SAFETY: config.current() returns the canonical host-validated ClawdbotConfig.
   // Resolve each turn from live config; DMs reauthorize after awaited work below.
+  // SAFETY: config.current() returns the canonical host-validated ClawdbotConfig.
   const cfg = getFeishuRuntime().config.current() as ClawdbotConfig;
   // Resolve account with merged config
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
