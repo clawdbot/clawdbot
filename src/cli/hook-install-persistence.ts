@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { stageHookInstall } from "../hooks/install-record-transaction.js";
 import type { HookInstallUpdate } from "../hooks/installs.js";
 import type { PackageDirInstallTransaction } from "../infra/install-package-dir.js";
-import type { ConfigSnapshotForInstallPersist } from "../plugins/install-persistence.js";
+import type { ConfigSnapshotForInstallPersist } from "../plugins/install-config-mutation.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { enableInternalHookEntries } from "./plugins-command-helpers.js";

@@ -88,7 +88,7 @@ describe("persistPluginInstall", () => {
   );
 
   it("labels plugin lifecycle config writes", async () => {
-    const { selectInstallMutationWriteOptions } = await import("./install-persistence.js");
+    const { selectInstallMutationWriteOptions } = await import("./install-config-mutation.js");
 
     expect(
       selectInstallMutationWriteOptions({

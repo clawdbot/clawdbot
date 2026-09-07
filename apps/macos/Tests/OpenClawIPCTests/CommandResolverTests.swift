@@ -85,7 +85,7 @@ import Testing
         try makeExecutableForTests(at: distEntrypoint)
         try makeExecutableForTests(at: projectExecutable)
         try makeExecutableForTests(at: node)
-        try "#!/bin/sh\necho v22.22.3\n".write(to: node, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\necho v24.16.0\n".write(to: node, atomically: true, encoding: .utf8)
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: node.path)
 
         let launch = try await CommandResolver.nodeHostWorkerLaunch(
@@ -109,7 +109,7 @@ import Testing
         let nodePath = tmp.appendingPathComponent("node_modules/.bin/node")
         let scriptPath = tmp.appendingPathComponent("bin/openclaw.js")
         try makeExecutableForTests(at: nodePath)
-        try "#!/bin/sh\necho v22.22.3\n".write(to: nodePath, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\necho v24.16.0\n".write(to: nodePath, atomically: true, encoding: .utf8)
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
         try makeExecutableForTests(at: scriptPath)
 
@@ -216,7 +216,7 @@ import Testing
         let binDir = tmp.appendingPathComponent("bin")
         let nodePath = binDir.appendingPathComponent("node")
         try makeExecutableForTests(at: nodePath)
-        try "#!/bin/sh\necho v22.22.3\n".write(to: nodePath, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\necho v24.16.0\n".write(to: nodePath, atomically: true, encoding: .utf8)
         try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
 
         let cmd = await CommandResolver.openclawCommand(
@@ -334,7 +334,7 @@ import Testing
     @Test func `node manager runtimes precede system runtimes`() throws {
         let home = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: home) }
-        let nodeManagerBin = home.appendingPathComponent(".nvm/versions/node/v22.22.3/bin")
+        let nodeManagerBin = home.appendingPathComponent(".nvm/versions/node/v24.16.0/bin")
         try makeExecutableForTests(at: nodeManagerBin.appendingPathComponent("node"))
 
         let paths = CommandResolver.preferredPaths(

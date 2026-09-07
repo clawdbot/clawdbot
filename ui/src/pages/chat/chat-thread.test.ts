@@ -4676,7 +4676,7 @@ describe("buildCachedChatItems", () => {
       groups.flatMap((group) =>
         group.messages.flatMap(({ message }) => normalizeMessage(message).content),
       ),
-    ).toContainEqual({ type: "text", text: "Ready." });
+    ).toContainEqual({ type: "text", text: "\n\nReady." });
     expect(assistant).toEqual(original);
   });
 

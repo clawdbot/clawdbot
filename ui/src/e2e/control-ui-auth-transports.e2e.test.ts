@@ -531,7 +531,7 @@ async function createBrowserPage(
   expect(await confirmation.textContent()).toContain(gatewayUrl);
   expect(proxy.evidence).toHaveLength(evidenceStartIndex);
   await confirmation
-    .getByRole("button", { name: "Confirm", exact: true })
+    .getByRole("button", { name: `Switch to ${new URL(gatewayUrl).host}`, exact: true })
     .click({ timeout: controlUiSettleTimeoutMs });
   await expect
     .poll(() => proxy.evidence.length, { timeout: 15_000 })
@@ -553,7 +553,7 @@ async function captureChromiumScreenshot(
 
 async function captureConnectedAuth(fileName: string, page: Page): Promise<void> {
   await captureChromiumScreenshot(fileName, page.locator(".shell"), [
-    page.getByRole("textbox", { name: "WebSocket URL", exact: true }),
+    page.getByRole("textbox", { name: "Gateway URL", exact: true }),
     page.getByText("Authenticated via trusted proxy.", { exact: true }),
   ]);
 }
@@ -594,7 +594,8 @@ async function waitForConnectionEvidence(
 async function waitForVisibleFailure(page: Page, expectedText: string): Promise<string> {
   const failure = page.locator(".login-gate__failure");
   await failure.waitFor();
-  expect(await failure.getAttribute("role")).toBe("alert");
+  expect(await failure.getAttribute("role")).toBe("status");
+  expect(await failure.getAttribute("aria-live")).toBe("polite");
   const raw = (await failure.locator(".login-gate__failure-raw").textContent()) ?? "";
   expect(raw.toLowerCase()).toContain(expectedText.toLowerCase());
   expect(await failure.locator(".login-gate__failure-steps").isVisible()).toBe(true);

@@ -122,7 +122,7 @@ describeControlUiE2e("Control UI token and password credentials E2E", () => {
       "unauthorized: gateway token required",
     );
 
-    const tokenInput = tokenFlow.page.getByLabel(/Gateway token/i);
+    const tokenInput = tokenFlow.page.getByLabel("Credential", { exact: true });
     const tokenConnectCount = (await tokenFlow.gateway.getRequests("connect")).length;
     await tokenFlow.gateway.deferNext("connect");
     await tokenInput.fill("token-accepted-by-mock");
@@ -156,7 +156,7 @@ describeControlUiE2e("Control UI token and password credentials E2E", () => {
       "unauthorized: gateway password required",
     );
 
-    const passwordInput = passwordFlow.page.getByLabel(/Password \(not stored\)/i);
+    const passwordInput = passwordFlow.page.getByLabel("Credential", { exact: true });
     const rejectedConnectCount = (await passwordFlow.gateway.getRequests("connect")).length;
     await passwordFlow.gateway.deferNext("connect");
     await passwordInput.fill("password-rejected-by-mock");
@@ -175,7 +175,8 @@ describeControlUiE2e("Control UI token and password credentials E2E", () => {
 
     const failure = passwordFlow.page.locator(".login-gate__failure");
     await failure.waitFor();
-    expect(await failure.getAttribute("role")).toBe("alert");
+    expect(await failure.getAttribute("role")).toBe("status");
+    expect(await failure.getAttribute("aria-live")).toBe("polite");
     expect(
       (await failure.locator(".login-gate__failure-raw").textContent())?.toLowerCase(),
     ).toContain("gateway password mismatch");

@@ -19,11 +19,6 @@ function exceedsOwnerPromptContentBudget(ownerNumbers: string[]): boolean {
   return false;
 }
 
-type OwnerDisplaySetting = {
-  ownerDisplay?: "raw" | "hash";
-  ownerDisplaySecret?: string;
-};
-
 type OwnerDisplaySecretResolution = {
   config: OpenClawConfig;
   generatedSecret?: string;
@@ -59,14 +54,6 @@ export function resolveOwnerPromptNumbers(params: {
     }
   }
   return promptOwners;
-}
-
-/**
- * Resolve owner display settings for prompt rendering.
- * Keep auth secrets decoupled from owner hash secrets.
- */
-export function resolveOwnerDisplaySetting(_config?: OpenClawConfig): OwnerDisplaySetting {
-  return { ownerDisplay: "raw", ownerDisplaySecret: undefined };
 }
 
 /**

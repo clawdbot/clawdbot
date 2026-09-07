@@ -15,6 +15,7 @@ import {
   parseMarkdownFileLinkTarget,
   splitMarkdownFileLineSuffix,
 } from "./markdown-file-links.ts";
+import { installMarkdownGitHubRefs } from "./markdown-github-refs.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { installMarkdownSessionLinks, SESSION_LINK_SCAN_RE } from "./markdown-session-links.ts";
@@ -570,6 +571,8 @@ export function createMarkdownParser(): MarkdownItParser {
       }
     }
   });
+
+  installMarkdownGitHubRefs(markdownParser);
 
   // Enable GFM task list checkboxes (- [x] / - [ ]).
   // enabled: false keeps checkboxes read-only (disabled="") — task lists in

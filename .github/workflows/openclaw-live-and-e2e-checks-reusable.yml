@@ -281,6 +281,11 @@ on:
         required: false
         default: ""
         type: string
+      published_upgrade_survivor_baseline_scope:
+        description: Internal baseline selector provenance from Package Acceptance
+        required: false
+        default: all-scenarios
+        type: string
       published_upgrade_survivor_scenarios:
         description: Optional scenario list for published-upgrade-survivor/update-migration lane expansion
         required: false
@@ -1634,6 +1639,8 @@ jobs:
         env:
           LANES: ${{ inputs.docker_lanes }}
           GROUP_SIZE: ${{ inputs.targeted_docker_lane_group_size }}
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE: ${{ inputs.published_upgrade_survivor_baseline_scope || 'all-scenarios' }}
           OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ inputs.published_upgrade_survivor_baselines }}
           OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
         run: |
@@ -4288,6 +4295,10 @@ jobs:
           cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
+
+      - name: Install Chromium for native live browser tests
+        if: matrix.suite_id == 'native-live-test' && contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        run: pnpm --dir ui exec playwright install --with-deps chromium
 
       - name: Hydrate live auth/profile inputs
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))

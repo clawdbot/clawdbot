@@ -723,6 +723,8 @@ from LAN advertisements and any configured wide-area DNS-SD zone. `off` stops
 LAN advertisements while configured wide-area discovery remains enabled. The
 Bonjour plugin must already be enabled, and environment overrides still apply.
 
+The Gateway accepts its configured secret whether the client sends it as a token or a password; `gateway.auth.mode` still decides which config value is the secret.
+
 Token and password rotation hot-applies only when the effective auth mode stays
 the same. Existing clients using the old shared credential must reconnect with
 the new credential; independently paired device-token clients remain connected.

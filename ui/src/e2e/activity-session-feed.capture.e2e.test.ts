@@ -450,9 +450,6 @@ suite.define(() => {
         });
 
         await page.locator('[data-online-user-id="profile-alice"]').click();
-        const personCard = page.getByRole("dialog", { name: "Activity for Alice Chen" });
-        await personCard.waitFor({ state: "visible" });
-        await personCard.getByRole("link", { name: "View activity", exact: true }).click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/profile-alice");
         await expect
           .poll(() => activityPage.locator('[data-activity-identity="profile-alice"]').isVisible())

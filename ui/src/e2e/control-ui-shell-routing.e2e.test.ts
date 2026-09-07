@@ -157,7 +157,9 @@ describeControlUiE2e("Control UI shell routing E2E", () => {
       const confirmation = page.locator("openclaw-gateway-url-confirmation");
       await confirmation.waitFor();
       expect(await confirmation.getByText(explicitGatewayUrl, { exact: true }).count()).toBe(1);
-      await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
+      await confirmation
+        .getByRole("button", { name: "Switch to 127.0.0.1:29991", exact: true })
+        .click();
 
       await gateway.waitForRequest("connect");
       await page.locator("openclaw-app-shell").waitFor();

@@ -74,7 +74,14 @@ export function resolveAutomaticUpdateTriage(
     preManagedServiceStop?: Pick<PreManagedServiceStop, "serviceMutationAllowed">;
   },
 ): TriageFailureContext | undefined {
+  // Triage follows a failed update, never a verified rollback: the restored
+  // generation is serving, and an autonomous repair turn there is unwanted.
+  const verifiedRollback =
+    result.recovery?.serviceRestartSafe === true &&
+    result.recovery.packageRollbackVerified === true &&
+    result.recovery.service === "healthy";
   const eligible =
+    !verifiedRollback &&
     (params.mutationStarted || result.reason === "restart-unhealthy") &&
     result.reason !== "service-revalidation-failed" &&
     !(

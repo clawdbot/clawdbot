@@ -10,11 +10,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { withClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
 import { shortenHomePath } from "../utils.js";
-import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import {
   selectInstallMutationWriteOptions,
   type ConfigSnapshotForInstallPersist,
-} from "./install-persistence.js";
+} from "./install-config-mutation.js";
+import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
 import {
   loadInstalledPluginIndexInstallRecords,

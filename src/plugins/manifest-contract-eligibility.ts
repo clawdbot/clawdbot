@@ -8,7 +8,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readBundledDiscoveryModeMemoized } from "./bundled-discovery-state.js";
 import { isBundledProviderCompatContract } from "./bundled-provider-compat.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
-import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
+import {
+  createInstalledPluginEnabledPredicate,
+  isInstalledPluginEnabled,
+} from "./installed-plugin-index.js";
 import { resolveManifestOwnerBasePolicyBlock } from "./manifest-owner-policy.js";
 import type { PluginManifestContractListKey, PluginManifestRecord } from "./manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -113,6 +116,11 @@ export function listAvailableManifestContractPlugins(params: {
   env?: NodeJS.ProcessEnv;
 }): PluginManifestRecord[] {
   const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  const isEnabled = createInstalledPluginEnabledPredicate(
+    params.snapshot.index.plugins,
+    params.config,
+    params.env,
+  );
   return params.snapshot.plugins.filter(
     (plugin) =>
       hasManifestContractValue({
@@ -125,6 +133,7 @@ export function listAvailableManifestContractPlugins(params: {
         plugin,
         config: params.config,
         normalizedConfig,
+        isInstalledPluginEnabled: isEnabled,
         env: params.env,
         allowBundledProviderCompat: isBundledProviderCompatContract(params.contract),
       }),

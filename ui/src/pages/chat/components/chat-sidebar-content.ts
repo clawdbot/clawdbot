@@ -12,6 +12,7 @@ import {
   markdownFileLinkFromEvent,
   markdownFileLinkFromKeyboardEvent,
 } from "../../../components/markdown-file-links.ts";
+import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import {
   markdownSessionLinkFromEvent,
   markdownSessionLinkFromKeyboardEvent,
@@ -173,6 +174,7 @@ type MarkdownSidebarProps = {
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
+  githubRepo?: MarkdownRenderOptions["githubRepo"];
   embedded?: boolean;
   onAttachmentUpdate: () => void;
   attachmentRuntime: AttachmentSidebarRuntime;
@@ -185,6 +187,7 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
       ? toSanitizedMarkdownHtml(content.content, {
           codeBlockInteraction: "interactive",
           fileLinks: true,
+          githubRepo: props.githubRepo ?? null,
           interactiveImages: props.onOpenImage !== undefined,
           sessionLinks: true,
         })

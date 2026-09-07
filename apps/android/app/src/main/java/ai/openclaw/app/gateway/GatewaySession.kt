@@ -417,11 +417,14 @@ class GatewaySession(
   private class DesiredConnection(
     val endpoint: GatewayEndpoint,
     val token: String?,
-    val bootstrapToken: String?,
+    @Volatile var bootstrapToken: String?,
     val password: String?,
     val options: GatewayConnectOptions,
     val tls: GatewayTlsParams?,
+    val bootstrapHandoff: GatewayBootstrapHandoff?,
   ) {
+    var recoveringStoredBootstrap = false
+
     // Retry state belongs to this connect intent, not a later target whose socket may already be ready.
     @Volatile var pendingDeviceTokenRetry = false
 
@@ -460,11 +463,12 @@ class GatewaySession(
     password: String?,
     options: GatewayConnectOptions,
     tls: GatewayTlsParams? = null,
+    bootstrapHandoff: GatewayBootstrapHandoff? = null,
   ) {
     synchronized(notificationLock) {
       val connectionToClose: Connection?
       synchronized(lifecycleLock) {
-        desired = DesiredConnection(endpoint, token, bootstrapToken, password, options, tls)
+        desired = DesiredConnection(endpoint, token, bootstrapToken, password, options, tls, bootstrapHandoff)
         connectionToClose = currentConnection
         if (job?.isActive != true) {
           job = scope.launch(Dispatchers.IO) { runLoop() }
@@ -1380,7 +1384,7 @@ class GatewaySession(
         selectConnectAuth(
           target = target,
           explicitGatewayToken = target.token?.trim()?.takeIf { it.isNotEmpty() },
-          explicitBootstrapToken = target.bootstrapToken?.trim()?.takeIf { it.isNotEmpty() },
+          explicitBootstrapToken = target.bootstrapToken?.trim()?.takeIf { it.isNotEmpty() && !target.recoveringStoredBootstrap },
           explicitPassword = target.password?.trim()?.takeIf { it.isNotEmpty() },
           storedToken = storedToken?.takeIf { it.isNotEmpty() },
           storedScopes = storedEntry?.scopes.orEmpty(),
@@ -1397,6 +1401,20 @@ class GatewaySession(
       val res = request(GatewayMethod.Connect.rawValue, payload, timeoutMs = CONNECT_RPC_TIMEOUT_MS)
       if (!res.ok) {
         val error = res.error ?: ErrorShape("UNAVAILABLE", "connect failed")
+        // Only implicitly loaded credentials may recover an old install's spent setup code.
+        // Never turn a rejection of newly supplied setup auth into access under an older grant.
+        if (
+          selectedAuth.authSource == GatewayConnectAuthSource.BOOTSTRAP_TOKEN &&
+          target.bootstrapHandoff?.allowStoredTokenRecovery == true &&
+          !target.recoveringStoredBootstrap &&
+          error.details?.code == "AUTH_BOOTSTRAP_TOKEN_INVALID" &&
+          shouldPersistBootstrapHandoffTokens(selectedAuth.authSource) &&
+          listOf("node", "operator").all { role ->
+            !deviceAuthStore.loadToken(target.endpoint.stableId, identity.deviceId, role).isNullOrBlank()
+          }
+        ) {
+          target.recoveringStoredBootstrap = true
+        }
         val shouldRetryWithDeviceToken =
           shouldRetryWithStoredDeviceToken(
             target = target,
@@ -1455,29 +1473,21 @@ class GatewaySession(
         }
       }
 
-    private fun persistBootstrapHandoffToken(
-      deviceId: String,
-      role: String,
-      token: String,
-      scopes: List<String>,
-    ) {
-      val filteredScopes = filteredBootstrapHandoffScopes(role, scopes) ?: return
-      deviceAuthStore.saveToken(target.endpoint.stableId, deviceId, role, token, filteredScopes)
-    }
-
     private fun persistIssuedDeviceToken(
       authSource: GatewayConnectAuthSource,
       deviceId: String,
       role: String,
       token: String,
       scopes: List<String>,
-    ) {
-      if (authSource == GatewayConnectAuthSource.BOOTSTRAP_TOKEN) {
-        if (!shouldPersistBootstrapHandoffTokens(authSource)) return
-        persistBootstrapHandoffToken(deviceId, role, token, scopes)
-        return
-      }
-      deviceAuthStore.saveToken(target.endpoint.stableId, deviceId, role, token, scopes)
+    ): Boolean {
+      val persistedScopes =
+        if (authSource == GatewayConnectAuthSource.BOOTSTRAP_TOKEN) {
+          if (!shouldPersistBootstrapHandoffTokens(authSource)) return false
+          filteredBootstrapHandoffScopes(role, scopes) ?: return false
+        } else {
+          scopes
+        }
+      return deviceAuthStore.saveToken(target.endpoint.stableId, deviceId, role, token, persistedScopes)
     }
 
     private fun parseConnectSuccess(
@@ -1516,14 +1526,17 @@ class GatewaySession(
           .asArrayOrNull()
           ?.mapNotNull { it.asStringOrNull() }
           ?: emptyList()
+      val persistedRoles = mutableMapOf<String, Boolean>()
       if (!deviceToken.isNullOrBlank()) {
         // Hello scopes describe this socket. Reissuing the same stored token must not narrow its
         // reusable grant metadata, while a rotated token starts with the live approved scopes.
         val sameStoredTokenRecord =
-          deviceToken.trim() == selectedAuth.storedToken &&
+          selectedAuth.authSource != GatewayConnectAuthSource.BOOTSTRAP_TOKEN &&
+            deviceToken.trim() == selectedAuth.storedToken &&
             authRole.trim().equals(target.options.role.trim(), ignoreCase = true)
         val persistedScopes = if (sameStoredTokenRecord) selectedAuth.storedScopes else authScopes
-        persistIssuedDeviceToken(selectedAuth.authSource, deviceId, authRole, deviceToken, persistedScopes)
+        persistedRoles[authRole.trim()] =
+          persistIssuedDeviceToken(selectedAuth.authSource, deviceId, authRole, deviceToken, persistedScopes)
       }
       if (shouldPersistBootstrapHandoffTokens(selectedAuth.authSource)) {
         // Bootstrap connects can mint role-specific device tokens; store only locally trusted handoffs.
@@ -1540,9 +1553,26 @@ class GatewaySession(
                 ?.mapNotNull { it.asStringOrNull() }
                 ?: emptyList()
             if (!handoffToken.isNullOrBlank() && !handoffRole.isNullOrBlank()) {
-              persistBootstrapHandoffToken(deviceId, handoffRole, handoffToken, handoffScopes)
+              persistedRoles[handoffRole.trim()] =
+                persistIssuedDeviceToken(selectedAuth.authSource, deviceId, handoffRole, handoffToken, handoffScopes)
             }
           }
+      }
+      if (target.recoveringStoredBootstrap && selectedAuth.authSource == GatewayConnectAuthSource.DEVICE_TOKEN) {
+        // A successful stored-node hello validates legacy recovery. Recommit both saved
+        // roles before retiring its rejected bootstrap; this is never a fresh-setup path.
+        for (role in listOf("node", "operator")) {
+          if (role in persistedRoles) continue
+          val entry = deviceAuthStore.loadEntry(target.endpoint.stableId, deviceId, role) ?: continue
+          persistedRoles[role] = deviceAuthStore.saveToken(target.endpoint.stableId, deviceId, role, entry.token, entry.scopes)
+        }
+      }
+      if (persistedRoles["node"] == true && persistedRoles["operator"] == true) {
+        synchronized(lifecycleLock) {
+          if (desired === target && currentConnection === this && target.bootstrapHandoff?.complete() == true) {
+            target.bootstrapToken = null
+          }
+        }
       }
       val rawPluginSurfaceUrls = obj["pluginSurfaceUrls"].asObjectOrNull()
       val normalizedPluginSurfaceUrls =
@@ -2088,7 +2118,7 @@ class GatewaySession(
       explicitGatewayToken
         ?: if (
           explicitPassword == null &&
-          (explicitBootstrapToken == null || storedToken != null)
+          explicitBootstrapToken == null
         ) {
           storedToken
         } else {
@@ -2154,13 +2184,14 @@ class GatewaySession(
     target: DesiredConnection,
     error: ErrorShape,
   ): Boolean =
-    shouldPauseGatewayReconnectAfterAuthFailure(
-      error = error,
-      hasBootstrapToken = target.bootstrapToken?.trim()?.isNotEmpty() == true,
-      role = target.options.role,
-      scopes = target.options.scopes,
-      pendingDeviceTokenRetry = target.pendingDeviceTokenRetry,
-    )
+    !(target.recoveringStoredBootstrap && error.details?.code == "AUTH_BOOTSTRAP_TOKEN_INVALID") &&
+      shouldPauseGatewayReconnectAfterAuthFailure(
+        error = error,
+        hasBootstrapToken = target.bootstrapToken?.trim()?.isNotEmpty() == true,
+        role = target.options.role,
+        scopes = target.options.scopes,
+        pendingDeviceTokenRetry = target.pendingDeviceTokenRetry,
+      )
 
   private fun shouldClearStoredDeviceTokenAfterRetry(error: ErrorShape): Boolean = error.details?.code == "AUTH_DEVICE_TOKEN_MISMATCH"
 

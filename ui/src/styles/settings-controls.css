@@ -5,8 +5,7 @@
 /* Settings controls also appear outside the settings workspace: the login
    gate, chat board controls, and the chat MCP form all use these primitives. */
 
-/* Segmented keeps its 2px track inset; the buttons fill the inner height.
-   min-height (not height) so many-option enums can still wrap to two lines. */
+/* The neutral track keeps its 2px inset; many-option enums may wrap. */
 .settings-segmented {
   min-height: var(--settings-control-height);
   box-sizing: border-box;
@@ -21,10 +20,34 @@
   padding: 2px;
 }
 
-.settings-segmented > .settings-segmented__btn {
-  display: inline-flex;
+.settings-segmented:is(.settings-segmented--accent, .settings-segmented--primary) {
+  min-height: auto;
+  max-width: none;
+  flex-wrap: nowrap;
+  border-color: var(--border);
+  padding: 3px;
+}
+
+.settings-segmented--accent {
   align-items: center;
-  padding-block: 0;
+  background: var(--bg-muted);
+}
+
+.settings-segmented--primary {
+  display: flex;
+  align-items: normal;
+  gap: 1px;
+  background: var(--bg-elevated);
+}
+
+:root[data-theme-mode="light"] .settings-segmented--primary {
+  background: white;
+}
+
+.settings-segmented--compact {
+  --settings-control-height: 24px;
+
+  flex-wrap: nowrap;
 }
 
 .settings-control__sr-label {
@@ -47,10 +70,13 @@ wa-radio-group.settings-segmented::part(form-control-label) {
   clip: rect(0, 0, 0, 0);
 }
 
-.settings-segmented__btn {
+/* The parent selector also wins over the shared .btn hover/active chrome. */
+.settings-segmented > .settings-segmented__btn {
+  display: inline-flex;
+  align-items: center;
   font-size: var(--control-ui-text-sm);
   font-weight: 550;
-  padding: 4px 12px;
+  padding: 0 12px;
   border: none;
   border-radius: calc(var(--radius-md) - 3px);
   background: transparent;
@@ -63,36 +89,107 @@ wa-radio-group.settings-segmented::part(form-control-label) {
     box-shadow var(--duration-normal) var(--ease-out);
 }
 
-.settings-segmented__btn:hover {
+.settings-segmented--accent > .settings-segmented__btn {
+  min-height: 28px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
   color: var(--text);
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out);
 }
 
-.settings-segmented__btn:focus-visible {
-  outline: none;
-  color: var(--text);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+.settings-segmented--primary > .settings-segmented__btn {
+  display: block;
+  align-items: normal;
+  flex: 1;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: normal;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
 }
 
-.settings-segmented__btn--active {
+.settings-segmented--compact > .settings-segmented__btn {
+  padding: 0 6px;
+  font-size: 10px;
+}
+
+.settings-segmented > .settings-segmented__btn--active {
   background: var(--bg-elevated);
   color: var(--text-strong);
   box-shadow: var(--shadow-sm);
 }
 
-.settings-segmented__btn:disabled {
+.settings-segmented--accent > .settings-segmented__btn--active {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-weight: 600;
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+:root[data-theme-mode="light"] .settings-segmented--accent > .settings-segmented__btn--active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.settings-segmented--primary > .settings-segmented__btn--active {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  box-shadow: 0 1px 3px var(--accent-subtle);
+}
+
+:is(.settings-segmented--accent, .settings-segmented--primary)
+  > .settings-segmented__btn:hover:not(.settings-segmented__btn--active) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+:where(.settings-segmented:not(.settings-segmented--accent, .settings-segmented--primary))
+  > .settings-segmented__btn:hover {
+  color: var(--text);
+}
+
+:where(.settings-segmented:not(.settings-segmented--accent, .settings-segmented--primary))
+  > .settings-segmented__btn:focus-visible {
+  outline: none;
+  color: var(--text);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+:where(.settings-segmented:not(.settings-segmented--primary)) > .settings-segmented__btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
 @media (forced-colors: active) {
-  .settings-segmented__btn--active {
+  :where(.settings-segmented:not(.settings-segmented--accent, .settings-segmented--primary))
+    > .settings-segmented__btn--active {
     text-decoration: underline 2px;
     text-underline-offset: 3px;
   }
 
-  .settings-segmented__btn:focus-visible {
+  :where(.settings-segmented:not(.settings-segmented--accent, .settings-segmented--primary))
+    > .settings-segmented__btn:focus-visible {
     outline: 2px solid Highlight;
     outline-offset: 2px;
+  }
+}
+
+@media (max-width: 768px) {
+  .settings-segmented__btn[data-compact-label] {
+    font-size: 0;
+  }
+
+  .settings-segmented__btn[data-compact-label]::after {
+    content: attr(data-compact-label);
+    font-size: var(--control-ui-text-sm);
   }
 }
 

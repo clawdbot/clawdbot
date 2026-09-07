@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
@@ -10,7 +9,6 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { loadSettings } from "../../app/settings.ts";
 import {
   createApplicationContextProvider,
   createApplicationGateway,
@@ -72,37 +70,128 @@ describe("supportsSystemInfo", () => {
   });
 });
 
+async function selectCredentialMode(page: ConnectionPage, mode: "Token" | "Password") {
+  const button = [...page.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find(
+    (candidate) => candidate.textContent?.trim() === mode,
+  );
+  if (!button) {
+    throw new Error(`Missing credential mode: ${mode}`);
+  }
+  button.click();
+  await settleLitElement(page);
+  expect(button.getAttribute("aria-checked")).toBe("true");
+}
+
+function editInput(page: ConnectionPage, label: string, value: string) {
+  const input = control(page, `input[aria-label="${label}"]`);
+  input.value = value;
+  input.dispatchEvent(new Event("input"));
+}
+
 describe("ConnectionPage credentials", () => {
-  it("re-scopes credentials when the Gateway URL changes", () => {
-    const page = new ConnectionPage();
-    const state = page as unknown as {
-      settings: ReturnType<typeof loadSettings>;
-      password: string;
-      context: ApplicationContext;
-      render: () => ReturnType<ConnectionPage["render"]>;
-    };
-    state.settings = {
-      ...loadSettings(),
+  it("re-scopes credentials when the Gateway URL changes", async () => {
+    const current = source({
+      request: vi.fn().mockResolvedValue(deviceSystemInfo),
+    } as unknown as GatewayBrowserClient);
+    Object.assign(current.gateway.connection, {
       gatewayUrl: "wss://gateway.example/openclaw",
       token: "old-token",
-    };
-    state.password = "old-password";
-    state.context = {
-      gateway: { snapshot: { phase: "stopped", hello: null, lastError: null } },
-      channels: { state: { channelsLastSuccess: null } },
-    } as unknown as ApplicationContext;
-    const container = document.createElement("div");
-    render(state.render(), container);
-    const input = container.querySelector<HTMLInputElement>('input[aria-label="WebSocket URL"]');
-    if (!input) {
-      throw new Error("expected Gateway URL input");
-    }
+      password: "old-password",
+    });
+    const connect = vi.spyOn(current.gateway, "connect");
+    const { page } = await mount(current.gateway);
 
-    input.value = "wss://other-gateway.example/openclaw";
-    input.dispatchEvent(new Event("input"));
+    editInput(page, "Gateway URL", "wss://other-gateway.example/openclaw");
+    await settleLitElement(page);
+    expect(control(page, 'input[aria-label="Credential"]').value).toBe("");
+    await selectCredentialMode(page, "Password");
+    expect(control(page, 'input[aria-label="Credential"]').value).toBe("");
+    control(page, "button.btn.primary").click();
+    expect(connect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gatewayUrl: "wss://other-gateway.example/openclaw",
+        token: "",
+        password: "",
+      }),
+    );
+  });
 
-    expect(state.settings.token).toBe("");
-    expect(state.password).toBe("");
+  it("switches which credential the single input edits and pins the mode when cleared", async () => {
+    const current = source({
+      request: vi.fn().mockResolvedValue(deviceSystemInfo),
+    } as unknown as GatewayBrowserClient);
+    Object.assign(current.gateway.connection, { token: "saved-token", password: "saved-password" });
+    const connect = vi.spyOn(current.gateway, "connect");
+    const { page } = await mount(current.gateway);
+    const credential = () => control(page, 'input[aria-label="Credential"]');
+    expect(page.querySelectorAll(".connection-credential input")).toHaveLength(1);
+    expect(credential().value).toBe("saved-token");
+    editInput(page, "Credential", "");
+    await settleLitElement(page);
+    expect(page.querySelector('[role="radio"][aria-checked="true"]')?.textContent?.trim()).toBe(
+      "Token",
+    );
+    expect(credential().value).toBe("");
+    editInput(page, "Credential", "edited-token");
+    await selectCredentialMode(page, "Password");
+    expect(credential().value).toBe("saved-password");
+    editInput(page, "Credential", "edited-password");
+    await selectCredentialMode(page, "Token");
+    expect(credential().value).toBe("edited-token");
+    await selectCredentialMode(page, "Password");
+    expect(credential().value).toBe("edited-password");
+    control(page, "button.btn.primary").click();
+    expect(connect).toHaveBeenCalledWith(
+      expect.objectContaining({ token: "edited-token", password: "edited-password" }),
+    );
+  });
+
+  it.each(["AUTH_PASSWORD_MISSING", "AUTH_PASSWORD_MISMATCH", "AUTH_PASSWORD_NOT_CONFIGURED"])(
+    "selects Password for %s unless the operator chooses Token",
+    async (lastErrorCode) => {
+      const current = source({
+        request: vi.fn().mockResolvedValue(deviceSystemInfo),
+      } as unknown as GatewayBrowserClient);
+      Object.assign(current.gateway.connection, {
+        token: "saved-token",
+        password: "saved-password",
+      });
+      current.publish({ ...current.gateway.snapshot, phase: "stopped", lastErrorCode });
+      const { page } = await mount(current.gateway);
+      expect(page.querySelector('[role="radio"][aria-checked="true"]')?.textContent?.trim()).toBe(
+        "Password",
+      );
+      expect(control(page, 'input[aria-label="Credential"]').value).toBe("saved-password");
+      await selectCredentialMode(page, "Token");
+      expect(control(page, 'input[aria-label="Credential"]').value).toBe("saved-token");
+    },
+  );
+
+  it("highlights Connect and shows the unsaved hint only while the draft differs", async () => {
+    const current = source({
+      request: vi.fn().mockResolvedValue(deviceSystemInfo),
+    } as unknown as GatewayBrowserClient);
+    const { page } = await mount(current.gateway);
+    const actions = () => [
+      ...page.querySelectorAll<HTMLButtonElement>(".settings-row__control > button.btn"),
+    ];
+    const connectButton = () => control(page, ".settings-row__control > button.btn");
+    const hint = "Unsaved changes apply when you connect.";
+    expect(actions().map((button) => button.textContent?.trim())).toEqual(["Connect"]);
+    expect(connectButton().className).toBe("btn");
+    expect(page.textContent).not.toContain(hint);
+    editInput(page, "Credential", "draft-token");
+    await settleLitElement(page);
+    expect(connectButton().className).toBe("btn primary");
+    expect(page.textContent).toContain(hint);
+    editInput(page, "Credential", "");
+    await settleLitElement(page);
+    expect(connectButton().className).toBe("btn");
+    expect(page.textContent).not.toContain(hint);
+    editInput(page, "Default session", "draft-session");
+    await settleLitElement(page);
+    expect(connectButton().className).toBe("btn primary");
+    expect(page.textContent).toContain(hint);
   });
 });
 
@@ -113,29 +202,29 @@ describe("ConnectionPage Gateway lifecycle", () => {
     const first = source(client);
     const { page, context, provider } = await mount(first.gateway);
     const input = (label: string) => control(page, `input[aria-label="${label}"]`);
-    const edit = (label: string, value: string) => {
-      input(label).value = value;
-      input(label).dispatchEvent(new Event("input"));
-    };
-    edit("Gateway Token", "draft-token");
-    edit("Password (not stored)", "draft-password");
-    edit("Default Session Key", "draft-session");
+    editInput(page, "Credential", "draft-token");
     control(page, 'button[aria-label="Toggle token visibility"]').click();
+    await settleLitElement(page);
+    expect(input("Credential").type).toBe("text");
+    await selectCredentialMode(page, "Password");
+    editInput(page, "Credential", "draft-password");
+    editInput(page, "Default session", "draft-session");
     control(page, 'button[aria-label="Toggle password visibility"]').click();
     await settleLitElement(page);
-    expect(input("Gateway Token").type).toBe("text");
-    expect(input("Password (not stored)").type).toBe("text");
+    expect(input("Credential").type).toBe("text");
 
     first.publish({ ...first.gateway.snapshot, phase: "reconnecting" });
     await settleLitElement(page);
-    expect(input("Gateway Token").type).toBe("password");
-    expect(input("Password (not stored)").type).toBe("password");
+    expect(input("Credential").type).toBe("password");
     expect(page.querySelector(".config-host__name")?.textContent?.trim()).toBe("—");
     first.publish({ ...first.gateway.snapshot, phase: "connected", sessionKey: "remote-session" });
     await settleLitElement(page);
-    expect(input("Gateway Token").value).toBe("draft-token");
-    expect(input("Password (not stored)").value).toBe("draft-password");
-    expect(input("Default Session Key").value).toBe("draft-session");
+    expect(input("Credential").value).toBe("draft-password");
+    expect(input("Default session").value).toBe("draft-session");
+    await selectCredentialMode(page, "Token");
+    expect(input("Credential").value).toBe("draft-token");
+    expect(input("Credential").type).toBe("password");
+    await selectCredentialMode(page, "Password");
     expect(request).toHaveBeenCalledTimes(2);
 
     const second = source(client);
@@ -145,10 +234,12 @@ describe("ConnectionPage Gateway lifecycle", () => {
     });
     provider.setContext({ ...context, gateway: second.gateway });
     await settleLitElement(page);
-    expect(input("Gateway Token").value).toBe("replacement-token");
-    expect(input("Password (not stored)").value).toBe("replacement-password");
-    expect(input("Default Session Key").value).toBe("main");
-    expect(input("Gateway Token").type).toBe("password");
+    expect(input("Credential").value).toBe("replacement-token");
+    expect(input("Default session").value).toBe("main");
+    expect(input("Credential").type).toBe("password");
+    await selectCredentialMode(page, "Password");
+    expect(input("Credential").value).toBe("replacement-password");
+    expect(input("Credential").type).toBe("password");
     expect(request).toHaveBeenCalledTimes(3);
   });
 

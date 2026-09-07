@@ -144,13 +144,13 @@ suite.define(() => {
         : primaryModel;
       await expect.poll(() => modelDescription.textContent()).toContain(displayedModel);
 
-      const fallbackInput = page.locator(".agent-chip-input");
-      await fallbackInput.waitFor({ timeout: 10_000 });
+      const fallbacks = page.locator("openclaw-multi-select.agent-fallbacks");
+      await fallbacks.waitFor({ timeout: 10_000 });
       await expect
-        .poll(async () =>
-          (await fallbackInput.locator(".chip").allTextContents()).map((value) =>
-            value.replace("×", "").trim(),
-          ),
+        .poll(() =>
+          fallbacks
+            .locator(".multi-select__chip")
+            .evaluateAll((chips) => chips.map((chip) => chip.getAttribute("data-value"))),
         )
         .toEqual(expectedFallbacks);
       expect(await gateway.getRequests("config.set")).toHaveLength(0);

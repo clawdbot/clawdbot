@@ -267,9 +267,8 @@ reconcile dependencies before the remote wrapper starts.
 
 ## Core commands
 
-Run the test toolchain on Node 22.22.3+, Node 24.15+, or Node 26+. Vitest 5
-excludes Node 25 from its declared engine range; packaged OpenClaw runtime
-support for Node 25.9+ is unchanged.
+Run the test toolchain on Node 24.16+ or Node 26.1+, matching the packaged
+runtime floor. Older Node bindings can truncate SQLite TEXT values at embedded NUL characters.
 
 The test toolchain pins stable Vitest `5.0.0`, including its browser and coverage
 packages. Use `describe(name, { concurrent: false }, callback)` for ordered
@@ -321,7 +320,7 @@ and runtime parents on TypeScript. Importing a declared subprocess entrypoint
 compiles the fixed test entry set and its workspace dependencies into one fresh
 invocation directory under `.artifacts/vitest-workers/`.
 
-The ten declared application entries run as plain Node JavaScript without a
+The declared application entries run as plain Node JavaScript without a
 TypeScript loader: SQLite read-only snapshots, database verification, Tailscale
 route ownership, the service relay, its POSIX and Windows anchors, the memory
 plugin's KNN child, session transcript archive and reconciliation workers, and
@@ -338,8 +337,13 @@ runtime graph while retaining the durable-write race and process-exit assertions
 Doctor process output tests with bundled plugins disabled reuse that compiled CLI
 inside one lazily created package fixture per test run, keeping real UI checks on
 fixture-owned assets and each scenario’s state separate. Standalone and watch runs
-use live source inside the same fixture. Other
-Worker-thread entries and arbitrary source CLI fixtures remain outside this declared set.
+use live source inside the same fixture.
+
+The prepared model-catalog worker also uses this compiled generation. Separate
+prepared model generations still own separate worker threads, and their choice
+of source or built plugin artifacts stays independent of worker compilation.
+Other worker-thread entries and arbitrary source CLI fixtures remain outside
+this declared set.
 
 The session-title and child-link retention tests declare their title-reader,
 session-utils, and listing roots in this same generation. Each fresh
@@ -982,7 +986,7 @@ Drives the interactive wizard via a pseudo-tty, verifies config/workspace/sessio
 
 ## QR import smoke (Docker)
 
-Ensures the maintained QR runtime helper loads under the supported Docker Node runtimes (Node 24 default, Node 22 compatible):
+Ensures the maintained QR runtime helper loads under the default Docker Node 24 runtime:
 
 ```bash
 pnpm test:docker:qr

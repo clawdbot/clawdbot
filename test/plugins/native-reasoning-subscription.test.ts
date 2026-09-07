@@ -270,6 +270,7 @@ describe("runtime-context replay at prompt submission", () => {
         modelPrompt: text,
         onFinalPromptText: vi.fn(),
         onSteeringAcknowledged: vi.fn(),
+        persistToolResultProjections: async () => {},
         runtimeOnly: false,
         sessionPromptState,
         systemPrompt: session.systemPrompt,
