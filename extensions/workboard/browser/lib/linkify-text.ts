@@ -1,5 +1,16 @@
 import { html, type TemplateResult } from "lit";
 
+// Display-only linker for Workboard notes and comments.
+// Stored card text is never rewritten.
+//
+// Recognized forms:
+// - Markdown: [label](http://…) or [label](https://…)
+// - Bare http:// and https:// URLs
+//
+// Everything else stays literal, including other Markdown, HTML, ftp/mailto/
+// javascript/data URLs, and www. hosts without a scheme. Trailing ) , . ; : ! ?
+// on a bare URL is kept as surrounding text.
+
 const LINK_PATTERN = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/[^\s<>"']+)/g;
 const TRAILING_PUNCTUATION = /[),.;:!?]+$/;
 
@@ -22,8 +33,19 @@ function trimBareUrl(value: string): { href: string; trailing: string } {
   };
 }
 
+function stopCardSurfaceActivation(event: Event) {
+  event.stopPropagation();
+}
+
 function renderExternalLink(href: string, label: string): TemplateResult {
-  return html`<a href=${href} target="_blank" rel="noopener noreferrer">${label}</a>`;
+  return html`<a
+    href=${href}
+    target="_blank"
+    rel="noopener noreferrer"
+    @click=${stopCardSurfaceActivation}
+    @keydown=${stopCardSurfaceActivation}
+    >${label}</a
+  >`;
 }
 
 export function renderLinkedPlainText(text: string): LinkedPlainTextNode[] {

@@ -87,6 +87,12 @@ operator see how a card moved through the board without opening the linked
 session; it is local operating context, not a replacement for session
 transcripts or GitHub issue history.
 
+Displayed card notes and operator comments stay literal plaintext except for
+two link forms: Markdown `[label](https://example.com)` and bare `http://` or
+`https://` URLs. Those render as external links in compact cards, the detail
+drawer, and the edit-card comment list. Other Markdown, HTML, and non-HTTP(S)
+schemes stay visible as typed. Stored values are not rewritten.
+
 The plugin and Control UI use one Workboard card contract. Dashboard refreshes
 therefore preserve workspace provenance and authority, claim state, diagnostic
 actions, and notification sequence numbers instead of projecting a smaller

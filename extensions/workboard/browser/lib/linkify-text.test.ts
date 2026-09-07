@@ -30,6 +30,25 @@ describe("renderLinkedPlainText", () => {
     expect(container.textContent).toBe("Open https://example.com/docs.");
   });
 
+  it("keeps wrapping parentheses around a bare URL", () => {
+    const container = renderLinked("See (https://example.com)");
+    expect(container.querySelector("a")?.getAttribute("href")).toBe("https://example.com");
+    expect(container.textContent).toBe("See (https://example.com)");
+  });
+
+  it("links http markdown and localhost URLs", () => {
+    const container = renderLinked("Try [local](http://127.0.0.1:8080/status) today.");
+    const link = container.querySelector("a");
+    expect(link?.textContent).toBe("local");
+    expect(link?.getAttribute("href")).toBe("http://127.0.0.1:8080/status");
+  });
+
+  it("still autolinks a URL inside malformed markdown", () => {
+    const container = renderLinked("Broken [docs](https://example.com still text.");
+    expect(container.querySelector("a")?.getAttribute("href")).toBe("https://example.com");
+    expect(container.textContent).toBe("Broken [docs](https://example.com still text.");
+  });
+
   it("does not turn javascript or data URLs into anchors", () => {
     const container = renderLinked(
       "Ignore [xss](javascript:alert(1)) and [file](data:text/html,hi) please.",
@@ -37,6 +56,19 @@ describe("renderLinkedPlainText", () => {
     expect(container.querySelector("a")).toBeNull();
     expect(container.textContent).toContain("[xss](javascript:alert(1))");
     expect(container.textContent).toContain("[file](data:text/html,hi)");
+  });
+
+  it.each([
+    ["ftp markdown", "See [files](ftp://files.example/doc) first."],
+    ["mailto markdown", "Email [us](mailto:hi@example.com) maybe."],
+    ["non-url markdown", "Broken [docs](not-a-url) still text."],
+    ["empty host", "Skip [bad](https://) entirely."],
+    ["www without scheme", "Visit www.example.com later."],
+    ["bold markdown", "Keep **bold** and `code` literal."],
+  ])("leaves %s unchanged", (_name, text) => {
+    const container = renderLinked(text);
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.textContent).toBe(text);
   });
 
   it("leaves ordinary notes unchanged", () => {

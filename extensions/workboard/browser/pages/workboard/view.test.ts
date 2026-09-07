@@ -577,6 +577,10 @@ describe("renderWorkboard", () => {
 
     compactLink?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(state.detailCardId).toBeNull();
+    compactLink?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(state.detailCardId).toBeNull();
+    compactLink?.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+    expect(state.detailCardId).toBeNull();
 
     state.detailCardId = "card-1";
     renderView();
