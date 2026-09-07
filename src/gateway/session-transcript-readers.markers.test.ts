@@ -43,6 +43,18 @@ function messageIds(messages: unknown[]) {
   return messages.map((entry) => (entry as { __openclaw: { id: string } })["__openclaw"].id);
 }
 
+function historicalWindowIds(events: Array<{ id: string; type?: string }>, targetId: string) {
+  const targetIndex = events.findIndex((event) => event.id === targetId);
+  const closingIndex =
+    events[targetIndex]?.type === "reset"
+      ? targetIndex
+      : events.findIndex((event, index) => index > targetIndex && event.type === "reset");
+  const openingIndex = events.findLastIndex(
+    (event, index) => index < closingIndex && event.type === "reset",
+  );
+  return events.slice(openingIndex + 1, closingIndex + 1).map((event) => event.id);
+}
+
 describe("session transcript reader marker projection", () => {
   let tempDir: string;
   let storePath: string;
@@ -219,11 +231,20 @@ describe("session transcript reader marker projection", () => {
     for (const { id } of fixture.events.filter(
       (event) => !fixture.expectedIds.includes(event.id),
     )) {
+      const historicalIds = historicalWindowIds(fixture.events, id);
       expect(await readSessionMessagesMatchingIdAsync(scope, id)).toEqual([]);
-      expect(await readSessionMessageByIdAsync(scope, id)).toMatchObject({ found: false });
-      expect(
-        await readSessionMessagesAroundIdWithStatsAsync(scope, { messageId: id, maxMessages: 10 }),
-      ).toMatchObject({ found: false, messages: [], totalMessages: fixture.expectedIds.length });
+      expect(await readSessionMessageByIdAsync(scope, id)).toMatchObject({
+        found: true,
+        message: { __openclaw: { id } },
+      });
+      const anchored = await readSessionMessagesAroundIdWithStatsAsync(scope, {
+        messageId: id,
+        maxMessages: 10,
+      });
+      expect(anchored.found).toBe(true);
+      expect(messageIds(anchored.messages)).toEqual(historicalIds);
+      expect(anchored.totalMessages).toBe(historicalIds.length);
+      expect(messageIds(anchored.messages)).not.toEqual(fixture.expectedIds);
     }
   });
 });

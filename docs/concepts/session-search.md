@@ -12,12 +12,14 @@ read_when:
 includes a `sessionKey`, timestamp, role, and a short matching excerpt. Pass the returned
 `sessionKey`, `messageId`, and `sessionId` together to `sessions_history` to reopen the matched
 context, including retained history from before a session reset. Without `messageId`, history
-returns the newest bounded tail instead.
+returns the newest reset-relative tail. An explicit `messageId` for a retained active-path row
+from before the latest reset opens that original closed interval and does not mix later
+post-reset turns.
 
 Anchored reads use `limit` to bound the surrounding messages and cannot be combined with `offset`.
-For SQLite transcript history, a missing message returns an empty history; a `sessionId` that does
-not belong to the selected session key is rejected. These rules also apply in local embedded mode,
-without a running Gateway.
+For SQLite transcript history, a missing or off-path message returns empty history rather than
+the newest tail; a `sessionId` that does not belong to the selected session key is rejected.
+These rules also apply in local embedded mode, without a running Gateway.
 
 ## Visibility and output
 

@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
+  appendTranscriptEvent,
   appendTranscriptMessage,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
@@ -94,6 +95,44 @@ describe("embedded session history anchors", () => {
     expect(await history({ ...selector, messageId: "missing", limit: 1 })).toMatchObject({
       messages: [],
     });
+  });
+
+  it("reopens a search hit after a reset of the same physical session", async () => {
+    await appendTranscriptMessage(scope, {
+      eventId: "old-tool",
+      message: { role: "toolResult", content: "synthetic scan result" },
+    });
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "reset",
+      parentId: "old-tool",
+      timestamp: "2026-09-07T16:00:00.000Z",
+      reason: "new",
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "fresh",
+      message: { role: "user", content: "fresh after reset", timestamp: 1_700_000_000_400 },
+    });
+
+    const current = await history({ sessionKey: scope.sessionKey, limit: 10 });
+    expect(current.messages.map(readChatHistoryMessageId)).toEqual(["reset", "fresh"]);
+    const search = await toolsFor().search.execute("find", { query: "quasar" });
+    expect((search.details as { results: Array<{ messageId?: string }> }).results).toEqual([
+      expect.objectContaining(selector),
+    ]);
+    const recalled = await history({
+      ...selector,
+      includeTools: true,
+      limit: 10,
+    });
+    expect(recalled.messages.map(readChatHistoryMessageId)).toEqual([
+      "old",
+      "middle",
+      "newest",
+      "old-tool",
+      "reset",
+    ]);
+    expect(recalled.messages.map(readChatHistoryMessageId)).not.toContain("fresh");
   });
 
   it.each(["missing", "wrong-key", "wrong-agent"])(

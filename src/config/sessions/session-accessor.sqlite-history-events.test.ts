@@ -8,11 +8,16 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
+import {
+  appendTranscriptEvent,
+  persistSessionTranscriptTurn,
+  replaceTranscriptEvents,
+} from "./session-accessor.js";
 import { readTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 import {
   readTranscriptDisplayDelta,
   readRecentSessionTranscriptHistoryEvents,
+  readSessionTranscriptHistoryAnchorPage,
   readSessionTranscriptHistoryEvents,
   readSessionTranscriptHistoryEventById,
   readSessionTranscriptHistoryEventPage,
@@ -427,5 +432,171 @@ describe("SQLite transcript history events", () => {
       `synthetic-boundary-${String(bindingCount * 2)}`,
       `synthetic-message-${String(bindingCount * 2 + 1)}`,
     ]);
+  });
+
+  it("opens a pre-reset active-path anchor in the same physical session", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "before-user",
+          parentId: null,
+          message: { role: "user", content: "synthetic charger handshake" },
+        },
+        {
+          eventId: "before-assistant",
+          parentId: "before-user",
+          message: { role: "assistant", content: "handshake captured" },
+        },
+        {
+          eventId: "before-tool",
+          parentId: "before-assistant",
+          message: { role: "toolResult", content: "scan result" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "first-reset",
+      parentId: "before-tool",
+      timestamp: "2026-09-07T00:00:00.000Z",
+      reason: "new",
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "middle-user",
+          parentId: "first-reset",
+          message: { role: "user", content: "middle window" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "second-reset",
+      parentId: "middle-user",
+      timestamp: "2026-09-07T01:00:00.000Z",
+      reason: "new",
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "fresh-user",
+          parentId: "second-reset",
+          message: { role: "user", content: "fresh after reset" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+
+    expect(readSessionTranscriptHistoryEvents(scope).map(historyEventId)).toEqual([
+      "second-reset",
+      "fresh-user",
+    ]);
+    expect(readSessionTranscriptHistoryEventById(scope, "fresh-user")).toMatchObject({
+      seq: 2,
+    });
+    expect(readSessionTranscriptHistoryEventById(scope, "before-user")).toMatchObject({
+      seq: 1,
+    });
+    expect(historyEventId(readSessionTranscriptHistoryEventById(scope, "before-user"))).toBe(
+      "before-user",
+    );
+    expect(historyEventId(readSessionTranscriptHistoryEventById(scope, "first-reset"))).toBe(
+      "first-reset",
+    );
+    expect(readSessionTranscriptHistoryEventById(scope, "missing-anchor")).toBeUndefined();
+
+    const firstWindow = readSessionTranscriptHistoryAnchorPage(scope, {
+      maxMessages: 10,
+      messageId: "before-user",
+    });
+    expect(firstWindow).toMatchObject({ found: true, totalMessages: 4 });
+    expect(firstWindow.events.map(historyEventId)).toEqual([
+      "before-user",
+      "before-assistant",
+      "before-tool",
+      "first-reset",
+    ]);
+    expect(
+      readSessionTranscriptHistoryAnchorPage(scope, {
+        maxMessages: 10,
+        messageId: "first-reset",
+      }).events.map(historyEventId),
+    ).toEqual(["before-user", "before-assistant", "before-tool", "first-reset"]);
+
+    const middleWindow = readSessionTranscriptHistoryAnchorPage(scope, {
+      maxMessages: 10,
+      messageId: "middle-user",
+    });
+    expect(middleWindow.events.map(historyEventId)).toEqual(["middle-user", "second-reset"]);
+
+    const currentWindow = readSessionTranscriptHistoryAnchorPage(scope, {
+      maxMessages: 10,
+      messageId: "fresh-user",
+    });
+    expect(currentWindow.events.map(historyEventId)).toEqual(["second-reset", "fresh-user"]);
+
+    expect(
+      readSessionTranscriptHistoryAnchorPage(scope, {
+        maxMessages: 10,
+        messageId: "missing-anchor",
+      }),
+    ).toMatchObject({
+      found: false,
+      events: [],
+      totalMessages: 2,
+    });
+  });
+
+  it("does not reopen an inactive side-branch message as a historical anchor", async () => {
+    await replaceTranscriptEvents(scope, [
+      { type: "session", version: 3, id: scope.sessionId },
+      {
+        type: "message",
+        id: "root",
+        parentId: null,
+        message: { role: "user", content: "root prompt" },
+      },
+      {
+        type: "message",
+        id: "inactive",
+        parentId: "root",
+        message: { role: "assistant", content: "stale answer" },
+      },
+      {
+        type: "message",
+        id: "active",
+        parentId: "root",
+        message: { role: "assistant", content: "active answer" },
+      },
+      {
+        type: "reset",
+        id: "reset",
+        parentId: "active",
+        timestamp: "2026-09-07T00:00:00.000Z",
+        reason: "new",
+      },
+      {
+        type: "message",
+        id: "fresh",
+        parentId: "reset",
+        message: { role: "user", content: "fresh prompt" },
+      },
+    ]);
+
+    expect(readSessionTranscriptHistoryEvents(scope).map(historyEventId)).toEqual([
+      "reset",
+      "fresh",
+    ]);
+    expect(historyEventId(readSessionTranscriptHistoryEventById(scope, "root"))).toBe("root");
+    expect(readSessionTranscriptHistoryEventById(scope, "inactive")).toBeUndefined();
+    expect(
+      readSessionTranscriptHistoryAnchorPage(scope, {
+        maxMessages: 10,
+        messageId: "inactive",
+      }),
+    ).toMatchObject({ found: false, events: [] });
   });
 });
