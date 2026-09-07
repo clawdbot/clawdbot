@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import type { ReplyToolAuthorityOverlay } from "../auto-reply/reply/reply-run-registry.contracts.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { readErrorName } from "../infra/errors.js";
 import { BoundedSerialQueue } from "../shared/bounded-serial-queue.js";
 import {
@@ -65,6 +66,7 @@ type TalkAgentConsultLifecycleMethods = {
 type LifecycleBoundTalkAgentConsult = ((
   args: unknown,
   signal: AbortSignal,
+  ready?: () => Promise<void>,
 ) => Promise<{ text: string }>) &
   TalkAgentConsultLifecycleMethods;
 
@@ -313,6 +315,18 @@ export function createTalkClientGatewayControlOwner(params: {
     consultSignal.throwIfAborted();
     return runner(args, consultSignal);
   };
+  const awaitProviderConsultReadiness = async (consultSignal: AbortSignal): Promise<void> => {
+    assertActive();
+    consultSignal.throwIfAborted();
+    await racePromiseWithAbortSignal(
+      params.flushTranscript(),
+      AbortSignal.any([signal, consultSignal]),
+    );
+    // Keep accepted work detached, but reject pending admission if either owner
+    // changed while transcript writes were draining.
+    assertActive();
+    consultSignal.throwIfAborted();
+  };
   const bindControl = (nextCommands: GatewayControlCommands) => {
     owner.assertOpen();
     if (!pendingOwners.has(owner) && owners.get(params.voiceSessionId) !== owner) {
@@ -422,7 +436,9 @@ export function createTalkClientGatewayControlOwner(params: {
       // leaves accepted provider work under its own cancellation owner.
       consultControllers.set(consultId, { controller, closeDisposition: "detach" });
       try {
-        return await admitConsult(params.runAgentConsult, { question: prompt }, delegatedSignal);
+        return await params.runAgentConsult({ question: prompt }, delegatedSignal, () =>
+          awaitProviderConsultReadiness(delegatedSignal),
+        );
       } finally {
         consultControllers.delete(consultId);
       }

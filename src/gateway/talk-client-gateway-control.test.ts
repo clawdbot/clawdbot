@@ -499,13 +499,37 @@ describe("Talk client Gateway control owner", () => {
     async ({ entry, transition }) => {
       const flush = createDeferred();
       const flushTranscript = vi.fn(() => flush.promise);
-      const runAgentConsult = vi.fn(async () => ({ text: "must not run" }));
+      const registration = createDeferred<boolean>();
+      const backend = vi.fn(async () => ({ text: "must not run" }));
+      const backendSteer = vi.fn(async () => ({ text: "" }));
+      let ownerInstalled = false;
+      const runAgentConsult = Object.assign(
+        vi.fn(async (_args: unknown, _signal: AbortSignal, ready?: () => Promise<void>) => {
+          ownerInstalled = true;
+          try {
+            await ready?.();
+            registration.resolve(true);
+            return await backend();
+          } catch (error) {
+            registration.resolve(false);
+            throw error;
+          }
+        }),
+        {
+          steer: vi.fn(async () => {
+            if (!ownerInstalled || !(await registration.promise)) {
+              throw new Error("The active Talk consult is no longer current");
+            }
+            return await backendSteer();
+          }),
+        },
+      );
       const common = {
         voiceSessionId: `voice-flush-${entry}-${transition}`,
         sessionTarget,
         connId: `conn-flush-${entry}-${transition}`,
         context: controlContext(),
-        runToolAgentConsult: runAgentConsult,
+        runToolAgentConsult: backend,
         runAgentConsult,
         appendTranscript: vi.fn(async () => undefined),
         closeLogicalSession: vi.fn(async () => undefined),
@@ -513,6 +537,7 @@ describe("Talk client Gateway control owner", () => {
       const owner = createTalkClientGatewayControlOwner({ ...common, flushTranscript });
       let replacement: ReturnType<typeof createTalkClientGatewayControlOwner> | undefined;
       let delegation: Promise<unknown> | undefined;
+      let steering: Promise<unknown> | undefined;
       await owner.adoptProvider(vi.fn(async () => undefined));
       owner.activate();
       try {
@@ -529,6 +554,14 @@ describe("Talk client Gateway control owner", () => {
           });
         }
         await vi.waitFor(() => expect(flushTranscript).toHaveBeenCalledOnce());
+        if (entry === "delegation") {
+          steering = owner.runAgentConsult
+            .steer?.({ prompt: "latest task" })
+            .catch((error: unknown) => error);
+          if (!steering) {
+            throw new Error("owned Talk runner did not expose steering");
+          }
+        }
         if (transition === "replace") {
           replacement = createTalkClientGatewayControlOwner({
             ...common,
@@ -539,20 +572,104 @@ describe("Talk client Gateway control owner", () => {
         } else {
           void owner.close();
         }
-        flush.resolve();
-        await owner.close();
         if (delegation) {
           await expect(delegation).resolves.toBeInstanceOf(Error);
+          await expect(steering).resolves.toBeInstanceOf(Error);
         }
-        expect(runAgentConsult).not.toHaveBeenCalled();
+        expect(backend).not.toHaveBeenCalled();
+        expect(backendSteer).not.toHaveBeenCalled();
+        flush.resolve();
+        await owner.close();
       } finally {
         flush.resolve();
+        registration.resolve(false);
         await owner.close();
         await replacement?.close();
         await delegation;
+        await steering;
       }
     },
   );
+
+  it("keeps delegation steering pending until transcript admission publishes the backend", async () => {
+    const flush = createDeferred();
+    const finish = createDeferred<{ text: string }>();
+    const registered = createDeferred();
+    const flushTranscript = vi.fn(() => flush.promise);
+    let ownerInstalled = false;
+    let steeringOutcome: "pending" | "resolved" | "rejected" = "pending";
+    const backendStarted = vi.fn();
+    const steer = vi.fn(async () => {
+      if (!ownerInstalled) {
+        throw new Error("No active Talk consult is available to steer");
+      }
+      await registered.promise;
+      return { text: "" };
+    });
+    const runAgentConsult = Object.assign(
+      vi.fn(
+        async (
+          _args: unknown,
+          _signal: AbortSignal,
+          ready?: () => Promise<void>,
+        ): Promise<{ text: string }> => {
+          ownerInstalled = true;
+          await ready?.();
+          backendStarted();
+          registered.resolve();
+          return await finish.promise;
+        },
+      ),
+      { steer },
+    );
+    const owner = createTalkClientGatewayControlOwner({
+      voiceSessionId: "voice-flush-steering",
+      sessionTarget,
+      connId: "conn-flush-steering",
+      context: controlContext(),
+      runToolAgentConsult: vi.fn(async () => ({ text: "unused" })),
+      runAgentConsult,
+      appendTranscript: vi.fn(async () => undefined),
+      flushTranscript,
+      closeLogicalSession: vi.fn(async () => undefined),
+    });
+    await owner.adoptProvider(vi.fn(async () => undefined));
+    owner.activate();
+
+    const first = owner.runAgentConsult({ prompt: "first task" });
+    await vi.waitFor(() => expect(flushTranscript).toHaveBeenCalledOnce());
+    const steering = owner.runAgentConsult.steer?.({ prompt: "latest task" }).then(
+      () => {
+        steeringOutcome = "resolved";
+      },
+      () => {
+        steeringOutcome = "rejected";
+      },
+    );
+    if (!steering) {
+      throw new Error("owned Talk runner did not expose steering");
+    }
+
+    try {
+      await Promise.resolve();
+      expect(steeringOutcome).toBe("pending");
+      expect(backendStarted).not.toHaveBeenCalled();
+      flush.resolve();
+      await steering;
+      expect(steeringOutcome).toBe("resolved");
+      expect(steer).toHaveBeenCalledOnce();
+      expect(backendStarted).toHaveBeenCalledOnce();
+      finish.resolve({ text: "done" });
+      await expect(first).resolves.toEqual({ text: "done" });
+    } finally {
+      flush.resolve();
+      registered.resolve();
+      finish.resolve({ text: "cleanup" });
+      await steering;
+      await first.catch(() => undefined);
+      await owner.close();
+    }
+  });
 
   it.each(["tool", "delegation"] as const)(
     "never admits a %s consult after flush completion schedules closure",
@@ -562,16 +679,22 @@ describe("Talk client Gateway control owner", () => {
       const admissionsAfterClose: boolean[] = [];
       let closed = false;
       const flushTranscript = vi.fn(() => flush.promise);
-      const runAgentConsult = vi.fn(async () => {
+      const backend = vi.fn(async () => {
         admissionsAfterClose.push(closed);
         return { text: "accepted while open" };
       });
+      const runAgentConsult = vi.fn(
+        async (_args: unknown, _signal: AbortSignal, ready?: () => Promise<void>) => {
+          await ready?.();
+          return await backend();
+        },
+      );
       const owner = createTalkClientGatewayControlOwner({
         voiceSessionId: `voice-flush-completion-${entry}`,
         sessionTarget,
         connId: `conn-flush-completion-${entry}`,
         context: controlContext(),
-        runToolAgentConsult: runAgentConsult,
+        runToolAgentConsult: backend,
         runAgentConsult,
         appendTranscript: vi.fn(async () => undefined),
         flushTranscript,

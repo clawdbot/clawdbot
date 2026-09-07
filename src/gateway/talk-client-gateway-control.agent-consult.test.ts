@@ -346,6 +346,75 @@ describe("Talk client agent consult admission", () => {
     }
   });
 
+  it("installs steering ownership before readiness and delays backend admission", async () => {
+    const ready = deferred<void>();
+    const finish = deferred<void>();
+    const chatAbortControllers = new Map();
+    const handle = createEmbeddedRunHandle({ runId: "run-talk" });
+    mocks.consultRealtimeVoiceAgent.mockImplementationOnce(async (params: ConsultParams) => {
+      params.onRunStarted?.({ runId: "run-talk", sessionId: "session-talk", timeoutMs: 1 });
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: "researcher",
+          sessionKey: "agent:researcher:talk",
+          embeddedRunToolAuthorityBinding: () => ({
+            source: "attempt",
+            project: () => "authority",
+            assertActive: () => {},
+          }),
+        },
+        () => setActiveEmbeddedRun("session-talk", handle, "agent:researcher:talk"),
+      );
+      await finish.promise;
+      clearActiveEmbeddedRun("session-talk", handle, "agent:researcher:talk");
+      return { text: "done" };
+    });
+    const runner = createTalkClientAgentConsultRunner({
+      config,
+      context: { chatAbortControllers, logGateway: { warn: vi.fn() } } as never,
+      sessionTarget: {
+        agentId: "researcher",
+        sessionKey: "main",
+        canonicalKey: "agent:researcher:talk",
+        storePath: "/tmp/sessions",
+      },
+      ownerConnId: "connection-owner",
+      getVoiceSessionId: () => "voice-session",
+      initialItems: [],
+      registerRun: vi.fn(),
+      isRunCurrent: () => true,
+    });
+    const readiness = vi.fn(() => ready.promise);
+    const run = runner.runOwnedArgs(
+      { question: "first task" },
+      new AbortController().signal,
+      readiness,
+    );
+    const steer = runner.runOwnedArgs.steer;
+    if (!steer) {
+      throw new Error("owned Talk runner did not expose steering");
+    }
+    const steering = steer({ prompt: "latest task" });
+
+    try {
+      expect(readiness).toHaveBeenCalledOnce();
+      expect(mocks.consultRealtimeVoiceAgent).not.toHaveBeenCalled();
+      await Promise.resolve();
+      expect(mocks.controlRealtimeVoiceAgentRun).not.toHaveBeenCalled();
+      ready.resolve();
+      await steering;
+      expect(mocks.consultRealtimeVoiceAgent).toHaveBeenCalledOnce();
+      expect(mocks.controlRealtimeVoiceAgentRun).toHaveBeenCalledOnce();
+      finish.resolve();
+      await expect(run).resolves.toEqual({ text: "done" });
+    } finally {
+      ready.resolve();
+      finish.resolve();
+      await steering.catch(() => undefined);
+      await run.catch(() => undefined);
+    }
+  });
+
   it("closes the Talk admission when core execution fails", async () => {
     mocks.runEmbeddedAgentCore.mockRejectedValueOnce(new Error("core failed"));
 
