@@ -45,6 +45,14 @@ async function runStatus(
   return JSON.parse(output()) as Record<string, unknown>;
 }
 
+async function runStatusOutput(config: OpenClawConfig, args: string[] = []): Promise<string> {
+  const output = captureStdout();
+  await createProgram(config).parseAsync(["onepassword", "secretref", "status", ...args], {
+    from: "user",
+  });
+  return output();
+}
+
 async function runSetup(planPath: string, args: string[]): Promise<string> {
   const output = captureStdout();
   await createProgram().parseAsync(
@@ -297,6 +305,26 @@ describe("1Password readiness", () => {
 });
 
 describe("1Password CLI status", () => {
+  it("shows the selected provider alias in human-readable output", async () => {
+    const output = await runStatusOutput(
+      {
+        secrets: {
+          providers: Object.fromEntries(
+            ["corp-onepassword", "prod-onepassword"].map((alias) => [
+              alias,
+              {
+                source: "exec",
+                pluginIntegration: { pluginId: "onepassword", integrationId: "onepassword" },
+              },
+            ]),
+          ),
+        },
+      },
+      ["--provider-alias", "corp-onepassword"],
+    );
+    expect(output).toContain("Provider alias: corp-onepassword");
+  });
+
   it("discovers a configured custom provider alias", async () => {
     const result = await runStatus({
       secrets: {

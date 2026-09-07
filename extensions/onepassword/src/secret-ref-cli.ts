@@ -159,6 +159,7 @@ async function runStatus(
   writeLine(
     `1Password provider: ${providerReady ? "ready" : provider.configured ? "misconfigured" : "not configured"}`,
   );
+  writeLine(`Provider alias: ${providerAlias}`);
   if (provider.source) {
     writeLine(`Source: ${provider.source}`);
   }

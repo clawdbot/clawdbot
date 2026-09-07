@@ -52,19 +52,26 @@ async function runSetup(planPath: string, args: string[]): Promise<string> {
   }
 }
 
+async function runStatusOutput(
+  config: Record<string, unknown>,
+  args: string[] = [],
+): Promise<string> {
+  const stdout = captureStdout();
+  try {
+    await createProgram(config).parseAsync(["vault", "status", ...args], {
+      from: "user",
+    });
+    return stdout.output();
+  } finally {
+    stdout.restore();
+  }
+}
+
 async function runStatus(
   config: Record<string, unknown>,
   args: string[] = [],
 ): Promise<Record<string, unknown>> {
-  const stdout = captureStdout();
-  try {
-    await createProgram(config).parseAsync(["vault", "status", "--json", ...args], {
-      from: "user",
-    });
-    return JSON.parse(stdout.output()) as Record<string, unknown>;
-  } finally {
-    stdout.restore();
-  }
+  return JSON.parse(await runStatusOutput(config, ["--json", ...args])) as Record<string, unknown>;
 }
 
 afterEach(() => {
@@ -227,6 +234,26 @@ describe("vault CLI setup plan", () => {
 });
 
 describe("vault CLI status", () => {
+  it("shows the selected provider alias in human-readable output", async () => {
+    const output = await runStatusOutput(
+      {
+        secrets: {
+          providers: Object.fromEntries(
+            ["corp-vault", "prod-vault"].map((alias) => [
+              alias,
+              {
+                source: "exec",
+                pluginIntegration: { pluginId: "vault", integrationId: "vault" },
+              },
+            ]),
+          ),
+        },
+      },
+      ["--provider-alias", "corp-vault"],
+    );
+    expect(output).toContain("Provider alias: corp-vault");
+  });
+
   it("discovers a configured custom Vault provider alias", async () => {
     const result = await runStatus({
       secrets: {

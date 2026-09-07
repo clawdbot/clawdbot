@@ -100,6 +100,7 @@ async function runStatus(config: OpenClawConfig, options: StatusOptions): Promis
     return;
   }
   writeLine(`Vault provider: ${provider.configured ? "configured" : "not configured"}`);
+  writeLine(`Provider alias: ${providerAlias}`);
   if (provider.source) {
     writeLine(`Source: ${provider.source}`);
   }
