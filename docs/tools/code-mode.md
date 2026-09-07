@@ -747,6 +747,36 @@ declare function json(value: unknown): void;
 declare function yield_control(reason?: string): Promise<void>;
 ```
 
+`URL` and `URLSearchParams` are available for local URL parsing and query
+manipulation. They use the pinned `whatwg-url` implementation of the WHATWG URL
+API, including relative bases, Unicode hostnames, linked `url.searchParams`,
+iterable/record query construction, and `URL.canParse`/`URL.parse`. Invalid URL
+construction throws `TypeError`; `URL.parse` returns `null` when parsing fails.
+Constructors, instances, linked parameters, and iterators remain in the guest
+across inline tool calls and explicit `wait` snapshot restoration.
+
+```javascript
+const url = new URL("../search", "https://example.com/docs/start");
+url.searchParams.append("q", "hello world");
+url.searchParams.append("q", "second");
+return { href: url.href, queries: url.searchParams.getAll("q") };
+```
+
+These are pure-data APIs, not browser or Node capabilities. Parsing an `http:`,
+`file:`, or other URL never opens a connection or reads a file. `fetch`,
+`WebSocket`, Node modules, and Blob/object-URL APIs are not added. Return an
+explicit string or plain record (`url.href`, `url.toJSON()`, or
+`params.toString()`); the existing bridge does not transport class instances.
+Library initialization, parsing, and input coercion use the existing guest
+execution and memory limits, and all results retain the existing output caps.
+
+Maintainers regenerate the checked-in guest source with `pnpm code-mode:url:gen`
+after an approved dependency update and verify it with `pnpm code-mode:url:check`.
+The generated asset includes the licenses of its incorporated packages. It is
+bundled with the worker; runtime execution does not load npm modules into the
+guest. The pinned upstream implementation determines specification coverage;
+these APIs do not imply support for the rest of the web platform.
+
 `TextEncoder` and `TextDecoder` are available for local text and byte transforms.
 Encoder and decoder instances survive `wait` snapshot restoration. They run
 inside the QuickJS sandbox and grant no filesystem, module, or network access.
