@@ -426,8 +426,9 @@ export async function runSqliteSessionReclamation(params: {
   ) {
     return await runExclusiveSqliteSessionWrite(
       params.plan.databaseOptions,
-      async () =>
-        reclaimSqliteSessionInTransaction(params.plan, {
+      async () => {
+        params.assertCommitAllowed?.();
+        return reclaimSqliteSessionInTransaction(params.plan, {
           beforeMutation: params.assertCommitAllowed,
           onCommit: (database) => {
             const publish = prepareReclamationPublication(params.plan);
@@ -436,7 +437,8 @@ export async function runSqliteSessionReclamation(params: {
             }
             params.onInProcessCommit?.(database);
           },
-        }),
+        });
+      },
       params.diagnostics,
     );
   }

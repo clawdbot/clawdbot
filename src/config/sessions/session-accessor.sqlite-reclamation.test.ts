@@ -11,15 +11,25 @@ import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import { configureSqliteWalMaintenance } from "../../infra/sqlite-wal.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
+  getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { loadTranscriptEvents } from "./session-accessor.js";
 import { runSqliteTranscriptArchiveWorkerOperation } from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
-import { loadSessionEntry, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import {
+  loadSessionEntry,
+  loadSessionEntryReadOnly,
+  replaceSessionEntrySync,
+} from "./session-accessor.sqlite-entry.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 import {
   createHistoryEvictionReclamationPlan,
@@ -285,6 +295,111 @@ test("captures removal identity when a synchronous writer authorizes reclamation
     unsubscribe();
   }
 });
+
+test.each([false, true])(
+  "in-process reclamation checks authority before cold database admission (revoked: %s)",
+  async (revoked) => {
+    const { database, databaseOptions, scopes } = createFixture();
+    const removed = scopes[0]!;
+    const survivor = scopes[1]!;
+    expect(appendTranscriptEventSync(removed, { type: "session", id: removed.sessionId })).toEqual({
+      ok: true,
+      value: true,
+    });
+    const current = { ...removed, sessionId: "parent-current" };
+    replaceSessionEntrySync(current, { sessionId: current.sessionId, updatedAt: 2 });
+    expect(appendTranscriptEventSync(current, { type: "session", id: current.sessionId })).toEqual({
+      ok: true,
+      value: true,
+    });
+    const expectedEntry = loadSessionEntry(current);
+    if (!expectedEntry) {
+      throw new Error("expected the native removal fixture entry");
+    }
+    const plan = createLifecycleArtifactReclamationPlan({
+      agentId: databaseOptions.agentId,
+      databaseOptions,
+      entries: [{ sessionKey: removed.sessionKey, expectedEntry }],
+      materializedPlans: [],
+    });
+    const stateDatabase = openOpenClawStateDatabase({ env: databaseOptions.env });
+    const inspect = () => {
+      const opened = withOpenClawAgentDatabaseReadOnly(
+        ({ db }) => ({
+          entries: db
+            .prepare("SELECT session_key, entry_json FROM session_nodes ORDER BY session_key")
+            .all(),
+          windows: db
+            .prepare(
+              "SELECT session_id, session_key, previous_session_id FROM session_windows ORDER BY session_id",
+            )
+            .all(),
+          events: db
+            .prepare(
+              "SELECT session_id, seq, event_json FROM transcript_events ORDER BY session_id, seq",
+            )
+            .all(),
+          repairIndex: db
+            .prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND name = ?")
+            .get("idx_agent_cache_expiry"),
+        }),
+        databaseOptions,
+      );
+      if (!opened.found) {
+        throw new Error("expected the existing native reclamation database");
+      }
+      return {
+        ...opened.value,
+        writerOpen: getOpenClawAgentDatabaseIfOpen(databaseOptions)?.db.isOpen ?? false,
+        leases: stateDatabase.db
+          .prepare("SELECT lease_id FROM agent_database_leases WHERE path = ? ORDER BY lease_id")
+          .all(database.path),
+      };
+    };
+    // The prepared operation loses its warm handle before it can enter the FIFO.
+    database.db.exec("DROP INDEX idx_agent_cache_expiry");
+    expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+    const before = inspect();
+    expect(before).toMatchObject({ writerOpen: false, leases: [], repairIndex: undefined });
+    const survivorEntry = loadSessionEntryReadOnly(survivor);
+    try {
+      const operation = runSqliteSessionReclamation({
+        forceInProcess: true,
+        plan,
+        assertCommitAllowed: () => {
+          if (revoked) {
+            throw new Error("native reclamation authority revoked");
+          }
+        },
+      });
+      if (revoked) {
+        await expect(operation).rejects.toThrow("native reclamation authority revoked");
+        // Read-only observation must not itself reopen or repair the rejected target.
+        expect(inspect()).toEqual(before);
+        expect(loadSessionEntryReadOnly(current)).toEqual(expectedEntry);
+      } else {
+        await expect(operation).resolves.toMatchObject({
+          kind: "lifecycle-artifacts",
+          value: { removedEntries: 1 },
+        });
+        const after = inspect();
+        expect(after).toMatchObject({
+          writerOpen: true,
+          repairIndex: { name: "idx_agent_cache_expiry" },
+          events: before.events,
+          windows: before.windows,
+        });
+        expect(after.leases).toHaveLength(1);
+        expect(loadSessionEntryReadOnly(current)).toBeUndefined();
+      }
+      expect(database.db.isOpen).toBe(false);
+      expect(loadSessionEntryReadOnly(survivor)).toEqual(survivorEntry);
+    } finally {
+      closeOpenClawAgentDatabaseByPath(database.path);
+      closeOpenClawStateDatabaseForTest();
+    }
+  },
+);
 
 test.runIf(process.platform !== "win32")(
   "keeps the opened database and its canonical writer queue after an alias retarget",
