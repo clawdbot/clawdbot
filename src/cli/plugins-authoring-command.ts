@@ -329,16 +329,11 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
     return;
   }
 
-  // The build rewrites the user's hand-maintained package.json in place; publish
-  // it atomically (preserving the existing file and directory modes) so a
-  // mid-write failure cannot truncate the manifest, matching the adjacent
-  // openclaw.plugin.json tmp+rename write.
   await replaceFileAtomic({
     filePath: packagePath,
     content: `${JSON.stringify(nextPackageManifest, null, 2)}\n`,
     preserveExistingMode: true,
-    dirMode: (await fs.promises.stat(rootDir)).mode & 0o777,
-    copyFallbackOnPermissionError: true,
+    dirMode: (await fs.promises.stat(rootDir)).mode & 0o7777,
     syncTempFile: true,
     syncParentDir: true,
   });

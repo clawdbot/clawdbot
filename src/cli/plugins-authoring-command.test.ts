@@ -647,11 +647,9 @@ describe("plugin authoring commands", () => {
       }
       return originalCwd;
     });
-    // The package.json write is staged through an atomic temp file, so hook the
-    // temp open instead of the final path.
     const realOpen = fsp.open.bind(fsp);
     const openSpy = vi.spyOn(fsp, "open").mockImplementation(async (file, flags, mode) => {
-      const handle = await realOpen(file, flags, mode as never);
+      const handle = await realOpen(file, flags, mode);
       if (String(file).startsWith(tmpDir) && String(file).endsWith(".tmp")) {
         cwdRemoved = true;
       }
@@ -673,53 +671,76 @@ describe("plugin authoring commands", () => {
     }
   });
 
-  it("keeps the original package.json intact when the build write fails mid-flight", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-build-write-fail-"));
-    const packagePath = path.join(tmpDir, "package.json");
-    const entryPath = writeSourceToolPluginProject({
-      tmpDir,
-      packageName: "openclaw-plugin-build-write-fail",
-      pluginId: "build-write-fail",
-      toolName: "build_write_fail_echo",
-    });
-    const originalPackage = fs.readFileSync(packagePath, "utf8");
-    const originalMode = fs.statSync(packagePath).mode & 0o777;
+  it.each(["write", "rename"] as const)(
+    "keeps the project intact when package publication fails during %s",
+    async (failure) => {
+      const tmpDir = tempDirs.make("openclaw-plugin-build-failure-");
+      const packagePath = path.join(tmpDir, "package.json");
+      const entryPath = writeSourceToolPluginProject({
+        tmpDir,
+        packageName: "openclaw-plugin-build-failure",
+        pluginId: "build-failure",
+        toolName: "build_failure_echo",
+      });
+      fs.chmodSync(packagePath, 0o640);
+      fs.chmodSync(tmpDir, 0o3770);
+      const originalPackage = fs.readFileSync(packagePath);
+      const originalMode = fs.statSync(packagePath).mode & 0o7777;
+      const originalDirectoryMode = fs.statSync(tmpDir).mode & 0o7777;
+      const originalEntries = fs.readdirSync(tmpDir).sort();
+      const error = Object.assign(new Error("publication failed"), {
+        code: failure === "write" ? "ENOSPC" : "EPERM",
+      });
+      let stagedHandle: Awaited<ReturnType<typeof fsp.open>> | undefined;
+      const realOpen = fsp.open.bind(fsp);
+      vi.spyOn(fsp, "open").mockImplementation(async (file, flags, mode) => {
+        const handle = await realOpen(file, flags, mode);
+        if (String(file).startsWith(tmpDir) && String(file).endsWith(".tmp")) {
+          stagedHandle = handle;
+        }
+        return handle;
+      });
+      const realWrite = fsp.writeFile.bind(fsp);
+      vi.spyOn(fsp, "writeFile").mockImplementation(async (file, data, options) => {
+        if (failure === "write" && file === stagedHandle) {
+          await realWrite(file, "partial");
+          throw error;
+        }
+        return realWrite(file, data, options);
+      });
+      const realWriteSync = fs.writeFileSync.bind(fs);
+      vi.spyOn(fs, "writeFileSync").mockImplementation((file, data, options) => {
+        if (failure === "write" && file === packagePath) {
+          realWriteSync(file, "partial");
+          throw error;
+        }
+        return realWriteSync(file, data, options);
+      });
+      const realRename = fsp.rename.bind(fsp);
+      vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
+        if (failure === "rename" && to === packagePath) {
+          throw error;
+        }
+        return realRename(from, to);
+      });
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
 
-    // Fail the staged package.json write halfway through, as a full disk does.
-    // fs-safe writes via fs.promises.writeFile(handle, content), so track the
-    // staged temp handle at open time and fail its writeFile.
-    const stagedHandles = new Set<unknown>();
-    const realOpen = fsp.open.bind(fsp);
-    const realWriteFile = fsp.writeFile.bind(fsp);
-    const openSpy = vi.spyOn(fsp, "open").mockImplementation(async (file, flags, mode) => {
-      const handle = await realOpen(file, flags, mode as never);
-      if (String(file).startsWith(tmpDir) && String(file).endsWith(".tmp")) {
-        stagedHandles.add(handle);
+      try {
+        await expect(
+          runPluginsBuildCommand({ root: tmpDir, entry: entryPath }),
+        ).rejects.toMatchObject({
+          code: error.code,
+        });
+        expect(fs.readFileSync(packagePath)).toEqual(originalPackage);
+        expect(fs.statSync(packagePath).mode & 0o7777).toBe(originalMode);
+        expect(fs.statSync(tmpDir).mode & 0o7777).toBe(originalDirectoryMode);
+        expect(fs.readdirSync(tmpDir).sort()).toEqual(originalEntries);
+        expect(log).not.toHaveBeenCalled();
+      } finally {
+        vi.restoreAllMocks();
       }
-      return handle;
-    });
-    const writeSpy = vi.spyOn(fsp, "writeFile").mockImplementation(async (file, data, options) => {
-      if (stagedHandles.has(file)) {
-        const text = typeof data === "string" ? data : Buffer.from(data as Uint8Array);
-        await realWriteFile(file as never, text.slice(0, 16), options as never);
-        throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
-      }
-      return realWriteFile(file as never, data as never, options as never);
-    });
-
-    try {
-      await expect(
-        runPluginsBuildCommand({ root: tmpDir, entry: entryPath }),
-      ).rejects.toMatchObject({ code: "ENOSPC" });
-      expect(fs.readFileSync(packagePath, "utf8")).toBe(originalPackage);
-      expect(fs.statSync(packagePath).mode & 0o777).toBe(originalMode);
-      expect(fs.readdirSync(tmpDir).filter((entry) => entry.includes(".tmp"))).toEqual([]);
-    } finally {
-      writeSpy.mockRestore();
-      openSpy.mockRestore();
-      fs.rmSync(tmpDir, { force: true, recursive: true });
-    }
-  });
+    },
+  );
 
   it("finishes init with an absolute directory after the launch directory is removed", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-deleted-cwd-init-"));
