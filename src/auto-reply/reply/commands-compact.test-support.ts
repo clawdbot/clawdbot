@@ -31,6 +31,7 @@ export const {
   compactEmbeddedAgentSession,
   enqueueSystemEvent,
   formatContextUsageShort,
+  formatTokenCount,
   incrementCompactionCount,
   resolveCurrentSessionEntry,
   isEmbeddedAgentRunAbortableForCompaction,

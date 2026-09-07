@@ -11,6 +11,7 @@ import {
   buildCompactParams,
   compactEmbeddedAgentSession,
   formatContextUsageShort,
+  formatTokenCount,
   handleCompactCommand,
   incrementCompactionCount,
   requireCompactEmbeddedAgentSessionCall,
@@ -563,6 +564,38 @@ describe("handleCompactCommand", () => {
     },
   );
 
+  it("does not render a token arrow when a decrease formats to equal labels", async () => {
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "compacted",
+        firstKeptEntryId: "first-kept",
+        tokensBefore: 12_499,
+        tokensAfter: 12_001,
+      },
+    });
+    vi.mocked(formatTokenCount)
+      .mockImplementationOnce(() => "12k")
+      .mockImplementationOnce(() => "12k");
+
+    const result = await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        sessionEntry: {
+          sessionId: "target-session",
+          updatedAt: Date.now(),
+        },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(result?.reply?.text).toBe("⚙️ Compacted • Context 12.1k");
+  });
+
   it("prefers the target session entry when incrementing compaction count", async () => {
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
       ok: true,
@@ -576,7 +609,7 @@ describe("handleCompactCommand", () => {
       },
     });
 
-    await handleCompactCommand(
+    const result = await handleCompactCommand(
       {
         ...buildCompactParams("/compact", {
           commands: { text: true },
@@ -604,7 +637,44 @@ describe("handleCompactCommand", () => {
     expect(call.sessionEntry.sessionId).toBe("target-session");
     expect(call.compactionKind).toBe("context-engine");
     expect(call.tokensAfter).toBe(321);
+    expect(result?.reply?.text).toBe("⚙️ Compacted (999 → 321) • Context 12.1k");
   });
+
+  it.each([
+    { tokensBefore: 0, tokensAfter: 36 },
+    { tokensBefore: 20, tokensAfter: 30 },
+    { tokensBefore: 36, tokensAfter: 36 },
+  ])(
+    "does not render a growth arrow for $tokensBefore → $tokensAfter compaction counts",
+    async ({ tokensBefore, tokensAfter }) => {
+      vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+        ok: true,
+        compacted: true,
+        result: {
+          summary: "compacted",
+          firstKeptEntryId: "first-kept",
+          tokensBefore,
+          tokensAfter,
+        },
+      });
+
+      const result = await handleCompactCommand(
+        {
+          ...buildCompactParams("/compact", {
+            commands: { text: true },
+            channels: { whatsapp: { allowFrom: ["*"] } },
+          } as OpenClawConfig),
+          sessionEntry: {
+            sessionId: "target-session",
+            updatedAt: Date.now(),
+          },
+        } as HandleCommandsParams,
+        true,
+      );
+
+      expect(result?.reply?.text).toBe("⚙️ Compacted • Context 12.1k");
+    },
+  );
 
   it("reports authoritative compaction no-ops without incrementing", async () => {
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
@@ -632,17 +702,48 @@ describe("handleCompactCommand", () => {
     expect(result?.reply?.text).toContain("Compaction skipped");
   });
 
-  it("reports server-side compaction with before and after tokens", async () => {
+  it.each([
+    {
+      name: "a strict decrease",
+      tokensBefore: 8_614,
+      tokensAfter: 736,
+      expectedLabel: "Server-side compaction (8614 → 736)",
+    },
+    {
+      name: "equal counts",
+      tokensBefore: 736,
+      tokensAfter: 736,
+      expectedLabel: "Server-side compaction •",
+    },
+    {
+      name: "increasing counts",
+      tokensBefore: 736,
+      tokensAfter: 8_614,
+      expectedLabel: "Server-side compaction •",
+    },
+    {
+      name: "a decrease with equal formatted labels",
+      tokensBefore: 12_499,
+      tokensAfter: 12_001,
+      formattedLabels: ["12k", "12k"] as [string, string],
+      expectedLabel: "Server-side compaction •",
+    },
+  ])("reports server-side compaction for $name", async (testCase) => {
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
       ok: true,
       compacted: true,
       compactionKind: "server-endpoint",
       result: {
         kind: "server-endpoint",
-        tokensBefore: 8_614,
-        tokensAfter: 736,
+        tokensBefore: testCase.tokensBefore,
+        tokensAfter: testCase.tokensAfter,
       },
     });
+    if ("formattedLabels" in testCase && testCase.formattedLabels) {
+      vi.mocked(formatTokenCount)
+        .mockImplementationOnce(() => testCase.formattedLabels[0])
+        .mockImplementationOnce(() => testCase.formattedLabels[1]);
+    }
 
     const result = await handleCompactCommand(
       {
@@ -655,7 +756,7 @@ describe("handleCompactCommand", () => {
       true,
     );
 
-    expect(result?.reply?.text).toContain("Server-side compaction (8614 → 736)");
+    expect(result?.reply?.text).toContain(testCase.expectedLabel);
     expect(requireIncrementCompactionCountCall().compactionKind).toBe("server-endpoint");
   });
 

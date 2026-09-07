@@ -5,6 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveCompactionTokenDecrease } from "../../agents/compaction-token-counts.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import {
   classifyCompactionReason,
@@ -384,20 +385,30 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   );
   const result = await compaction.finally(() => replyOperation?.setPhase("running"));
 
+  const tokensBeforeCompaction = result.result?.tokensBefore;
   const tokensAfterCompaction = result.result?.tokensAfter;
+  const tokenDecrease = resolveCompactionTokenDecrease(
+    tokensBeforeCompaction,
+    tokensAfterCompaction,
+  );
   const didCompact = result.ok && result.compacted;
+  const formattedTokenDecrease =
+    didCompact && tokenDecrease
+      ? {
+          before: runtime.formatTokenCount(tokenDecrease.before),
+          after: runtime.formatTokenCount(tokenDecrease.after),
+        }
+      : undefined;
+  const completedLabel =
+    result.compactionKind === "server-endpoint" ? "Server-side compaction" : "Compacted";
   const compactLabel =
     result.ok || isBenignCompactionSkipResult(result)
       ? didCompact
-        ? result.compactionKind === "server-endpoint" &&
-          typeof tokensAfterCompaction === "number" &&
-          result.result?.tokensBefore != null
-          ? `Server-side compaction (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(tokensAfterCompaction)})`
-          : typeof tokensAfterCompaction !== "number"
-            ? "Compaction finished (resulting context unknown)"
-            : result.result?.tokensBefore != null
-              ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(tokensAfterCompaction)})`
-              : "Compacted"
+        ? typeof tokensAfterCompaction !== "number"
+          ? "Compaction finished (resulting context unknown)"
+          : formattedTokenDecrease && formattedTokenDecrease.before !== formattedTokenDecrease.after
+            ? `${completedLabel} (${formattedTokenDecrease.before} → ${formattedTokenDecrease.after})`
+            : completedLabel
         : "Compaction skipped"
       : "Compaction failed";
   if (didCompact) {
