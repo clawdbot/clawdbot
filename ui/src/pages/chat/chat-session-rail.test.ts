@@ -520,18 +520,18 @@ describe("ChatSessionRailElement", () => {
       const element = await mount({ onSubmit });
       element.companion = { ...element.companion, draft: "First paragraph.\nSecond paragraph." };
       await element.updateComplete;
-      const input = element.querySelector("textarea")!;
+      const textarea = element.querySelector("textarea")!;
       const event = new KeyboardEvent("keydown", {
         key: "Enter",
         bubbles: true,
         cancelable: true,
         ...modifiers,
       });
-      input.dispatchEvent(event);
+      textarea.dispatchEvent(event);
       expect(event.defaultPrevented).toBe(false);
       expect(onSubmit).not.toHaveBeenCalled();
 
-      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
       expect(onSubmit).toHaveBeenCalledExactlyOnceWith("First paragraph.\nSecond paragraph.");
     },
   );
