@@ -389,11 +389,10 @@ describe("createLazyGatewayCronState", () => {
     hoisted.setState(state);
 
     const lazy = createLazyGatewayCronState(createParams());
-    const cfg = { agents: { defaults: { heartbeat: { every: "5m" } } } } as OpenClawConfig;
-    await lazy.reconcileSystemJobs(cfg);
+    await lazy.reconcileSystemJobs();
 
     expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
-    expect(state.reconcileSystemJobs).toHaveBeenCalledExactlyOnceWith(cfg);
+    expect(state.reconcileSystemJobs).toHaveBeenCalledExactlyOnceWith();
   });
 
   it("forwards watcher reconciliation and teardown hooks through the proxy", async () => {
@@ -470,6 +469,9 @@ function createCronService(): GatewayCronServiceContract {
     remove: vi.fn(async () => ({ ok: true }) as never),
     removeStaleJobFamily: vi.fn(async () => 0),
     removeAgentJobsTransactional: vi.fn(async (_agentId, commit) => await commit()),
+    quiesceJobs: vi.fn(async (_jobs, commitGuard) => {
+      commitGuard();
+    }),
     run: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),
     enqueueRun: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),
     getJob: vi.fn(() => undefined),

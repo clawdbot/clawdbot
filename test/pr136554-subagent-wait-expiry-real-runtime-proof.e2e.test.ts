@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -9,25 +8,21 @@ import {
   testing,
 } from "../src/agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { AgentEventPayload } from "../src/infra/agent-events.js";
+import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 describe("PR #136554 production registry lifecycle proof", () => {
-  const proofRoots = new Set<string>();
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  afterEach(async () => {
+  afterEach(() => {
     testing.setDepsForTest();
     resetSubagentRegistryForTests({ persist: false });
-    await Promise.all(
-      [...proofRoots].map((proofRoot) => fs.rm(proofRoot, { recursive: true, force: true })),
-    );
-    proofRoots.clear();
   });
 
   it(
     "keeps resources live after wait expiry and cleans them after authoritative completion",
     { timeout: 15_000 },
     async () => {
-      const proofRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pr136554-proof-"));
-      proofRoots.add(proofRoot);
+      const proofRoot = tempDirs.make("openclaw-pr136554-proof-");
       const resourcePath = path.join(proofRoot, "live-child-resource");
       await fs.mkdir(resourcePath);
 
@@ -149,8 +144,6 @@ describe("PR #136554 production registry lifecycle proof", () => {
             },
           }),
       );
-      await fs.rm(proofRoot, { recursive: true, force: true });
-      proofRoots.delete(proofRoot);
     },
   );
 });

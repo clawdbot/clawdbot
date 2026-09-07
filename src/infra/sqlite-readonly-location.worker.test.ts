@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { prepare } = vi.hoisted(() => ({ prepare: vi.fn() }));
 vi.mock("./sqlite-readonly-location.js", () => ({
-  SQLITE_READONLY_CHILD_ARG: "--openclaw-sqlite-readonly-child",
   prepareSqliteReadOnlyLocationInProcess: prepare,
   prepareSqliteReadOnlyLocationSyncInProcess: prepare,
 }));

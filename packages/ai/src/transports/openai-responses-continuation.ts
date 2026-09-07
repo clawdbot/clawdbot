@@ -5,6 +5,7 @@ import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.j
 import { registerSessionResourceCleanup } from "../session-resources.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import {
+  canReferenceResponsesReasoningHistory,
   replayResponsesReasoningUpdates,
   type ResponsesConfigurationUpdate,
 } from "./openai-responses-reasoning-update.js";
@@ -17,6 +18,7 @@ export type ResponsesContinuationRequest = Record<string, unknown> & {
   input?: Array<ResponseInput[number] | ResponsesConfigurationUpdate>;
   previous_response_id?: string;
 };
+export type ResponsesSteeringContinuationMode = "automatic" | "required-input";
 export type ResponsesContinuationState = {
   lastRequest: ResponsesContinuationRequest;
   lastResponseId: string;
@@ -91,7 +93,7 @@ function normalizeAssistantReplayInput(input: readonly unknown[], fromResponse =
 export function resolveResponsesContinuationRequest(
   continuation: ResponsesContinuationState | undefined,
   request: ResponsesContinuationRequest,
-  options?: { allowNewReasoningUpdate?: boolean },
+  steering?: ResponsesSteeringContinuationMode,
 ): {
   request: ResponsesContinuationRequest;
   fullRequest?: ResponsesContinuationRequest;
@@ -103,13 +105,21 @@ export function resolveResponsesContinuationRequest(
   if (request.previous_response_id) {
     return { request, continuationStatus: "explicit_previous_response_id" };
   }
+  // Referenced controls remain active even when omitted from the wire delta.
+  // Check compatibility whether the caller supplied them or needs rehydration.
+  if (!canReferenceResponsesReasoningHistory(continuation.lastRequest, request)) {
+    return { request, continuationStatus: "request_changed" };
+  }
   const prepared = replayResponsesReasoningUpdates(
     continuation.lastRequest,
     request,
     continuation.lastResponseItems.length,
-    options,
+    steering,
   );
+  // Required input creates a new response with current settings. The same
+  // history validation below still binds it to the accepted steering's parent.
   if (
+    steering !== "required-input" &&
     !jsonValuesEqual(requestWithoutInput(prepared), requestWithoutInput(continuation.lastRequest))
   ) {
     return { request, continuationStatus: "request_changed" };

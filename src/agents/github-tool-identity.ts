@@ -72,29 +72,29 @@ export function resolveConfiguredGitHubToolIdentity(params: {
     : params.config.tools?.github;
 }
 
-function resolveGitHubToolIdentity(params: {
-  config: OpenClawConfig;
-  agentId: string;
-  env?: NodeJS.ProcessEnv;
-}) {
-  const agentOverride = resolveAgentConfig(params.config, params.agentId)?.tools?.github;
-  const config = agentOverride ?? params.config.tools?.github;
-  if (!config) {
-    return { source: "system-detected" as const };
-  }
-  const source: "agent-override" | "system-configured" = agentOverride
-    ? "agent-override"
-    : "system-configured";
-  return {
-    source,
-    config,
-    profileDir: resolveManagedGitHubProfileDir({
-      agentId: params.agentId,
-      env: params.env,
-      scope: source === "agent-override" ? "agent" : "system",
-      profileId: config.profileId,
-    }),
-  };
+function resolveSystemGitHubToolIdentity(
+  params: Pick<GitHubIdentityPreparation, "config" | "env">,
+) {
+  const config = params.config.tools?.github;
+  return config
+    ? {
+        source: "system-configured" as const,
+        config,
+        profileDir: resolveManagedGitHubProfileDir({
+          agentId: "",
+          scope: "system",
+          profileId: config.profileId,
+          env: params.env,
+        }),
+      }
+    : { source: "system-detected" as const };
+}
+
+function resolveGitHubToolIdentity(params: GitHubIdentityPreparation) {
+  return (
+    resolveScopedGitHubToolIdentity({ ...params, scope: "agent" }) ??
+    resolveSystemGitHubToolIdentity(params)
+  );
 }
 
 function resolveScopedGitHubToolIdentity(params: {
@@ -102,22 +102,23 @@ function resolveScopedGitHubToolIdentity(params: {
   agentId: string;
   scope: "system" | "agent";
   env?: NodeJS.ProcessEnv;
-}): ResolvedGitHubToolIdentity | undefined {
-  const config = resolveConfiguredGitHubToolIdentity(params);
-  if (!config) {
-    return params.scope === "system" ? { source: "system-detected" as const } : undefined;
+}) {
+  if (params.scope === "system") {
+    return resolveSystemGitHubToolIdentity(params);
   }
-  const source = params.scope === "system" ? "system-configured" : "agent-override";
-  return {
-    source,
-    config,
-    profileDir: resolveManagedGitHubProfileDir({
-      agentId: params.agentId,
-      env: params.env,
-      scope: params.scope,
-      profileId: config.profileId,
-    }),
-  };
+  const config = resolveConfiguredGitHubToolIdentity(params);
+  return config
+    ? {
+        source: "agent-override" as const,
+        config,
+        profileDir: resolveManagedGitHubProfileDir({
+          agentId: params.agentId,
+          env: params.env,
+          scope: "agent",
+          profileId: config.profileId,
+        }),
+      }
+    : undefined;
 }
 
 type ResolvedGitHubToolIdentity = ReturnType<typeof resolveGitHubToolIdentity>;
@@ -172,12 +173,9 @@ export function managedGitHubIdentityEnvironment(params: {
 }
 
 /** Prepares the non-secret child overlay and store exclusions once per agent run. */
-export function prepareGitHubToolEnvironment(params: {
-  config: OpenClawConfig;
-  agentId: string;
-  sourceConfig?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): PreparedGitHubToolEnvironment {
+export function prepareGitHubToolEnvironment(
+  params: GitHubIdentityPreparation,
+): PreparedGitHubToolEnvironment {
   const identity = resolveGitHubToolIdentity(params);
   const managedLocalIdentity = identity.source !== "system-detected";
   const previewToken =
@@ -333,7 +331,8 @@ export async function resolveGitHubToolIdentityStatus(params: {
     ...params,
     scope: params.selectedScope,
   });
-  const effective = await resolveGitHubIdentityFacts({ ...params, identity: effectiveIdentity });
+  const probe = { cwd: resolveAgentWorkspaceDir(params.config, params.agentId), env: params.env };
+  const effective = await resolveGitHubIdentityFacts({ ...probe, identity: effectiveIdentity });
   const selectedMatchesEffective =
     selectedIdentity?.source === effectiveIdentity.source &&
     (selectedIdentity?.source === "system-detected" ||
@@ -343,7 +342,7 @@ export async function resolveGitHubToolIdentityStatus(params: {
     ? null
     : selectedMatchesEffective
       ? effective
-      : await resolveGitHubIdentityFacts({ ...params, identity: selectedIdentity });
+      : await resolveGitHubIdentityFacts({ ...probe, identity: selectedIdentity });
   return {
     agentId: params.agentId,
     selectedScope: params.selectedScope,
@@ -356,9 +355,19 @@ export async function resolveGitHubToolIdentityStatus(params: {
   };
 }
 
+export async function resolveSystemGitHubIdentityStatus(
+  params: Pick<GitHubIdentityPreparation, "config" | "env">,
+): Promise<GitHubIdentityFacts> {
+  // Profile settings have no agent owner. Probe the shared identity outside agent workspaces.
+  return resolveGitHubIdentityFacts({
+    identity: resolveSystemGitHubToolIdentity(params),
+    cwd: resolveStateDir(params.env),
+    env: params.env,
+  });
+}
+
 async function resolveGitHubIdentityFacts(params: {
-  config: OpenClawConfig;
-  agentId: string;
+  cwd: string;
   identity: ResolvedGitHubToolIdentity;
   env?: NodeJS.ProcessEnv;
 }): Promise<GitHubIdentityFacts> {
@@ -372,10 +381,9 @@ async function resolveGitHubIdentityFacts(params: {
   const token = managed
     ? await readManagedGitHubToken(identity.profileDir)
     : await readNativeGitHubToken(probeEnv);
-  const workspaceDir = resolveAgentWorkspaceDir(params.config, params.agentId);
   const [probe, author] = await Promise.all([
     token ? verifyGitHubCredential(token) : undefined,
-    readGitAuthor(probeEnv, workspaceDir),
+    readGitAuthor(probeEnv, params.cwd),
   ]);
   const account = probe?.status === "available" ? probe.account : null;
   const credentialState =

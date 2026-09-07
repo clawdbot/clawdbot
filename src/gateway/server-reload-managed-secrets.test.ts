@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveModelProviderRouteOverridePresence } from "../config/model-provider-config.js";
+import { createModelProviderRouteOverrideResolver } from "../config/model-provider-config.js";
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
@@ -66,11 +66,10 @@ function expectAuthoredSource(source: OpenClawConfig) {
   expect(config).not.toBeNull();
   expect(getRuntimeConfigSourceSnapshot()).toEqual(source);
   expect(
-    resolveModelProviderRouteOverridePresence({
+    createModelProviderRouteOverrideResolver({
       provider: "openai",
-      modelId: "gpt-5.6-luna",
       authoredConfig: projectConfigOntoRuntimeSourceSnapshot(config!),
-    }),
+    })("gpt-5.6-luna"),
   ).toBe("none");
 }
 

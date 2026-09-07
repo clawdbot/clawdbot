@@ -121,10 +121,9 @@ export async function runOpenAIOAuthTlsHealth(ctx: DoctorHealthFlowContext): Pro
 export async function runWhatsappResponsivenessHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteWhatsappResponsivenessHealth } =
     await import("../commands/doctor-whatsapp-responsiveness.js");
-  await noteWhatsappResponsivenessHealth({
+  noteWhatsappResponsivenessHealth({
     cfg: ctx.cfg,
     status: ctx.gatewayStatus,
-    shouldRepair: ctx.prompter.shouldRepair,
   });
 }
 

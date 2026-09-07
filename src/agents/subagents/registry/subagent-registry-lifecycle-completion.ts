@@ -478,6 +478,8 @@ export async function completeSubagentRunAttempt(
         status: "terminal",
         endedAt,
         outcome: executionOutcome,
+        interruptedAt: undefined,
+        interruptionReason: undefined,
         restartRecovery: retainedRestartRecovery,
         suppressSessionEffects: suppressSessionEffects ? true : undefined,
       };

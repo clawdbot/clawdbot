@@ -344,27 +344,38 @@ function buildToolUsage(
   };
 }
 
-function mergeDatedRows<T extends { date: string; quarterIndex?: number }>(
-  left: T[] | undefined,
-  right: T[] | undefined,
+function createDatedRowsAccumulator<T extends { date: string; quarterIndex?: number }>(
   add: (target: T, source: T) => void,
-  clone: (row: T) => T = (row) => ({ ...row }),
-): T[] | undefined {
+  options?: {
+    key?: (row: T) => string;
+    clone?: (row: T) => T;
+  },
+) {
   const rows = new Map<string, T>();
-  for (const row of [...(left ?? []), ...(right ?? [])]) {
-    const key = row.quarterIndex === undefined ? row.date : `${row.date}:${row.quarterIndex}`;
-    const existing = rows.get(key);
-    if (existing) {
-      add(existing, row);
-    } else {
-      rows.set(key, clone(row));
-    }
-  }
-  return rows.size
-    ? Array.from(rows.values()).toSorted(
-        (a, b) => a.date.localeCompare(b.date) || (a.quarterIndex ?? 0) - (b.quarterIndex ?? 0),
-      )
-    : undefined;
+  const keyOf =
+    options?.key ??
+    ((row: T) => (row.quarterIndex === undefined ? row.date : `${row.date}:${row.quarterIndex}`));
+  const clone = options?.clone ?? ((row: T) => ({ ...row }));
+  return {
+    add(source: T[] | undefined): void {
+      for (const row of source ?? []) {
+        const key = keyOf(row);
+        const existing = rows.get(key);
+        if (existing) {
+          add(existing, row);
+        } else {
+          rows.set(key, clone(row));
+        }
+      }
+    },
+    finish(): T[] | undefined {
+      return rows.size
+        ? Array.from(rows.values()).toSorted(
+            (a, b) => a.date.localeCompare(b.date) || (a.quarterIndex ?? 0) - (b.quarterIndex ?? 0),
+          )
+        : undefined;
+    },
+  };
 }
 
 function mergeMessageCountSummaries(
@@ -404,99 +415,26 @@ function mergeLatencyStats(
   };
 }
 
-function mergeDailyLatencyStats(
-  left: SessionDailyLatency[] | undefined,
-  right: SessionDailyLatency[] | undefined,
-): SessionDailyLatency[] | undefined {
-  const rows = new Map<string, SessionDailyLatency>();
-  for (const row of [...(left ?? []), ...(right ?? [])]) {
-    const existing = rows.get(row.date);
-    if (!existing) {
-      rows.set(row.date, { ...row });
-      continue;
-    }
-    const count = existing.count + row.count;
-    existing.avgMs =
-      count > 0 ? (existing.avgMs * existing.count + row.avgMs * row.count) / count : 0;
-    existing.count = count;
-    existing.p95Ms = Math.max(existing.p95Ms, row.p95Ms);
-    existing.minMs = Math.min(existing.minMs, row.minMs);
-    existing.maxMs = Math.max(existing.maxMs, row.maxMs);
-  }
-  return rows.size
-    ? Array.from(rows.values()).toSorted((a, b) => a.date.localeCompare(b.date))
-    : undefined;
-}
-
-function mergeDailyModels(
-  left: SessionDailyModelUsage[] | undefined,
-  right: SessionDailyModelUsage[] | undefined,
-): SessionDailyModelUsage[] | undefined {
-  const rows = new Map<string, SessionDailyModelUsage>();
-  for (const row of [...(left ?? []), ...(right ?? [])]) {
-    const key = usageDailyModelIdentity(row.date, row.provider, row.model);
-    const existing = rows.get(key);
-    if (!existing) {
-      rows.set(key, { ...row });
-      continue;
-    }
-    existing.tokens += row.tokens;
-    existing.cost += row.cost;
-    existing.count += row.count;
-  }
-  return rows.size
-    ? Array.from(rows.values()).toSorted((a, b) => a.date.localeCompare(b.date))
-    : undefined;
-}
-
-export function mergeSessionCostSummaryInto(
-  target: SessionCostSummary,
-  source: SessionCostSummary,
-): void {
-  addCostUsageTotals(target, source);
-  target.firstActivity =
-    target.firstActivity === undefined
-      ? source.firstActivity
-      : source.firstActivity === undefined
-        ? target.firstActivity
-        : Math.min(target.firstActivity, source.firstActivity);
-  target.lastActivity =
-    target.lastActivity === undefined
-      ? source.lastActivity
-      : source.lastActivity === undefined
-        ? target.lastActivity
-        : Math.max(target.lastActivity, source.lastActivity);
-  if (target.firstActivity !== undefined && target.lastActivity !== undefined) {
-    target.durationMs = Math.max(0, target.lastActivity - target.firstActivity);
-  }
-
-  const activityDates = new Set([...(target.activityDates ?? []), ...(source.activityDates ?? [])]);
-  if (activityDates.size) {
-    target.activityDates = Array.from(activityDates).toSorted();
-  }
-  target.dailyBreakdown = mergeDatedRows(
-    target.dailyBreakdown,
-    source.dailyBreakdown,
+export function createSessionCostSummaryAccumulator(
+  identity: Pick<SessionCostSummary, "sessionId" | "sessionFile">,
+) {
+  const target: SessionCostSummary = { ...createEmptyCostUsageTotals(), ...identity };
+  const activityDates = new Set<string>();
+  const dailyBreakdown = createDatedRowsAccumulator<
+    NonNullable<SessionCostSummary["dailyBreakdown"]>[number]
+  >(
     (current, row) => {
       addCostUsageTotals(current, row);
       current.tokens += row.tokens;
       current.cost += row.cost;
     },
-    (row) => ({ ...row, ...cloneCostUsageTotals(row) }),
+    { clone: (row) => ({ ...row, ...cloneCostUsageTotals(row) }) },
   );
-  target.dailyMessageCounts = mergeDatedRows(
-    target.dailyMessageCounts,
-    source.dailyMessageCounts,
-    addMessageCounts,
-  );
-  target.utcQuarterHourMessageCounts = mergeDatedRows(
-    target.utcQuarterHourMessageCounts,
-    source.utcQuarterHourMessageCounts,
-    addMessageCounts,
-  );
-  target.utcQuarterHourTokenUsage = mergeDatedRows(
-    target.utcQuarterHourTokenUsage,
-    source.utcQuarterHourTokenUsage,
+  const dailyMessageCounts =
+    createDatedRowsAccumulator<SessionDailyMessageCounts>(addMessageCounts);
+  const quarterMessages =
+    createDatedRowsAccumulator<SessionUtcQuarterHourMessageCounts>(addMessageCounts);
+  const quarterTokens = createDatedRowsAccumulator<SessionUtcQuarterHourTokenUsage>(
     (current, row) => {
       current.input += row.input;
       current.output += row.output;
@@ -506,20 +444,76 @@ export function mergeSessionCostSummaryInto(
       current.totalCost += row.totalCost;
     },
   );
-  target.dailyLatency = mergeDailyLatencyStats(target.dailyLatency, source.dailyLatency);
-  target.dailyModelUsage = mergeDailyModels(target.dailyModelUsage, source.dailyModelUsage);
-  target.messageCounts = mergeMessageCountSummaries(target.messageCounts, source.messageCounts);
+  const dailyLatency = createDatedRowsAccumulator<SessionDailyLatency>((current, row) => {
+    const count = current.count + row.count;
+    current.avgMs = count > 0 ? (current.avgMs * current.count + row.avgMs * row.count) / count : 0;
+    current.count = count;
+    current.p95Ms = Math.max(current.p95Ms, row.p95Ms);
+    current.minMs = Math.min(current.minMs, row.minMs);
+    current.maxMs = Math.max(current.maxMs, row.maxMs);
+  });
+  const dailyModels = createDatedRowsAccumulator<SessionDailyModelUsage>(
+    (current, row) => {
+      current.tokens += row.tokens;
+      current.cost += row.cost;
+      current.count += row.count;
+    },
+    { key: (row) => usageDailyModelIdentity(row.date, row.provider, row.model) },
+  );
 
-  // Family rows retain first-seen/tie order; response-wide aggregates sort independently later.
-  const tools = new Map<string, number>();
-  mergeTools(tools, target.toolUsage?.tools ?? []);
-  mergeTools(tools, source.toolUsage?.tools ?? []);
-  target.toolUsage = buildToolUsage(tools, false);
-  const models = new Map<string, SessionModelUsage>();
-  mergeModels(models, target.modelUsage ?? []);
-  mergeModels(models, source.modelUsage ?? []);
-  target.modelUsage = sortedModelUsage(models, false);
-  target.latency = mergeLatencyStats(target.latency, source.latency);
+  return {
+    add(source: SessionCostSummary): void {
+      addCostUsageTotals(target, source);
+      target.firstActivity =
+        target.firstActivity === undefined
+          ? source.firstActivity
+          : source.firstActivity === undefined
+            ? target.firstActivity
+            : Math.min(target.firstActivity, source.firstActivity);
+      target.lastActivity =
+        target.lastActivity === undefined
+          ? source.lastActivity
+          : source.lastActivity === undefined
+            ? target.lastActivity
+            : Math.max(target.lastActivity, source.lastActivity);
+      if (target.firstActivity !== undefined && target.lastActivity !== undefined) {
+        target.durationMs = Math.max(0, target.lastActivity - target.firstActivity);
+      }
+      for (const date of source.activityDates ?? []) {
+        activityDates.add(date);
+      }
+      dailyBreakdown.add(source.dailyBreakdown);
+      dailyMessageCounts.add(source.dailyMessageCounts);
+      quarterMessages.add(source.utcQuarterHourMessageCounts);
+      quarterTokens.add(source.utcQuarterHourTokenUsage);
+      dailyLatency.add(source.dailyLatency);
+      dailyModels.add(source.dailyModelUsage);
+      target.messageCounts = mergeMessageCountSummaries(target.messageCounts, source.messageCounts);
+
+      // Later count ties inherit the preceding ranking, so tools still fold after each instance.
+      const tools = new Map<string, number>();
+      mergeTools(tools, target.toolUsage?.tools ?? []);
+      mergeTools(tools, source.toolUsage?.tools ?? []);
+      target.toolUsage = buildToolUsage(tools, false);
+      const models = new Map<string, SessionModelUsage>();
+      mergeModels(models, target.modelUsage ?? []);
+      mergeModels(models, source.modelUsage ?? []);
+      target.modelUsage = sortedModelUsage(models, false);
+      target.latency = mergeLatencyStats(target.latency, source.latency);
+    },
+    finish(): SessionCostSummary {
+      if (activityDates.size) {
+        target.activityDates = Array.from(activityDates).toSorted();
+      }
+      target.dailyBreakdown = dailyBreakdown.finish();
+      target.dailyMessageCounts = dailyMessageCounts.finish();
+      target.utcQuarterHourMessageCounts = quarterMessages.finish();
+      target.utcQuarterHourTokenUsage = quarterTokens.finish();
+      target.dailyLatency = dailyLatency.finish();
+      target.dailyModelUsage = dailyModels.finish();
+      return target;
+    },
+  };
 }
 
 function usageBucketsInRange(

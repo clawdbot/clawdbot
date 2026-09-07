@@ -1,11 +1,31 @@
 // Script erasability tests cover Node's transformation-free TypeScript boundary.
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { checkScriptErasability } from "../../scripts/check-script-erasability.mjs";
+import type { checkScriptErasability } from "../../scripts/check-script-erasability.mjs";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
+
+function checkNodeScriptErasability(root: string): ReturnType<typeof checkScriptErasability> {
+  // Only Node's strip-only parser can prove this contract, even with a Bun test runner.
+  const checkerUrl = new URL("../../scripts/check-script-erasability.mjs", import.meta.url).href;
+  const output = execFileSync(
+    requireNodeTool("node"),
+    [
+      "--disable-warning=ExperimentalWarning",
+      "--input-type=module",
+      "--eval",
+      `import { checkScriptErasability } from ${JSON.stringify(checkerUrl)};
+       console.log(JSON.stringify(checkScriptErasability(process.argv[1])));`,
+      root,
+    ],
+    { encoding: "utf8" },
+  );
+  return JSON.parse(output);
+}
 
 function writeScriptsTree(files: Record<string, string>): string {
   const scriptsRoot = path.join(createTempDir("openclaw-script-erasability-"), "scripts");
@@ -36,7 +56,7 @@ describe("check-script-erasability", () => {
       "node_modules/example/index.ts": "enum DependencyOutput { Ready }",
     });
 
-    expect(checkScriptErasability(scriptsRoot)).toEqual({ checkedFiles: 2, errors: [] });
+    expect(checkNodeScriptErasability(scriptsRoot)).toEqual({ checkedFiles: 2, errors: [] });
   });
 
   it("rejects transform-required syntax in deterministic file order", () => {
@@ -45,7 +65,7 @@ describe("check-script-erasability", () => {
       "a-runtime-enum.cts": "enum State { Ready }",
     });
 
-    const result = checkScriptErasability(scriptsRoot);
+    const result = checkNodeScriptErasability(scriptsRoot);
 
     expect(result.checkedFiles).toBe(2);
     expect(result.errors.map(({ file, line }) => ({ file, line }))).toEqual([
@@ -58,7 +78,7 @@ describe("check-script-erasability", () => {
 
   it("accepts the repository scripts tree", () => {
     const scriptsRoot = path.resolve(import.meta.dirname, "../../scripts");
-    const result = checkScriptErasability(scriptsRoot);
+    const result = checkNodeScriptErasability(scriptsRoot);
 
     expect(result.checkedFiles).toBeGreaterThan(0);
     expect(result.errors).toEqual([]);

@@ -295,39 +295,46 @@ describe("Ollama non-interactive onboarding", () => {
     ).toHaveLength(1);
   });
 
-  it("preserves the discovered capabilities of a newly pulled selected model", async () => {
-    const modelId = "gemma4:e2b";
-    const fetchMock = createOllamaFetchMock({
-      tags: [],
-      show: { [modelId]: 131_072 },
-      capabilities: { [modelId]: ["completion", "tools", "vision", "thinking"] },
-      pullResponse: new Response('{"status":"success"}\n', { status: 200 }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
+  it.each([
+    { contextWindow: 131_072, contextTokens: 32_768 },
+    { contextWindow: 16_384, contextTokens: 16_384 },
+  ])(
+    "preserves capabilities and caps a newly pulled model with context $contextWindow",
+    async ({ contextWindow, contextTokens }) => {
+      const modelId = "gemma4:e2b";
+      const fetchMock = createOllamaFetchMock({
+        tags: [],
+        show: { [modelId]: contextWindow },
+        capabilities: { [modelId]: ["completion", "tools", "vision", "thinking"] },
+        pullResponse: new Response('{"status":"success"}\n', { status: 200 }),
+      });
+      vi.stubGlobal("fetch", fetchMock);
 
-    const result = await configureOllamaNonInteractive({
-      nextConfig: {},
-      opts: {
-        customBaseUrl: "http://127.0.0.1:11434",
-        customModelId: modelId,
-      },
-      runtime: createRuntime(),
-    });
+      const result = await configureOllamaNonInteractive({
+        nextConfig: {},
+        opts: {
+          customBaseUrl: "http://127.0.0.1:11434",
+          customModelId: modelId,
+        },
+        runtime: createRuntime(),
+      });
 
-    expect(result.agents?.defaults?.model).toEqual({ primary: `ollama/${modelId}` });
-    expect(
-      result.models?.providers?.ollama?.models?.find((model) => model.id === modelId),
-    ).toMatchObject({
-      id: modelId,
-      input: ["text", "image"],
-      reasoning: true,
-      contextWindow: 131_072,
-      compat: { supportsTools: true },
-    });
-    expect(fetchMock.mock.calls.map((call) => requestUrl(call[0]))).toEqual([
-      "http://127.0.0.1:11434/api/tags",
-      "http://127.0.0.1:11434/api/pull",
-      "http://127.0.0.1:11434/api/show",
-    ]);
-  });
+      expect(result.agents?.defaults?.model).toEqual({ primary: `ollama/${modelId}` });
+      expect(
+        result.models?.providers?.ollama?.models?.find((model) => model.id === modelId),
+      ).toMatchObject({
+        id: modelId,
+        input: ["text", "image"],
+        reasoning: true,
+        contextWindow,
+        contextTokens,
+        compat: { supportsTools: true },
+      });
+      expect(fetchMock.mock.calls.map((call) => requestUrl(call[0]))).toEqual([
+        "http://127.0.0.1:11434/api/tags",
+        "http://127.0.0.1:11434/api/pull",
+        "http://127.0.0.1:11434/api/show",
+      ]);
+    },
+  );
 });

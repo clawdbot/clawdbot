@@ -1,5 +1,7 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.ui.chat.formatContextUsageTokens
+import ai.openclaw.app.ui.chat.latestChatMessageUsage
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -62,6 +64,78 @@ class ChatControllerMessageIdentityTest {
 
     assertEquals(listOf(ChatMessageContent(type = "text", text = "Hi there")), content)
   }
+
+  @Test
+  fun parseChatMessageUsageAndCostKeepObservedCanonicalBuckets() {
+    val obj =
+      json
+        .parseToJsonElement(
+          """
+          {
+            "cost": {"input": 0.003, "output": 0.018, "cacheRead": 0.001, "cacheWrite": 0, "total": 0.022},
+            "usage": {"input": 12000, "output_tokens": 300, "cacheRead": 438400, "cost": {"input": 99}}
+          }
+          """.trimIndent(),
+        ).jsonObject
+
+    assertEquals(ChatMessageUsage(input = 12_000, output = 300, cacheRead = 438_400), parseChatMessageUsage(obj))
+    assertEquals(
+      ChatMessageCost(input = 0.003, output = 0.018, cacheRead = 0.001, cacheWrite = 0.0, total = 0.022),
+      parseChatMessageCost(obj),
+    )
+    assertEquals(
+      ChatMessageCost(output = 0.02),
+      parseChatMessageCost(json.parseToJsonElement("""{"usage":{"cost":{"output":0.02}}}""").jsonObject),
+    )
+    assertEquals(
+      ChatMessageCost(input = 0.01),
+      parseChatMessageCost(
+        json.parseToJsonElement("""{"cost":{"input":0.01},"usage":{"cost":{"output":99}}}""").jsonObject,
+      ),
+    )
+    assertEquals(null, parseChatMessageUsage(json.parseToJsonElement("""{"usage":{"input":-1}}""").jsonObject))
+    assertEquals(null, parseChatMessageCost(json.parseToJsonElement("""{"cost":{"input":-1}}""").jsonObject))
+  }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun liveHistoryKeepsAmbiguousInputAliasesUnknown() =
+    runTest {
+      val cases =
+        listOf("inputTokens", "input_tokens", "promptTokens", "prompt_tokens").map { alias ->
+          """{"$alias":100,"cacheRead":80,"output":4}""" to ChatMessageUsage(output = 4, cacheRead = 80)
+        } +
+          listOf(
+            """{"prompt_tokens":100,"completion_tokens":4}""" to ChatMessageUsage(output = 4),
+            """{"input":20,"prompt_tokens":100,"cacheRead":80,"output":4}""" to ChatMessageUsage(input = 20, output = 4, cacheRead = 80),
+            """{"input":0,"input_tokens":100,"cacheRead":100,"output":4}""" to ChatMessageUsage(input = 0, output = 4, cacheRead = 100),
+          )
+      val history =
+        cases
+          .mapIndexed { index, (usage, _) ->
+            """{"role":"assistant","content":"reply-$index","usage":$usage}"""
+          }.joinToString(",")
+      val controller =
+        ChatController(
+          scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
+          cacheScope = { ChatCacheScope("gateway-test", 1L) },
+          json = json,
+          requestGateway = { method, _ ->
+            if (method == "chat.history") """{"messages":[$history]}""" else emptyChatGatewayResponse(method)
+          },
+        )
+
+      controller.load("main")
+      advanceUntilIdle()
+
+      assertEquals(cases.map { it.second }, controller.messages.value.map { it.usage })
+      controller.messages.value.forEachIndexed { index, message ->
+        val expected = cases[index].second
+        assertEquals(expected, latestChatMessageUsage(listOf(message)))
+        if (expected.input == null) assertEquals("\u2014", formatContextUsageTokens(expected.input))
+      }
+    }
 
   @Test
   fun managedImagesParticipateInMessageIdentity() {
@@ -197,6 +271,53 @@ class ChatControllerMessageIdentityTest {
         ),
         messages[1].transcriptMarker,
       )
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun markerOnlyDeliveryMirrorDoesNotReplaceLatestRunUsage() =
+    runTest {
+      val controller =
+        ChatController(
+          scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
+          cacheScope = { ChatCacheScope("gateway-test", 1L) },
+          json = json,
+          requestGateway = { method, _ ->
+            if (method == "chat.history") {
+              """
+              {
+                "messages": [
+                  {
+                    "role": "assistant",
+                    "content": "real reply",
+                    "usage": {"input": 12000, "output": 300}
+                  },
+                  {
+                    "role": "assistant",
+                    "content": "delivery copy",
+                    "openclawDeliveryMirror": {"kind": "channel-final"},
+                    "usage": {"input": 0, "output": 0}
+                  }
+                ]
+              }
+              """.trimIndent()
+            } else {
+              emptyChatGatewayResponse(method)
+            }
+          },
+        )
+
+      controller.load("main")
+      advanceUntilIdle()
+
+      assertEquals(
+        ChatDeliveryMirror(kind = "channel-final"),
+        controller.messages.value
+          .last()
+          .deliveryMirror,
+      )
+      assertEquals(ChatMessageUsage(input = 12_000, output = 300), latestChatMessageUsage(controller.messages.value))
     }
 
   @Test

@@ -20,7 +20,6 @@ import { runCodexAuthDoctorMigrationProof } from "./codex-auth-product-proof.tes
 const oauthAccess = "test-oauth-access";
 const ACCOUNT_ID = "qa-codex-account";
 const MODEL = "openai/gpt-5.6-luna";
-const NATIVE_MODEL = "openai/gpt-future";
 const MISSING_PROFILE_ID = "openai:missing";
 const SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT =
   "The selected auth profile is unavailable in this agent's OpenClaw credential store. " +
@@ -399,10 +398,7 @@ describe("Codex auth product proof", () => {
           agents: {
             defaults: {
               model: { primary: `${MODEL}@${MISSING_PROFILE_ID}`, fallbacks: [] },
-              models: {
-                [MODEL]: { agentRuntime: { id: "codex" } },
-                [NATIVE_MODEL]: { agentRuntime: { id: "codex" } },
-              },
+              models: { [MODEL]: { agentRuntime: { id: "codex" } } },
               workspace: "~/workspace",
               skipBootstrap: true,
               timeoutSeconds: 60,
@@ -435,27 +431,44 @@ describe("Codex auth product proof", () => {
       let terminal: unknown;
       let failedHistory: GatewayHistory | undefined;
       try {
-        const setup = await client.request<{ runId?: string; status?: string }>("chat.send", {
-          sessionKey,
-          message: `Reply with ${PRODUCT_OUTPUT}.`,
-          deliver: false,
-          idempotencyKey: "qa-codex-profile-binding-setup",
-        });
-        expect(setup).toMatchObject({ runId: expect.any(String), status: "started" });
-        const setupTerminal = await client.request(
-          "agent.wait",
-          { runId: setup.runId, timeoutMs: REQUEST_TIMEOUT_MS },
-          { timeoutMs: REQUEST_TIMEOUT_MS + 5_000 },
-        );
-        expect(
-          setupTerminal,
-          `${JSON.stringify(setupTerminal)}\n${JSON.stringify(appServerLog.read())}\n${instance.logs()}`,
-        ).toMatchObject({ runId: setup.runId, status: "ok" });
+        const testInstance = instance;
+        const runConfiguredTurn = async (idempotencyKey: string) => {
+          const setup = await client.request<{ runId?: string; status?: string }>("chat.send", {
+            sessionKey,
+            message: `Reply with ${PRODUCT_OUTPUT}.`,
+            deliver: false,
+            idempotencyKey,
+          });
+          expect(setup).toMatchObject({ runId: expect.any(String), status: "started" });
+          const setupTerminal = await client.request(
+            "agent.wait",
+            { runId: setup.runId, timeoutMs: REQUEST_TIMEOUT_MS },
+            { timeoutMs: REQUEST_TIMEOUT_MS + 5_000 },
+          );
+          expect(
+            setupTerminal,
+            `${JSON.stringify(setupTerminal)}\n${JSON.stringify(appServerLog.read())}\n${testInstance.logs()}`,
+          ).toMatchObject({ runId: setup.runId, status: "ok" });
+        };
+        await runConfiguredTurn("qa-codex-profile-binding-setup");
         await expect(
-          client.request("sessions.patch", { key: sessionKey, model: NATIVE_MODEL }),
-        ).resolves.toMatchObject({ ok: true });
+          client.request("sessions.patch", {
+            key: sessionKey,
+            model: `${MODEL}@${MISSING_PROFILE_ID}`,
+          }),
+        ).resolves.toMatchObject({
+          ok: true,
+          entry: {
+            authProfileOverride: MISSING_PROFILE_ID,
+            authProfileOverrideSource: "user",
+          },
+        });
+        // A metadata patch alone does not prove the selected profile reaches native execution.
+        await runConfiguredTurn("qa-codex-profile-binding-pinned");
 
         await instance.state.writeAuthProfiles({ version: 1, profiles: {} });
+        // Publish this offline write through the supported activation boundary before the next turn.
+        await expect(client.request("secrets.reload", {})).resolves.toMatchObject({ ok: true });
         await fs.writeFile(requestLog, "", "utf8");
         events.length = 0;
         await client.request("sessions.messages.subscribe", { key: sessionKey });

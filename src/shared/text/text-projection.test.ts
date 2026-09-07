@@ -121,6 +121,18 @@ describe("duplicate paragraphs", () => {
     { text: "repeat\n\n    repeat\n\nrepeat", expected: "repeat\n\n    repeat\n\nrepeat" },
     { text: "Run `x`.\n\nRun `x`.", expected: "Run `x`." },
     {
+      text: "Same `x`.\n\nSame `x`.\n\nOther `x`.\n\nOther `x`.",
+      expected: "Same `x`.\n\nOther `x`.",
+    },
+    {
+      text: "repeat\n\nrepeat\n\n```text\n$$ $& $` $'\n```\n\n```text\n$$ $& $` $'\n```",
+      expected: "repeat\n\n```text\n$$ $& $` $'\n```\n\n```text\n$$ $& $` $'\n```",
+    },
+    {
+      text: "\0\0\0\n\nrepeat\n\nrepeat\n\nUse `x`\u0000`y` and `x`.",
+      expected: "\0\0\0\n\nrepeat\n\nUse `x`\u0000`y` and `x`.",
+    },
+    {
       text: 'repeat\n\nrepeat\n\n```js\nfunction replacement() {\n\n  return "$$ $& $` $\'";\n}\n```',
       expected: 'repeat\n\n```js\nfunction replacement() {\n\n  return "$$ $& $` $\'";\n}\n```',
     },

@@ -3,6 +3,7 @@ import type { AgentWaitParams } from "../../../../packages/gateway-protocol/src/
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { callGateway } from "../../../gateway/call.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
+import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
   bindGatewayContextResolver,
@@ -428,6 +429,8 @@ const subagentSweeper = createSubagentRegistrySweeper({
     subagentRunManager.abandonSubagentRestartRecoveryLaunch(params),
   clearAcceptedSubagentRestartRecovery: (params) =>
     subagentRunManager.clearAcceptedSubagentRestartRecovery(params),
+  clearPendingSubagentRecoveryNotice: (params) =>
+    subagentRunManager.clearPendingSubagentRecoveryNotice(params),
   resumeSettledSubagentRestartRecovery: (params) =>
     subagentRunManager.resumeSettledSubagentRestartRecovery(params),
   replaceSubagentRunAfterSteer: (params) => subagentRunManager.replaceSubagentRunAfterSteer(params),
@@ -504,7 +507,14 @@ const subagentRunManager = createSubagentRunManager({
   completeSubagentRun: async (params) => {
     await completionRuntime.completeSubagentRunWithRecovery(params, "subagent-wait");
   },
-  reportSubagentWaitExpiry: async ({ entry, observedAt, startedAt }) => {
+  reportSubagentWaitExpiry: async ({ entry, observedAt, startedAt, lifecycleGeneration }) => {
+    // A restart may retain the row, but must retire the original wait's writes
+    // and delivery authority across both the grace timer and announcement.
+    const isCurrent = () =>
+      isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
+      subagentRuns.get(entry.runId) === entry &&
+      typeof entry.execution.endedAt !== "number";
+    const ownsObservation = () => isCurrent() && entry.waitExpiryObservedAt === observedAt;
     // The runtime owns configured execution deadlines and commonly emits its
     // terminal event in the same clock tick as agent.wait expires. Give that
     // authoritative event one brief turn to win before publishing a still-live
@@ -513,10 +523,8 @@ const subagentRunManager = createSubagentRunManager({
       const timer = setTimeout(resolve, SUBAGENT_WAIT_EXPIRY_TERMINAL_GRACE_MS);
       timer.unref?.();
     });
-    const current = subagentRuns.get(entry.runId);
     if (
-      current !== entry ||
-      typeof entry.execution.endedAt === "number" ||
+      !isCurrent() ||
       typeof entry.waitExpiryAnnouncedAt === "number" ||
       (typeof entry.waitExpiryObservedAt === "number" && entry.waitExpiryObservedAt !== observedAt)
     ) {
@@ -552,20 +560,13 @@ const subagentRunManager = createSubagentRunManager({
       spawnMode: entry.spawnMode,
       wakeOnDescendantSettle: entry.wakeOnDescendantSettle,
       suppressChildSessionEffects: true,
-      isCompletionDeliveryAllowed: () =>
-        subagentRuns.get(entry.runId) === entry &&
-        typeof entry.execution.endedAt !== "number" &&
-        entry.waitExpiryObservedAt === observedAt,
+      isCompletionDeliveryAllowed: ownsObservation,
       resolveGatewayContext: getGatewayContextResolver(entry),
     });
     if (announceResult !== "delivered") {
       throw new Error("subagent wait-expiry announcement was not delivered");
     }
-    if (
-      subagentRuns.get(entry.runId) === entry &&
-      typeof entry.execution.endedAt !== "number" &&
-      entry.waitExpiryObservedAt === observedAt
-    ) {
+    if (ownsObservation()) {
       entry.waitExpiryAnnouncedAt = Date.now();
       persistSubagentRunsOrThrow(entry.runId);
     }

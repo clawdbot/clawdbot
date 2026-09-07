@@ -23,6 +23,7 @@ import {
 
 function board(face: ResolvedBoardView["face"] = "dashboard") {
   return {
+    available: true,
     hasBoard: true,
     face,
     provider: { hasLoadedSnapshot: true },
@@ -37,10 +38,8 @@ function callbacks() {
     activatePanel: vi.fn(),
     closeSlot: vi.fn(),
     openSlot: vi.fn(),
-    appendComposerText: vi.fn(),
     reorderPanel: vi.fn(),
     resizePanel: vi.fn(),
-    setExpanded: vi.fn(),
     setOpen: vi.fn(),
   };
 }
@@ -234,7 +233,6 @@ describe("chat pane sidebar layout", () => {
       layout: rendered,
       closePanelSlot: vi.fn(),
       openPanelSlot: vi.fn(),
-      appendComposerText: vi.fn(),
       forgetDiscussionUrl: vi.fn(),
       resizePanel: vi.fn(),
       setPanelOpen: vi.fn(),
@@ -268,7 +266,6 @@ describe("chat pane sidebar layout", () => {
       layout,
       closePanelSlot,
       openPanelSlot: vi.fn(),
-      appendComposerText: vi.fn(),
       forgetDiscussionUrl: vi.fn(),
       resizePanel: vi.fn(),
       setPanelOpen,
@@ -279,7 +276,7 @@ describe("chat pane sidebar layout", () => {
     expect(state.updateSidebarLayout).not.toHaveBeenCalled();
   });
 
-  it("keeps restored main content until the board owner confirms its removal", () => {
+  it("keeps an empty dashboard open and only removes it when dashboard support is unavailable", () => {
     const layout = promoteSidebarPanel(
       openSlot(openSlot({ columns: [] }, "dashboard"), "detail"),
       "dashboard",
@@ -291,7 +288,14 @@ describe("chat pane sidebar layout", () => {
       paneWidth: 1_400,
     });
     expect(awaitingSnapshot).toEqual(layout);
-    const removed = resolveSidebarLayoutForBoard({ board: loading, layout, paneWidth: 1_400 });
+    expect(resolveSidebarLayoutForBoard({ board: loading, layout, paneWidth: 1_400 })).toEqual(
+      layout,
+    );
+    const removed = resolveSidebarLayoutForBoard({
+      board: { ...loading, available: false },
+      layout,
+      paneWidth: 1_400,
+    });
     expect(sidebarMainPanel(removed)?.slot).toBe("conversation");
     expect(sidebarActivePanel(removed)?.slot).toBe("detail");
   });

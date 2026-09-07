@@ -1,6 +1,7 @@
 // Bounded data-URL cache for locally resolved assistant avatars. Kept apart
 // from the avatar projection so cache policy (identity validation, LRU bound)
 // stays independently testable with injected read/close seams.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import {
   readOpenedLocalAgentAvatarDataUrl,
@@ -18,6 +19,19 @@ type AvatarDataUrlCacheEntry = {
 };
 
 const GATEWAY_AVATAR_DATA_URL_CACHE_MAX_ENTRIES = 4;
+
+export type GatewayAvatarImageSource = { file: OpenedLocalAgentAvatarFile } | { dataUrl: string };
+
+/** Include the representation version so a changed thumbnail policy cannot reuse old bytes. */
+export function gatewayAvatarImageRevision(source: GatewayAvatarImageSource): string {
+  return createHash("sha256")
+    .update("thumbnail-128-png-v1:")
+    .update(
+      "file" in source ? JSON.stringify([source.file.path, source.file.stat]) : source.dataUrl,
+    )
+    .digest("hex")
+    .slice(0, 16);
+}
 
 export function createGatewayAvatarDataUrlCache(params?: {
   maxEntries?: number;

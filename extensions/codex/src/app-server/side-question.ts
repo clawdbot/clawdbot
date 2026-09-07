@@ -30,7 +30,7 @@ import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import {
-  isCodexAlreadyTerminalInterruptError,
+  interruptCodexTurnAndWaitBestEffort,
   retireUnsafeCodexTurnClientBestEffort,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
@@ -85,6 +85,7 @@ import {
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { routeCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
+import { CodexEphemeralTurn } from "./ephemeral-turn.js";
 import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
 import {
   buildCodexNativeHookRelayConfig,
@@ -93,7 +94,6 @@ import {
   emitCodexNativePreToolUseFailureDiagnostic,
   type CodexNativePreToolUseFailure,
 } from "./native-hook-relay.js";
-import { isCodexNotificationForTurn } from "./notification-correlation.js";
 import {
   mergeCodexThreadConfigs,
   refreshCodexPluginAppApprovalPolicy,
@@ -102,13 +102,10 @@ import {
   assertCodexThreadForkResponse,
   assertCodexTurnStartResponse,
   readCodexDynamicToolCallParams,
-  readCodexTurn,
 } from "./protocol-validators.js";
 import {
   isJsonObject,
-  type CodexServerNotification,
   type CodexThreadForkParams,
-  type CodexTurn,
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
@@ -125,7 +122,11 @@ import {
   type CodexSandboxExecEnvironment,
 } from "./sandbox-exec-server.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
-import { sessionBindingIdentity, type CodexAppServerBindingStore } from "./session-binding.js";
+import {
+  sessionBindingIdentity,
+  resolveCodexSessionBinding,
+  type CodexAppServerBindingStore,
+} from "./session-binding.js";
 import {
   applyCodexSessionPermissionPolicy,
   CODEX_SESSION_PERMISSION_EXEC_MODES,
@@ -153,6 +154,7 @@ import {
   refreshCodexThreadPolicy,
 } from "./thread-policy.js";
 import { buildCodexTemporalAdditionalContext } from "./turn-params.js";
+import type { CodexAppServerServerRequest, CodexThreadRouteScope } from "./turn-router.js";
 import { filterCodexVisionTools } from "./vision-tools.js";
 import {
   resolveCodexWebSearchPlan,
@@ -207,7 +209,15 @@ export async function runCodexAppServerSideQuestion(
     agentId: params.agentId,
     config: params.cfg,
   });
-  const binding = options.bindingStore.read(bindingIdentity);
+  const hostCapabilities = params.hostCapabilities;
+  const { binding, assertCurrent } = await resolveCodexSessionBinding({
+    bindingStore: options.bindingStore,
+    identity: bindingIdentity,
+    config: params.cfg,
+    storePath: params.storePath,
+    assertCurrent: hostCapabilities.assertActive,
+    signal: params.opts?.abortSignal,
+  });
   if (!binding?.threadId) {
     throw new Error(
       "Codex /btw needs an active Codex thread. Send a normal message first, then try /btw again.",
@@ -405,10 +415,9 @@ export async function runCodexAppServerSideQuestion(
   } satisfies CodexAppServerClientOptions;
   let client = await getLeasedSharedCodexAppServerClient(clientOptions);
   const clientLease: CodexAppServerClientLease = { client };
-  const collector = new CodexSideQuestionCollector(params, () => readRecentCodexRateLimits(client));
+  let collector: CodexEphemeralTurn | undefined;
   const runAbortController = new AbortController();
   let nativeToolLifecycleProjector: CodexNativeToolLifecycleProjector | undefined;
-  const pendingNativeToolNotifications: CodexServerNotification[] = [];
   const pendingNativePreToolUseFailures: CodexNativePreToolUseFailure[] = [];
   let nativePreToolUseFailureFallbackActive = false;
   let nativeToolRunWasAbortedBeforeCleanup: boolean | undefined;
@@ -444,23 +453,6 @@ export async function runCodexAppServerSideQuestion(
     }
     flushPendingNativePreToolUseFailures();
   };
-  const handleNotification = (notification: CodexServerNotification) => {
-    collector.handleNotification(notification);
-    if (
-      notification.method !== "item/started" &&
-      notification.method !== "item/completed" &&
-      notification.method !== "rawResponseItem/completed" &&
-      notification.method !== "turn/completed"
-    ) {
-      return;
-    }
-    if (!nativeToolLifecycleProjector) {
-      pendingNativeToolNotifications.push(notification);
-      return;
-    }
-    nativeToolLifecycleProjector.handleNotification(notification);
-  };
-  let removeNotificationHandler = client.addNotificationHandler(handleNotification);
   const abortFromUpstream = () =>
     runAbortController.abort(params.opts?.abortSignal?.reason ?? "codex_side_question_abort");
   if (params.opts?.abortSignal?.aborted) {
@@ -474,8 +466,8 @@ export async function runCodexAppServerSideQuestion(
   let policyWriteUncertain = false;
   let turnId: string | undefined;
   let sandboxEnvironment: CodexSandboxExecEnvironment | undefined;
+  let sandboxDisconnectError: Error | undefined;
   let sandboxEnvironmentClient: CodexAppServerClient | undefined;
-  let removeRequestHandler: (() => void) | undefined;
   let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
   const activeDynamicToolCalls = new Set<Promise<unknown>>();
   const releaseSandboxEnvironment = async () => {
@@ -492,6 +484,7 @@ export async function runCodexAppServerSideQuestion(
       return;
     }
     await releaseSandboxEnvironment();
+    assertCurrent();
     const environment = await ensureCodexSandboxExecServerEnvironment({
       client: targetClient,
       sandbox: params.sandbox ?? null,
@@ -500,7 +493,7 @@ export async function runCodexAppServerSideQuestion(
       timeoutMs: appServer.requestTimeoutMs,
       signal: runAbortController.signal,
       onExecutionDisconnect: (error) => {
-        collector.reject(error);
+        sandboxDisconnectError = error;
         embeddedAgentLog.warn(error.message);
         runAbortController.abort("client_closed");
       },
@@ -515,6 +508,7 @@ export async function runCodexAppServerSideQuestion(
   };
 
   try {
+    assertCurrent();
     const autoApproveMcpTools = shouldAutoApproveCodexAppServerApprovals(appServer);
     const projectedMcpServers = loadCodexBundleMcpApprovalConfig({
       workspaceDir: agentWorkspaceDir,
@@ -571,114 +565,114 @@ export async function runCodexAppServerSideQuestion(
         : {}),
       config: params.cfg,
     });
-    const registerRequestHandler = (targetClient: CodexAppServerClient) =>
-      targetClient.addRequestHandler(async (request) => {
-        if (!childThreadId || !turnId) {
-          return undefined;
-        }
-        if (request.method === "mcpServer/elicitation/request") {
-          const approvalResult = await routeCodexAppServerElicitationRequest({
-            requestParams: request.params,
-            paramsForRun: sideRunParams,
-            threadId: childThreadId,
-            turnId,
-            autoApproveMcpTools,
-            projectedMcpServers,
-            getActiveMcpToolCall: (serverName) =>
-              nativeToolLifecycleProjector?.getActiveMcpToolCall(serverName),
-            pluginAppPolicyContext,
-            signal: runAbortController.signal,
-          });
-          return approvalResult.kind === "handled"
-            ? approvalResult.response
-            : createCodexElicitationResponse("decline", null, {
-                message: "OpenClaw Codex side questions do not support interactive MCP input.",
-              });
-        }
-        if (request.method === "item/tool/requestUserInput") {
-          return isSideUserInputRequest(request.params, childThreadId, turnId)
-            ? emptySideUserInputResponse()
-            : undefined;
-        }
-        if (isCodexAppServerApprovalRequest(request.method)) {
-          return handleCodexAppServerApprovalRequest({
-            method: request.method,
-            requestParams: request.params,
-            paramsForRun: sideRunParams,
-            threadId: childThreadId,
-            turnId,
-            nativeHookRelay,
-            autoApprove: autoApproveMcpTools,
-            signal: runAbortController.signal,
-            onNativeToolFailureDisposition: (itemId, disposition) =>
-              nativeToolLifecycleProjector?.recordApprovalFailureDisposition(itemId, disposition),
-          });
-        }
-        if (request.method !== "item/tool/call") {
-          return undefined;
-        }
-        const call = readCodexDynamicToolCallParams(request.params);
-        if (!call || call.threadId !== childThreadId || call.turnId !== turnId) {
-          return undefined;
-        }
-        const timeoutMs = resolveDynamicToolCallTimeoutMs({
-          call,
-          config: params.cfg,
+    const handleServerRequest = async (
+      request: CodexAppServerServerRequest,
+      _scope: CodexThreadRouteScope,
+      requestSignal: AbortSignal,
+    ) => {
+      const signal = AbortSignal.any([requestSignal, runAbortController.signal]);
+      if (signal.aborted) {
+        return undefined;
+      }
+      if (!childThreadId || !turnId) {
+        return undefined;
+      }
+      if (request.method === "mcpServer/elicitation/request") {
+        const approvalResult = await routeCodexAppServerElicitationRequest({
+          requestParams: request.params,
+          paramsForRun: sideRunParams,
+          threadId: childThreadId,
+          turnId,
+          autoApproveMcpTools,
+          projectedMcpServers,
+          getActiveMcpToolCall: (serverName) =>
+            nativeToolLifecycleProjector?.getActiveMcpToolCall(serverName),
+          pluginAppPolicyContext,
+          signal,
         });
-        const toolStartedAt = Date.now();
-        const diagnosticContext = {
-          call,
-          agentId: sessionAgentId,
-          runId: sideRunParams.runId,
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-        };
-        emitDynamicToolStartedDiagnostic(diagnosticContext);
-        const toolCall = handleDynamicToolCallWithTimeout({
-          call,
-          toolBridge,
-          signal: runAbortController.signal,
-          timeoutMs,
-          observeToolTerminal: sideRunParams.observeToolTerminal,
+        return approvalResult.kind === "handled"
+          ? approvalResult.response
+          : createCodexElicitationResponse("decline", null, {
+              message: "OpenClaw Codex side questions do not support interactive MCP input.",
+            });
+      }
+      if (request.method === "item/tool/requestUserInput") {
+        return isSideUserInputRequest(request.params, childThreadId, turnId)
+          ? emptySideUserInputResponse()
+          : undefined;
+      }
+      if (isCodexAppServerApprovalRequest(request.method)) {
+        return handleCodexAppServerApprovalRequest({
+          method: request.method,
+          requestParams: request.params,
+          paramsForRun: sideRunParams,
+          threadId: childThreadId,
+          turnId,
+          nativeHookRelay,
+          autoApprove: autoApproveMcpTools,
+          signal,
+          onNativeToolFailureDisposition: (itemId, disposition) =>
+            nativeToolLifecycleProjector?.recordApprovalFailureDisposition(itemId, disposition),
         });
-        activeDynamicToolCalls.add(toolCall);
-        try {
-          const response = await toolCall;
-          emitDynamicToolTerminalDiagnostic({
-            ...diagnosticContext,
-            response,
-            durationMs: Math.max(0, Date.now() - toolStartedAt),
-          });
-          return {
-            contentItems: response.contentItems,
-            success: response.success,
-          } as JsonValue;
-        } catch (error) {
-          emitDynamicToolErrorDiagnostic({
-            ...diagnosticContext,
-            durationMs: Math.max(0, Date.now() - toolStartedAt),
-            terminalReason: runAbortController.signal.aborted
-              ? resolveCodexToolAbortTerminalReason(runAbortController.signal)
-              : "failed",
-          });
-          throw error;
-        } finally {
-          activeDynamicToolCalls.delete(toolCall);
-        }
+      }
+      if (request.method !== "item/tool/call") {
+        return undefined;
+      }
+      const call = readCodexDynamicToolCallParams(request.params);
+      if (!call || call.threadId !== childThreadId || call.turnId !== turnId) {
+        return undefined;
+      }
+      const timeoutMs = resolveDynamicToolCallTimeoutMs({
+        call,
+        config: params.cfg,
       });
-    removeRequestHandler = registerRequestHandler(client);
+      const toolStartedAt = Date.now();
+      const diagnosticContext = {
+        call,
+        agentId: sessionAgentId,
+        runId: sideRunParams.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+      };
+      emitDynamicToolStartedDiagnostic(diagnosticContext);
+      const toolCall = handleDynamicToolCallWithTimeout({
+        call,
+        toolBridge,
+        signal,
+        timeoutMs,
+        observeToolTerminal: sideRunParams.observeToolTerminal,
+      });
+      activeDynamicToolCalls.add(toolCall);
+      try {
+        const response = await toolCall;
+        emitDynamicToolTerminalDiagnostic({
+          ...diagnosticContext,
+          response,
+          durationMs: Math.max(0, Date.now() - toolStartedAt),
+        });
+        return {
+          contentItems: response.contentItems,
+          success: response.success,
+        } as JsonValue;
+      } catch (error) {
+        emitDynamicToolErrorDiagnostic({
+          ...diagnosticContext,
+          durationMs: Math.max(0, Date.now() - toolStartedAt),
+          terminalReason: signal.aborted ? resolveCodexToolAbortTerminalReason(signal) : "failed",
+        });
+        throw error;
+      } finally {
+        activeDynamicToolCalls.delete(toolCall);
+      }
+    };
 
-    const rebindClientHandlers = (nextClient: CodexAppServerClient) => {
-      removeRequestHandler?.();
-      removeNotificationHandler();
+    const selectClient = (nextClient: CodexAppServerClient) => {
       client = nextClient;
       ensureCodexAppServerClientRuntime(client, {
         agentDir: params.agentDir,
         authProfileId: connection.requestAuthProfileId,
         config: params.cfg,
       });
-      removeNotificationHandler = client.addNotificationHandler(handleNotification);
-      removeRequestHandler = registerRequestHandler(client);
     };
 
     const serviceTier = binding.serviceTier ?? appServer.serviceTier;
@@ -708,6 +702,7 @@ export async function runCodexAppServerSideQuestion(
           loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
           signal: runAbortController.signal,
           hostCapabilities: sideRunParams.hostCapabilities,
+          assertCurrent,
           onPreToolUseFailure: (failure) => {
             if (nativePreToolUseFailureFallbackActive) {
               emitNativePreToolUseFailure(failure);
@@ -743,11 +738,21 @@ export async function runCodexAppServerSideQuestion(
       run: async (forkClient, requestOptions) =>
         options.bindingStore.withLease(bindingIdentity, async () => {
           const assertCurrentBinding = () => {
-            params.hostCapabilities.assertActive();
+            assertCurrent();
             runAbortController.signal.throwIfAborted();
             if (!isDeepStrictEqual(options.bindingStore.read(bindingIdentity), binding)) {
               throw new Error("Codex side-question binding changed before fork");
             }
+          };
+          const currentRequestOptions = () => {
+            const scoped = requestOptions();
+            return {
+              ...scoped,
+              assertCurrent: () => {
+                scoped.assertCurrent();
+                assertCurrentBinding();
+              },
+            };
           };
           assertCurrentBinding();
           if (binding.connectionScope === "supervision") {
@@ -757,7 +762,7 @@ export async function runCodexAppServerSideQuestion(
                 threadId: binding.threadId,
                 includeTurns: false,
               },
-              requestOptions(),
+              currentRequestOptions(),
             );
             assertCurrentBinding();
             assertCodexSupervisionThreadLineage(binding, thread);
@@ -772,7 +777,7 @@ export async function runCodexAppServerSideQuestion(
               configCwd: executionCwd,
               request: (method, requestParams) => {
                 assertCurrentBinding();
-                return forkClient.request(method, requestParams, requestOptions());
+                return forkClient.request(method, requestParams, currentRequestOptions());
               },
             }).finally(assertCurrentBinding);
             pluginAppPolicyContext = refreshed.policyContext;
@@ -815,7 +820,7 @@ export async function runCodexAppServerSideQuestion(
                 excludeTurns: true,
                 threadSource: "user",
               },
-              requestOptions(),
+              currentRequestOptions(),
             ),
           );
           if (!response.thread.id.trim() || response.thread.id === binding.threadId) {
@@ -824,7 +829,24 @@ export async function runCodexAppServerSideQuestion(
           }
           childThreadId = response.thread.id;
           childClient = forkClient;
+          collector = new CodexEphemeralTurn(forkClient, childThreadId, {
+            textMode: "last",
+            onRequest: handleServerRequest,
+            onAssistantMessageStart: async () => {
+              await params.opts?.onAssistantMessageStart?.();
+            },
+            onNotification: (notification) =>
+              nativeToolLifecycleProjector?.handleNotification(notification),
+          });
+          // A terminal answer may still be projecting after transport closure;
+          // native hook authority ends with the route, not that projection.
+          if (nativeHookRelay) {
+            collector.route.signal.addEventListener("abort", nativeHookRelay.unregister, {
+              once: true,
+            });
+          }
           try {
+            assertCurrentBinding();
             if (
               supervisionModelSelection &&
               (response.model !== supervisionModelSelection.model ||
@@ -842,7 +864,7 @@ export async function runCodexAppServerSideQuestion(
               ...scoped,
               signal: runAbortController.signal,
               assertCurrent: () => {
-                params.hostCapabilities.assertActive();
+                assertCurrent();
                 runAbortController.signal.throwIfAborted();
                 scoped.assertCurrent();
               },
@@ -857,7 +879,7 @@ export async function runCodexAppServerSideQuestion(
           }
           return response.thread.id;
         }),
-      onClientChange: rebindClientHandlers,
+      onClientChange: selectClient,
     });
 
     const effort = usesSupervisionConnection
@@ -910,7 +932,11 @@ export async function runCodexAppServerSideQuestion(
                   },
                 }),
           },
-          { timeoutMs: appServer.requestTimeoutMs, signal: runAbortController.signal },
+          {
+            timeoutMs: appServer.requestTimeoutMs,
+            signal: runAbortController.signal,
+            assertCurrent,
+          },
         )
         .catch((error: unknown) => {
           if (isCodexAppServerIndeterminateRequestCancellationError(error)) {
@@ -921,7 +947,7 @@ export async function runCodexAppServerSideQuestion(
         }),
     );
     turnId = turnResponse.turn.id;
-    collector.setTurn(sideThreadId, turnId);
+    assertCurrent();
     nativeToolLifecycleProjector = new CodexNativeToolLifecycleProjector(
       { ...sideRunParams, agentId: sessionAgentId },
       sideThreadId,
@@ -934,16 +960,20 @@ export async function runCodexAppServerSideQuestion(
       nativeToolLifecycleProjector.recordPreToolUseFailure(failure);
     }
     pendingNativePreToolUseFailures.length = 0;
-    for (const notification of pendingNativeToolNotifications) {
-      nativeToolLifecycleProjector.handleNotification(notification);
+    if (!collector) {
+      throw new Error("Codex side thread route was not reserved");
     }
-    pendingNativeToolNotifications.length = 0;
-
-    let text: string;
+    let result: Awaited<ReturnType<CodexEphemeralTurn["wait"]>>;
     try {
-      text = await collector.wait({
+      result = await collector.wait(turnResponse.turn, {
         signal: runAbortController.signal,
-        timeoutMs: SIDE_QUESTION_COMPLETION_TIMEOUT_MS,
+        abortError: () => sandboxDisconnectError ?? new Error("Codex /btw was aborted."),
+        timeout: {
+          ms: SIDE_QUESTION_COMPLETION_TIMEOUT_MS,
+          error: new CodexSideQuestionTimeoutError(
+            "Codex /btw timed out waiting for the side thread to finish.",
+          ),
+        },
       });
     } catch (error) {
       if (error instanceof CodexSideQuestionTimeoutError && !runAbortController.signal.aborted) {
@@ -951,7 +981,22 @@ export async function runCodexAppServerSideQuestion(
       }
       throw error;
     }
-    const trimmed = text.trim();
+    if (result.error || result.turn?.status === "failed") {
+      throw formatCodexErrorMessage(
+        result.error ?? {
+          error: {
+            message: result.turn?.error?.message ?? null,
+            codexErrorInfo: result.turn?.error?.codexErrorInfo ?? null,
+          },
+        },
+        readRecentCodexRateLimits(client),
+      );
+    }
+    if (result.turn?.status === "interrupted") {
+      throw new Error("Codex /btw side thread was interrupted.");
+    }
+    const trimmed = result.text;
+    assertCurrent();
     if (!trimmed) {
       throw new Error("Codex /btw completed without an answer.");
     }
@@ -963,7 +1008,6 @@ export async function runCodexAppServerSideQuestion(
       const runWasAbortedBeforeCleanup = runAbortController.signal.aborted;
       nativeToolRunWasAbortedBeforeCleanup = runWasAbortedBeforeCleanup;
       params.opts?.abortSignal?.removeEventListener("abort", abortFromUpstream);
-      removeRequestHandler?.();
       // Stop dispatched side tools before cleanup waits on the app server;
       // otherwise a stuck tool can outlive the side turn that owns it.
       if (!runAbortController.signal.aborted) {
@@ -977,14 +1021,14 @@ export async function runCodexAppServerSideQuestion(
         await cleanupCodexSideThread(childClient ?? client, {
           threadId: childThreadId,
           turnId,
-          interrupt: !collector.completed,
+          interrupt: !collector?.completed,
           timeoutMs: appServer.requestTimeoutMs,
         });
       } finally {
         if (policyWriteUncertain && childClient) {
           await retireUnsafeCodexTurnClientBestEffort(childClient, "side policy handoff");
         }
-        removeNotificationHandler();
+        collector?.route.release();
         try {
           nativeToolLifecycleProjector?.finalizeActive(runWasAbortedBeforeCleanup);
         } finally {
@@ -1037,6 +1081,7 @@ function registerCodexSideNativeHookRelay(params: {
   loopDetectionPreToolUseRelay: boolean;
   signal: AbortSignal;
   hostCapabilities: EmbeddedRunAttemptParamsV2["hostCapabilities"];
+  assertCurrent: () => void;
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void;
 }): NativeHookRelayRegistrationHandle | undefined {
   if (params.options.enabled === false) {
@@ -1061,7 +1106,7 @@ function registerCodexSideNativeHookRelay(params: {
     }),
     signal: params.signal,
     runBeforeToolCall: params.hostCapabilities.runBeforeToolCall,
-    assertActive: params.hostCapabilities.assertActive,
+    assertActive: params.assertCurrent,
     onPreToolUseFailure: params.onPreToolUseFailure,
     command: {
       timeoutMs: params.options.gatewayTimeoutMs,
@@ -1388,19 +1433,15 @@ async function cleanupCodexSideThread(
     return;
   }
   if (params.interrupt && params.turnId !== undefined) {
-    try {
-      await client.request(
-        "turn/interrupt",
-        { threadId: params.threadId, turnId: params.turnId },
-        { timeoutMs: params.timeoutMs },
-      );
-    } catch (error) {
-      if (!isCodexAlreadyTerminalInterruptError(error)) {
-        embeddedAgentLog.debug("codex /btw side thread interrupt cleanup failed", { error });
-        await retireUnsafeCodexTurnClientBestEffort(client, "side turn interrupt");
-        // An unconfirmed native turn must never lose its only visible subscription.
-        return;
-      }
+    const confirmed = await interruptCodexTurnAndWaitBestEffort(client, {
+      threadId: params.threadId,
+      turnId: params.turnId,
+      timeoutMs: params.timeoutMs,
+    });
+    if (!confirmed) {
+      await retireUnsafeCodexTurnClientBestEffort(client, "side turn interrupt");
+      // An unconfirmed native turn must never lose its only visible subscription.
+      return;
     }
   }
   if (
@@ -1411,174 +1452,6 @@ async function cleanupCodexSideThread(
   ) {
     await retireUnsafeCodexTurnClientBestEffort(client, "side thread unsubscribe");
   }
-}
-
-class CodexSideQuestionCollector {
-  private threadId: string | undefined;
-  private turnId: string | undefined;
-  private pendingNotifications: CodexServerNotification[] = [];
-  private assistantStarted = false;
-  private assistantText = "";
-  private finalText: string | undefined;
-  private terminalError: Error | undefined;
-  private settle:
-    | {
-        resolve: (text: string) => void;
-        reject: (error: Error) => void;
-      }
-    | undefined;
-  completed = false;
-
-  constructor(
-    private readonly params: AgentHarnessSideQuestionParamsV2,
-    private readonly readRecentRateLimits: () => JsonValue | undefined,
-  ) {}
-
-  setTurn(threadId: string, turnId: string): void {
-    this.threadId = threadId;
-    this.turnId = turnId;
-    const pending = this.pendingNotifications;
-    this.pendingNotifications = [];
-    for (const notification of pending) {
-      this.handleNotification(notification);
-    }
-  }
-
-  handleNotification(notification: CodexServerNotification): void {
-    const params = isJsonObject(notification.params) ? notification.params : undefined;
-    if (!params) {
-      return;
-    }
-    if (!this.threadId || !this.turnId) {
-      this.pendingNotifications.push(notification);
-      return;
-    }
-    if (!isCodexNotificationForTurn(params, this.threadId, this.turnId)) {
-      return;
-    }
-    if (notification.method === "item/agentMessage/delta") {
-      void this.appendAssistantDelta(params);
-      return;
-    }
-    if (notification.method === "turn/completed") {
-      this.completeFromTurn(params);
-      return;
-    }
-    if (notification.method === "error" && params.willRetry !== true) {
-      this.reject(formatCodexErrorMessage(params, this.readRecentRateLimits()));
-    }
-  }
-
-  wait(options: { signal?: AbortSignal; timeoutMs: number }): Promise<string> {
-    if (this.terminalError) {
-      return Promise.reject(this.terminalError);
-    }
-    if (this.completed) {
-      return Promise.resolve(this.finalText ?? this.assistantText);
-    }
-    if (options.signal?.aborted) {
-      return Promise.reject(new Error("Codex /btw was aborted."));
-    }
-    return new Promise((resolve, reject) => {
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      const cleanup = () => {
-        if (timeout) {
-          clearTimeout(timeout);
-          timeout = undefined;
-        }
-        options.signal?.removeEventListener("abort", abort);
-      };
-      const abort = () => {
-        cleanup();
-        this.settle = undefined;
-        reject(new Error("Codex /btw was aborted."));
-      };
-      timeout = setTimeout(
-        () => {
-          cleanup();
-          this.settle = undefined;
-          reject(
-            new CodexSideQuestionTimeoutError(
-              "Codex /btw timed out waiting for the side thread to finish.",
-            ),
-          );
-        },
-        Math.max(100, options.timeoutMs),
-      );
-      timeout.unref?.();
-      options.signal?.addEventListener("abort", abort, { once: true });
-      this.settle = {
-        resolve: (text) => {
-          cleanup();
-          resolve(text);
-        },
-        reject: (error) => {
-          cleanup();
-          reject(error);
-        },
-      };
-    });
-  }
-
-  private async appendAssistantDelta(params: JsonObject): Promise<void> {
-    const delta = readString(params, "delta") ?? "";
-    if (!delta) {
-      return;
-    }
-    if (!this.assistantStarted) {
-      this.assistantStarted = true;
-      await this.params.opts?.onAssistantMessageStart?.();
-    }
-    this.assistantText += delta;
-  }
-
-  private completeFromTurn(params: JsonObject): void {
-    const turn = readCodexTurn(params.turn);
-    if (!turn || turn.id !== this.turnId) {
-      return;
-    }
-    this.completed = true;
-    if (turn.status === "failed") {
-      this.reject(
-        formatCodexUsageLimitErrorMessage({
-          message: turn.error?.message,
-          codexErrorInfo: turn.error?.codexErrorInfo as JsonValue | null | undefined,
-          rateLimits: this.readRecentRateLimits(),
-        }) ??
-          turn.error?.message ??
-          "Codex /btw side thread failed.",
-      );
-      return;
-    }
-    if (turn.status === "interrupted") {
-      this.reject("Codex /btw side thread was interrupted.");
-      return;
-    }
-    const finalText = collectAssistantText(turn) || this.assistantText;
-    this.resolve(finalText);
-  }
-
-  private resolve(text: string): void {
-    this.finalText = text;
-    const settle = this.settle;
-    this.settle = undefined;
-    settle?.resolve(text);
-  }
-
-  reject(error: string | Error): void {
-    this.terminalError = error instanceof Error ? error : new Error(error);
-    const settle = this.settle;
-    this.settle = undefined;
-    settle?.reject(this.terminalError);
-  }
-}
-
-function collectAssistantText(turn: CodexTurn): string {
-  const messages = (turn.items ?? [])
-    .filter((item) => item.type === "agentMessage" && typeof item.text === "string")
-    .map((item) => item.text.trim())
-    .filter(Boolean);
-  return messages.at(-1) ?? "";
 }
 
 function formatCodexErrorMessage(params: JsonObject, rateLimits: JsonValue | undefined): Error {

@@ -6,6 +6,7 @@ import type {
   ProviderNormalizeModelCatalogIdContext,
   ProviderResponseModelEquivalenceContext,
   ProviderResolveModelRoutesContext,
+  ProviderToolSearchPolicyContext,
 } from "../plugin-sdk/provider-model-types.js";
 import type {
   ProviderApplyConfigDefaultsContext,
@@ -58,6 +59,8 @@ export type ProviderPolicySurface = {
   resolveThinkingProfile?: (
     ctx: ProviderDefaultThinkingPolicyContext,
   ) => ProviderThinkingProfile | null | undefined;
+  /** Prefer compact tool discovery, or veto a managed-service default for a hosted route. */
+  resolveToolSearchMode?: (ctx: ProviderToolSearchPolicyContext) => "tools" | false | undefined;
   resolveModelRoutes?: (
     ctx: ProviderResolveModelRoutesContext,
   ) => ProviderModelRouteResolution | null | undefined;
@@ -82,6 +85,7 @@ const PROVIDER_POLICY_HOOK_KEYS = [
   "applyConfigDefaults",
   "resolveConfigApiKey",
   "resolveThinkingProfile",
+  "resolveToolSearchMode",
   "resolveModelRoutes",
   "normalizeModelCatalogId",
   "isResponseModelEquivalent",

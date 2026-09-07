@@ -369,16 +369,17 @@ export function applySubagentWaitOutcome(params: {
         // `pendingError: true` (see createPendingErrorTimeoutSnapshot). Keep that
         // cause so the announce reports why the child died, not a bare "timed out".
         //
-        // (2) `hard_timeout` is the run's own budget firing; a plain `timed_out` is
-        // wait-layer uncertainty (see agent-run-terminal-outcome.ts) — the waiter
-        // gave up with no terminal snapshot, so the child is still live. That is
-        // orthogonal to (1): a pendingError timeout still has a disposition.
+        // (2) A timeout reason alone does not establish whether the child stopped.
+        // Preserve terminal timestamps and prior disposition when a later wait
+        // expires without new evidence. Only a bare expiry is unconfirmed.
         const pendingErrorText =
           params.wait?.pendingError === true ? (terminalOutcome.error ?? waitError) : undefined;
         const disposition =
-          terminalOutcome.reason === "hard_timeout"
+          terminalOutcome.reason === "hard_timeout" ||
+          asFiniteNumber(next.endedAt) !== undefined ||
+          asFiniteNumber(outcome?.endedAt) !== undefined
             ? ("exited" as const)
-            : ("still-running" as const);
+            : (outcome?.disposition ?? ("still-running" as const));
         outcome = pendingErrorText
           ? { status: "timeout", error: pendingErrorText, disposition }
           : { status: "timeout", disposition };

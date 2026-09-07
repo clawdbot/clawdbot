@@ -1,8 +1,3 @@
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
-import {
-  isProviderAuthProfileConfigured,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/provider-auth";
 import type {
   OpenAICompatibleRealtimeAudioFormat,
   RealtimeVoiceBridgeCreateRequest,
@@ -230,19 +225,4 @@ export function toXaiRealtimeWsUrl(
     url.searchParams.set("conversation_id", conversationId);
   }
   return url.toString();
-}
-
-export function hasXaiRealtimeApiKeyInput(
-  configApiKey: string | undefined,
-  cfg: OpenClawConfig | undefined,
-  agentId?: string,
-): boolean {
-  if (normalizeOptionalString(configApiKey) || normalizeOptionalString(process.env.XAI_API_KEY)) {
-    return true;
-  }
-  return isProviderAuthProfileConfigured({
-    provider: "xai",
-    cfg,
-    ...(cfg && agentId ? { agentDir: resolveAgentDir(cfg, agentId) } : {}),
-  });
 }

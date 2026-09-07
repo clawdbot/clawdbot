@@ -1,4 +1,4 @@
-import { resolveEmbeddedAgentRunProgressState } from "../../agents/embedded-agent-runner/runs.js";
+import { resolveEmbeddedAgentSessionProgressState } from "../../agents/embedded-agent-runner/runs.js";
 import {
   getLatestLiveSubagentRunByChildSessionKey,
   isSubagentRunLive,
@@ -241,7 +241,7 @@ export function resolveVisibleActiveSessionRunState(params: {
     ...(params.projectedAgentRunIndex ? { index: params.projectedAgentRunIndex } : {}),
   });
   const embeddedRunState =
-    sessionId === undefined ? undefined : resolveEmbeddedAgentRunProgressState(sessionId);
+    sessionId === undefined ? undefined : resolveEmbeddedAgentSessionProgressState(sessionId);
   // Connection, worker-lifecycle, and embedded registries are independent owners.
   // Settlement in one must not hide live work owned by another.
   const running =

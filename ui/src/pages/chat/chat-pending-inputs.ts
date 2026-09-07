@@ -7,7 +7,8 @@ import type {
   ChatPendingInputsPage,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { t } from "../../i18n/index.ts";
-import type { ChatItem } from "../../lib/chat/chat-types.ts";
+import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
@@ -33,6 +34,7 @@ const pendingInputViews = new WeakMap<ChatState, PendingInputView>();
 export function buildPendingInputItems(
   inputs: ChatPendingInputsPage["items"],
   searchQuery?: string,
+  browserInputs: readonly ChatQueueItem[] = [],
 ): ChatItem[] {
   // Custody records stay outside active-run ordering until the writer promotes them.
   const items: ChatItem[] = [];
@@ -58,9 +60,15 @@ export function buildPendingInputItems(
       key: `pending-input:${input.id}:state`,
       timestamp: input.acceptedAt,
       text: t(
-        input.state === "cancelled"
-          ? "chat.pendingInputs.cancelled"
-          : "chat.pendingInputs.interrupted",
+        input.state === "interrupted" &&
+          input.runId &&
+          browserInputs.some(
+            (item) => item.sendRunId === input.runId && item.sendState !== "failed",
+          )
+          ? "chat.pendingInputs.resuming"
+          : input.state === "cancelled"
+            ? "chat.pendingInputs.cancelled"
+            : "chat.pendingInputs.interrupted",
       ),
     });
   }
@@ -107,11 +115,7 @@ export function applyChatPendingInputs(
   page: ChatPendingInputsPage | undefined,
   options: { before?: number; receipts?: ChatInputReceipts } = {},
 ): void {
-  const { page: displayPage, acceptedRunIds } = reconcileChatInputCustody(
-    state,
-    page,
-    options.receipts,
-  );
+  const { page: displayPage } = reconcileChatInputCustody(state, page, options.receipts);
   pendingInputViews.set(state, {
     sessionKey: state.sessionKey,
     sessionId: state.currentSessionId ?? null,
@@ -120,17 +124,23 @@ export function applyChatPendingInputs(
     before: options.before,
     loading: false,
   });
-  if (acceptedRunIds.size) {
-    // The server owns accepted input even after an interruption. Retiring the
-    // outbox copy prevents reconnect from silently submitting it a second time.
-    for (const item of state.chatQueue) {
-      if (
-        item.sendRunId &&
-        acceptedRunIds.has(item.sendRunId) &&
-        (!item.sessionId || item.sessionId === state.currentSessionId)
-      ) {
-        removeQueuedMessage(state, item.id);
-      }
+  const settled = new Set([
+    ...(options.receipts ?? [])
+      .filter((receipt) => receipt.state === "consumed")
+      .map((receipt) => receipt.runId),
+    ...displayPage.items.filter((input) => input.state === "cancelled").map((input) => input.runId),
+  ]);
+  // Acceptance keeps the browser's authenticated retry payload. Only consumption
+  // or explicit cancellation retires it; a restart may need a fresh admission.
+  for (const item of state.chatQueue) {
+    const canonical = findChatSubmissionMessage(state.chatMessages, item.sendRunId, true);
+    if (
+      item.sendRunId &&
+      (settled.has(item.sendRunId) ||
+        (canonical && (canonical.id !== null || canonical.sequence !== null))) &&
+      (!item.sessionId || item.sessionId === state.currentSessionId)
+    ) {
+      removeQueuedMessage(state, item.id);
     }
   }
   state.requestUpdate?.();
