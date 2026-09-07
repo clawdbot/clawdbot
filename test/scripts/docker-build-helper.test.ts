@@ -6379,6 +6379,17 @@ process.exit(73);
     expect(pluginBinding).not.toContain('readFileSync(logPath, "utf8")');
   });
 
+  it("materializes legacy bundle-MCP client links before its read-only Docker mount", () => {
+    const runner = readFileSync(AGENT_BUNDLE_MCP_TOOLS_DOCKER_E2E_PATH, "utf8");
+
+    expectTextToIncludeAll(runner, [
+      'ln -s /app/dist "$LEGACY_CLIENT_SOURCE_ROOT/dist"',
+      'ln -s /app/node_modules "$LEGACY_CLIENT_SOURCE_ROOT/node_modules"',
+      '-v "$LEGACY_CLIENT_SOURCE_ROOT:$LEGACY_CLIENT_ROOT:ro"',
+    ]);
+    expect(runner).not.toContain("CLIENT_PRELUDE");
+  });
+
   it("keeps Open WebUI Docker E2E resource-guarded", () => {
     const runner = readFileSync(OPENWEBUI_DOCKER_E2E_PATH, "utf8");
     expectTextToIncludeAll(runner, [
