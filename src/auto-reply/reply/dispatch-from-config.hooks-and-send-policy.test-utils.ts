@@ -496,6 +496,19 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         },
       } as OpenClawConfig,
     },
+    {
+      name: "implicit Slack thread turns",
+      ctx: buildTestCtx({
+        ChatType: "channel",
+        Surface: "slack",
+        Provider: "slack",
+        SessionKey: "agent:main:slack:channel:C123:thread:456",
+        WasMentioned: true,
+        MentionSource: "implicit_thread",
+        ImplicitMentionKinds: ["bot_thread_participant"],
+      }),
+      cfg: emptyConfig,
+    },
   ])("records explicit NO_REPLY without a generic fallback in $name", async ({ ctx, cfg }) => {
     setNoAbort();
     const deliver = vi.fn(async () => {});
