@@ -4,10 +4,13 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { NativeLinkMenu } from "../components/native-link-menu.runtime.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 
-const menuLoad = vi.hoisted(() => ({
-  started: vi.fn(),
-  ready: Promise.withResolvers<void>(),
-}));
+const menuLoad = vi.hoisted(() => {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { started: vi.fn(), ready: { promise, resolve } };
+});
 
 vi.mock("../components/native-link-menu.runtime.ts", async (importOriginal) => {
   menuLoad.started();
