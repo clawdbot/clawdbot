@@ -46,6 +46,11 @@ export function normalizeGitPathForFilesystem(
   return path.win32.normalize(`${drive.toUpperCase()}:/${match[2] ?? ""}`);
 }
 
+/** Git-for-Windows cannot open Node's `os.devNull` (`\\.\nul`) as a config file. */
+export function gitConfigNullPath(platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32" ? "NUL" : "/dev/null";
+}
+
 export function withForegroundGitMaintenance(argv: string[]): string[] {
   // Maintenance and legacy auto-GC must stay in their cancellable process tree.
   return argv[0] === "git"
