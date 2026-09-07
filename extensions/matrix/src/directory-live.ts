@@ -1,6 +1,7 @@
 import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk/channel-contract";
 // Matrix plugin module implements directory live behavior.
 import {
+  isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -95,12 +96,16 @@ async function requestMatrixJson<T>(
     body?: unknown;
   },
 ): Promise<T> {
-  return (await client.requestJson({
+  const result = await client.requestJson({
     method: params.method,
     endpoint: params.endpoint,
     body: params.body,
     timeoutMs: MATRIX_DIRECTORY_TIMEOUT_MS,
-  })) as T;
+  });
+  if (!isRecord(result)) {
+    throw new Error(`Matrix homeserver returned a non-object JSON response for ${params.endpoint}`);
+  }
+  return result as T;
 }
 
 export async function listMatrixDirectoryPeersLive(
