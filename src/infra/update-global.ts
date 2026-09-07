@@ -523,7 +523,7 @@ async function collectInstalledPathErrors(params: {
  * Explicit tarball, URL, git, and main-branch specs bypass registry lookup.
  */
 export function canResolveRegistryVersionForPackageTarget(value: string): boolean {
-  const trimmed = normalizePackageTarget(value);
+  const trimmed = stripPrimaryPackageAlias(value);
   if (!trimmed) {
     return true;
   }

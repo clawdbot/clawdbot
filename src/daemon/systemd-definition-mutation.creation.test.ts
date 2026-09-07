@@ -3,17 +3,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withSystemdDefinitionMutation } from "./systemd-definition-mutation.js";
 
 vi.mock("./systemd-exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./systemd-exec.js")>()),
   execBusctlUser: async (env: Record<string, string | undefined>) => ({
     code: 1,
+    termination: "exit",
     stdout: "",
     stderr: `Call failed: Unit ${env.OPENCLAW_SYSTEMD_UNIT}.service not found.`,
   }),
 }));
-
-import { withSystemdDefinitionMutation } from "./systemd-definition-mutation.js";
 
 describe.skipIf(process.platform === "win32")("systemd publication directory creation", () => {
   let root: string;

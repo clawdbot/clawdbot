@@ -141,6 +141,19 @@ export function acquireGatewayLifecycleCoordinator(params: CoordinatorOptions) {
   return acquireLifecycleCoordinator("gateway-lifecycle", params);
 }
 
+/** Borrow only a coordinator already owned by this process. The returned
+ * reference must remain held until the participating worker has exited. */
+export function retainHeldStateDatabaseCoordinator(databasePath: string) {
+  const pathname = resolveStateDatabaseCoordinatorPath({
+    databasePath,
+    runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
+    uid: typeof process.getuid === "function" ? process.getuid() : undefined,
+  });
+  return heldCoordinators.has(pathname)
+    ? acquireStateDatabaseCoordinator({ databasePath, busyTimeoutMs: 0 })
+    : undefined;
+}
+
 export function acquireStateDatabaseCoordinator(params: CoordinatorOptions) {
   // Lifecycle ownership is reentrant for nested transactions. File publication
   // is not: even this process must refuse before ownership probes touch SQLite.

@@ -28,7 +28,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { pathExists } from "../../utils.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
 import { isJsonOutputModeActive } from "../json-output-mode.js";
-import type { UpdateCommandRecovery } from "./update-command-recovery.js";
+import type { UpdateCommandRecovery } from "./update-command-recovery-context.js";
 
 export type UpdateCommandOptions = {
   /** In-process executor only; workers must reacquire authority, never deserialize this. */

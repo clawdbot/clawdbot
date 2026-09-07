@@ -475,6 +475,31 @@ export function finishInterruptedUpdatePreviewInTransaction(
   );
 }
 
+/** Caller holds fresh local admission, a live executor and recovery exclusion. */
+export function finishInterruptedUpdateBeforeActivationInTransaction(
+  db: DatabaseSync,
+  expected: UpdateRunRecord,
+  options: LedgerOptions,
+): void {
+  if (
+    !db.isTransaction ||
+    expected.status !== "running" ||
+    !["requested", "staging", "validating"].includes(expected.phase)
+  ) {
+    throw new Error("Update interruption requires its live pre-activation transaction");
+  }
+  mutateRunInTransaction(
+    db,
+    expected.runId,
+    (record) => {
+      if (isDeepStrictEqual(record, expected)) {
+        finishRunRecord(record, { status: "failed", reason: "interrupted" });
+      }
+    },
+    options,
+  );
+}
+
 export function recordUpdateRunVerification(
   runId: string,
   verification: UpdateRunRecord["verification"],

@@ -24,6 +24,7 @@ import {
   type RestoreResource,
   type UpdateCheckpointRestorePlanRef,
 } from "./update-checkpoint-plan.js";
+import type { UpdateCheckpointSharedPublication } from "./update-checkpoint-publication-types.js";
 import { validateUpdateCheckpointPreviousRuntimeDatabase } from "./update-checkpoint-runtime.js";
 import { assertUpdateCheckpointSqliteSchema } from "./update-checkpoint-sqlite.js";
 import {
@@ -43,6 +44,8 @@ import {
   type UpdateRecoveryRecord,
   type UpdateRecoveryFence,
 } from "./update-run-recovery.js";
+
+export type { UpdateCheckpointSharedPublication } from "./update-checkpoint-publication-types.js";
 
 export { prepareUpdateCheckpointRestore } from "./update-checkpoint-prepare.js";
 export {
@@ -242,12 +245,6 @@ export async function inspectUpdateCheckpointRestoreResource(
 ): Promise<UpdateCheckpointRestoreObservation> {
   return (await inspectResource(params)).observation;
 }
-
-/** Facts required to rebind live lease owners; never a serialized capability. */
-export type UpdateCheckpointSharedPublication = UpdateCheckpointReadAccess & {
-  planRef: UpdateCheckpointRestorePlanRef;
-  recoveryRecord: UpdateRecoveryRecord;
-};
 
 /** Called by the physical lease owner, not replaced with a caller's assertion.
  * Verify original logical bindings, exact live record and displaced commitment,

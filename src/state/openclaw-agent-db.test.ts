@@ -2282,9 +2282,24 @@ describe("openclaw agent database", () => {
     const database = openOpenClawAgentDatabase({ agentId: "worker-1", env });
     expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
     const { DatabaseSync } = requireNodeSqlite();
-    const close = vi.spyOn(DatabaseSync.prototype, "close").mockImplementationOnce(() => {
-      throw new Error("initialization close failed");
-    });
+    const closeDatabase: unknown = Object.getOwnPropertyDescriptor(
+      DatabaseSync.prototype,
+      "close",
+    )?.value;
+    if (typeof closeDatabase !== "function") {
+      throw new Error("Missing original SQLite close implementation");
+    }
+    let failedClose = false;
+    const close = vi
+      .spyOn(DatabaseSync.prototype, "close")
+      .mockImplementation(function (this: DatabaseSync) {
+        // Fail the agent handle's cleanup, not a shared-state coordinator close.
+        if (!failedClose && this.location() === database.path) {
+          failedClose = true;
+          throw new Error("initialization close failed");
+        }
+        return Reflect.apply(closeDatabase, this, []);
+      });
 
     expect(() =>
       openOpenClawAgentDatabase({ agentId: "worker-2", env, path: database.path }),
@@ -3303,7 +3318,7 @@ describe("openclaw agent database", () => {
     });
 
     expect(assertRetainedOwnership).toBeDefined();
-    expect(() => assertRetainedOwnership?.()).toThrow("was lost");
+    expect(() => assertRetainedOwnership?.()).toThrow("Agent database maintenance scope is closed");
     expect(openOpenClawAgentDatabase({ agentId: "worker-1", env }).db.isOpen).toBe(true);
   });
 

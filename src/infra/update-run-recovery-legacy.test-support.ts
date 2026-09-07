@@ -10,7 +10,7 @@ import { getUpdateRun } from "./update-run-ledger.js";
 import type {
   RecoveryPackageTestFactory,
   RecoveryPackageTestCommit,
-} from "./update-run-recovery-package.test-support.js";
+} from "./update-run-recovery-package-fixture.test-support.js";
 import { inspectUpdateRecovery, type UpdateRecoveryRecord } from "./update-run-recovery-schema.js";
 import { commitUpdateRecoveryTerminal } from "./update-run-recovery-terminal.js";
 import { inspectUpdateRecoveries, claimUpdateRecovery } from "./update-run-recovery.js";

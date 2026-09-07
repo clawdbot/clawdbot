@@ -51,7 +51,7 @@ export const CORE_CLI_COMMAND_DESCRIPTORS = [
   },
   {
     name: "database",
-    description: "Inspect shared-state schema compatibility and write ownership",
+    description: "Inspect database schema compatibility and shared-state write ownership",
     hasSubcommands: true,
     parentDefaultHelp: true,
   },

@@ -56,6 +56,10 @@ import { registerSignalExitBarrier, waitForSignalExitBarriers } from "../signal-
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
 import {
+  admitMutableUpdateSignalRun,
+  withMutableUpdateSignals,
+} from "./update-command-mutable-signals.js";
+import {
   resolveOwnedManagedUpdateEnv,
   resolveServiceRefreshEnv,
 } from "./update-command-service-env.js";
@@ -150,24 +154,27 @@ export async function admitUpdateCommandRun(params: {
     : undefined;
   const run = { runId: record.runId, env, ...(requesterAuthority ? { requesterAuthority } : {}) };
   if (
-    params.opts.dryRun === true &&
     !env[UPDATE_RUN_ID_ENV] &&
     env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1" &&
     env[POST_CORE_UPDATE_ENV] !== "1"
   ) {
-    previewAdmissions.set(run, { record, env: { ...env } });
+    if (params.opts.dryRun === true) {
+      previewAdmissions.set(run, { record, env: { ...env } });
+    } else {
+      admitMutableUpdateSignalRun(run, record);
+    }
   }
   return run;
 }
 
-/** Own signal diagnostics only for the admitted preview's lexical lifetime. */
+/** Own diagnostics only for this freshly admitted invocation's lexical lifetime. */
 export async function withUpdatePreviewSignals<T>(
   opts: UpdateCommandOptions,
   operation: () => Promise<T>,
 ): Promise<T> {
   const admission = opts.dryRun === true && opts.run ? previewAdmissions.get(opts.run) : undefined;
   if (!admission || !opts.run) {
-    return await operation();
+    return await withMutableUpdateSignals(opts, operation);
   }
   previewAdmissions.delete(opts.run);
   const { record: expected, env } = admission;

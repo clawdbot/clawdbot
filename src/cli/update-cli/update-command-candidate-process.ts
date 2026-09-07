@@ -15,7 +15,7 @@ import { withUpdateCommandExecutorChild } from "./update-command-executor.js";
 import type {
   MigratedUpdateFinalizationInput,
   MigratedUpdateFinalizationResult,
-} from "./update-command-migrated.js";
+} from "./update-command-migrated-types.js";
 import type { FinishUpdateParams } from "./update-command-post-update.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
 import {

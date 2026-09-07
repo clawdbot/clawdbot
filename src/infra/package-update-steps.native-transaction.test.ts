@@ -392,11 +392,16 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
           path.join(result.activePackageRoot!, "package.json"),
           '{"name":"openclaw","version":"2.0.1"}',
         );
+        const publishedLauncher = await fs.readlink(launcher);
         const copyFile = fs.copyFile.bind(fs);
         const rename = fs.rename.bind(fs);
         const backupRoot = retained.backupRoot;
         const copySpy = vi.spyOn(fs, "copyFile").mockImplementation(async (...args) => {
-          if (rollbackFailure === "shim" && String(args[1]) === launcher) {
+          if (
+            rollbackFailure === "shim" &&
+            path.dirname(path.dirname(String(args[1]))) === binDir &&
+            path.basename(path.dirname(String(args[1]))).startsWith(".openclaw-shim-stage-")
+          ) {
             throw Object.assign(new Error("launcher restoration failed"), { code: "EACCES" });
           }
           return copyFile(...args);
@@ -425,7 +430,8 @@ describe.runIf(process.platform !== "win32")("native package transactions", () =
             expect(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).toContain(
               '"version":"1.0.0"',
             );
-            await expect(fs.stat(launcher)).rejects.toMatchObject({ code: "ENOENT" });
+            // Failed staging leaves the previously published launcher unchanged.
+            await expect(fs.readlink(launcher)).resolves.toBe(publishedLauncher);
           }
           return;
         }

@@ -11,7 +11,7 @@ import {
   type UpdateRecoveryRecord,
 } from "./update-run-recovery-schema.js";
 import { requireRevision } from "./update-run-recovery-store.js";
-import type { UpdateRecoveryDatabaseBinding } from "./update-run-recovery.js";
+import type { UpdateRecoveryDatabaseBinding } from "./update-run-recovery-types.js";
 
 /** Path spelling does not distinguish a disposable copy from a hard-linked live DB. */
 export function assertSeparateUpdateRecoveryDatabases(

@@ -2,12 +2,8 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
-import type { UpdateStateSchemaVersion } from "../../infra/update-candidate-state.js";
-import type { UpdateChannel } from "../../infra/update-channels.js";
 import {
   buildControlPlaneUpdateRestartHealthPendingResult,
-  readControlPlaneUpdateSentinelMeta,
   resolveManagedServiceUpdateFailureExitCode,
 } from "../../infra/update-control-plane-sentinel.js";
 import {
@@ -17,22 +13,18 @@ import {
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
-import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
-import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { formatCliCommand } from "../command-format.js";
 import { printResult } from "./progress.js";
-import { tryWriteCompletionCache, type UpdateCommandOptions } from "./shared.js";
+import { tryWriteCompletionCache } from "./shared.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { finishDurableUpdate } from "./update-command-durable-finalize.js";
+import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { retireStandaloneGitWrapper } from "./update-command-git.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { repairUpdateService } from "./update-command-repair-service.js";
-import {
-  prepareUpdateRestart,
-  type UpdateRestartParams,
-} from "./update-command-restart-context.js";
+import { prepareUpdateRestart } from "./update-command-restart-context.js";
 import {
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
   UpdateCommandFailure,
@@ -41,10 +33,7 @@ import {
 } from "./update-command-result.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
-import {
-  UpdateServiceLoadBoundaryError,
-  type UpdateServiceLoadBoundary,
-} from "./update-command-service-load.js";
+import { UpdateServiceLoadBoundaryError } from "./update-command-service-load.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 import {
@@ -57,31 +46,7 @@ import {
 } from "./update-command-service.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
-export type FinishUpdateParams = UpdateRestartParams & {
-  serviceLoadBoundary?: UpdateServiceLoadBoundary;
-  failure?: { cause: unknown; detail: string };
-  mutationStarted: boolean;
-  expectedVersion?: string;
-  previousInstallRoot?: string;
-  installKindChanged: boolean;
-  configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
-  requestedChannel: UpdateChannel | null;
-  storedChannel: UpdateChannel | null;
-  channel: UpdateChannel;
-  downgradeRisk: boolean;
-  opts: UpdateCommandOptions;
-  controlPlaneUpdateSentinelMeta: Awaited<ReturnType<typeof readControlPlaneUpdateSentinelMeta>>;
-  preUpdatePluginInstallRecords: Awaited<ReturnType<typeof loadInstalledPluginIndexInstallRecords>>;
-  startedAt: number;
-  packageUpdateNodeRunner?: string;
-  packageTransaction?: PackageUpdateTransaction;
-  schemaVersions?: UpdateStateSchemaVersion[];
-  candidateSchemaVersions?: OpenClawSchemaVersions;
-  previousSchemaVersions?: OpenClawSchemaVersions;
-  previousVerified?: boolean;
-  activationConfig?: import("./update-command-config-snapshot.js").UpdateConfigSnapshot;
-  rollbackBlockedReason?: "state-migrated-no-rollback" | "rollback-state-unverified";
-};
+export type { FinishUpdateParams } from "./update-command-finish-types.js";
 
 export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRunResult> {
   if (params.serviceLoadBoundary && process.platform !== "linux") {

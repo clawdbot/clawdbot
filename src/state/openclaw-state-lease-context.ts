@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { OpenClawStatePublicationOperation } from "./openclaw-state-lease-exclusion.js";
+import type { OpenClawStatePublicationOperation } from "./openclaw-state-publication-types.js";
 
 export type OpenClawStateMutationOperation<T, R> = {
   /** Fresh executor authority. Checked by every coordinated canonical write. */

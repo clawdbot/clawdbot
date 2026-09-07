@@ -470,13 +470,22 @@ aligned:
 
 ### Validation and activation
 
-If the resolved package version equals the installed version without changing
+If the resolved registry package version equals the installed version without changing
 the selected channel or installation method, or the Git target SHA equals
 `HEAD`, the run finishes `skipped` with reason `already-current`. A same-version
 explicit `--channel` or installation-method change finishes successfully.
 Neither path stops or restarts the Gateway unless the installation method
 changes. Read-only plugin convergence checks can still report repair needs; use
 `openclaw update repair` to apply them.
+
+Explicit package artifacts, such as tarball paths and URLs, still pass through
+validation and installation when their version matches the installed version.
+A matching version alone does not establish artifact equality.
+
+Interrupting a fresh local update before activation records a failed,
+`interrupted` history entry while its installation owner is still held.
+Once checkpoint recovery owns the run, interruption leaves that recovery pending
+until its recorded effects are reconciled.
 
 For targets that support candidate validation, the old Gateway keeps serving through `staging` and
 `validating`. The updater uses the candidate entrypoint for Doctor lint

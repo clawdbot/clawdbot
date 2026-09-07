@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import type { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it } from "vitest";
+import { tryAcquireExclusiveSqliteCoordinator } from "../infra/sqlite-coordinator.js";
 import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -66,6 +67,35 @@ describe("maintenance lease heartbeat", () => {
         expect(readLease(state.env)).toBeUndefined();
       } finally {
         process.removeListener("worker", onWorker);
+      }
+    });
+  });
+
+  it("retains its parent's real lifecycle owner through heartbeat teardown", async () => {
+    await withOpenClawTestState({ label: "maintenance-parent-coordinator" }, async (state) => {
+      const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
+      const held = acquireStateDatabaseCoordinator({ databasePath, busyTimeoutMs: 0 });
+      const attemptForeignWrite = () => {
+        const foreign = tryAcquireExclusiveSqliteCoordinator(held.path, { busyTimeoutMs: 0 });
+        const acquired = foreign !== null;
+        foreign?.release();
+        return acquired;
+      };
+      try {
+        await withOpenClawStateLease({ ...options(state.env), leaseMs: 10_000 }, async (lease) => {
+          const before = readLease(state.env);
+          held.release();
+          // The worker retains the actual coordinator, even after its original
+          // caller releases. An unrelated writer must still fail physical admission.
+          expect(attemptForeignWrite()).toBe(false);
+          await expect
+            .poll(() => Number(readLease(state.env)?.heartbeat_at), { timeout: 5_000 })
+            .toBeGreaterThan(Number(before?.heartbeat_at));
+          lease.assertOwned();
+        });
+        expect(attemptForeignWrite()).toBe(true);
+      } finally {
+        held.release();
       }
     });
   });

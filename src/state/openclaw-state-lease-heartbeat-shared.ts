@@ -15,6 +15,8 @@ export const leaseHeartbeatState = {
 export type LeaseHeartbeatWorkerData = {
   path: string;
   existingOnly?: boolean;
+  /** Private parent retains the actual lifecycle coordinator until native worker exit. */
+  parentCoordinatorRetained?: true;
   identity: OpenClawStateLeaseIdentity;
   leaseMs: number;
   expiresAt: number;

@@ -7,6 +7,10 @@ import { sha256Hex } from "./crypto-digest.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import { checkpointContentMatches } from "./update-checkpoint-files.js";
+import {
+  UpdateCheckpointRestorePlanRefSchema,
+  type UpdateCheckpointRestorePlanRef,
+} from "./update-checkpoint-plan-ref.js";
 import { checkpointPluginIndexMutationsMatch } from "./update-checkpoint-plugin-index.js";
 import {
   CheckpointFileStateSchema,
@@ -14,7 +18,13 @@ import {
   UpdateCheckpointRefSchema,
   type UpdateCheckpointReadAccess,
 } from "./update-checkpoint.js";
-import type { UpdateRecoveryDatabaseBinding } from "./update-run-recovery.js";
+import type { UpdateRecoveryDatabaseBinding } from "./update-run-recovery-types.js";
+
+export {
+  UpdateCheckpointRestorePlanIdentitySchema,
+  type UpdateCheckpointRestorePlanIdentity,
+  type UpdateCheckpointRestorePlanRef,
+} from "./update-checkpoint-plan-ref.js";
 
 const databaseBindingSchema: z.ZodType<UpdateRecoveryDatabaseBinding> = z
   .object({
@@ -49,21 +59,6 @@ export const planSchema = z
     ),
   })
   .strict();
-/** Discoverable preparation locator, not a sealed plan or publication authority. */
-export const UpdateCheckpointRestorePlanIdentitySchema = z
-  .object({
-    restoreId: z.string().uuid(),
-    checkpointId: z.string().uuid(),
-    planPath: z.string(),
-  })
-  .strict();
-export type UpdateCheckpointRestorePlanIdentity = z.infer<
-  typeof UpdateCheckpointRestorePlanIdentitySchema
->;
-const UpdateCheckpointRestorePlanRefSchema = UpdateCheckpointRestorePlanIdentitySchema.extend({
-  planSha256: z.string().regex(/^[a-f0-9]{64}$/u),
-}).strict();
-export type UpdateCheckpointRestorePlanRef = z.infer<typeof UpdateCheckpointRestorePlanRefSchema>;
 type RestorePlan = z.infer<typeof planSchema>;
 export type RestoreResource = RestorePlan["resources"][number];
 export function assertSqliteFamilyClosed(file: string): void {

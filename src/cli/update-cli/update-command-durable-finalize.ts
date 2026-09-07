@@ -3,8 +3,8 @@ import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-a
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { printResult } from "./progress.js";
+import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
-import type { FinishUpdateParams } from "./update-command-post-update.js";
 import {
   assertUpdateCommandRecovery,
   finalizeUpdateCommandRecovery,

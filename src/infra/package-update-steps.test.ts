@@ -868,12 +868,16 @@ describe("runGlobalPackageUpdateSteps", () => {
 
       await fs.chmod(targetShim, 0o755);
       let stagedShimForFailure: string | undefined;
+      let restoringShim: string | undefined;
+      const isLauncherStage = (entry: string) =>
+        path.dirname(path.dirname(entry)) === path.dirname(targetShim) &&
+        path.basename(path.dirname(entry)).startsWith(".openclaw-shim-stage-");
       const realCopyFile = fs.copyFile.bind(fs);
       const realSymlink = fs.symlink.bind(fs);
       const realRename = fs.rename.bind(fs);
       const realChmod = fs.chmod.bind(fs);
       const chmodSpy = vi.spyOn(fs, "chmod").mockImplementation(async (...args) => {
-        if (failure === "mode restore" && String(args[0]) === targetShim) {
+        if (failure === "mode restore" && String(args[0]) === restoringShim) {
           throw createFsError("EACCES", "shim mode restoration failed");
         }
         return await realChmod(...args);
@@ -882,10 +886,16 @@ describe("runGlobalPackageUpdateSteps", () => {
         const source = String(args[0]);
         const destination = String(args[1]);
         if (
+          isLauncherStage(destination) &&
+          path.basename(path.dirname(source)).startsWith(".openclaw.shim-backup-")
+        ) {
+          restoringShim = destination;
+        }
+        if (
           (failure === "backup copy" && source === targetShim) ||
           (failure !== "backup copy" && source === stagedShimForFailure) ||
           (failure === "shim restore" &&
-            destination === targetShim &&
+            isLauncherStage(destination) &&
             path.basename(path.dirname(source)).startsWith(".openclaw.shim-backup-"))
         ) {
           throw createFsError("EACCES", `${failure} failed`);
@@ -893,7 +903,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         return await realCopyFile(...args);
       });
       const symlinkSpy = vi.spyOn(fs, "symlink").mockImplementation(async (...args) => {
-        if (failure === "symlink copy" && args[0] === newLink && String(args[1]) === targetShim) {
+        if (failure === "symlink copy" && args[0] === newLink && isLauncherStage(String(args[1]))) {
           throw createFsError("EACCES", "staged symlink creation failed");
         }
         return await realSymlink(...args);
@@ -964,9 +974,8 @@ describe("runGlobalPackageUpdateSteps", () => {
         ).resolves.toContain('"version":"1.0.0"');
       }
       if (failure === "shim restore" || failure === "mode restore") {
-        if (failure === "shim restore") {
-          await expectPathMissing(targetShim);
-        }
+        // Atomic replacement preserves the old entry if restoration cannot stage or set its mode.
+        await expect(fs.readFile(targetShim, "utf8")).resolves.toBe("old shim\n");
         const backups = (await fs.readdir(globalRoot)).filter((entry) =>
           entry.startsWith(".openclaw.shim-backup-"),
         );

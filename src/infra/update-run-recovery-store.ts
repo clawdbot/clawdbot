@@ -20,7 +20,7 @@ import {
   UpdateRecoveryConflictError,
   type UpdateRecoveryRecord,
 } from "./update-run-recovery-schema.js";
-import type { UpdateRecoveryFence, UpdateRecoveryRevision } from "./update-run-recovery.js";
+import type { UpdateRecoveryFence, UpdateRecoveryRevision } from "./update-run-recovery-types.js";
 type RecoveryDatabase = Pick<DB, "update_runs" | "config_machine_state">;
 
 // Existing recovery mutations also project terminal history atomically. Validate

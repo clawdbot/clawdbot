@@ -252,6 +252,7 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
     OPENCLAW_HOME: "",
     OPENCLAW_PROFILE: "default",
     OPENCLAW_SUPERVISOR_MODE: "",
+    OPENCLAW_SERVICE_REPAIR_POLICY: "auto",
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
     OPENCLAW_WORKSPACE_DIR: path.join(stateDir, "workspace"),
@@ -586,7 +587,7 @@ const service={
   readRuntime:async()=>{
     phase('readRuntime');
     const primary=JSON.parse(fs.readFileSync(primaryFile,'utf8'));
-    return {status:primary.active?'running':'stopped',pid:primary.active?primary.pid:undefined};
+    return {status:primary.active?'running':'stopped',pid:primary.active?primary.pid:undefined,systemd:{managerUid:2001}};
   },
   stop:()=>native('stop'),
   restart:()=>native('restart'),

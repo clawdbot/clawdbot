@@ -1,7 +1,10 @@
 import { Worker } from "node:worker_threads";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { acquireStateDatabaseHandleLease } from "../infra/state-database-coordinator.js";
+import {
+  acquireStateDatabaseHandleLease,
+  retainHeldStateDatabaseCoordinator,
+} from "../infra/state-database-coordinator.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   leaseHeartbeatState as state,
@@ -12,7 +15,7 @@ import {
 const WORKER_RESPONSE_TIMEOUT_MS = 1_000;
 
 export function startOpenClawStateLeaseHeartbeat(
-  params: Omit<LeaseHeartbeatWorkerData, "shared"> & {
+  params: Omit<LeaseHeartbeatWorkerData, "shared" | "parentCoordinatorRetained"> & {
     expiresAt: number;
     onLost: (error: Error) => void;
   },
@@ -23,13 +26,28 @@ export function startOpenClawStateLeaseHeartbeat(
   // Retain a parent-owned physical lease through native worker teardown. A forced
   // Worker.terminate() need not run JS cleanup; the exit event does attest that
   // native source handles have settled before this last guard is released.
-  const handle = acquireStateDatabaseHandleLease({ databasePath: params.path, busyTimeoutMs: 0 });
+  const coordinator = retainHeldStateDatabaseCoordinator(params.path);
+  let handle: ReturnType<typeof acquireStateDatabaseHandleLease>;
+  try {
+    handle = acquireStateDatabaseHandleLease({ databasePath: params.path, busyTimeoutMs: 0 });
+  } catch (error) {
+    coordinator?.release();
+    throw error;
+  }
+  const release = () => {
+    try {
+      handle.release();
+    } finally {
+      coordinator?.release();
+    }
+  };
   let worker: Worker;
   try {
     worker = new Worker(url, {
       workerData: {
         path: params.path,
         existingOnly: params.existingOnly,
+        ...(coordinator ? { parentCoordinatorRetained: true as const } : {}),
         identity: {
           scope: params.identity.scope,
           key: params.identity.key,
@@ -46,13 +64,13 @@ export function startOpenClawStateLeaseHeartbeat(
       stderr: true,
     });
   } catch (error) {
-    handle.release();
+    release();
     throw error;
   }
   let handleReleaseError: Error | undefined;
   worker.once("exit", () => {
     try {
-      handle.release();
+      release();
     } catch (error) {
       handleReleaseError = new Error("state lease heartbeat handle release failed", {
         cause: error,

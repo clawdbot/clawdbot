@@ -10,12 +10,17 @@ import {
   acquireGatewayLifecycleCoordinator,
   acquireStateDatabaseCoordinator,
 } from "../infra/state-database-coordinator.js";
-import type { UpdateCheckpointSharedPublication } from "../infra/update-checkpoint-restore.js";
+import type { UpdateCheckpointSharedPublication } from "../infra/update-checkpoint-publication-types.js";
 import {
   acquireOpenClawStateDatabaseFileExclusion,
   openClawStateDatabaseCache,
 } from "./openclaw-state-db-cache.js";
-import type { CaptureOwner } from "./openclaw-state-lease-exclusion.js";
+import type { CaptureOwner } from "./openclaw-state-lease-owner.js";
+import type {
+  OpenClawStateLeasePublicationResult,
+  OpenClawStatePublicationOperation,
+  OpenClawStatePublicationWrite,
+} from "./openclaw-state-publication-types.js";
 
 function fail(errors: unknown[]): never {
   if (errors.length === 1) {
@@ -23,27 +28,6 @@ function fail(errors: unknown[]): never {
   }
   throw createSqliteLifecycleAggregateError(errors, "state publication failed", errors[0]);
 }
-/** The checkpoint describes facts; authority is the live lexical owners plus
- * retained physical custody. Every effect/reconciliation must finish before
- * returning: renewal after this window changes the bound lease rows.
- */
-type OpenClawStateLeasePublicationResult<T> = {
-  result: T;
-  publication: UpdateCheckpointSharedPublication;
-};
-
-/** Canonical-only recovery CAS inside a verified, still-physically-excluded
- * publication window. The async inspections stay outside the synchronous write.
- */
-type OpenClawStatePublicationWrite = (
-  publication: UpdateCheckpointSharedPublication,
-  write: (assertCurrent: () => void) => UpdateCheckpointSharedPublication["recoveryRecord"],
-) => Promise<UpdateCheckpointSharedPublication>;
-export type OpenClawStatePublicationOperation<T> = (
-  assertCurrent: () => void,
-  bindPublishedRecord: OpenClawStatePublicationWrite,
-) => Promise<OpenClawStateLeasePublicationResult<T>>;
-
 export async function performOpenClawStatePublication<T>(
   owners: readonly CaptureOwner[],
   databasePath: string,

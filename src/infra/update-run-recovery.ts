@@ -43,6 +43,19 @@ import {
   mutateRecovery,
   assertExecutingClaim,
 } from "./update-run-recovery-store.js";
+import type {
+  UpdateRecoveryFence,
+  UpdateRecoveryRevision,
+  UpdateRecoveryHandoff,
+  UpdateRecoveryDatabaseBinding,
+} from "./update-run-recovery-types.js";
+
+export type {
+  UpdateRecoveryFence,
+  UpdateRecoveryRevision,
+  UpdateRecoveryHandoff,
+  UpdateRecoveryDatabaseBinding,
+} from "./update-run-recovery-types.js";
 
 export {
   UpdateRecoveryConflictError,
@@ -55,16 +68,6 @@ export type {
 } from "./update-run-recovery-schema.js";
 export { inspectUpdateRecoveries } from "./update-run-recovery-store.js";
 type RecoveryDatabase = Pick<DB, "update_runs" | "config_machine_state">;
-
-/** Current executor-held exclusion, never deserialized. CAS does not authorize effects. */
-export type UpdateRecoveryFence = { assertCurrent: () => void };
-export type UpdateRecoveryRevision = Pick<
-  UpdateRecoveryRecord,
-  "runId" | "transactionId" | "revision" | "claimId"
->;
-
-/** Correlation only. The receiving runtime must independently reacquire authority. */
-export type UpdateRecoveryHandoff = UpdateRecoveryRevision & { handoffId: string };
 
 /** Must run before general database open, admission writes, or runtime migration. */
 function loadUpdateRecoveries(options: OpenClawStateDatabaseOptions = {}): UpdateRecoveryRecord[] {
@@ -548,13 +551,6 @@ export function recordUpdateRecoveryRestoreProgress(
     options,
   );
 }
-
-/** Immutable plan binding; the exact active record is validated separately. */
-export type UpdateRecoveryDatabaseBinding = {
-  runId: string;
-  transactionId: string;
-  sha256: string;
-};
 
 export function validateUpdateRecoveryDatabaseBinding(
   db: DatabaseSync,

@@ -601,3 +601,90 @@ it.each(["capture", "mutation"])(
     expect(family()).toEqual(replacement);
   },
 );
+
+it.each([false, true])(
+  "retains the first actual ownership failure through maintenance drainage (nested=%s)",
+  async (nested) => {
+    const f = source();
+    let first: unknown;
+    const operation = withAgentDatabaseMaintenanceLease(f.options, async (owner) => {
+      const db = openNodeSqliteDatabase(f.pathname);
+      try {
+        const deleted = db
+          .prepare("DELETE FROM state_leases WHERE scope = ? AND lease_key = ?")
+          .run(AGENT_DATABASE_MAINTENANCE_LEASE.scope, AGENT_DATABASE_MAINTENANCE_LEASE.key);
+        expect(deleted.changes).toBe(1);
+      } finally {
+        db.close();
+      }
+      try {
+        owner.assertOwned();
+      } catch (error) {
+        first = error;
+      }
+      expect(first).toBeInstanceOf(Error);
+      let repeated: unknown;
+      try {
+        owner.assertOwned();
+      } catch (error) {
+        repeated = error;
+      }
+      expect(repeated).toBe(first);
+      if (nested) {
+        let entered = false;
+        await expect(
+          withAgentDatabaseMaintenanceLease(f.options, async () => {
+            entered = true;
+          }),
+        ).rejects.toBe(first);
+        expect(entered).toBe(false);
+      }
+      throw first;
+    });
+    const outcome = await operation.catch((error: unknown) => error);
+    expect(outcome).toBe(first);
+    expect(outcome).toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
+  },
+);
+
+it("shares a child-first lease loss with its parent and sibling scopes", async () => {
+  const f = source();
+  let first: unknown;
+  let parentFailure: unknown;
+  let siblingFailure: unknown;
+  let siblingEntered = false;
+  const operation = withAgentDatabaseMaintenanceLease(f.options, async (parent) => {
+    await withAgentDatabaseMaintenanceLease(f.options, async (child) => {
+      const db = openNodeSqliteDatabase(f.pathname);
+      try {
+        expect(
+          db
+            .prepare("DELETE FROM state_leases WHERE scope = ? AND lease_key = ?")
+            .run(AGENT_DATABASE_MAINTENANCE_LEASE.scope, AGENT_DATABASE_MAINTENANCE_LEASE.key)
+            .changes,
+        ).toBe(1);
+      } finally {
+        db.close();
+      }
+      try {
+        child.assertOwned();
+      } catch (error) {
+        first = error;
+      }
+    }).catch(() => undefined);
+    try {
+      parent.assertOwned();
+    } catch (error) {
+      parentFailure = error;
+    }
+    siblingFailure = await withAgentDatabaseMaintenanceLease(f.options, async () => {
+      siblingEntered = true;
+    }).catch((error: unknown) => error);
+  });
+  const outcome = await operation.catch((error: unknown) => error);
+  expect(first).toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
+  expect(parentFailure).toBe(first);
+  expect(siblingFailure).toBe(first);
+  expect(siblingEntered).toBe(false);
+  expect(outcome).toBe(first);
+});

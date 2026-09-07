@@ -10,32 +10,11 @@ import {
 import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
 import { acquireOpenClawStateDatabaseFileExclusion } from "./openclaw-state-db-cache.js";
 import type { OpenClawStateMutationOperation } from "./openclaw-state-lease-context.js";
-import {
-  performOpenClawStatePublication,
-  type OpenClawStatePublicationOperation,
-} from "./openclaw-state-publication.js";
-export type { OpenClawStatePublicationOperation } from "./openclaw-state-publication.js";
+import type { CaptureOwner, LeaseExclusionParams } from "./openclaw-state-lease-owner.js";
+import type { OpenClawStatePublicationOperation } from "./openclaw-state-publication-types.js";
+import { performOpenClawStatePublication } from "./openclaw-state-publication.js";
+export type { OpenClawStatePublicationOperation } from "./openclaw-state-publication-types.js";
 
-type LeaseExclusionParams = {
-  databasePath: () => string;
-  assertActive: () => void;
-  readExpiry: (databasePath: string) => number;
-  readPublicationExpiry: (databasePath: string) => number;
-  readMutationExpiry: (databasePath: string) => number;
-  pause: () => Promise<void>;
-  resume: (expiresAt: number) => Promise<void>;
-  onLost: (error: Error) => void;
-};
-export type CaptureOwner = {
-  params: LeaseExclusionParams;
-  databasePath?: string;
-  busy: boolean;
-  cleanupAllowed: boolean;
-  admissionClosed: boolean;
-  assertion?: () => void;
-  mutationAssertion?: () => void;
-  admitted: Promise<unknown>[];
-};
 // Only live lexical owners are composed. Other tasks/processes remain foreign
 // handles; neither a pathname nor inherited serialized data grants admission.
 const activeOwners = new AsyncLocalStorage<readonly CaptureOwner[]>();

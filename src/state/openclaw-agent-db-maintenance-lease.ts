@@ -9,8 +9,8 @@ import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db-lifecycle.
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import type { OpenClawStateMutationOperation } from "./openclaw-state-lease-context.js";
-import type { OpenClawStatePublicationOperation } from "./openclaw-state-lease-exclusion.js";
 import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
+import type { OpenClawStatePublicationOperation } from "./openclaw-state-publication-types.js";
 
 type MaintenanceScope = {
   databasePath: string;
@@ -19,6 +19,7 @@ type MaintenanceScope = {
   active: boolean;
   accepting: boolean;
   pending: Promise<unknown>[];
+  ownership: { failure?: { error: unknown } };
 };
 const activeMaintenance = new AsyncLocalStorage<MaintenanceScope>();
 
@@ -35,12 +36,22 @@ async function runMaintenanceScope<T>(
     active: true,
     accepting: true,
     pending: [],
+    ownership: ancestors[0]?.ownership ?? {},
   };
   const assertCurrent = () => {
     if (!scope.active || ancestors.some((parent) => !parent.active)) {
       throw new Error("Agent database maintenance scope is closed");
     }
-    owner.assertOwned();
+    if (scope.ownership.failure) {
+      throw scope.ownership.failure.error;
+    }
+    try {
+      owner.assertOwned();
+    } catch (error) {
+      // One failed ownership observation retires every scope under the same owner.
+      scope.ownership.failure = { error };
+      throw error;
+    }
   };
   const assertAdmission = () => {
     assertCurrent();
@@ -130,7 +141,9 @@ async function runMaintenanceScope<T>(
       try {
         assertCurrent();
       } catch (error) {
-        errors.push(error);
+        if (!errors.includes(error)) {
+          errors.push(error);
+        }
       } finally {
         scope.active = false;
       }

@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { reopenPackageUpdateTransaction } from "../../infra/package-update-recovery.js";
-import type { ManagedServiceNativeHandoff } from "../../infra/update-managed-service-native-control.js";
 import { createUpdateRecoveryCheckpointAdapter } from "../../infra/update-run-recovery-checkpoint.js";
 import { currentUpdateRecoveryNativeFacts } from "../../infra/update-run-recovery-native-schema.js";
 import { createUpdateRecoveryPackageHooks } from "../../infra/update-run-recovery-package.js";
@@ -15,31 +14,9 @@ import {
   type UpdateRecoveryRecord,
 } from "../../infra/update-run-recovery.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import type { OpenClawStateLeaseContext } from "../../state/openclaw-state-lease.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
-/** Live executor context only. Never serialize it into worker options or a descriptor. */
-export type UpdateCommandRecovery = Parameters<typeof createUpdateRecoveryPackageHooks>[0] & {
-  /** Rechecks final lifecycle readiness, not merely stored proof or a claim ID. */
-  assertReady: () => void;
-  /** Same-process transport admitted before recovery creation; never serialize. */
-  managedNativeHandoff?: ManagedServiceNativeHandoff;
-  /**
-   * Executor-owned PUBLICATION interval with live lease rebinding, not capture
-   * exclusion. No default: the capture-only owner must never be adapted here.
-   * Runtime callbacks and the interval fence are supplied only while held.
-   */
-  checkpointReplay?: {
-    withDatabaseFilePublication: NonNullable<
-      OpenClawStateLeaseContext["withDatabaseFilePublication"]
-    >;
-    /** Runtime/resource owners remain responsible for these live assertions. */
-    access: Omit<
-      Parameters<typeof createUpdateRecoveryCheckpointReplay>[0],
-      "expected" | "database" | "fence" | "bindPublishedRecord"
-    >;
-  };
-};
+export type { UpdateCommandRecovery } from "./update-command-recovery-context.js";
 
 export class UpdateCommandRecoveryPendingError extends Error {
   override name = "UpdateCommandRecoveryPendingError";

@@ -17,6 +17,11 @@ import {
   recordUpdateRunPhase,
 } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
+import { finishUpdate, type FinishUpdateParams } from "./update-command-post-update.js";
+import { repairUpdateService } from "./update-command-repair-service.js";
+import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
+import { verifyUpdatedGateway } from "./update-command-verification.js";
+import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
 const mocks = vi.hoisted(() => ({
   repair:
@@ -104,11 +109,6 @@ vi.mock("./update-command-result.js", async (importOriginal) => ({
   writeControlPlaneUpdateRestartSentinelBestEffort: async () => {},
   markControlPlaneUpdateRestartSentinelFailureBestEffort: async () => {},
 }));
-import { finishUpdate, type FinishUpdateParams } from "./update-command-post-update.js";
-import { repairUpdateService } from "./update-command-repair-service.js";
-import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
-import { verifyUpdatedGateway } from "./update-command-verification.js";
-import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -465,6 +465,8 @@ describe("post-activation repair after rollback refusal or failure", () => {
         command: { programArguments: ["node", path.join(root, "dist/entry.js"), "gateway"] },
         definitionMutationCapability: { kind: "sealed", reason: "system-owned" },
       };
+      state.runtime!.systemd = { managerUid: 2001 };
+      params.preManagedServiceStop!.serviceManagerUid = 2001;
       params.root = root;
       params.result.root = root;
       params.preManagedServiceStop!.serviceUpdateVerdict =
@@ -711,10 +713,12 @@ describe("post-activation repair after rollback refusal or failure", () => {
         env,
         command: { programArguments: ["node", path.join(root, "dist/entry.js"), "gateway"] },
       };
+      state.runtime!.systemd = { managerUid: 2001 };
       mocks.readService.mockResolvedValue(state);
       mocks.revalidate.mockImplementation(revalidateManagedGatewayServiceAfterUpdate);
       const expectedService = {
         serviceEnv: env,
+        serviceManagerUid: 2001,
         serviceUpdateVerdict: await revalidateManagedGatewayServiceAfterUpdate({ state, root }),
       };
       const controller = new AbortController();

@@ -19,6 +19,7 @@ import {
 } from "../../infra/update-doctor-result.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
+  canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
   resolveGlobalInstallSpec,
   resolveGlobalInstallTarget,
@@ -334,7 +335,9 @@ export async function runPackageInstallUpdate(
     installSpec,
     packageName,
     packageRoot: pkgRoot,
-    requirePackageReplacement: params.installKind === "git",
+    // Explicit artifacts identify the payload; an equal version is not artifact equality.
+    requirePackageReplacement:
+      params.installKind === "git" || !canResolveRegistryVersionForPackageTarget(installSpec),
     runCommand: runCommandWithTimeout,
     timeoutMs: params.timeoutMs,
     ...(installEnv === undefined ? {} : { env: installEnv }),

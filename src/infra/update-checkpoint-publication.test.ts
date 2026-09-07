@@ -12,7 +12,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "./node-sqlite.js";
-import { resolveRuntimeWorkerUrl, resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
+import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import { inspectCheckpointFile } from "./update-checkpoint-files.js";
 import {
   publicationFixture,
@@ -75,11 +75,7 @@ function prepare(f: Awaited<ReturnType<typeof fixture>>, assertCurrent: () => vo
 }
 
 function child(mode: string, input: string) {
-  const url = resolveRuntimeWorkerUrl({
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "update-checkpoint-publication-child.test-support",
-    distWorkerPath: "infra/update-checkpoint-publication-child.test-support.js",
-  });
+  const url = new URL("./update-checkpoint-publication-child.test-support.ts", import.meta.url);
   return spawn(process.execPath, [...resolveRuntimeWorkerArgv(url), mode, input], {
     stdio: ["ignore", "ignore", "pipe", "ipc"],
   });

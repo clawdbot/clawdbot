@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import type { RecoveryAfterImageFixture } from "./update-run-recovery-after-image.test-support.js";
+import type { RecoveryAfterImageFixture } from "./update-run-recovery-after-image-fixture.test-support.js";
 import {
   acceptUpdateRecoveryHandoff,
   bindUpdateRecoveryAfterImage,

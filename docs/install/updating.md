@@ -26,8 +26,11 @@ the old Gateway serves, then activates and verifies the update.
 openclaw update
 ```
 
-An already-installed package version or Git target SHA finishes as
+An already-installed registry package version or Git target SHA finishes as
 `skipped` / `already-current` without stopping or restarting the Gateway.
+An explicit package artifact (for example, a tarball path or URL) is validated
+and installed even when its version matches; matching versions do not prove
+that two artifacts contain the same code.
 An explicit `--channel` choice still becomes the saved update channel.
 For targets that support candidate validation, Doctor lint, config and plugin planning, and a
 canary boot on copied state finish before the service stops. The stopped interval

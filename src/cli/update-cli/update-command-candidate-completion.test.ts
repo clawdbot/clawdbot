@@ -82,6 +82,7 @@ it.each([
 ])(
   "completes a real package transaction only under current serving authority (%s)",
   async (mode) => {
+    vi.mocked(os.platform).mockReturnValue(process.platform);
     const home = await fs.realpath(dirs.make("owned-native-restore-"));
     const control = path.join(home, "control");
     await fs.mkdir(control);
@@ -241,7 +242,7 @@ it.each([
                 ...(running ? { pid: process.pid } : {}),
                 systemd: { unit: "openclaw-gateway.service", managerUid: 2001 },
               }),
-              isLoaded: async () => windows || process.platform !== "darwin" || running,
+              isLoaded: async () => windows || os.platform() !== "darwin" || running,
               isEnabled: async () => enabled,
               start,
               stop: async (args) => {

@@ -70,7 +70,8 @@ vi.mock("./update-command-managed-context.js", () => ({
   revalidateUpdateDatabaseContext: mocks.revalidateSchemaContext,
 }));
 
-vi.mock("./update-command-package.js", () => ({
+vi.mock("./update-command-package.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-package.js")>()),
   runPackageInstallUpdate: mocks.runPackageUpdate,
 }));
 
@@ -271,7 +272,7 @@ describe("mutable update execution", () => {
     expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
   });
 
-  it("captures the package target before schema revalidation and binds the latest service environment", async () => {
+  it("captures the package target and admitted service environment before schema awaits", async () => {
     const events: string[] = [];
     mocks.runPackageUpdate.mockImplementation(async () => {
       events.push("install");
@@ -329,7 +330,7 @@ describe("mutable update execution", () => {
     expect(mocks.runPackageUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         installSpec: "openclaw@1.0.1",
-        managedServiceEnv: { OPENCLAW_PROFILE: "revalidated" },
+        managedServiceEnv: { OPENCLAW_PROFILE: "default" },
       }),
     );
   });

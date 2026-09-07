@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
@@ -18,6 +17,7 @@ import {
   reopenUpdateCheckpointPreimages,
 } from "./update-checkpoint.js";
 import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
+import { fixture, fence, dirs } from "./update-run-recovery-after-image-fixture.test-support.js";
 import { defineUpdateRecoveryMutationImageTests } from "./update-run-recovery-mutation-image.test-support.js";
 import {
   assertUpdateRecoveryPreimages,
@@ -36,84 +36,6 @@ import {
   recordUpdateRecoveryObservation,
   type UpdateRecoveryRecord,
 } from "./update-run-recovery.js";
-
-export type RecoveryAfterImageFixture = Awaited<ReturnType<typeof fixture>>;
-
-const dirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  }),
-);
-const fence = { assertCurrent() {} }; // The test owns every source and writer.
-async function fixture() {
-  const root = dirs.make("recovery-after-image-");
-  const options = { env: { HOME: root, OPENCLAW_STATE_DIR: root } };
-  const run = createUpdateRun({ trigger: "cli" }, options);
-  const runtime = { root, nodePath: process.execPath, version: "1.0.0", buildId: null };
-  let record = beginUpdateRecovery(
-    { runId: run.runId, from: runtime, to: runtime },
-    fence,
-    options,
-  );
-  const configPath = path.join(root, "openclaw.json");
-  fs.writeFileSync(configPath, "original");
-  const access = {
-    artifactRoot: path.join(root, "artifacts"),
-    binding: {
-      runId: run.runId,
-      stateDir: root,
-      configPath,
-      fromRuntime: { root, nodePath: runtime.nodePath, version: runtime.version },
-    },
-    assertQuiescent: () => fence.assertCurrent(),
-  };
-  const capture = async (content: string) => {
-    fs.writeFileSync(configPath, content);
-    // The fixture owns this write and retains its output before any later work.
-    const output = { sourcePath: configPath, state: await inspectCheckpointFile(configPath) };
-    const ref = await captureUpdateCheckpoint({
-      ...access,
-      expectedSources: [output],
-      resources: [{ sourcePath: configPath, kind: "config", restore: "replace" }],
-      exclusions: [],
-    });
-    const reopened = await reopenUpdateCheckpoint(ref, access);
-    return { ref: reopened.ref, binding: reopened.manifest.binding };
-  };
-  const checkpoint = await capture("original");
-  record = bindUpdateRecoveryCheckpoint(record, checkpoint, fence, options);
-  const observe = (current: UpdateRecoveryRecord) => {
-    const intent = recordUpdateRecoveryIntent(
-      current,
-      {
-        effectId: randomUUID(),
-        kind: "package-activation",
-        resourceId: "owned-package",
-        runtime: "candidate",
-      },
-      fence,
-      options,
-    );
-    return recordUpdateRecoveryObservation(
-      intent,
-      {
-        effectId: intent.effects.at(-1)!.effectId,
-        observedIdentity: "owner-observed-generation",
-      },
-      fence,
-      options,
-    );
-  };
-  record = observe(record);
-  const afterUpdate = await capture("owner-written-after-image");
-  const input = {
-    checkpointRef: checkpoint.ref,
-    afterUpdate,
-    effectIds: record.effects.map((effect) => effect.effectId),
-  };
-  return { root, options, run, runtime, record, checkpoint, input, capture, observe, access };
-}
 
 export function defineUpdateRecoveryArtifactTests() {
   describe("artifact recovery", () => {

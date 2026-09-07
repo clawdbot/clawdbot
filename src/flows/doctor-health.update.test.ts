@@ -194,7 +194,10 @@ describe("runDoctorHealthFlow update outcomes", () => {
                 OPENCLAW_CONFIG_PATH: state.configPath,
               },
             }),
-            readRuntime: async () => ({ status: running ? "running" : "stopped" }),
+            readRuntime: async () => ({
+              status: running ? "running" : "stopped",
+              systemd: { managerUid: 2001 },
+            }),
             readLoadState: async () => ({ status: running ? "loaded" : "not-loaded" }),
             isLoaded: async () => running,
             isEnabled: async () => running,
