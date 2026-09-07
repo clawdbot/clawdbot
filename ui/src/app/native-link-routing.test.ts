@@ -135,7 +135,7 @@ describe("native link routing", () => {
 
   it("routes an unmodified external click to the native panel and preserves page-level cleanup", () => {
     const bridge = installBridge();
-    routing = startNativeLinkRouting();
+    routing = startNativeLinkRouting({ canPresentBrowserPanel: () => true });
     const anchor = appendLink("https://example.com/report");
     const bubbleHandler = vi.fn();
     anchor.addEventListener("click", bubbleHandler);
@@ -145,6 +145,26 @@ describe("native link routing", () => {
     expect(event.defaultPrevented).toBe(true);
     expect(bubbleHandler).toHaveBeenCalledOnce();
     expect(bridge.messages).toEqual([]);
+    expect(bridge.browserRequests).toEqual([
+      { open: true, url: "https://example.com/report", native: true },
+    ]);
+  });
+
+  it("opens links externally during a Settings takeover and restores panel routing when it closes", () => {
+    const bridge = installBridge();
+    let canPresentBrowserPanel = false;
+    routing = startNativeLinkRouting({ canPresentBrowserPanel: () => canPresentBrowserPanel });
+    const anchor = appendLink("https://example.com/report");
+
+    expect(click(anchor).defaultPrevented).toBe(true);
+    expect(bridge.messages).toEqual([
+      { type: "open-link", url: "https://example.com/report", target: "external" },
+    ]);
+    expect(bridge.browserRequests).toEqual([]);
+
+    canPresentBrowserPanel = true;
+    expect(click(anchor).defaultPrevented).toBe(true);
+    expect(bridge.messages).toHaveLength(1);
     expect(bridge.browserRequests).toEqual([
       { open: true, url: "https://example.com/report", native: true },
     ]);

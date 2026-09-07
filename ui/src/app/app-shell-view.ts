@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import { isSettingsNavigationRoute } from "../app-navigation.ts";
+import { isSettingsNavigationRoute, isSettingsTakeover } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { isRouteId, type RouteId } from "../app-routes.ts";
 import { icons } from "../components/icons.ts";
@@ -175,8 +175,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       isSettingsNavigationRoute(activeRoute) ||
       activeRoute === "skills" ||
       activeRoute === "cron");
-  const settingsTakeover =
-    isSettingsNavigationRoute(activeRoute) && !host.onboardingMode && !nativeEmbed;
+  const settingsTakeover = isSettingsTakeover(activeRoute) && !host.onboardingMode && !nativeEmbed;
   const runtimeConfig = context.runtimeConfig.state;
   const onboarding = host.onboardingMode;
   const memoryImportActive = onboarding && activeRoute !== "custodian";

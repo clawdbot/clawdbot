@@ -6,6 +6,7 @@ import {
 import type { RouteLocation } from "@openclaw/uirouter";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { isSettingsTakeover } from "../app-navigation.ts";
 import {
   createApplicationRouter,
   locationForRoute,
@@ -35,6 +36,7 @@ import {
 } from "../pages/model-setup/first-run.ts";
 import { ControlUiPluginRuntime } from "../plugins/control-ui-runtime.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
+import type { ShellRouteState } from "./app-host-route-state.ts";
 import { resolveControlUiDocumentMode, type ControlUiDocumentMode } from "./approval-deep-link.ts";
 import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
@@ -306,6 +308,12 @@ export function bootstrapApplication(): ApplicationRuntime {
   const theme = createApplicationTheme(settings, gateway);
   const nativeChatDrafts = createNativeChatDrafts();
   const nativeLinkRouting = startNativeLinkRouting({
+    canPresentBrowserPanel: () => {
+      const shell = document.querySelector<HTMLElement & { routeState: ShellRouteState }>(
+        "openclaw-app-shell",
+      );
+      return shell?.isConnected === true && !isSettingsTakeover(shell.routeState.routeId);
+    },
     onNativeUpdateDeclined: () => {
       const snapshot = overlays.snapshot;
       const campaign = snapshot.updateSchedule?.campaign;

@@ -44,6 +44,7 @@ type NativeLinkRouting = {
 type NativeLinkRoutingOptions = {
   onNativeUpdateDeclined?: () => void;
   shouldOpenInControlUiBrowser?: () => boolean;
+  canPresentBrowserPanel?: () => boolean;
 };
 
 function getNativeLinkPoster(): WebKitMessageHandler["postMessage"] | undefined {
@@ -229,7 +230,13 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
         : shouldHandleControlUiBrowserActivation(event)) &&
       (hasNativeBrowserBridge() || options.shouldOpenInControlUiBrowser?.())
     ) {
-      openBrowserPanel(webLink.url);
+      if (hasNativeBrowserBridge() && options.canPresentBrowserPanel?.() === false) {
+        if (postMessage) {
+          postNativeLink(postMessage, webLink.url, "external");
+        }
+      } else {
+        openBrowserPanel(webLink.url);
+      }
       closeMenu();
       event.preventDefault();
       return;
