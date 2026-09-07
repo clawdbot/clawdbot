@@ -1,7 +1,13 @@
+import {
+  createEmptyPluginRegistry,
+  withPluginRuntimeRegistryScope,
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
+  registerPluginCommand,
 } from "openclaw/plugin-sdk/plugin-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
@@ -2524,6 +2530,7 @@ describe("createTelegramBot", () => {
     expect(renderedMessageId).toBe(messageId);
     expect(String(text)).toContain(`${INFO_EMOJI} Commands (2/`);
     expect(params).toEqual({
+      parse_mode: "HTML",
       reply_markup: {
         inline_keyboard: [
           [
@@ -2533,6 +2540,42 @@ describe("createTelegramBot", () => {
           ],
         ],
       },
+    });
+  });
+
+  it("keeps hyphenated plugin names as code when command pagination is edited", async () => {
+    await withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), async () => {
+      expect(
+        registerPluginCommand("memory-fixture", {
+          name: "active-memory",
+          description: "Inspect memory <scope>",
+          handler: async () => ({ text: "memory" }),
+        }),
+      ).toEqual({ ok: true });
+      createTelegramBot({ token: "tok" });
+      const page = buildCommandsMessagePaginated(loadConfig(), [], {
+        surface: "telegram",
+        forcePaginatedList: true,
+        page: Number.MAX_SAFE_INTEGER,
+      });
+      expect(page.text).toContain("active-memory");
+      await getTelegramCallbackHandlerForTests()(
+        createTelegramCallbackContext({
+          id: "cbq-command-code",
+          data: `commands_page_${page.currentPage}:main`,
+          message: { message_id: 17 },
+        }),
+      );
+      const [chatId, messageId, text, params] = mockCall(
+        editMessageTextSpy,
+        0,
+        "edit command page",
+      );
+      expect(chatId).toBe(1234);
+      expect(messageId).toBe(17);
+      expect(text).toContain("<code>/active-memory</code>");
+      expect(text).toContain("Inspect memory &lt;scope&gt;");
+      expect(params).toMatchObject({ parse_mode: "HTML" });
     });
   });
 
