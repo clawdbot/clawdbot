@@ -15,6 +15,14 @@ const codexModel = {
 
 const context = { messages: [] } as unknown as Context;
 
+const proxyResponsesModel = {
+  id: "gpt-5.5",
+  provider: "openai-proxy",
+  api: "openai-responses",
+  baseUrl: "https://responses-proxy.example.test/v1",
+  compat: { sendSessionIdHeader: true },
+} as Model;
+
 describe("buildOpenAIClientHeaders session_id affinity header", () => {
   it("clamps long internal session ids to the backend's 64-char cache key limit", () => {
     const longSessionId = `internal-session-effects-session-companion-${"a".repeat(50)}`;
@@ -35,6 +43,43 @@ describe("buildOpenAIClientHeaders session_id affinity header", () => {
   it("passes short session ids through unchanged", () => {
     const headers = buildOpenAIClientHeaders(codexModel, context, undefined, undefined, "abc-123");
     expect(headers.session_id).toBe("abc-123");
+  });
+
+  it("honors the explicit Responses proxy session header opt-in", () => {
+    const headers = buildOpenAIClientHeaders(
+      proxyResponsesModel,
+      context,
+      undefined,
+      undefined,
+      "proxy-session-123",
+    );
+
+    expect(headers.session_id).toBe("proxy-session-123");
+  });
+
+  it("honors an explicit native Responses session header opt-out", () => {
+    const headers = buildOpenAIClientHeaders(
+      { ...codexModel, compat: { sendSessionIdHeader: false } },
+      context,
+      undefined,
+      undefined,
+      "native-session-123",
+    );
+
+    expect(headers.session_id).toBeUndefined();
+  });
+
+  it("omits generated Responses session headers when caching is disabled", () => {
+    const headers = buildOpenAIClientHeaders(
+      proxyResponsesModel,
+      context,
+      undefined,
+      undefined,
+      "proxy-session-123",
+      "none",
+    );
+
+    expect(headers.session_id).toBeUndefined();
   });
 });
 

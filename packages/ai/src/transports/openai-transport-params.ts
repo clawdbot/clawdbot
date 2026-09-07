@@ -1,4 +1,4 @@
-import type { Context, Model } from "@openclaw/llm-core";
+import type { CacheRetention, Context, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getAiTransportHost } from "../host.js";
@@ -298,6 +298,7 @@ export function buildOpenAIClientHeaders(
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
   sessionId?: string,
+  cacheRetention?: CacheRetention,
 ): Record<string, string> {
   const providerHeaders = { ...model.headers };
   if (model.provider === "github-copilot") {
@@ -318,13 +319,22 @@ export function buildOpenAIClientHeaders(
     precedence: "caller-wins",
   }).headers;
   const resolvedHeaders = headers ?? {};
-  // Preserve ChatGPT Responses session affinity; the native backend accepts this spelling.
+  const configuredSessionHeaderPolicy =
+    (model.api === "openai-responses" || model.api === "openai-chatgpt-responses") &&
+    model.compat &&
+    "sendSessionIdHeader" in model.compat
+      ? model.compat?.sendSessionIdHeader
+      : undefined;
+  const sendSessionIdHeader =
+    configuredSessionHeaderPolicy ?? usesNativeOpenAICodexResponsesBackend(model);
+  // Preserve Responses session affinity for native routes and explicitly compatible proxies.
   if (
     sessionId &&
+    cacheRetention !== "none" &&
+    sendSessionIdHeader &&
     !Object.keys(resolvedHeaders).some(
       (key) => normalizeLowercaseStringOrEmpty(key) === "session_id",
-    ) &&
-    usesNativeOpenAICodexResponsesBackend(model)
+    )
   ) {
     // The backend derives its prompt cache key from this header and enforces
     // OpenAI's 64-char limit server-side; long internal session ids
