@@ -454,6 +454,8 @@ type OpenAICodexImageGenerationItem = {
   type?: string;
   result?: string | null;
   revised_prompt?: string;
+  size?: string;
+  quality?: string;
   status?: "in_progress" | "completed" | "generating" | "failed";
 };
 
@@ -596,6 +598,10 @@ function toCodexImage(
       buffer: decodeCodexImagePayload(entry.result),
       mimeType: output.mimeType,
       fileName: `image-${index + 1}.${output.extension}`,
+      metadata: {
+        ...(entry.size !== undefined ? { size: entry.size } : {}),
+        ...(entry.quality !== undefined ? { quality: entry.quality } : {}),
+      },
     },
     entry.revised_prompt ? { revisedPrompt: entry.revised_prompt } : {},
   );

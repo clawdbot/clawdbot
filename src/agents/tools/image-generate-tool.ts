@@ -602,6 +602,15 @@ async function executeImageGenerationJob(params: {
       typeof result.metadata?.requestedSize === "string" &&
       result.metadata.requestedSize === params.size &&
       Boolean(normalizedAspectRatio));
+  const firstImageMetadata = result.images[0]?.metadata;
+  const appliedSize =
+    typeof firstImageMetadata?.size === "string" && firstImageMetadata.size.trim()
+      ? firstImageMetadata.size
+      : undefined;
+  const appliedQuality =
+    typeof firstImageMetadata?.quality === "string" && firstImageMetadata.quality.trim()
+      ? firstImageMetadata.quality
+      : undefined;
 
   const mediaMaxBytes = resolveGeneratedMediaMaxBytes(params.effectiveCfg, "image");
   const savedImages = await persistGeneratedMediaBatch({
@@ -659,13 +668,27 @@ async function executeImageGenerationJob(params: {
         getResolvedInput: (entry) => entry.resolvedImage,
       }),
       ...(appliedResolution ? { resolution: appliedResolution } : {}),
-      ...(normalizedSize || (params.size && !sizeTranslatedToAspectRatio)
-        ? { size: normalizedSize ?? params.size }
-        : {}),
+      ...(appliedSize
+        ? {
+            size: appliedSize,
+            ...(params.size && appliedSize !== params.size ? { requestedSize: params.size } : {}),
+          }
+        : normalizedSize || (params.size && !sizeTranslatedToAspectRatio)
+          ? { size: normalizedSize ?? params.size }
+          : {}),
       ...(normalizedAspectRatio || params.aspectRatio
         ? { aspectRatio: normalizedAspectRatio ?? params.aspectRatio }
         : {}),
-      ...(params.quality ? { quality: params.quality } : {}),
+      ...(appliedQuality
+        ? {
+            quality: appliedQuality,
+            ...(params.quality && appliedQuality !== params.quality
+              ? { requestedQuality: params.quality }
+              : {}),
+          }
+        : params.quality
+          ? { quality: params.quality }
+          : {}),
       ...(params.outputFormat ? { outputFormat: params.outputFormat } : {}),
       ...(params.background ? { background: params.background } : {}),
       ...(params.filename ? { filename: params.filename } : {}),
