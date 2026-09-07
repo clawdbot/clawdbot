@@ -32,6 +32,13 @@ type ConfiguredPluginInstallHealthIssue =
       installSpec?: string;
     }
   | {
+      kind: "missing-required-dependencies";
+      pluginId: string;
+      installPath?: string;
+      installSpec?: string;
+      missingRequired: string[];
+    }
+  | {
       kind: "repairable-installed-plugin";
       pluginId: string;
       installPath?: string;
@@ -95,6 +102,7 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
     installedPluginIdsWithRepairablePackageDiagnostics: repairablePackageDiagnosticPluginIds,
     installedPluginIdsWithStaleVersionBoundRuntimePackages: staleVersionBoundRuntimePluginIds,
     installedPluginIdsWithRepairablePackages: repairableInstalledPluginIds,
+    installedPluginMissingRequiredDependencies,
     officialReplacementPluginIds,
   } = await resolveConfiguredPluginInstallContext({
     cfg: params.cfg,
@@ -119,7 +127,11 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
     })) {
       deferredPluginIds.add(pluginId);
       const record = records[pluginId];
-      if (!record || !isPayloadMissing(env, record.installPath)) {
+      if (
+        !record ||
+        (!isPayloadMissing(env, record.installPath) &&
+          !installedPluginMissingRequiredDependencies.has(pluginId))
+      ) {
         continue;
       }
       issues.push({
@@ -146,6 +158,18 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
 
   for (const pluginId of missingRecordedPluginIds) {
     const record = records[pluginId];
+    const missingDependencies = installedPluginMissingRequiredDependencies.get(pluginId);
+    if (missingDependencies) {
+      issues.push({
+        kind: "missing-required-dependencies",
+        pluginId,
+        installPath: resolveRecordInstallPath(record, env),
+        ...(record?.spec ? { installSpec: record.spec } : {}),
+        missingRequired: missingDependencies.missingRequired,
+      });
+      reportedPluginIds.add(pluginId);
+      continue;
+    }
     const kind = missingRecordedPluginIssueKind({
       pluginId,
       staleVersionBoundRuntimePluginIds,
@@ -278,6 +302,13 @@ const CONFIGURED_PLUGIN_INSTALL_ISSUE_DETAILS = {
     action: "would-reinstall-configured-plugin",
     dryRunSafe: false,
   },
+  "missing-required-dependencies": {
+    message: (pluginId: string) =>
+      `Configured plugin ${pluginId} is missing required dependencies:`,
+    fixHint: "Run `openclaw doctor --fix` to reinstall the configured plugin dependencies.",
+    action: "would-repair-configured-plugin-dependencies",
+    dryRunSafe: false,
+  },
   "repairable-installed-plugin": {
     message: (pluginId: string) =>
       `Configured plugin ${pluginId} has a repairable package install problem.`,
@@ -323,7 +354,10 @@ export function configuredPluginInstallIssueToHealthFinding(
   return {
     checkId: CONFIGURED_PLUGIN_INSTALLS_CHECK_ID,
     severity: "warning",
-    message: detail.message(issue.pluginId),
+    message:
+      issue.kind === "missing-required-dependencies"
+        ? `${detail.message(issue.pluginId)} ${issue.missingRequired.join(", ")}.`
+        : detail.message(issue.pluginId),
     target: issue.pluginId,
     ...("installPath" in issue && issue.installPath ? { path: issue.installPath } : {}),
     fixHint:

@@ -254,6 +254,60 @@ describe("resolveNpmSpecMetadata", () => {
     });
   });
 
+  describe.each(["example-plugin", "@example/plugin"])("registry selector for %s", (name) => {
+    it.each(["v2", "2", "2.x"])("preserves literal tag %s in both npm view shapes", async (tag) => {
+      const entry = { name, version: "1.0.0" };
+      // npm resolves literal dist-tags before interpreting the selector as a range.
+      for (const payload of [entry, [entry]]) {
+        mockPackCommandResult({ stdout: JSON.stringify(payload) });
+        await expect(resolveNpmSpecMetadata({ spec: `${name}@${tag}` })).resolves.toMatchObject({
+          ok: true,
+          metadata: { name, version: "1.0.0", resolvedSpec: `${name}@1.0.0` },
+        });
+      }
+    });
+
+    it.each(["v2", "2", "2.x"])(
+      "selects the max version when %s is not a literal tag",
+      async (tag) => {
+        mockPackCommandResult({
+          stdout: JSON.stringify([
+            { name, version: "2.9.0" },
+            { name, version: "2.1.0" },
+          ]),
+        });
+        await expect(resolveNpmSpecMetadata({ spec: `${name}@${tag}` })).resolves.toMatchObject({
+          ok: true,
+          metadata: { name, version: "2.9.0", resolvedSpec: `${name}@2.9.0` },
+        });
+      },
+    );
+
+    it.each(["^2", "2.0.0"])(
+      "rejects a singleton outside the non-tag selector %s",
+      async (selector) => {
+        mockPackCommandResult({ stdout: JSON.stringify([{ name, version: "1.0.0" }]) });
+        await expect(
+          resolveNpmSpecMetadata({ spec: `${name}@${selector}` }),
+        ).resolves.toMatchObject({
+          ok: false,
+          category: "metadata-env",
+        });
+      },
+    );
+  });
+
+  it.each([{ entry: [] }, { entry: [null] }, { entry: [42] }])(
+    "rejects an empty or invalid npm view entry list $entry",
+    async ({ entry }) => {
+      mockPackCommandResult({ stdout: JSON.stringify(entry) });
+      await expect(resolveNpmSpecMetadata({ spec: "example-plugin@v2" })).resolves.toMatchObject({
+        ok: false,
+        category: "metadata-env",
+      });
+    },
+  );
+
   it("selects the newest multi-version entry satisfying the requested range", async () => {
     mockPackCommandResult({
       stdout: JSON.stringify([

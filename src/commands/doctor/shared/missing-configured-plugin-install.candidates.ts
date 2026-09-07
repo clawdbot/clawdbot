@@ -37,6 +37,7 @@ import {
   CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES,
   VERSION_BOUND_RUNTIME_PLUGIN_IDS,
 } from "./configured-runtime-plugin-installs.js";
+import { collectInstalledPluginMissingRequiredDependencies } from "./missing-configured-plugin-install.dependency-health.js";
 import {
   collectConfiguredChannelIds,
   collectConfiguredPluginIds,
@@ -120,15 +121,29 @@ export async function resolveConfiguredPluginInstallContext(params: {
       configuredPluginIds: params.configuredPluginIds,
       currentVersion,
     });
+  const installedPluginMissingRequiredDependencies =
+    await collectInstalledPluginMissingRequiredDependencies({
+      cfg: params.cfg,
+      snapshot,
+      installRecords: records,
+      blockedPluginIds: params.blockedPluginIds,
+      resolvePathIdentity,
+    });
   const installedPluginIdsWithRepairablePackages = new Set([
     ...installedPluginIdsWithRepairablePackageDiagnostics,
     ...installedPluginIdsWithStaleVersionBoundRuntimePackages,
+    ...installedPluginMissingRequiredDependencies.keys(),
   ]);
   const officialReplacementPluginIds = new Set(
     collectOfficialReplacementInstallCandidates({
       cfg: params.cfg,
       env: params.env,
-      repairablePluginIds: installedPluginIdsWithRepairablePackages,
+      // Hollow packages need the recorded updater's fresh-generation path, not direct replacement.
+      repairablePluginIds: new Set(
+        [...installedPluginIdsWithRepairablePackages].filter(
+          (pluginId) => !installedPluginMissingRequiredDependencies.has(pluginId),
+        ),
+      ),
       configuredPluginIds: params.configuredPluginIds,
       configuredChannelIds: params.configuredChannelIds,
       configuredChannelOwnerPluginIds,
@@ -188,6 +203,7 @@ export async function resolveConfiguredPluginInstallContext(params: {
     installedPluginIdsWithRepairablePackageDiagnostics,
     installedPluginIdsWithStaleVersionBoundRuntimePackages,
     installedPluginIdsWithRepairablePackages,
+    installedPluginMissingRequiredDependencies,
     officialReplacementPluginIds,
   };
 }

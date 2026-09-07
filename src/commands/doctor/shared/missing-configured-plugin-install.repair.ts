@@ -10,6 +10,11 @@ import {
 } from "../../../plugins/config-state.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../../../plugins/install-types.js";
 import { writePersistedInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
+import {
+  clearRetainedManagedNpmInstallMarker,
+  hasRetainedManagedNpmInstallMarker,
+  markRetainedManagedNpmInstall,
+} from "../../../plugins/managed-npm-retention.js";
 import { isPayloadMissing } from "../../../plugins/payload-verification.js";
 import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
 import { updateNpmInstalledPlugins, type PluginUpdateOutcome } from "../../../plugins/update.js";
@@ -140,13 +145,48 @@ async function repairMissingPluginInstalls(params: {
   beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<RepairMissingPluginInstallsResult> {
   // Baseline, awaited review, package publication, and the index write share one generation.
-  return await withPluginLifecycleLease({ env: params.env }, () =>
-    repairMissingPluginInstallsWithLease(params),
-  );
+  return await withPluginLifecycleLease({ env: params.env }, async () => {
+    const dependencyRepairMarkers = new Map<string, string>();
+    let result: RepairMissingPluginInstallsResult | undefined;
+    let failure: unknown;
+    try {
+      result = await repairMissingPluginInstallsWithLease(params, dependencyRepairMarkers);
+    } catch (error) {
+      failure = error;
+    }
+    // Settle owned markers before returning success or rethrowing the original failure.
+    const cleanupErrors: unknown[] = [];
+    for (const [pluginId, packageDir] of dependencyRepairMarkers) {
+      if (result?.repairedPluginIds?.includes(pluginId)) {
+        continue;
+      }
+      try {
+        await clearRetainedManagedNpmInstallMarker(packageDir);
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+    if (!result) {
+      if (cleanupErrors.length > 0) {
+        throw new AggregateError(
+          [failure, ...cleanupErrors],
+          "Plugin dependency repair failed and its retention markers could not be cleared.",
+        );
+      }
+      throw failure;
+    }
+    result.warnings.push(
+      ...cleanupErrors.map(
+        (error) => `Failed to clear dependency repair retention marker: ${String(error)}`,
+      ),
+    );
+    return result;
+  });
 }
 
 async function repairMissingPluginInstallsWithLease(
   params: Parameters<typeof repairMissingPluginInstalls>[0],
+  dependencyRepairMarkers: Map<string, string>,
 ): Promise<RepairMissingPluginInstallsResult> {
   const env = params.env ?? process.env;
   const {
@@ -161,6 +201,7 @@ async function repairMissingPluginInstallsWithLease(
     installedPluginIdsWithRepairablePackageDiagnostics,
     installedPluginIdsWithStaleVersionBoundRuntimePackages,
     installedPluginIdsWithRepairablePackages,
+    installedPluginMissingRequiredDependencies,
     officialReplacementPluginIds,
   } = await resolveConfiguredPluginInstallContext({
     cfg: params.cfg,
@@ -189,6 +230,7 @@ async function repairMissingPluginInstallsWithLease(
       knownIds.has(pluginId) &&
       !isPayloadMissing(env, records[pluginId]?.installPath) &&
       !installedPluginIdsWithRepairablePackageDiagnostics.has(pluginId) &&
+      !installedPluginMissingRequiredDependencies.has(pluginId) &&
       !configuredPluginIdsWithStaleDescriptors.has(pluginId) &&
       resolveEffectiveEnableState({
         id: pluginId,
@@ -240,7 +282,11 @@ async function repairMissingPluginInstallsWithLease(
     for (const pluginId of updateDeferredPluginIds) {
       deferredPluginIds.add(pluginId);
       const record = nextRecords[pluginId];
-      if (!record || !isPayloadMissing(env, record.installPath)) {
+      if (
+        !record ||
+        (!isPayloadMissing(env, record.installPath) &&
+          !installedPluginMissingRequiredDependencies.has(pluginId))
+      ) {
         continue;
       }
       const detail = `Skipped package-manager repair for configured plugin "${pluginId}" during package update; rerun "openclaw doctor --fix" after the update completes.`;
@@ -266,13 +312,27 @@ async function repairMissingPluginInstallsWithLease(
     // Dropping resolved fields forces an installer attempt, not a record mutation.
     const repairRecords = { ...nextRecords };
     for (const [pluginId, record] of missingRecordedPlugins) {
+      const missingDependencies = installedPluginMissingRequiredDependencies.get(pluginId);
       if (
+        missingDependencies ||
         !installedPluginIdsWithStaleVersionBoundRuntimePackages.has(pluginId) ||
         installedPluginIdsWithRepairablePackageDiagnostics.has(pluginId) ||
         configuredPluginIdsWithStaleDescriptors.has(pluginId) ||
         isPayloadMissing(env, record.installPath)
       ) {
         repairRecords[pluginId] = forceNpmInstallRecordRepair(record);
+      }
+      if (missingDependencies) {
+        await params.beforePersistentEffect?.();
+        if (!hasRetainedManagedNpmInstallMarker(missingDependencies.rootDir)) {
+          // Register ownership before the write so even a partial marker write is cleaned on failure.
+          dependencyRepairMarkers.set(pluginId, missingDependencies.rootDir);
+          await markRetainedManagedNpmInstall({
+            packageDir: missingDependencies.rootDir,
+            pluginId,
+            reason: "doctor-missing-required-dependencies",
+          });
+        }
       }
     }
     const updateResult = await updateNpmInstalledPlugins({
@@ -312,13 +372,20 @@ async function repairMissingPluginInstallsWithLease(
         repairedPluginIds.add(outcome.pluginId);
         failedPlugins.delete(outcome.pluginId);
         changes.push(
-          installedPluginIdsWithStaleVersionBoundRuntimePackages.has(outcome.pluginId)
-            ? `Refreshed stale configured plugin "${outcome.pluginId}".`
-            : installedPluginIdsWithRepairablePackageDiagnostics.has(outcome.pluginId)
-              ? `Repaired broken installed plugin "${outcome.pluginId}".`
-              : `Repaired missing configured plugin "${outcome.pluginId}".`,
+          installedPluginMissingRequiredDependencies.has(outcome.pluginId)
+            ? `Repaired missing dependencies for installed plugin "${outcome.pluginId}".`
+            : installedPluginIdsWithStaleVersionBoundRuntimePackages.has(outcome.pluginId)
+              ? `Refreshed stale configured plugin "${outcome.pluginId}".`
+              : installedPluginIdsWithRepairablePackageDiagnostics.has(outcome.pluginId)
+                ? `Repaired broken installed plugin "${outcome.pluginId}".`
+                : `Repaired missing configured plugin "${outcome.pluginId}".`,
         );
-      } else if (outcome.status === "error" || isActionableClawHubSkippedOutcome(outcome)) {
+      } else if (
+        outcome.status === "error" ||
+        isActionableClawHubSkippedOutcome(outcome) ||
+        (outcome.status === "skipped" &&
+          installedPluginMissingRequiredDependencies.has(outcome.pluginId))
+      ) {
         recordFailure(outcome.pluginId, [outcome.message], outcome.code);
       }
     }

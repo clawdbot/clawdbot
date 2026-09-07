@@ -72,6 +72,10 @@ import {
   auditDeclaredOpenClawHostDependency,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "./plugin-peer-link.js";
+import {
+  findMissingRequiredPluginDependencies,
+  normalizePluginDependencySpecs,
+} from "./status-dependencies-core.js";
 
 export async function installPluginFromManagedNpmRoot(
   params: InstallSafetyOverrides & {
@@ -500,6 +504,18 @@ export async function installPluginFromManagedNpmRoot(
       return {
         ok: false,
         error: `npm install metadata remained incomplete after managed npm project recovery (quarantine: ${recovery.quarantine.quarantineDir}): ${resolutionVerification.error}`,
+      };
+    }
+
+    const missingRequired = await findMissingRequiredPluginDependencies({
+      rootDir: installRoot,
+      dependencyRootDir: npmRoot,
+      ...normalizePluginDependencySpecs(packageManifestResult.manifest ?? {}),
+    });
+    if (missingRequired.length > 0) {
+      return {
+        ok: false,
+        error: `npm install reported success but left required dependencies missing for ${params.packageName}: ${missingRequired.join(", ")}`,
       };
     }
 
