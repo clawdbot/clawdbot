@@ -1,4 +1,5 @@
 // Codex tests cover run attempt plugin behavior.
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
@@ -4785,7 +4786,8 @@ describe("runCodexAppServerAttempt", () => {
         const request = harness.requests
           .slice(offset)
           .find(({ method }) => method === "turn/start");
-        const input = (request?.params as { input: Array<{ text?: string }> }).input[0]?.text ?? "";
+        assert(request, "Expected the reference turn/start request");
+        const input = (request.params as { input: Array<{ text?: string }> }).input[0]?.text ?? "";
         expect(compiledPrompts).toEqual([input]);
         return { input, result };
       };
