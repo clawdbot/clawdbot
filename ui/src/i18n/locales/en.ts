@@ -4597,9 +4597,8 @@ export const en: TranslationMap & {
       sat: "Sat",
     },
   },
-  login: {
-    subtitle: "Gateway Dashboard",
-  },
+  // Login copy lives in the lazy en-login catalog; the anchor keeps its merge target.
+  login: {},
   chat: {
     modelAccounts: {
       label: "Account for this chat",
