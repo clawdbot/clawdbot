@@ -55,7 +55,6 @@ function createAppServerOptions(): Parameters<typeof startOrResumeThread>[0]["ap
     codeModeOnly: false,
     loopDetectionPreToolUseRelay: true,
     requestTimeoutMs: 60_000,
-    turnCompletionIdleTimeoutMs: 60_000,
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
@@ -78,7 +77,8 @@ function threadStartResult(threadId = "thread-1", serviceTier: string | null = n
       status: { type: "idle" },
       path: null,
       cwd: tempDir,
-      cliVersion: "0.147.0",
+      projectId: null,
+      cliVersion: "0.149.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -120,6 +120,12 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
       inputSchema: normalizedParameterFreeSchema(),
     };
     const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return threadStartResult();
       }
@@ -134,10 +140,15 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
       appServer: createAppServerOptions(),
     });
 
-    expect(request).toHaveBeenCalledTimes(1);
-    const [method, payload] = request.mock.calls[0] ?? [];
-    if (method !== "thread/start") {
-      throw new Error(`expected thread/start request, got ${method}`);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+    ]);
+    const [startMethod, payload] =
+      request.mock.calls.find(([method]) => method === "thread/start") ?? [];
+    if (startMethod !== "thread/start") {
+      throw new Error(`expected thread/start request, got ${startMethod}`);
     }
     const startPayload = payload as CodexThreadStartParams | undefined;
     expect(startPayload?.dynamicTools).toStrictEqual([
@@ -164,6 +175,12 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return threadStartResult("thread-priority", "priority");
       }
@@ -187,6 +204,12 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
     const appServer = createAppServerOptions();
     let nextThreadId = 1;
     const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
       if (method === "thread/start") {
         return threadStartResult(`thread-${nextThreadId++}`);
       }
@@ -223,6 +246,13 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
       appServer,
     });
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/start"]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+    ]);
   });
 });

@@ -98,7 +98,7 @@ describe("native image tool result context projection", () => {
   it.each([
     { contextWindowTokens: 8_000, loadedImages: 1, visibleImages: 0 },
     { contextWindowTokens: 32_000, loadedImages: 3, visibleImages: 1 },
-    { contextWindowTokens: 128_000, loadedImages: 9, visibleImages: 7 },
+    { contextWindowTokens: 128_000, loadedImages: 20, visibleImages: 7 },
   ])(
     "preserves a fitting sanitized image prefix in a $contextWindowTokens-token window",
     async ({ contextWindowTokens, loadedImages, visibleImages }) => {
@@ -199,10 +199,13 @@ describe("native image tool result context projection", () => {
     },
   );
 
-  it("keeps a fitting image without letting oversized text starve a later text block", async () => {
+  it.each([
+    ["short", "retain the image description"],
+    ["2,000-character", "d".repeat(2_000)],
+  ])("keeps a fitting image without starving a later %s text block", async (_name, description) => {
     const native = await executeNativeImageTool(2);
     const nativeBlocks = blocksOf(native);
-    const trailingText = { type: "text", text: "retain the image description" };
+    const trailingText = { type: "text", text: description };
     const source = castAgentMessage({
       ...native,
       content: [

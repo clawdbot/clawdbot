@@ -1,31 +1,29 @@
 import { expect, it, vi } from "vitest";
 import {
+  createCronRegressionState,
   createDueIsolatedJob,
-  noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import { loadCronStore, saveCronStore } from "../store.js";
+import { loadCronStore, saveCronJobsStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
   claimCronRunReceiptInDatabase,
   finishCronRunReceipt,
-  isCronRunReceiptOwnerDefinitelyStale,
+  isCronRunReceiptOwnerStale,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
-import { saveCronJobsStoreWithTransactionHooks } from "../store/transaction-hooks.js";
-import { stop } from "./ops-lifecycle.js";
+import { start, stop } from "./ops-lifecycle.js";
 import { list } from "./ops-read.js";
 import {
   cleanupQueuedCronRunReservations,
   persistQueuedCronRunReservations,
   reserveQueuedCronRun,
 } from "./run-admission.js";
-import { createCronServiceState } from "./state.js";
 import { onTimer } from "./timer.test-support.js";
 
 const fixtures = setupCronRegressionFixtures({ prefix: "cron-admission-conflict-" });
@@ -51,13 +49,9 @@ it("recovers an ownerless queued lease on a live sibling without restart", async
   const now = Date.parse("2026-08-13T15:30:00.000Z");
   const job = createDueIsolatedJob({ id: "queued-owner-exit", nowMs: now, nextRunAtMs: now });
   await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-  const owner = createCronServiceState({
-    cronEnabled: true,
+  const owner = createCronRegressionState({
     storePath: store.storePath,
-    log: noopLogger,
     nowMs: () => now,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   await list(owner);
@@ -73,13 +67,9 @@ it("recovers an ownerless queued lease on a live sibling without restart", async
   releaseLocalCronRunReceiptOwnership(reserved.runReceipt);
 
   const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
-  const sibling = createCronServiceState({
-    cronEnabled: true,
+  const sibling = createCronRegressionState({
     storePath: store.storePath,
-    log: noopLogger,
     nowMs: () => now + 1,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob,
   });
   await onTimer(sibling);
@@ -102,13 +92,9 @@ it("recovers a dead running owner on timer refresh without an admission conflict
   const receipt = claimReceipt(store.storePath, job, now);
   releaseLocalCronRunReceiptOwnership(receipt);
   const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
-  const sibling = createCronServiceState({
-    cronEnabled: true,
+  const sibling = createCronRegressionState({
     storePath: store.storePath,
-    log: noopLogger,
     nowMs: () => now + 1,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob,
   });
 
@@ -118,7 +104,18 @@ it("recovers a dead running owner on timer refresh without an admission conflict
   expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
     lastRunStatus: "error",
   });
-  expect((await loadCronStore(store.storePath)).jobs[0]?.state.runningAtMs).toBeUndefined();
+  const reclaimed = (await loadCronStore(store.storePath)).jobs[0];
+  expect(reclaimed?.enabled).toBe(false);
+  expect(reclaimed?.state.runningAtMs).toBeUndefined();
+  expect(reclaimed?.state.nextRunAtMs).toBeUndefined();
+  expect(reclaimed?.state.startupCatchupAtMs).toBeUndefined();
+  // Reclamation must consume the occurrence, not defer a duplicate until the
+  // next timer tick or turn it into startup catch-up on a later restart.
+  await onTimer(sibling);
+  stop(sibling);
+  await start(sibling);
+  await onTimer(sibling);
+  expect(runIsolatedAgentJob).not.toHaveBeenCalled();
   const receiptRows = runOpenClawStateWriteTransaction(({ db }) =>
     db
       .prepare(
@@ -144,13 +141,9 @@ it("preserves foreign state while retrying an unrelated reservation", async () =
     nextRunAtMs: now,
   });
   await saveCronStore(store.storePath, { version: 1, jobs: [foreignJob, pendingJob] });
-  const state = createCronServiceState({
-    cronEnabled: true,
+  const state = createCronRegressionState({
     storePath: store.storePath,
-    log: noopLogger,
     nowMs: () => now,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   await list(state);
@@ -166,17 +159,18 @@ it("preserves foreign state while retrying an unrelated reservation", async () =
     startedAtMs,
   });
   let receipt: ReturnType<typeof claimCronRunReceiptInDatabase> | undefined;
-  await saveCronJobsStoreWithTransactionHooks(
+  await saveCronJobsStore(
     store.storePath,
     { version: 1, jobs: [foreignRunning, pendingJob] },
-    undefined,
     {
-      beforeWrite: (database) => {
-        receipt = claimCronRunReceiptInDatabase({
-          database,
-          prepared,
-          resolveAgentId: (job) => job.agentId ?? "main",
-        });
+      transactionHooks: {
+        beforeWrite: (database) => {
+          receipt = claimCronRunReceiptInDatabase({
+            database,
+            prepared,
+            resolveAgentId: (job) => job.agentId ?? "main",
+          });
+        },
       },
     },
   );
@@ -227,13 +221,9 @@ it("rejects a stale reservation plan after the job already finalized", async () 
     nextRunAtMs: now,
   });
   await saveCronStore(store.storePath, { version: 1, jobs: [planned] });
-  const state = createCronServiceState({
-    cronEnabled: true,
+  const state = createCronRegressionState({
     storePath: store.storePath,
-    log: noopLogger,
     nowMs: () => now + 1,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   await list(state);
@@ -269,13 +259,9 @@ it("terminalizes an owned reservation after another gateway deletes the job", as
     nextRunAtMs: now,
   });
   await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-  const state = createCronServiceState({
-    cronEnabled: true,
+  const state = createCronRegressionState({
     storePath: store.storePath,
-    log: noopLogger,
     nowMs: () => now,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(),
   });
   await list(state);
@@ -315,13 +301,9 @@ it("retires a reservation when its row disappears during the post-commit reload"
     nextRunAtMs: now,
   });
   await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-  const state = createCronServiceState({
-    cronEnabled: true,
+  const state = createCronRegressionState({
     storePath: store.storePath,
-    log: noopLogger,
     nowMs: () => now,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(),
   });
   await list(state);
@@ -352,7 +334,7 @@ it("retires a reservation when its row disappears during the post-commit reload"
       | undefined;
     expect(receipt?.status).toBe("skipped");
     expect(
-      isCronRunReceiptOwnerDefinitelyStale({
+      isCronRunReceiptOwnerStale({
         receiptId: receipt!.receiptId,
         storeKey: cronStoreKey(store.storePath),
         jobId: job.id,

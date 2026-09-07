@@ -104,45 +104,42 @@ describe("models-config merge helpers", () => {
     ]);
   });
 
-  it("preserves explicit input modality overrides when implicit metadata has the same model id", () => {
-    const merged = mergeProviderModels(
-      {
-        api: "ollama",
-        models: [
-          {
-            id: "qwen3-vl:latest",
-            name: "Qwen3 VL",
-            input: ["text"],
-            reasoning: true,
-            contextWindow: 128_000,
-            maxTokens: 8192,
-          },
-        ],
-      } as ProviderConfig,
-      {
-        api: "ollama",
-        models: [
-          {
-            id: "qwen3-vl:latest",
-            name: "Qwen3 VL",
-            input: ["text", "image"],
-            contextWindow: 128_000,
-            maxTokens: 8192,
-          },
-        ],
-      } as ProviderConfig,
-    );
+  it("uses source input presence when merging matching model metadata", () => {
+    const implicit = {
+      api: "ollama",
+      models: [
+        {
+          id: "qwen3-vl:latest",
+          name: "Qwen3 VL",
+          input: ["text", "image"],
+          reasoning: true,
+          contextWindow: 128_000,
+          maxTokens: 8192,
+        },
+      ],
+    } as ProviderConfig;
+    const explicit = {
+      api: "ollama",
+      models: [
+        {
+          id: "qwen3-vl:latest",
+          name: "Qwen3 VL",
+          input: ["text"],
+          contextWindow: 128_000,
+          maxTokens: 8192,
+        },
+      ],
+    } as ProviderConfig;
 
-    expect(merged.models).toEqual([
-      {
-        id: "qwen3-vl:latest",
-        name: "Qwen3 VL",
-        input: ["text", "image"],
-        reasoning: true,
-        contextWindow: 128_000,
-        maxTokens: 8192,
-      },
-    ]);
+    expect(mergeProviderModels(implicit, explicit).models?.[0]?.input).toEqual(["text"]);
+    expect(
+      mergeProviderModels(implicit, explicit, {
+        providerId: "ollama",
+        sourceModelFields: new Map([
+          ["ollama/qwen3-vl:latest", { inputOmitted: true, cost: undefined }],
+        ]),
+      }).models?.[0]?.input,
+    ).toEqual(["text", "image"]);
   });
 
   it("keeps compat catalog-owned for a configured model on the catalog route", () => {

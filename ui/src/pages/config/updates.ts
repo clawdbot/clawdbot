@@ -3,15 +3,16 @@
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
+import type { UpdateRunRecord } from "../../../../src/infra/update-run-record.ts";
+import "../../components/update-run-view.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../../api/types.ts";
-import type {
-  ApplicationStatusBanner,
-  RecordedUpdateAttempt,
-} from "../../app/update-overlay-helpers.ts";
+import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
+import type { UpdateFailureReportNotice } from "../../app/overlays-types.ts";
+import type { ApplicationStatusBanner } from "../../app/update-overlay-helpers.ts";
 import {
   formatUpdateCampaignLabel,
   formatUpdateTargetLabel,
-} from "../../app/update-overlay-helpers.ts";
+} from "../../app/update-schedule-projection.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderSettingsPage,
@@ -23,11 +24,15 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatDateTimeMs, formatTimeAgo } from "../../lib/format.ts";
+
+registerSettingsEnglish();
 
 type UpdatesChannel = "stable" | "beta" | "dev" | "extended-stable";
 
 type UpdatesViewProps = {
+  nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
   configObject: Record<string, unknown>;
   gatewayVersion: string | null;
   controlUiCommit: string | null;
@@ -37,114 +42,187 @@ type UpdatesViewProps = {
   heldUpdateCampaignId: string | null;
   updateAvailable: UpdateAvailable | null;
   statusBanner: ApplicationStatusBanner | null;
-  recordedAttempt: RecordedUpdateAttempt | null;
+  run: UpdateRunRecord | null;
+  connected: boolean;
   configBusy: boolean;
   canAdmin: boolean;
   canUpdate: boolean;
   canCheckStatus: boolean;
   canHoldUpdate: boolean;
+  canReport: boolean;
   updateBusy: boolean;
+  reportableUpdateFailureId: string | null;
+  updateFailureReportBusy: boolean;
+  updateFailureReportNotice: UpdateFailureReportNotice | null;
   nowMs?: number;
   onChannelChange: (channel: UpdatesChannel) => void;
+  onUpdateChecksChange: (enabled: boolean) => void;
   onAutomaticUpdatesChange: (enabled: boolean) => void;
   onUpdateNow: () => void;
   onHoldUpdate: () => Promise<boolean>;
   onCheckStatus: () => Promise<void>;
+  onReportFailure: (attemptId: string) => Promise<void>;
 };
 
-function formatAttemptIdentity(version: string | null, sha: string | null): string {
-  return version ? `v${version}` : sha ? sha.slice(0, 12) : t("common.unknown");
+function renderDeviceUpdates(capability: NativeDeviceSettingsCapability | null | undefined) {
+  if (!capability) {
+    return nothing;
+  }
+  const snapshot = capability.snapshot;
+  return renderSettingsSection(
+    { title: t("updates.device.title") },
+    snapshot
+      ? [
+          renderSettingsRow({
+            title: t("updates.device.version"),
+            control: renderSettingsValue(
+              t("updates.device.versionBuild", {
+                version: snapshot.device.appVersion,
+                build: snapshot.device.appBuild,
+              }),
+            ),
+          }),
+          snapshot.updates.available
+            ? html`${renderSettingsToggleRow({
+                title: t("updates.device.automatic"),
+                checked: snapshot.updates.automatic,
+                onChange: (value) => capability.set("updates.automatic", value),
+              })}${renderSettingsRow({
+                title: t("updates.device.check"),
+                control: html`<button
+                  class="btn btn--sm"
+                  type="button"
+                  @click=${() => capability.checkForUpdates()}
+                >
+                  ${t("updates.device.check")}
+                </button>`,
+              })}`
+            : renderSettingsRow({
+                title: t("updates.device.unavailable"),
+                description: snapshot.updates.unavailableReason,
+              }),
+        ]
+      : renderSettingsRow({ title: t("common.loading") }),
+  );
 }
 
 function renderRecordedAttempt(props: UpdatesViewProps) {
-  const attempt = props.recordedAttempt;
-  if (!attempt && !props.statusBanner) {
+  const run = props.run;
+  if (!run && !props.statusBanner) {
     return nothing;
   }
+  const failed = run
+    ? run.status === "failed" || run.status === "rolled-back" || run.status === "skipped"
+    : true;
   const canRetry = props.canUpdate && !props.updateBusy;
-  const recordedTarget = attempt
-    ? formatAttemptIdentity(attempt.targetVersion, attempt.targetSha)
-    : null;
-  const target =
-    recordedTarget && recordedTarget !== t("common.unknown")
-      ? recordedTarget
-      : (formatUpdateTargetLabel(props.schedule, props.updateAvailable) ?? t("common.unknown"));
   return renderSettingsSection({ title: t("updates.page.latestAttempt") }, [
-    attempt
-      ? renderSettingsRow({
-          title: t("updates.page.attemptedAt"),
-          control: renderTimestamp(attempt.timestampMs, props.nowMs),
-        })
+    run
+      ? html`<div class="settings-row settings-row--stacked">
+          <openclaw-update-run-view
+            .run=${run}
+            .connected=${props.connected}
+          ></openclaw-update-run-view>
+        </div>`
       : nothing,
-    renderSettingsRow({
-      title: t("updates.page.attemptTarget"),
-      control: renderSettingsValue(target, { mono: true }),
-    }),
-    attempt
-      ? renderSettingsRow({
-          title: t("updates.page.installedIdentity"),
-          control: renderSettingsValue(
-            formatAttemptIdentity(attempt.installedVersion, attempt.installedSha),
-            { mono: true },
-          ),
-        })
+    ...(!failed
+      ? []
+      : [
+          renderSettingsRow({
+            title: t("updates.page.recoveryActions"),
+            control: html`<div class="updates-status-control">
+              <button
+                class="btn btn--sm"
+                type="button"
+                title=${props.canCheckStatus ? "" : t("updates.adminRequired")}
+                ?disabled=${!props.canCheckStatus || props.updateBusy}
+                @click=${() => void props.onCheckStatus()}
+              >
+                ${t("updates.page.checkStatus")}
+              </button>
+              <button
+                class="btn btn--sm primary"
+                type="button"
+                title=${canRetry ? "" : t("updates.adminRequired")}
+                ?disabled=${!canRetry}
+                @click=${props.onUpdateNow}
+              >
+                ${t("updates.page.retryUpdate")}
+              </button>
+              ${
+                props.reportableUpdateFailureId
+                  ? html`<button
+                      class="btn btn--sm"
+                      type="button"
+                      title=${props.canReport ? "" : t("updates.page.reportOwnerRequired")}
+                      ?disabled=${!props.canReport || props.updateBusy || props.updateFailureReportBusy}
+                      @click=${() => void props.onReportFailure(props.reportableUpdateFailureId!)}
+                    >
+                      ${
+                        props.updateFailureReportBusy
+                          ? t("updates.page.reportSubmitting")
+                          : t("updates.page.reportFailure")
+                      }
+                    </button>`
+                  : nothing
+              }
+            </div>`,
+          }),
+          renderSettingsRow({
+            title: t("updates.page.cliFallback"),
+            description: t("updates.triage.hostHint"),
+            stacked: true,
+            control: html`<details class="updates-attempt-details">
+              <summary>${t("updates.page.showCliFallback")}</summary>
+              <pre><code>openclaw triage</code></pre>
+            </details>`,
+          }),
+        ]),
+    props.updateFailureReportNotice
+      ? renderUpdateFailureReportNotice(props.updateFailureReportNotice)
       : nothing,
-    attempt?.installKind
-      ? renderSettingsRow({
-          title: t("updates.page.attemptInstallKind"),
-          control: renderSettingsValue(attempt.installKind),
-        })
-      : nothing,
-    attempt
-      ? renderSettingsRow({
-          title: t("updates.page.attemptReason"),
-          control: renderSettingsValue(html`<code>${attempt.reason}</code>`, { mono: true }),
-        })
-      : nothing,
-    attempt?.failure
-      ? renderSettingsRow({
-          title: t("updates.page.failedStep"),
-          stacked: true,
-          control: html`<details class="updates-attempt-details">
-            <summary>${t("updates.page.viewDetails")}</summary>
-            <div><code>${attempt.failure.step}</code></div>
-            <pre>${attempt.failure.detail}</pre>
-          </details>`,
-        })
-      : nothing,
-    renderSettingsRow({
-      title: t("updates.page.recoveryActions"),
-      control: html`<div class="updates-status-control">
-        <button
-          class="btn btn--sm"
-          type="button"
-          title=${props.canCheckStatus ? "" : t("updates.adminRequired")}
-          ?disabled=${!props.canCheckStatus || props.updateBusy}
-          @click=${() => void props.onCheckStatus()}
-        >
-          ${t("updates.page.checkStatus")}
-        </button>
-        <button
-          class="btn btn--sm primary"
-          type="button"
-          title=${canRetry ? "" : t("updates.adminRequired")}
-          ?disabled=${!canRetry}
-          @click=${props.onUpdateNow}
-        >
-          ${t("updates.page.retryUpdate")}
-        </button>
-      </div>`,
-    }),
-    renderSettingsRow({
-      title: t("updates.page.cliFallback"),
-      stacked: true,
-      control: html`<details class="updates-attempt-details">
-        <summary>${t("updates.page.showCliFallback")}</summary>
-        <pre><code>openclaw update status --json
-openclaw update</code></pre>
-      </details>`,
-    }),
   ]);
+}
+
+function renderUpdateFailureReportNotice(notice: UpdateFailureReportNotice) {
+  const result = notice.result;
+  const label =
+    result.status === "created"
+      ? t("updates.page.reportCreated")
+      : result.status === "fallback"
+        ? t("updates.page.reportFallback")
+        : result.status === "pending"
+          ? t("updates.page.reportPending")
+          : result.status === "retryable"
+            ? t("updates.page.reportRetryable")
+            : result.status === "duplicate"
+              ? t("updates.page.reportDuplicate")
+              : t("updates.page.reportError");
+  const url = "url" in result && result.url ? result.url : null;
+  const fallbackUrl = "fallbackUrl" in result && result.fallbackUrl ? result.fallbackUrl : null;
+  return renderSettingsRow({
+    title: t("updates.page.reportResult"),
+    stacked: true,
+    control: html`<div class="updates-attempt-details" role="status">
+      <div>${label}</div>
+      ${
+        url
+          ? html`<div>
+              <a href=${url} target="_blank" rel="noreferrer">${t("updates.page.openIssue")}</a>
+            </div>`
+          : nothing
+      }
+      ${
+        fallbackUrl
+          ? html`<div>
+              <a href=${fallbackUrl} target="_blank" rel="noreferrer"
+                >${t("updates.page.openPrefilledIssue")}</a
+              >
+            </div>`
+          : nothing
+      }
+      ${"message" in result && result.message ? html`<div>${result.message}</div>` : nothing}
+    </div>`,
+  });
 }
 
 function readUpdatesSettings(
@@ -365,6 +443,7 @@ export function renderUpdates(props: UpdatesViewProps): TemplateResult {
     });
   }
   const automaticUpdatesSupported = settings.channel !== "extended-stable";
+  const checksDisabled = asConfigRecord(props.configObject.update)?.checkOnStart === false;
   const devPackageInstall =
     settings.channel === "dev" && props.schedule?.install?.kind === "package";
   const campaign = props.schedule?.campaign;
@@ -392,35 +471,46 @@ export function renderUpdates(props: UpdatesViewProps): TemplateResult {
       }),
     }),
     renderSettingsToggleRow({
+      title: t("updates.page.checkForUpdates"),
+      description: t("updates.page.checkForUpdatesDescription"),
+      checked: !checksDisabled,
+      disabled: props.configBusy,
+      onChange: props.onUpdateChecksChange,
+    }),
+    renderSettingsToggleRow({
       title: t("updates.page.automaticUpdates"),
       description: !automaticUpdatesSupported
         ? t("updates.page.extendedStableAutomaticHint")
         : devPackageInstall
           ? t("updates.page.devPackageAutomaticHint")
-          : t("updates.page.automaticUpdatesDescription"),
+          : checksDisabled
+            ? t("updates.page.checksDisabledAutomaticHint")
+            : t("updates.page.automaticUpdatesDescription"),
       checked: automaticUpdatesSupported && settings.autoEnabled,
-      disabled: props.configBusy || !automaticUpdatesSupported || devPackageInstall,
+      disabled:
+        props.configBusy || checksDisabled || !automaticUpdatesSupported || devPackageInstall,
       onChange: props.onAutomaticUpdatesChange,
     }),
   ];
   const updateButtonTitle = !props.canAdmin ? t("updates.adminRequired") : "";
   return html`
     <div id="config-section-update">
-      ${renderSettingsPage(
-        [
-          !props.canAdmin
-            ? html`<div class="callout warning" role="note">${t("updates.adminRequired")}</div>`
-            : nothing,
-          renderBuildFacts(props),
-          renderRecordedAttempt(props),
-          renderSettingsSection({ title: t("updates.page.policyTitle") }, policyRows),
-          renderSettingsSection({ title: t("updates.page.statusTitle") }, [
-            renderSettingsRow({
-              title: t("updates.page.scheduleStatus"),
-              control: html`
-                <div class="updates-status-control">
-                  ${renderScheduleStatus(props)}
-                  ${showHold
+      ${renderSettingsPage([
+        renderDeviceUpdates(props.nativeDeviceSettings),
+        !props.canAdmin
+          ? html`<div class="callout warning" role="note">${t("updates.adminRequired")}</div>`
+          : nothing,
+        renderBuildFacts(props),
+        renderRecordedAttempt(props),
+        renderSettingsSection({ title: t("updates.page.policyTitle") }, policyRows),
+        renderSettingsSection({ title: t("updates.page.statusTitle") }, [
+          renderSettingsRow({
+            title: t("updates.page.scheduleStatus"),
+            control: html`
+              <div class="updates-status-control">
+                ${renderScheduleStatus(props)}
+                ${
+                  showHold
                     ? html`
                         <button
                           type="button"
@@ -431,36 +521,35 @@ export function renderUpdates(props: UpdatesViewProps): TemplateResult {
                           ${t("updates.holdOneHour")}
                         </button>
                       `
-                    : nothing}
-                </div>
-              `,
-            }),
-            renderCommitList(props),
-            renderSettingsRow({
-              title: t("updates.page.updateNow"),
-              description: t("updates.page.updateNowDescription"),
-              control: html`
-                <button
-                  type="button"
-                  class="btn primary"
-                  title=${updateButtonTitle}
-                  ?disabled=${props.updateBusy || !props.canUpdate}
-                  @click=${props.onUpdateNow}
-                >
-                  ${icons.download}
-                  ${props.updateBusy ? t("chat.updating") : t("updates.page.updateNow")}
-                </button>
-              `,
-            }),
-          ]),
-          html`<p class="settings-page__hint">
-            <a href="https://docs.openclaw.ai/install/update-troubleshooting" target="_blank"
-              >${t("updates.page.troubleshoot")}</a
-            >
-          </p>`,
-        ],
-        { intro: t("updates.page.intro") },
-      )}
+                    : nothing
+                }
+              </div>
+            `,
+          }),
+          renderCommitList(props),
+          renderSettingsRow({
+            title: t("updates.page.updateNow"),
+            description: t("updates.page.updateNowDescription"),
+            control: html`
+              <button
+                type="button"
+                class="btn primary"
+                title=${updateButtonTitle}
+                ?disabled=${props.updateBusy || !props.canUpdate}
+                @click=${props.onUpdateNow}
+              >
+                ${icons.download}
+                ${props.updateBusy ? t("chat.updating") : t("updates.page.updateNow")}
+              </button>
+            `,
+          }),
+        ]),
+        html`<p class="settings-page__hint">
+          <a href="https://docs.openclaw.ai/install/update-troubleshooting" target="_blank"
+            >${t("updates.page.troubleshoot")}</a
+          >
+        </p>`,
+      ])}
     </div>
   `;
 }

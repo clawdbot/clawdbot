@@ -1,10 +1,58 @@
-// Vitest Local Scheduling tests cover vitest local scheduling script behavior.
 import { describe, expect, it } from "vitest";
 import {
   resolveLocalVitestEnv,
   resolveLocalFullSuiteProfile,
   resolveLocalVitestScheduling,
 } from "../../scripts/lib/vitest-local-scheduling.mts";
+
+describe("local Vitest scheduling", () => {
+  it.each([
+    ["uses a moderate cap on larger hosts", { RUNNER_OS: "macOS" }, 10, 64, 0, 6, false],
+    [
+      "honors OPENCLAW_VITEST_MAX_WORKERS",
+      { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+      10,
+      128,
+      0,
+      2,
+      false,
+    ],
+    [
+      "honors the legacy OPENCLAW_TEST_WORKERS override",
+      { OPENCLAW_TEST_WORKERS: "3" },
+      16,
+      128,
+      0,
+      3,
+      false,
+    ],
+    ["keeps memory-constrained hosts conservative", {}, 16, 16, 0, 2, false],
+    ["lets roomy hosts use more parallelism", {}, 16, 128, 0, 8, false],
+    ["backs off when host load is saturated", {}, 16, 128, 16, 2, true],
+    ["caps very large hosts at twelve workers", {}, 32, 256, 0, 12, false],
+    ["keeps big hosts parallel under moderate contention", {}, 16, 128, 12, 5, true],
+    [
+      "allows explicitly disabling system throttling",
+      { OPENCLAW_VITEST_DISABLE_SYSTEM_THROTTLE: "1" },
+      16,
+      128,
+      0.5,
+      8,
+      false,
+    ],
+  ] as const)(
+    "%s",
+    (_name, env, cpuCount, totalMemoryGb, loadAverage1m, maxWorkers, throttledBySystem) => {
+      expect(
+        resolveLocalVitestScheduling(env, {
+          cpuCount,
+          totalMemoryBytes: totalMemoryGb * 1024 ** 3,
+          loadAverage1m,
+        }),
+      ).toEqual({ maxWorkers, fileParallelism: true, throttledBySystem });
+    },
+  );
+});
 
 describe("vitest local full-suite profile", () => {
   it("forces local Vitest runs back onto local-check policy", () => {

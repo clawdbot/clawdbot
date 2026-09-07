@@ -198,6 +198,7 @@ describe("channels controller WhatsApp wait", () => {
       },
     } as never);
     channels.state.whatsappLoginQrDataUrl = "data:image/png;base64,existing";
+    channels.state.whatsappLoginSessionKey = "existing-session";
 
     const wait = channels.waitWhatsApp();
     await vi.waitFor(() => expect(channels.state.whatsappBusy).toBe(true));
@@ -210,6 +211,7 @@ describe("channels controller WhatsApp wait", () => {
     }
     expect(channels.state.whatsappBusy).toBe(false);
     expect(channels.state.whatsappLoginQrDataUrl).toBeNull();
+    expect(channels.state.whatsappLoginSessionKey).toBeNull();
 
     pending.resolve({
       message: "stale login",
@@ -253,6 +255,87 @@ describe("channels controller WhatsApp wait", () => {
 
     await channels.waitWhatsApp();
     expect(request).toHaveBeenCalledOnce();
+  });
+});
+
+describe("channels controller WhatsApp provider selection", () => {
+  it("selects WhatsApp for QR login start and wait requests", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "channels.status") {
+        return createChannelsSnapshot("refreshed");
+      }
+      return { connected: true, message: "connected" };
+    });
+    const channels = createChannelCapability({
+      snapshot: { client: { request }, phase: "connected" },
+      subscribe: () => () => undefined,
+    } as never);
+
+    await channels.startWhatsApp(false);
+    await channels.waitWhatsApp();
+
+    expect(request).toHaveBeenCalledWith(
+      "web.login.start",
+      expect.objectContaining({ channel: "whatsapp" }),
+    );
+    expect(request).toHaveBeenCalledWith(
+      "web.login.wait",
+      expect.objectContaining({ channel: "whatsapp" }),
+    );
+    channels.dispose();
+  });
+
+  it("carries the provider session key from login start into wait", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "web.login.start") {
+        return { message: "scan", sessionKey: "opaque-session" };
+      }
+      if (method === "web.login.wait") {
+        return { connected: true, message: "connected" };
+      }
+      return createChannelsSnapshot("refreshed");
+    });
+    const channels = createChannelCapability({
+      snapshot: { client: { request }, phase: "connected" },
+      subscribe: () => () => undefined,
+    } as never);
+
+    await channels.startWhatsApp(false);
+    await channels.waitWhatsApp();
+
+    expect(request).toHaveBeenCalledWith(
+      "web.login.wait",
+      expect.objectContaining({ channel: "whatsapp", sessionKey: "opaque-session" }),
+    );
+    expect(channels.state.whatsappLoginSessionKey).toBeNull();
+    channels.dispose();
+  });
+
+  it("retains the provider session key when a wait remains disconnected", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "web.login.start") {
+        return { message: "scan", sessionKey: "opaque-session" };
+      }
+      if (method === "web.login.wait") {
+        return { connected: false, message: "still waiting" };
+      }
+      return createChannelsSnapshot("refreshed");
+    });
+    const channels = createChannelCapability({
+      snapshot: { client: { request }, phase: "connected" },
+      subscribe: () => () => undefined,
+    } as never);
+
+    await channels.startWhatsApp(false);
+    await channels.waitWhatsApp();
+
+    expect(channels.state.whatsappLoginSessionKey).toBe("opaque-session");
+    await channels.waitWhatsApp();
+    expect(request.mock.calls.findLast(([method]) => method === "web.login.wait")).toEqual([
+      "web.login.wait",
+      expect.objectContaining({ sessionKey: "opaque-session" }),
+    ]);
+    channels.dispose();
   });
 });
 
@@ -309,29 +392,65 @@ describe("channels controller WhatsApp logout", () => {
     expect(channels.state.whatsappBusy).toBe(false);
     channels.dispose();
   });
+});
 
-  it("reports a Gateway failure without discarding login state", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "channels.logout") {
-        throw new Error("credential cleanup failed");
-      }
-      return createChannelsSnapshot("refreshed");
-    });
-    const channels = createChannelCapability({
-      snapshot: { client: { request }, phase: "connected" },
-      subscribe: () => () => undefined,
-    } as never);
-    channels.state.whatsappLoginQrDataUrl = "data:image/png;base64,current-qr";
-    channels.state.whatsappLoginConnected = true;
+describe("channels controller WhatsApp mutation failures", () => {
+  it.each([
+    {
+      operation: "login",
+      method: "web.login.start",
+      invoke: (channels: ReturnType<typeof createChannelCapability>) =>
+        channels.startWhatsApp(false),
+      preservesQr: false,
+      connected: null,
+    },
+    {
+      operation: "scan wait",
+      method: "web.login.wait",
+      invoke: (channels: ReturnType<typeof createChannelCapability>) => channels.waitWhatsApp(),
+      preservesQr: true,
+      connected: null,
+    },
+    {
+      operation: "logout",
+      method: "channels.logout",
+      invoke: (channels: ReturnType<typeof createChannelCapability>) => channels.logoutWhatsApp(),
+      preservesQr: true,
+      connected: true,
+    },
+  ])(
+    "publishes a rejected $operation without probing channel status",
+    async ({ method, invoke, preservesQr, connected }) => {
+      const request = vi.fn(async (requestedMethod: string) => {
+        if (requestedMethod === method) {
+          throw new Error("WhatsApp request rejected");
+        }
+        return createChannelsSnapshot("unexpected refresh");
+      });
+      const channels = createChannelCapability({
+        snapshot: { client: { request }, phase: "connected" },
+        subscribe: () => () => undefined,
+      } as never);
+      channels.state.whatsappLoginQrDataUrl = "data:image/png;base64,current-qr";
+      channels.state.whatsappLoginConnected = true;
+      const updates: Array<{ busy: boolean; message: string | null }> = [];
+      channels.subscribe((state) => {
+        updates.push({ busy: state.whatsappBusy, message: state.whatsappLoginMessage });
+      });
 
-    await channels.logoutWhatsApp();
+      await invoke(channels);
 
-    expect(channels.state.whatsappLoginMessage).toBe("credential cleanup failed");
-    expect(channels.state.whatsappLoginQrDataUrl).toBe("data:image/png;base64,current-qr");
-    expect(channels.state.whatsappLoginConnected).toBe(true);
-    expect(request.mock.calls.filter(([method]) => method === "channels.status")).toHaveLength(1);
-    channels.dispose();
-  });
+      expect(
+        request.mock.calls.filter(([requestedMethod]) => requestedMethod === "channels.status"),
+      ).toHaveLength(0);
+      expect(updates.at(-1)).toEqual({ busy: false, message: "WhatsApp request rejected" });
+      expect(channels.state.whatsappLoginQrDataUrl).toBe(
+        preservesQr ? "data:image/png;base64,current-qr" : null,
+      );
+      expect(channels.state.whatsappLoginConnected).toBe(connected);
+      channels.dispose();
+    },
+  );
 });
 
 describe("channels controller DM pairing", () => {

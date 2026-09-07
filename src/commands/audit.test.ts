@@ -415,7 +415,7 @@ describe("audit run explanation", () => {
         missingEvidence: ["run.record"],
         remediation: [],
       },
-      decisions: [],
+      decisionDisplays: [],
       coverage: { state: "unknown", missingEvidence: ["run.record"] },
     });
 
@@ -456,6 +456,15 @@ describe("audit run explanation", () => {
 
   it("queries audit.run.inspect and renders all identity fields with explicit state", async () => {
     const hmacRef = `hmac-sha256:v1:${"a".repeat(32)}:${"b".repeat(64)}`;
+    const hostileRawReceiptSecrets = [
+      "U2_R6_CLI_RECEIPT_ID_SECRET_97af31",
+      "U2_R6_CLI_SUMMARY_SECRET_ba9180",
+      "U2_R6_CLI_CODE_SECRET_f26d43",
+      "U2_R6_CLI_TEXT_SECRET_0c75ee",
+      "U2_R6_CLI_POLICY_REF_SECRET_2bd706",
+      "U2_R6_CLI_GRANT_REF_SECRET_a14c83",
+      "U2_R6_CLI_FORGED_OWNER_SECRET_3f4e21",
+    ];
     callGateway.mockResolvedValue({
       schemaVersion: 1,
       run: { runId: "run-1", executionId: "execution-1", status: "known" },
@@ -497,13 +506,10 @@ describe("audit run explanation", () => {
           missingEvidence: ["invoker.principal"],
         },
       },
-      decisions: [
+      decisionDisplays: [
         {
           schemaVersion: 1,
-          receiptId: "context-1:admission",
-          contextId: "context-1",
-          executionId: "execution-1",
-          runId: "run-1",
+          selectorId: "context-1:admission",
           occurredAt: 1,
           action: { family: "run", operation: "admission" },
           decision: {
@@ -512,25 +518,17 @@ describe("audit run explanation", () => {
           },
           enforcement: {
             coverageState: "unattributed",
-            policyRefs: [],
-            grantRefs: [],
+            policyCount: 0,
+            grantCount: 0,
             contextFieldsUsed: [],
           },
-          source: {
-            owner: "agent-command",
-            recordRef: "context-1",
-            decisionBoundary: "agent-command.run-admission",
-          },
+          provenance: { state: "verified", producer: "run-admission" },
           missingEvidence: ["invoker.principal"],
           remediation: [{ code: "no_claim", text: "Treat this receipt as attribution only." }],
         },
         {
           schemaVersion: 1,
-          receiptId: "approval:receipt-1",
-          contextId: "context-1",
-          executionId: "execution-1",
-          runId: "run-1",
-          actionId: "receipt-1",
+          selectorId: "approval-decision:1",
           occurredAt: 2,
           action: { family: "exec", operation: "approval" },
           decision: {
@@ -539,41 +537,29 @@ describe("audit run explanation", () => {
           },
           enforcement: {
             coverageState: "enforced",
-            evaluatorRef: "operator-approval:device",
-            policyRefs: ["operator-approval:human-decision"],
-            grantRefs: [],
+            policyCount: 1,
+            grantCount: 0,
             contextFieldsUsed: ["contextId", "executionId", "runId"],
           },
-          source: {
-            owner: "operator_approvals",
-            recordRef: "receipt-1",
-            decisionBoundary: "gateway.operator-approval.first-answer",
-          },
+          provenance: { state: "verified", producer: "operator-approval" },
           missingEvidence: [],
           remediation: [{ code: "review_and_request_again", text: "Review the denial and retry." }],
         },
         {
           schemaVersion: 1,
-          receiptId: "fact-corrupt",
-          contextId: "context-1",
-          executionId: "execution-1",
-          runId: "run-1",
+          selectorId: "decision-fact:1",
           occurredAt: 3,
-          action: { family: "tool", operation: "decision" },
-          decision: { outcome: "unknown", reasonCode: "decision_fact_record_corrupt" },
+          action: { family: "decision", operation: "record" },
+          decision: { outcome: "unknown", reasonCode: "decision_fact_display_unverified" },
           enforcement: {
             coverageState: "unknown",
-            policyRefs: [],
-            grantRefs: [],
+            policyCount: 0,
+            grantCount: 0,
             contextFieldsUsed: [],
           },
-          source: {
-            owner: "tool-policy",
-            recordRef: "fact-corrupt",
-            decisionBoundary: "execution-decision-facts",
-          },
-          missingEvidence: ["decision.fact.valid"],
-          remediation: [{ code: "inspect_state_integrity", text: "Inspect state integrity." }],
+          provenance: { state: "unverified" },
+          missingEvidence: ["decision.display_provenance"],
+          remediation: [],
         },
       ],
       coverage: { state: "enforced", missingEvidence: ["invoker.principal"] },
@@ -617,10 +603,26 @@ describe("audit run explanation", () => {
     expect(output).toContain("operator_approval_denied_by_reviewer");
     expect(output).toContain("authoritative owner-native SQLite record; retained 30 days");
     expect(output).toContain("admission provenance only; no enforcement decision");
-    expect(output).toContain("evidence unavailable or corrupt; do not infer authorization");
     expect(output).not.toContain("named authoritative decision source");
-    expect(output).toContain("Policy refs: operator-approval:human-decision");
+    expect(output).toContain("Policy refs: 1");
+    expect(output).toContain("Policy refs: 0");
+    expect(output).toContain("Grant refs: 0");
     expect(output).toContain("Context used: contextId, executionId, runId");
+    expect(output).toContain("producer display contract unverified; receipt prose omitted");
+    for (const secret of hostileRawReceiptSecrets) {
+      expect(output).not.toContain(secret);
+    }
+    vi.mocked(runtime.log).mockClear();
+    await auditListCommand({ explain: true, runId: "run-1", json: true }, runtime);
+    const jsonOutput = vi.mocked(runtime.log).mock.calls.flat().join("\n");
+    expect(jsonOutput).toContain('"decisionDisplays"');
+    expect(jsonOutput).not.toContain('"decisions"');
+    for (const rawKey of ["receiptId", "resolutionRef", "eventId"]) {
+      expect(jsonOutput).not.toContain(`"${rawKey}"`);
+    }
+    for (const secret of hostileRawReceiptSecrets) {
+      expect(jsonOutput).not.toContain(secret);
+    }
   });
 
   it("renders ambiguous run discovery and selects an exact execution", async () => {
@@ -642,7 +644,7 @@ describe("audit run explanation", () => {
           },
         ],
       },
-      decisions: [],
+      decisionDisplays: [],
       coverage: { state: "unknown", missingEvidence: ["execution.selection"] },
     });
 
@@ -661,7 +663,7 @@ describe("audit run explanation", () => {
         missingEvidence: ["identity.context"],
         remediation: [{ code: "verify_execution_id", text: "Verify the exact execution id." }],
       },
-      decisions: [],
+      decisionDisplays: [],
       coverage: { state: "unknown", missingEvidence: ["identity.context"] },
     });
     await auditListCommand({ explain: true, executionId: "execution-2", json: true }, runtime);
@@ -681,7 +683,7 @@ describe("audit run explanation", () => {
         missingEvidence: ["identity.context"],
         remediation: [],
       },
-      decisions: [],
+      decisionDisplays: [],
       coverage: { state: "unknown", missingEvidence: ["identity.context"] },
     });
 
@@ -730,7 +732,7 @@ describe("audit run explanation", () => {
           },
         ],
       },
-      decisions: [],
+      decisionDisplays: [],
       coverage: { state: "unsupported", missingEvidence: ["identity.context"] },
     });
 

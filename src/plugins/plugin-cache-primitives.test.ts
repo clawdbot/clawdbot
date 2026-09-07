@@ -1,12 +1,9 @@
 /** Tests primitive cache-key helpers used by plugin descriptor and metadata caches. */
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  PluginLruCache,
-  createConfigScopedPromiseLoader,
-  resolveConfigScopedRuntimeCacheValue,
-  type ConfigScopedRuntimeCache,
-} from "./plugin-cache-primitives.js";
+import { PluginLruCache, createConfigScopedPromiseLoader } from "./plugin-cache-primitives.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
 describe("PluginLruCache", () => {
   it("evicts the least recently used entry", () => {
@@ -24,52 +21,13 @@ describe("PluginLruCache", () => {
     expect(cache.get("c")).toBe("charlie");
   });
 
-  it("returns hit state for cached null values", () => {
+  it("distinguishes cached null values from misses", () => {
     const cache = new PluginLruCache<string | null>(2);
 
     cache.set("missing", null);
 
-    expect(cache.getResult("missing")).toEqual({ hit: true, value: null });
-    expect(cache.getResult("unknown")).toEqual({ hit: false });
-  });
-});
-
-describe("resolveConfigScopedRuntimeCacheValue", () => {
-  it("caches values by config object and key", () => {
-    const cache: ConfigScopedRuntimeCache<string[]> = new WeakMap();
-    const config = {} as OpenClawConfig;
-    const load = vi.fn(() => ["loaded"]);
-
-    expect(resolveConfigScopedRuntimeCacheValue({ cache, config, key: "demo", load })).toEqual([
-      "loaded",
-    ]);
-    expect(resolveConfigScopedRuntimeCacheValue({ cache, config, key: "demo", load })).toEqual([
-      "loaded",
-    ]);
-    expect(load).toHaveBeenCalledOnce();
-  });
-
-  it("does not cache values without a config owner", () => {
-    const cache: ConfigScopedRuntimeCache<string> = new WeakMap();
-    const load = vi.fn(() => "loaded");
-
-    expect(resolveConfigScopedRuntimeCacheValue({ cache, key: "demo", load })).toBe("loaded");
-    expect(resolveConfigScopedRuntimeCacheValue({ cache, key: "demo", load })).toBe("loaded");
-    expect(load).toHaveBeenCalledTimes(2);
-  });
-
-  it("caches undefined values by key", () => {
-    const cache: ConfigScopedRuntimeCache<string | undefined> = new WeakMap();
-    const config = {} as OpenClawConfig;
-    const load = vi.fn(() => undefined);
-
-    expect(resolveConfigScopedRuntimeCacheValue({ cache, config, key: "missing", load })).toBe(
-      undefined,
-    );
-    expect(resolveConfigScopedRuntimeCacheValue({ cache, config, key: "missing", load })).toBe(
-      undefined,
-    );
-    expect(load).toHaveBeenCalledOnce();
+    expect(cache.get("missing")).toBeNull();
+    expect(cache.get("unknown")).toBeUndefined();
   });
 });
 
@@ -117,6 +75,31 @@ describe("createConfigScopedPromiseLoader", () => {
     expect(calls).toBe(2);
   });
 
+  it.each([
+    { name: "config-scoped", config: {} as OpenClawConfig },
+    { name: "default", config: undefined },
+  ])("keeps the refreshed $name promise when a retired generation rejects", async ({ config }) => {
+    const retired = createDeferred<string>();
+    let calls = 0;
+    const loader = createConfigScopedPromiseLoader(() => {
+      calls += 1;
+      return calls === 1 ? retired.promise : Promise.resolve(`fresh-${calls}`);
+    });
+
+    const stale = loader.load(config);
+    const staleFailure = expect(stale).rejects.toThrow("retired generation");
+    await Promise.resolve();
+
+    clearPluginMetadataLifecycleCaches();
+
+    await expect(loader.load(config)).resolves.toBe("fresh-2");
+    retired.reject(new Error("retired generation"));
+    await staleFailure;
+
+    await expect(loader.load(config)).resolves.toBe("fresh-2");
+    expect(calls).toBe(2);
+  });
+
   it("clears default and config-scoped entries", async () => {
     const config = {} as OpenClawConfig;
     let calls = 0;
@@ -128,6 +111,22 @@ describe("createConfigScopedPromiseLoader", () => {
     await expect(loader.load(config)).resolves.toBe("config-2");
 
     loader.clear();
+
+    await expect(loader.load()).resolves.toBe("default-3");
+    await expect(loader.load(config)).resolves.toBe("config-4");
+  });
+
+  it("drops default and config-scoped executable promises when plugin metadata changes", async () => {
+    const config = {} as OpenClawConfig;
+    let calls = 0;
+    const loader = createConfigScopedPromiseLoader(
+      async (owner?: OpenClawConfig) => `${owner ? "config" : "default"}-${++calls}`,
+    );
+
+    await expect(loader.load()).resolves.toBe("default-1");
+    await expect(loader.load(config)).resolves.toBe("config-2");
+
+    clearPluginMetadataLifecycleCaches();
 
     await expect(loader.load()).resolves.toBe("default-3");
     await expect(loader.load(config)).resolves.toBe("config-4");

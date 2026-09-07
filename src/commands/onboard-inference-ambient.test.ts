@@ -24,34 +24,17 @@ afterEach(async () => {
 });
 
 describe("detectAmbientInferenceBackends", () => {
-  it.each([
-    {
-      kind: "claude-cli" as const,
-      relativePath: ".claude/.credentials.json",
-      credential: {
-        claudeAiOauth: {
-          accessToken: "claude-access",
-          refreshToken: "claude-refresh",
-          expiresAt: Date.now() + 60_000,
-        },
-      },
-    },
-    {
-      kind: "codex-cli" as const,
-      relativePath: ".codex/auth.json",
-      credential: {
-        auth_mode: "chatgpt",
-        tokens: { access_token: "codex-access", refresh_token: "codex-refresh" },
-      },
-    },
-  ])("returns a verified $kind candidate only for readable file credentials", async (fixture) => {
+  it("returns a verified Codex candidate only for readable file credentials", async () => {
     const home = await createTempHome();
     expect(detectAmbientInferenceBackends({ HOME: home })).toEqual([]);
 
-    await writeCredential(home, fixture.relativePath, fixture.credential);
+    await writeCredential(home, ".codex/auth.json", {
+      auth_mode: "chatgpt",
+      tokens: { access_token: "codex-access", refresh_token: "codex-refresh" },
+    });
 
     expect(detectAmbientInferenceBackends({ HOME: home })).toEqual([
-      expect.objectContaining({ kind: fixture.kind, credentials: true }),
+      expect.objectContaining({ kind: "codex-cli", credentials: true }),
     ]);
   });
 });

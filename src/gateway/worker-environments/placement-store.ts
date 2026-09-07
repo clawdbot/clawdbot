@@ -15,6 +15,7 @@ import {
   normalizeEpoch,
   normalizeWorkerPlacementExecutionMode,
   normalizeIdentity,
+  placementTurnOwner,
   projectWorkerSessionTurnClaim,
   required,
   resolvePlacementTurnEnvironment,
@@ -48,6 +49,10 @@ import {
   signalWorkerTurnClaimClosed,
 } from "./placement-turn-claims.js";
 import { createPlacementWorkspaceJournalOps } from "./placement-workspace-journal.js";
+import {
+  assertSessionWorkspaceUnreserved,
+  createPlacementWorkspaceReservationOps,
+} from "./placement-workspace-reservation.js";
 import {
   createPlacementWorkspaceResultOps,
   hasCurrentWorkspaceResultClaim,
@@ -133,6 +138,7 @@ export function createWorkerSessionPlacementStore(
   };
 
   const store = {
+    ...createPlacementWorkspaceReservationOps(runtime),
     ...createPlacementTurnClaimOps(runtime),
     ...createPlacementPendingFailureOps(runtime),
     ...createPlacementMoveOps(runtime),
@@ -223,6 +229,7 @@ export function createWorkerSessionPlacementStore(
       const executionMode = normalizeWorkerPlacementExecutionMode(input.executionMode);
       return write((db) => {
         const current = ensureLocal(db, identity, now());
+        assertSessionWorkspaceUnreserved(db, identity.sessionId);
         if (
           current.state !== "local" &&
           current.state !== "reclaimed" &&
@@ -350,6 +357,7 @@ export function createWorkerSessionPlacementStore(
       environmentId: string;
       ownerEpoch: number;
       expectedGeneration: number;
+      forceLocalClaim?: true;
     }): WorkerSessionPlacementRecord {
       const sessionId = required(input.sessionId, "session id");
       const environmentId = required(input.environmentId, "environment id");
@@ -371,15 +379,18 @@ export function createWorkerSessionPlacementStore(
         }
         // Clear the last claim in the same CAS that opens post-worker
         // reconciliation. Pending results block this authority fence.
-        const releasedClaim = current.turnClaim !== null;
-        if (current.turnClaim) {
+        const claim = current.turnClaim;
+        if (claim?.owner === "local" && input.forceLocalClaim !== true) {
+          throw new Error(`Cannot reconcile session ${sessionId} while its local turn is active`);
+        }
+        if (claim) {
           assertNoRunningWorkerSessionToolOperations(db, {
             sessionId,
-            claimId: current.turnClaim.claimId,
+            claimId: claim.claimId,
           });
           clearWorkerTurnToolState(db, {
             sessionId,
-            claimId: current.turnClaim.claimId,
+            claimId: claim.claimId,
           });
         }
         const values = transitionValues(current, "reconciling", {}, now());
@@ -391,13 +402,17 @@ export function createWorkerSessionPlacementStore(
           .where("transition_generation", "=", current.generation)
           .where("environment_id", "=", environmentId)
           .where("active_owner_epoch", "=", ownerEpoch);
-        const guardedUpdate = current.turnClaim
+        const guardedUpdate = claim
           ? update
-              .where("turn_claim_owner", "=", "worker")
-              .where("turn_claim_id", "=", current.turnClaim.claimId)
-              .where("turn_claim_run_id", "=", current.turnClaim.runId)
-              .where("turn_claim_generation", "=", current.turnClaim.generation)
-              .where("turn_claim_owner_epoch", "=", current.turnClaim.ownerEpoch)
+              .where("turn_claim_owner", "=", claim.owner)
+              .where("turn_claim_id", "=", claim.claimId)
+              .where("turn_claim_run_id", "=", claim.runId)
+              .where("turn_claim_generation", "=", claim.generation)
+              .where(
+                "turn_claim_owner_epoch",
+                claim.owner === "worker" ? "=" : "is",
+                claim.ownerEpoch,
+              )
           : update.where("turn_claim_owner", "is", null);
         const result = executeSqliteQuerySync(db, guardedUpdate);
         if (result.numAffectedRows !== 1n) {
@@ -405,7 +420,15 @@ export function createWorkerSessionPlacementStore(
         }
         return {
           record: getRequired(db, sessionId),
-          releasedClaim: releasedClaim ? projectWorkerSessionTurnClaim(current) : undefined,
+          releasedClaim: claim
+            ? {
+                sessionId,
+                claimId: claim.claimId,
+                runId: claim.runId,
+                placementGeneration: claim.generation,
+                owner: placementTurnOwner(current),
+              }
+            : undefined,
         };
       });
       if (outcome.releasedClaim) {

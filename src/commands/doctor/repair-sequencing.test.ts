@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { runDoctorRepairSequence } from "./repair-sequencing.js";
+import { registerSharedRuntimeReaderDoctorTests } from "./repair-sequencing.shared-runtime.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   applyPluginAutoEnable: vi.fn(),
@@ -18,8 +19,8 @@ const mocks = vi.hoisted(() => ({
   maybeRepairGroupAllowFromFallback: vi.fn(),
   maybeRepairPluginOpenClawHostLinks: vi.fn(),
   maybeRepairLegacyOAuthSidecarProfiles: vi.fn(),
-  migrateLegacyOnboardingRecommendationsScope: vi.fn(),
   migrateLegacyTailscaleProfileIdentities: vi.fn(),
+  repairMergedGatewayOwnerProfile: vi.fn(),
   maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn(),
   maybeRepairOpenAICodexAuthConfig: vi.fn(),
   maybeRepairOpenPolicyAllowFrom: vi.fn(),
@@ -56,12 +57,12 @@ vi.mock("../doctor-auth-oauth-sidecar.js", () => ({
   maybeRepairLegacyOAuthSidecarProfiles: mocks.maybeRepairLegacyOAuthSidecarProfiles,
 }));
 
-vi.mock("../../infra/state-migrations.onboarding-recommendations.js", () => ({
-  migrateLegacyOnboardingRecommendationsScope: mocks.migrateLegacyOnboardingRecommendationsScope,
-}));
-
 vi.mock("../../state/user-profiles-tailscale-migration.js", () => ({
   migrateLegacyTailscaleProfileIdentities: mocks.migrateLegacyTailscaleProfileIdentities,
+}));
+
+vi.mock("../../state/user-profiles-owner-migration.js", () => ({
+  repairMergedGatewayOwnerProfile: mocks.repairMergedGatewayOwnerProfile,
 }));
 
 vi.mock("../doctor-auth-flat-profiles.js", () => ({
@@ -236,13 +237,6 @@ vi.mock("./shared/exec-safe-bins.js", () => ({
   }),
 }));
 
-vi.mock("./shared/plugin-dependency-cleanup.js", () => ({
-  cleanupLegacyPluginDependencyState: async () => ({
-    changes: [],
-    warnings: [],
-  }),
-}));
-
 describe("doctor repair sequencing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -280,11 +274,12 @@ describe("doctor repair sequencing", () => {
       changes: [],
       warnings: [],
     });
-    mocks.migrateLegacyOnboardingRecommendationsScope.mockReturnValue({
+    mocks.migrateLegacyTailscaleProfileIdentities.mockReturnValue({ changes: [], warnings: [] });
+    mocks.repairMergedGatewayOwnerProfile.mockReturnValue({
+      repaired: false,
       changes: [],
       warnings: [],
     });
-    mocks.migrateLegacyTailscaleProfileIdentities.mockReturnValue({ changes: [], warnings: [] });
     mocks.collectOpenAICodexAuthProfileStoreIdMap.mockReturnValue(new Map());
     mocks.maybeMigrateAuthProfileJsonStoresToSqlite.mockResolvedValue({
       detected: [],
@@ -331,39 +326,26 @@ describe("doctor repair sequencing", () => {
     }));
   });
 
-  it("runs the doctor-only onboarding recommendation scope migration", async () => {
+  registerSharedRuntimeReaderDoctorTests();
+
+  it.each([
+    {
+      name: "Tailscale profile identity migration",
+      repair: mocks.migrateLegacyTailscaleProfileIdentities,
+      options: {},
+    },
+    {
+      name: "merged gateway owner profile repair",
+      repair: mocks.repairMergedGatewayOwnerProfile,
+      options: { shouldRepair: true },
+    },
+  ])("reports the doctor-only $name", async ({ repair, options }) => {
     const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-doctor-test" };
     const candidate = {} as OpenClawConfig;
-    mocks.migrateLegacyOnboardingRecommendationsScope.mockReturnValue({
-      changes: ["Migrated onboarding recommendation state."],
-      warnings: ["Migration warning."],
-    });
-
-    const result = await runDoctorRepairSequence({
-      state: {
-        cfg: candidate,
-        candidate,
-        pendingChanges: false,
-        fixHints: [],
-      },
-      doctorFixCommand: "openclaw doctor --fix",
-      env,
-    });
-
-    expect(mocks.migrateLegacyOnboardingRecommendationsScope).toHaveBeenCalledWith({
-      cfg: candidate,
-      env,
-    });
-    expect(result.changeNotes).toContain("Migrated onboarding recommendation state.");
-    expect(result.warningNotes).toContain("Migration warning.");
-  });
-
-  it("runs the doctor-only Tailscale profile identity migration", async () => {
-    const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-doctor-test" };
-    const candidate = {} as OpenClawConfig;
-    mocks.migrateLegacyTailscaleProfileIdentities.mockReturnValue({
-      changes: ["Migrated Tailscale profile identity."],
-      warnings: ["Tailscale identity conflict."],
+    repair.mockReturnValue({
+      repaired: true,
+      changes: ["Repaired user profile identity."],
+      warnings: ["User profile identity conflict."],
     });
 
     const result = await runDoctorRepairSequence({
@@ -372,9 +354,10 @@ describe("doctor repair sequencing", () => {
       env,
     });
 
-    expect(mocks.migrateLegacyTailscaleProfileIdentities).toHaveBeenCalledWith({ env });
-    expect(result.changeNotes).toContain("Migrated Tailscale profile identity.");
-    expect(result.warningNotes).toContain("Tailscale identity conflict.");
+    expect(repair).toHaveBeenCalledWith({ env, ...options });
+    expect(result.changeNotes).toContain("Repaired user profile identity.");
+    expect(result.warningNotes).toContain("User profile identity conflict.");
+    expect(result.state.pendingChanges).toBe(false);
   });
 
   it("retains the exact auth profile map after import for later session-owner repair", async () => {
@@ -414,7 +397,7 @@ describe("doctor repair sequencing", () => {
       warnings: ["Plugin \u001B[31mwarning\u001B[0m\r\nnext."],
       notices: ["Plugin \u001B[31mnotice\u001B[0m\r\nnext."],
     });
-    mocks.migrateLegacyOnboardingRecommendationsScope.mockReturnValueOnce({
+    mocks.migrateLegacyTailscaleProfileIdentities.mockReturnValueOnce({
       changes: ["Migrated \u001B[31mrecommendations\u001B[0m\r\nnext."],
       warnings: ["Migration \u001B[31mwarning\u001B[0m\r\nnext."],
     });
@@ -549,7 +532,7 @@ describe("doctor repair sequencing", () => {
     });
     mocks.repairMissingConfiguredPluginInstalls.mockImplementation(async () => {
       events.push("missing-installs");
-      return { changes: [], warnings: [] };
+      return { changes: [], warnings: [], records: {} };
     });
 
     const result = await runDoctorRepairSequence({
@@ -594,6 +577,19 @@ describe("doctor repair sequencing", () => {
     const peerLinkCall = mocks.maybeRepairPluginOpenClawHostLinks.mock.calls[0]?.[0];
     expect(peerLinkCall?.prompter).toEqual({ shouldRepair: true });
     expect(peerLinkCall?.env).toBe(process.env);
+    expect(mocks.loadInstalledPluginIndex).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {
+          plugins: {
+            entries: {
+              "google-meet": { enabled: true },
+            },
+          },
+        },
+        env: process.env,
+        installRecords: {},
+      }),
+    );
     expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
     expect(result.pluginMetadataSnapshot).toMatchObject({
       manifestRegistry: refreshedSnapshot.manifestRegistry,
@@ -1090,6 +1086,7 @@ describe("doctor repair sequencing", () => {
       changes: ['Removed stale managed install record for bundled plugin "google-meet".'],
       warnings: [],
       pluginInventoryChanged: true,
+      records: {},
     });
     const { repairStaleAgentModelRefs: repairStaleAgentModelRefsActual } = await vi.importActual<
       typeof import("./shared/stale-agent-model-ref-repair.js")
@@ -1153,6 +1150,7 @@ describe("doctor repair sequencing", () => {
       },
       env: process.env,
       workspaceDir,
+      index: { plugins: [] },
     });
     expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
       config: {

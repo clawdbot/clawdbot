@@ -51,7 +51,6 @@ async function fetchPlaybackHead(params: {
   headers: Headers;
   signal: AbortSignal;
   timeoutMs: number;
-  fetchImpl: typeof fetch;
 }): Promise<Response> {
   const controller = new AbortController();
   let rejectDeadline: ((error: Error) => void) | undefined;
@@ -74,7 +73,7 @@ async function fetchPlaybackHead(params: {
   }, params.timeoutMs);
   try {
     return await Promise.race([
-      params.fetchImpl(params.source, {
+      fetch(params.source, {
         method: "HEAD",
         headers: params.headers,
         credentials: "same-origin",
@@ -92,15 +91,7 @@ export async function waitForChatMediaPlayback(params: {
   source: string;
   authToken?: string | null;
   signal: AbortSignal;
-  onPreparing?: () => void;
-  fetchImpl?: typeof fetch;
-  retryDelaysMs?: readonly number[];
-  waitImpl?: (delayMs: number, signal: AbortSignal) => Promise<void>;
-  requestTimeoutMs?: number;
 }): Promise<ChatMediaPlaybackReadiness> {
-  const fetchImpl = params.fetchImpl ?? fetch;
-  const retryDelaysMs = params.retryDelaysMs ?? CHAT_MEDIA_PLAYBACK_RETRY_DELAYS_MS;
-  const waitImpl = params.waitImpl ?? waitForRetry;
   const headers = buildChatMediaFetchHeaders(params.authToken);
   headers.set("Accept", "audio/*, video/*");
   const deadline = Date.now() + CHAT_MEDIA_PLAYBACK_MAX_WAIT_MS;
@@ -118,17 +109,12 @@ export async function waitForChatMediaPlayback(params: {
         source: params.source,
         headers,
         signal: params.signal,
-        timeoutMs: Math.min(
-          params.requestTimeoutMs ?? CHAT_MEDIA_PLAYBACK_REQUEST_TIMEOUT_MS,
-          remainingMs,
-        ),
-        fetchImpl,
+        timeoutMs: Math.min(CHAT_MEDIA_PLAYBACK_REQUEST_TIMEOUT_MS, remainingMs),
       });
       if (response.status !== 202) {
         return response.ok ? "ready" : "unavailable";
       }
-      params.onPreparing?.();
-      const retryDelay = retryDelaysMs[attempt];
+      const retryDelay = CHAT_MEDIA_PLAYBACK_RETRY_DELAYS_MS[attempt];
       if (retryDelay === undefined) {
         return "unavailable";
       }
@@ -136,7 +122,7 @@ export async function waitForChatMediaPlayback(params: {
       if (remainingAfterResponseMs <= 0) {
         return "unavailable";
       }
-      await waitImpl(Math.min(retryDelay, remainingAfterResponseMs), params.signal);
+      await waitForRetry(Math.min(retryDelay, remainingAfterResponseMs), params.signal);
     } catch {
       return params.signal.aborted ? "aborted" : "unavailable";
     }

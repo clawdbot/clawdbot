@@ -88,6 +88,10 @@ type RuntimeCreateSessionEntryResult = {
   sessionId: string;
   entry: RuntimeSessionEntry;
 };
+type RuntimeCreateSessionEntryContext = RuntimeCreateSessionEntryResult & {
+  /** Host creation authority; runtimes that cannot supply it must leave it absent. */
+  initialization?: import("../../sessions/session-initialization.js").SessionInitialization;
+};
 type RuntimeCreateSessionEntryFinalPatch = {
   pluginExtensions: RuntimeSessionPluginExtensions;
 };
@@ -96,6 +100,8 @@ type RuntimeCreateSessionEntryBaseParams = {
   key: string;
   agentId?: string;
   label?: string;
+  /** Create-only title snapshot: trimmed, capped at 500 UTF-16 units without splitting pairs; not a unique label. */
+  displayName?: string;
   spawnedCwd?: string;
   sessionRoot?: string;
   permissionMode?: RuntimeSessionEntry["permissionMode"];
@@ -106,11 +112,13 @@ type RuntimeCreateSessionEntryBaseParams = {
   initialEntry:
     | {
         agentHarnessId: string;
+        color?: string;
         modelSelectionLocked?: true;
         pluginExtensions?: RuntimeSessionPluginExtensions;
       }
     | {
         cliBackendId: string;
+        color?: string;
         model: string;
         cliSessionBinding: import("../../config/sessions/types.js").CliSessionBinding;
         modelSelectionLocked: true;
@@ -120,6 +128,7 @@ type RuntimeCreateSessionEntryBaseParams = {
       }
     | {
         acpBackendId: string;
+        color?: string;
         acpSessionBinding: {
           acpAgentId: string;
           agentSessionId: string;
@@ -136,17 +145,19 @@ type RuntimeCreateSessionEntryParams = RuntimeCreateSessionEntryBaseParams &
         /** Retry an interrupted initializer only when persisted trusted state matches exactly. */
         recoverMatchingInitialEntry: true;
         afterCreate: (
-          created: RuntimeCreateSessionEntryResult,
+          created: RuntimeCreateSessionEntryContext,
         ) => Promise<RuntimeCreateSessionEntryFinalPatch>;
       }
     | {
         recoverMatchingInitialEntry?: never;
         afterCreate?: (
-          created: RuntimeCreateSessionEntryResult,
+          created: RuntimeCreateSessionEntryContext,
         ) => Promise<RuntimeCreateSessionEntryFinalPatch | void>;
       }
   );
 type RuntimeSessionStoreEntryPatchParams = RuntimeSessionStoreReadParams & {
+  /** Synchronous final ownership check executed inside the commit transaction. */
+  assertCommitAllowed?: () => void;
   fallbackEntry?: RuntimeSessionEntry;
   maintenanceConfig?: import("../../config/sessions/store-maintenance.js").ResolvedSessionMaintenanceConfigInput;
   preserveActivity?: boolean;
@@ -300,7 +311,7 @@ export type LlmCompleteResult = {
 
 type RuntimeRunEmbeddedAgentParams = Omit<
   import("../../agents/embedded-agent-runner/run/params.js").RunEmbeddedAgentParams,
-  "admittedRunContext" | "preparedRunAdmission" | "skillWorkshopCollectionReconcile"
+  "admittedRunContext" | "preparedRunAdmission"
 >;
 
 type RuntimeRunEmbeddedAgent = (
@@ -350,6 +361,11 @@ export type PluginRuntimeCore = {
     resolveThinkingPolicy: (
       params: PluginRuntimeThinkingPolicyRequest,
     ) => PluginRuntimeThinkingPolicy;
+    /** Admit a turn for this exact trusted channel plugin and its authenticated sender. */
+    runCommandFromIngress: (
+      opts: import("../../agents/command/types.js").AgentCommandIngressOpts,
+      runtime: import("../../runtime.js").RuntimeEnv,
+    ) => ReturnType<typeof import("../../agents/agent-command.js").agentCommandFromIngress>;
     runEmbeddedAgent: RuntimeRunEmbeddedAgent;
     resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
     /**
@@ -380,6 +396,21 @@ export type PluginRuntimeCore = {
         params: RuntimeSessionStoreEntryUpdateParams,
       ) => Promise<RuntimeSessionEntry | null>;
     };
+  };
+  hooks: {
+    /** Dispatch untrusted external content through an isolated, contained hook agent turn. */
+    dispatchHookAgentTurn: (params: {
+      name: string;
+      agentId: string;
+      sessionKey: string;
+      message: string;
+      externalContentSource: "email";
+      deliver: boolean;
+      model?: string;
+      thinking?: import("../../auto-reply/thinking.js").ThinkLevel;
+      timeoutSeconds?: number;
+      idempotencyKey?: string;
+    }) => Promise<{ ok: true; runId: string } | { ok: false; reason: string }>;
   };
   system: {
     enqueueSystemEvent: typeof import("../../infra/system-events.js").enqueueSystemEvent;
@@ -414,6 +445,7 @@ export type PluginRuntimeCore = {
     listVoices: ListSpeechVoices;
   };
   mediaUnderstanding: {
+    resolveAudioInputBudget: MediaUnderstandingRuntime["resolveAudioInputBudget"];
     runFile: MediaUnderstandingRuntime["runMediaUnderstandingFile"];
     describeImageFile: MediaUnderstandingRuntime["describeImageFile"];
     describeImageFileWithModel: MediaUnderstandingRuntime["describeImageFileWithModel"];
@@ -509,11 +541,23 @@ export type PluginRuntimeCore = {
         providerId: string;
         baseUrl: string;
         headers?: HeadersInit;
+        reconcile?: import("../provider-plugin.types.js").ProviderPlugin["reconcileLocalService"];
       },
       signal?: AbortSignal | null,
     ) => Promise<{ release: () => void } | undefined>;
   };
+  modelConfig: {
+    /** Read-only model selection; no session mutation or harness execution authority. */
+    resolveDefaultModelForAgent: typeof import("../../agents/model-selection-config.js").resolveDefaultModelForAgent;
+    resolveAllowedModelRef: typeof import("../../agents/model-selection-resolve.js").resolveAllowedModelRefCore;
+  };
   modelAuth: {
+    /** Existing synchronous SDK operations, composed by the native host. */
+    resolveProviderIdForAuth: typeof import("../../agents/provider-auth-aliases.js").resolveProviderIdForAuth;
+    ensureAuthProfileStore: typeof import("../../agents/auth-profiles/store-runtime.js").ensureAuthProfileStore;
+    resolveAuthProfileOrder: typeof import("../../agents/auth-profiles/order.js").resolveAuthProfileOrder;
+    listProfilesForProvider: typeof import("../../agents/auth-profiles/profile-list.js").listProfilesForProvider;
+    isProviderApiKeyConfigured: typeof import("../provider-auth-availability.js").isProviderApiKeyConfigured;
     /** Resolve auth for a model. Only provider/model, optional cfg, and workspaceDir are used. */
     getApiKeyForModel: (params: {
       model: import("openclaw/plugin-sdk/llm").Model<import("openclaw/plugin-sdk/llm").Api>;

@@ -72,7 +72,16 @@ describe("TuiStreamAssembler", () => {
     expect(second).toBe("[thinking]\nBrain\n\nHello");
   });
 
-  it("omits thinking when showThinking is false", () => {
+  it("defers streamed terminal sanitization to the markdown boundary", () => {
+    const assembler = new TuiStreamAssembler();
+    const unsafe = "before\x1b]52;c;unsafe\x07after";
+
+    expect(assembler.ingestDelta("run-unsafe", messageWithContent([text(unsafe)]), false)).toBe(
+      unsafe,
+    );
+  });
+
+  it("retains hidden thinking across display toggles", () => {
     const assembler = new TuiStreamAssembler();
     const output = assembler.ingestDelta(
       "run-2",
@@ -80,6 +89,10 @@ describe("TuiStreamAssembler", () => {
       false,
     );
     expect(output).toBe("Visible");
+    expect(assembler.ingestDelta("run-2", messageWithContent([]), true)).toBe(
+      "[thinking]\nHidden\n\nVisible",
+    );
+    expect(assembler.ingestDelta("run-2", messageWithContent([]), false)).toBe("Visible");
   });
 
   it("tracks literal placeholder text as real displayable content until finalization", () => {

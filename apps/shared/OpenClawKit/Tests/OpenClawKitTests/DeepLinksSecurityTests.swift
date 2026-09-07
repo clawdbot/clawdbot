@@ -43,6 +43,82 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
         #expect(DeepLinkParser.parse(url) == .dashboard)
     }
 
+    @Test(arguments: ["openclaw", "openclaw-debug"])
+    func gatewayAddDeepLinkPreservesAddressAndLabel(scheme: String) throws {
+        var components = URLComponents(string: "\(scheme)://gateway/add")!
+        components.queryItems = [
+            URLQueryItem(name: "url", value: "HTTPS://Gateway.Example:8443/openclaw%20gateway/"),
+            URLQueryItem(name: "name", value: " Research & Design "),
+        ]
+        let route = DeepLinkParser.parse(try #require(components.url))
+        guard case let .gatewayAdd(link) = route else {
+            Issue.record("Expected a gateway-add intent")
+            return
+        }
+        #expect(link.url.absoluteString == "https://gateway.example:8443/openclaw%20gateway/")
+        #expect(link.name == "Research & Design")
+        #expect(GatewayConnectDeepLink.fromSetupInput(components.url!.absoluteString) == nil)
+    }
+
+    @Test(arguments: [
+        "https://gateway.example/",
+        "https://127.0.0.1:8443/",
+        "https://openclaw.local/gateway",
+        "https://gateway.example/operator%2Fteam",
+    ])
+    func gatewayAddDeepLinkDoesNotRequireADeploymentHostname(address: String) throws {
+        var components = URLComponents(string: "openclaw://gateway/add")!
+        components.queryItems = [URLQueryItem(name: "url", value: address)]
+        guard case let .gatewayAdd(link) = DeepLinkParser.parse(try #require(components.url)) else {
+            Issue.record("Expected a gateway-add intent")
+            return
+        }
+        #expect(link.url.absoluteString == address)
+        #expect(link.name == nil)
+    }
+
+    @Test(arguments: [
+        "http://gateway.example/",
+        "http://127.0.0.1:18789/",
+        "wss://gateway.example/",
+        "file:///tmp/gateway",
+        "https://user@gateway.example/",
+        "https://gateway.example/?token=secret",
+        "https://gateway.example/#secret",
+        "https://gateway.example/?",
+        "https://gateway.example/#",
+        "https://gateway.example:0/",
+        "https://gateway.example:65536/",
+    ])
+    func gatewayAddDeepLinkRejectsNonAddressMetadata(address: String) throws {
+        var components = URLComponents(string: "openclaw://gateway/add")!
+        components.queryItems = [URLQueryItem(name: "url", value: address)]
+        #expect(DeepLinkParser.parse(try #require(components.url)) == nil)
+    }
+
+    @Test func gatewayAddDeepLinkRejectsPasswordCredentials() throws {
+        var address = try #require(URLComponents(string: "https://gateway.example/"))
+        address.user = "fixture-user"
+        address.password = "fixture-password"
+        var link = try #require(URLComponents(string: "openclaw://gateway/add"))
+        link.queryItems = [URLQueryItem(name: "url", value: try #require(address.url).absoluteString)]
+        #expect(DeepLinkParser.parse(try #require(link.url)) == nil)
+    }
+
+    @Test(arguments: [
+        "openclaw://gateway/add?url=https%3A%2F%2Fgateway.example&token=secret",
+        "openclaw://gateway/add?url=https%3A%2F%2Fgateway.example&password=secret",
+        "openclaw://gateway/add?url=https%3A%2F%2Fgateway.example&url=https%3A%2F%2Fother.example",
+        "openclaw://gateway/add?url=https%3A%2F%2Fgateway.example&name=One&name=Two",
+        "openclaw://gateway/add?url=https%3A%2F%2Fgateway.example#secret",
+        "openclaw://user@gateway/add?url=https%3A%2F%2Fgateway.example",
+        "openclaw://gateway:443/add?url=https%3A%2F%2Fgateway.example",
+        "openclaw://gateway/add?host=gateway.example&tls=1&token=secret",
+    ])
+    func gatewayAddDeepLinkRejectsCredentialsAndAmbiguousParameters(raw: String) throws {
+        #expect(DeepLinkParser.parse(try #require(URL(string: raw))) == nil)
+    }
+
     @Test func gatewayDeepLinkUsesTlsDefaultPortWhenPortMissing() {
         let link = gatewayLink(from: "openclaw://gateway?host=gateway.example.com&tls=1")
         #expect(link?.port == 443)
@@ -190,6 +266,69 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
             bootstrapToken: "tok",
             token: nil,
             password: nil))
+    }
+
+    @Test func setupCodeCarriesNormalizedTLSFingerprint() {
+        let fingerprint = (0..<32).map { _ in "AB" }.joined(separator: ":")
+        let payload = #"{"url":"wss://gateway.example.com","tlsFingerprint":"SHA256:\#(fingerprint)"}"#
+        let link = GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload))
+
+        #expect(link?.tlsFingerprintSha256 == fingerprint.replacingOccurrences(of: ":", with: "").lowercased())
+    }
+
+    @Test func setupCodeRejectsInvalidTLSFingerprint() {
+        let payload = #"{"url":"wss://gateway.example.com","tlsFingerprint":"not-a-fingerprint"}"#
+
+        #expect(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == nil)
+    }
+
+    @Test func setupCodeRejectsExpiredPayload() {
+        let payload = #"{"url":"wss://gateway.example.com","expiresAtMs":1}"#
+
+        #expect(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == nil)
+    }
+
+    @Test func publicInitializerRejectsMalformedTLSFingerprint() {
+        let link = GatewayConnectDeepLink(
+            host: "gateway.example.com",
+            port: 443,
+            tls: true,
+            tlsFingerprintSha256: "not-a-fingerprint",
+            bootstrapToken: nil,
+            token: nil,
+            password: nil)
+
+        #expect(!link.isValidEndpoint)
+    }
+
+    @Test func setupCodeRejectsTLSFingerprintOnPlaintextEndpoint() {
+        let fingerprint = String(repeating: "ab", count: 32)
+        let payload = #"{"url":"ws://127.0.0.1:18789","tlsFingerprint":"\#(fingerprint)"}"#
+
+        #expect(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == nil)
+    }
+
+    @Test func fallbackEndpointDoesNotInheritPrimaryTLSFingerprint() throws {
+        let fingerprint = String(repeating: "ab", count: 32)
+        let expiresAtMs: Int64 = 4_102_444_800_000
+        let payload = #"{"url":"wss://direct.example.com","urls":["wss://direct.example.com","wss://proxy.example.com"],"tlsFingerprint":"\#(fingerprint)","expiresAtMs":\#(expiresAtMs)}"#
+        let link = try #require(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)))
+        let fallback = try #require(link.fallbackEndpoints.first)
+        let selectedFallback = link.selectingEndpoint(fallback)
+
+        #expect(link.tlsFingerprintSha256 == fingerprint)
+        #expect(link.expiresAtMs == expiresAtMs)
+        #expect(selectedFallback.tlsFingerprintSha256 == nil)
+        #expect(selectedFallback.expiresAtMs == expiresAtMs)
+    }
+
+    @Test func rejectedPrimaryDoesNotTransferTLSFingerprintToFallback() throws {
+        let fingerprint = String(repeating: "ab", count: 32)
+        let payload = #"{"url":"ws://127.0.0.1:18789","urls":["wss://proxy.example.com"],"tlsFingerprint":"\#(fingerprint)"}"#
+        let link = try #require(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)))
+
+        #expect(link.host == "proxy.example.com")
+        #expect(link.tlsFingerprintSha256 == nil)
     }
 
     @Test func legacyEncodedGatewayLinkDecodesWithoutFallbacks() throws {

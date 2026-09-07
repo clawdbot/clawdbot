@@ -396,6 +396,12 @@ describe("runMessageAction plugin dispatch", () => {
           target: "user-123",
           message: "hello from cli",
         },
+        toolContext: {
+          currentChannelProvider: "gatewaychat",
+          currentMessagingTarget: "user-123",
+          currentMessageId: "source-message-1",
+          replyToMode: "first",
+        },
         gateway: {
           resolveAgentRuntimeIdentityToken,
           clientName: "cli",
@@ -417,6 +423,11 @@ describe("runMessageAction plugin dispatch", () => {
           action: "send",
           conversationReadOrigin: "direct-operator",
           idempotencyKey: "idem-gateway-action",
+          reply: {
+            replyToId: "source-message-1",
+            source: "implicit",
+            mode: "first",
+          },
         },
         "gateway call params",
       );
@@ -503,13 +514,13 @@ describe("runMessageAction plugin dispatch", () => {
 
       expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
       const executeCall = readMockCallArg(mocks.executeSendAction, "execute send call");
+      const context = readRecordField(executeCall, "ctx", "execute send context");
       expectRecordFields(
-        readRecordField(executeCall, "ctx", "execute send context"),
+        readRecordField(context, "input", "message action input"),
         {
-          forceCoreDelivery: true,
           requireQueuePersistence: true,
         },
-        "execute send context",
+        "message action input",
       );
       expectRecordFields(result, { handledBy: "core" }, "result");
     });

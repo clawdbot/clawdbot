@@ -29,7 +29,14 @@ export function buildTelegramApprovalCallbackData(
     return undefined;
   }
   const approvalKind = action.approvalKind;
-  const kind = approvalKind === "exec" ? "e" : approvalKind === "plugin" ? "p" : null;
+  const kind =
+    approvalKind === "exec"
+      ? "e"
+      : approvalKind === "plugin"
+        ? "p"
+        : approvalKind === "system-agent"
+          ? "s"
+          : null;
   const decision =
     action.decision === "allow-once"
       ? "o"
@@ -63,7 +70,14 @@ export function parseTelegramApprovalCallbackData(
   if (encoded.length < 5 || encoded[1] !== ":" || encoded[3] !== ":") {
     return null;
   }
-  const approvalKind = encoded[0] === "e" ? "exec" : encoded[0] === "p" ? "plugin" : null;
+  const approvalKind =
+    encoded[0] === "e"
+      ? "exec"
+      : encoded[0] === "p"
+        ? "plugin"
+        : encoded[0] === "s"
+          ? "system-agent"
+          : null;
   const decision =
     encoded[2] === "o"
       ? "allow-once"

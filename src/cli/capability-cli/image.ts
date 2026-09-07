@@ -32,14 +32,13 @@ import { readInputFiles, writeOutputAsset } from "../media-output.js";
 import { collectOption } from "../program/helpers.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
 import type { CapabilityEnvelope } from "./metadata.js";
+import { emitJsonOrText, formatEnvelopeForText, providerSummaryText } from "./output.js";
 import {
-  emitJsonOrText,
-  formatEnvelopeForText,
   parseOptionalPositiveInteger,
   parseOptionalTimeoutMs,
   providerHasGenericConfig,
-  providerSummaryText,
   requireProviderModelOverride,
+  resolveCapabilityAgentOption,
   resolveCapabilityProviderAgentId,
   resolveLocalCapabilityRuntimeConfig,
   resolveSelectedProviderFromModelRef,
@@ -313,41 +312,49 @@ function addImageGenerationOptions(command: Command): Command {
     .option("--json", "Output JSON", false);
 }
 
-function resolveImageGenerationOptions(opts: Record<string, unknown>) {
+function readStringOption(opts: Record<string, unknown>, key: string): string | undefined {
+  const value = opts[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function resolveImageGenerationOptions(opts: Record<string, unknown>, command: Command) {
   return {
+    agent: resolveCapabilityAgentOption(command, opts.agent),
     model: opts.model as string | undefined,
     count: parseOptionalPositiveInteger(opts.count, "--count"),
     size: opts.size as string | undefined,
     aspectRatio: opts.aspectRatio as string | undefined,
     resolution: opts.resolution as "1K" | "2K" | "4K" | undefined,
-    outputFormat: normalizeImageOutputFormat(opts.outputFormat as string | undefined),
-    background: normalizeImageBackground(opts.background as string | undefined),
+    outputFormat: normalizeImageOutputFormat(readStringOption(opts, "outputFormat")),
+    background: normalizeImageBackground(readStringOption(opts, "background")),
     openaiBackground: normalizeImageBackground(
       opts.openaiBackground as string | undefined,
       "--openai-background",
     ),
-    openaiModeration: normalizeOpenAIModeration(opts.openaiModeration as string | undefined),
-    quality: normalizeImageQuality(opts.quality as string | undefined),
+    openaiModeration: normalizeOpenAIModeration(readStringOption(opts, "openaiModeration")),
+    quality: normalizeImageQuality(readStringOption(opts, "quality")),
     timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs as string | number | undefined),
     output: opts.output as string | undefined,
-    agent: typeof opts.agent === "string" ? opts.agent : undefined,
   };
 }
 
 export function registerImageCapabilityCommands(capability: Command): void {
-  const image = capability.command("image").description("Image generation and description");
+  const image = capability
+    .command("image")
+    .description("Image generation and description")
+    .option("--agent <id>", "Agent whose model and auth state should be used");
 
   addImageGenerationOptions(
     image
       .command("generate")
       .description("Generate images")
       .requiredOption("--prompt <text>", "Prompt text"),
-  ).action(async (opts) => {
+  ).action(async (opts, command) => {
     await runCommandWithRuntime(defaultRuntime, async () => {
       const result = await runImageGenerate({
         capability: "image.generate",
         prompt: String(opts.prompt),
-        ...resolveImageGenerationOptions(opts),
+        ...resolveImageGenerationOptions(opts, command),
       });
       emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
     });
@@ -357,16 +364,16 @@ export function registerImageCapabilityCommands(capability: Command): void {
     image
       .command("edit")
       .description("Edit images with one or more input files")
-      .requiredOption("--file <path>", "Input file", collectOption, [])
+      .requiredOption("--file <path>", "Input file", collectOption)
       .requiredOption("--prompt <text>", "Prompt text"),
-  ).action(async (opts) => {
+  ).action(async (opts, command) => {
     await runCommandWithRuntime(defaultRuntime, async () => {
       const files = Array.isArray(opts.file) ? (opts.file as string[]) : [String(opts.file)];
       const result = await runImageGenerate({
         capability: "image.edit",
         prompt: String(opts.prompt),
         file: files,
-        ...resolveImageGenerationOptions(opts),
+        ...resolveImageGenerationOptions(opts, command),
       });
       emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
     });
@@ -384,7 +391,7 @@ export function registerImageCapabilityCommands(capability: Command): void {
       "Agent whose saved provider auth is used (default: agents.defaults.systemAgent.agentId, then the sole agent)",
     )
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const result = await runImageDescribe({
           capability: "image.describe",
@@ -392,7 +399,7 @@ export function registerImageCapabilityCommands(capability: Command): void {
           model: opts.model as string | undefined,
           prompt: opts.prompt as string | undefined,
           timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
-          agent: typeof opts.agent === "string" ? opts.agent : undefined,
+          agent: resolveCapabilityAgentOption(command, opts.agent),
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
@@ -401,7 +408,7 @@ export function registerImageCapabilityCommands(capability: Command): void {
   image
     .command("describe-many")
     .description("Describe multiple image files")
-    .requiredOption("--file <path>", "Image file", collectOption, [])
+    .requiredOption("--file <path>", "Image file", collectOption)
     .option("--prompt <text>", "Prompt hint")
     .option("--model <provider/model>", "Model override")
     .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
@@ -410,7 +417,7 @@ export function registerImageCapabilityCommands(capability: Command): void {
       "Agent whose saved provider auth is used (default: agents.defaults.systemAgent.agentId, then the sole agent)",
     )
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const result = await runImageDescribe({
           capability: "image.describe-many",
@@ -418,7 +425,7 @@ export function registerImageCapabilityCommands(capability: Command): void {
           model: opts.model as string | undefined,
           prompt: opts.prompt as string | undefined,
           timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
-          agent: typeof opts.agent === "string" ? opts.agent : undefined,
+          agent: resolveCapabilityAgentOption(command, opts.agent),
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
@@ -429,10 +436,13 @@ export function registerImageCapabilityCommands(capability: Command): void {
     .description("List image generation providers")
     .option("--agent <id>", "Agent whose provider state should be inspected")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const cfg = getRuntimeConfig();
-        const agentId = resolveCapabilityProviderAgentId(cfg, opts.agent as string | undefined);
+        const agentId = resolveCapabilityProviderAgentId(
+          cfg,
+          resolveCapabilityAgentOption(command, opts.agent),
+        );
         const selectedProvider = resolveSelectedProviderFromModelRef(
           resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.image),
         );

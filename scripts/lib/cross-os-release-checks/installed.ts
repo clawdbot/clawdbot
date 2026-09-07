@@ -28,7 +28,7 @@ import {
   looksLikeCommitSha,
   resolveExplicitBaselineVersion,
   resolveExpectedDevUpdateRef,
-  shouldSkipInstallerDaemonHealthCheck,
+  shouldUseManagedGatewayService,
 } from "./config.ts";
 import {
   installedEntryPath,
@@ -447,7 +447,7 @@ export async function runOnboardWithInstalledCli(params: {
       authChoice: params.providerConfig.authChoice,
       gatewayPort: params.lane.gatewayPort,
       installDaemon: params.installDaemon,
-      skipHealth: !params.installDaemon || shouldSkipInstallerDaemonHealthCheck(),
+      skipHealth: !params.installDaemon || shouldUseManagedGatewayService(),
     });
     await runInstalledCli({
       cliPath: params.cliPath,

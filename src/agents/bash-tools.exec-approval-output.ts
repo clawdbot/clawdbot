@@ -74,8 +74,18 @@ function capContinuationOutput(text: string, maxUtf16Units: number): string {
     return truncateUtf16Safe(TRUNCATION_MARKER, boundedMax);
   }
   const headBudget = Math.floor(cutBudget * HEAD_SHARE);
-  const head = alignHeadToLineBreak(truncateUtf16Safe(text, headBudget));
+  let head = alignHeadToLineBreak(truncateUtf16Safe(text, headBudget));
   const tail = alignTailToLineBreak(sliceUtf16Safe(text, text.length - (cutBudget - headBudget)));
+  // Recapping can omit a stream header while retaining its contents; restore its
+  // label from the omitted span so stderr/error never masquerades as stdout.
+  const omittedHeaders = /^\[(?:stdout|stderr|error)\]\n/m.test(head)
+    ? text.slice(head.length, text.length - tail.length).match(/^\[(?:stdout|stderr|error)\]\n/gm)
+    : null;
+  const tailHeader = omittedHeaders?.at(-1) ?? "";
+  if (tailHeader && tailHeader.length <= headBudget) {
+    head = alignHeadToLineBreak(truncateUtf16Safe(text, headBudget - tailHeader.length));
+    return `${head}\n${TRUNCATION_MARKER}\n${tailHeader}${tail}`;
+  }
   return `${head}\n${TRUNCATION_MARKER}\n${tail}`;
 }
 

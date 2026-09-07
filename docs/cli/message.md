@@ -50,6 +50,14 @@ Every action accepts: `--channel <name>`, `--account <id>`, `--json`,
 `--dry-run`, `--verbose`. Actions that take a destination also accept
 `-t, --target <dest>`.
 
+Discord message bodies, captions, poll context, and component text retain
+leading indentation. Existing empty-message validation still applies.
+Ordinary message and caption delivery still trims trailing whitespace.
+
+Local message actions run the loaded plugins' shutdown hooks before exiting, including
+after an action fails. Cleanup has a 2.5-second overall budget and does not change
+the action's exit status. `message read` skips these shutdown hooks.
+
 ## SecretRef resolution
 
 `openclaw message` resolves channel SecretRefs before running the action,
@@ -72,7 +80,7 @@ unresolved SecretRef on the selected channel/account fails the action closed.
 | `poll`          | Discord, Matrix, Microsoft Teams, Telegram, WhatsApp                                                            | `--target`, `--poll-question`, `--poll-option` (repeat)        | See [Poll](#poll) below.                                                                                                                                                                                                                                                                               |
 | `react`         | Discord, Matrix, Nextcloud Talk, Signal, Slack, Telegram, WhatsApp                                              | `--message-id`, `--target`                                     | `--emoji`, `--remove` (needs `--emoji`; omit it to clear own reactions where supported, see [Reactions](/tools/reactions)). WhatsApp: `--participant`, `--from-me`. Signal group reactions require `--target-author` or `--target-author-uuid`. Nextcloud Talk only adds reactions; `--remove` errors. |
 | `reactions`     | Discord, Matrix, Microsoft Teams, Slack                                                                         | `--message-id`, `--target`                                     | `--limit`.                                                                                                                                                                                                                                                                                             |
-| `read`          | Discord, Matrix, Microsoft Teams, Slack                                                                         | `--target`                                                     | `--limit`, `--message-id`, `--before`, `--after`. Discord: `--around`, `--include-thread`. Slack: `--message-id` reads a specific timestamp, combine with `--thread-id` for an exact thread reply.                                                                                                     |
+| `read`          | Discord, Matrix, Microsoft Teams, Slack                                                                         | `--target`                                                     | `--limit`, `--message-id`, `--before`, `--after`. Discord: `--around`. Slack: `--message-id` reads a specific timestamp, combine with `--thread-id` for an exact thread reply.                                                                                                                         |
 | `edit`          | Discord, Matrix, Microsoft Teams, Slack, Telegram                                                               | `--message-id`, `--message`, `--target`                        | Telegram forum threads use `--thread-id`.                                                                                                                                                                                                                                                              |
 | `delete`        | Discord, Matrix, Microsoft Teams, Slack, Telegram                                                               | `--message-id`, `--target`                                     |                                                                                                                                                                                                                                                                                                        |
 | `pin` / `unpin` | Discord, Matrix, Microsoft Teams, Slack                                                                         | `--message-id`, `--target`                                     | `unpin` also accepts `--pinned-message-id` (Microsoft Teams: the pin/list-pins resource id, not the chat message id).                                                                                                                                                                                  |
@@ -80,6 +88,9 @@ unresolved SecretRef on the selected channel/account fails the action closed.
 | `permissions`   | Discord, Matrix                                                                                                 | `--target`                                                     | Matrix: available only when encryption is enabled and verification actions are allowed.                                                                                                                                                                                                                |
 | `search`        | Discord                                                                                                         | `--guild-id`, `--query`                                        | `--channel-id`, `--channel-ids` (repeat), `--author-id`, `--author-ids` (repeat), `--limit`.                                                                                                                                                                                                           |
 | `member info`   | Discord, Matrix, Microsoft Teams, Slack                                                                         | `--user-id`                                                    | `--guild-id` (Discord).                                                                                                                                                                                                                                                                                |
+
+The legacy `message read --include-thread` spelling remains accepted for existing
+scripts but has no effect.
 
 ### Send
 
@@ -103,6 +114,11 @@ true}`. `--pin` is shorthand for pinned delivery when the channel supports
   compression.
 - `--silent` (Telegram, Discord): send without a notification.
 - `--gif-playback` (WhatsApp only): treat video media as GIF playback.
+
+When a send is suppressed by a message hook, fails, or only partially succeeds,
+the command explains the outcome and exits nonzero. Partial delivery keeps any
+confirmed message ID. JSON failures include `ok: false`, `deliveryStatus`, and
+`error`; successful JSON responses retain their existing shape.
 
 ```bash
 openclaw message send --channel discord \
@@ -163,7 +179,7 @@ openclaw message poll --channel discord \
 - `--poll-option <choice>`: repeat 2-12 times.
 - `--poll-multi`: allow multiple selections.
 - Discord: `--poll-duration-hours`, `--silent`, `--message`.
-- Telegram: `--poll-duration-seconds <n>` (5-600), `--silent`,
+- Telegram: `--poll-duration-seconds <n>` (5-604800; up to seven days), `--silent`,
   `--poll-anonymous` / `--poll-public`, `--thread-id`.
 
 ```bash
@@ -230,6 +246,10 @@ openclaw message broadcast --targets <target...> [--channel all] [--message <tex
 
 Sends one payload to multiple targets. `--targets` takes a space-separated
 list. Use `--channel all` to target every configured provider.
+
+If any target fails, is suppressed, or only partially delivers, the broadcast
+exits nonzero. Text output identifies failed targets; JSON reports `ok: false`
+and retains every target's result, including failures returned by channel plugins.
 
 ## Related
 

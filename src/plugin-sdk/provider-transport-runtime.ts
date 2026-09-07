@@ -17,6 +17,12 @@ export {
 } from "@openclaw/ai/internal/shared";
 export {
   coerceTransportToolCallArguments,
+  consumeGoogleGenerateContentStream,
+  convertGoogleTools,
+  projectGoogleMessages,
+  requiresGoogleToolCallId,
+  type GoogleStreamChunk,
+  copyProviderAcceptanceObserver,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
   failTransportStream,
@@ -24,7 +30,12 @@ export {
   finalizeTransportStream,
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
   mergeTransportHeaders,
+  notifyProviderHttpMetadata,
+  notifyProviderHttpResponse,
+  notifyProviderStreamOpened,
   parseTerminalToolCallArguments,
   sanitizeTransportPayloadText,
+  withProviderAcceptanceObserver,
+  type ProviderAcceptance,
   type WritableTransportStream,
 } from "@openclaw/ai/transports";

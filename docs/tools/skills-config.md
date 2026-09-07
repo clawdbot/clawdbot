@@ -17,8 +17,8 @@ Most skills configuration lives under `skills` in
   skills: {
     allowBundled: ["gemini", "peekaboo"],
     load: {
-      extraDirs: ["~/Projects/agent-scripts/skills"],
-      allowSymlinkTargets: ["~/Projects/manager/skills"],
+      extraDirs: ["~/path/to/agent-scripts/skills"],
+      allowSymlinkTargets: ["~/path/to/skills"],
       watch: true,
     },
     install: {
@@ -28,7 +28,6 @@ Most skills configuration lives under `skills` in
     },
     workshop: {
       autonomous: { mode: "auto" },
-      allowSymlinkTargetWrites: false,
       approvalPolicy: "auto",
       maxPending: 50,
       maxSkillBytes: 40000,
@@ -63,8 +62,8 @@ Most skills configuration lives under `skills` in
   Trusted real target directories that symlinked skill folders may resolve
   into, even when the symlink lives outside the configured root. Use this for
   intentional sibling-repo layouts such as
-  `<workspace>/skills/manager -> ~/Projects/manager/skills`. Keep this list
-  narrow — do not point at broad roots like `~` or `~/Projects`.
+  `<workspace>/skills/manager -> ~/path/to/skills`. Keep this list
+  narrow — do not point at broad roots like `~` or a whole projects directory.
 </ParamField>
 
 <ParamField path="skills.load.watch" type="boolean" default="true">
@@ -80,10 +79,12 @@ Most skills configuration lives under `skills` in
 
 <ParamField path="skills.install.nodeManager" type='"npm" | "pnpm" | "yarn" | "bun"' default='"npm"'>
   Node package manager preference for skill installs. This only affects skill
-  installs - the OpenClaw CLI and Gateway runtime require Node because the
-  canonical state store uses `node:sqlite`. `openclaw setup --node-manager` and
-  `openclaw onboard --node-manager` accept `npm`, `pnpm`, or `bun`; set
-  `"yarn"` directly in config for Yarn-backed skill installs.
+  installs. Node remains the primary and recommended OpenClaw runtime; Bun 1.4+
+  with WAL-reset-safe `node:sqlite` is supported as an explicit runtime opt-in.
+  `openclaw setup --node-manager` and `openclaw onboard --node-manager` accept
+  `npm`, `pnpm`, or `bun`; set `"yarn"` directly in config for Yarn-backed skill
+  installs. Setup preserves this preference unless you pass `--node-manager`;
+  fresh configurations default to `npm`.
 </ParamField>
 
 <ParamField path="skills.install.allowUploadedArchives" type="boolean" default="false">
@@ -362,9 +363,10 @@ different visible skill set per agent.
 <ParamField path="skills.workshop.autonomous.mode" type='"off" | "propose" | "auto"' default='"auto"'>
   `off` disables autonomous capture while keeping the durable-instruction
   suggestion nudge. `propose` creates pending proposals from corrections and
-  substantial completed work. `auto` sends the same captures through the normal
-  scanner-gated Workshop apply path and runs daily collection cleanup that can
-  rewrite or drop eligible writable skills. User-prompted skill creation,
+  substantial completed work. `auto` uses normal agent tools for direct per-turn
+  and weekly Workshop maintenance, without proposal scanning or automatic rollback
+  snapshots. Immediate foreground repairs still use scanner-gated proposal apply.
+  User-prompted skill creation,
   `/learn`, and manual history scan continue to work in every mode.
 </ParamField>
 
@@ -376,15 +378,8 @@ proposal-only permissions, and troubleshooting.
   additional approval prompt. `pending` requires operator approval.
 </ParamField>
 
-<ParamField path="skills.workshop.allowSymlinkTargetWrites" type="boolean" default="false">
-  Allow Skill Workshop apply to write through workspace skill symlinks whose
-  real target is already trusted by `skills.load.allowSymlinkTargets`. Keep
-  this disabled unless generated proposal applies should mutate that shared
-  skill root.
-</ParamField>
-
 <ParamField path="skills.workshop.maxPending" type="number" default="50">
-  Maximum pending and quarantined proposals retained per workspace (allowed
+  Maximum pending and quarantined proposals retained per agent (allowed
   range: 1-200).
 </ParamField>
 
@@ -409,34 +404,21 @@ To allow an intentional symlink layout, declare the trusted target:
 {
   skills: {
     load: {
-      extraDirs: ["~/Projects/manager/skills"],
-      allowSymlinkTargets: ["~/Projects/manager/skills"],
+      extraDirs: ["~/path/to/skills"],
+      allowSymlinkTargets: ["~/path/to/skills"],
     },
   },
 }
 ```
 
-With this config, `<workspace>/skills/manager -> ~/Projects/manager/skills`
+With this config, `<workspace>/skills/manager -> ~/path/to/skills`
 is accepted after realpath resolution. `extraDirs` scans the sibling repo
 directly; `allowSymlinkTargets` preserves the symlinked path for existing
 layouts.
 
-Skill Workshop apply does not write through those symlinks by default. To
-let Workshop apply mutate skills under already-trusted symlink targets, opt
-in separately:
-
-```json5
-{
-  skills: {
-    load: {
-      allowSymlinkTargets: ["~/Projects/manager/skills"],
-    },
-    workshop: {
-      allowSymlinkTargetWrites: true,
-    },
-  },
-}
-```
+Skill Workshop uses each agent's `<state-dir>/agents/<agentId>/agent/workshop-skills`
+containment boundary. It does not use `allowSymlinkTargets`, and it rejects
+symlinked skills that resolve outside that directory.
 
 Managed `~/.openclaw/skills` and personal `~/.agents/skills` directories
 already accept skill-directory symlinks unconditionally (per-skill
@@ -477,22 +459,9 @@ Pass secrets into a Docker sandbox with:
 
 ## Loading order reminder
 
-```text
-workspace/skills      (highest)
-workspace/.agents/skills
-~/.agents/skills
-~/.openclaw/skills
-bundled + Custodian skills
-skills.load.extraDirs (lowest)
-```
-
-Custodian skills share bundled precedence but load only for the agent selected
-by `agents.defaults.systemAgent.agentId` (or the existing sole-agent fallback).
-See [Custodian skills](/tools/custodian-skills).
-
-Changes to skills and config take effect on the next new session when the
-watcher is enabled, or on the next agent turn when the watcher detects a
-change.
+See [Loading order](/tools/skills#loading-order) for source precedence, including
+the per-agent Workshop tier, and [Snapshots and refresh](/tools/skills#snapshots-and-refresh)
+for when changes become visible.
 
 ## Related
 

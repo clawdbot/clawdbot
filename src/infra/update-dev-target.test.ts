@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyDevUpdateTargetEnv,
-  devUpdateTargetFromGitCampaign,
+  devUpdateTargetFromGitTarget,
   parseDevUpdateTargetEnv,
   resolveDevUpdateTargetRevision,
 } from "./update-dev-target.js";
@@ -38,11 +38,9 @@ describe("dev update target environment", () => {
   });
 
   it("projects campaign targets and resolves both target modes", () => {
-    const tracked = devUpdateTargetFromGitCampaign({
-      kind: "git",
+    const tracked = devUpdateTargetFromGitTarget({
       upstreamRef: "origin/main",
       upstreamSha: "frozen-sha",
-      commitsBehind: 2,
     });
 
     expect(tracked).toEqual({

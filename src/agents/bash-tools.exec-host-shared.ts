@@ -25,7 +25,7 @@ import {
 } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
 import { registerExecApprovalFollowupRuntimeHandoff } from "./bash-tools.exec-approval-followup-state.js";
-import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
+import type { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
 import {
   type ExecApprovalRegistration,
   isExecApprovalRunAbortedError,
@@ -222,6 +222,7 @@ export async function resolveExecHostApprovalContext(params: {
   security: ExecSecurity;
   ask: ExecAsk;
   host: "gateway" | "node";
+  bypassHostApprovalFloors?: boolean;
 }): Promise<ExecHostApprovalContext> {
   const approvals = await resolveExecApprovalsLocked(params.agentId, {
     security: params.security,
@@ -229,9 +230,15 @@ export async function resolveExecHostApprovalContext(params: {
   });
   // Session/config tool policy is the caller's requested contract. The host file
   // may tighten that contract, but it must not silently broaden it.
-  const hostSecurity = minSecurity(params.security, approvals.agent.security);
-  const hostAsk = maxAsk(params.ask, approvals.agent.ask);
-  const askFallback = minSecurity(hostSecurity, approvals.agent.askFallback);
+  const hostSecurity = params.bypassHostApprovalFloors
+    ? params.security
+    : minSecurity(params.security, approvals.agent.security);
+  const hostAsk = params.bypassHostApprovalFloors
+    ? params.ask
+    : maxAsk(params.ask, approvals.agent.ask);
+  const askFallback = params.bypassHostApprovalFloors
+    ? "deny"
+    : minSecurity(hostSecurity, approvals.agent.askFallback);
   if (hostSecurity === "deny") {
     throw new Error(`exec denied: host=${params.host} security=deny`);
   }
@@ -508,6 +515,13 @@ export function buildHeadlessExecApprovalDeniedMessage(params: {
   askFallback: ExecApprovalsResolved["agent"]["askFallback"];
 }): string {
   const runLabel = params.trigger === "cron" ? "Automation runs" : "Headless runs";
+  // The TUI and chat channels never receive automation approval cards
+  // (server-request-context canDeliverApprovals), so only name surfaces that
+  // can actually answer this run's approval.
+  const approvalSurfaceFix =
+    params.trigger === "cron" && params.host === "gateway"
+      ? "- keep the Control UI or a macOS/iOS/Android app connected and answer the next run's approval card; Allow Always mints a standing grant"
+      : "- rerun interactively and approve when prompted (Control UI, TUI, or a chat channel with exec approvals)";
   return [
     `exec denied: ${runLabel} cannot wait for interactive exec approval.`,
     `Effective host exec policy: security=${params.security} ask=${params.ask} askFallback=${params.askFallback}`,
@@ -515,7 +529,7 @@ export function buildHeadlessExecApprovalDeniedMessage(params: {
     "Fix one of these:",
     '- align both files to security="full" and ask="off" for trusted local automation',
     "- keep allowlist mode and add an explicit allowlist entry for this command",
-    "- enable Web UI, terminal UI, or chat exec approvals and rerun interactively",
+    approvalSurfaceFix,
     'Tip: run "openclaw doctor" and "openclaw approvals get --gateway" to inspect the effective policy.',
   ].join("\n");
 }
@@ -526,7 +540,12 @@ export async function sendExecApprovalFollowupResult(
   resultText: string,
   deps: ExecApprovalFollowupResultDeps = {},
 ): Promise<void> {
-  const send = deps.sendExecApprovalFollowup ?? sendExecApprovalFollowup;
+  const send: typeof sendExecApprovalFollowup =
+    deps.sendExecApprovalFollowup ??
+    (async (params) => {
+      const { sendExecApprovalFollowup } = await import("./bash-tools.exec-approval-followup.js");
+      return sendExecApprovalFollowup(params);
+    });
   const warn = deps.logWarn ?? logWarn;
   const runtimeHandoff =
     target.direct === true || !target.sessionKey || isExecDeniedResultText(resultText)

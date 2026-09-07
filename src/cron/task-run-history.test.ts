@@ -473,25 +473,43 @@ describe("cron task run history", () => {
     );
   });
 
-  it("allowlists the legacy wire record", () => {
+  it.each([
+    { status: "ok", expectedStatus: "ok" },
+    { status: "error", expectedStatus: "error" },
+    { status: "skipped", expectedStatus: "skipped" },
+    { status: "invalid", expectedStatus: undefined },
+    { status: null, expectedStatus: undefined },
+    { status: undefined, expectedStatus: undefined },
+  ])("allowlists the legacy wire record with status $status", ({ status, expectedStatus }) => {
     const storeKey = "/internal/cron/store";
     const task = taskFromEntry(
       { ts: 100, jobId: JOB_ID, action: "finished", status: "ok" },
       1,
       storeKey,
     );
+    task.error = "legacy error";
+    task.terminalSummary = "legacy summary";
     task.detail = {
-      ...(task.detail as Record<string, TaskRecord["detail"]>),
+      kind: "cron-run",
+      ...(status === undefined ? {} : { status }),
+      storeKey,
       internalFutureField: "secret",
       triggerState: { secret: true },
       delivery: "malformed",
       failureNotificationDelivery: { status: "invalid", internal: "secret" },
     };
+    Object.freeze(task.detail);
+    Object.freeze(task);
     const entry = cronTaskRecordToRunLogEntry(task);
     expect(entry).not.toBeNull();
+    expect(entry?.status).toBe(expectedStatus);
+    for (const key of ["delivered", "deliveryStatus", "deliveryError", "sessionId", "sessionKey"]) {
+      expect(Object.hasOwn(entry ?? {}, key)).toBe(true);
+    }
     expect(Object.hasOwn(entry ?? {}, "storeKey")).toBe(false);
     expect(Object.hasOwn(entry ?? {}, "internalFutureField")).toBe(false);
     expect(Object.hasOwn(entry ?? {}, "triggerState")).toBe(false);
+    expect(entry).toMatchObject({ error: "legacy error", summary: "legacy summary" });
     expect(entry?.delivery).toBeUndefined();
     expect(entry?.failureNotificationDelivery).toBeUndefined();
   });

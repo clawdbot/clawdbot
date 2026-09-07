@@ -105,12 +105,15 @@ export function buildEmbeddedSandboxInfo(
     return undefined;
   }
   const elevatedConfigured = execElevated?.enabled === true;
-  const elevatedAllowed = Boolean(execElevated?.enabled && execElevated.allowed);
-  const fullAccess = resolveEmbeddedFullAccessState({
-    execElevated,
-    execPolicy,
-    hostPolicy,
-  });
+  const elevatedAllowed =
+    !sandbox.required && Boolean(execElevated?.enabled && execElevated.allowed);
+  const fullAccess = sandbox.required
+    ? { available: false, blockedReason: "host-policy" as const }
+    : resolveEmbeddedFullAccessState({
+        execElevated,
+        execPolicy,
+        hostPolicy,
+      });
   return {
     enabled: true,
     workspaceDir: sandbox.workspaceDir,
@@ -123,7 +126,7 @@ export function buildEmbeddedSandboxInfo(
       ? {
           elevated: {
             allowed: elevatedAllowed,
-            defaultLevel: execElevated?.defaultLevel ?? "off",
+            defaultLevel: sandbox.required ? "off" : (execElevated?.defaultLevel ?? "off"),
             fullAccessAvailable: fullAccess.available,
             ...(fullAccess.blockedReason
               ? { fullAccessBlockedReason: fullAccess.blockedReason }

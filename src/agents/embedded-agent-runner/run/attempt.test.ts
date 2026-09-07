@@ -17,7 +17,7 @@ import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import type { NormalizedUsage } from "../../usage.js";
 import {
   resolveEmbeddedAgentBaseStreamFn,
-  resolveEmbeddedAgentStreamFn as resolveEmbeddedAgentStreamFnImpl,
+  resolveEmbeddedAgentStream as resolveEmbeddedAgentStreamImpl,
 } from "../stream-resolution.js";
 import { buildContextEnginePromptCacheInfo } from "./attempt-context-engine-helpers.js";
 import {
@@ -33,7 +33,6 @@ import {
 import { composeSystemPromptWithHookContext } from "./attempt-thread-helpers.js";
 import { wrapStreamFnSanitizeMalformedToolCalls } from "./attempt-tool-call-replay-sanitization.js";
 import { wrapStreamFnTrimToolCallNames } from "./attempt-tool-call-stream-normalization.js";
-import { buildEmbeddedAttemptToolRunContext } from "./attempt-tool-run-context.js";
 import { wrapStreamFnRepairMalformedToolCallArguments } from "./attempt.tool-call-argument-repair.js";
 
 const llmRuntime = {
@@ -41,10 +40,10 @@ const llmRuntime = {
   streamSimple,
 } as LlmRuntime;
 
-function resolveEmbeddedAgentStreamFn(
-  params: Omit<Parameters<typeof resolveEmbeddedAgentStreamFnImpl>[0], "llmRuntime">,
+function resolveEmbeddedAgentStream(
+  params: Omit<Parameters<typeof resolveEmbeddedAgentStreamImpl>[0], "llmRuntime">,
 ) {
-  return resolveEmbeddedAgentStreamFnImpl({ ...params, llmRuntime });
+  return resolveEmbeddedAgentStreamImpl({ ...params, llmRuntime });
 }
 
 type FakeWrappedStream = {
@@ -120,21 +119,6 @@ function firstBaseContext(baseFn: ReturnType<typeof vi.fn>): { messages: unknown
   }
   return call[1] as { messages: unknown[] };
 }
-
-describe("buildEmbeddedAttemptToolRunContext", () => {
-  it("carries runtime toolsAllow into coding tool construction", () => {
-    const context = buildEmbeddedAttemptToolRunContext({
-      trigger: "manual",
-      jobId: "job-1",
-      memoryFlushWritePath: "memory/log.md",
-      toolsAllow: ["memory_search", "memory_get"],
-    });
-    expect(context.trigger).toBe("manual");
-    expect(context.jobId).toBe("job-1");
-    expect(context.memoryFlushWritePath).toBe("memory/log.md");
-    expect(context.runtimeToolAllowlist).toEqual(["memory_search", "memory_get"]);
-  });
-});
 
 describe("resolvePromptBuildHookResult", () => {
   it("preserves prompt-build context fields", async () => {
@@ -300,7 +284,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       }),
     ).toEqual({
       merged: true,
-      removeLeaf: true,
+      removeLeaf: false,
       prompt:
         "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
         "older active-turn message\n\nnewest inbound message",
@@ -353,7 +337,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       }),
     ).toEqual({
       merged: true,
-      removeLeaf: true,
+      removeLeaf: false,
       prompt:
         "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
         "forwarded user request\n\nnewest inbound message",
@@ -371,7 +355,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       }),
     ).toEqual({
       merged: false,
-      removeLeaf: true,
+      removeLeaf: false,
       prompt: "summary\nolder active-turn message\nnewest inbound message",
     });
   });
@@ -387,14 +371,14 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       }),
     ).toEqual({
       merged: true,
-      removeLeaf: true,
+      removeLeaf: false,
       prompt:
         "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
         "ok\n\nplease inspect this token",
     });
   });
 
-  it("preserves structured orphaned user content before removing the leaf", () => {
+  it("preserves structured orphaned user content while keeping the leaf for later turns", () => {
     expect(
       mergeOrphanedTrailingUserPrompt({
         prompt: "newest inbound message",
@@ -409,7 +393,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       }),
     ).toEqual({
       merged: true,
-      removeLeaf: true,
+      removeLeaf: false,
       prompt:
         "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
         "please inspect this\n" +
@@ -434,7 +418,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
     });
 
     expect(result.merged).toBe(true);
-    expect(result.removeLeaf).toBe(true);
+    expect(result.removeLeaf).toBe(false);
     expect(result.prompt).toContain("please inspect this inline image");
     expect(result.prompt).toContain("[image_url] inline data URI (image/png, 4118 chars)");
     expect(result.prompt).not.toContain("base64");
@@ -460,7 +444,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
     });
 
     expect(result.merged).toBe(true);
-    expect(result.removeLeaf).toBe(true);
+    expect(result.removeLeaf).toBe(false);
     expect(result.prompt).toContain("[value] inline data URI (image/png, 10022 chars)");
     expect(result.prompt).toContain("bbbb");
     expect(result.prompt).toContain("(2000 chars)");
@@ -495,7 +479,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       }),
     ).toEqual({
       merged: true,
-      removeLeaf: true,
+      removeLeaf: false,
       prompt:
         "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
         "older active-turn message\n\nHEARTBEAT_OK",
@@ -503,7 +487,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
   });
 });
 
-describe("resolveEmbeddedAgentStreamFn", () => {
+describe("resolveEmbeddedAgentStream", () => {
   it("reuses the session's original base stream across later wrapper mutations", () => {
     const baseStreamFn = vi.fn();
     const wrapperStreamFn = vi.fn();
@@ -520,7 +504,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
 
   it("injects authStorage api keys into provider-owned stream functions", async () => {
     const providerStreamFn = vi.fn(async (_model, _context, options) => options);
-    const streamFn = resolveEmbeddedAgentStreamFn({
+    const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn: undefined,
       providerStreamFn,
       sessionId: "session-1",
@@ -549,7 +533,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
 
   it("strips the internal cache boundary before provider-owned stream calls", async () => {
     const providerStreamFn = vi.fn(async (_model, context) => context);
-    const streamFn = resolveEmbeddedAgentStreamFn({
+    const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn: undefined,
       providerStreamFn,
       sessionId: "session-1",
@@ -573,7 +557,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     expect(providerStreamFn).toHaveBeenCalledTimes(1);
   });
   it("routes supported default streamSimple fallbacks through boundary-aware transports", () => {
-    const streamFn = resolveEmbeddedAgentStreamFn({
+    const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn: undefined,
       sessionId: "session-1",
       model: {
@@ -588,7 +572,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
 
   it("keeps explicit custom currentStreamFn values unchanged", () => {
     const currentStreamFn = vi.fn();
-    const streamFn = resolveEmbeddedAgentStreamFn({
+    const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn: currentStreamFn as never,
       sessionId: "session-1",
       model: {
@@ -603,7 +587,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
 
   it("routes runtime-auth custom currentStreamFn values through boundary-aware transports", async () => {
     const currentStreamFn = vi.fn();
-    const streamFn = resolveEmbeddedAgentStreamFn({
+    const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn: currentStreamFn as never,
       sessionId: "session-1",
       model: {
@@ -3322,58 +3306,63 @@ describe("prependSystemPromptAddition", () => {
 });
 
 describe("buildAfterTurnRuntimeContext", () => {
-  it("preserves sessionId-scoped active process sessions for after-turn context", () => {
-    resetProcessRegistryForTests();
-    try {
-      const active = createProcessSessionFixture({
-        id: "sess-session-id",
-        command: "sleep 600",
-        backgrounded: true,
-        pid: 1234,
-      });
-      active.scopeKey = "session-123";
-      addSession(active);
-      const other = createProcessSessionFixture({
-        id: "sess-other",
-        command: "sleep 600",
-        backgrounded: true,
-      });
-      other.scopeKey = "agent:main";
-      addSession(other);
-
-      const legacy = buildAfterTurnRuntimeContext({
-        attempt: {
-          sessionId: "session-123",
-          config: {} as OpenClawConfig,
-          skillsSnapshot: undefined,
-          provider: "openai",
-          modelId: "gpt-5.4",
-          thinkLevel: "off",
-          reasoningLevel: "on",
-          extraSystemPrompt: "extra",
-          ownerNumbers: ["+15555550123"],
-        },
-        workspaceDir: "/tmp/workspace",
-        agentDir: "/tmp/agent",
-        activeAgentId: "main",
-      });
-
-      const activeProcessSessions = legacy.activeProcessSessions as
-        | Array<{ sessionId?: string; command?: string; pid?: number }>
-        | undefined;
-      expect(activeProcessSessions).toHaveLength(1);
-      const activeSession = requireRecord(activeProcessSessions?.[0], "active process session");
-      expect(activeSession.sessionId).toBe("sess-session-id");
-      expect(activeSession.command).toBe("sleep 600");
-      expect(activeSession.pid).toBe(1234);
-      expect(activeProcessSessions?.some((session) => session.sessionId === "sess-other")).toBe(
-        false,
-      );
-      expect(legacy.transcriptStorage).toEqual({ kind: "sqlite" });
-    } finally {
+  it.each([undefined, "agent:main:execution"])(
+    "preserves execution-scoped processes with sessionKey=%s and borrowed policy",
+    (sessionKey) => {
       resetProcessRegistryForTests();
-    }
-  });
+      try {
+        const active = createProcessSessionFixture({
+          id: "sess-session-id",
+          command: "sleep 600",
+          backgrounded: true,
+          pid: 1234,
+        });
+        active.scopeKey = sessionKey ?? "session-123";
+        addSession(active);
+        const other = createProcessSessionFixture({
+          id: "sess-other",
+          command: "sleep 600",
+          backgrounded: true,
+        });
+        other.scopeKey = "agent:main";
+        addSession(other);
+
+        const legacy = buildAfterTurnRuntimeContext({
+          attempt: {
+            sessionId: "session-123",
+            sessionKey,
+            sandboxSessionKey: "agent:main",
+            config: {} as OpenClawConfig,
+            skillsSnapshot: undefined,
+            provider: "openai",
+            modelId: "gpt-5.4",
+            thinkLevel: "off",
+            reasoningLevel: "on",
+            extraSystemPrompt: "extra",
+            ownerNumbers: ["+15555550123"],
+          },
+          workspaceDir: "/tmp/workspace",
+          agentDir: "/tmp/agent",
+          activeAgentId: "main",
+        });
+
+        const activeProcessSessions = legacy.activeProcessSessions as
+          | Array<{ sessionId?: string; command?: string; pid?: number }>
+          | undefined;
+        expect(activeProcessSessions).toHaveLength(1);
+        const activeSession = requireRecord(activeProcessSessions?.[0], "active process session");
+        expect(activeSession.sessionId).toBe("sess-session-id");
+        expect(activeSession.command).toBe("sleep 600");
+        expect(activeSession.pid).toBe(1234);
+        expect(activeProcessSessions?.some((session) => session.sessionId === "sess-other")).toBe(
+          false,
+        );
+        expect(legacy.transcriptStorage).toEqual({ kind: "sqlite" });
+      } finally {
+        resetProcessRegistryForTests();
+      }
+    },
+  );
 
   it("uses primary model when compaction.model is not set", () => {
     const runtimeAuthPlan = {
@@ -3424,6 +3413,8 @@ describe("buildAfterTurnRuntimeContext", () => {
     const runtimeContext = buildAfterTurnRuntimeContext({
       attempt: {
         sessionKey: "agent:main:session:locked",
+        sandboxSessionKey: "global",
+        sandboxAgentId: "main",
         config: {
           agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } },
         } as OpenClawConfig,
@@ -3439,6 +3430,8 @@ describe("buildAfterTurnRuntimeContext", () => {
     });
 
     expect(runtimeContext.modelSelectionLocked).toBe(true);
+    expect(runtimeContext.sandboxSessionKey).toBe("global");
+    expect(runtimeContext.sandboxAgentId).toBe("main");
     expect(runtimeContext.provider).toBe("openai");
     expect(runtimeContext.model).toBe("gpt-5.5");
   });

@@ -1,5 +1,8 @@
 // Discord tests cover config schema plugin behavior.
+import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
+import { resolveUpgradeSurvivorConfigStepsForBaseline } from "../../../scripts/e2e/lib/upgrade-survivor/config-recipe.mts";
+import { DiscordChannelConfigSchema } from "../channel-config-api.js";
 import { DiscordConfigSchema } from "../config-api.js";
 
 function expectValidDiscordConfig(config: unknown) {
@@ -21,6 +24,41 @@ function expectInvalidDiscordConfig(config: unknown) {
 }
 
 describe("discord config schema", () => {
+  it.each([
+    ["2026.3.13", true],
+    ["2026.7.1-2", true],
+    ["2026.7.2-beta.3", true],
+    ["2026.7.2-beta.4", false],
+    ["2026.8.1-beta.1", false],
+    ["2026.8.1-beta.2", false],
+    ["2026.8.1", false],
+    [null, false],
+  ] as const)("preserves supported Discord DM input for baseline %s", (version, legacy) => {
+    const step = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
+      (entry) => entry.id === "channels-discord",
+    );
+    expect(step).toBeDefined();
+    const discord = JSON.parse(step?.argv[3] ?? "{}");
+    if (legacy) {
+      expect(discord.dm).toEqual({ policy: "allowlist", allowFrom: ["111111111111111111"] });
+      expect(discord.dmPolicy).toBeUndefined();
+      expect(discord.allowFrom).toBeUndefined();
+    } else {
+      expect(discord.dm).toBeUndefined();
+      expect(discord.dmPolicy).toBe("allowlist");
+      expect(discord.allowFrom).toEqual(["111111111111111111"]);
+    }
+    // The public schema is the config-set boundary; runtime Zod preprocessing
+    // would silently normalize the legacy specimen and miss a bad baseline cutoff.
+    expect(
+      validateJsonSchemaValue({
+        schema: DiscordChannelConfigSchema.schema,
+        cacheKey: "upgrade-survivor-discord-config",
+        value: discord,
+      }).ok,
+    ).toBe(!legacy);
+  });
+
   it('rejects dmPolicy="open" without allowFrom "*"', () => {
     const issues = expectInvalidDiscordConfig({
       dmPolicy: "open",
@@ -127,6 +165,19 @@ describe("discord config schema", () => {
     const cfg = expectValidDiscordConfig({});
 
     expect(cfg.groupPolicy).toBe("allowlist");
+  });
+
+  it("accepts join introductions at channel and account scope without masking inheritance", () => {
+    const defaults = expectValidDiscordConfig({ accounts: { work: {} } });
+    const configured = expectValidDiscordConfig({
+      joinIntro: false,
+      accounts: { work: { joinIntro: true } },
+    });
+
+    expect(defaults.joinIntro).toBeUndefined();
+    expect(defaults.accounts?.work?.joinIntro).toBeUndefined();
+    expect(configured.joinIntro).toBe(false);
+    expect(configured.accounts?.work?.joinIntro).toBe(true);
   });
 
   it("accepts historyLimit", () => {

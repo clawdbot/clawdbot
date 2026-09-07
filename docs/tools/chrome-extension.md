@@ -32,25 +32,54 @@ a script launcher or registry key without a proven binary framing path.
 
 ## Install
 
-Launch Chrome, then pre-register the native host before adding the extension:
+Launch Chrome at least once, then run this command on the machine that hosts
+Chrome:
 
 ```bash
 openclaw browser extension install
 ```
 
-Keep the command running. It pre-registers an origin-locked native host for the
-exact official Chrome Web Store identity and for OpenClaw's deterministic
-development IDs. After pre-registration succeeds, add
-[OpenClaw from the Chrome Web Store](https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig).
+Keep the command running while you complete Chrome's setup. On macOS, it first
+registers the native host, then asks Google Chrome to install the official
+Store extension. Chrome discovers the request at browser startup. If Chrome is
+already running, fully quit and reopen it when convenient, then approve or
+enable **OpenClaw** in Chrome. OpenClaw never restarts Chrome or approves its
+permission prompt for you. The request applies to all profiles in that Chrome
+user-data directory; Chrome controls approval in each profile.
 
-The extension pairs on its first native call; you do not need to open its
-popup, reload it, or restart Chrome during a normal first-time setup. The
-installer then reads the profile's `Secure Preferences` and verifies the exact
-Store ID independently from any extension path.
+In the macOS app, **Dashboard → Settings → This Mac → Browser → Set up Chrome on
+this Mac** runs the same local setup. This always prepares Chrome on this Mac,
+even when the app is connected to a remote Gateway. A browser-based dashboard
+provides Store and setup-guide links instead of installing software locally.
 
-For extension development, the command also copies the bundled extension to a
-stable OpenClaw-owned directory. Use that unpacked copy only as a development
-fallback:
+On Linux and in other supported Chromium browsers, add
+[OpenClaw from the Chrome Web Store](https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig)
+after native-host registration succeeds. Linux does not support this per-user
+Store installation request. Windows requires adding the Store extension and
+[manual pairing](#advanced-manual-pairing).
+
+You can also use the Store link if Chrome does not offer the requested install.
+If you previously removed the extension, Chrome remembers that choice; explicitly
+add it again from the Store. OpenClaw does not clear Chrome's removal decision.
+
+On macOS and Linux, the origin-locked native host permits the exact official
+Store identity and OpenClaw's deterministic development IDs. Once enabled, the
+extension pairs on its first native call. The installer inspects the profile's
+`Preferences` and `Secure Preferences`
+backing files and verifies the exact Store ID independently from any extension
+path. Chromium selects the backing file by settings-enforcement policy; Linux
+normally uses `Preferences`. Both files receive the same ownership, path, file
+type, permission, and size checks.
+
+For extension development, skip creating a Store installation request:
+
+```bash
+openclaw browser extension install --no-store
+```
+
+This still copies the bundled extension to a stable OpenClaw-owned directory
+and registers the native host. It leaves any existing Store request unchanged.
+Use the unpacked copy as a development fallback:
 
 1. Open `chrome://extensions`.
 2. Enable **Developer mode**.
@@ -81,10 +110,12 @@ Use a different bounded wait when needed:
 openclaw browser extension install --wait-ms 60000
 ```
 
-For automation, use `--json`. The result reports Store discovery separately
-from approved unpacked IDs and paths, plus native-host registration health and
-whether manual setup is required. It never includes a relay key or pairing
-string.
+For automation, use `--json`. The result reports Store installation requests,
+Store discovery and approval, approved unpacked IDs and paths, and native-host
+registration health separately. These local observations do not prove a live
+connection. Verify the extension's connected state and run
+`openclaw browser --browser-profile chrome tabs` against the intended Gateway
+or browser node. JSON output never includes a relay key or pairing string.
 
 ## Use it
 
@@ -107,7 +138,7 @@ openclaw config set browser.defaultProfile chrome
 Fresh automatic pairings use **All tabs**. Existing valid pairings are never
 overwritten, and older pairings keep their stored access mode.
 
-For local setup, native bootstrap connects the extension through the local
+For fresh local setup, native bootstrap connects the extension through the local
 Gateway's exact `/browser/extension` route. That first authenticated connection
 wakes the lazy browser-control service and starts the profile's loopback relay;
 OpenClaw and local clients such as mcporter then use that profile relay port.
@@ -118,6 +149,55 @@ Browser-node setup remains different: the extension connects to the relay on
 the browser-node host while the node uses its configured remote Gateway. An
 explicit `--gateway-url` pairing connects directly to that remote Gateway and
 remains a manual-only flow.
+
+### Standalone direct-loopback relay
+
+A pairing on `ws://127.0.0.1:<port>/extension` can run without a local Gateway
+or browser node. On macOS and Linux, the bundled extension can ask the installed
+native host to start a standalone relay when reconnecting to that endpoint.
+Automatic local setup must be enabled. Requests are limited to once per minute;
+the extension still authenticates the relay with connection-bound v2 proofs.
+This requires both the updated native host and an extension build containing
+relay wake-up support. Store publication can lag the bundled extension; the
+bundled unpacked development copy is the source-build validation path.
+
+Automatic wake-up requires the exact `127.0.0.1` host that the daemon serves.
+Other loopback aliases, including `localhost` and IPv6, do not trigger wake-up;
+use the canonical IPv4 endpoint when pairing for standalone operation.
+
+Wake-up uses the port in the extension's existing canonical pairing. It does
+not switch to the first configured profile. The native host resolves current
+`browser.profiles` and permits only an extension-driver relay port, including
+automatically allocated ports and explicit `cdpPort` pins. A removed profile
+or stale port fails closed; correct the pairing to match the current profile.
+Gateway `/browser/extension` routes and remote pairings never trigger local
+daemon wake-up. Browser-node pairings that use a direct loopback relay can use
+it even when their Gateway hint points to a remote host.
+
+An existing listener keeps ownership of its port. Otherwise, the native host
+spawns `dist/extensions/browser/relay-daemon-entry.js` as a detached process.
+The daemon uses the same per-host relay key and stays alive while an extension
+or CDP client is connected. After both disconnect, it exits following ten
+minutes of inactivity, checked every 30 seconds. Closing Chrome alone does not
+stop it while a CDP client remains connected. A later reconnect can wake it again.
+
+The standalone daemon defaults to **v2-only authentication**, independently of
+the Gateway relay's legacy default. Only an explicit
+`browser.extensionRelay.allowLegacyAuth=true` enables legacy authentication;
+an unset value, `false`, or a config-read failure never enables it. Prefer v2
+clients so the persistent key is not disclosed to a process occupying the port.
+
+Gateway browser control can join a standalone relay that already owns the
+configured profile and port. It authenticates that exact owner with v2 and uses
+its existing bridge; it does not start a second listener. Stopping Gateway
+releases only Gateway's connections, leaving the daemon, its direct extension
+connection, and other CDP clients running. Gateway-first automatic setup through
+`/browser/extension` remains supported.
+
+Both processes need an OpenClaw build that supports this owner-access protocol. A
+mismatched profile, port, key, or stricter authentication policy produces an
+error; Gateway never takes over the listener or falls back to legacy credentials.
+The daemon's stricter v2-only default is compatible with Gateway's default.
 
 ### Choose tab access
 
@@ -136,13 +216,36 @@ The extension excludes incognito tabs, internal pages such as `chrome://` and
 `chrome-extension://`, and tabs without a usable current URL. `file://` access
 also requires Chrome's **Allow access to file URLs** setting.
 
+An agent-created tab may start at `about:blank` while a CDP client initializes
+it before navigating. The extension allows that specific initial tab, keeps it
+in the OpenClaw group, and applies the same pause and access-mode controls.
+Existing blank tabs, manually grouped blanks, and other `about:` pages remain
+unavailable. Navigating away, replacing the tab, or restarting or reconnecting
+the extension ends the initial blank admission; returning to `about:blank`
+does not restore it.
+
+If creation fails before the extension returns the target, it attempts to close
+the tab only while it still owns it. Tabs you paused, moved, or navigated during
+creation are left alone. A redirect, lost connection, or worker shutdown can
+leave a tab behind; close it manually if needed.
+
+An explicitly commanded main-frame navigation of an authorized tab can also
+use exact `about:blank`, for example during a performance trace reset. Chrome
+must confirm the root frame and loader on the same attachment. An iframe
+navigation or a blank URL alone does not grant access.
+
+That temporary admission ends on the next nonblank document, debugger detach,
+access-mode change, pause, group or window change, tab closure or replacement,
+reconnect, or extension restart. Failed navigation never closes an existing
+tab or restores a URL over your navigation.
+
 ## Automatic setup controls
 
-Settings shows redacted relay/native bootstrap status and an **Use automatic
+Settings shows redacted relay/native bootstrap status and the **Use automatic
 local setup** switch.
 
 - Turning automatic setup off preserves a valid existing pairing but prevents
-  new native bootstrap attempts.
+  new native bootstrap and standalone relay wake-up attempts.
 - **Disconnect and disable automatic setup** revokes the pairing immediately,
   detaches debugger sessions, and persists the opt-out.
 - **Use local OpenClaw** clears the opt-out and retries the native host.
@@ -178,6 +281,30 @@ openclaw browser extension status
 openclaw browser extension status --json
 ```
 
+JSON `storeInstallRequests` entries report `requested` for a verified
+OpenClaw-owned request, `missing` when no request exists, `foreign` for an
+unrecognized registration, or `invalid` when the file cannot be safely read or
+validated. `storeDiscovered` reports `enabled` and `awaitingApproval` separately.
+A requested installation, a discovered extension, or an enabled extension does
+not prove an authenticated relay connection.
+
+An `owned` native-host registration is not necessarily launchable. Status reports a filesystem
+readiness snapshot of its registered runtime and native entry. It does not execute
+either target or verify that its code will run successfully. If an upgrade removes
+either target, rerun `openclaw browser extension install` to repair the owned
+registration. Ownership checks still refuse foreign or malformed manifests and
+launchers.
+
+Remove only OpenClaw's macOS Chrome Store installation request:
+
+```bash
+openclaw browser extension uninstall-store
+```
+
+Chrome may remove an externally installed extension on its next startup after
+the request is removed. This command leaves native-host registration and the
+development copy intact, and refuses foreign or malformed request files.
+
 Remove only OpenClaw-owned native-host manifests and launchers:
 
 ```bash
@@ -203,8 +330,10 @@ Manual pairing remains useful on Windows and for recovery. Treat the complete
 pairing string as a password.
 
 Without `--gateway-url`, this command retains the host-local `/extension` relay
-for standalone manual pairing. It does not wake Browser control; the selected
-profile relay must already be running before the extension connects.
+for standalone manual pairing. It does not wake Browser control. With native
+wake-up support installed and automatic local setup enabled, the extension can
+start that relay on reconnect without a local Gateway. Otherwise, the relay
+must already be running, for example through Browser control or a browser node.
 
 For a laptop that has Chrome but does not run OpenClaw or a browser node, pair
 directly to a remote Gateway:
@@ -223,6 +352,60 @@ path without a path-rewriting proxy prefix.
 ## External CDP clients
 
 The relay supports Browser Relay Authentication v2 clients such as mcporter.
+OpenClaw and an external client can stay connected together. When a client
+enables Runtime, the extension checks current tab access before the relay
+replays existing execution contexts to that new subscriber. This does not
+reset another client's Runtime session.
+
+Runtime binding callbacks go only to logical sessions that successfully registered
+the binding name, independently of `Runtime.enable` and `Runtime.disable`.
+Removing a binding or disconnecting a client preserves other clients' registrations
+of the same name. Context-specific registrations with the same name still share
+the underlying native Runtime; use distinct names when clients need separate
+context selection.
+
+Fetch request interception has one owner per native target session. Another
+client can use other CDP domains, but cannot replace that owner's interception
+settings or resolve its paused requests. Competing interception requests return
+an error rather than silently changing the active owner's policy. Fetch response
+streams also belong to the logical session that acquired them.
+
+Related targets (such as frames and workers) have separate logical sessions
+for each interested parent. Each parent's ordered auto-attach filter is
+preserved; the native attachment uses their union. New or broadened interests
+receive existing children only after the extension accepts the command. The
+native pause-on-attach setting remains shared: the latest update wins,
+including DevTools suspend/resume. Resuming a waiting target affects all its
+logical sessions.
+
+Clients still share the underlying tabs. Navigation or page changes can
+invalidate another client's snapshot refs; this is not an isolated browser per
+client or complete isolation of every CDP domain and competing client policy.
+A complete tab-list request returns an error when native targets cannot yet be
+matched to Playwright pages, rather than reporting a partial list as complete.
+
+If the extension connection drops, its debugger attachments retire before the
+replacement connection reattaches. An uncertain native Fetch operation also
+retires the affected attachment instead of retrying the operation against a
+replacement. Fetch cleanup is bounded; debugger teardown is not a guarantee that
+pending network requests are canceled. These paths do not change the access
+mode or paused tabs. Take a fresh snapshot after the target reattaches before
+using element refs. If a client no longer exposes the target, reconnect that
+client.
+
+If native detach fails, the error is reported and cleanup debt stays with that
+exact attachment. Other tabs remain usable, but the affected tab cannot acquire
+a replacement until cleanup succeeds. After restoring Chrome access, retry an
+explicit attachment or **Disconnect**. Chrome's debugger Cancel action can also
+end the native attachment. Removing or replacing a tab alone is not treated as
+proof that its debugger client closed. Failed CDP operations are never retried
+against a replacement session.
+
+The connection-lifetime protections require updated extension code as well as
+an updated OpenClaw installation. Update the Store extension when available.
+For an unpacked development copy, rerun `openclaw browser extension install`
+and reload the installed copy from `chrome://extensions`.
+
 Print non-secret endpoint metadata:
 
 ```bash
@@ -246,20 +429,28 @@ The extension requests only:
 - `tabs` and `tabGroups`: discover tabs and enforce access mode;
 - `storage`: persist pairing, access mode, session pauses, and bootstrap opt-out;
 - `alarms`: wake the MV3 worker for relay/bootstrap retries;
-- `nativeMessaging`: request one local bootstrap pairing.
+- `nativeMessaging`: request a local bootstrap pairing or wake its configured relay.
 
 It does not request `activeTab`, `contextMenus`, `scripting`, or `sidePanel`.
 
 ## Native bootstrap security
 
-The native host is `ai.openclaw.browser_bootstrap`. Each
-`chrome.runtime.sendNativeMessage` call starts one process, reads one request,
-writes one response, and exits.
+The native host is `ai.openclaw.browser_bootstrap`. The extension opens a
+`chrome.runtime.connectNative` port for one request, validates the response,
+then disconnects. The host writes one response and exits; a spawned standalone
+relay outlives this short-lived native connection.
 
 The request uses a versioned, length-prefixed JSON frame with a fresh 16-byte
 nonce. The host caps input at 4 KiB, requires fatal UTF-8 decoding and exact
 fields, verifies the caller origin against the exact installed manifest, and
-returns only a locally generated pairing or a bounded non-secret failure code.
+returns only a locally generated pairing, a relay status, or a bounded
+non-secret failure code. The bootstrap request remains exactly
+`{v:1, op:"bootstrap", nonce}`. Relay wake-up uses
+`{v:1, op:"ensure_relay", nonce, relayPort}` with a required integer port from
+1 through 65535. Missing, duplicate, malformed, or extra fields are rejected.
+After manifest and caller validation, the host checks the requested port
+against current extension profiles before probing or spawning. No request can
+supply a host, executable path, or credential to the launcher.
 The response is below Chrome's 1 MiB native-message limit. Pairing keys never
 appear in launcher arguments, manifests, status JSON, or diagnostics.
 
@@ -286,7 +477,10 @@ manifest has no `key`; only these development IDs depend on approved
 OpenClaw-owned realpaths.
 
 The relay itself uses connection-bound HMAC proofs. The persistent per-host key
-is not sent in a URL, header, WebSocket subprotocol, or application frame.
+is not sent in a URL, header, WebSocket subprotocol, or application frame during
+v2 authentication. On POSIX hosts, each key read rejects foreign-owned and
+non-regular files and tightens an owned group/other-accessible file to `0600`;
+if tightening fails, the key is refused. Windows uses its existing ACL policy.
 
 ## Troubleshooting
 
@@ -296,21 +490,31 @@ openclaw browser doctor --browser-profile chrome
 openclaw doctor
 ```
 
+- **No native host was pre-registered:** check the preceding per-browser refusal
+  diagnostics and resolve the reported path, ownership, or permission issue. This
+  summary does not mean that Chrome's user-data directory is missing. If Chrome
+  has never been launched, launch it first, then rerun `extension install` before
+  adding the extension.
 - **No extension ID detected:** keep Chrome running, rerun `extension install`,
   then add the official Store extension. Use **Load unpacked** only as a
   development fallback after the command says native bootstrap is ready.
 - **Extension was loaded before native setup:** restart Chrome once to clear its
   cached native-host miss, then rerun the ordered install flow.
+- **Extension version mismatch:** reload the unpacked OpenClaw extension from
+  `chrome://extensions`, then rerun browser doctor. Fully restart Chrome if the
+  running and bundled versions still differ.
 - **Waiting for local OpenClaw:** run `extension status`; install or repair the
   owned native host.
 - **Automatic setup disabled:** enable it in Settings or click **Use local
   OpenClaw**.
 - **Manual setup required:** use Settings for the advanced pairing flow. This
   is expected on Windows and direct extension-only remote Gateway setups.
-- **Relay unavailable:** confirm `openclaw gateway run` or the managed Gateway
-  service is running for local setup, or confirm the browser node is running
-  for browser-node setup. Then run browser doctor. No separate browser prewarm
-  should be necessary.
+- **Relay unavailable:** for `/browser/extension` pairings, confirm the target
+  Gateway is running. For direct loopback `/extension` pairings, check native
+  host registration, wake-up support in the extension build, automatic setup,
+  and that the paired port still belongs to an extension profile. Allow for the
+  one-minute wake-up throttle, then run browser doctor. No local Gateway is
+  required for the standalone path.
 
 See [Browser](/tools/browser) for the full profile model and the managed
 `openclaw` and Chrome MCP `user` profiles.

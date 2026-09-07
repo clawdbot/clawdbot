@@ -23,7 +23,6 @@ const blockArtCodeBlockCopyPayloadEncoding = "block-art-json";
 const CODE_PREVIEW_LINE_COUNT = 7;
 const codeBlockCopyAttempts = new WeakMap<HTMLElement, number>();
 const codeBlockCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
-let codeBlockRegionSequence = 0;
 
 for (const [language, definition] of Object.entries({
   bash,
@@ -59,7 +58,7 @@ function shouldRenderCodeBlockInteraction(env: unknown): boolean {
   return codeBlockRenderEnv(env)?.codeBlockInteraction === "interactive";
 }
 
-function encodeBlockArtCodeBlockCopyPayload(value: string): string {
+function encodeCodeBlockCopyPayload(value: string): string {
   return `${blockArtCopyPayloadPrefix}${JSON.stringify(value)}`;
 }
 
@@ -139,7 +138,7 @@ function handleCodeBlockDisclosure(target: Element): void {
   updateCodeBlockWidthOverflow(wrapper);
 }
 
-function updateCodeBlockWidthOverflow(wrapper: HTMLElement): void {
+export function updateCodeBlockWidthOverflow(wrapper: HTMLElement): void {
   const viewport = wrapper.querySelector<HTMLElement>(".code-block-viewport");
   const code = viewport?.querySelector<HTMLElement>("code");
   if (!viewport || !code) {
@@ -148,89 +147,6 @@ function updateCodeBlockWidthOverflow(wrapper: HTMLElement): void {
   const overflowing =
     !wrapper.classList.contains("is-wrapped") && code.scrollWidth > viewport.clientWidth + 1;
   wrapper.classList.toggle("has-horizontal-overflow", overflowing);
-}
-
-const initializedCodeBlocks = new WeakSet<HTMLElement>();
-const observedCodeBlockNodes = new Set<HTMLElement>();
-const pendingCodeBlockRoots = new Set<ParentNode>();
-const codeBlockResizeObserver =
-  typeof ResizeObserver === "undefined"
-    ? null
-    : new ResizeObserver((entries) => {
-        for (const entry of entries) {
-          const wrapper = entry.target.closest<HTMLElement>(".code-block-wrapper");
-          if (wrapper) {
-            updateCodeBlockWidthOverflow(wrapper);
-          }
-        }
-      });
-
-function observeCodeBlockNode(node: HTMLElement): void {
-  observedCodeBlockNodes.add(node);
-  codeBlockResizeObserver?.observe(node);
-}
-
-/**
- * A transcript re-render replaces its code blocks, and a ResizeObserver keeps its
- * targets alive, so detached nodes are released before each scan instead of
- * accumulating for the life of the session.
- */
-function releaseDetachedCodeBlockNodes(): void {
-  for (const node of observedCodeBlockNodes) {
-    if (!node.isConnected) {
-      codeBlockResizeObserver?.unobserve(node);
-      observedCodeBlockNodes.delete(node);
-    }
-  }
-}
-
-function scanMarkdownCodeBlocks(root: ParentNode): void {
-  for (const wrapper of root.querySelectorAll<HTMLElement>(".code-block-wrapper")) {
-    if (initializedCodeBlocks.has(wrapper)) {
-      continue;
-    }
-    const viewport = wrapper.querySelector<HTMLElement>(".code-block-viewport");
-    const code = viewport?.querySelector<HTMLElement>("code");
-    if (!viewport || !code) {
-      continue;
-    }
-    initializedCodeBlocks.add(wrapper);
-    const expandButton = wrapper.querySelector<HTMLButtonElement>(".code-block-expand");
-    if (expandButton) {
-      codeBlockRegionSequence += 1;
-      const regionId = `code-block-${codeBlockRegionSequence}`;
-      viewport.id = regionId;
-      expandButton.setAttribute("aria-controls", regionId);
-    }
-    observeCodeBlockNode(viewport);
-    observeCodeBlockNode(code);
-    updateCodeBlockWidthOverflow(wrapper);
-  }
-}
-
-/**
- * Single measurement owner for interactive fenced code below `root`. It names the
- * reveal region and tracks code width, which is what decides whether the wrap
- * control is offered at all; without it a host renders controls that never appear.
- *
- * The scan is deferred and coalesced because a Lit element `ref` commits before
- * that render's children: scanning inline would miss exactly the blocks the host
- * called about, and the last message of a quiet transcript would never measure.
- */
-export function initializeMarkdownCodeBlocks(root: ParentNode): void {
-  const alreadyScheduled = pendingCodeBlockRoots.size > 0;
-  pendingCodeBlockRoots.add(root);
-  if (alreadyScheduled) {
-    return;
-  }
-  queueMicrotask(() => {
-    const roots = [...pendingCodeBlockRoots];
-    pendingCodeBlockRoots.clear();
-    releaseDetachedCodeBlockNodes();
-    for (const pending of roots) {
-      scanMarkdownCodeBlocks(pending);
-    }
-  });
 }
 
 /** Highlight a snippet; output is escaped hljs markup safe for unsafeHTML in a code block. */
@@ -268,12 +184,13 @@ function codeClassAttribute(lang: string, highlighted: string): string {
 function renderCodeElement(
   text: string,
   lang: string,
-  options: { blockArt?: boolean } = {},
+  options: { blockArt?: boolean; highlight?: boolean } = {},
 ): string {
   if (options.blockArt || isMarkdownBlockArtText(text)) {
     return `<pre><code class="markdown-block-art">${escapeMarkdownHtml(text)}</code></pre>`;
   }
-  const highlighted = highlightCodeHtml(text, lang);
+  const highlighted =
+    options.highlight === false ? escapeMarkdownHtml(text) : highlightCodeHtml(text, lang);
   const classAttr = codeClassAttribute(lang, highlighted);
   return `<pre><code${classAttr}>${highlighted}</code></pre>`;
 }
@@ -283,43 +200,34 @@ function renderCodeBlockHeader(lang: string, actions: string): string {
   return `<div class="code-block-header"><span class="code-block-lang">${language}</span><div class="code-block-actions">${actions}</div></div>`;
 }
 
-function renderCodeBlockCopyButton(
-  text: string,
-  blockArt: boolean,
-  copyTextOverride: string | undefined,
-): string {
-  const copyText = copyTextOverride ?? text;
-  const copyPayload = blockArt ? encodeBlockArtCodeBlockCopyPayload(copyText) : copyText;
-  const attrSafe = escapeMarkdownHtml(copyPayload);
-  const encodingAttr = blockArt
-    ? ` data-code-encoding="${blockArtCodeBlockCopyPayloadEncoding}"`
-    : "";
-  return `<button type="button" class="code-block-copy" data-code="${attrSafe}"${encodingAttr} aria-label="${escapeMarkdownHtml(t("common.copyCode"))}"><span class="code-block-copy__idle" aria-hidden="true"></span><span class="code-block-copy__done" aria-hidden="true"></span><span class="code-block-copy__failed" aria-hidden="true">!</span></button>`;
+function renderCodeBlockCopyButton(text: string): string {
+  // Attribute sanitization trims plain values; encode copied whitespace with the text.
+  const attrSafe = escapeMarkdownHtml(encodeCodeBlockCopyPayload(text));
+  return `<button type="button" class="code-block-copy" data-code="${attrSafe}" data-code-encoding="${blockArtCodeBlockCopyPayloadEncoding}" aria-label="${escapeMarkdownHtml(t("common.copyCode"))}"><span class="code-block-copy__idle" aria-hidden="true"></span><span class="code-block-copy__done" aria-hidden="true"></span><span class="code-block-copy__failed" aria-hidden="true">!</span></button>`;
 }
 
 export function renderMarkdownCodeBlock(
   text: string,
   lang: string,
   env: unknown,
-  options: { blockArt?: boolean; copyText?: string } = {},
+  options: { blockArt?: boolean; copyText?: string; highlight?: boolean } = {},
 ): string {
   const blockArt = options.blockArt || isMarkdownBlockArtText(text);
-  const codeBlock = renderCodeElement(text, lang, { blockArt });
+  const codeBlock = renderCodeElement(text, lang, { blockArt, highlight: options.highlight });
   if (!shouldRenderCodeBlockCopy(env) && !shouldRenderCodeBlockInteraction(env)) {
     return codeBlock;
   }
   const copyButton = shouldRenderCodeBlockCopy(env)
-    ? renderCodeBlockCopyButton(text, blockArt, options.copyText)
+    ? renderCodeBlockCopyButton(options.copyText ?? text)
     : "";
   // Reveal and wrap controls are inert without a host that runs the code-block
   // lifecycle, so only interaction-owning hosts get the collapsible markup.
   if (!shouldRenderCodeBlockInteraction(env)) {
     return `<div class="code-block-wrapper">${renderCodeBlockHeader(lang, copyButton)}${codeBlock}</div>`;
   }
-  const hiddenLineCount = Math.max(
-    0,
-    markdownCodeBlockCopyText(text).split("\n").length - CODE_PREVIEW_LINE_COUNT,
-  );
+  const hiddenLineCount = ["text", "md", "markdown"].includes(lang.trim().toLowerCase())
+    ? 0
+    : Math.max(0, markdownCodeBlockCopyText(text).split("\n").length - CODE_PREVIEW_LINE_COUNT);
   const hiddenCount = { count: String(hiddenLineCount) };
   const expandLabel = t(
     hiddenLineCount === 1 ? "chat.codeBlock.showHiddenLine" : "chat.codeBlock.showHiddenLines",

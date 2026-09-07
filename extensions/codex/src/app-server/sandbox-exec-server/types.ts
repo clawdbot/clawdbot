@@ -1,9 +1,9 @@
 /**
  * Shared protocol and runtime state types for the Codex sandbox exec-server
- * WebSocket bridge.
+ * transport-neutral execution session.
  */
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
-import type { WebSocketServer } from "ws";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import type { SandboxChildOwner } from "./sandbox-child.js";
 
@@ -12,6 +12,19 @@ export type JsonRpcRequest = {
   id?: string | number;
   method?: string;
   params?: JsonValue;
+};
+
+/** Narrow JSON-RPC message sink for one connection-owned execution session. */
+export type CodexSandboxExecMessageTransport = {
+  send: (message: JsonObject) => void;
+  isOpen: () => boolean;
+};
+
+/** Notification delivery and lifetime owned by one execution session. */
+export type CodexSandboxExecSessionNotifications = {
+  send: (method: string, params: JsonObject) => void;
+  isOpen: () => boolean;
+  signal: AbortSignal;
 };
 
 /** Buffered process output chunk retained for polling and stream replay. */
@@ -79,15 +92,47 @@ export type ManagedProcess = {
   evictProcess: () => void;
 };
 
-/** Shared exec-server instance leased by Codex native sandbox environments. */
-export type OpenClawExecServer = {
+/** Common loopback server and lease ownership shared by both execution transports. */
+type OpenClawExecServerLease = {
   environmentId: string;
   authPath: string;
   refCount: number;
   closed: boolean;
   url: string;
   sandbox: SandboxContext;
-  server: WebSocketServer;
+  server: {
+    clients: Iterable<{ close: (code?: number, reason?: string) => void }>;
+    close: (callback: (error?: Error) => void) => void;
+  };
   children: Set<SandboxChildOwner>;
   cleanupTasks: Set<Promise<void>>;
 };
+
+/** Locally interpreted exec-server protocol backed by an OpenClaw sandbox. */
+export type OpenClawExecServer = OpenClawExecServerLease & {
+  backend: NonNullable<SandboxContext["backend"]>;
+  fsBridge: NonNullable<SandboxContext["fsBridge"]>;
+  readonly networkIsolated: boolean;
+};
+
+/** One pre-authorized, single-use Codex stdio connection. */
+export type CodexNodeExecServerLease = {
+  id: string;
+  channel: Awaited<ReturnType<PluginRuntime["nodes"]["openDuplex"]>>;
+  claimed: boolean;
+  closed: boolean;
+  closeRelay?: () => void;
+  onDisconnected?: (error: Error) => void;
+  onChannelClosed?: (result: { failed: boolean; error?: unknown }) => void;
+};
+
+/** Opaque exec-server relay backed by the exact prepared paired-device placement. */
+export type OpenClawNodeExecServer = OpenClawExecServerLease & {
+  node: {
+    id: string;
+    leases: Map<string, CodexNodeExecServerLease>;
+  };
+};
+
+/** One canonical loopback/refcount owner with either local or node connection handling. */
+export type OpenClawLeasedExecServer = OpenClawExecServer | OpenClawNodeExecServer;

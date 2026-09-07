@@ -33,6 +33,19 @@ function expectSlackConfigKeyRejected(config: unknown, key: string) {
 }
 
 describe("slack config schema", () => {
+  it("accepts compact progress style", () => {
+    expectSlackConfigValid({
+      streaming: {
+        mode: "progress",
+        progress: { style: "compact" },
+      },
+    });
+    expectSlackConfigIssue(
+      { streaming: { mode: "progress", progress: { style: "plain" } } },
+      "streaming.progress.style",
+    );
+  });
+
   it("accepts capability arrays and rejects retired interactive reply objects", () => {
     expectSlackConfigValid({ capabilities: ["presentation"] });
     expectSlackConfigIssue({ capabilities: { interactiveReplies: true } }, "capabilities");
@@ -61,6 +74,34 @@ describe("slack config schema", () => {
       expect(res.data.groupPolicy).toBe("allowlist");
     }
   });
+
+  it("preserves default-on join introductions without masking account inheritance", () => {
+    const parsed = SlackConfigSchema.parse({ accounts: { work: {} } });
+
+    expect(parsed.joinIntro).toBeUndefined();
+    expect(parsed.accounts?.work?.joinIntro).toBeUndefined();
+  });
+
+  it.each([
+    { root: false, account: undefined, expected: false },
+    { root: false, account: true, expected: true },
+    { root: true, account: false, expected: false },
+  ])(
+    "resolves join introductions from root=$root and account=$account to $expected",
+    ({ root, account, expected }) => {
+      const cfg = {
+        channels: {
+          slack: {
+            joinIntro: root,
+            accounts: { work: account === undefined ? {} : { joinIntro: account } },
+          },
+        },
+      } satisfies OpenClawConfig;
+
+      expectSlackConfigValid(cfg.channels.slack);
+      expect(resolveSlackAccount({ cfg, accountId: "work" }).config.joinIntro).toBe(expected);
+    },
+  );
 
   it('defaults postAs to "bot"', () => {
     const res = SlackConfigSchema.safeParse({ accounts: { work: {} } });

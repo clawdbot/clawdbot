@@ -517,26 +517,30 @@ async function writeLintReport(rootDir: string, issues: MemoryWikiLintIssue[]): 
 
 export async function lintMemoryWikiVault(
   config: ResolvedMemoryWikiConfig,
+  options: { signal?: AbortSignal } = {},
 ): Promise<LintMemoryWikiResult> {
-  const compileResult = await compileMemoryWikiVault(config);
+  const compileResult = await compileMemoryWikiVault(
+    config,
+    options.signal ? { signal: options.signal } : undefined,
+  );
+  options.signal?.throwIfAborted();
   const sourceSyncState = await readMemoryWikiSourceSyncState(config.vault.path);
   const managedImportedSourcePagePaths = new Set(
     Object.values(sourceSyncState.entries).map((entry) => entry.pagePath.split(path.sep).join("/")),
   );
   const issues = [
-    ...compileResult.frontmatterErrors.map(
-      (error): MemoryWikiLintIssue => ({
-        severity: "error",
-        category: "structure",
-        code: "invalid-frontmatter",
-        path: error.relativePath,
-        message: `Frontmatter failed to parse: ${error.message}`,
-      }),
-    ),
+    ...compileResult.frontmatterErrors.map((error): MemoryWikiLintIssue => ({
+      severity: "error",
+      category: "structure",
+      code: "invalid-frontmatter",
+      path: error.relativePath,
+      message: `Frontmatter failed to parse: ${error.message}`,
+    })),
     ...collectPageIssues(compileResult.pages, managedImportedSourcePagePaths),
   ].toSorted((left, right) => left.path.localeCompare(right.path));
   const issuesByCategory = buildIssuesByCategory(issues);
   const reportPath = await writeLintReport(config.vault.path, issues);
+  options.signal?.throwIfAborted();
 
   await appendMemoryWikiLog(config.vault.path, {
     type: "lint",

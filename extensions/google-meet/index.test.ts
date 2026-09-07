@@ -5553,8 +5553,8 @@ describe("google-meet plugin", () => {
         tab: { targetId: "created-meet-tab-b", openedByPlugin: false },
         browser: { inCall: true, micMuted: true },
       });
-    const leaveChromeMeetOnNode = vi
-      .spyOn(chromeTransport, "leaveChromeMeetOnNode")
+    const leaveChromeMeet = vi
+      .spyOn(chromeTransport, "leaveChromeMeet")
       .mockResolvedValue({ left: true, note: "left created tab" });
     try {
       const runtime = meetRuntime(
@@ -5586,16 +5586,18 @@ describe("google-meet plugin", () => {
       });
       await runtime.leave(joinedA.session.id);
       await runtime.leave(joinedB.session.id);
-      expect(leaveChromeMeetOnNode).toHaveBeenNthCalledWith(1, {
+      expect(leaveChromeMeet).toHaveBeenNthCalledWith(1, {
         runtime: expect.any(Object),
+        transport: "chrome-node",
         nodeId: "meet-node",
         config: expect.any(Object),
         meetingSessionId: expect.any(String),
         meetingUrl: "https://meet.google.com/drf-ihtb-pad",
         tab: { targetId: "created-meet-tab-a", openedByPlugin: true },
       });
-      expect(leaveChromeMeetOnNode).toHaveBeenNthCalledWith(2, {
+      expect(leaveChromeMeet).toHaveBeenNthCalledWith(2, {
         runtime: expect.any(Object),
+        transport: "chrome-node",
         nodeId: "meet-node",
         config: expect.any(Object),
         meetingSessionId: expect.any(String),
@@ -5603,7 +5605,7 @@ describe("google-meet plugin", () => {
         tab: { targetId: "created-meet-tab-b", openedByPlugin: true },
       });
     } finally {
-      leaveChromeMeetOnNode.mockRestore();
+      leaveChromeMeet.mockRestore();
       launchChromeMeetOnNode.mockRestore();
       createMeet.mockRestore();
     }

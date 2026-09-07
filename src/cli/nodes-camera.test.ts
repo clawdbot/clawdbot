@@ -66,7 +66,7 @@ let writeCameraClipPayloadToFile: typeof import("./nodes-camera.js").writeCamera
 let writeCameraPayloadToFile: typeof import("./nodes-camera.js").writeCameraPayloadToFile;
 let writeBase64ToFile: typeof import("./nodes-camera.js").writeBase64ToFile;
 let parseScreenRecordPayload: typeof import("./nodes-screen.js").parseScreenRecordPayload;
-let parseScreenSnapshotPayload: typeof import("./nodes-screen.js").parseScreenSnapshotPayload;
+let parseScreenSnapshotResult: typeof import("../plugins/computer-use-contract.js").parseScreenSnapshotResult;
 let screenRecordTempPath: typeof import("./nodes-screen.js").screenRecordTempPath;
 let screenSnapshotFormatForPath: typeof import("./nodes-screen.js").screenSnapshotFormatForPath;
 let screenSnapshotTempPath: typeof import("./nodes-screen.js").screenSnapshotTempPath;
@@ -121,13 +121,13 @@ describe("nodes camera helpers", () => {
     } = await import("./nodes-camera.js"));
     ({
       parseScreenRecordPayload,
-      parseScreenSnapshotPayload,
       screenRecordTempPath,
       screenSnapshotFormatForPath,
       screenSnapshotTempPath,
       writeScreenRecordToFile,
       writeScreenSnapshotToFile,
     } = await import("./nodes-screen.js"));
+    ({ parseScreenSnapshotResult } = await import("../plugins/computer-use-contract.js"));
     ({ publishOutputFileAtomically } = await vi.importActual("./output-file.runtime.js"));
   });
 
@@ -154,6 +154,47 @@ describe("nodes camera helpers", () => {
     expect(() => parseCameraSnapPayload({ format: "jpg" })).toThrow(
       /invalid camera\.snap payload/i,
     );
+  });
+
+  it.each([
+    {
+      name: "malformed base64",
+      payload: { format: "jpg", base64: "not-base64!", width: 1, height: 1 },
+      expectedError: /invalid base64/i,
+    },
+    {
+      name: "insecure URL",
+      payload: { format: "jpg", url: "http://198.51.100.42/photo.jpg", width: 1, height: 1 },
+      expectedHost: "198.51.100.42",
+      expectedError: /only https/i,
+    },
+    {
+      name: "mismatched URL host",
+      payload: { format: "jpg", url: "https://198.51.100.43/photo.jpg", width: 1, height: 1 },
+      expectedHost: "198.51.100.42",
+      expectedError: /must match node host/i,
+    },
+    {
+      name: "missing URL node host",
+      payload: { format: "jpg", url: "https://198.51.100.42/photo.jpg", width: 1, height: 1 },
+      expectedError: /node remoteip/i,
+    },
+    {
+      name: "valid URL with malformed base64",
+      payload: {
+        format: "jpg",
+        url: "https://198.51.100.42/photo.jpg",
+        base64: "not-base64!",
+        width: 1,
+        height: 1,
+      },
+      expectedHost: "198.51.100.42",
+      expectedError: /invalid base64/i,
+    },
+  ])("rejects $name while parsing a camera.snap payload", (testCase) => {
+    expect(() =>
+      parseCameraSnapPayload(testCase.payload, { expectedHost: testCase.expectedHost }),
+    ).toThrow(testCase.expectedError);
   });
 
   it.each([undefined, "front", "back", "both"] as const)(
@@ -434,6 +475,7 @@ describe("nodes camera helpers", () => {
     await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "short-write.bin");
       await fs.writeFile(out, "existing-camera");
+      const stagingRoot = `${await fs.realpath(dir)}${path.sep}`;
       const originalOpen = fsMocks.actualOpen;
       if (!originalOpen) {
         throw new Error("expected actual fs.open implementation");
@@ -441,7 +483,7 @@ describe("nodes camera helpers", () => {
       let shortWriteObserved = false;
       fsMocks.open.mockImplementation(async (...args) => {
         const handle = await originalOpen(...args);
-        if (typeof args[0] !== "string" || path.dirname(args[0]) !== dir || args[1] !== "wx") {
+        if (typeof args[0] !== "string" || !args[0].startsWith(stagingRoot) || args[1] !== "wx") {
           return handle;
         }
 
@@ -721,7 +763,7 @@ describe("nodes screen helpers", () => {
 
   it("parses screen.snapshot payload", () => {
     expect(
-      parseScreenSnapshotPayload({
+      parseScreenSnapshotResult({
         format: "png",
         base64: "Zm9v",
         displayFrameId: "display-42-frame",
@@ -740,7 +782,7 @@ describe("nodes screen helpers", () => {
   });
 
   it("rejects invalid screen.snapshot payload", () => {
-    expect(() => parseScreenSnapshotPayload({ format: "png" })).toThrow(
+    expect(() => parseScreenSnapshotResult({ format: "png" })).toThrow(
       /invalid screen\.snapshot payload/i,
     );
   });

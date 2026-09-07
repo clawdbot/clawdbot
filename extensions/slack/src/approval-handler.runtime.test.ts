@@ -9,6 +9,12 @@ import { decodeSlackApprovalAction } from "./approval-actions.js";
 import { slackApprovalNativeRuntime } from "./approval-handler.runtime.js";
 import { countSlackTextUtf8Bytes } from "./truncate.js";
 
+const sendMessageSlackMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./send.js", () => ({
+  sendMessageSlack: sendMessageSlackMock,
+}));
+
 type SlackPayload = {
   text: string;
   blocks?: unknown;
@@ -170,6 +176,25 @@ function buildExecResolvedResult() {
   });
 }
 
+function buildExecExpiredResult() {
+  return slackApprovalNativeRuntime.presentation.buildExpiredResult({
+    ...APPROVAL_CONTEXT,
+    request: {
+      id: "req-1",
+      request: { command: "echo hi" },
+      ...APPROVAL_TIMING,
+    },
+    view: {
+      approvalKind: "exec",
+      approvalId: "req-1",
+      phase: "expired",
+      commandText: "echo hi",
+      metadata: [],
+    } as never,
+    entry: APPROVAL_ENTRY,
+  });
+}
+
 function buildPluginResolvedResult() {
   return slackApprovalNativeRuntime.presentation.buildResolvedResult({
     ...APPROVAL_CONTEXT,
@@ -244,6 +269,13 @@ async function updateSlackApprovalEntry(
     ...APPROVAL_CONTEXT,
     context,
     entry: { channelId: "C123", messageTs: "1712345678.999999" },
+    request: {
+      id: "approval-1",
+      request: { command: "echo hi" },
+      createdAtMs: 0,
+      expiresAtMs: 60_000,
+    },
+    approvalKind: "exec",
     payload,
     phase: "resolved",
   });
@@ -301,8 +333,94 @@ function findApprovalMrkdwn(payload: SlackPayload, prefix: string): string {
 }
 
 describe("slackApprovalNativeRuntime", () => {
-  it("subscribes to plugin approval events", () => {
-    expect(slackApprovalNativeRuntime.eventKinds).toEqual(["exec", "plugin"]);
+  it.each([
+    { phase: "resolved", status: "processing", threadTs: "1712345678.000001" },
+    { phase: "expired", status: "active", threadTs: "1712345678.000001" },
+    { phase: "resolved", status: "processing", threadTs: undefined },
+    { phase: "expired", status: "active", threadTs: undefined },
+  ] as const)(
+    "tracks $phase approval session status with thread $threadTs",
+    async ({ phase, status, threadTs }) => {
+      const calls: string[] = [];
+      sendMessageSlackMock.mockReset().mockImplementation(async () => {
+        calls.push("deliver");
+        return { channelId: "C123", messageId: "1712345678.999999" };
+      });
+      const apiCall = vi.fn(async (_method: string, args: { status: string }) => {
+        calls.push(args.status);
+        return { ok: true };
+      });
+      const context = {
+        app: {
+          client: {
+            apiCall,
+            chat: {
+              update: vi.fn(async () => {
+                calls.push("update");
+                return { ok: true };
+              }),
+            },
+          },
+        },
+        config: {},
+      };
+      const request = {
+        id: "approval-1",
+        request: { command: "echo hi" },
+        ...APPROVAL_TIMING,
+      };
+      const entry = await slackApprovalNativeRuntime.transport.deliverPending({
+        ...APPROVAL_CONTEXT,
+        context,
+        request,
+        approvalKind: "exec",
+        plannedTarget: {
+          surface: "origin",
+          reason: "preferred",
+          target: { to: "channel:C123", threadId: threadTs },
+        },
+        preparedTarget: { to: "channel:C123", threadTs },
+        pendingPayload: { text: "Waiting", blocks: [] },
+        view: {
+          approvalKind: "exec",
+          phase: "pending",
+          approvalId: request.id,
+          title: "Exec approval",
+          commandText: "echo hi",
+          metadata: [],
+          actions: [],
+          expiresAtMs: APPROVAL_TIMING.expiresAtMs,
+        },
+      });
+      if (!entry) {
+        throw new Error("Expected delivered Slack approval entry");
+      }
+      await slackApprovalNativeRuntime.transport.updateEntry?.({
+        ...APPROVAL_CONTEXT,
+        context,
+        request,
+        approvalKind: "exec",
+        entry,
+        payload: { text: "Finished", blocks: [] },
+        phase,
+      });
+
+      expect(calls).toEqual(
+        threadTs ? ["deliver", "suspended", "update", status] : ["deliver", "update"],
+      );
+      expect(apiCall.mock.calls).toEqual(
+        threadTs
+          ? ["suspended", status].map((sessionStatus) => [
+              "agents.sessions.setStatus",
+              { channel_id: "C123", thread_ts: threadTs, status: sessionStatus },
+            ])
+          : [],
+      );
+    },
+  );
+
+  it("subscribes to all native approval events", () => {
+    expect(slackApprovalNativeRuntime.eventKinds).toEqual(["exec", "plugin", "system-agent"]);
   });
 
   it("does not leave dangling surrogates when truncating exec approval command mrkdwn", async () => {
@@ -375,6 +493,10 @@ describe("slackApprovalNativeRuntime", () => {
       metadata: [
         { label: "Severity", value: "Warning" },
         { label: "Plugin", value: "computer-use" },
+        {
+          label: "Scope",
+          value: "Send to 3 recipients via email (external): alice@example.com, +2 more",
+        },
       ],
       decisions: ["allow-once", "allow-always", "deny"],
     });
@@ -385,6 +507,12 @@ describe("slackApprovalNativeRuntime", () => {
     );
     expect(payload.text).toContain("Share screen with Computer Use");
     expect(payload.text).toContain("*Approval ID:* plugin:req-1");
+    expect(payload.text).toContain(
+      "*Scope:* Send to 3 recipients via email (external): alice@example.com, +2 more",
+    );
+    expect(readMrkdwnTexts(payload.blocks)).toContain(
+      "*Scope:* Send to 3 recipients via email (external): alice@example.com, +2 more",
+    );
     expect(payload.text).not.toContain("*Command*");
     const actionsBlock = findSlackActionsBlock(
       payload.blocks as Array<{ type?: string; elements?: unknown[] }>,
@@ -414,6 +542,33 @@ describe("slackApprovalNativeRuntime", () => {
     expect(
       (payload.blocks as Array<{ type?: string }>).some((block) => block.type === "actions"),
     ).toBe(false);
+  });
+
+  it("renders expired exec approvals without interactive controls", async () => {
+    const result = await buildExecExpiredResult();
+
+    expect(result).toEqual({
+      kind: "update",
+      payload: {
+        text: "*Exec approval expired*\nThis approval request expired before it was resolved.\n\n*Command*\n```\necho hi\n```",
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "*Exec approval expired*\nThis approval request expired before it was resolved.",
+            },
+          },
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "*Command*\n```\necho hi\n```",
+            },
+          },
+        ],
+      },
+    });
   });
 
   it("renders plugin resolved and expired updates without command text", async () => {

@@ -55,7 +55,6 @@ private struct AppearanceSettingsRow: View {
 private struct AppearanceSettingsScreen: View {
     @Environment(AppAppearanceModel.self) private var appearanceModel
     @Environment(\.dismiss) private var dismiss
-    @AppStorage(RootSidebar.visibleAgentCountKey) private var sidebarVisibleAgentCount: Int = 1
 
     var body: some View {
         List {
@@ -85,23 +84,6 @@ private struct AppearanceSettingsScreen: View {
                 }
             } footer: {
                 Text("System follows this device’s appearance setting.")
-                    .font(OpenClawType.footnote)
-            }
-
-            Section {
-                Stepper(value: self.$sidebarVisibleAgentCount, in: 1...3) {
-                    HStack {
-                        Text("Sidebar Agents")
-                            .font(OpenClawType.body)
-                        Spacer()
-                        Text(verbatim: self.sidebarVisibleAgentCount.formatted())
-                            .font(OpenClawType.body)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .accessibilityIdentifier("settings-appearance-sidebar-agents")
-            } footer: {
-                Text("How many agents the sidebar lists before the switcher menu.")
                     .font(OpenClawType.footnote)
             }
         }
@@ -500,11 +482,24 @@ extension SettingsProTab {
                 color: watchStatus.appInstalled ? OpenClawBrand.ok : OpenClawBrand.warn)
 
             Section {
+                NavigationLink {
+                    WatchMessageJournalView()
+                } label: {
+                    Label("Message Delivery", systemImage: "bubble.left.and.text.bubble.right")
+                        .font(OpenClawType.body)
+                }
+            }
+
+            Section {
                 Button {
                     Task { await self.sendDirectWatchSetup() }
                 } label: {
-                    Label("Enable Direct Gateway Connection", systemImage: "point.3.connected.trianglepath.dotted")
-                        .font(OpenClawType.body)
+                    Label {
+                        Text("Connect Apple Watch")
+                            .font(OpenClawType.body)
+                    } icon: {
+                        Image(systemName: "applewatch")
+                    }
                 }
                 .disabled(
                     self.isSendingWatchDirectSetup
@@ -521,7 +516,9 @@ extension SettingsProTab {
             } footer: {
                 Text(
                     """
-                    The watch receives a one-time pairing code and stores its own device token. \
+                    The watch receives a one-time pairing code and its own device credentials. \
+                    Voice is included with read and Talk access, without admin access. \
+                    The microphone starts only when you tap Start on the watch. \
                     A reachable secure Gateway URL is required away from the iPhone.
                     """)
                     .font(OpenClawType.footnote)
@@ -544,13 +541,11 @@ extension SettingsProTab {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if self.directRoute == nil {
-                Button {
-                    self.openNotificationsRouteFromApprovals()
-                } label: {
-                    Label("Open Notifications", systemImage: "bell.badge")
-                        .font(OpenClawType.body)
-                }
+            Button {
+                self.openNotificationsRouteFromApprovals()
+            } label: {
+                Label("Open Notifications", systemImage: "bell.badge")
+                    .font(OpenClawType.body)
             }
         }
     }

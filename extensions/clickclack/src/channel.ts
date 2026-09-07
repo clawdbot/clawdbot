@@ -200,7 +200,11 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
         name: account.name,
         enabled: account.enabled,
         configured: account.configured,
-        baseUrl: account.baseUrl,
+        extra: {
+          baseUrl: account.baseUrl,
+          tokenSource: account.tokenSource,
+          tokenStatus: account.tokenStatus,
+        },
       }),
     }),
     gateway: {

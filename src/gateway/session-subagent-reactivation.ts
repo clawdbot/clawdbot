@@ -1,6 +1,10 @@
 // Subagent session reactivation helper.
 // Replaces completed subagent run records when a user steers the child session.
-import { getLatestSubagentRunByChildSessionKey } from "../agents/subagents/registry/subagent-registry-read.js";
+import {
+  getLatestLiveSubagentRunByChildSessionKey,
+  getLatestSubagentRunByChildSessionKey,
+} from "../agents/subagents/registry/subagent-registry-read.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 
 // Completed subagent sessions can be reactivated after a user steer by replacing
 // the previous completed run id with the next run id through a lazy runtime
@@ -23,6 +27,7 @@ export async function reactivateCompletedSubagentSession(params: {
   sessionKey: string;
   runId?: string;
   task?: string;
+  gatewayContextResolver?: GatewayContextResolver;
 }): Promise<boolean> {
   const runId = params.runId?.trim();
   if (!runId) {
@@ -33,13 +38,30 @@ export async function reactivateCompletedSubagentSession(params: {
     return false;
   }
   const { replaceSubagentRunAfterSteer } = await loadSessionSubagentReactivationRuntime();
+  // The lazy import can outlive its Gateway. Check the exact owner immediately
+  // before the synchronous replacement write.
+  if (params.gatewayContextResolver && !params.gatewayContextResolver()) {
+    return false;
+  }
   const task = params.task;
   const hasTask = typeof task === "string" && task.trim().length > 0;
-  return replaceSubagentRunAfterSteer({
+  const replaced = await replaceSubagentRunAfterSteer({
     previousRunId: existing.runId,
     nextRunId: runId,
     fallback: existing,
     runTimeoutSeconds: existing.runTimeoutSeconds ?? 0,
+    persistenceFailure: "throw",
     ...(hasTask ? { task } : {}),
+    ...(params.gatewayContextResolver
+      ? { gatewayContextResolver: params.gatewayContextResolver }
+      : {}),
   });
+  if (replaced) {
+    return true;
+  }
+  const currentOwner = getLatestLiveSubagentRunByChildSessionKey(params.sessionKey);
+  if (currentOwner?.runId === runId) {
+    return true;
+  }
+  throw new Error("subagent follow-up owner replacement was rejected");
 }

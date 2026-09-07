@@ -590,11 +590,7 @@ export async function fetchMinimaxUsage(
       };
     }
 
-    const resetAt =
-      parseEpoch(pickString(usageRecord, RESET_KEYS)) ??
-      parseEpoch(pickNumber(usageRecord, RESET_KEYS)) ??
-      parseEpoch(pickString(payload, RESET_KEYS)) ??
-      parseEpoch(pickNumber(payload, RESET_KEYS));
+    const resetAt = pickEpoch(usageRecord, RESET_KEYS) ?? pickEpoch(payload, RESET_KEYS);
     windows = [
       {
         label: deriveWindowLabel(usageRecord),

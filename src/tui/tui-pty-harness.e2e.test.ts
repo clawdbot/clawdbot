@@ -15,7 +15,7 @@ import {
   waitForSynchronizedFrameRows,
   type FixtureLogEntry,
 } from "./tui-pty-harness-fixture-test-support.js";
-import { exerciseTuiReconnectOutcomes } from "./tui-pty-reconnect-test-support.js";
+import { registerTuiReconnectTests } from "./tui-pty-reconnect-test-support.js";
 import {
   exerciseStreamingRendering,
   exerciseToolCardRendering,
@@ -42,7 +42,7 @@ it("rejects rendering oracle false positives", () => {
   expect(toolFrame(reversedTool, false)).toBe(false);
 });
 
-describe.sequential("TUI PTY harness", () => {
+describe("TUI PTY harness", { concurrent: false }, () => {
   let fixture: Awaited<ReturnType<typeof startTuiFixture>>;
   let compactFooterFixture: Awaited<ReturnType<typeof startTuiFixture>>;
   let thinkingOverrideFixture: Awaited<ReturnType<typeof startTuiFixture>>;
@@ -247,11 +247,11 @@ describe.sequential("TUI PTY harness", () => {
     STARTUP_TEST_TIMEOUT_MS,
   );
 
-  it(
-    "reconciles active and terminal runs after reconnect history",
-    () => exerciseTuiReconnectOutcomes(STARTUP_TIMEOUT_MS),
-    STARTUP_TEST_TIMEOUT_MS,
-  );
+  registerTuiReconnectTests({
+    startupTimeoutMs: STARTUP_TIMEOUT_MS,
+    testTimeoutMs: TEST_TIMEOUT_MS,
+    startupTestTimeoutMs: STARTUP_TEST_TIMEOUT_MS,
+  });
 
   it.each([{ failures: 1 }, { failures: 2 }, { failures: 3 }, { failures: 4 }])(
     "recovers session subscription after $failures startup failures",
@@ -655,10 +655,10 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
-    "presents and starts a suggested task in the TUI",
+    "starts a suggested task in a new session from the TUI",
     async () => {
       await fixture.run.write("task suggestion proof\r");
-      await fixture.run.waitForOutput("Suggested follow-up: Remove stale adapter");
+      await fixture.run.waitForOutput("Start in a new session");
       await fixture.run.waitForOutput("Project: /repo/project");
       await fixture.run.waitForOutput("The adapter is unreachable and adds maintenance cost.");
 
@@ -736,12 +736,12 @@ describe.sequential("TUI PTY harness", () => {
     "preserves xAI account limit errors in terminal output",
     async () => {
       await fixture.run.write("xai limit proof\r");
-      await fixture.run.waitForOutput("monthly spending limit");
-      expect(fixture.run.visibleOutput()).not.toContain("Run /auth");
       await fixture.waitForLogEntry(
         (entry) =>
           entry.method === "sendChat" && objectFieldEquals(entry, "message", "xai limit proof"),
       );
+      await fixture.run.waitForOutput("monthly spending limit");
+      expect(fixture.run.visibleOutput()).not.toContain("Run /auth");
     },
     TEST_TIMEOUT_MS,
   );

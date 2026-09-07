@@ -1,9 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n } from "../i18n/index.ts";
 import { GitHubLinkHovercardProvider } from "./github-link-hovercard.runtime.ts";
+import { LazyHovercardBootstrap } from "./lazy-hovercard-registration.ts";
 
 // Mirrors CLOSE_DELAY_MS in the runtime, like the 250ms open delay used below.
 const GITHUB_HOVERCARD_CLOSE_DELAY_MS = 120;
@@ -17,6 +19,7 @@ customElements.define(
 
 type GitHubLinkHovercardProviderElement = HTMLElement & {
   client: GatewayBrowserClient | null;
+  agentId?: string;
 };
 
 function createLink(href: string, label = "GitHub item") {
@@ -51,10 +54,9 @@ function issuePreviewResponse(overrides: Record<string, unknown> = {}) {
 
 function createIssueLink(response: Record<string, unknown> = issuePreviewResponse()) {
   const link = createLink(ISSUE_HREF, "#99815");
-  link.provider.client = {
-    request: vi.fn().mockResolvedValue(response),
-  } as unknown as GatewayBrowserClient;
-  return link;
+  const request = vi.fn().mockResolvedValue(response);
+  link.provider.client = { request } as unknown as GatewayBrowserClient;
+  return { ...link, request };
 }
 
 function titleLinkInCard(): HTMLAnchorElement | null {
@@ -97,6 +99,112 @@ describe("openclaw-github-link-hovercard-provider", () => {
     vi.restoreAllMocks();
   });
 
+  it("stacks co-author faces after the author and counts the rest", async () => {
+    const avatar =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=";
+    const request = vi.fn().mockResolvedValue({
+      additions: 71,
+      avatarDataUrl: avatar,
+      changedFiles: 8,
+      coAuthorCount: 5,
+      coAuthors: [
+        { login: "steipete", avatarDataUrl: avatar },
+        { login: "ada", avatarDataUrl: avatar },
+        { login: "mira", avatarDataUrl: avatar },
+      ],
+      createdAt: "2026-07-04T05:03:47Z",
+      deletions: 109,
+      kind: "pull",
+      login: "roboclaw-bot",
+      mergedAt: "2026-07-04T09:53:52Z",
+      number: 131440,
+      owner: "OpenClaw",
+      repo: "OpenClaw",
+      state: "closed",
+      title: "fix(ui): open people cards from one row",
+      updatedAt: "2026-07-05T09:55:00Z",
+    });
+    const { anchor, provider } = createLink(
+      "https://github.com/openclaw/openclaw/pull/131440",
+      "#131440",
+    );
+    provider.client = { request } as unknown as GatewayBrowserClient;
+
+    await hover(anchor);
+
+    const stack = document.querySelector<HTMLElement>(".github-link-hovercard__coauthors");
+    expect(stack?.querySelectorAll("img")).toHaveLength(3);
+    // Two co-authors beyond the three fetched faces.
+    expect(stack?.querySelector(".github-link-hovercard__coauthors-more")?.textContent).toBe("+2");
+    expect(stack?.getAttribute("title")).toBe("Co-authored by steipete, ada, mira");
+    // Faces are decorative; the group is the only thing assistive tech can read.
+    expect(stack?.getAttribute("role")).toBe("img");
+    expect(stack?.getAttribute("aria-label")).toBe("Co-authored by steipete, ada, mira");
+    expect([...(stack?.querySelectorAll("img") ?? [])].every((img) => img.alt === "")).toBe(true);
+    // The stack sits after the author, never inside the metrics.
+    expect(stack?.previousElementSibling?.classList.contains("github-link-hovercard__author")).toBe(
+      true,
+    );
+  });
+
+  it("counts a co-author whose avatar failed to inline into the overflow", async () => {
+    const avatar =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=";
+    const request = vi.fn().mockResolvedValue({
+      createdAt: "2026-07-04T05:03:47Z",
+      coAuthorCount: 5,
+      coAuthors: [
+        { login: "steipete", avatarDataUrl: avatar },
+        { login: "ada", avatarDataUrl: avatar },
+        // Avatar inlining is optional and can fail for one person.
+        { login: "mira" },
+      ],
+      kind: "pull",
+      login: "roboclaw-bot",
+      number: 131442,
+      owner: "OpenClaw",
+      repo: "OpenClaw",
+      state: "open",
+      title: "fix(ui): one row",
+      updatedAt: "2026-07-05T09:55:00Z",
+    });
+    const { anchor, provider } = createLink(
+      "https://github.com/openclaw/openclaw/pull/131442",
+      "#131442",
+    );
+    provider.client = { request } as unknown as GatewayBrowserClient;
+
+    await hover(anchor);
+
+    const stack = document.querySelector<HTMLElement>(".github-link-hovercard__coauthors");
+    expect(stack?.querySelectorAll("img")).toHaveLength(2);
+    // Two faces plus "+3" accounts for all five; "+2" would drop the faceless one.
+    expect(stack?.querySelector(".github-link-hovercard__coauthors-more")?.textContent).toBe("+3");
+  });
+
+  it("omits the co-author stack when a pull request has none", async () => {
+    const request = vi.fn().mockResolvedValue({
+      createdAt: "2026-07-04T05:03:47Z",
+      kind: "pull",
+      login: "roboclaw-bot",
+      number: 131441,
+      owner: "OpenClaw",
+      repo: "OpenClaw",
+      state: "open",
+      title: "fix(ui): one row",
+      updatedAt: "2026-07-05T09:55:00Z",
+    });
+    const { anchor, provider } = createLink(
+      "https://github.com/openclaw/openclaw/pull/131441",
+      "#131441",
+    );
+    provider.client = { request } as unknown as GatewayBrowserClient;
+
+    await hover(anchor);
+
+    expect(document.querySelector(".github-link-hovercard__coauthors")).toBeNull();
+  });
+
   it("renders and caches pull request details without changing the link", async () => {
     const request = vi.fn().mockResolvedValue({
       additions: 101,
@@ -118,7 +226,10 @@ describe("openclaw-github-link-hovercard-provider", () => {
       updatedAt: "2026-07-05T09:55:00Z",
     });
     const href = "https://github.com/openclaw/openclaw/pull/99816";
-    const { anchor, provider } = createLink(href, "#99816");
+    const { anchor, provider } = createLink(
+      "HTTPS://GITHUB.COM:443/openclaw/openclaw/pull/99816",
+      "#99816",
+    );
     provider.client = { request } as unknown as GatewayBrowserClient;
 
     await hover(anchor);
@@ -132,7 +243,7 @@ describe("openclaw-github-link-hovercard-provider", () => {
     expect(card?.textContent).toContain("steipete");
     expect(card?.textContent).toContain("+101");
     expect(card?.textContent).toContain("−12");
-    expect(card?.textContent).toContain("3 files");
+    expect(card?.textContent).not.toContain("3 files");
     expect(card?.textContent).toContain("5m ago");
     expect(anchor.href).toBe(href);
     // A card that owns a link is an interactive popover, never an ARIA tooltip.
@@ -143,20 +254,25 @@ describe("openclaw-github-link-hovercard-provider", () => {
     expect(anchor.getAttribute("aria-haspopup")).toBe("dialog");
     expect(anchor.getAttribute("aria-expanded")).toBe("true");
     expect(anchor.getAttribute("aria-controls")).toBe(card?.id);
-    // Title, repo reference, author and the files chip are all real links, which
-    // is what makes the card a popover rather than a tooltip.
+    // Title, repo reference, and author are real links, which is what makes the
+    // card a popover rather than a tooltip.
     const cardLink = (selector: string) =>
       card?.querySelector<HTMLAnchorElement>(`.github-link-hovercard__${selector}`);
     expect(cardLink("title")?.getAttribute("href")).toBe(href);
     expect(cardLink("repo")?.getAttribute("href")).toBe(href);
     expect(cardLink("author")?.getAttribute("href")).toBe("https://github.com/steipete");
-    expect(cardLink("metric--files")?.getAttribute("href")).toBe(`${href}/files`);
-    for (const selector of ["title", "repo", "author", "metric--files"]) {
+    expect(card?.querySelector(".github-link-hovercard__metric--files")).toBeNull();
+    for (const selector of ["title", "repo", "author"]) {
       expect(cardLink(selector)?.target).toBe("_blank");
       expect(cardLink(selector)?.rel.split(/\s+/)).toEqual(
         expect.arrayContaining(["noopener", "noreferrer"]),
       );
     }
+    const diffMetrics = card?.querySelector(".github-link-hovercard__metrics--diff");
+    expect(diffMetrics?.children).toHaveLength(2);
+    expect([...(diffMetrics?.children ?? [])].every((metric) => metric.tagName === "SPAN")).toBe(
+      true,
+    );
     expect(request).toHaveBeenCalledWith(
       "controlUi.githubPreview",
       {
@@ -173,6 +289,115 @@ describe("openclaw-github-link-hovercard-provider", () => {
     expect(hovercard()).toBeNull();
     await hover(anchor);
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(
+    ["pull", "issue"].flatMap((kind) => ["base", "comment"].map((first) => ({ kind, first }))),
+  )(
+    "keeps cached $kind preview links on the current anchor ($first first)",
+    async ({ kind, first }) => {
+      const surface = kind === "pull" ? "pull" : "issues";
+      const baseHref = `https://github.com/openclaw/openclaw/${surface}/99815`;
+      const commentHref = `${baseHref}#issuecomment-123`;
+      const variantHref = `https://github.com/OpenClaw/OpenClaw/${surface}/99815/?view=activity#issuecomment-456`;
+      const { anchor, provider } = createLink(baseHref);
+      const request = vi.fn().mockResolvedValue(issuePreviewResponse({ kind }));
+      provider.client = { request } as unknown as GatewayBrowserClient;
+      const comment = document.createElement("a");
+      comment.href = commentHref;
+      comment.textContent = "Comment permalink";
+      const variant = document.createElement("a");
+      variant.href = variantHref;
+      variant.textContent = "Alternate permalink";
+      provider.append(comment, variant);
+      const sequence =
+        first === "base" ? [anchor, comment, variant, anchor] : [comment, anchor, variant, anchor];
+
+      for (const current of sequence) {
+        await hover(current);
+        expect(titleLinkInCard()?.href).toBe(current.href);
+        expect(
+          hovercard()?.querySelector<HTMLAnchorElement>(".github-link-hovercard__repo")?.href,
+        ).toBe(current.href);
+        expect(
+          hovercard()?.querySelector<HTMLAnchorElement>(".github-link-hovercard__author")?.href,
+        ).toBe("https://github.com/octocat");
+        expect(request).toHaveBeenCalledTimes(1);
+        leave(current);
+        await vi.advanceTimersByTimeAsync(GITHUB_HOVERCARD_CLOSE_DELAY_MS);
+      }
+    },
+  );
+
+  it.each(["immediate rejection", "late rejection", "late success"])(
+    "reopens an abandoned request without poisoning its replacement cache: %s",
+    async (settlement) => {
+      const abandoned = createDeferred<ReturnType<typeof issuePreviewResponse>>();
+      let requestSignal: AbortSignal | undefined;
+      const request = vi
+        .fn()
+        .mockImplementationOnce(
+          (_method: string, _params: unknown, options: { signal: AbortSignal }) => {
+            requestSignal = options.signal;
+            if (settlement === "immediate rejection") {
+              options.signal.addEventListener(
+                "abort",
+                () => abandoned.reject(new Error("gateway request aborted")),
+                { once: true },
+              );
+            }
+            return abandoned.promise;
+          },
+        )
+        .mockResolvedValue(issuePreviewResponse());
+      const { anchor, provider } = createLink(ISSUE_HREF);
+      provider.client = { request } as unknown as GatewayBrowserClient;
+
+      await hover(anchor);
+      expect(hovercard()?.dataset.loading).toBe("true");
+      leave(anchor);
+      await vi.advanceTimersByTimeAsync(GITHUB_HOVERCARD_CLOSE_DELAY_MS);
+      expect(requestSignal?.aborted).toBe(true);
+      await hover(anchor);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
+
+      if (settlement === "late success") {
+        abandoned.resolve(issuePreviewResponse({ title: "Abandoned preview" }));
+      } else {
+        abandoned.reject(new Error("gateway request aborted"));
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
+      leave(anchor);
+      await vi.advanceTimersByTimeAsync(GITHUB_HOVERCARD_CLOSE_DELAY_MS);
+      await hover(anchor);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
+    },
+  );
+
+  it("keeps genuine request failures cached for 30 seconds before retrying on hover", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("GitHub preview unavailable"))
+      .mockResolvedValue(issuePreviewResponse());
+    const { anchor, provider } = createLink(ISSUE_HREF);
+    provider.client = { request } as unknown as GatewayBrowserClient;
+
+    await hover(anchor);
+    expect(hovercard()?.dataset.state).toBe("unavailable");
+    leave(anchor);
+    await vi.advanceTimersByTimeAsync(29_000);
+    await hover(anchor);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(hovercard()?.dataset.state).toBe("unavailable");
+
+    leave(anchor);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await hover(anchor);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
   });
 
   it("stays open while the pointer travels from the link onto the card", async () => {
@@ -315,11 +540,81 @@ describe("openclaw-github-link-hovercard-provider", () => {
     expect(document.querySelector(".github-link-hovercard")?.textContent).toContain(
       "GitHub preview unavailable",
     );
+    expect(hovercard()?.querySelector(".github-link-hovercard__error")?.textContent).toBe(
+      "Not Found",
+    );
+  });
+
+  it("discards cached and pending previews when the selected agent changes", async () => {
+    const { anchor, provider } = createIssueLink();
+    const request = vi.fn().mockResolvedValue(issuePreviewResponse());
+    provider.client = { request } as unknown as GatewayBrowserClient;
+    provider.agentId = "first-agent";
+    await hover(anchor);
+
+    expect(request.mock.calls[0]?.[1]).toMatchObject({ agentId: "first-agent" });
+    provider.agentId = "second-agent";
+    expect(hovercard()).toBeNull();
+    await hover(anchor);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ agentId: "second-agent" });
+
+    let resolvePending!: (value: unknown) => void;
+    const nextRequest = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvePending = resolve;
+        }),
+    );
+    provider.client = { request: nextRequest } as unknown as GatewayBrowserClient;
+    expect(hovercard()).toBeNull();
+    await hover(anchor);
+    provider.agentId = "third-agent";
+    resolvePending(issuePreviewResponse());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hovercard()).toBeNull();
+  });
+
+  it("uses the latest dependencies assigned before its lazy definition finishes", async () => {
+    const tag = `test-github-lazy-upgrade-${crypto.randomUUID()}`;
+    const loaded = createDeferred<CustomElementConstructor>();
+    const bootstrap = new LazyHovercardBootstrap<GitHubLinkHovercardProvider>({
+      tag,
+      load: () => loaded.promise,
+    });
+    const provider = document.createElement(tag) as GitHubLinkHovercardProvider;
+    const anchor = document.createElement("a");
+    anchor.href = ISSUE_HREF;
+    provider.append(anchor);
+    document.body.append(provider);
+    const staleRequest = vi.fn();
+    provider.client = { request: staleRequest } as unknown as GatewayBrowserClient;
+    provider.agentId = "first-agent";
+
+    const definition = bootstrap.define();
+    const request = vi.fn().mockResolvedValue(issuePreviewResponse());
+    provider.client = { request } as unknown as GatewayBrowserClient;
+    provider.agentId = "second-agent";
+    loaded.resolve(class extends GitHubLinkHovercardProvider {});
+    await definition;
+    await provider.updateComplete;
+    await hover(anchor);
+
+    expect(staleRequest).not.toHaveBeenCalled();
+    expect(request.mock.calls[0]?.[1]).toMatchObject({ agentId: "second-agent" });
+    expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
+    provider.agentId = "third-agent";
+    expect(hovercard()).toBeNull();
+    await hover(anchor);
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ agentId: "third-agent" });
   });
 
   it.each([
     "http://github.com/openclaw/openclaw/issues/99815",
     "https://user:password@github.com/openclaw/openclaw/issues/99815",
+    "https://github.com:8443/openclaw/openclaw/issues/99815",
+    "https://github.com.example.com/openclaw/openclaw/issues/99815",
+    "blob:https://github.com/issues/99815",
     "https://example.com/openclaw/openclaw/issues/99815",
     "javascript:alert(1)",
   ])("does not preview an untrusted item URL: %s", async (href) => {
@@ -372,8 +667,14 @@ describe("openclaw-github-link-hovercard-provider", () => {
   });
 
   it("rerenders an open preview when the locale changes", async () => {
-    const { anchor } = createIssueLink(issuePreviewResponse({ comments: 1 }));
+    const { anchor, provider, request } = createIssueLink(issuePreviewResponse({ comments: 1 }));
     await hover(anchor);
+    leave(anchor);
+    await vi.advanceTimersByTimeAsync(GITHUB_HOVERCARD_CLOSE_DELAY_MS);
+    const comment = document.createElement("a");
+    comment.href = `${ISSUE_HREF}#issuecomment-123`;
+    provider.append(comment);
+    await hover(comment);
 
     i18n.registerTranslation("pt-BR", {
       githubPreview: {
@@ -401,5 +702,10 @@ describe("openclaw-github-link-hovercard-provider", () => {
     expect(card?.textContent).toContain("Aberto");
     expect(card?.textContent).toContain("1 comentário");
     expect(card?.getAttribute("aria-label")).toContain("por octocat");
+    expect(titleLinkInCard()?.href).toBe(comment.href);
+    expect(card?.querySelector<HTMLAnchorElement>(".github-link-hovercard__repo")?.href).toBe(
+      comment.href,
+    );
+    expect(request).toHaveBeenCalledTimes(1);
   });
 });

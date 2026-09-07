@@ -12,11 +12,14 @@ export type MarkdownRenderOptions = {
   linkFavicons?: boolean;
   progressBars?: boolean;
   mode?: MarkdownRenderMode;
+  remoteImages?: boolean;
   sessionLinks?: boolean;
   tableInteractions?: MarkdownTableInteractions;
 };
 
-export type MarkdownRenderEnv = Required<MarkdownRenderOptions>;
+export type MarkdownRenderEnv = Required<MarkdownRenderOptions> & {
+  streamingOpenFence?: boolean;
+};
 
 export function normalizeMarkdownRenderOptions(
   options: MarkdownRenderOptions = {},
@@ -30,6 +33,7 @@ export function normalizeMarkdownRenderOptions(
     linkFavicons: options.linkFavicons ?? false,
     progressBars: options.progressBars ?? false,
     mode: options.mode ?? "message",
+    remoteImages: options.remoteImages ?? options.mode === "document",
     sessionLinks: options.sessionLinks ?? false,
     tableInteractions: options.tableInteractions ?? "none",
   };

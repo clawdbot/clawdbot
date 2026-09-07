@@ -9,7 +9,7 @@ metadata:
         - slacrawl
     install:
       - kind: go
-        module: github.com/vincentkoc/slacrawl/cmd/slacrawl@latest
+        module: github.com/openclaw/slacrawl/cmd/slacrawl@latest
         bins:
           - slacrawl
 ---
@@ -26,9 +26,13 @@ slacrawl status --json
 Refresh only when stale or asked:
 
 ```bash
-slacrawl sync --source desktop
-slacrawl sync --source api --latest-only
+slacrawl sync --source wiretap
+slacrawl sync --source bot --latest-only
 ```
+
+`wiretap` reads Slack Desktop cache; `bot` uses API tokens. The `desktop`/`api`
+aliases remain valid. A configured connector can use `--source mcp`; select the
+workspace explicitly when needed. Use `--full` only for deliberate backfills.
 
 Query with bounded slices:
 

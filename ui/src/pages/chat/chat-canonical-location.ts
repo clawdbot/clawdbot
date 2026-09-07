@@ -1,7 +1,7 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { locationWithoutDraft } from "./route-draft.ts";
 
-function currentRouteLocation(): RouteLocation {
+export function currentRouteLocation(): RouteLocation {
   return {
     pathname: window.location.pathname,
     search: window.location.search,

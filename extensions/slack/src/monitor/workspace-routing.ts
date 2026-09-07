@@ -14,7 +14,7 @@ export function resolveSlackEnterpriseMainDmSessionKey(params: {
 export function qualifySlackRoutePeerId(params: {
   id: string;
   kind: "user" | "channel";
-  eventScope?: SlackEventScope;
+  eventScope?: Pick<SlackEventScope, "teamId">;
 }): string {
   if (!params.eventScope) {
     return params.id;
@@ -24,7 +24,7 @@ export function qualifySlackRoutePeerId(params: {
 
 export function qualifySlackConversationId(
   conversationId: string,
-  eventScope?: SlackEventScope,
+  eventScope?: Pick<SlackEventScope, "teamId">,
 ): string {
   return eventScope
     ? `team:${encodeURIComponent(eventScope.teamId)}:${conversationId}`

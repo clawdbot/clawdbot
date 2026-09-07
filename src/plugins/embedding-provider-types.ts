@@ -89,6 +89,8 @@ export type EmbeddingProviderAdapter = {
   defaultModel?: string;
   transport?: "local" | "remote";
   authProviderId?: string;
+  /** Canonical model from config only: synchronous, without auth or network access. */
+  normalizeModel?: (options: EmbeddingProviderCreateOptions) => string;
   resolveIndexIdentity?: (
     options: EmbeddingProviderCreateOptions,
   ) => EmbeddingProviderIndexIdentity;

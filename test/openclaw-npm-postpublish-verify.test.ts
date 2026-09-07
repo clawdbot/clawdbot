@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { generateKeyPairSync, sign } from "node:crypto";
 // OpenClaw npm postpublish tests validate postpublish verification behavior.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -25,6 +25,10 @@ import {
   verifyNpmProvenanceAttestation,
   verifyNpmRegistrySignatures,
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
+import {
+  WORKER_BUNDLE_ENTRY_PATH,
+  WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
+} from "../src/shared/worker-bundle-hash.js";
 import { withEnv } from "../src/test-utils/env.js";
 
 const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 10_000;
@@ -574,14 +578,17 @@ describe("collectInstalledPackageErrors", () => {
   ): void {
     const omitted = new Set(omittedIds);
     for (const relativePath of requiredBundledPluginPackPaths) {
-      const match = /^dist\/extensions\/([^/]+)\/package\.json$/u.exec(relativePath);
+      const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
       if (!match || omitted.has(match[1] ?? "")) {
         continue;
       }
-      const packageJsonPath = join(packageRoot, relativePath);
-      mkdirSync(dirname(packageJsonPath), { recursive: true });
-      writeFileSync(packageJsonPath, "{}\n", "utf8");
+      const artifactPath = join(packageRoot, relativePath);
+      mkdirSync(dirname(artifactPath), { recursive: true });
+      writeFileSync(artifactPath, relativePath.endsWith(".json") ? "{}\n" : "export {};\n", "utf8");
     }
+    const inventoryPath = join(packageRoot, "dist", "postinstall-inventory.json");
+    mkdirSync(dirname(inventoryPath), { recursive: true });
+    writeFileSync(inventoryPath, JSON.stringify(requiredBundledPluginPackPaths), "utf8");
   }
 
   it("flags version mismatches", () => {
@@ -594,6 +601,32 @@ describe("collectInstalledPackageErrors", () => {
     expect(errors[0]).toBe(
       "installed package version mismatch: expected 2026.3.23-2, found 2026.3.23.",
     );
+  });
+
+  it("rejects an oversized worker before the full verifier reads its contents", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeFileSync(join(packageRoot, "package.json"), '{"version":"2026.3.23"}\n', "utf8");
+      const workerPath = join(packageRoot, "dist", "worker", WORKER_BUNDLE_ENTRY_PATH);
+      mkdirSync(dirname(workerPath), { recursive: true });
+      writeFileSync(workerPath, "/* Failed to load legacy context engine runtime. */\n", "utf8");
+      truncateSync(workerPath, 80 * 1024 * 1024 + 1);
+
+      const errors = collectInstalledPackageErrors({
+        expectedVersion: "2026.3.23",
+        installedVersion: "2026.3.23",
+        packageRoot,
+      });
+      const sizeError = `installed package root dist file 'worker/${WORKER_BUNDLE_ENTRY_PATH}' is invalid or exceeds 83886080 bytes.`;
+
+      expect(errors.filter((error) => error === sizeError)).toEqual([sizeError]);
+      expect(errors).not.toContain(
+        "installed package includes unresolved legacy context engine runtime loader; rebuild with a bundler-traceable LegacyContextEngine import.",
+      );
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
   });
 
   it.each(["ollama", "lmstudio"])(
@@ -613,10 +646,17 @@ describe("collectInstalledPackageErrors", () => {
           "package.json",
         );
         const expectedError = `installed bundled extension manifest missing: ${missingManifestPath}.`;
+        const missingArtifactErrors = requiredBundledPluginPackPaths
+          .filter((relativePath) => relativePath.startsWith(`dist/extensions/${providerId}/`))
+          .map((relativePath) =>
+            relativePath.endsWith("/package.json")
+              ? expectedError
+              : `installed bundled plugin artifact missing: ${relativePath}.`,
+          );
 
-        expect(collectInstalledBundledExtensionManifestErrors(packageRoot)).toStrictEqual([
-          expectedError,
-        ]);
+        expect(collectInstalledBundledExtensionManifestErrors(packageRoot)).toStrictEqual(
+          missingArtifactErrors,
+        );
         expect(
           collectInstalledPackageErrors({
             expectedVersion: "2026.3.23",
@@ -629,6 +669,46 @@ describe("collectInstalledPackageErrors", () => {
       }
     },
   );
+
+  it.each([
+    ["plugin manifest", "dist/extensions/ollama/openclaw.plugin.json"],
+    ["generated plugin artifact", "dist/extensions/ollama/provider-discovery.js"],
+  ])("rejects an installed bundled %s missing after postinstall", (_, relativePath) => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeExpectedBundledExtensionManifests(packageRoot);
+      rmSync(join(packageRoot, relativePath));
+
+      expect(collectInstalledBundledExtensionManifestErrors(packageRoot)).toContain(
+        `installed bundled plugin artifact missing: ${relativePath}.`,
+      );
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["plugin manifest", "dist/extensions/ollama/openclaw.plugin.json"],
+    ["generated plugin artifact", "dist/extensions/ollama/provider-discovery.js"],
+  ])("rejects an installed bundled %s omitted from its inventory", (_, relativePath) => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeExpectedBundledExtensionManifests(packageRoot);
+      writeFileSync(
+        join(packageRoot, "dist", "postinstall-inventory.json"),
+        JSON.stringify(requiredBundledPluginPackPaths.filter((entry) => entry !== relativePath)),
+        "utf8",
+      );
+
+      expect(collectInstalledBundledExtensionManifestErrors(packageRoot)).toContain(
+        `installed bundled plugin artifact omitted from dist inventory: ${relativePath}.`,
+      );
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
 
   it("rejects an installed package without its bundled extension root", () => {
     const packageRoot = makeInstalledPackageRoot();
@@ -670,16 +750,16 @@ describe("collectInstalledPackageErrors", () => {
       expect(filteredErrors).toStrictEqual(expectedErrors);
       expect(filteredErrors).toEqual(
         expect.arrayContaining(
-          ["ollama", "lmstudio"].map(
-            (providerId) =>
-              `installed bundled extension manifest missing: ${join(
-                packageRoot,
-                "dist",
-                "extensions",
-                providerId,
-                "package.json",
-              )}.`,
-          ),
+          ["ollama", "lmstudio"].flatMap((providerId) => [
+            `installed bundled extension manifest missing: ${join(
+              packageRoot,
+              "dist",
+              "extensions",
+              providerId,
+              "package.json",
+            )}.`,
+            `installed bundled plugin artifact missing: dist/extensions/${providerId}/openclaw.plugin.json.`,
+          ]),
         ),
       );
     } finally {
@@ -714,16 +794,16 @@ describe("collectInstalledPackageErrors", () => {
       expect(probe.status, probe.stderr).toBe(0);
       expect(JSON.parse(probe.stdout)).toEqual(
         expect.arrayContaining(
-          ["ollama", "lmstudio"].map(
-            (providerId) =>
-              `installed bundled extension manifest missing: ${join(
-                packageRoot,
-                "dist",
-                "extensions",
-                providerId,
-                "package.json",
-              )}.`,
-          ),
+          ["ollama", "lmstudio"].flatMap((providerId) => [
+            `installed bundled extension manifest missing: ${join(
+              packageRoot,
+              "dist",
+              "extensions",
+              providerId,
+              "package.json",
+            )}.`,
+            `installed bundled plugin artifact missing: dist/extensions/${providerId}/openclaw.plugin.json.`,
+          ]),
         ),
       );
     } finally {
@@ -889,6 +969,31 @@ describe("collectInstalledContextEngineRuntimeErrors", () => {
     }
   });
 
+  it("ignores extension-owned JavaScript assets", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      const viewerPath = join(
+        packageRoot,
+        "dist",
+        "extensions",
+        "diffs",
+        "assets",
+        "viewer-runtime.js",
+      );
+      mkdirSync(dirname(viewerPath), { recursive: true });
+      writeFileSync(
+        viewerPath,
+        'throw new Error("Failed to load legacy context engine runtime.");\n',
+        "utf8",
+      );
+
+      expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toStrictEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
   it("refuses unbounded packaged dist scans", () => {
     const packageRoot = makeInstalledPackageRoot();
 
@@ -896,7 +1001,7 @@ describe("collectInstalledContextEngineRuntimeErrors", () => {
       writeDistJavaScriptFiles(packageRoot, INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT + 1);
 
       expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toEqual([
-        `installed package dist contains more than ${INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT} JavaScript files; refusing to scan unbounded package contents.`,
+        `installed package root dist contains more than ${INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT} JavaScript files; refusing to scan unbounded package contents.`,
       ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
@@ -1059,7 +1164,7 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     }
   });
 
-  it("flags undeclared imports from mjs and cjs root dist files", () => {
+  it("flags undeclared imports from nested mjs and direct cjs root dist files", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
@@ -1067,9 +1172,9 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         version: "2026.4.22",
         dependencies: {},
       });
-      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      mkdirSync(join(packageRoot, "dist", "runtime"), { recursive: true });
       writeFileSync(
-        join(packageRoot, "dist", "esm-entry.mjs"),
+        join(packageRoot, "dist", "runtime", "esm-entry.mjs"),
         'export { value } from "mjs-only";\n',
         "utf8",
       );
@@ -1081,8 +1186,455 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
 
       expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
         "installed package root is missing declared runtime dependency 'cjs-only' for dist importers: cjs-entry.cjs. Add it to package.json dependencies/optionalDependencies.",
-        "installed package root is missing declared runtime dependency 'mjs-only' for dist importers: esm-entry.mjs. Add it to package.json dependencies/optionalDependencies.",
+        "installed package root is missing declared runtime dependency 'mjs-only' for dist importers: runtime/esm-entry.mjs. Add it to package.json dependencies/optionalDependencies.",
       ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    [
+      "plugin-owned loader",
+      'import { createRequire } from "node:module"; function build(root) { const require = createRequire(root); require("plugin-build-tool"); }',
+      [],
+    ],
+    [
+      "aliased root loader",
+      'import { createRequire as makeRequire } from "node:module"; const load = makeRequire(import.meta.url); load("root-runtime");',
+      ["root-runtime"],
+    ],
+    ["aliased CommonJS loader", 'const load = require; load("root-runtime");', ["root-runtime"]],
+    [
+      "root loader alongside plugin loader",
+      'import { createRequire } from "node:module"; const require = createRequire(import.meta.url); require("root-runtime"); function build(root) { const require = createRequire(root); require("plugin-build-tool"); }',
+      ["root-runtime"],
+    ],
+    [
+      "unknown require parameters stay conservative",
+      'function render(require) { require("view-name"); } require("root-runtime");',
+      ["root-runtime", "view-name"],
+    ],
+    [
+      "block shadow",
+      '{ const require = (name) => name; require("view-name"); } require("root-runtime");',
+      ["root-runtime", "view-name"],
+    ],
+    [
+      "hoisted function shadow",
+      'function build() { require("view-name"); function require(name) { return name; } } require("root-runtime");',
+      ["root-runtime", "view-name"],
+    ],
+    [
+      "aliased plugin loader",
+      'import { createRequire as makeRequire } from "node:module"; function build(root) { const load = makeRequire(root); const require = load; require("plugin-build-tool"); }',
+      [],
+    ],
+    [
+      "destructured CommonJS factory",
+      'const { createRequire: make } = require("node:module"); const load = make(__filename); load("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "reassigned loader",
+      'import { createRequire } from "node:module"; let require = createRequire(pluginPath); require = createRequire(import.meta.url); require("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "reassigned loader alias",
+      'import { createRequire } from "node:module"; let load = createRequire(pluginPath); load = createRequire(import.meta.url); load("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "assigned loader without initializer",
+      'import { createRequire } from "node:module"; let load; load = createRequire(import.meta.url); load("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "assigned factory alias",
+      'import { createRequire } from "node:module"; let make; make = createRequire; const require = make(import.meta.url); require("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "assigned parameter binding",
+      'import { createRequire } from "node:module"; function run(require) { require = createRequire(import.meta.url); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "assigned destructured binding",
+      'import { createRequire } from "node:module"; let { load } = loaders; load = createRequire(import.meta.url); load("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "redeclared loader",
+      'import { createRequire } from "node:module"; var require; var require = createRequire(import.meta.url); require("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "factory with alternative root alias",
+      'import { createRequire } from "node:module"; const root = createRequire(import.meta.url); let make = createRequire; const load = make(import.meta.url); make = root; load("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "conditional roots",
+      'import { createRequire } from "node:module"; const require = usePlugin ? createRequire(pluginPath) : createRequire(import.meta.url); require("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "external module factory",
+      'import { createRequire } from "node:module"; const pluginLoad = createRequire(pluginPath); const require = pluginLoad("node:module").createRequire(import.meta.url); require("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "logical factory",
+      'import { createRequire } from "node:module"; const preferred = null; const make = preferred || createRequire; const require = make(import.meta.url); require("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "comma factory",
+      'import { createRequire } from "node:module"; const require = (0, createRequire)(import.meta.url); require("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "quoted namespace",
+      'import * as module from "node:module"; const require = module["createRequire"](import.meta["url"]); require("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "quoted factory binding",
+      'const { "createRequire": make } = require("node:module"); const load = make(__filename); load("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "awaited builtin",
+      'const { createRequire: make } = await import("node:module"); const require = make(import.meta.url); require("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "assignment factory",
+      'import { createRequire } from "node:module"; let make; const require = (make = createRequire)(import.meta.url); require("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "conditional external",
+      'import { createRequire } from "node:module"; function build(useFirst, firstPath, secondPath) { const require = useFirst ? createRequire(firstPath) : createRequire(secondPath); require("plugin-build-tool"); }',
+      [],
+    ],
+    [
+      "logical assignment or",
+      'import { createRequire } from "node:module"; let require; require ||= createRequire(import.meta.url); require("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "logical assignment nullish",
+      'import { createRequire } from "node:module"; let require; require ??= createRequire(import.meta.url); require("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "logical assignment and",
+      'import { createRequire } from "node:module"; let require = createRequire(pluginPath); require &&= createRequire(import.meta.url); require("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "global builtin accessor",
+      'const getBuiltinModule = process.getBuiltinModule; const moduleNamespace = getBuiltinModule("module"); const require = moduleNamespace.createRequire(import.meta.url); require("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "imported builtin accessor",
+      'import { getBuiltinModule as get } from "node:process"; const require = get("module").createRequire(import.meta.url); require("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "process namespace accessor",
+      'const processNamespace = require("node:process"); const load = processNamespace.getBuiltinModule("node:module").createRequire(__filename); load("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "shadowed builtin accessor",
+      'function render(process) { const load = process.getBuiltinModule("module").createRequire(import.meta.url); load("view-name"); }',
+      [],
+    ],
+    ["uninitialized CommonJS require", 'var require; require("root-runtime");', ["root-runtime"]],
+    [
+      "destructured process accessor",
+      'const { getBuiltinModule } = process; const load = getBuiltinModule("module").createRequire(import.meta.url); load("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "unknown loader provenance",
+      'const require = opaqueLoader(); require("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "unknown factory anchor",
+      'import { createRequire } from "node:module"; const require = createRequire(opaqueLocation()); require("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "unknown alternative to caller loader",
+      'import { createRequire } from "node:module"; function build(root, chooseCaller) { const require = chooseCaller ? createRequire(root) : opaqueLoader(); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "caller-derived package anchor",
+      'import { createRequire } from "node:module"; import fs from "node:fs/promises"; import path from "node:path"; async function build(opts) { const root = await fs.realpath(path.resolve(opts.root ?? process.cwd())); const require = createRequire(path.join(root, "package.json")); require("plugin-build-tool"); }',
+      [],
+    ],
+    [
+      "unknown dynamic caller property",
+      'import { createRequire } from "node:module"; function build(opts, key, choose) { const selection = choose ? opts : opaqueOptions(); const require = createRequire(selection[key]); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "array destructuring loader write",
+      'import { createRequire } from "node:module"; function build(anchor) { let require = createRequire(anchor); [require] = [createRequire(import.meta.url)]; require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "object destructuring loader write",
+      'import { createRequire } from "node:module"; function build(anchor) { let require = createRequire(anchor); ({ nested: [require] } = opaqueLoaders()); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "iteration loader write",
+      'import { createRequire } from "node:module"; function build(anchor) { let require = createRequire(anchor); for (require of [createRequire(import.meta.url)]) { require("root-runtime"); } }',
+      ["root-runtime"],
+    ],
+    [
+      "destructuring anchor default",
+      'import { createRequire } from "node:module"; function build(opts) { const { anchor = import.meta.url } = opts; const require = createRequire(anchor); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "function wrapper remains unknown",
+      'import { createRequire as make } from "node:module"; const load = make(import.meta.url); function require(name) { return load(name); } require("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "unknown supplied loader with caller default",
+      'import { createRequire } from "node:module"; function build(root, loaders) { const [require = createRequire(root)] = loaders; require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "mutated caller member",
+      'import { createRequire } from "node:module"; function build(options) { options.filename = import.meta.url; const require = createRequire(options.filename); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "mutated caller member through alias",
+      'import { createRequire } from "node:module"; function build(options) { const alias = options; alias.filename = import.meta.url; const require = createRequire(options.filename); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "mutated caller URL",
+      'import { createRequire } from "node:module"; function build(location) { location.href = import.meta.url; const require = createRequire(location); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "compound caller location write",
+      'import { createRequire } from "node:module"; function build(location) { location += import.meta.url; const require = createRequire(location); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "compound caller member write",
+      'import { createRequire } from "node:module"; function build(options) { options.filename += import.meta.url; const require = createRequire(options.filename); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "initialized CommonJS require before assignment",
+      'require("root-runtime"); var require = process.getBuiltinModule("module").createRequire(process.cwd() + "/package.json");',
+      ["root-runtime"],
+    ],
+    [
+      "mutable caller var remains conservative",
+      'import { createRequire } from "node:module"; function build(root) { var require = createRequire(root); require("plugin-build-tool"); }',
+      ["plugin-build-tool"],
+    ],
+    ["parenthesized require specifier", 'require(("root-runtime"));', ["root-runtime"]],
+    ["parenthesized dynamic import specifier", 'import(("root-runtime"));', ["root-runtime"]],
+    [
+      "shorthand loader write",
+      'import { createRequire } from "node:module"; function build(anchor) { let require = createRequire(anchor); ({ require } = { require: createRequire(import.meta.url) }); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "opaque input normalization",
+      'import { createRequire } from "node:module"; function build(options) { Object.assign(options, { filename: import.meta.url }); const require = createRequire(options.filename); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "opaque input before scalar normalization",
+      'import { createRequire } from "node:module"; import path from "node:path"; function build(options) { Object.assign(options, { filename: import.meta.url }); const root = path.resolve(options.filename); const require = createRequire(root); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "normalized paths passed to helpers",
+      'import { createRequire } from "node:module"; import path from "node:path"; function build(options) { const root = path.resolve(options.filename); consume(root); const require = createRequire(root); require("plugin-build-tool"); }',
+      [],
+    ],
+    [
+      "opaque caller receiver",
+      'import { createRequire } from "node:module"; function build(options) { options.normalize(); const require = createRequire(options.filename); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "opaque constructor input",
+      'import { createRequire } from "node:module"; function build(options) { new Mutator(options); const require = createRequire(options.filename); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "opaque container input alias",
+      'import { createRequire } from "node:module"; function build(options) { const wrapper = { options }; normalize(wrapper); const require = createRequire(options.filename); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "callback input owns its escape",
+      'import { createRequire } from "node:module"; import path from "node:path"; function build(options) { const root = path.resolve(options.filename); files.forEach(file => normalize(file.path)); const require = createRequire(root); require("plugin-build-tool"); }',
+      [],
+    ],
+    [
+      "opaque projected input default",
+      'import { createRequire } from "node:module"; function build(options) { let alias; ({ alias = options } = {}); normalize(alias); const require = createRequire(options.filename); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "opaque iterable input alias",
+      'import { createRequire } from "node:module"; function build(options) { let alias; for (alias of [options]) normalize(alias); const require = createRequire(options.filename); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "raw caller after loop remains conservative",
+      'import { createRequire } from "node:module"; function build(options) { for (const key in options) consume(key); const require = createRequire(options.filename); require("plugin-build-tool"); }',
+      ["plugin-build-tool"],
+    ],
+    [
+      "opaque nested input projection",
+      'import { createRequire } from "node:module"; function build(options) { const { nested: { alias } } = options; normalize(alias); const require = createRequire(options.filename); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "nested parameter default remains unknown",
+      'import { createRequire } from "node:module"; function build({ nested: { filename } = { filename: import.meta.url } }) { const require = createRequire(filename); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "locally changed cwd",
+      'import { createRequire } from "node:module"; import path from "node:path"; import { fileURLToPath } from "node:url"; process.chdir(path.dirname(fileURLToPath(import.meta.url))); const require = createRequire(path.resolve("bridge.cjs")); require("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "aliased cwd mutation",
+      'import { createRequire } from "node:module"; import path from "node:path"; const { chdir: move } = process; move(opaquePath()); const require = createRequire(path.resolve("bridge.cjs")); require("root-runtime");',
+      ["root-runtime"],
+    ],
+    [
+      "raw caller after cwd mutation remains conservative",
+      'import { createRequire } from "node:module"; function build(root) { process.chdir(opaquePath()); const require = createRequire(root); require("plugin-build-tool"); }',
+      ["plugin-build-tool"],
+    ],
+    [
+      "binary coercion before snapshot",
+      'import { createRequire } from "node:module"; function build(options) { const unused = options + ""; const require = createRequire(options.filename); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "unary coercion before snapshot",
+      'import { createRequire } from "node:module"; function build(options) { const unused = +options; const require = createRequire(options.filename); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "extra factory getter argument",
+      'import { createRequire } from "node:module"; function build(location, options) { const require = createRequire(location, options.unused); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "destructured parameter remains conservative",
+      'import { createRequire } from "node:module"; function build(options, { unused }) { const require = createRequire(options.filename); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "raw declaration ends admission",
+      'import { createRequire } from "node:module"; function build(options) { const unused = options.unused; const require = createRequire(options.filename); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "template coercion before snapshot",
+      'import { createRequire } from "node:module"; function build(options) { const unused = `${options}`; const require = createRequire(options.filename); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "parameter iterator before snapshot",
+      'import { createRequire } from "node:module"; function build(options, [unused]) { const require = createRequire(options); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "spread before snapshot",
+      'import { createRequire } from "node:module"; function build(options) { const unused = [...options]; const require = createRequire(options); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "effectful parameter default before snapshot",
+      'import { createRequire } from "node:module"; import path from "node:path"; function build(options, ignored = Object.assign(options, { filename: import.meta.url })) { const root = path.resolve(options.filename); const require = createRequire(root); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "ignored initializer effect before snapshot",
+      'import { createRequire } from "node:module"; import path from "node:path"; function build(options) { const root = (normalize(options), path.resolve(options.filename)); const require = createRequire(root); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "ignored factory argument effect",
+      'import { createRequire } from "node:module"; function build(location) { const require = createRequire(location, location.href = import.meta.url); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "captured mutable input cannot restart prefix",
+      'import { createRequire } from "node:module"; import path from "node:path"; function outer(options) { Object.assign(options, { filename: import.meta.url }); return function build() { const root = path.resolve(options.filename); const require = createRequire(root); require("root-runtime"); }; }',
+      ["root-runtime"],
+    ],
+    [
+      "captured immutable snapshot survives effects",
+      'import { createRequire } from "node:module"; import path from "node:path"; function outer(options) { const root = path.resolve(options.filename); normalize(options); return function build() { const require = createRequire(root); require("plugin-build-tool"); }; }',
+      [],
+    ],
+    [
+      "pending normalization is not a string snapshot",
+      'import { createRequire } from "node:module"; import fs from "node:fs/promises"; function build(options) { const pending = fs.realpath(options.filename); normalize(pending); return (async () => { const root = await pending; const require = createRequire(root); require("root-runtime"); })(); }',
+      ["root-runtime"],
+    ],
+    [
+      "awaited input ends admission",
+      'import { createRequire } from "node:module"; async function build(options) { const unused = await options; const require = createRequire(options); require("root-runtime"); }',
+      ["root-runtime"],
+    ],
+    [
+      "compiled control UI builder ordering",
+      'import { createRequire } from "node:module"; import fs from "node:fs/promises"; import path from "node:path"; async function build(params) { const rootDir = await fs.realpath(params.rootDir); const entry = await fs.realpath(path.resolve(rootDir, params.source)); if (!entry) throw new Error("missing entry"); const require = createRequire(path.join(rootDir, "package.json")); require("plugin-build-tool"); }',
+      [],
+    ],
+    [
+      "compiled pack builder ordering",
+      'import { createRequire } from "node:module"; import fs from "node:fs/promises"; import path from "node:path"; async function build(opts) { const rootDir = await fs.realpath(path.resolve(opts.root ?? process.cwd())); const valid = validate(rootDir); if (!valid) throw new Error("invalid"); createRequire(path.join(rootDir, "package.json"))("plugin-build-tool"); }',
+      [],
+    ],
+    [
+      "namespace root loader",
+      'import * as module from "node:module"; const load = module.createRequire(import.meta.url); load("root-runtime");',
+      ["root-runtime"],
+    ],
+  ])("follows lexical require ownership: %s", (_name, source, dependencies) => {
+    const packageRoot = makeInstalledPackageRoot();
+    try {
+      writePackageFile(packageRoot, "package.json", { dependencies: {} });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(join(packageRoot, "dist", "runtime.js"), source);
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual(
+        dependencies.map(
+          (name) =>
+            `installed package root is missing declared runtime dependency '${name}' for dist importers: runtime.js. Add it to package.json dependencies/optionalDependencies.`,
+        ),
+      );
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
@@ -1155,7 +1707,40 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     }
   });
 
-  it("refuses oversized root dist files", () => {
+  it.each([
+    {
+      expected: [
+        "installed package root dist file 'oversized.js' is invalid or exceeds 6291456 bytes.",
+      ],
+      name: "rejects oversized direct dist files",
+      relativePath: "oversized.js",
+    },
+    {
+      expected: [
+        "installed package root dist file 'runtime/oversized.js' is invalid or exceeds 6291456 bytes.",
+      ],
+      name: "rejects oversized arbitrary nested dist files",
+      relativePath: "runtime/oversized.js",
+    },
+    {
+      expected: [],
+      name: "accepts the oversized worker deploy entrypoint",
+      relativePath: `worker/${WORKER_BUNDLE_ENTRY_PATH}`,
+    },
+    {
+      expected: [],
+      name: "accepts the oversized worker rsync receiver",
+      relativePath: `worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
+    },
+    {
+      expected: [
+        `installed package root dist file 'worker/${WORKER_BUNDLE_ENTRY_PATH}' is invalid or exceeds 83886080 bytes.`,
+      ],
+      name: "rejects the worker deploy entrypoint above its dedicated parser bound",
+      relativePath: `worker/${WORKER_BUNDLE_ENTRY_PATH}`,
+      sparseSize: 80 * 1024 * 1024 + 1,
+    },
+  ])("$name", ({ expected, relativePath, sparseSize }) => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
@@ -1163,16 +1748,16 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         version: "2026.4.22",
         dependencies: {},
       });
-      mkdirSync(join(packageRoot, "dist"), { recursive: true });
-      writeFileSync(
-        join(packageRoot, "dist", "oversized.js"),
-        "x".repeat(6 * 1024 * 1024 + 1),
-        "utf8",
-      );
+      const filePath = join(packageRoot, "dist", relativePath);
+      mkdirSync(dirname(filePath), { recursive: true });
+      if (sparseSize) {
+        writeFileSync(filePath, "/*", "utf8");
+        truncateSync(filePath, sparseSize);
+      } else {
+        writeFileSync(filePath, `/* ${"x".repeat(6 * 1024 * 1024)} */\n`, "utf8");
+      }
 
-      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
-        "installed package root dist file 'oversized.js' is invalid or exceeds 6291456 bytes.",
-      ]);
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual(expected);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }

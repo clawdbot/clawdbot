@@ -1,14 +1,16 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { withTimeout } from "../../infra/fs-safe.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
+import { isWorkspaceInspectionCommand } from "../../worker/workspace-inspection-protocol.js";
 import { type PreparedWorkerSsh, runWorkerSshCandidates, workerSshCommandOptions } from "./ssh.js";
 import type {
   WorkerTunnelHandle,
   WorkerWorkspaceCommand,
+  WorkerLocalWorkspaceSyncRequest,
+  WorkerLocalWorkspaceReconcileRequest,
   WorkerWorkspaceReconcileRequest,
   WorkerWorkspaceReconcileResult,
   WorkerWorkspaceSyncRequest,
@@ -18,12 +20,14 @@ import {
   createAcceptedWorkspacePublisherFactory,
   recoverAcceptedWorkspacePublication,
 } from "./workspace-accepted-sync.js";
-import { registerWorkspaceReconcileReporter } from "./workspace-finalize.js";
+import { runInstrumentedWorkspaceReconcile } from "./workspace-finalize.js";
+import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 import {
-  createWorkspaceReconcileMetrics,
   MAX_WORKSPACE_HASH_MEMO_BYTES,
   measureLocalWorkspaceReconciliation,
+  pruneWorkspaceHashMemo,
   withWorkspaceHashMemo,
+  type WorkspaceHashMemo,
   type WorkspaceReconcileMetrics,
 } from "./workspace-hash-memo.js";
 import { MAX_WORKSPACE_MANIFEST_BYTES } from "./workspace-inventory-limits.js";
@@ -51,6 +55,7 @@ import {
   parseRemoteWorkspaceSetup,
   probeWorkspaceGitMode,
   readTransferredManifest,
+  resolveWorkerWorkspaceGitAuthor,
   resolveRemoteWorkspaceManifest,
   stableWorkerPathComponent,
   validateWorkspaceSyncRequest,
@@ -63,10 +68,10 @@ import {
   type WorkerWorkspaceActionsOptions,
 } from "./workspace-sync-helpers.js";
 import {
-  createGitTransferList,
+  createWorkspaceGitTransferList,
   filterExistingGitTransferList,
-  runLocalCommandToFile,
-} from "./workspace-sync-local.js";
+  readWorkspaceStagedInputDirectories,
+} from "./workspace-sync-inventory.js";
 import {
   REMOTE_GIT_WORKSPACE_RETRY_RESET_JS,
   REMOTE_GIT_WORKSPACE_SETUP_SCRIPT,
@@ -83,7 +88,6 @@ const REMOTE_WORKSPACE_ROOT = ".openclaw-worker/workspaces";
 const REMOTE_GIT_PACK_NAME = ".openclaw-base.pack";
 const GIT_COMMIT_PATTERN = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u;
 const INBOUND_RSYNC_BW_LIMIT_KIB = 65_536;
-const workspaceSyncLog = createSubsystemLogger("gateway/worker-workspace");
 
 /** Binds workspace commands and synchronization to one connected tunnel owner. */
 export function createWorkerWorkspaceActions(
@@ -143,6 +147,9 @@ export function createWorkerWorkspaceActions(
   const receiverEntryPath = workerWorkspaceRsyncReceiverEntryPath(options.bundleHash);
 
   const runWorkspaceCommand = async (command: WorkerWorkspaceCommand): Promise<SpawnResult> => {
+    if (isWorkspaceInspectionCommand(command.argv)) {
+      throw new Error("Repository workspace inspection requires a managed node runtime");
+    }
     const timeoutMs = command.timeoutMs ?? WORKSPACE_TIMEOUT_MS;
     const deadlineMs = Date.now() + timeoutMs;
     const signal = command.signal
@@ -156,6 +163,7 @@ export function createWorkerWorkspaceActions(
       command.signal,
     );
     signal.throwIfAborted();
+    command.assertCurrent?.();
     const remainingCommandTimeoutMs = () => Math.max(0, deadlineMs - Date.now());
     const commandOptions = (remainingTimeoutMs: number): CommandOptions => {
       const base = workerSshCommandOptions({
@@ -180,13 +188,22 @@ export function createWorkerWorkspaceActions(
     return await runWorkerSshCandidates(
       prepared,
       remainingCommandTimeoutMs(),
-      async (port, remainingTimeoutMs) =>
-        await runTask(
+      async (port, remainingTimeoutMs) => {
+        command.assertCurrent?.();
+        return await runTask(
           workerWorkspaceSshArgv(prepared, command.argv, port),
           commandOptions(remainingTimeoutMs),
-        ),
+        );
+      },
     );
   };
+
+  // Stat-identity keys self-invalidate when files change, so this memo safely
+  // outlives one reconciliation. Owning it here scopes it to the connected
+  // tunnel owner: one placement epoch, dropped with the tunnel entry. Remote
+  // (`worker:`) entries round-trip through each memo-v1 capture; without this
+  // owner every turn re-hashes the full tree on both sides.
+  const placementHashMemo: WorkspaceHashMemo = new Map();
 
   const quiesceWorkspace = createWorkerWorkspaceQuiescence({
     ownerSignal: options.ownerSignal,
@@ -195,7 +212,7 @@ export function createWorkerWorkspaceActions(
   });
 
   const syncWorkspaceImpl = async (
-    request: WorkerWorkspaceSyncRequest,
+    request: WorkerLocalWorkspaceSyncRequest,
   ): Promise<WorkerWorkspaceSyncResult> => {
     validateWorkspaceSyncRequest(request);
     const prepared = await waitForPrepared(
@@ -230,7 +247,7 @@ export function createWorkerWorkspaceActions(
       runTask,
     });
     const temporaryDirectory = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-worker-workspace-sync-"),
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-worker-workspace-sync-"),
     );
     try {
       const receiverContext = {
@@ -253,36 +270,18 @@ export function createWorkerWorkspaceActions(
           throw new Error("Worker workspace git base is not a commit id");
         }
 
-        gitTransferListPath = await createGitTransferList({
+        gitTransferListPath = await createWorkspaceGitTransferList({
           gitRoot,
           temporaryDirectory: path.join(temporaryDirectory, "transfer"),
           signal: options.ownerSignal,
           timeoutMs: WORKSPACE_TIMEOUT_MS,
         });
 
-        const objectListPath = path.join(temporaryDirectory, "base-objects");
-        const packPath = path.join(temporaryDirectory, "base.pack");
-        await runLocalCommandToFile({
-          argv: [
-            "git",
-            "-C",
-            gitRoot,
-            "rev-list",
-            "--objects",
-            "--no-object-names",
-            `${baseCommit}^{tree}`,
-          ],
-          outputPath: objectListPath,
+        const packPath = await prepareWorkerWorkspaceGitPack({
+          root: gitRoot,
+          baseCommit,
+          temporaryRoot: temporaryDirectory,
           signal: options.ownerSignal,
-          timeoutMs: WORKSPACE_TIMEOUT_MS,
-        });
-        await fs.appendFile(objectListPath, `${baseCommit}\n`);
-        await runLocalCommandToFile({
-          argv: ["git", "-C", gitRoot, "pack-objects", "--stdout"],
-          inputPath: objectListPath,
-          outputPath: packPath,
-          signal: options.ownerSignal,
-          timeoutMs: WORKSPACE_TIMEOUT_MS,
         });
         const packTransfer = await runRsync(prepared, (rsyncSsh) => [
           "rsync",
@@ -298,20 +297,15 @@ export function createWorkerWorkspaceActions(
         if (!success(packTransfer)) {
           throw workspaceSyncError(packTransfer);
         }
-        const [detectedAuthorName, detectedAuthorEmail] = await Promise.all(
-          ["user.name", "user.email"].map(async (key) => {
-            const result = await runTask(
-              ["git", "-C", gitRoot, "config", "--get", key],
-              workerSshCommandOptions({
-                timeoutMs: REMOTE_SETUP_TIMEOUT_MS,
-                signal: options.ownerSignal,
-              }),
-            );
-            return success(result) ? result.stdout.trim() : "";
-          }),
+        const author = await resolveWorkerWorkspaceGitAuthor(request, async (argv) =>
+          runTask(
+            argv,
+            workerSshCommandOptions({
+              timeoutMs: REMOTE_SETUP_TIMEOUT_MS,
+              signal: options.ownerSignal,
+            }),
+          ),
         );
-        const authorName = request.gitAuthor?.name ?? detectedAuthorName;
-        const authorEmail = request.gitAuthor?.email ?? detectedAuthorEmail;
         const seeded = await runWorkspaceCommand({
           transportRetry: "never",
           argv: [
@@ -321,8 +315,8 @@ export function createWorkerWorkspaceActions(
             remoteWorkspaceDir,
             path.posix.join(remoteWorkspaceDir, REMOTE_GIT_PACK_NAME),
             baseCommit,
-            authorName ?? "",
-            authorEmail ?? "",
+            author.name,
+            author.email,
           ],
           input: REMOTE_GIT_WORKSPACE_SETUP_SCRIPT,
         });
@@ -331,6 +325,13 @@ export function createWorkerWorkspaceActions(
         }
       }
 
+      const stagedInputDirectories = await readWorkspaceStagedInputDirectories(gitRoot);
+      const inputIncludes = path.join(temporaryDirectory, "input-includes");
+      await fs.writeFile(
+        inputIncludes,
+        stagedInputDirectories.map((directory) => `/${directory}/***\0`).join(""),
+        { mode: 0o600 },
+      );
       const localSource = gitRoot.endsWith(path.sep) ? gitRoot : `${gitRoot}${path.sep}`;
       const transferArgv = (rsyncSsh: string, fileListPath?: string) => [
         "rsync",
@@ -338,8 +339,10 @@ export function createWorkerWorkspaceActions(
         "--checksum",
         "--delete-delay",
         "--exclude=.git",
+        "--from0",
+        `--include-from=${inputIncludes}`,
         ...DERIVED_WORKSPACE_RSYNC_EXCLUDES.map((pattern) => `--exclude=${pattern}`),
-        ...(fileListPath ? ["--recursive", "--from0", `--files-from=${fileListPath}`] : []),
+        ...(fileListPath ? ["--recursive", `--files-from=${fileListPath}`] : []),
         `--rsync-path=${mutationReceiverPath("workspace-root")}`,
         "-e",
         rsyncSsh,
@@ -435,7 +438,7 @@ export function createWorkerWorkspaceActions(
   };
 
   const reconcileWorkspaceRun = async (
-    request: WorkerWorkspaceReconcileRequest,
+    request: WorkerLocalWorkspaceReconcileRequest,
     metrics: WorkspaceReconcileMetrics,
   ): Promise<WorkerWorkspaceReconcileResult> => {
     if (!path.isAbsolute(request.localPath) || !path.posix.isAbsolute(request.remoteWorkspaceDir)) {
@@ -446,7 +449,8 @@ export function createWorkerWorkspaceActions(
       await recoverWorkerWorkspaceReconciliation({ root: request.localPath, journal: pending });
       request.journal.abort();
     }
-    const hashMemo = new Map<string, string>();
+    pruneWorkspaceHashMemo(placementHashMemo);
+    const hashMemo = placementHashMemo;
     const runLocalReconciliation = <T>(operation: () => Promise<T>): Promise<T> =>
       measureLocalWorkspaceReconciliation(metrics, () =>
         withWorkspaceHashMemo(hashMemo, operation, metrics.gateway),
@@ -461,7 +465,7 @@ export function createWorkerWorkspaceActions(
       "Worker tunnel did not reconnect within the workspace reconciliation timeout",
     );
     const temporaryDirectory = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-worker-workspace-reconcile-"),
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-worker-workspace-reconcile-"),
     );
     const stagingRoot = path.join(temporaryDirectory, "staging");
     const manifestRoot = path.join(temporaryDirectory, "manifests");
@@ -675,23 +679,21 @@ export function createWorkerWorkspaceActions(
   const reconcileWorkspaceImpl = async (
     request: WorkerWorkspaceReconcileRequest,
   ): Promise<WorkerWorkspaceReconcileResult> => {
-    const metrics = createWorkspaceReconcileMetrics();
-    const startedAt = performance.now();
-    const report = (outcome: "failed" | "succeeded") => {
-      workspaceSyncLog.debug("worker workspace reconcile completed", {
-        outcome,
-        durationMs: performance.now() - startedAt,
-        ...metrics,
-      });
-    };
-    try {
-      const reconciliation = await reconcileWorkspaceRun(request, metrics);
-      registerWorkspaceReconcileReporter(reconciliation, report);
-      return reconciliation;
-    } catch (error) {
-      report("failed");
-      throw error;
+    if (request.source.kind === "repository") {
+      throw new Error(
+        "Repository sessions require a managed node or cloud provider; SSH-only workers cannot preserve repository checkpoints.",
+      );
     }
+    const localRequest: WorkerLocalWorkspaceReconcileRequest = {
+      remoteWorkspaceDir: request.remoteWorkspaceDir,
+      baseManifestRef: request.baseManifestRef,
+      localPath: request.source.path,
+      journal: request.source.journal,
+      stagedResult: request.source.stagedResult,
+    };
+    return await runInstrumentedWorkspaceReconcile((metrics) =>
+      reconcileWorkspaceRun(localRequest, metrics),
+    );
   };
 
   return {
@@ -699,6 +701,23 @@ export function createWorkerWorkspaceActions(
     reconcileWorkspace: (request) => track(reconcileWorkspaceImpl(request)),
     runWorkspaceCommand,
     // Keep the outer task registered across local-file phases so tunnel stop drains all owner work.
-    syncWorkspace: (request) => track(syncWorkspaceImpl(request)),
+    syncWorkspace: (request: WorkerWorkspaceSyncRequest) => {
+      if (request.source.kind === "repository") {
+        return Promise.reject(
+          new Error(
+            "Repository sessions require a managed node or cloud provider; SSH-only workers cannot clone repository sessions.",
+          ),
+        );
+      }
+      return track(
+        syncWorkspaceImpl({
+          sessionId: request.sessionId,
+          generation: request.generation,
+          gitAuthor: request.gitAuthor,
+          localPath: request.source.path,
+          projectKey: request.source.projectKey,
+        }),
+      );
+    },
   };
 }

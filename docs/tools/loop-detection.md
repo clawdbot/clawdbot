@@ -74,17 +74,27 @@ You can also enable the global rolling-history detectors in **Settings -> Labs**
 
 For `exec`, no-progress hashing compares stable command outcomes (status,
 exit code, timed-out flag, output) and ignores volatile runtime metadata such
-as duration, PID, session ID, and working directory. Outbound message-send
-results are hashed with volatile per-call ids (message id, file id, timestamp)
-stripped, so a "sent" result does not look identical to a different "sent"
-result. When a run id is available, history is evaluated only within that run,
+as duration, PID, session ID, and working directory.
+For typed terminal failures, it also ignores diagnostic timestamps, explicit
+attempt or retry counters, elapsed durations, and labeled process IDs. Other
+text and numbers remain significant, so a new failure cause resets the streak.
+Outbound message-send results are hashed with volatile per-call ids (message id, file id, timestamp)
+stripped, so delivery IDs alone do not make repeated equivalent sends look like
+progress. When a run id is available, history is evaluated only within that run,
 so scheduled heartbeat cycles and fresh runs do not inherit stale loop counts
 from earlier runs.
+
+Outcome comparisons also ignore fresh external-content wrapper nonces, including
+wrapped errors and JSON results. Delivered security markers remain unchanged;
+payload text, status, timestamps, and durations still distinguish network results.
+This is a syntactic comparison: literal or copied text matching the complete
+wrapper format also ignores nonce-only changes. It does not authenticate content,
+change authorization, or modify delivered tool results.
 
 ## Recommended setup
 
 - For smaller models, set `enabled: true`. Flagship models rarely need rolling-history detection and can
-  leave the master switch `false` while still benefiting from the
+  leave the master switch unset while still benefiting from the
   post-compaction guard.
 - To disable everything, including the post-compaction guard, set
   `tools.loopDetection.enabled: false` explicitly.
@@ -113,8 +123,8 @@ so a no-config user still gets the protection.
 }
 ```
 
-- The guard never aborts while results are changing; only byte-identical
-  results across the window trigger it.
+- The guard compares normalized outcome hashes, not raw result bytes. Meaningful
+  changes keep it from aborting; fresh wrapper nonces alone do not count as progress.
 - It only arms in the immediate aftermath of a compaction-retry, not at other
   points in a run.
 
@@ -128,7 +138,11 @@ When a loop is detected, OpenClaw logs a loop event and either warns or blocks
 the next tool-cycle depending on severity, protecting against runaway token
 spend and lockups while preserving normal tool access.
 
-- Warnings come first.
+- Warnings come first. On OpenClaw-executed tool calls, a short system note is
+  appended to the affected tool result so the model can change approach before
+  a critical block. Warnings share the diagnostic log's rate limit, rather than
+  appearing on every repeated call. The raw outcome is recorded before the note
+  is added, so warning text does not count as progress.
 - Blocking follows once a pattern persists past the warning threshold.
 - In the embedded agent loop, the first critical loop blocks the whole tool
   batch before any tool in that batch runs. The model then gets one more

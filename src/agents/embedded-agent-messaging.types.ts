@@ -21,14 +21,17 @@ export type MessagingToolSend = {
 export type MessagingToolSourceReplyPayload = Pick<
   ReplyPayload,
   | "audioAsVoice"
+  | "attachments"
   | "channelData"
   | "interactive"
   | "mediaUrl"
   | "mediaUrls"
   | "presentation"
   | "text"
+  | "trustedLocalMedia"
 > & {
   idempotencyKey?: string;
+  transcriptOwner?: true;
   /** Current-source progress (`false`) or completed reply (`true`). */
   sourceReplyFinal?: boolean;
 };

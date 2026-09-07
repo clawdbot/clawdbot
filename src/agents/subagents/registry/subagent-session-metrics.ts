@@ -8,37 +8,32 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type SubagentExecutionMetrics = Pick<
   SubagentRunRecord["execution"],
-  "startedAt" | "endedAt" | "outcome"
+  "status" | "startedAt" | "endedAt" | "outcome"
 >;
-type SubagentSessionStartRecord = Pick<SubagentRunRecord, "sessionStartedAt" | "createdAt"> & {
+type SubagentSessionStartRecord = Pick<SubagentRunRecord, "sessionStartedAt"> & {
   execution: Pick<SubagentExecutionMetrics, "startedAt">;
 };
 type SubagentSessionRuntimeRecord = Pick<SubagentRunRecord, "accumulatedRuntimeMs"> & {
   execution: Pick<SubagentExecutionMetrics, "startedAt" | "endedAt">;
 };
 type SubagentSessionStatusRecord = Pick<SubagentRunRecord, "endedReason"> & {
-  execution: Pick<SubagentExecutionMetrics, "endedAt" | "outcome">;
+  execution: Pick<SubagentExecutionMetrics, "status" | "endedAt" | "outcome">;
 };
 
-function resolveSubagentSessionStartedAtInternal(
-  entry: SubagentSessionStartRecord,
+/** Returns a recorded execution start, never the earlier admission time. */
+export function getSubagentSessionStartedAt(
+  entry: SubagentSessionStartRecord | null | undefined,
 ): number | undefined {
+  if (!entry) {
+    return undefined;
+  }
   if (typeof entry.sessionStartedAt === "number" && Number.isFinite(entry.sessionStartedAt)) {
     return entry.sessionStartedAt;
   }
   if (typeof entry.execution.startedAt === "number" && Number.isFinite(entry.execution.startedAt)) {
     return entry.execution.startedAt;
   }
-  return typeof entry.createdAt === "number" && Number.isFinite(entry.createdAt)
-    ? entry.createdAt
-    : undefined;
-}
-
-/** Returns the best available session start timestamp for a run record. */
-export function getSubagentSessionStartedAt(
-  entry: SubagentSessionStartRecord | null | undefined,
-): number | undefined {
-  return entry ? resolveSubagentSessionStartedAtInternal(entry) : undefined;
+  return undefined;
 }
 
 /** Computes accumulated runtime including the current live run when still active. */
@@ -58,7 +53,7 @@ export function getSubagentSessionRuntimeMs(
   const startedAt = entry.execution.startedAt;
   if (typeof startedAt !== "number" || !Number.isFinite(startedAt)) {
     // Archived/recovered rows may only have an accumulated duration.
-    return entry.accumulatedRuntimeMs != null ? accumulatedRuntimeMs : undefined;
+    return accumulatedRuntimeMs > 0 ? accumulatedRuntimeMs : undefined;
   }
 
   const endedAt = entry.execution.endedAt;
@@ -69,12 +64,12 @@ export function getSubagentSessionRuntimeMs(
 /** Maps persisted run outcome fields to the compact session status shown in tools/UI. */
 export function resolveSubagentSessionStatus(
   entry: SubagentSessionStatusRecord | null | undefined,
-): "running" | "killed" | "failed" | "timeout" | "done" | undefined {
+): "queued" | "running" | "killed" | "failed" | "timeout" | "done" | undefined {
   if (!entry) {
     return undefined;
   }
   if (!entry.execution.endedAt) {
-    return "running";
+    return entry.execution.status === "queued" ? "queued" : "running";
   }
   if (entry.endedReason === SUBAGENT_ENDED_REASON_KILLED) {
     return "killed";

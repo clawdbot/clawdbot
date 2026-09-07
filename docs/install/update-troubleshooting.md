@@ -6,9 +6,53 @@ read_when:
 title: "Update troubleshooting"
 ---
 
-Start in **Control UI → Settings → Updates**. The page reads the latest recorded
-update attempt from the connected Gateway and shows its time, target, reason
-code, failing step, and bounded diagnostic detail.
+Failed updates enter built-in triage after update recovery settles. In an
+interactive terminal, OpenClaw collects sanitized diagnostics and opens the
+[triage agent picker](/cli/triage). With `--yes`, `--json`, or no interactive
+terminal, it prepares diagnostics and handoff commands without launching an
+agent. The original update failure and exit status remain authoritative;
+diagnostics do not turn a failed update into a successful one.
+
+In the Control UI, a failed attempt opens **Ask OpenClaw** with its recorded
+details and asks it to investigate before retrying. A lost connection or
+verification timeout is presented as an unknown outcome. The tab remembers the
+latest 32 investigated attempt identities, scoped to their Gateway and profile.
+Status checks, switching between those scopes, and reloading the same tab do not
+automatically send those investigations again. If the browser cannot read or
+save that history, the failure details remain visible without an automatic
+diagnostic request. Ask OpenClaw manually or run `openclaw triage` on the host.
+If the Gateway or agent is
+unavailable, use `openclaw triage` on the Gateway host. Automatic diagnosis keeps
+your unsent composer draft, including when its conversation session must restart.
+
+**Control UI → Settings → Updates** keeps the latest recorded attempt visible,
+including its time, before/after identities, reason code, failing step, and
+bounded diagnostic detail. A version or revision verification failure stays
+visible when a status check rereads the same attempt. An unknown verification
+outcome resolves when the expected version or revision arrives, or when the
+same attempt reports its final failure or cancellation. A newer recorded attempt
+can also replace it. Intentional cancellations, already-current installs, and
+updates still in progress do not start triage.
+
+For a final failed attempt, **Report update failure** is separate from **Retry**
+and **Ask OpenClaw**. It previews a bounded report containing the OpenClaw
+version, platform, update target, failed phase, sanitized diagnostics, and
+verified rollback outcome. The report excludes secrets, tokens, chat content,
+raw logs, private absolute paths, and recovery commands. Nothing is submitted
+until an administrator confirms that preview. OpenClaw then uses the existing
+GitHub CLI issue flow. Fallback and pending outcomes retain the sanitized report
+locally; a confirmed issue keeps only its durable issue URL. OpenClaw first makes
+a silent, read-only request with the active `github.com` account. A missing CLI
+or a failed, unavailable, or timed-out authentication check returns a prefilled
+issue link without starting issue creation. In the Control UI, an interrupted
+preparation for the recorded attempt can be retried after its local reservation
+expires. Once issue creation starts, a
+timeout, signal, nonzero exit, or malformed response without a verified issue
+URL leaves the attempt pending without a replay link, because the issue-creation
+outcome may be unknown. The action is tied to one update-attempt identity and
+cannot submit that attempt twice; reconnecting or refreshing status never
+reports it automatically. A CLI reporting error returns to the explicit action
+menu and never starts diagnosis on the user's behalf.
 
 Control UI remediation uses typed product actions only. It leads with an
 authenticated Gateway or native action when the connected UI has the required
@@ -36,6 +80,12 @@ the CLI fallback on the Gateway host.
 ## Reason codes
 
 - `dirty`, `no-upstream`: repair the source checkout before retrying.
+- `preflight-insufficient-space`: free space on the filesystems containing
+  preflight staging (the checkout's `.artifacts` area on POSIX) and the
+  package-manager store, then retry. The updater stops on
+  confirmed ENOSPC instead of trying older commits; it does not delete shared
+  package-manager stores. See [Git checkout flow](/cli/update#git-checkout-flow)
+  for staging placement and the older published-updater limitation.
 - `deps-install-failed`, `build-failed`, `ui-build-failed`: inspect the failing
   step, fix the dependency or build error, then retry.
 - `global-install-failed`: retry after checking package-manager ownership and
@@ -59,13 +109,29 @@ Control UI open:
 
 ```bash
 openclaw update status --json
-openclaw doctor --non-interactive
-openclaw update
+openclaw triage
 ```
 
 Use `openclaw update --dry-run` to preview a new attempt. If a package update
 failed after installation began, follow the installer recovery steps in
 [Updating](/install/updating#alternative-re-run-the-installer).
+
+If the installed CLI is damaged or the filesystem cannot write diagnostics,
+automatic triage reports that failure and preserves the original update error.
+Repair the installed command, then run `openclaw triage`. Managed updates retain
+their detached helper log even when the Gateway cannot start; the recorded
+outcome points to the available diagnostics or the failed collection attempt.
+Restart notices summarize the diagnostic outcome. Saved artifact paths and exact,
+installation-specific recovery commands remain in the host command output or
+managed update helper log rather than the notice sent to an agent or channel.
+
+If the updater crashes or is killed after the Gateway stops, the Gateway stays
+stopped unless the updater completed and verified recovery. Inspect
+`openclaw gateway status --deep`, repair the reported dependency or installation
+failure, and rerun `openclaw update`. A failed Git dependency install restores
+and rebuilds the previous runtime before allowing an automatic restart. Restarts
+after verified recovery still check the installed configuration, service ownership,
+and Gateway health.
 
 ## Rollback boundary
 

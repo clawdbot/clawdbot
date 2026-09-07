@@ -4,6 +4,7 @@ import {
   createChannelSecretTargetRegistryEntries,
   getChannelSurface,
   hasOwnProperty,
+  normalizeSecretStringValue,
   type ResolverContext,
   type SecretDefaults,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
@@ -33,7 +34,9 @@ export function collectRuntimeConfigAssignments(params: {
     context: params.context,
     topLevelActiveWithoutAccounts: true,
     topLevelInheritedAccountActive: ({ account, enabled }) =>
-      enabled && !hasOwnProperty(account, "botToken"),
+      enabled &&
+      !hasOwnProperty(account, "botToken") &&
+      !normalizeSecretStringValue(account.tokenFile),
     accountActive: ({ enabled }) => enabled,
     topInactiveReason: "no enabled Zalo surface inherits this top-level botToken.",
     accountInactiveReason: "Zalo account is disabled.",

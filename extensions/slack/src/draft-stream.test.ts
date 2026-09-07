@@ -197,20 +197,27 @@ describe("createSlackDraftStream", () => {
     expect(stream.messageId()).toBe("333.444");
   });
 
-  it("drops a posted preview detached by forceNewMessage", async () => {
-    const { stream, remove } = createDraftStreamHarness();
+  it("drains past a failed preview and retries only the retained failure", async () => {
+    const send = vi
+      .fn<DraftSendFn>()
+      .mockResolvedValueOnce(slackDraftSendResult("100.100"))
+      .mockResolvedValueOnce(slackDraftSendResult("100.300"));
+    const remove = vi.fn<DraftRemoveFn>(async () => {});
+    remove.mockRejectedValueOnce(new Error("cleanup failed"));
+    const { stream } = createDraftStreamHarness({ send, remove });
+    const removedMessageIds = () =>
+      mockCalls<Parameters<DraftRemoveFn>>(remove).map(([, messageId]) => messageId);
 
-    stream.update("working");
-    await stream.flush();
-    stream.forceNewMessage();
+    for (const text of ["first", "second"]) {
+      stream.update(text);
+      await stream.flush();
+      stream.forceNewMessage();
+    }
     await stream.dropDetachedMessages();
-    await stream.dropDetachedMessages();
+    expect(removedMessageIds()).toEqual(["100.100", "100.300"]);
 
-    expect(remove).toHaveBeenCalledOnce();
-    expect(remove).toHaveBeenCalledWith("C123", "111.222", {
-      token: "xoxb-test",
-      accountId: undefined,
-    });
+    await stream.dropDetachedMessages();
+    expect(removedMessageIds()).toEqual(["100.100", "100.300", "100.100"]);
   });
 
   it("drains previews detached during an in-flight removal", async () => {
@@ -701,19 +708,18 @@ describe("createSlackDraftStream", () => {
     expect(remove).not.toHaveBeenCalled();
   });
 
-  it("clear warns when cleanup fails", async () => {
-    const remove = vi.fn<DraftRemoveFn>(async () => {
-      throw new Error("cleanup failed");
-    });
+  it("retries a failed active preview cleanup on the next clear", async () => {
+    const remove = vi.fn<DraftRemoveFn>(async () => {});
+    remove.mockRejectedValueOnce(new Error("cleanup failed"));
     const warn = vi.fn<DraftWarnFn>();
     const { stream } = createDraftStreamHarness({ remove, warn });
 
     stream.update("hello");
     await stream.flush();
     await stream.clear();
+    await stream.clear();
 
+    expect(remove).toHaveBeenCalledTimes(2);
     expect(warn).toHaveBeenCalledWith("slack stream preview cleanup failed: cleanup failed");
-    expect(stream.messageId()).toBeUndefined();
-    expect(stream.channelId()).toBeUndefined();
   });
 });

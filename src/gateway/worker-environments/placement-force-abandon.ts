@@ -1,5 +1,7 @@
 import type { WorkerDispatchPlacementStore } from "./placement-dispatch-failure.js";
-import { placementTurnOwner } from "./placement-record.js";
+import { FORCED_WORKER_ABANDONMENT_ERROR, placementTurnOwner } from "./placement-record.js";
+import { isCurrentWorkerWorkspacePendingResultOwner } from "./placement-workspace-result.js";
+import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
   deleteStagedWorkerWorkspaceResult,
@@ -8,29 +10,7 @@ import {
   workerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
 
-export const FORCED_WORKER_ABANDONMENT_ERROR =
-  "Cloud worker result abandoned by forced operator teardown";
-
-async function tryResolveWorkspacePath(
-  resolveWorkspacePath: (placement: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-  }) => Promise<string>,
-  placement: { sessionId: string; sessionKey: string; agentId: string },
-  onCleanupError?: (error: unknown) => void,
-): Promise<string | undefined> {
-  try {
-    return await resolveWorkspacePath(placement);
-  } catch (error) {
-    // Forced teardown is the last-resort state owner. If the session/worktree is
-    // already gone, skip local repair/ref cleanup and still release the claim.
-    reportCleanupError(onCleanupError, error);
-    return undefined;
-  }
-}
-
-function reportCleanupError(
+export function reportWorkerAbandonmentCleanupError(
   onCleanupError: ((error: unknown) => void) | undefined,
   error: unknown,
 ): void {
@@ -44,11 +24,11 @@ function reportCleanupError(
 export async function forceAbandonWorkerEnvironment(params: {
   placements: WorkerDispatchPlacementStore;
   environmentId: string;
-  resolveWorkspacePath: (placement: {
+  resolveWorkspace: (placement: {
     sessionId: string;
     sessionKey: string;
     agentId: string;
-  }) => Promise<string>;
+  }) => Promise<WorkerSessionWorkspace>;
   onCleanupError?: (error: unknown) => void;
 }): Promise<void> {
   const { environmentId, placements } = params;
@@ -86,7 +66,7 @@ export async function forceAbandonWorkerEnvironment(params: {
           journalCleanups.push({ owner, placement, journal });
         }
       } catch (error) {
-        reportCleanupError(params.onCleanupError, error);
+        reportWorkerAbandonmentCleanupError(params.onCleanupError, error);
         retainedJournalSessions.add(owner.sessionId);
       }
     }
@@ -94,23 +74,17 @@ export async function forceAbandonWorkerEnvironment(params: {
   const stagedResultCleanups: Array<{
     placement: { sessionId: string; sessionKey: string; agentId: string };
     refs: string[];
+    repositoryWorkspaceId?: string;
   }> = [];
   for (const pending of placements.listPendingWorkspaceResults()) {
     if (pending.environmentId === environmentId) {
       const placement = placements.get(pending.sessionId);
-      if (
-        (placement?.state === "active" || placement?.state === "draining") &&
-        placement.environmentId === pending.environmentId &&
-        placement.activeOwnerEpoch === pending.ownerEpoch &&
-        placement.generation ===
-          (placement.state === "active"
-            ? pending.placementGeneration
-            : pending.placementGeneration + 1)
-      ) {
+      if (isCurrentWorkerWorkspacePendingResultOwner(placement, pending)) {
         const finalRef = pending.stagedResultRef ?? workerWorkspaceResultRef(pending.claimId);
         stagedResultCleanups.push({
           placement,
           refs: [finalRef, preparedWorkerWorkspaceResultRef(finalRef)],
+          repositoryWorkspaceId: pending.repositoryWorkspaceId,
         });
         const claim = placement.turnClaim;
         if (claim && claim.claimId === pending.claimId && claim.runId === pending.runId) {
@@ -156,6 +130,7 @@ export async function forceAbandonWorkerEnvironment(params: {
         environmentId: current.environmentId,
         ownerEpoch: current.activeOwnerEpoch,
         expectedGeneration: current.generation,
+        forceLocalClaim: true,
       });
     }
     if (current && current.state !== "failed") {
@@ -174,10 +149,16 @@ export async function forceAbandonWorkerEnvironment(params: {
       continue;
     }
     try {
-      const root = await params.resolveWorkspacePath(cleanup.placement);
-      await recoverWorkerWorkspaceReconciliation({ root, journal: cleanup.journal });
+      const workspace = await params.resolveWorkspace(cleanup.placement);
+      if (workspace.kind !== "local") {
+        throw new Error("Repository workspace cannot own a local rollback journal");
+      }
+      await recoverWorkerWorkspaceReconciliation({
+        root: workspace.path,
+        journal: cleanup.journal,
+      });
     } catch (error) {
-      reportCleanupError(params.onCleanupError, error);
+      reportWorkerAbandonmentCleanupError(params.onCleanupError, error);
       retainedJournalSessions.add(cleanup.owner.sessionId);
     }
   }
@@ -191,21 +172,23 @@ export async function forceAbandonWorkerEnvironment(params: {
   }
   for (const cleanup of stagedResultCleanups) {
     try {
-      const root = await tryResolveWorkspacePath(
-        params.resolveWorkspacePath,
-        cleanup.placement,
-        params.onCleanupError,
-      );
-      if (!root) {
+      // Repository refs remain the durable session data even when the operator
+      // abandons a worker; only the repository workspace deletion owns them.
+      if (cleanup.repositoryWorkspaceId) {
         continue;
       }
+      const workspace = await params.resolveWorkspace(cleanup.placement);
+      if (workspace.kind === "repository") {
+        continue;
+      }
+      const root = workspace.path;
       for (const stagedResultRef of cleanup.refs) {
         if (await hasWorkerWorkspaceResultRef({ root, stagedResultRef })) {
           await deleteStagedWorkerWorkspaceResult({ root, stagedResultRef });
         }
       }
     } catch (error) {
-      reportCleanupError(params.onCleanupError, error);
+      reportWorkerAbandonmentCleanupError(params.onCleanupError, error);
     }
   }
 }

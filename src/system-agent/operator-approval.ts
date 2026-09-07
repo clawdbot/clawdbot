@@ -1,8 +1,14 @@
-// Human-only arming for delegated OpenClaw changes.
-import { hashSystemAgentOperation } from "../agents/tools/system-agent-tool.js";
-import { isPersistentSystemAgentOperation, type SystemAgentOperation } from "./operations.js";
+// Host-owned authorization for exact delegated OpenClaw changes.
+import { createHash } from "node:crypto";
+import { stableStringify } from "@openclaw/normalization-core";
+import { isPersistentSystemAgentOperation, type SystemAgentOperation } from "./operations-parse.js";
 
-type ProposalRef = { current?: string; operation?: SystemAgentOperation };
+export type SystemAgentProposalRef = { current?: string; operation?: SystemAgentOperation };
+
+/** Canonical operation fingerprint used to bind approval to one exact mutation. */
+export function hashSystemAgentOperation(operation: SystemAgentOperation): string {
+  return createHash("sha256").update(stableStringify(operation)).digest("hex");
+}
 
 export type SystemAgentApprovalIntent = "approve" | "decline" | "other";
 
@@ -30,7 +36,7 @@ export function classifySystemAgentApprovalText(message: string): SystemAgentApp
 
 export function resolvePendingOperatorProposal(
   pending: SystemAgentOperation | null,
-  proposalRef: ProposalRef,
+  proposalRef: SystemAgentProposalRef,
 ): { operation: SystemAgentOperation; hash: string } | null {
   const operation = pending ?? proposalRef.operation;
   if (!operation || !isPersistentSystemAgentOperation(operation)) {
@@ -40,8 +46,6 @@ export function resolvePendingOperatorProposal(
   if (proposalRef.current && proposalRef.current !== hash) {
     return null;
   }
-  proposalRef.current = hash;
-  proposalRef.operation = operation;
   return { operation, hash };
 }
 

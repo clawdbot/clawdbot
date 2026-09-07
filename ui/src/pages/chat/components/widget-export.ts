@@ -5,6 +5,7 @@ const WIDGET_SNAPSHOT_MAX_DATA_URL_CHARS = 32 * 1024 * 1024;
 
 type WidgetSnapshotReply = { type?: unknown; id?: unknown; dataUrl?: unknown; error?: unknown };
 type WidgetExportRuntime = {
+  documentHtml?: string;
   timeoutMs?: number;
   requestSnapshot?: typeof requestWidgetSnapshot;
   copyImage?: (dataUrl: Promise<string>) => Promise<void>;
@@ -108,7 +109,10 @@ export async function exportWidget(
     const copyImage =
       runtime.copyImage ??
       ((dataUrl: Promise<string>) => {
-        const blob = dataUrl.then(async (value) => (await fetch(value)).blob());
+        if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+          throw new Error("image clipboard is unavailable");
+        }
+        const blob = dataUrl.then(async (value) => (await globalThis.fetch(value)).blob());
         void blob.catch(() => {});
         // ClipboardItem keeps the click's transient activation while its PNG promise resolves.
         return navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
@@ -136,19 +140,25 @@ export async function exportWidget(
     if (!(error instanceof WidgetSnapshotUnavailableError)) {
       throw error;
     }
-    const src = frame.getAttribute("src");
-    if (!src) {
-      throw new Error("widget document URL is unavailable", { cause: error });
+    let blob: Blob;
+    if (runtime.documentHtml !== undefined) {
+      blob = new Blob([runtime.documentHtml], { type: "text/html" });
+    } else {
+      const src = frame.getAttribute("src");
+      if (!src) {
+        throw new Error("widget document URL is unavailable", { cause: error });
+      }
+      const url = new URL(src, window.location.href);
+      if (url.origin !== window.location.origin) {
+        throw new Error("widget document URL is not same-origin", { cause: error });
+      }
+      const response = await (runtime.fetch ?? globalThis.fetch)(url.href);
+      if (!response.ok) {
+        throw new Error(`widget document download failed (${response.status})`, { cause: error });
+      }
+      blob = await response.blob();
     }
-    const url = new URL(src, window.location.href);
-    if (url.origin !== window.location.origin) {
-      throw new Error("widget document URL is not same-origin", { cause: error });
-    }
-    const response = await (runtime.fetch ?? globalThis.fetch)(url.href);
-    if (!response.ok) {
-      throw new Error(`widget document download failed (${response.status})`, { cause: error });
-    }
-    const objectUrl = URL.createObjectURL(await response.blob());
+    const objectUrl = URL.createObjectURL(blob);
     try {
       (runtime.download ?? downloadHref)(objectUrl, `${filename}.html`);
     } finally {

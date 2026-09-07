@@ -1,13 +1,13 @@
 {
   "name": "@openclaw/openai-provider",
-  "version": "2026.8.1",
+  "version": "2026.9.2",
   "private": true,
   "description": "OpenClaw OpenAI provider plugins",
   "type": "module",
   "dependencies": {
     "libopus-wasm": "0.2.0",
-    "werift": "0.24.1",
-    "ws": "8.21.1",
+    "werift": "0.24.4",
+    "ws": "8.21.3",
     "zod": "4.4.3"
   },
   "devDependencies": {

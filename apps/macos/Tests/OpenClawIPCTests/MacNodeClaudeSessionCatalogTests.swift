@@ -152,13 +152,14 @@ struct MacNodeClaudeSessionCatalogTests {
         }
     }
 
-    @Test func `merges Desktop metadata over CLI indexes and filters archived sessions`() throws {
+    @Test(arguments: [true, false])
+    func `merges Desktop metadata with indexed or Desktop-only transcripts`(indexedDesktop: Bool) throws {
         let fixture = try Fixture()
         let desktopId = "desktop-session"
         let cliId = "cli-session"
         let archivedId = "archived-session"
         let project = try fixture.project()
-        try fixture.writeIndex([
+        var indexEntries = [
             fixture.indexEntry(
                 cliId,
                 in: project,
@@ -175,7 +176,11 @@ struct MacNodeClaudeSessionCatalogTests {
                 in: project,
                 summary: "Archived",
                 modified: "2026-07-03T00:00:00.000Z"),
-        ], in: project)
+        ]
+        if !indexedDesktop {
+            indexEntries.removeAll { $0["sessionId"] as? String == desktopId }
+        }
+        try fixture.writeIndex(indexEntries, in: project)
         for sessionId in [desktopId, cliId, archivedId] {
             try fixture.writeTranscript(
                 [fixture.message(sessionId, sessionId)],
@@ -198,6 +203,9 @@ struct MacNodeClaudeSessionCatalogTests {
                 "isArchived": true,
             ],
             to: fixture.desktopMetadata("local_archived"))
+        try fixture.writeJSON(
+            ["cliSessionId": "missing-session", "title": "Stale Desktop metadata", "isArchived": false],
+            to: fixture.desktopMetadata("local_missing"))
 
         let first = try #require(try fixture.list(paramsJSON: #"{"limit":1}"#))
         let firstSessions = try #require(first["sessions"] as? [[String: Any]])
@@ -246,8 +254,11 @@ struct MacNodeClaudeSessionCatalogTests {
             (cliId, "Interactive CLI prompt", "cli", "/work/cli", "2.1.216"),
             (sdkCLIId, "Headless CLI prompt", "sdk-cli", "/work/sdk", "2.1.204"),
         ] {
+            var meta = fixture.message(
+                id, "<local-command-caveat>CLI metadata</local-command-caveat>", entrypoint: entrypoint)
+            meta["isMeta"] = true
             try fixture.writeTranscript(
-                [fixture.message(
+                [meta, fixture.message(
                     id,
                     text,
                     entrypoint: entrypoint,
@@ -276,6 +287,7 @@ struct MacNodeClaudeSessionCatalogTests {
             ("local_sidechain", sidechainId, "Desktop sidechain"),
             ("local_cli_sidechain", cliSidechainId, "Interactive Desktop sidechain"),
             ("local_discovered_sidechain", discoveredSidechainId, "Headless Desktop sidechain"),
+            ("local_escaped", escapedId, "Escaped Desktop session"),
         ] {
             try fixture.writeJSON(
                 ["cliSessionId": sessionId, "title": title, "isArchived": false],
@@ -353,7 +365,7 @@ struct MacNodeClaudeSessionCatalogTests {
         let fixture = try Fixture()
         let project = try fixture.project()
         let sessionId = "transcript-session"
-        let oldUser = String(repeating: "old user ", count: 20000)
+        let oldUser = String(repeating: "old user 🦞 ", count: 20000)
         let transcript = fixture.file(sessionId, in: project)
         try fixture.writeIndex([
             fixture.indexEntry(
@@ -387,6 +399,18 @@ struct MacNodeClaudeSessionCatalogTests {
         let olderItems = try #require(older["items"] as? [[String: Any]])
         #expect(olderItems.map { $0["text"] as? String } == ["old assistant", oldUser])
         #expect(older["nextCursor"] == nil)
+        #expect(enumerations.value() == 1)
+
+        for item in latestItems + olderItems {
+            let resume = try #require(item["resumeCursor"] as? String)
+            let resumeParams = try #require(try fixture.params([
+                "threadId": sessionId, "limit": 1, "cursor": resume,
+            ]))
+            let resumed = try #require(try fixture.read(resumeParams))
+            let resumedItem = try #require((resumed["items"] as? [[String: Any]])?.first)
+            #expect(resumedItem["uuid"] as? String == item["uuid"] as? String)
+            #expect(resumedItem["text"] as? String == item["text"] as? String)
+        }
         #expect(enumerations.value() == 1)
     }
 
@@ -508,6 +532,12 @@ struct MacNodeClaudeSessionCatalogTests {
         let decoded = try #require(fixture.decode(response))
         let items = try #require(decoded["items"] as? [[String: Any]])
         #expect(items.first?["truncated"] as? Bool == true)
+        let resume = try #require(items.first?["resumeCursor"] as? String)
+        let resumeParams = try #require(try fixture.params([
+            "threadId": sessionId, "limit": 1, "cursor": resume,
+        ]))
+        let resumed = try #require(try fixture.read(resumeParams))
+        #expect((resumed["items"] as? [[String: Any]])?.first?["truncated"] as? Bool == true)
         let itemData = try JSONSerialization.data(withJSONObject: #require(items.first))
         #expect(itemData.count <= 4 * 1024 * 1024)
     }

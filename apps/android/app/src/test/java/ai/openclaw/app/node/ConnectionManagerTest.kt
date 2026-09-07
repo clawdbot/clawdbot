@@ -1,5 +1,6 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.gateway.GatewayEndpoint
@@ -47,6 +48,40 @@ class ConnectionManagerTest {
         advertisedFingerprint = "attacker",
       ),
     )
+
+  @Test
+  fun resolveTlsParamsForEndpoint_loopbackPreservesPinAndHintPolicy() {
+    val cases =
+      listOf(
+        Triple<String?, Boolean, String?>(" pinned ", false, null) to "pinned",
+        Triple<String?, Boolean, String?>(null, true, null) to null,
+        Triple<String?, Boolean, String?>(" \t ", true, null) to null,
+        Triple<String?, Boolean, String?>(null, false, "untrusted") to null,
+      )
+    for ((input, expectedFingerprint) in cases) {
+      val (storedFingerprint, tlsEnabled, advertisedFingerprint) = input
+      val endpoint =
+        GatewayEndpoint(
+          stableId = "_openclaw-gw._tcp.|local.|Loopback",
+          name = "Loopback",
+          host = "127.0.0.1",
+          port = 18789,
+          tlsEnabled = tlsEnabled,
+          tlsFingerprintSha256 = advertisedFingerprint,
+        )
+
+      assertEquals(
+        GatewayTlsParams(
+          required = true,
+          expectedFingerprint = expectedFingerprint,
+          allowTOFU = false,
+          stableId = endpoint.stableId,
+        ),
+        ConnectionManager.resolveTlsParamsForEndpoint(endpoint, storedFingerprint, manualTlsEnabled = false),
+      )
+    }
+    assertNull(resolveDiscoveredTls(host = "127.0.0.1", storedFingerprint = " \t "))
+  }
 
   @Test
   fun resolveTlsParamsForEndpoint_manualRespectsManualTlsToggle() {
@@ -139,6 +174,7 @@ class ConnectionManagerTest {
       listOf(
         ConnectionManager.AGENT_KIND_CLIENT_CAPABILITY,
         ConnectionManager.INLINE_WIDGETS_CLIENT_CAPABILITY,
+        ConnectionManager.USAGE_REFRESHING_CLIENT_CAPABILITY,
       ),
       options.caps,
     )
@@ -148,7 +184,13 @@ class ConnectionManagerTest {
   fun buildOperatorConnectOptions_omitsInlineWidgetsWithoutIsolatedWebViews() {
     val options = newManager(inlineWidgetsAvailable = false).buildOperatorConnectOptions()
 
-    assertEquals(listOf(ConnectionManager.AGENT_KIND_CLIENT_CAPABILITY), options.caps)
+    assertEquals(
+      listOf(
+        ConnectionManager.AGENT_KIND_CLIENT_CAPABILITY,
+        ConnectionManager.USAGE_REFRESHING_CLIENT_CAPABILITY,
+      ),
+      options.caps,
+    )
   }
 
   @Test
@@ -422,20 +464,27 @@ class ConnectionManagerTest {
       )
     prefs.setVoiceWakeEnabled(voiceWakeEnabled)
 
+    val dispatcher =
+      newInvokeDispatcher(
+        cameraEnabled = { cameraEnabled },
+        locationEnabled = locationMode != LocationMode.Off,
+        motionActivityAvailable = motionActivityAvailable,
+        motionPedometerAvailable = motionPedometerAvailable,
+        sendSmsAvailable = sendSmsAvailable,
+        readSmsAvailable = readSmsAvailable,
+        smsSearchPossible = { smsSearchPossible },
+        callLogAvailable = callLogAvailable,
+        photosAvailable = photosAvailable,
+        installedAppsSharingEnabled = installedAppsSharingEnabled,
+        debugBuild = BuildConfig.DEBUG,
+        voiceWakeAvailable = { prefs.voiceWakeEnabled.value && voiceWakeAvailable },
+        mobileUiAvailable = mobileUiAvailable,
+      )
+
     return ConnectionManager(
       prefs = prefs,
-      cameraEnabled = { cameraEnabled },
-      locationMode = { locationMode },
-      motionActivityAvailable = { motionActivityAvailable },
-      motionPedometerAvailable = { motionPedometerAvailable },
-      sendSmsAvailable = { sendSmsAvailable },
-      readSmsAvailable = { readSmsAvailable },
-      smsSearchPossible = { smsSearchPossible },
-      callLogAvailable = { callLogAvailable },
-      photosAvailable = { photosAvailable },
-      installedAppsSharingEnabled = { installedAppsSharingEnabled },
-      voiceWakeAvailable = { voiceWakeAvailable },
-      mobileUiAvailable = { mobileUiAvailable },
+      advertisedCapabilities = dispatcher::buildCapabilities,
+      advertisedCommands = dispatcher::buildInvokeCommands,
       inlineWidgetsAvailable = { inlineWidgetsAvailable },
       permissionSnapshot = { permissionSnapshot },
       manualTls = { false },

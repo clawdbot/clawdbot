@@ -48,15 +48,6 @@ export function buildXaiProvider(
   };
 }
 
-function buildXaiOAuthFallbackProvider(): ModelProviderConfig {
-  return {
-    baseUrl: XAI_GROK_OAUTH_BASE_URL,
-    api: "openai-responses",
-    auth: "oauth",
-    models: buildXaiCatalogModels(),
-  };
-}
-
 function normalizeXaiOAuthModelSelector(value: string): string {
   return value.trim().toLowerCase().replace(/[._]+/g, "-");
 }
@@ -108,10 +99,6 @@ function withXaiOAuthAutoModel(
   };
 }
 
-function readXaiOAuthDefaultModelId(value: unknown): string | undefined {
-  return readLiveModelCatalogStringField(value, "default_model");
-}
-
 async function fetchXaiOAuthDefaultModelId(params: {
   discoveryApiKey: string;
   fetchGuard?: LiveModelCatalogFetchGuard;
@@ -139,9 +126,9 @@ async function fetchXaiOAuthDefaultModelId(params: {
         return [body];
       },
       shouldCacheRows: (candidateRows) =>
-        readXaiOAuthDefaultModelId(candidateRows[0]) !== undefined,
+        readLiveModelCatalogStringField(candidateRows[0], "default_model") !== undefined,
     });
-    return readXaiOAuthDefaultModelId(rows[0]);
+    return readLiveModelCatalogStringField(rows[0], "default_model");
   } catch {
     // Remote settings are advisory. Catalog order remains the provider-owned fallback.
     return undefined;
@@ -155,6 +142,7 @@ export async function buildLiveXaiProvider(params: {
   signal?: AbortSignal;
 }): Promise<ModelProviderConfig> {
   return await buildLiveModelProviderConfig({
+    discoveryMode: "strict",
     providerId: PROVIDER_ID,
     endpoint: XAI_MODELS_ENDPOINT,
     providerConfig: {
@@ -248,17 +236,17 @@ export async function buildLiveXaiOAuthProvider(params: {
   fetchGuard?: LiveModelCatalogFetchGuard;
   signal?: AbortSignal;
 }): Promise<ModelProviderConfig> {
-  const fallback = buildXaiOAuthFallbackProvider();
   const [provider, preferredModelId] = await Promise.all([
     buildLiveModelProviderConfig({
+      discoveryMode: "strict",
       providerId: PROVIDER_ID,
       endpoint: XAI_GROK_OAUTH_MODELS_ENDPOINT,
       providerConfig: {
-        baseUrl: fallback.baseUrl,
-        api: fallback.api,
-        auth: fallback.auth,
+        baseUrl: XAI_GROK_OAUTH_BASE_URL,
+        api: "openai-responses",
+        auth: "oauth",
       },
-      models: fallback.models,
+      models: [],
       discoveryApiKey: params.discoveryApiKey,
       fetchGuard: params.fetchGuard,
       signal: params.signal,

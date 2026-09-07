@@ -1,4 +1,3 @@
-// Telegram plugin module implements channel actions behavior.
 import {
   createUnionActionGate,
   listTokenSourcedAccounts,
@@ -11,7 +10,6 @@ import type {
   ChannelMessageToolDiscovery,
   ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
-import type { TelegramActionConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { asNonArrayRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
@@ -24,6 +22,7 @@ import {
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
 import {
   createTelegramPollExtraToolSchemas,
+  createTelegramReactionEmojiSchema,
   createTelegramRichSendExtraToolSchemas,
 } from "./message-tool-schema.js";
 import { rejectTelegramNativeButtonParams } from "./native-button-params.js";
@@ -42,6 +41,7 @@ const telegramMessageActionRuntime = {
 const TELEGRAM_MESSAGE_ACTION_MAP = {
   delete: "deleteMessage",
   edit: "editMessage",
+  "emoji-list": "emoji-list",
   poll: "poll",
   react: "react",
   send: "sendMessage",
@@ -72,7 +72,7 @@ function resolveTelegramMessageActionName(action: ChannelMessageActionName) {
   return TELEGRAM_MESSAGE_ACTION_MAP[action as keyof typeof TELEGRAM_MESSAGE_ACTION_MAP];
 }
 
-function prepareTelegramSendPayload({
+async function prepareTelegramSendPayload({
   ctx,
   payload,
 }: Parameters<NonNullable<ChannelMessageActionAdapter["prepareSendPayload"]>>[0]) {
@@ -83,7 +83,7 @@ function prepareTelegramSendPayload({
   ) {
     return null;
   }
-  const quoteText = readStringParam(ctx.params, "quoteText");
+  const quoteText = readStringParam(ctx.params, "quoteText", { trim: false });
   if (!quoteText) {
     return payload;
   }
@@ -98,9 +98,16 @@ function prepareTelegramSendPayload({
   };
 }
 
-function resolveTelegramActionDiscovery(cfg: Parameters<typeof listTelegramAccountIds>[0]) {
-  const inspected = listTelegramAccountIds(cfg)
-    .map((accountId) => inspectTelegramAccount({ cfg, accountId }))
+function resolveTelegramActionDiscovery({
+  cfg,
+  accountId,
+}: {
+  cfg: Parameters<typeof listTelegramAccountIds>[0];
+  accountId?: string | null;
+}) {
+  const accountIds = accountId ? [accountId] : listTelegramAccountIds(cfg);
+  const inspected = accountIds
+    .map((id) => inspectTelegramAccount({ cfg, accountId: id }))
     .filter((account) => account.enabled && account.configured);
   const accounts = listTokenSourcedAccounts(inspected);
   if (accounts.length === 0) {
@@ -123,35 +130,9 @@ function resolveTelegramActionDiscovery(cfg: Parameters<typeof listTelegramAccou
     isTelegramInlineButtonsEnabled({ cfg, accountId: account.accountId }),
   );
   return {
-    isEnabled: (key: keyof TelegramActionConfig, defaultValue = true) =>
-      unionGate(key, defaultValue),
+    isEnabled: unionGate,
     pollEnabled,
     buttonsEnabled,
-  };
-}
-
-function resolveScopedTelegramActionDiscovery(params: {
-  cfg: Parameters<typeof listTelegramAccountIds>[0];
-  accountId?: string | null;
-}) {
-  if (!params.accountId) {
-    return resolveTelegramActionDiscovery(params.cfg);
-  }
-  const account = inspectTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
-  if (!account.enabled || !account.configured || account.tokenSource === "none") {
-    return null;
-  }
-  const gate = createTelegramActionGate({
-    cfg: params.cfg,
-    accountId: account.accountId,
-  });
-  return {
-    isEnabled: (key: keyof TelegramActionConfig, defaultValue = true) => gate(key, defaultValue),
-    pollEnabled: resolveTelegramPollActionGateState(gate).enabled,
-    buttonsEnabled: isTelegramInlineButtonsEnabled({
-      cfg: params.cfg,
-      accountId: account.accountId,
-    }),
   };
 }
 
@@ -161,7 +142,7 @@ function describeTelegramMessageTool({
 }: Parameters<
   NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
 >[0]): ChannelMessageToolDiscovery {
-  const discovery = resolveScopedTelegramActionDiscovery({ cfg, accountId });
+  const discovery = resolveTelegramActionDiscovery({ cfg, accountId });
   if (!discovery) {
     return {
       actions: [],
@@ -178,6 +159,7 @@ function describeTelegramMessageTool({
   }
   if (discovery.isEnabled("reactions")) {
     actions.add("react");
+    actions.add("emoji-list");
   }
   if (discovery.isEnabled("deleteMessage")) {
     actions.add("delete");
@@ -202,6 +184,14 @@ function describeTelegramMessageTool({
       visibility: "all-configured",
     });
   }
+  if (discovery.isEnabled("reactions")) {
+    schema.push({
+      properties: createTelegramReactionEmojiSchema(),
+      // The shared emoji parameter keeps react valid across channels; this
+      // contribution only adds Telegram-specific guidance for that parameter.
+      actions: [],
+    });
+  }
   if (discovery.isEnabled("sendMessage")) {
     schema.push({
       properties: createTelegramRichSendExtraToolSchemas(),
@@ -217,6 +207,7 @@ function describeTelegramMessageTool({
 
 export const telegramMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeTelegramMessageTool,
+  providerOwnedReadGates: ["react", "edit", "delete", "emoji-list"],
   resolveExecutionMode: () => "gateway",
   messageActionTargetAliases: {
     react: { aliases: ["messageId"], deliveryTargetAliases: [] },
@@ -245,6 +236,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
   handleAction: async ({
     action,
     params,
+    reply,
     cfg,
     accountId,
     mediaAccess,
@@ -256,6 +248,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     conversationReadOrigin,
     requesterAccountId,
     gatewayClientScopes,
+    deliveryRetryOwner,
   }) => {
     const telegramAction = resolveTelegramMessageActionName(action);
     if (!telegramAction) {
@@ -265,6 +258,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       conversationReadOrigin: _modelConversationReadOrigin,
       mediaAccess: _modelMediaAccess,
       requesterAccountId: _modelRequesterAccountId,
+      reply: _modelReply,
       toolContext: _modelToolContext,
       ...runtimeParams
     } = params;
@@ -289,8 +283,10 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
         sessionKey,
         inboundEventKind,
         gatewayClientScopes,
+        deliveryRetryOwner,
         ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
         ...(requesterAccountId ? { requesterAccountId } : {}),
+        ...(reply ? { reply } : {}),
         ...(toolContext ? { toolContext } : {}),
       },
     );

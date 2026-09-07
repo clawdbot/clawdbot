@@ -1,7 +1,11 @@
 // Tool image logging tests cover diagnostic context emitted while sanitizing
 // oversized or transformed image payloads.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { imageResultFromFile } from "../plugin-sdk/channel-actions.js";
 
 const { infoMock, resizeToJpegMock, warnMock } = vi.hoisted(() => ({
   infoMock: vi.fn(),
@@ -28,7 +32,7 @@ vi.mock("../logging/subsystem.js", () => {
 vi.mock("../media/media-services.js", () => ({
   buildImageResizeSideGrid: () => [2000],
   getImageMetadata: vi.fn(),
-  IMAGE_REDUCE_QUALITY_STEPS: [85],
+  IMAGE_REDUCE_QUALITY_STEPS: [85, 75, 65],
   isImageProcessorUnavailableError: () => false,
   MAX_IMAGE_INPUT_PIXELS: 25_000_000,
   readImageMetadataFromHeader: () => ({ width: 2001, height: 8 }),
@@ -42,6 +46,7 @@ async function createLargePng(): Promise<Buffer> {
 }
 
 describe("tool-images log context", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let png: Buffer;
 
   beforeAll(async () => {
@@ -54,6 +59,65 @@ describe("tool-images log context", () => {
     resizeToJpegMock.mockResolvedValue(Buffer.alloc(100, 2));
     warnMock.mockClear();
   });
+
+  it.each([
+    { maxBytes: 512, outputBytes: [768], minimumBytes: 768, limit: "512B", actual: "768B" },
+    {
+      maxBytes: 512,
+      outputBytes: [900, 700, 800],
+      minimumBytes: 700,
+      limit: "512B",
+      actual: "700B",
+    },
+    {
+      maxBytes: 256 * 1024,
+      outputBytes: [512 * 1024],
+      minimumBytes: 512 * 1024,
+      limit: "256.0KB",
+      actual: "512.0KB",
+    },
+    {
+      maxBytes: 1.5 * 1024 * 1024,
+      outputBytes: [2 * 1024 * 1024],
+      minimumBytes: 2 * 1024 * 1024,
+      limit: "1.50MB",
+      actual: "2.00MB",
+    },
+  ])(
+    "reports the effective SDK image cap of $limit with smallest candidate $actual",
+    async ({ maxBytes, outputBytes, minimumBytes, limit, actual }) => {
+      const filePath = path.join(tempDirs.make("tool-image-cap-"), "sample.png");
+      await writeFile(filePath, png);
+      for (const bytes of outputBytes) {
+        const candidate = Buffer.alloc(bytes, 2);
+        resizeToJpegMock.mockResolvedValueOnce(candidate).mockResolvedValue(candidate);
+      }
+
+      const result = await imageResultFromFile({
+        label: "sdk:image",
+        path: filePath,
+        extraText: "image caption",
+        details: { media: { outbound: false } },
+        imageSanitization: { maxBytes },
+      });
+
+      expect(result.content).toEqual([
+        { type: "text", text: "image caption" },
+        {
+          type: "text",
+          text: `[sdk:image] omitted image payload: Error: Image could not be reduced below ${limit} (got ${actual})`,
+        },
+      ]);
+      expect(result.details).toMatchObject({
+        path: filePath,
+        media: { outbound: false, mediaUrl: filePath },
+      });
+      expect(warnMock).toHaveBeenLastCalledWith(
+        expect.any(String),
+        expect.objectContaining({ smallestCandidateBytes: minimumBytes }),
+      );
+    },
+  );
 
   it("includes filename from read label", async () => {
     const blocks = [

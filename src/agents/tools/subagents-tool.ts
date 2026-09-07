@@ -9,8 +9,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listTaskRecordsUnsorted } from "../../tasks/runtime-internal.js";
 import { cancelDetachedTaskRunById } from "../../tasks/task-executor.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
+import { resolveTaskSessionAgentId } from "../../tasks/task-session-identity.js";
 import { TASK_STATUS_DETAIL_MAX_CHARS, sanitizeTaskStatusText } from "../../tasks/task-status.js";
-import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalPositiveIntegerSchema, optionalStringEnum } from "../schema/typebox.js";
 import {
   DEFAULT_RECENT_MINUTES,
@@ -58,20 +58,16 @@ function taskUpdatedAt(task: TaskRecord): number {
   return task.lastEventAt ?? task.endedAt ?? task.startedAt ?? task.createdAt;
 }
 
-function resolveTaskRequesterAgentId(task: TaskRecord, cfg: OpenClawConfig): string | undefined {
-  if (task.requesterAgentId) {
-    return task.requesterAgentId;
-  }
-  return resolveSessionAgentId({ sessionKey: task.ownerKey, config: cfg });
-}
-
 function taskOwnerMatches(
   task: TaskRecord,
   sessionKey: string,
   agentId: string,
   cfg: OpenClawConfig,
 ): boolean {
-  return task.ownerKey === sessionKey && resolveTaskRequesterAgentId(task, cfg) === agentId;
+  return (
+    task.ownerKey === sessionKey &&
+    resolveTaskSessionAgentId(task.ownerKey, task.requesterAgentId, cfg) === agentId
+  );
 }
 
 function listTreeTasks(
@@ -89,7 +85,11 @@ function listTreeTasks(
       if (task.scopeKind !== "session" || visibleTasks.has(task.taskId)) {
         continue;
       }
-      const taskRequesterAgentId = resolveTaskRequesterAgentId(task, cfg);
+      const taskRequesterAgentId = resolveTaskSessionAgentId(
+        task.ownerKey,
+        task.requesterAgentId,
+        cfg,
+      );
       if (!visibleSessions.has(`${taskRequesterAgentId ?? ""}\0${task.ownerKey}`)) {
         continue;
       }

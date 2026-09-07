@@ -5,6 +5,35 @@ import {
   type NodeRunnerInventoryIssue,
   type NodeWorkerHostDeclaration,
 } from "../infra/node-runner-inventory.js";
+import type { NodeWorkerBundleStatus } from "../shared/node-list-types.js";
+
+type NodeWorkerHostClientId =
+  | typeof GATEWAY_CLIENT_IDS.NODE_HOST
+  | typeof GATEWAY_CLIENT_IDS.MACOS_APP;
+
+/** Both first-party hosts run the shared node runtime without changing client identity. */
+export function isNodeWorkerHostClientId(
+  clientId: string | undefined,
+): clientId is NodeWorkerHostClientId {
+  return clientId === GATEWAY_CLIENT_IDS.NODE_HOST || clientId === GATEWAY_CLIENT_IDS.MACOS_APP;
+}
+
+export type NodeWorkerBundleStatusObservation = {
+  bundleHash: string;
+  status: NodeWorkerBundleStatus;
+};
+
+export function sameBundleStatusObservation(
+  left: NodeWorkerBundleStatusObservation | undefined,
+  right: NodeWorkerBundleStatusObservation | undefined,
+): boolean {
+  return (
+    left?.bundleHash === right?.bundleHash &&
+    left?.status.status === right?.status.status &&
+    (left?.status.status !== "installed" ||
+      (right?.status.status === "installed" && left.status.version === right.status.version))
+  );
+}
 
 export type NodeRunnerRegistrySession = {
   nodeId: string;
@@ -22,7 +51,7 @@ export type NodeWorkerSupervisorNodeProof = {
   connId: string;
   pairingIdentity: string;
   pairingGeneration: string;
-  clientId: typeof GATEWAY_CLIENT_IDS.NODE_HOST;
+  clientId: NodeWorkerHostClientId;
   clientMode: "node";
   protocolFeature: typeof NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE;
   workerHost: Extract<NodeWorkerHostDeclaration, { enabled: true }>;
@@ -38,6 +67,48 @@ export type NodeRunnerInventoryRecord = Omit<
   workerHost?: NodeWorkerHostDeclaration;
 };
 
+export type NodeRunnerStateChange = {
+  inventoryChanged: boolean;
+  availabilityChanged: boolean;
+};
+
+export function createNodeRunnerStatePublisher(
+  getNode: (nodeId: string) => NodeRunnerRegistrySession | undefined,
+  runnerInventoryByConn: ReadonlyMap<string, NodeRunnerInventoryRecord>,
+) {
+  // Availability is an edge over the last published proof, not an inventory mutation alias.
+  const availableNodeIds = new Set<string>();
+  let listener = (_nodeId: string, _change: NodeRunnerStateChange) => {};
+  const hasCurrent = (nodeId: string) => {
+    const node = getNode(nodeId);
+    return Boolean(
+      node &&
+      node.client.invalidated !== true &&
+      resolveNodeWorkerSupervisorProof(node, runnerInventoryByConn),
+    );
+  };
+  return {
+    hasCurrent,
+    reconcile: (nodeId: string, inventoryChanged: boolean) => {
+      const available = hasCurrent(nodeId);
+      const availabilityChanged = availableNodeIds.has(nodeId) !== available;
+      if (available) {
+        availableNodeIds.add(nodeId);
+      } else {
+        availableNodeIds.delete(nodeId);
+      }
+      if (inventoryChanged || availabilityChanged) {
+        listener(nodeId, { inventoryChanged, availabilityChanged });
+      }
+    },
+    setListener: (next: typeof listener) => {
+      listener = next;
+    },
+  };
+}
+
+export type NodeRunnerStatePublisher = ReturnType<typeof createNodeRunnerStatePublisher>;
+
 export function sameNodeWorkerHostDeclaration(
   left: NodeWorkerHostDeclaration | undefined,
   right: NodeWorkerHostDeclaration | undefined,
@@ -50,7 +121,9 @@ export function sameNodeWorkerHostDeclaration(
         left.capacity.available === right.capacity.available &&
         left.bundlePrewarm === right.bundlePrewarm &&
         left.bundleRetention === right.bundleRetention &&
-        left.bundleStatus === right.bundleStatus))
+        left.bundleStatus === right.bundleStatus &&
+        left.portalStream === right.portalStream &&
+        left.environmentSession === right.environmentSession))
   );
 }
 
@@ -63,7 +136,7 @@ export function resolveNodeWorkerSupervisorProof(
     !declaration ||
     !node.pairingIdentity ||
     !node.pairingGeneration ||
-    node.clientId !== GATEWAY_CLIENT_IDS.NODE_HOST ||
+    !isNodeWorkerHostClientId(node.clientId) ||
     node.clientMode !== "node" ||
     declaration.nodeId !== node.nodeId ||
     declaration.pairingIdentity !== node.pairingIdentity ||
@@ -80,7 +153,7 @@ export function resolveNodeWorkerSupervisorProof(
     connId: node.connId,
     pairingIdentity: node.pairingIdentity,
     pairingGeneration: node.pairingGeneration,
-    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+    clientId: node.clientId,
     clientMode: "node",
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
     workerHost: {
@@ -102,7 +175,9 @@ export function resolveNodeRunnerInventoryIssue(
     declaration.pairingIdentity === node.pairingIdentity &&
     declaration.pairingGeneration !== undefined &&
     declaration.pairingGeneration === node.pairingGeneration &&
-    declaration.clientId === GATEWAY_CLIENT_IDS.NODE_HOST &&
+    isNodeWorkerHostClientId(node.clientId) &&
+    declaration.clientId === node.clientId &&
+    node.clientMode === "node" &&
     declaration.clientMode === "node" &&
     declaration.protocolFeatures.length === 1 &&
     declaration.protocolFeatures[0] !== NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE

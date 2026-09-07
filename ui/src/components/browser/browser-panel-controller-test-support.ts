@@ -13,6 +13,9 @@ const BROWSER_PANEL_TEST_PAGE_TITLE = "Page";
 export type BrowserRequestEnvelope = {
   method: string;
   path: string;
+  target?: "host" | "node";
+  node?: string;
+  query?: Record<string, unknown>;
   body?: Record<string, unknown>;
 };
 

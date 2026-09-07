@@ -27,6 +27,7 @@ import {
   waitersFor,
 } from "./placement-turn-claim-events.js";
 import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
+import { assertSessionWorkspaceUnreserved } from "./placement-workspace-reservation.js";
 import {
   clearWorkerWorkspacePendingResult,
   hasCurrentWorkspaceResultClaim,
@@ -67,6 +68,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
     options: { allowDraining?: boolean } = {},
   ): WorkerSessionTurnClaim => {
     const identity = normalizeIdentity(input);
+    assertSessionWorkspaceUnreserved(db, identity.sessionId);
     const claimId = required(input.claimId, "turn claim id");
     const runId = required(input.runId, "turn claim run id");
     const owner: WorkerSessionTurnOwner =
@@ -137,6 +139,25 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       owner,
     };
   };
+  const claimWorkspaceResult = (
+    input: WorkerTurnClaimInput,
+    purpose: "reclaim" | "mutation",
+  ): WorkerSessionTurnClaim =>
+    write((db) => {
+      if (purpose === "mutation" && getRequired(db, input.sessionId).state !== "active") {
+        throw new Error(
+          `Session ${input.sessionId} workspace mutation requires an active placement`,
+        );
+      }
+      const updatedAtMs = now();
+      const claim = claimTurnInDatabase(db, input, updatedAtMs, {
+        allowDraining: purpose === "reclaim",
+      });
+      // Mutation admission and its recovery custody must commit together: an
+      // interrupted remote operation cannot leave unowned workspace changes.
+      insertWorkerWorkspacePendingResult(db, claim, updatedAtMs, instanceId);
+      return claim;
+    });
 
   return {
     claimTurn(input: WorkerTurnClaimInput): WorkerSessionTurnClaim {
@@ -147,14 +168,13 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       if (input.claimId !== input.runId || !input.claimId.startsWith("reclaim-")) {
         throw new Error(`Session ${input.sessionId} workspace result is not owned by reclaim`);
       }
-      // Admission and its recovery fence are inseparable. A crash after this
-      // transaction leaves startup recovery enough state to finish or abandon it.
-      return write((db) => {
-        const updatedAtMs = now();
-        const claim = claimTurnInDatabase(db, input, updatedAtMs, { allowDraining: true });
-        insertWorkerWorkspacePendingResult(db, claim, updatedAtMs, instanceId);
-        return claim;
-      });
+      return claimWorkspaceResult(input, "reclaim");
+    },
+
+    claimWorkspaceMutationResult(
+      input: Omit<WorkerTurnClaimInput, "runId">,
+    ): WorkerSessionTurnClaim {
+      return claimWorkspaceResult({ ...input, runId: input.claimId }, "mutation");
     },
 
     ...createPlacementSessionToolOperationOps(runtime),
@@ -250,15 +270,16 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
 
     cancelWorkspaceResultAndReleaseTurn(
       claim: WorkerSessionTurnClaim,
+      options?: { reason: "node-disconnect" },
     ): WorkerSessionPlacementRecord {
       const sessionId = required(claim.sessionId, "session id");
       const claimId = required(claim.claimId, "turn claim id");
       const runId = required(claim.runId, "turn claim run id");
-      if (claimId !== runId || !claimId.startsWith("reclaim-")) {
+      const nodeDisconnect = options?.reason === "node-disconnect";
+      if (!nodeDisconnect && (claimId !== runId || !claimId.startsWith("reclaim-"))) {
         throw new Error(`Session ${sessionId} workspace result is not owned by reclaim`);
       }
-      // A failed stop must not expose a claim without its recovery fence (or vice
-      // versa), because either half-state permanently blocks the next reclaim.
+      // Claim and recovery fence disappear together; either surviving half blocks the next attempt.
       const released = write((db) => {
         const current = getRequired(db, sessionId);
         const environment = resolvePlacementTurnEnvironment(current, claim);
@@ -277,7 +298,21 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
           pending.placement_generation !== claim.placementGeneration ||
           pending.claim_id !== claimId ||
           pending.run_id !== runId ||
-          pending.workspace_accepted_at_ms !== null
+          pending.workspace_accepted_at_ms !== null ||
+          (nodeDisconnect &&
+            (current.state !== "active" ||
+              current.executionMode !== "remote-exec" ||
+              claim.owner.kind !== "local" ||
+              pending.gateway_instance_id !== instanceId ||
+              pending.recovery_requested_at_ms !== null ||
+              pending.staged_result_ref !== null ||
+              executeSqliteQuerySync(
+                db,
+                workspaceJournalQuery(db)
+                  .selectFrom("worker_workspace_reconciliations")
+                  .select("session_id")
+                  .where("session_id", "=", sessionId),
+              ).rows.length > 0))
         ) {
           throw new Error(
             `Session ${sessionId} workspace result owner changed before cancellation`,

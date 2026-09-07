@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
+import { readQaScenarioPack } from "./scenario-catalog.js";
 import {
   runQaTestFileScenarios,
   type QaScenarioCommandExecution,
@@ -21,6 +22,22 @@ afterEach(async () => {
 });
 
 describe("qa test file scenario runner", () => {
+  it("keeps every Playwright scenario pattern aligned with an executable test", async () => {
+    for (const scenario of readQaScenarioPack().scenarios) {
+      const execution = scenario.execution;
+      if (execution.kind !== "playwright" || !execution.testNamePattern) {
+        continue;
+      }
+      const testSource = await fs.readFile(execution.path, "utf8");
+      const testNamePattern = new RegExp(execution.testNamePattern);
+      const testNames = testSource.matchAll(/\bit\s*\(\s*["'`]([^"'`\n]+)["'`]/gu);
+      expect(
+        Array.from(testNames, (match) => match[1] ?? "").some((name) => testNamePattern.test(name)),
+        `${scenario.id} testNamePattern matches an executable test`,
+      ).toBe(true);
+    }
+  });
+
   it("runs Playwright scenarios with the repo UI e2e command and writes Playwright evidence", async () => {
     const repoRoot = await makeTempRepo("qa-playwright-scenario-");
     const commands: QaScenarioCommandExecution[] = [];
@@ -32,12 +49,16 @@ describe("qa test file scenario runner", () => {
         makeTestFileScenario(
           "playwright",
           "ui/src/e2e/chat-flow.e2e.test.ts",
-          "sends a chat turn through the GUI",
+          "^chat > sends a chat turn through the GUI$",
         ),
       ],
       runCommand: async (command) => {
         commands.push(command);
-        await writeNativeVitestReport(command, { passed: 1 });
+        await writeNativeVitestReport(command, {
+          passed: 1,
+          ancestorTitles: ["chat"],
+          testName: "sends a chat turn through the GUI",
+        });
         return {
           exitCode: 0,
           stdout: "pass\n",
@@ -70,7 +91,7 @@ describe("qa test file scenario runner", () => {
           "scenario-playwright.vitest-report.json",
         )}`,
         "--testNamePattern",
-        "sends a chat turn through the GUI",
+        "^chat > sends a chat turn through the GUI$",
       ],
     ]);
     expect(commands.map((command) => command.timeoutMs)).toEqual([1_800_000, 1_800_000]);
@@ -217,7 +238,7 @@ describe("qa test file scenario runner", () => {
       result: {
         status: "fail",
         failure: {
-          reason: "node exited with 1",
+          reason: `${path.basename(process.execPath)} exited with 1`,
         },
       },
     });
@@ -431,7 +452,7 @@ describe("qa test file scenario runner", () => {
 
       const firstRun = await runQaTestFileScenarios(runParams);
       expect(firstRun.results[0]).toMatchObject({ status: "pass" });
-      await expect(fs.access(reportPath)).resolves.toBeUndefined();
+      await fs.access(reportPath);
 
       writeReport = false;
       const secondRun = await runQaTestFileScenarios(runParams);

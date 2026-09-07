@@ -49,107 +49,49 @@ function codeDelimiter(content: string): string {
   return "`".repeat(longestRun + 1);
 }
 
-type TextEdit = { start: number; end: number; text: string };
-type DunderProtection = { token: string; identifier: string };
-
-function protectDunderIdentifiers(input: string): {
-  markdown: string;
-  protections: DunderProtection[];
-} {
-  const protections: DunderProtection[] = [];
-  let markdown = "";
-  let cursor = 0;
-  for (const match of input.matchAll(/__[\p{L}_][\p{L}\p{N}_]*__/gu)) {
-    const identifier = match[0];
-    const start = match.index ?? 0;
-    const end = start + identifier.length;
-    const before = input[start - 1];
-    const beforeBefore = input[start - 2];
-    const after = input[end];
-    const member = before === ".";
-    const call = after === "(";
-    const functionArgument = before === "(" && /[\p{L}\p{N}_]/u.test(beforeBefore ?? "");
-    const index = after === "[";
-    if (!member && !call && !functionArgument && !index) {
-      continue;
-    }
-    let token = `OCdunder${protections.length}token`;
-    while (input.includes(token)) {
-      token += "x";
-    }
-    markdown += input.slice(cursor, start) + token;
-    protections.push({ token, identifier });
-    cursor = end;
-  }
-  return { markdown: markdown + input.slice(cursor), protections };
-}
-
-function applyTextEdits(text: string, edits: TextEdit[]) {
-  const ordered = edits.toSorted((left, right) => left.start - right.start);
-  let rendered = "";
-  let cursor = 0;
-  for (const edit of ordered) {
-    rendered += text.slice(cursor, edit.start) + edit.text;
-    cursor = edit.end;
-  }
-  rendered += text.slice(cursor);
-  return {
-    text: rendered,
-    mapOffset: (offset: number) =>
-      offset +
-      ordered.reduce(
-        (delta, edit) =>
-          delta + (edit.end <= offset ? edit.text.length - edit.end + edit.start : 0),
-        0,
-      ),
-  };
-}
-
-function restoreDunderIdentifiers(
-  text: string,
-  ranges: IMessageFormatRange[],
-  codeRanges: Array<{ start: number; length: number }>,
-  protections: DunderProtection[],
-) {
-  const edits = protections.flatMap((protection) => {
-    const start = text.indexOf(protection.token);
-    return start === -1
-      ? []
-      : [{ start, end: start + protection.token.length, text: protection.identifier }];
-  });
-  const edited = applyTextEdits(text, edits);
-  const mapRange = <T extends { start: number; length: number }>(range: T): T => ({
-    ...range,
-    start: edited.mapOffset(range.start),
-    length: edited.mapOffset(range.start + range.length) - edited.mapOffset(range.start),
-  });
-  return {
-    text: edited.text,
-    ranges: ranges.map(mapRange),
-    codeRanges: codeRanges.map(mapRange),
-  };
-}
-
 function restoreCodeMarkers(
   text: string,
   ranges: Array<{ start: number; length: number; styles: IMessageFormatStyle[] }>,
   codeRanges: Array<{ start: number; length: number }>,
 ): { text: string; ranges: IMessageFormatRange[] } {
+  if (codeRanges.length === 0) {
+    return { text, ranges };
+  }
+  let rendered = "";
+  let cursor = 0;
+  // The code-only renderer merges and sorts these non-overlapping ranges.
+  // Record each cumulative UTF-16 shift at the existing end-inclusive boundary.
   const edits = codeRanges.map((range) => {
     const end = range.start + range.length;
     const content = text.slice(range.start, end);
     const marker = codeDelimiter(content);
     const padding = content.startsWith("`") || content.endsWith("`") ? " " : "";
-    return { start: range.start, end, text: `${marker}${padding}${content}${padding}${marker}` };
+    rendered +=
+      text.slice(cursor, range.start) + `${marker}${padding}${content}${padding}${marker}`;
+    cursor = end;
+    return { end, shift: rendered.length - end };
   });
-  const edited = applyTextEdits(text, edits);
+  rendered += text.slice(cursor);
+  const mapOffset = (offset: number) => {
+    let low = 0;
+    let high = edits.length;
+    while (low < high) {
+      const middle = low + Math.floor((high - low) / 2);
+      const edit = edits[middle];
+      if (edit && edit.end <= offset) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
+    }
+    return offset + (edits[low - 1]?.shift ?? 0);
+  };
   return {
-    text: edited.text,
-    ranges: ranges.map((range) => ({
-      ...range,
-      start: edited.mapOffset(range.start),
-      length: edited.mapOffset(range.start + range.length) - edited.mapOffset(range.start),
-    })),
+    text: rendered,
+    ranges: ranges.map((range) => {
+      const start = mapOffset(range.start);
+      return { ...range, start, length: mapOffset(range.start + range.length) - start };
+    }),
   };
 }
 
@@ -157,12 +99,12 @@ export function extractMarkdownFormatRuns(input: string): {
   text: string;
   ranges: IMessageFormatRange[];
 } {
-  const protectedDunders = protectDunderIdentifiers(input);
-  const ir = markdownToIR(protectedDunders.markdown, {
+  const ir = markdownToIR(input, {
     autolink: false,
     enableHtmlUnderline: true,
     headingStyle: "rich",
     linkify: false,
+    preserveDunderIdentifiers: true,
     preserveSourceBlockSpacing: true,
   });
   const rendered = renderMarkdownWithAttributedRanges(
@@ -170,20 +112,18 @@ export function extractMarkdownFormatRuns(input: string): {
     { styleMap: IMESSAGE_STYLE_MAP },
     IMESSAGE_FORMAT_PROFILE,
   );
-  const code = renderMarkdownWithAttributedRanges(
-    ir,
-    { styleMap: { code: "code" } },
-    IMESSAGE_CODE_PROFILE,
-  );
-  const dunders = restoreDunderIdentifiers(
+  // Fallback projection can shift inline-code spans, but never creates them.
+  const codeRanges = ir.styles.some((span) => span.style === "code")
+    ? renderMarkdownWithAttributedRanges(ir, { styleMap: { code: "code" } }, IMESSAGE_CODE_PROFILE)
+        .ranges
+    : [];
+  return restoreCodeMarkers(
     rendered.text,
     rendered.ranges.map(({ start, length, style }) => ({
       start,
       length,
       styles: [style],
     })),
-    code.ranges,
-    protectedDunders.protections,
+    codeRanges,
   );
-  return restoreCodeMarkers(dunders.text, dunders.ranges, dunders.codeRanges);
 }

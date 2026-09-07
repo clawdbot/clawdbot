@@ -15,6 +15,7 @@ import {
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
+  SystemAgentApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { resolveDefaultWhatsAppAccountId } from "./accounts.js";
@@ -28,7 +29,7 @@ import { sendMessageWhatsApp, sendTypingWhatsApp } from "./send.js";
 
 const log = createSubsystemLogger("whatsapp/approvals");
 
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
 type WhatsAppPendingDelivery = ApprovalReactionPendingContent;
 type PreparedWhatsAppApprovalTarget = {
   to: string;
@@ -59,7 +60,7 @@ export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
   true,
   WhatsAppFinalPayload
 >({
-  eventKinds: ["exec", "plugin"],
+  eventKinds: ["exec", "plugin", "system-agent"],
   availability: {
     isConfigured: ({ context }) => Boolean(context),
     shouldHandle: ({ context }) => Boolean(context),

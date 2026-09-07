@@ -1,6 +1,8 @@
 // Voice Call plugin module implements cli behavior.
 import path from "node:path";
 import type { Command } from "commander";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { MAX_TCP_PORT } from "openclaw/plugin-sdk/number-runtime";
 import {
   isRecord,
@@ -22,7 +24,8 @@ import {
   validateProviderConfig,
   type VoiceCallConfig,
 } from "./config.js";
-import { findCallMatchesInStore, loadActiveCallsFromStore } from "./manager/store.js";
+import { findCallInStore, loadActiveCallsFromStore } from "./manager/store.js";
+import { resolveVoiceCallAgentId } from "./resolve-call-agent-id.js";
 import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-state.js";
 import type { VoiceCallRuntime } from "./runtime.js";
 import { resolveDefaultVoiceCallStoreDir } from "./store-path.js";
@@ -66,7 +69,7 @@ function resolveDefaultStorePath(config: VoiceCallConfig): string {
   return path.join(base, "calls.jsonl");
 }
 
-function buildSetupStatus(config: VoiceCallConfig): SetupStatus {
+function buildSetupStatus(config: VoiceCallConfig, coreConfig: OpenClawConfig): SetupStatus {
   const validation = validateProviderConfig(config);
   const webhookExposure = resolveWebhookExposureStatus(config);
   const checks: SetupCheck[] = [
@@ -109,6 +112,12 @@ function buildSetupStatus(config: VoiceCallConfig): SetupStatus {
               : "Notify/conversation calls use normal TTS/STT flow",
     },
   ];
+  try {
+    const agentId = resolveVoiceCallAgentId(config, coreConfig);
+    checks.push({ id: "agent-owner", ok: true, message: `Response agent: ${agentId}` });
+  } catch (error) {
+    checks.push({ id: "agent-owner", ok: false, message: formatErrorMessage(error) });
+  }
   return {
     ok: checks.every((check) => check.ok),
     checks,
@@ -125,11 +134,12 @@ function writeSetupStatus(status: SetupStatus): void {
 export function registerVoiceCallCli(params: {
   program: Command;
   config: VoiceCallConfig;
+  coreConfig: OpenClawConfig;
   ensureRuntime: () => Promise<VoiceCallRuntime>;
   stateRuntime?: VoiceCallStateRuntime["state"];
   logger: Logger;
 }) {
-  const { program, config, ensureRuntime, stateRuntime } = params;
+  const { program, config, coreConfig, ensureRuntime, stateRuntime } = params;
   const ensureHistoryStateRuntime = (): void => {
     if (stateRuntime) {
       setVoiceCallStateRuntime({ state: stateRuntime });
@@ -145,7 +155,7 @@ export function registerVoiceCallCli(params: {
     .description("Show Voice Call provider and webhook setup status")
     .option("--json", "Print machine-readable JSON")
     .action((options: { json?: boolean }) => {
-      const status = buildSetupStatus(config);
+      const status = buildSetupStatus(config, coreConfig);
       if (options.json) {
         writeCliJson(status);
         return;
@@ -173,7 +183,7 @@ export function registerVoiceCallCli(params: {
         yes?: boolean;
         json?: boolean;
       }) => {
-        const setup = buildSetupStatus(config);
+        const setup = buildSetupStatus(config, coreConfig);
         if (!setup.ok) {
           if (options.json) {
             writeCliJson({ ok: false, setup });
@@ -379,8 +389,7 @@ export function registerVoiceCallCli(params: {
       ensureHistoryStateRuntime();
       const storePath = path.dirname(resolveDefaultStorePath(config));
       if (options.callId) {
-        const persisted = await findCallMatchesInStore(storePath, options.callId);
-        const call = persisted.byCallId ?? persisted.byProviderCallId;
+        const call = findCallInStore(storePath, options.callId);
         writeCliJson(call ?? { found: false });
         return;
       }

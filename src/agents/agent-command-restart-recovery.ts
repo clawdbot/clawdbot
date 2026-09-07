@@ -3,10 +3,12 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../config/sessions/restart-recovery-types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
+import type { AgentCommandOpts } from "./command/types.js";
 import {
   collectDeliveredMediaUrls,
   collectMessagingToolDeliveredMediaUrls,
   hasCommittedOutboundDeliveryEvidence,
+  hasExplicitlyVisibleAgentPayload,
   hasUnaccountedMessagingToolAggregateEvidence,
   hasVisibleAgentPayload,
   hasVisibleCommittedMessagingToolDeliveryEvidence,
@@ -14,24 +16,47 @@ import {
 } from "./embedded-agent-runner/delivery-evidence.js";
 import { mergeAttemptToolMediaPayloads } from "./embedded-agent-runner/run/tool-media-payloads.js";
 
+/** Restore the exact host-owned delivery constraints before starting a recovery turn. */
+export function resolveCommandRecoveryOptions(params: {
+  opts: AgentCommandOpts;
+  sessionEntry?: SessionEntry;
+  runId: string;
+}): AgentCommandOpts {
+  const { sessionEntry: entry } = params;
+  const media =
+    entry?.restartRecoveryDeliveryRunId === params.runId &&
+    Array.isArray(entry.restartRecoveryDeliveryMediaUrls)
+      ? entry.restartRecoveryDeliveryMediaUrls
+      : undefined;
+  const opts =
+    media !== undefined
+      ? {
+          ...params.opts,
+          internalDeliveryMediaUrls: [...media],
+          internalDeliverySuppressText: entry?.restartRecoverySuppressTextDelivery,
+          sourceReplyDeliveryMode: entry?.restartRecoverySourceReplyDeliveryMode,
+          disableMessageTool: entry?.restartRecoveryDisableMessageTool,
+          forceRestartSafeTools: entry?.restartRecoveryForceSafeTools,
+        }
+      : params.opts;
+  if (
+    (opts.internalDeliverySuppressText === true && opts.internalDeliveryMediaUrls === undefined) ||
+    ((opts.internalDeliveryMediaUrls !== undefined || opts.internalDeliverySuppressText === true) &&
+      (opts.forceRestartSafeTools !== true ||
+        opts.disableMessageTool !== true ||
+        opts.sourceReplyDeliveryMode !== "automatic"))
+  ) {
+    throw new Error(
+      "internal delivery media constraints require automatic delivery with restart-safe tools and no message tool",
+    );
+  }
+  return opts;
+}
+
 function normalizeOptionalThreadId(value: unknown): string | undefined {
   return (
     normalizeOptionalString(value) ??
     (typeof value === "number" && Number.isFinite(value) ? String(value) : undefined)
-  );
-}
-
-function sameDeliveryContext(
-  left: DeliveryContext | undefined,
-  right: DeliveryContext | undefined,
-): boolean {
-  return (
-    left !== undefined &&
-    right !== undefined &&
-    left.channel === right.channel &&
-    left.to === right.to &&
-    left.accountId === right.accountId &&
-    normalizeOptionalThreadId(left.threadId) === normalizeOptionalThreadId(right.threadId)
   );
 }
 
@@ -80,20 +105,15 @@ export function constrainRestartRecoveryDeliveryPayloads(
   }
 
   if (!suppressText) {
-    const visibleReplyIndex = constrained.findIndex(
-      (payload) =>
-        payload.isCommentary !== true &&
-        payload.isCompactionNotice !== true &&
-        payload.isFallbackNotice !== true &&
-        payload.isStatusNotice !== true &&
-        hasVisibleAgentPayload(
-          { payloads: [payload] },
-          {
-            includeErrorPayloads: false,
-            includeReasoningPayloads: false,
-            includeSilentReplyPayloads: false,
-          },
-        ),
+    const visibleReplyIndex = constrained.findIndex((payload) =>
+      hasVisibleAgentPayload(
+        { payloads: [payload] },
+        {
+          includeErrorPayloads: false,
+          includeSilentReplyPayloads: false,
+          requireTerminalContent: true,
+        },
+      ),
     );
     if (visibleReplyIndex >= 0) {
       const visibleReply = constrained[visibleReplyIndex];
@@ -120,19 +140,6 @@ export function constrainRestartRecoveryDeliveryPayloads(
   return constrained;
 }
 
-function hasExplicitlyVisiblePayload(payload: unknown): boolean {
-  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-    const visible = (payload as { visible?: unknown }).visible;
-    if (typeof visible === "boolean") {
-      return visible;
-    }
-  }
-  return hasVisibleAgentPayload(
-    { payloads: [payload] },
-    { includeErrorPayloads: false, includeReasoningPayloads: false },
-  );
-}
-
 /** Reduce a terminal result to bounded, route-checkable delivery evidence. */
 export function buildRestartRecoveryTerminalDeliveryEvidence(
   result: AgentDeliveryEvidence,
@@ -143,7 +150,7 @@ export function buildRestartRecoveryTerminalDeliveryEvidence(
   )
     ? rawPayloads.slice(0, 64).map((payload) => {
         const mediaUrls = collectDeliveredMediaUrls({ payloads: [payload] });
-        const visible = hasExplicitlyVisiblePayload(payload);
+        const visible = hasExplicitlyVisibleAgentPayload(payload);
         const evidence: { mediaUrls?: string[]; visible?: boolean } = { visible };
         if (mediaUrls.length > 0) {
           evidence.mediaUrls = mediaUrls;
@@ -337,13 +344,6 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
   // Recovery can preclaim a run by id. Preserve its original source semantics
   // while the resumed RPC replaces only the active delivery run id.
   const adoptsExistingClaim = params.entry.restartRecoveryDeliveryRunId === params.runId;
-  if (
-    adoptsExistingClaim &&
-    params.deliveryContext !== undefined &&
-    !sameDeliveryContext(params.entry.restartRecoveryDeliveryContext, params.deliveryContext)
-  ) {
-    throw new Error("restart recovery delivery route changed after the run was claimed");
-  }
   const createsTranscriptOnlySourceClaim =
     params.sourceRunId !== undefined && params.deliveryContext === undefined;
   const createsScopedDeliveryClaim = params.sourceRunId !== undefined;

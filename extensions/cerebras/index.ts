@@ -4,6 +4,7 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { applyCerebrasConfig } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { CEREBRAS_MODEL_DISCOVERY } from "./provider-catalog.js";
 
 const PROVIDER_ID = "cerebras";
 
@@ -24,6 +25,10 @@ export default defineSingleProviderPluginEntry({
       ].join("\n"),
       noteTitle: "Cerebras",
     },
-    catalog: {},
+    catalog: {
+      discoveryMode: "strict",
+      allowExplicitBaseUrl: true,
+      liveModelDiscovery: CEREBRAS_MODEL_DISCOVERY,
+    },
   },
 });

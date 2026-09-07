@@ -1,5 +1,5 @@
 import { expect } from "vitest";
-import { resolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
+import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 // OpenClaw test helpers build runtime environments for rescue tests.
@@ -12,10 +12,17 @@ import {
 import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { installTemporaryCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+import {
+  bindPluginMetadataSnapshotCache,
+  getPluginMetadataSnapshotCache,
+} from "../plugins/plugin-cache.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  loadPluginMetadataSnapshot,
+  type resolvePluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import {
@@ -38,9 +45,7 @@ export type SystemAgentPluginMetadataTestSnapshot = {
     config: OpenClawConfig,
     workspaceDir?: string,
   ) => ReturnType<typeof resolvePluginMetadataSnapshot>;
-  /** Rebind after a test redirects to another empty state root with the same plugin inventory. */
-  rebindForCurrentEnv: () => void;
-  restore: () => void;
+  run: <T>(run: () => T, config?: OpenClawConfig) => T;
 };
 
 /** Install the contract-level selectable CLI backend used by core system-agent tests. */
@@ -72,14 +77,16 @@ export function installSystemAgentClaudeCliBackendTestFixture(): () => void {
   return () => cliBackendsTesting.resetDepsForTest();
 }
 
-/** Install the process-stable plugin metadata snapshot that the real Gateway owns. */
-export function installSystemAgentPluginMetadataTestSnapshot(
+/** Prepare one inventory; each test operation owns its scoped config and environment. */
+export function createSystemAgentPluginMetadataTestSnapshot(
   config: OpenClawConfig = {},
 ): SystemAgentPluginMetadataTestSnapshot {
-  const prepared = resolvePluginMetadataSnapshot({ config, env: process.env });
-  let releaseCurrentSnapshot: () => boolean = () => false;
-  const bind = (params: Parameters<typeof resolvePluginMetadataSnapshot>[0]) => {
-    releaseCurrentSnapshot();
+  const prepared = loadPluginMetadataSnapshot({ config, env: process.env, allowCurrent: false });
+  let boundParams: Parameters<typeof resolvePluginMetadataSnapshot>[0] = {
+    config,
+    env: process.env,
+  };
+  const prepareSnapshot = (params: Parameters<typeof resolvePluginMetadataSnapshot>[0]) => {
     const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
     const index =
       prepared.index.policyHash === policyHash ? prepared.index : { ...prepared.index, policyHash };
@@ -96,24 +103,20 @@ export function installSystemAgentPluginMetadataTestSnapshot(
       }),
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     };
-    releaseCurrentSnapshot = installTemporaryCurrentPluginMetadataSnapshot(snapshot, {
-      config: params.config,
-      env: params.env,
-      workspaceDir: params.workspaceDir,
-    }).release;
+    bindPluginMetadataSnapshotCache(snapshot, getPluginMetadataSnapshotCache(prepared));
     return snapshot;
   };
-  const rebindForCurrentEnv = () => {
-    bind({ config, env: process.env });
+  const bind = (params: Parameters<typeof resolvePluginMetadataSnapshot>[0]) => {
+    boundParams = params;
+    return prepareSnapshot(params);
   };
-  rebindForCurrentEnv();
   return {
     bind,
     bindForConfig: (nextConfig, workspaceDir) =>
       bind({ config: nextConfig, env: process.env, workspaceDir }),
-    rebindForCurrentEnv,
-    restore: () => {
-      releaseCurrentSnapshot();
+    run: (run, nextConfig) => {
+      const params = { ...boundParams, config: nextConfig ?? boundParams.config, env: process.env };
+      return withPluginMetadataSnapshotScope(prepareSnapshot(params), run, params);
     },
   };
 }
@@ -152,7 +155,7 @@ export function expectSystemAgentAuditRecord(
 export async function createSystemAgentVerifiedInferenceTestFixture(
   config: OpenClawConfig,
 ): Promise<SystemAgentVerifiedInferenceTestFixture> {
-  const routeAgentId = resolveSystemAgentTargetAgentId(config);
+  const routeAgentId = resolveAmbientOwnerAgentId(config);
   const selection = resolveSimpleCompletionSelectionForAgent({
     cfg: config,
     agentId: routeAgentId,

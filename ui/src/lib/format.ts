@@ -3,9 +3,10 @@ import { bucketRelativeTimeMs, type RelativeTimeUnit } from "@openclaw/normaliza
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
-  formatDurationCompact as formatDurationCompactCore,
-  formatDurationHuman as formatDurationHumanCore,
-} from "../../../src/infra/format-time/format-duration.ts";
+  resolveCompactDurationParts,
+  resolveSingleUnitDurationParts,
+  type DurationPart,
+} from "../../../src/infra/format-time/format-duration-internal.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { formatUiError } from "./format-error.ts";
 
@@ -29,20 +30,40 @@ type FormatRelativeTimestampOptions = {
   suffix?: boolean;
 };
 
-function formatUnit(value: number, unit: RelativeTimeUnit | "millisecond"): string {
-  return new Intl.NumberFormat(i18n.getLocale(), {
+let localeFormatters:
+  | {
+      locale: string;
+      units: Partial<Record<DurationPart["unit"], Intl.NumberFormat>>;
+      relative?: Intl.RelativeTimeFormat;
+    }
+  | undefined;
+
+function getLocaleFormatters() {
+  const locale = i18n.getLocale();
+  // Keep one locale's closed unit set; switching languages releases the old
+  // formatters without retaining labels or subscribing to component lifetimes.
+  if (localeFormatters?.locale !== locale) {
+    localeFormatters = { locale, units: {} };
+  }
+  return localeFormatters;
+}
+
+export function formatUnit({ value, unit }: DurationPart): string {
+  const formatters = getLocaleFormatters();
+  return (formatters.units[unit] ??= new Intl.NumberFormat(formatters.locale, {
     style: "unit",
     unit,
     unitDisplay: "narrow",
     maximumFractionDigits: 0,
-  }).format(value);
+  })).format(value);
 }
 
 function formatRelative(value: number, unit: RelativeTimeUnit): string {
-  return new Intl.RelativeTimeFormat(i18n.getLocale(), {
+  const formatters = getLocaleFormatters();
+  return (formatters.relative ??= new Intl.RelativeTimeFormat(formatters.locale, {
     numeric: "auto",
     style: "narrow",
-  }).format(value, unit);
+  })).format(value, unit);
 }
 
 export function formatTimeAgo(
@@ -55,12 +76,10 @@ export function formatTimeAgo(
   }
 
   const { value, unit } = bucketRelativeTimeMs(durationMs);
-  if (unit === "second") {
-    if (options.suffix !== false) {
-      return t("common.justNow");
-    }
+  if (unit === "second" && options.suffix !== false) {
+    return t("common.justNow");
   }
-  return options.suffix === false ? formatUnit(value, unit) : formatRelative(-value, unit);
+  return options.suffix === false ? formatUnit({ value, unit }) : formatRelative(-value, unit);
 }
 
 export function formatRelativeTimestamp(
@@ -77,7 +96,7 @@ export function formatRelativeTimestamp(
   const { value, unit } = bucketRelativeTimeMs(Math.abs(diff));
   if (unit === "second") {
     if (options.suffix === false) {
-      return formatUnit(value, unit);
+      return formatUnit({ value, unit });
     }
     return isPast ? t("common.justNow") : formatRelative(value, unit);
   }
@@ -95,67 +114,18 @@ export function formatRelativeTimestamp(
   }
 
   const signedValue = isPast ? -value : value;
-  return options.suffix === false ? formatUnit(value, unit) : formatRelative(signedValue, unit);
+  return options.suffix === false ? formatUnit({ value, unit }) : formatRelative(signedValue, unit);
 }
 
 export function formatDurationCompact(ms?: number | null): string | undefined {
-  const coreValue = formatDurationCompactCore(ms, { spaced: true });
-  if (!coreValue || ms == null || !Number.isFinite(ms) || ms <= 0) {
-    return coreValue;
-  }
-  const roundedMs = Math.round(ms);
-  if (roundedMs < 1000) {
-    return formatUnit(roundedMs, "millisecond");
-  }
-  const totalSeconds = Math.round(ms / 1000);
-  if (totalSeconds < 60) {
-    return formatUnit(totalSeconds, "second");
-  }
-  const totalMinutes = Math.floor(totalSeconds / 60);
-  if (totalMinutes < 60) {
-    const seconds = totalSeconds % 60;
-    const parts = [formatUnit(totalMinutes, "minute")];
-    if (seconds > 0) {
-      parts.push(formatUnit(seconds, "second"));
-    }
-    return parts.join(" ");
-  }
-  const hours = Math.floor(totalMinutes / 60);
-  if (hours >= 24) {
-    const days = Math.floor(hours / 24);
-    const remainingHours = hours % 24;
-    const parts = [formatUnit(days, "day")];
-    if (remainingHours > 0) {
-      parts.push(formatUnit(remainingHours, "hour"));
-    }
-    return parts.join(" ");
-  }
-  const minutes = totalMinutes % 60;
-  const parts = [formatUnit(hours, "hour")];
-  if (minutes > 0) {
-    parts.push(formatUnit(minutes, "minute"));
-  }
-  return parts.join(" ");
+  return resolveCompactDurationParts(ms)?.map(formatUnit).join(" ");
 }
 
 export function formatDurationHuman(ms?: number | null, fallback = t("common.na")): string {
-  const coreValue = formatDurationHumanCore(ms, fallback);
   if (ms == null || !Number.isFinite(ms) || ms < 0) {
-    return coreValue;
+    return fallback;
   }
-  if (ms < 1000) {
-    return formatUnit(Math.round(ms), "millisecond");
-  }
-  const seconds = Math.round(ms / 1000);
-  if (seconds < 60) {
-    return formatUnit(seconds, "second");
-  }
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) {
-    return formatUnit(minutes, "minute");
-  }
-  const hours = Math.round(minutes / 60);
-  return hours < 24 ? formatUnit(hours, "hour") : formatUnit(Math.round(hours / 24), "day");
+  return resolveSingleUnitDurationParts(ms).map(formatUnit).join(" ");
 }
 
 export function formatUnknownText(
@@ -194,7 +164,13 @@ export function formatMs(ms?: number | null): string {
   if (timestampMs === undefined) {
     return t("common.na");
   }
-  return new Date(timestampMs).toLocaleString(i18n.getLocale());
+  return new Date(timestampMs).toLocaleString(i18n.getLocale(), {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 export function formatDateMs(
@@ -216,7 +192,7 @@ export function formatTimeMs(
   const timestampMs = asDateTimestampMs(ms);
   return timestampMs === undefined
     ? fallback
-    : new Date(timestampMs).toLocaleTimeString(i18n.getLocale(), options);
+    : new Date(timestampMs).toLocaleTimeString(i18n.getLocale(), options ?? { timeStyle: "short" });
 }
 
 export function formatDateTimeMs(

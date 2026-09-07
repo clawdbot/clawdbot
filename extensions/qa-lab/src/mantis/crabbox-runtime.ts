@@ -223,7 +223,7 @@ function sshCommandForPort(inspect: CrabboxInspect, sshPort: string) {
   };
 }
 
-export async function sshCommand(params: {
+async function sshCommand(params: {
   cwd: string;
   env: NodeJS.ProcessEnv;
   inspect: CrabboxInspect;
@@ -255,4 +255,31 @@ export async function sshCommand(params: {
     }
   }
   throw lastError;
+}
+
+export async function copyCrabboxArtifacts(params: {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  exclude?: readonly string[];
+  inspect: CrabboxInspect;
+  outputDir: string;
+  remoteOutputDir: string;
+  runner: CommandRunner;
+}) {
+  const { host, sshArgs, sshUser } = await sshCommand(params);
+  const excludeArgs = params.exclude?.flatMap((pattern) => ["--exclude", pattern]) ?? [];
+  await runCommand({
+    command: "rsync",
+    args: [
+      "-az",
+      "-e",
+      sshArgs,
+      ...excludeArgs,
+      `${sshUser}@${host}:${params.remoteOutputDir}/`,
+      `${params.outputDir}/`,
+    ],
+    cwd: params.cwd,
+    env: params.env,
+    runner: params.runner,
+  });
 }

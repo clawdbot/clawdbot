@@ -1,7 +1,7 @@
 // Plugin HTTP auth tests cover protected route canonicalization, operator scope
 // checks, hook/plugin route precedence, and unauthorized variant handling.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { describe, expect, test, vi } from "vitest";
+import { beforeAll, describe, expect, test, vi } from "vitest";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { canonicalizePathVariant } from "./security-path.js";
@@ -210,34 +210,40 @@ async function expectPluginRequestOk(
 }
 
 describe("gateway plugin HTTP auth boundary", () => {
-  test("applies default security headers and optional strict transport security", async () => {
-    await withGatewayTempConfig("openclaw-plugin-http-security-headers-test-", async () => {
-      const withoutHsts = createTestGatewayServer({ resolvedAuth: AUTH_NONE });
-      const withoutHstsResponse = await sendRequest(withoutHsts, { path: "/missing" });
-      expect(withoutHstsResponse.setHeader).toHaveBeenCalledWith(
-        "X-Content-Type-Options",
-        "nosniff",
-      );
-      expect(withoutHstsResponse.setHeader).toHaveBeenCalledWith("Referrer-Policy", "no-referrer");
-      expect(
-        withoutHstsResponse.setHeader.mock.calls.some(
-          ([headerName]) => headerName === "Strict-Transport-Security",
-        ),
-      ).toBe(false);
+  beforeAll(async () => {
+    // Compile the real Control UI owner before the request deadline starts;
+    // this suite verifies route/auth ownership, not source-loader startup latency.
+    await import("./control-ui.js");
+  });
 
-      const withHsts = createTestGatewayServer({
-        resolvedAuth: AUTH_NONE,
-        overrides: {
-          strictTransportSecurityHeader: "max-age=31536000; includeSubDomains",
+  test.each([true, false])(
+    "reserves public preview routes ahead of plugins (UI enabled: %s)",
+    async (controlUiEnabled) => {
+      const plugin = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+        res.end("plugin-owned");
+        return true;
+      });
+      await withGatewayServer({
+        prefix: "openclaw-public-preview-",
+        resolvedAuth: AUTH_TOKEN,
+        overrides: { controlUiEnabled, controlUiBasePath: "/control", handlePluginRequest: plugin },
+        run: async (server) => {
+          const response = await sendRequest(server, {
+            path: "/control/share/dashboard/example/session",
+            host: "gateway.example.test",
+          });
+          expect(response.res.statusCode).toBe(controlUiEnabled ? 200 : 404);
+          expect(response.getBody()).toContain(
+            controlUiEnabled ? 'content="OpenClaw dashboard"' : "Not Found",
+          );
+          for (const route of ["/control/share", "/control/share/api/private"]) {
+            expect((await sendRequest(server, { path: route })).res.statusCode).toBe(404);
+          }
+          expect(plugin).not.toHaveBeenCalled();
         },
       });
-      const withHstsResponse = await sendRequest(withHsts, { path: "/missing" });
-      expect(withHstsResponse.setHeader).toHaveBeenCalledWith(
-        "Strict-Transport-Security",
-        "max-age=31536000; includeSubDomains",
-      );
-    });
-  });
+    },
+  );
 
   test("serves unauthenticated liveness/readiness probe routes when no other route handles them", async () => {
     await withGatewayServer({

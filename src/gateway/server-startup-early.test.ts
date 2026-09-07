@@ -2,13 +2,18 @@
  * Early gateway startup helper tests.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
+import { runGatewayShutdownSteps } from "./server-shutdown.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
 type StartGatewayDiscovery = typeof import("./server-discovery-runtime.js").startGatewayDiscovery;
 
 const mocks = vi.hoisted(() => ({
   getMachineDisplayName: vi.fn(async () => "Test Machine"),
-  startGatewayDiscovery: vi.fn<StartGatewayDiscovery>(async () => ({ bonjourStop: null })),
+  startGatewayDiscovery: vi.fn<StartGatewayDiscovery>(async () => ({
+    update: async () => {},
+    stop: async () => {},
+  })),
   setSkillsRemoteRegistry: vi.fn(),
   primeRemoteSkillsCache: vi.fn(),
   refreshRemoteBinsForConnectedNodes: vi.fn(),
@@ -55,7 +60,7 @@ vi.mock("../tasks/task-registry.maintenance.js", () => ({
   getInspectableActiveTaskRestartBlockers: mocks.getInspectableActiveTaskRestartBlockers,
 }));
 
-import { startGatewayEarlyRuntime, startGatewayPluginDiscovery } from "./server-startup-early.js";
+import { startGatewayEarlyRuntime } from "./server-startup-early.js";
 
 type StartGatewayEarlyRuntimeInput = Parameters<typeof startGatewayEarlyRuntime>[0];
 
@@ -82,6 +87,11 @@ function earlyRuntimeInput(
     log,
     logDiscovery: log,
     nodeRegistry: {} as never,
+    swapDiscovery: () => null,
+    pluginRuntimeClaim: createGatewayPluginRuntimeGeneration({
+      getServices: () => null,
+      setServices: () => {},
+    }).currentClaim(),
     ...maintenanceState,
     skillsRefreshDelayMs: 30_000,
     getSkillsRefreshTimer: () => null,
@@ -95,7 +105,7 @@ describe("startGatewayEarlyRuntime", () => {
   beforeEach(() => {
     mocks.getMachineDisplayName.mockClear();
     mocks.startGatewayDiscovery.mockClear();
-    mocks.startGatewayDiscovery.mockResolvedValue({ bonjourStop: null });
+    mocks.startGatewayDiscovery.mockResolvedValue({ update: async () => {}, stop: async () => {} });
     mocks.setSkillsRemoteRegistry.mockReset();
     mocks.primeRemoteSkillsCache.mockReset();
     mocks.refreshRemoteBinsForConnectedNodes.mockReset();
@@ -149,6 +159,60 @@ describe("startGatewayEarlyRuntime", () => {
     expect(mocks.skillsChangeUnsub).toHaveBeenCalledTimes(1);
     expect(mocks.closeSkillsWatchers).toHaveBeenCalledTimes(1);
   });
+
+  it.each([false, true])(
+    "stops acquired discovery exactly once after later startup failure (cleanup rejects: %s)",
+    async (cleanupRejects) => {
+      const startupError = new Error("remote skills registry failed");
+      const cleanupError = new Error("discovery cleanup failed");
+      const stopDiscovery = vi.fn(async () => {
+        if (cleanupRejects) {
+          throw cleanupError;
+        }
+      });
+      const owner: { current: Awaited<ReturnType<StartGatewayDiscovery>> | null } = {
+        current: null,
+      };
+      const swapDiscovery = (next: typeof owner.current) => {
+        const previous = owner.current;
+        owner.current = next;
+        return previous;
+      };
+      mocks.startGatewayDiscovery.mockResolvedValueOnce({
+        update: async () => {},
+        stop: stopDiscovery,
+      });
+      mocks.setSkillsRemoteRegistry.mockImplementationOnce(() => {
+        throw startupError;
+      });
+      const onCleanupError = vi.fn();
+
+      const startup = startGatewayEarlyRuntime(
+        earlyRuntimeInput({ minimalTestGateway: false, swapDiscovery }),
+      ).catch(async (error: unknown) => {
+        await runGatewayShutdownSteps({
+          steps: [
+            { name: "discovery resident", run: async () => await swapDiscovery(null)?.stop() },
+            { name: "gateway close", run: async () => await swapDiscovery(null)?.stop() },
+          ],
+          onError: onCleanupError,
+        });
+        throw error;
+      });
+
+      if (cleanupRejects) {
+        await expect(startup).rejects.toMatchObject({
+          name: "AggregateError",
+          errors: [expect.objectContaining({ cause: cleanupError })],
+        });
+      } else {
+        await expect(startup).rejects.toBe(startupError);
+      }
+      expect(stopDiscovery).toHaveBeenCalledOnce();
+      expect(owner.current).toBeNull();
+      expect(onCleanupError).toHaveBeenCalledTimes(cleanupRejects ? 1 : 0);
+    },
+  );
 
   it("broadcasts remote-node skill invalidations to operator clients", async () => {
     const broadcast = vi.fn();
@@ -212,6 +276,9 @@ describe("startGatewayEarlyRuntime", () => {
   });
 
   it("fails before discovery and task maintenance when task state cannot restore", async () => {
+    const stopDiscovery = vi.fn(async () => {});
+    const swapDiscovery = vi.fn(() => null);
+    mocks.startGatewayDiscovery.mockResolvedValue({ update: async () => {}, stop: stopDiscovery });
     mocks.ensureTaskRuntimeStateReady.mockImplementationOnce(() => {
       throw new Error("task-flow registry restore failed");
     });
@@ -220,40 +287,46 @@ describe("startGatewayEarlyRuntime", () => {
       startGatewayEarlyRuntime(
         earlyRuntimeInput({
           minimalTestGateway: false,
+          swapDiscovery,
         }),
       ),
     ).rejects.toThrow("task-flow registry restore failed");
 
     expect(mocks.startGatewayDiscovery).not.toHaveBeenCalled();
+    expect(swapDiscovery).not.toHaveBeenCalled();
+    expect(stopDiscovery).not.toHaveBeenCalled();
     expect(mocks.configureTaskRegistryMaintenance).not.toHaveBeenCalled();
     expect(mocks.startTaskRegistryMaintenance).not.toHaveBeenCalled();
   });
 
   it("starts discovery with the current plugin registry services", async () => {
     const stop = vi.fn(async () => {});
-    mocks.startGatewayDiscovery.mockResolvedValueOnce({ bonjourStop: stop } as never);
+    const discovery = { update: async () => {}, stop };
+    mocks.startGatewayDiscovery.mockResolvedValueOnce(discovery);
+    const swapDiscovery = vi.fn(() => null);
     const service = {
       pluginId: "bonjour",
       service: { id: "bonjour", advertise: vi.fn() },
     };
 
-    await expect(
-      startGatewayPluginDiscovery({
-        minimalTestGateway: false,
-        cfgAtStart: { discovery: { mdns: { mode: "full" } } } as never,
-        port: 19_001,
-        gatewayTls: { enabled: true, fingerprintSha256: "abc123" },
-        gatewayDirectReachable: true,
-        tailscaleMode: "serve" as never,
-        logDiscovery: {
-          info: () => {},
-          warn: () => {},
-        },
-        pluginRegistry: {
-          gatewayDiscoveryServices: [service],
-        } as never,
-      }),
-    ).resolves.toBe(stop);
+    const input = earlyRuntimeInput({
+      minimalTestGateway: false,
+      swapDiscovery,
+      cfgAtStart: { discovery: { mdns: { mode: "full" } } } as never,
+      port: 19_001,
+      gatewayTls: { enabled: true, fingerprintSha256: "abc123" },
+      gatewayDirectReachable: true,
+      tailscaleMode: "serve" as never,
+      logDiscovery: {
+        info: () => {},
+        warn: () => {},
+      },
+      pluginRegistry: {
+        gatewayDiscoveryServices: [service],
+      } as never,
+    });
+    await startGatewayEarlyRuntime(input);
+    expect(swapDiscovery).toHaveBeenCalledWith(discovery);
 
     const [discoveryParams] = mocks.startGatewayDiscovery.mock.calls.at(-1) ?? [];
     if (discoveryParams === undefined) {
@@ -264,7 +337,8 @@ describe("startGatewayEarlyRuntime", () => {
     expect(discoveryParams.gatewayTls).toEqual({ enabled: true, fingerprintSha256: "abc123" });
     expect(discoveryParams.gatewayDirectReachable).toBe(true);
     expect(discoveryParams.tailscaleMode).toBe("serve");
-    expect(discoveryParams.mdnsMode).toBe("full");
+    expect(discoveryParams.discovery?.mdns?.mode).toBe("full");
     expect(discoveryParams.gatewayDiscoveryServices).toEqual([service]);
+    expect(discoveryParams.pluginRuntimeClaim).toBe(input.pluginRuntimeClaim);
   });
 });

@@ -7,6 +7,7 @@ import {
   type SessionTranscriptTurnLifecyclePatch,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import {
   hasInterSessionUserProvenance,
   isCompletionReportInputProvenance,
@@ -21,8 +22,8 @@ import {
 import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
 import { isRestartAbortTailArtifact } from "./main-session-restart-recovery-resume-policy.js";
 import {
-  buildRestartRecoveryExpectedState,
   mainSessionRecoveryLog,
+  resolveRestartRecoveryTerminalClientRunId,
 } from "./main-session-restart-recovery-shared.js";
 
 export function hasOnlyAnnounceRecoveryRuns(entry: SessionEntry): boolean {
@@ -70,6 +71,7 @@ export async function reconcileInterruptedCompletionReport(params: {
         ...buildMainSessionRecoveryClearPatch(entry),
         status: "killed",
         lifecycleRunId: undefined,
+        lastRunId: resolveRestartRecoveryTerminalClientRunId(entry),
         abortedLastRun: false,
         endedAt,
         lastRunError: undefined,
@@ -323,6 +325,7 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
     }),
     abortedLastRun: false,
     lifecycleRunId: undefined,
+    lastRunId: resolveRestartRecoveryTerminalClientRunId(params.entry),
     endedAt,
     pendingFinalDelivery: undefined,
     restartRecoveryForceSafeTools: undefined,

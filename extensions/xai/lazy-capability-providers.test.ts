@@ -1,9 +1,20 @@
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  isProviderApiKeyConfigured,
+  isProviderAuthProfileConfigured,
+} from "openclaw/plugin-sdk/provider-auth";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { createRealtimeTranscriptionWebSocketSession } from "openclaw/plugin-sdk/realtime-transcription-session";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("openclaw/plugin-sdk/agent-runtime", () => {
+  throw new Error("Lazy capability metadata must not load the broad agent runtime");
+});
 
 const runtimeMocks = vi.hoisted(() => {
   const generateImage = vi.fn();
@@ -81,15 +92,28 @@ vi.mock("./video-generation-provider.js", () => ({
 vi.mock("./speech-provider.js", () => ({
   buildXaiSpeechProvider: runtimeMocks.buildSpeechProvider,
 }));
-vi.mock("./realtime-transcription-provider.js", () => ({
+vi.mock("./realtime-transcription-provider-factory.js", () => ({
   buildXaiRealtimeTranscriptionProvider: runtimeMocks.buildTranscriptionProvider,
 }));
 vi.mock("./realtime-voice-provider.js", () => ({
   buildXaiRealtimeVoiceProvider: runtimeMocks.buildVoiceProvider,
 }));
 
-async function loadLazyProviders() {
-  return await import("./lazy-capability-providers.js");
+const capabilityHost = {
+  isProviderApiKeyConfigured,
+  isProviderAuthProfileConfigured,
+  resolveAgentDir,
+  resolveApiKeyForProvider,
+  createRealtimeTranscriptionWebSocketSession,
+};
+
+const lazyProvidersUrl = new URL("./lazy-capability-provider-factories.ts", import.meta.url).href;
+let lazyProviderCase = 0;
+
+async function loadLazyProviders(): Promise<
+  typeof import("./lazy-capability-provider-factories.js")
+> {
+  return await import(`${lazyProvidersUrl}?testCase=${lazyProviderCase}`);
 }
 
 function createVoiceRequest(
@@ -105,7 +129,8 @@ function createVoiceRequest(
 }
 
 beforeEach(() => {
-  vi.resetModules();
+  // Refresh provider caches without reloading unchanged SDK dependencies.
+  lazyProviderCase += 1;
   for (const value of Object.values(runtimeMocks)) {
     value.mockReset();
   }
@@ -173,10 +198,11 @@ describe("xAI lazy capability providers", () => {
     const lazy = await loadLazyProviders();
     const image = lazy.createLazyXaiImageGenerationProvider();
     const media = lazy.createLazyXaiMediaUnderstandingProvider();
-    const video = lazy.createLazyXaiVideoGenerationProvider();
-    const speech = lazy.createLazyXaiSpeechProvider();
-    const transcription = lazy.createLazyXaiRealtimeTranscriptionProvider();
-    const voice = lazy.createLazyXaiRealtimeVoiceProvider();
+    const video = lazy.createLazyXaiVideoGenerationProvider(capabilityHost);
+    const speech = lazy.createLazyXaiSpeechProvider(capabilityHost);
+    const transcription = lazy.createLazyXaiRealtimeTranscriptionProvider(capabilityHost);
+    const voice = lazy.createLazyXaiRealtimeVoiceProvider(capabilityHost);
+    await vi.dynamicImportSettled();
 
     expect(
       [
@@ -210,7 +236,7 @@ describe("xAI lazy capability providers", () => {
 
   it("keeps the newest transcription audio ordered while the runtime loads", async () => {
     const lazy = await loadLazyProviders();
-    const session = lazy.createLazyXaiRealtimeTranscriptionProvider().createSession({
+    const session = lazy.createLazyXaiRealtimeTranscriptionProvider(capabilityHost).createSession({
       providerConfig: {},
     });
     const first = Buffer.alloc(1024 * 1024, 0x01);
@@ -223,19 +249,21 @@ describe("xAI lazy capability providers", () => {
     await session.connect();
 
     expect(runtimeMocks.buildTranscriptionProvider).toHaveBeenCalledOnce();
-    expect(runtimeMocks.transcriptionSendAudio.mock.calls.map(([audio]) => audio)).toEqual([
-      second,
-      third,
-    ]);
+    const forwardedAudio = runtimeMocks.transcriptionSendAudio.mock.calls.map(([audio]) => audio);
+    expect(forwardedAudio).toHaveLength(2);
+    for (const [index, expected] of [second, third].entries()) {
+      const audio = forwardedAudio[index];
+      expect(Buffer.isBuffer(audio) && audio.equals(expected)).toBe(true);
+    }
     expect(runtimeMocks.transcriptionConnect).toHaveBeenCalledOnce();
-    expect(runtimeMocks.transcriptionSendAudio.mock.invocationCallOrder.at(-1)).toBeLessThan(
-      runtimeMocks.transcriptionConnect.mock.invocationCallOrder[0]!,
+    expect(runtimeMocks.transcriptionConnect.mock.invocationCallOrder[0]).toBeLessThan(
+      runtimeMocks.transcriptionSendAudio.mock.invocationCallOrder[0]!,
     );
   });
 
   it("closes a transcription session that finishes loading after the wrapper closes", async () => {
     const lazy = await loadLazyProviders();
-    const session = lazy.createLazyXaiRealtimeTranscriptionProvider().createSession({
+    const session = lazy.createLazyXaiRealtimeTranscriptionProvider(capabilityHost).createSession({
       providerConfig: {},
     });
 
@@ -250,30 +278,68 @@ describe("xAI lazy capability providers", () => {
   });
 
   it("reopens transcription after close without replaying discarded audio", async () => {
+    const reconnecting = createDeferred<void>();
+    const forwarded: Buffer[] = [];
+    const events: string[] = [];
+    let connectCount = 0;
+    let providerClosed = false;
+    runtimeMocks.transcriptionConnect.mockImplementation(() => {
+      providerClosed = false;
+      connectCount += 1;
+      if (connectCount === 1) {
+        return Promise.resolve();
+      }
+      events.push("connect-start");
+      return reconnecting.promise.then(() => {
+        events.push("connect-settle");
+      });
+    });
+    runtimeMocks.transcriptionClose.mockImplementation(() => {
+      providerClosed = true;
+    });
+    runtimeMocks.transcriptionSendAudio.mockImplementation((audio: Buffer) => {
+      events.push(`${providerClosed ? "drop" : "audio"}:${audio[0]}`);
+      if (!providerClosed) {
+        forwarded.push(audio);
+      }
+    });
     const lazy = await loadLazyProviders();
-    const session = lazy.createLazyXaiRealtimeTranscriptionProvider().createSession({
+    const session = lazy.createLazyXaiRealtimeTranscriptionProvider(capabilityHost).createSession({
       providerConfig: {},
     });
     const first = Buffer.from([0x01]);
     const discarded = Buffer.from([0x02]);
-    const second = Buffer.from([0x03]);
+    const droppedByLimit = Buffer.alloc(1024 * 1024, 0x03);
+    const retainedFirst = Buffer.alloc(1024 * 1024, 0x04);
+    const retainedSecond = Buffer.alloc(1024 * 1024, 0x05);
+    const live = Buffer.from([0x06]);
 
     session.sendAudio(first);
     await session.connect();
     session.close();
     session.close();
     session.sendAudio(discarded);
+    events.length = 0;
 
     const reconnectPromise = session.connect();
-    session.sendAudio(second);
-    await reconnectPromise;
+    session.sendAudio(droppedByLimit);
+    session.sendAudio(retainedFirst);
+    session.sendAudio(retainedSecond);
+    await vi.waitFor(() => expect(runtimeMocks.transcriptionConnect).toHaveBeenCalledTimes(2));
+    session.sendAudio(live);
 
-    expect(runtimeMocks.transcriptionConnect).toHaveBeenCalledTimes(2);
     expect(runtimeMocks.transcriptionClose).toHaveBeenCalledOnce();
-    expect(runtimeMocks.transcriptionSendAudio.mock.calls.map(([audio]) => audio)).toEqual([
-      first,
-      second,
+    expect(forwarded.map((audio) => [audio[0], audio.byteLength])).toEqual([
+      [1, 1],
+      [4, 1024 * 1024],
+      [5, 1024 * 1024],
+      [6, 1],
     ]);
+    expect(events).toEqual(["connect-start", "audio:4", "audio:5", "audio:6"]);
+
+    reconnecting.resolve();
+    await reconnectPromise;
+    expect(events.at(-1)).toBe("connect-settle");
   });
 
   it("preserves voice startup ordering and waits to trigger the greeting", async () => {
@@ -296,7 +362,9 @@ describe("xAI lazy capability providers", () => {
       forwarded.push(`greeting:${instructions ?? ""}`);
     });
     const lazy = await loadLazyProviders();
-    const bridge = lazy.createLazyXaiRealtimeVoiceProvider().createBridge(createVoiceRequest());
+    const bridge = lazy
+      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
+      .createBridge(createVoiceRequest());
     const first = Buffer.from([0x01]);
     const second = Buffer.from([0x02]);
 
@@ -351,7 +419,9 @@ describe("xAI lazy capability providers", () => {
       forwarded.push(`greeting:${String(instructions)}`);
     });
     const lazy = await loadLazyProviders();
-    const bridge = lazy.createLazyXaiRealtimeVoiceProvider().createBridge(createVoiceRequest());
+    const bridge = lazy
+      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
+      .createBridge(createVoiceRequest());
 
     bridge.setMediaTimestamp(1);
     bridge.sendUserMessage?.("middle");
@@ -373,7 +443,7 @@ describe("xAI lazy capability providers", () => {
     const lazy = await loadLazyProviders();
     const onError = vi.fn();
     const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider()
+      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
       .createBridge(createVoiceRequest({ onError }));
     const accepted = "a".repeat(200 * 1024);
 
@@ -409,7 +479,7 @@ describe("xAI lazy capability providers", () => {
       const lazy = await loadLazyProviders();
       const onError = vi.fn();
       const bridge = lazy
-        .createLazyXaiRealtimeVoiceProvider()
+        .createLazyXaiRealtimeVoiceProvider(capabilityHost)
         .createBridge(createVoiceRequest({ onError }));
 
       expect(() => bridge.submitToolResult("call-1", create())).toThrow(/serializ/i);
@@ -428,7 +498,9 @@ describe("xAI lazy capability providers", () => {
 
   it("snapshots lazy voice tool results with one canonical serialization", async () => {
     const lazy = await loadLazyProviders();
-    const bridge = lazy.createLazyXaiRealtimeVoiceProvider().createBridge(createVoiceRequest());
+    const bridge = lazy
+      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
+      .createBridge(createVoiceRequest());
     const toJSON = vi.fn((key: string) => ({ key, ok: true }));
 
     await bridge.submitToolResult("call-1", { toJSON });
@@ -446,7 +518,7 @@ describe("xAI lazy capability providers", () => {
     const lazy = await loadLazyProviders();
     const onError = vi.fn();
     const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider()
+      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
       .createBridge(createVoiceRequest({ onError }));
 
     expect(() =>
@@ -462,7 +534,7 @@ describe("xAI lazy capability providers", () => {
     const lazy = await loadLazyProviders();
     const onError = vi.fn();
     const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider()
+      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
       .createBridge(createVoiceRequest({ onError }));
     const accepted = { text: "a".repeat(200 * 1024) };
 
@@ -486,7 +558,7 @@ describe("xAI lazy capability providers", () => {
     const lazy = await loadLazyProviders();
     const onError = vi.fn();
     const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider()
+      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
       .createBridge(createVoiceRequest({ onError }));
     const acceptedMessage = "a".repeat(200 * 1024);
     const acceptedResult = { text: "b".repeat(200 * 1024) };
@@ -538,7 +610,9 @@ describe("xAI lazy capability providers", () => {
       forwarded.push(`timestamp:${timestamp}`);
     });
     const lazy = await loadLazyProviders();
-    const bridge = lazy.createLazyXaiRealtimeVoiceProvider().createBridge(createVoiceRequest());
+    const bridge = lazy
+      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
+      .createBridge(createVoiceRequest());
 
     await bridge.submitToolResult("call-1", { text: "first" });
     const connectPromise = bridge.connect();
@@ -571,7 +645,7 @@ describe("xAI lazy capability providers", () => {
     const lazy = await loadLazyProviders();
     const onError = vi.fn();
     const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider()
+      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
       .createBridge(createVoiceRequest({ onError }));
 
     await bridge.submitToolResult("call-1", { text: "a".repeat(200 * 1024) });
@@ -597,7 +671,9 @@ describe("xAI lazy capability providers", () => {
     runtimeMocks.voiceConnect.mockReturnValue(connecting.promise);
     runtimeMocks.voiceIsConnected.mockReturnValue(true);
     const lazy = await loadLazyProviders();
-    const bridge = lazy.createLazyXaiRealtimeVoiceProvider().createBridge(createVoiceRequest());
+    const bridge = lazy
+      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
+      .createBridge(createVoiceRequest());
     const audio = Buffer.from([0x01]);
 
     const firstConnect = bridge.connect();
@@ -633,7 +709,7 @@ describe("xAI lazy capability providers", () => {
     const lazy = await loadLazyProviders();
     const onError = vi.fn();
     const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider()
+      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
       .createBridge(createVoiceRequest({ onError }));
 
     bridge.sendUserMessage?.("stale".repeat(40 * 1024));
@@ -662,7 +738,7 @@ describe("xAI lazy capability providers", () => {
     const lazy = await loadLazyProviders();
     const onClose = vi.fn();
     const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider()
+      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
       .createBridge(createVoiceRequest({ onClose }));
 
     const connectPromise = bridge.connect();
@@ -681,7 +757,7 @@ describe("xAI lazy capability providers", () => {
     const lazy = await loadLazyProviders();
     const onClose = vi.fn();
     const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider()
+      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
       .createBridge(createVoiceRequest({ onClose }));
     const first = Buffer.from([0x01]);
     const discarded = Buffer.from([0x02]);
@@ -714,7 +790,7 @@ describe("xAI lazy capability providers", () => {
     const onError = vi.fn();
     const onClose = vi.fn();
     const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider()
+      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
       .createBridge(createVoiceRequest({ onError, onClose }));
 
     const staleConnect = bridge.connect();
@@ -742,6 +818,8 @@ describe("xAI lazy capability providers", () => {
 
   it("ignores nonterminal callbacks from a superseded voice generation", async () => {
     const onAudio = vi.fn();
+    const playback = [{ itemId: "current-item", audioEndMs: 320 }];
+    const getPlaybackState = vi.fn(() => playback);
     const onClearAudio = vi.fn();
     const onMark = vi.fn();
     const onTranscript = vi.fn();
@@ -750,9 +828,10 @@ describe("xAI lazy capability providers", () => {
     const onReady = vi.fn();
     const onError = vi.fn();
     const lazy = await loadLazyProviders();
-    const bridge = lazy.createLazyXaiRealtimeVoiceProvider().createBridge(
+    const bridge = lazy.createLazyXaiRealtimeVoiceProvider(capabilityHost).createBridge(
       createVoiceRequest({
         onAudio,
+        getPlaybackState,
         onClearAudio,
         onMark,
         onTranscript,
@@ -783,6 +862,8 @@ describe("xAI lazy capability providers", () => {
     };
 
     staleRequest?.onAudio(staleAudio);
+    expect(staleRequest?.getPlaybackState?.()).toEqual([]);
+    expect(getPlaybackState).not.toHaveBeenCalled();
     staleRequest?.onClearAudio("barge-in");
     staleRequest?.onMark?.("stale-mark");
     staleRequest?.onTranscript?.("assistant", "stale", true);
@@ -809,7 +890,8 @@ describe("xAI lazy capability providers", () => {
       name: "current-tool",
       args: {},
     };
-    currentRequest?.onAudio(currentAudio);
+    currentRequest?.onAudio(currentAudio, { itemId: "current-item" });
+    expect(currentRequest?.getPlaybackState?.()).toEqual(playback);
     currentRequest?.onClearAudio("barge-in");
     currentRequest?.onMark?.("current-mark");
     currentRequest?.onTranscript?.("assistant", "current", true);
@@ -818,7 +900,7 @@ describe("xAI lazy capability providers", () => {
     currentRequest?.onReady?.();
     currentRequest?.onError?.(currentError);
 
-    expect(onAudio).toHaveBeenCalledWith(currentAudio);
+    expect(onAudio).toHaveBeenCalledWith(currentAudio, { itemId: "current-item" });
     expect(onClearAudio).toHaveBeenCalledWith("barge-in");
     expect(onMark).toHaveBeenCalledWith("current-mark");
     expect(onTranscript).toHaveBeenCalledWith("assistant", "current", true);
@@ -837,7 +919,7 @@ describe("xAI lazy capability providers", () => {
       throw callbackFailure;
     });
     const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider()
+      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
       .createBridge(createVoiceRequest({ onClose }));
 
     await bridge.submitToolResult("call-1", { text: "queued" });
@@ -874,7 +956,7 @@ describe("xAI lazy capability providers", () => {
       throw closeCallbackFailure;
     });
     const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider()
+      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
       .createBridge(createVoiceRequest({ onError, onClose }));
 
     await expect(bridge.connect()).rejects.toBe(failure);
@@ -897,7 +979,7 @@ describe("xAI lazy capability providers", () => {
     const lazy = await loadLazyProviders();
     const onClose = vi.fn();
     const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider()
+      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
       .createBridge(createVoiceRequest({ onClose }));
     const discarded = Buffer.from([0x01]);
     const accepted = Buffer.from([0x02]);
@@ -924,7 +1006,7 @@ describe("xAI lazy capability providers", () => {
     const lazy = await loadLazyProviders();
     const onClose = vi.fn();
     const bridge = lazy
-      .createLazyXaiRealtimeVoiceProvider()
+      .createLazyXaiRealtimeVoiceProvider(capabilityHost)
       .createBridge(createVoiceRequest({ onClose }));
 
     await bridge.connect();
@@ -942,7 +1024,7 @@ describe("xAI lazy capability providers", () => {
 
   it("keeps realtime voice request validation synchronous", async () => {
     const lazy = await loadLazyProviders();
-    const provider = lazy.createLazyXaiRealtimeVoiceProvider();
+    const provider = lazy.createLazyXaiRealtimeVoiceProvider(capabilityHost);
 
     expect(() => provider.createBridge(createVoiceRequest({ autoRespondToAudio: false }))).toThrow(
       "xAI realtime voice requires automatic server-VAD responses",

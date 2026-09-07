@@ -37,7 +37,7 @@ read_when:
     Proxy adds a header with the authenticated user identity (e.g., `x-forwarded-user: nick@example.com`).
   </Step>
   <Step title="Gateway verifies trusted source">
-    OpenClaw checks that the request came from a **trusted proxy IP** (`gateway.trustedProxies`) and is not the Gateway's own loopback or local interface address.
+    OpenClaw checks that the request came from a **trusted proxy IP** (`gateway.trustedProxies`). Loopback sources require explicit `allowLoopback` consent; other Gateway-local interface addresses are rejected.
   </Step>
   <Step title="Gateway extracts identity">
     OpenClaw reads the required headers, then the user identity from the configured header.
@@ -48,6 +48,10 @@ read_when:
 </Steps>
 
 ## Configuration
+
+<Note>
+The `deviceAutoApprove` examples below target beta/current-main builds. Stable `v2026.7.1` does not support this option.
+</Note>
 
 ```json5
 {
@@ -76,10 +80,10 @@ read_when:
         // Optional: allow a same-host loopback proxy after explicit opt-in
         allowLoopback: false,
 
-        // Optional: let authenticated proxy users enroll new browser devices
+        // Optional: let authenticated proxy users enroll UI devices and upgrade scopes
         deviceAutoApprove: {
           enabled: false,
-          scopes: ["operator.read", "operator.write", "operator.approvals"],
+          scopes: ["operator.read", "operator.write", "operator.approvals", "operator.questions"],
         },
       },
     },
@@ -128,15 +132,21 @@ Internal Gateway clients that do not travel through the reverse proxy should use
   Opt-in support for same-host loopback reverse proxies.
 </ParamField>
 <ParamField path="gateway.auth.trustedProxy.deviceAutoApprove.enabled" type="boolean" default="false">
-  Automatically approve new Control UI and WebChat device identities after trusted-proxy authentication.
+  Automatically approve new browser and native UI operator devices and same-key scope upgrades after trusted-proxy authentication.
 </ParamField>
-<ParamField path="gateway.auth.trustedProxy.deviceAutoApprove.scopes" type="string[]" default='["operator.read", "operator.write", "operator.approvals"]'>
-  Maximum scopes granted to an auto-approved browser device. Explicitly listing `operator.admin` lets every proxy-authenticated user request an automatic full-admin device grant, makes scope-less requests receive full admin automatically, and triggers the CRITICAL `gateway.trusted_proxy_device_auto_approve_admin` security audit finding plus a Gateway startup warning.
+<ParamField path="gateway.auth.trustedProxy.deviceAutoApprove.scopes" type="string[]" default='["operator.read", "operator.write", "operator.approvals", "operator.questions"]'>
+  Maximum scopes granted to an auto-approved operator device. Explicitly listing `operator.admin` lets every proxy-authenticated user request an automatic full-admin device grant, makes scope-less requests receive full admin automatically, and triggers the CRITICAL `gateway.trusted_proxy_device_auto_approve_admin` security audit finding plus a Gateway startup warning.
 </ParamField>
 
 <Warning>
-Only enable `allowLoopback` when the local reverse proxy is the intended trust boundary. Any local process that can connect to the Gateway can try to send proxy identity headers, so keep direct Gateway access private to the host and require proxy-owned headers such as `x-forwarded-proto`, or a signed assertion header where your proxy supports one.
+Any local process that can connect to the Gateway can impersonate a loopback reverse proxy by sending identity headers. Only enable `allowLoopback` when the reverse proxy is the sole local listener for incoming user traffic, direct Gateway access is locked down, and you trust local processes. The proxy must authenticate users and strip or overwrite client-supplied identity headers; required headers alone do not distinguish the proxy from another local process.
 </Warning>
+
+### Configure with the wizard
+
+Run `openclaw configure --section gateway` and select **Trusted Proxy**. Entering an address or CIDR that matches a loopback source under the Gateway's runtime rules shows the security warning above and asks whether to allow loopback authentication. This includes ranges containing loopback, even when their base address is not loopback. The default is **No** for a new configuration. **Yes** saves `gateway.auth.trustedProxy.allowLoopback: true`; **No** leaves it unset and warns that loopback proxy requests will fail with `trusted_proxy_loopback_source`, with a link back to this page.
+
+When reconfiguring an existing trusted-proxy setup, the prompt defaults to the existing `allowLoopback` opt-in. Choosing **No** revokes it. If no entered address or range matches a loopback source, the wizard leaves the existing value unchanged. Same-mode reconfiguration also preserves `deviceAutoApprove` verbatim; device enrollment policy is not changed by this prompt. Switching from another auth mode does not restore dormant trusted-proxy opt-ins.
 
 ## Per-identity scope grants
 
@@ -171,7 +181,7 @@ no-auth connections do not carry a verified identity and never receive a grant.
 
 ## Automatic device approval
 
-Trusted-proxy auth can optionally use the proxy identity as the approval boundary for new browser devices:
+Trusted-proxy auth can optionally use the proxy identity as the approval boundary for new browser and native UI operator devices and same-key scope upgrades:
 
 ```json5
 {
@@ -183,7 +193,7 @@ Trusted-proxy auth can optionally use the proxy identity as the approval boundar
         allowUsers: ["operator@example.com"],
         deviceAutoApprove: {
           enabled: true,
-          scopes: ["operator.read", "operator.write", "operator.approvals"],
+          scopes: ["operator.read", "operator.write", "operator.approvals", "operator.questions"],
         },
       },
     },
@@ -194,12 +204,12 @@ Trusted-proxy auth can optionally use the proxy identity as the approval boundar
 The default is `enabled: false`. When enabled, all of these rules apply:
 
 1. The WebSocket must have authenticated through the `trusted-proxy` method with a non-empty user identity that passed `allowUsers` when an allowlist is configured. Token, password, Tailscale, and unauthenticated connections never use this policy.
-2. Only a new Control UI or WebChat browser device can be approved automatically. Any request for an existing device, including a scope upgrade, remains pending for manual approval with `openclaw devices approve <requestId>`.
-3. The device is approved with role `operator`. If the connect request includes scopes, the grant is the exact intersection of the requested scopes and `deviceAutoApprove.scopes`. If the request omits scopes, the configured list is granted; when that list is omitted, it defaults to `operator.read`, `operator.write`, and `operator.approvals`. The resulting grant is then additionally capped by the connection's [`x-openclaw-scopes`](#control-ui-pairing-behavior) proxy header when present, so a proxy that narrows a user's scopes also limits the **persistent** device grant, not just the session — a present-but-empty header yields no scopes. This cap applies even when the client omits its own scope list.
-4. `operator.admin` is allowed only through explicit listing in `deviceAutoApprove.scopes`. When listed, every proxy-authenticated user can request and automatically receive full admin on a new browser device; requests without scopes receive full admin automatically. `openclaw security audit` reports the CRITICAL `gateway.trusted_proxy_device_auto_approve_admin` finding, and the Gateway logs a warning once at startup. Prefer a targeted [`identityScopes`](#per-identity-scope-grants) admin grant when selected verified users need session admin without a persistent admin device grant.
+2. New browser operator devices (including Control UI and WebChat), native macOS, Linux, iOS, and Android clients in UI mode, and scope upgrades from an existing device with the same paired public key resolve automatically. Native clients must supply a signed device identity and authenticate through the proxy on each connection. Node-role connections, role upgrades, and changes to pinned platform or device-family metadata are not eligible for this auto-approval policy. If the existing grant already covers the automatically approvable scopes, the session narrows to that grant without a pairing request or audit entry; otherwise, `deviceAutoApprove.scopes` can automatically approve the widened intersection. A connection claiming an existing device ID with a different public key is rejected before a pairing request is created.
+3. The device is approved with role `operator`. With an explicit `deviceAutoApprove.scopes` list, requested scopes are intersected with that list; a request that omits scopes receives the list. When the list is unset, it defaults to `operator.read`, `operator.write`, `operator.approvals`, and `operator.questions`. During auto-approval with this default list, OpenClaw also adds `operator.questions` even if an older UI client does not request it. An explicit scope list is never widened. The resulting grant is then additionally capped by the connection's [`x-openclaw-scopes`](#control-ui-pairing-behavior) proxy header when present, so a proxy that narrows a user's scopes also limits the **persistent** device grant, not just the session — a present-but-empty header yields no scopes. This cap applies even when the client omits its own scope list.
+4. `operator.admin` is allowed only through explicit listing in `deviceAutoApprove.scopes`. When listed, every proxy-authenticated user can request and automatically receive full admin on a new operator device; requests without scopes receive full admin automatically. `openclaw security audit` reports the CRITICAL `gateway.trusted_proxy_device_auto_approve_admin` finding, and the Gateway logs a warning once at startup. Prefer a targeted [`identityScopes`](#per-identity-scope-grants) admin grant when selected verified users need session admin without a persistent admin device grant.
 
 <Warning>
-Enabling this option delegates new browser device enrollment entirely to the reverse-proxy identity. A compromised proxy account can enroll a persistent device with every configured scope. Listing `operator.admin` makes that device a full administrator without manual approval. Keep the Gateway reachable only through the proxy, require strong proxy authentication, overwrite identity headers, and use a narrow `allowUsers` list.
+Enabling this option delegates new browser and native UI operator device enrollment entirely to the reverse-proxy identity. A compromised proxy account can enroll a persistent device with every configured scope. Listing `operator.admin` makes that device a full administrator without manual approval. Keep the Gateway reachable only through the proxy, require strong proxy authentication, overwrite identity headers, and use a narrow `allowUsers` list.
 </Warning>
 
 ## Control UI pairing behavior
@@ -209,13 +219,13 @@ Browsers attach a device identity on every origin, including plain HTTP, so firs
 Scope implications:
 
 - Device-less Control UI WebSocket sessions cannot self-declare permissions. OpenClaw clears their requested scope list to `[]`, then applies any matching server-side `identityScopes` grant after proxy identity verification.
-- If methods fail with `missing scope` after a successful WebSocket connect, reload so the browser pairs its device identity, or approve the pending device request. See [Control UI insecure HTTP](/web/control-ui#insecure-http).
+- If methods fail with `missing scope` after a successful WebSocket connect, reload so the browser pairs its device identity, or approve the pending device request. See [Control UI insecure HTTP](/web/control-ui/connect-and-pair#insecure-http).
 
 Reverse-proxy scope capping: if your proxy sends `x-openclaw-scopes` on the Control UI WebSocket upgrade request, OpenClaw caps device enrollment or upgrade requests and the final union of device-authorized and identity-granted session scopes. This header does not grant scopes; it only narrows authority. When `deviceAutoApprove.enabled` is true, the cap also limits the persistent device grant written by [automatic device approval](#automatic-device-approval).
 
 Implications:
 
-- Pairing is no longer the primary gate for device-less Control UI access. A matching `identityScopes` entry can authorize that session without creating a pairing record. When `deviceAutoApprove.enabled` is true, the proxy identity also becomes the approval gate for new browser device enrollment.
+- Pairing is no longer the primary gate for device-less Control UI access. A matching `identityScopes` entry can authorize that session without creating a pairing record. When `deviceAutoApprove.enabled` is true, the proxy identity also becomes the approval gate for new browser and native UI operator device enrollment.
 - Your reverse proxy auth policy and `allowUsers` become the effective access control.
 - Keep gateway ingress locked to trusted proxy IPs only (`gateway.trustedProxies` + firewall).
 
@@ -431,6 +441,37 @@ If startup fails with an error like `gateway auth mode is trusted-proxy, but a s
 
 Loopback trusted-proxy identity headers still fail closed: same-host callers are not silently authenticated as proxy users. Internal OpenClaw callers that bypass the proxy may authenticate with `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` instead. Token fallback remains intentionally unsupported in trusted-proxy mode.
 
+## Restrict a separate Gateway to one owner
+
+Use a [separate Gateway cell](/gateway/multi-tenant-hosting) when one owner needs a
+different trust boundary. A separate workspace, model picker filter, or Gateway
+process under the same OS user does not isolate its credentials and state from
+other agents running as that user.
+
+Fleet-managed cells currently use token authentication. This trusted-proxy
+procedure requires an independently provisioned cell; do not overwrite Fleet's
+managed auth configuration.
+
+The identity-aware proxy must reject every other user **before forwarding any HTTP
+request or WebSocket upgrade**. Bind that policy to a verified immutable identity,
+such as an issuer-qualified OIDC subject, and overwrite `userHeader` with that
+identity. Set `allowUsers` to the same single value as a second check. Gateway
+`allowUsers` compares the trimmed header value exactly; it does not verify a JWT,
+resolve an account ID, or make an email address immutable. `requiredHeaders` only
+checks that headers are present and non-blank.
+
+Keep the Gateway reachable only from that proxy. Do not rely on `allowUsers` alone
+to revoke access: valid paired-device or bootstrap credentials have their own
+WebSocket authentication paths. Existing connections also require explicit
+revocation or disconnection. Enforce the owner restriction at the proxy for all
+routes, including plugin routes, and do not create an unprotected node route.
+
+For a proxy-only cell, omit both Gateway token and password configuration and
+their environment variables. Keep `allowLoopback: false` when the proxy has a
+separate network identity. The provider credential inside the cell authenticates
+the workload to its provider; it does not authenticate the human using the
+Gateway. The host administrator remains trusted.
+
 ## Security checklist
 
 Before enabling trusted-proxy auth, verify:
@@ -458,11 +499,19 @@ The audit checks for:
 - Missing `userHeader` configuration.
 - Empty `allowUsers` (allows any authenticated user).
 - Enabled `allowLoopback` for same-host proxy sources.
-- Enabled browser device auto-approval (delegates new device pairing to the proxy identity).
+- Enabled operator device auto-approval (delegates new browser and native UI device pairing to the proxy identity).
 
 Separate, non-trusted-proxy-specific findings also apply whenever Control UI is exposed: wildcard or missing `gateway.controlUi.allowedOrigins`, and Host-header origin fallback.
 
 ## Troubleshooting
+
+### Control UI says Proxy authentication required
+
+The Gateway is reachable, but it rejected proxy authentication or forwarded identity. For `AUTH_IDENTITY_HEADER_REQUIRED`, a required proxy header was missing or blank; this is not a network outage.
+
+Open the configured authenticated proxy or SSO dashboard URL and sign in there instead of visiting the Gateway's loopback URL directly. If the error persists, ask the Gateway administrator to verify identity and required-header forwarding on **WebSocket upgrade requests**, and confirm that the signed-in account is permitted.
+
+A Gateway token cannot replace proxy authentication. Do not send identity headers from the browser, broaden `trustedProxies`, or remove `allowUsers` to work around the rejection.
 
 <AccordionGroup>
   <Accordion title="trusted_proxy_untrusted_source">
@@ -483,7 +532,7 @@ Separate, non-trusted-proxy-specific findings also apply whenever Control UI is 
 
     Fix:
 
-    - Prefer token/password auth for internal same-host clients that do not go through the proxy, or
+    - Use an explicitly configured local password for internal same-host clients that do not go through the proxy; token fallback is not supported in trusted-proxy mode, or
     - Route through a non-loopback trusted proxy address and keep that IP in `gateway.trustedProxies`, or
     - For a deliberate same-host reverse proxy, set `gateway.auth.trustedProxy.allowLoopback = true`, keep the loopback address in `gateway.trustedProxies`, and make sure the proxy strips or overwrites identity headers.
 
@@ -515,7 +564,7 @@ Separate, non-trusted-proxy-specific findings also apply whenever Control UI is 
 
   </Accordion>
   <Accordion title="trusted_proxy_user_not_allowed">
-    The user is authenticated but not in `allowUsers`. Either add them or remove the allowlist.
+    The user is authenticated but not in `allowUsers`. Sign in with a permitted account or ask the Gateway administrator to review the intended access policy. Do not remove the allowlist as a connectivity workaround.
   </Accordion>
   <Accordion title="trusted_proxy_no_proxies_configured / trusted_proxy_config_missing">
     `gateway.auth.mode` is `"trusted-proxy"` but `gateway.trustedProxies` is empty, or `gateway.auth.trustedProxy` itself is missing. Every request is rejected until both are set.

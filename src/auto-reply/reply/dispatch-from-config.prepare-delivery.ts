@@ -1,6 +1,6 @@
 import { isParentOwnedBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import { logVerbose } from "../../globals.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
@@ -36,20 +36,19 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     sessionStoreEntry,
     turnLedger,
   } = state;
-  // Check if we should route replies to originating channel instead of dispatcher.
-  // Only route when the originating channel is DIFFERENT from the current surface.
-  // This handles cross-provider routing (e.g., message from Telegram being processed
-  // by a shared session that's currently on Slack) while preserving normal dispatcher
-  // flow when the provider handles its own messages.
-  //
-  // Debug: `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts`
-  const sessionAcpMeta = sessionStoreEntry.sessionKey
-    ? readAcpSessionMeta({ sessionKey: sessionStoreEntry.sessionKey })
+  // Gather awaits runtime preparation after its first row read. Reread ACP
+  // metadata with the same owner to preserve current lifecycle fences and
+  // recovery from an earlier store-read failure.
+  const currentAcpSession = sessionStoreEntry.sessionKey
+    ? readAcpSessionEntry({
+        cfg,
+        agentId: sessionStoreEntry.agentId,
+        sessionKey: sessionStoreEntry.sessionKey,
+      })
     : undefined;
-  const sessionEntryWithAcp =
-    sessionAcpMeta && sessionStoreEntry.entry
-      ? { ...sessionStoreEntry.entry, acp: sessionAcpMeta }
-      : sessionStoreEntry.entry;
+  const sessionEntryWithAcp = currentAcpSession?.entry
+    ? { ...currentAcpSession.entry, acp: currentAcpSession.acp }
+    : undefined;
   const suppressAcpChildUserDelivery = isParentOwnedBackgroundAcpSession(sessionEntryWithAcp);
   const normalizedRouteReplyChannel = normalizeMessageChannel(replyRoute.channel);
   const normalizedProviderChannel = normalizeMessageChannel(ctx.Provider);
@@ -84,17 +83,18 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     isRoutableChannel: routeReplyRuntime?.isRoutableChannel ?? (() => false),
   });
   const routeReplyTo = replyRoute.to;
+  // Durable intent identifies an outbound write; it never authorizes a new
+  // destination or bypasses private-webchat and parent-owned-session fences.
+  const canRouteDurableBlockReply = Boolean(
+    !suppressAcpChildUserDelivery &&
+    !isInternalWebchatTurn &&
+    routeReplyChannel &&
+    routeReplyTo &&
+    routeReplyChannel === normalizedCurrentSurface,
+  );
   const deliveryChannel = shouldRouteToOriginating ? routeReplyChannel : currentSurface;
-  const shouldPrepareRoutedReplyDelivery = shouldRouteToOriginating && Boolean(routeReplyChannel);
   const replyContextAccountId = routeReplyChannel
     ? resolveReplyDeliveryAccountId(cfg, routeReplyChannel, replyRoute.accountId)
-    : undefined;
-  const routedReplyAccountId = shouldPrepareRoutedReplyDelivery ? replyContextAccountId : undefined;
-  const routedReplyDelivery = shouldPrepareRoutedReplyDelivery
-    ? createReplyDeliveryContext(
-        resolveReplyToMode(cfg, routeReplyChannel, routedReplyAccountId, replyRoute.chatType),
-        replyRoute.chatType,
-      )
     : undefined;
   let normalizeReplyMediaPaths:
     | ReturnType<
@@ -108,6 +108,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     const { createReplyMediaPathNormalizer } = await loadReplyMediaPathsRuntime();
     normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
       cfg,
+      agentId: state.sessionAgentId,
       sessionKey: state.acpDispatchSessionKey,
       workspaceDir: state.workspaceDir,
       messageProvider: deliveryChannel,
@@ -138,9 +139,22 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       kind?: ReplyDispatchKind;
       responsePrefixContext?: ResponsePrefixContext;
       sessionKey?: string;
+      deliveryIntentId?: string;
     },
   ) => {
-    if (!shouldRouteToOriginating || !routeReplyChannel || !routeReplyTo || !routeReplyRuntime) {
+    const durableRouteAuthorized =
+      options?.deliveryIntentId !== undefined && canRouteDurableBlockReply;
+    const runtime =
+      routeReplyRuntime ?? (durableRouteAuthorized ? await loadRouteReplyRuntime() : undefined);
+    if (
+      (!shouldRouteToOriginating && !durableRouteAuthorized) ||
+      !routeReplyChannel ||
+      !routeReplyTo ||
+      !runtime
+    ) {
+      if (options?.deliveryIntentId) {
+        throw new Error("durable block reply route unavailable");
+      }
       return null;
     }
     markInboundDedupeReplayUnsafe();
@@ -152,21 +166,25 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       (ctx.CommandSource === "native"
         ? (resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey)
         : ctx.SessionKey);
-    const result = await routeReplyRuntime.routeReply({
+    const result = await runtime.routeReply({
       payload,
       channel: routeReplyChannel,
       to: routeReplyTo,
+      agentId: state.sessionAgentId,
       sessionKey: agentRuntimeSessionKey,
       policySessionKey:
         options?.sessionKey ?? resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey,
       policyConversationType: resolveRoutedPolicyConversationType(ctx),
-      accountId: routedReplyAccountId,
+      accountId: replyContextAccountId,
       requesterSenderId: ctx.SenderId,
       requesterSenderName: ctx.SenderName,
       requesterSenderUsername: ctx.SenderUsername,
       requesterSenderE164: ctx.SenderE164,
       threadId: state.routeReplyThreadId,
-      replyDelivery: routedReplyDelivery,
+      replyDelivery: createReplyDeliveryContext(
+        resolveReplyToMode(cfg, routeReplyChannel, replyContextAccountId, replyRoute.chatType),
+        replyRoute.chatType,
+      ),
       cfg,
       abortSignal: options?.abortSignal,
       mirror: options?.mirror,
@@ -175,10 +193,11 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       replyKind: options?.kind ?? "final",
       runId: state.params.replyOptions?.runId,
       responsePrefixContext: options?.responsePrefixContext,
+      deliveryIntentId: options?.deliveryIntentId,
     });
     // Routed sends settle here: the transport result is the settlement. This is
     // the single routed choke point, so every routed lane feeds the turn ledger.
-    turnLedger.recordRoutedDelivery(payload, isRoutedReplyDelivered(result));
+    turnLedger.recordRoutedDelivery(payload, result);
     return result;
   };
 
@@ -195,10 +214,11 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     abortSignal?: AbortSignal,
     mirror?: boolean,
     kind: ReplyDispatchKind = "tool",
+    deliveryIntentId?: string,
   ) => {
     // Keep the runtime guard explicit because this helper is called from nested
     // reply callbacks where TypeScript cannot narrow shouldRouteToOriginating.
-    if (!routeReplyRuntime || !routeReplyChannel || !routeReplyTo) {
+    if (!routeReplyRuntime && !deliveryIntentId) {
       return null;
     }
     const effectiveAbortSignal = abortSignal ?? state.getDispatchAbortSignal();
@@ -209,9 +229,13 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       abortSignal: effectiveAbortSignal,
       mirror,
       kind,
+      deliveryIntentId,
     });
     if (result && !result.ok) {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
+      if (deliveryIntentId) {
+        throw new Error(result.error ?? "durable block reply delivery failed");
+      }
     }
     if (hasAskUserPayload(payload) && !effectiveAbortSignal?.aborted && !result?.delivered) {
       throw new Error("ask_user prompt delivery failed");
@@ -269,6 +293,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     normalizedCurrentSurface,
     isInternalWebchatTurn,
     routeReplyChannel,
+    canRouteDurableBlockReply,
     shouldRouteToOriginating,
     shouldSuppressTyping,
     routeReplyTo,

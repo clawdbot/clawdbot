@@ -1,10 +1,8 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   captureUiProofEnabled,
-  channelStopProofDir,
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
@@ -14,15 +12,12 @@ import {
   requireString,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 async function withChatPage(run: (page: Page) => Promise<void>): Promise<void> {
-  const context = await suite.newBrowserContext({
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport: { height: 900, width: 1280 },
-  });
+  const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
   try {
     await run(await context.newPage());
   } finally {
@@ -31,6 +26,27 @@ async function withChatPage(run: (page: Page) => Promise<void>): Promise<void> {
 }
 
 suite.define(() => {
+  it.each([
+    { draft: "Draft from a shared link", name: "a one-shot chat draft" },
+    { draft: undefined, name: "an existing session URL" },
+  ])("preserves remaining URL state while resolving $name", async ({ draft }) => {
+    await withChatPage(async (page) => {
+      await installMockGateway(page, { historyMessages: [] });
+      const sessionUrl = new URL(controlUiSessionUrl(suite.server.baseUrl, "main"));
+      if (draft !== undefined) {
+        sessionUrl.searchParams.set("draft", draft);
+      }
+      sessionUrl.searchParams.set("panel", "details");
+      sessionUrl.hash = "#pane";
+
+      await page.goto(sessionUrl.href);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await expect.poll(() => composer.inputValue()).toBe(draft ?? "");
+      await expect.poll(() => new URL(page.url()).search).toBe("?panel=details");
+      await expect.poll(() => new URL(page.url()).hash).toBe("#pane");
+    });
+  });
+
   it("sends a chat turn through the GUI and renders the final Gateway event", async () => {
     await withChatPage(async (page) => {
       const gateway = await installMockGateway(page, {
@@ -51,7 +67,7 @@ suite.define(() => {
 
       const sendRequest = await gateway.waitForRequest("chat.send");
       const params = requireRecord(sendRequest.params);
-      expect(params.sessionKey).toBe("main");
+      expect(params.sessionKey).toBe("agent:main:main");
       expect(params.message).toBe(prompt);
       expect(params.deliver).toBe(false);
 
@@ -75,7 +91,10 @@ suite.define(() => {
 
   it("adopts a browser-local prompt from a metadata-free gateway event without duplication", async () => {
     await withChatPage(async (page) => {
-      const gateway = await installMockGateway(page, { historyMessages: [] });
+      const gateway = await installMockGateway(page, {
+        historyMessages: [],
+        deferredMethods: ["chat.send"],
+      });
       const prompt = "Keep my browser-local prompt synchronized.";
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
@@ -83,6 +102,7 @@ suite.define(() => {
 
       const request = await gateway.waitForRequest("chat.send");
       const runId = requireString(requireRecord(request.params).idempotencyKey, "chat run id");
+      await gateway.resolveDeferred("chat.send", { runId, status: "started" });
       const userRow = page.locator(".chat-group.user", { hasText: prompt });
       await userRow.waitFor({ timeout: 10_000 });
 
@@ -100,12 +120,12 @@ suite.define(() => {
         session: {
           activeRunIds: [runId],
           hasActiveRun: true,
-          key: "main",
+          key: "agent:main:main",
           kind: "direct",
           status: "running",
           updatedAt: Date.now(),
         },
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
 
       await expect.poll(() => userRow.count()).toBe(1);
@@ -122,7 +142,7 @@ suite.define(() => {
           timestamp: Date.now(),
         },
         {
-          __openclaw: { id: "browser-local-authoritative-assistant", seq: 2 },
+          __openclaw: { id: "browser-local-authoritative-assistant", seq: 2, runId },
           content: [{ text: finalText, type: "text" }],
           role: "assistant",
           timestamp: Date.now(),
@@ -138,7 +158,10 @@ suite.define(() => {
 
   it("keeps a previous final above a newer active turn when events arrive late", async () => {
     await withChatPage(async (page) => {
-      const gateway = await installMockGateway(page, { historyMessages: [] });
+      const gateway = await installMockGateway(page, {
+        historyMessages: [],
+        deferredMethods: ["chat.send"],
+      });
       const previousRunId = "previous-run";
       const previousPrompt = "What are groups?";
       const previousFinal = "Groups organize conversations.";
@@ -161,12 +184,12 @@ suite.define(() => {
         session: {
           activeRunIds: [],
           hasActiveRun: false,
-          key: "main",
+          key: "agent:main:main",
           kind: "direct",
           status: "done",
           updatedAt: Date.now(),
         },
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
 
       await page.locator(".agent-chat__composer-combobox textarea").fill(currentPrompt);
@@ -176,6 +199,9 @@ suite.define(() => {
         requireRecord(sendRequest.params).idempotencyKey,
         "current chat run id",
       );
+      // This scenario owns the exact transcript sequence, including a prior
+      // final that arrives late. Keep its ACK distinct from those source events.
+      await gateway.resolveDeferred("chat.send", { runId: currentRunId, status: "started" });
       await gateway.emitGatewayEvent("session.message", {
         activeRunIds: [currentRunId],
         clientRunId: currentRunId,
@@ -190,12 +216,12 @@ suite.define(() => {
         session: {
           activeRunIds: [currentRunId],
           hasActiveRun: true,
-          key: "main",
+          key: "agent:main:main",
           kind: "direct",
           status: "running",
           updatedAt: Date.now(),
         },
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
       await gateway.emitGatewayEvent("chat", {
         deltaText: currentPartial,
@@ -206,7 +232,7 @@ suite.define(() => {
         },
         runId: currentRunId,
         seq: 1,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         state: "delta",
       });
       await gateway.emitGatewayEvent("session.message", {
@@ -223,12 +249,12 @@ suite.define(() => {
         session: {
           activeRunIds: [currentRunId],
           hasActiveRun: true,
-          key: "main",
+          key: "agent:main:main",
           kind: "direct",
           status: "running",
           updatedAt: Date.now(),
         },
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
 
       const visibleTexts = [previousPrompt, previousFinal, currentPrompt, currentPartial];
@@ -283,12 +309,12 @@ suite.define(() => {
           session: {
             activeRunIds: [],
             hasActiveRun: false,
-            key: "main",
+            key: "agent:main:main",
             kind: "direct",
             status: "done",
             updatedAt: Date.now(),
           },
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
         });
       };
 
@@ -315,7 +341,7 @@ suite.define(() => {
       await gateway.setHistoryMessages(persistedMessages);
       await gateway.resolveDeferred("chat.history", {
         messages: [],
-        sessionId: "control-ui-e2e-session",
+        sessionId: "session:agent:main:main",
         thinkingLevel: null,
       });
       await expectDistinctPeerBubbles();
@@ -338,30 +364,27 @@ suite.define(() => {
         const secondPrompt = "A distinct turn in the same shared run.";
         const partial = "Streaming into both clients.";
         const userMessage = {
-          ...(includeMessageMetadata
-            ? { __openclaw: { id: "shared-session-user", idempotencyKey: `${runId}:user`, seq: 1 } }
-            : {}),
           content: [{ text: prompt, type: "text" }],
           role: "user",
           timestamp: Date.now(),
         };
+        const persistedUserMessage = {
+          ...userMessage,
+          __openclaw: { id: "shared-session-user", idempotencyKey: `${runId}:user`, seq: 1 },
+        };
         const secondUserMessage = {
-          ...(includeMessageMetadata
-            ? {
-                __openclaw: {
-                  id: "shared-session-second-user",
-                  idempotencyKey: `${runId}:user`,
-                  seq: 2,
-                },
-              }
-            : {}),
           content: [{ text: secondPrompt, type: "text" }],
           role: "user",
           timestamp: Date.now(),
         };
+        const persistedSecondUserMessage = {
+          ...secondUserMessage,
+          __openclaw: { id: "shared-session-second-user", idempotencyKey: `${runId}:user`, seq: 2 },
+        };
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("chat.startup");
-        await gateway.setHistoryMessages([userMessage]);
+        // Even an envelope-only event reads back with its canonical transcript identity.
+        await gateway.setHistoryMessages([persistedUserMessage]);
         await gateway.emitGatewayEvent("chat", {
           deltaText: partial,
           message: {
@@ -371,7 +394,7 @@ suite.define(() => {
           },
           runId,
           seq: 1,
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
           state: "delta",
         });
         await page.locator(".chat-bubble.streaming", { hasText: partial }).waitFor({
@@ -382,18 +405,18 @@ suite.define(() => {
           activeRunIds: [runId],
           clientRunId: includeMessageMetadata ? "conflicting-envelope-run" : runId,
           hasActiveRun: true,
-          message: userMessage,
+          message: includeMessageMetadata ? persistedUserMessage : userMessage,
           messageId: "shared-session-user",
           messageSeq: 1,
           session: {
             activeRunIds: [runId],
             hasActiveRun: true,
-            key: "main",
+            key: "agent:main:main",
             kind: "direct",
             status: "running",
             updatedAt: Date.now(),
           },
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
         };
         await gateway.emitGatewayEvent("session.message", sharedUserEvent);
 
@@ -404,7 +427,7 @@ suite.define(() => {
         await expect.poll(() => userRow.count()).toBe(1);
         await gateway.emitGatewayEvent("session.message", {
           ...sharedUserEvent,
-          message: secondUserMessage,
+          message: includeMessageMetadata ? persistedSecondUserMessage : secondUserMessage,
           messageId: "shared-session-second-user",
           messageSeq: 2,
         });
@@ -435,24 +458,10 @@ suite.define(() => {
 
         const finalText = "Both clients stayed synchronized.";
         await gateway.setHistoryMessages([
+          persistedUserMessage,
+          persistedSecondUserMessage,
           {
-            ...userMessage,
-            __openclaw: {
-              id: "shared-session-user",
-              idempotencyKey: `${runId}:user`,
-              seq: 1,
-            },
-          },
-          {
-            ...secondUserMessage,
-            __openclaw: {
-              id: "shared-session-second-user",
-              idempotencyKey: `${runId}:user`,
-              seq: 2,
-            },
-          },
-          {
-            __openclaw: { id: "shared-session-assistant", seq: 3 },
+            __openclaw: { id: "shared-session-assistant", seq: 3, runId },
             content: [{ text: finalText, type: "text" }],
             role: "assistant",
             timestamp: Date.now(),
@@ -502,7 +511,7 @@ suite.define(() => {
           },
           runId,
           seq: 1,
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
           state: "delta",
         });
         await page.locator(".chat-bubble.streaming", { hasText: finalText }).waitFor({
@@ -524,12 +533,12 @@ suite.define(() => {
           session: {
             activeRunIds: [],
             hasActiveRun: false,
-            key: "main",
+            key: "agent:main:main",
             kind: "direct",
             status: "done",
             updatedAt: Date.now(),
           },
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
         });
 
         await expect
@@ -554,7 +563,7 @@ suite.define(() => {
           .toBe(true);
         await gateway.resolveDeferred("chat.history", {
           messages: includesPrompt ? [userMessage, assistantMessage] : [assistantMessage],
-          sessionId: "control-ui-e2e-session",
+          sessionId: "session:agent:main:main",
           thinkingLevel: null,
         });
         await expect
@@ -609,7 +618,7 @@ suite.define(() => {
           timestamp: gatewayTimestamp,
         },
         runId,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         state: "delta",
       });
       await page.locator(".chat-bubble.streaming", { hasText: partial }).waitFor({
@@ -624,7 +633,7 @@ suite.define(() => {
           timestamp: gatewayTimestamp,
         },
         runId,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         state: "final",
       });
       await page.locator(".chat-group.assistant .chat-text", { hasText: reply }).waitFor({
@@ -664,14 +673,14 @@ suite.define(() => {
           timestamp: Date.now(),
         },
         runId,
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         state: "delta",
       });
       await page.locator(".chat-bubble.streaming", { hasText: finalText }).waitFor();
       await gateway.setHistoryMessages([
         {
-          __openclaw: { id: "user-reconcile", seq: 1 },
-          content: [{ text: "reconcile the terminal event ordering", type: "text" }],
+          __openclaw: { id: `mock-user:${runId}`, idempotencyKey: `${runId}:user`, seq: 1 },
+          content: "reconcile the terminal event ordering",
           role: "user",
           timestamp: Date.now() - 1,
         },
@@ -688,12 +697,12 @@ suite.define(() => {
         session: {
           activeRunIds: [],
           hasActiveRun: false,
-          key: "main",
+          key: "agent:main:main",
           kind: "direct",
           status: "done",
           updatedAt: Date.now(),
         },
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
       });
       await expect
         .poll(async () => (await gateway.getRequests("chat.history")).length)
@@ -766,7 +775,7 @@ suite.define(() => {
     });
   });
 
-  it("sends /stop to the exact selected channel session and clears its working indicator", async () => {
+  it("sends annotated /stop to the exact selected channel session and clears its working indicator", async () => {
     await withChatPage(async (page) => {
       const channelSessionKey = "agent:main:openclaw-weixin:direct:wechat-user";
       const gateway = await installMockGateway(page, {
@@ -785,12 +794,33 @@ suite.define(() => {
           ]),
         },
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, channelSessionKey));
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible", timeout: 10_000 });
       await gateway.waitForRequest("sessions.list");
       const workingIndicator = page.locator(".chat-working-indicator");
       await workingIndicator.waitFor({ state: "visible", timeout: 10_000 });
+
+      await page.evaluate(() => {
+        window.dispatchEvent(
+          new CustomEvent("openclaw:browser-annotation", {
+            cancelable: true,
+            detail: {
+              modelContext: "Review the annotated page",
+              dataUrl:
+                "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+              fileName: "annotated-page.png",
+              card: {
+                title: "Annotated page",
+                displayUrl: "example.com",
+                markedRegionCount: 1,
+                inspectedElement: false,
+              },
+            },
+          }),
+        );
+      });
+      await page.locator(".chat-attachment-thumb--browser-annotation").waitFor();
 
       await composer.fill("/stop");
       await page.getByRole("option", { name: /\/stop/ }).waitFor();
@@ -801,8 +831,7 @@ suite.define(() => {
         key: channelSessionKey,
         clearQueued: true,
       });
-      await gateway.setMethodResponse(
-        "sessions.list",
+      await gateway.setSessionsListResponse(
         chatSessionListResponse([
           {
             activeRunIds: [],
@@ -824,12 +853,13 @@ suite.define(() => {
         updatedAt: Date.now(),
       });
       await workingIndicator.waitFor({ state: "detached", timeout: 10_000 });
+      await page.locator(".chat-attachment-thumb--browser-annotation").waitFor();
       await expectRequestCountStable(gateway, "chat.abort", 0);
       await expectRequestCountStable(gateway, "chat.send", 0);
       await expect.poll(() => page.getByRole("listbox").count()).toBe(0);
       expect(await composer.inputValue()).toBe("");
       if (captureUiProofEnabled) {
-        await mkdir(channelStopProofDir, { recursive: true });
+        const channelStopProofDir = path.join(suite.artifactDir, "channel-stop");
         await page.screenshot({
           path: path.join(channelStopProofDir, "stopped.png"),
           fullPage: true,
@@ -890,7 +920,7 @@ suite.define(() => {
 
   it("sends /steer for the selected session without resolving a run or leaf", async () => {
     await withChatPage(async (page) => {
-      const sessionKey = "main";
+      const sessionKey = "agent:main:main";
       const gateway = await installMockGateway(page, {
         historyMessages: [
           {
@@ -949,7 +979,11 @@ suite.define(() => {
 
       const sendRequest = await gateway.waitForRequest("chat.send");
       const params = requireRecord(sendRequest.params);
-      expect(params).toMatchObject({ sessionKey: "main", message: prompt, deliver: false });
+      expect(params).toMatchObject({
+        sessionKey: "agent:main:main",
+        message: prompt,
+        deliver: false,
+      });
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
 
       await gateway.emitChatFinal({

@@ -19,7 +19,7 @@ const EDGE_DASHES_RE = /^-+|-+$/g;
 
 export function resolveHomePath(input: string): string {
   const value = input.trim();
-  return value ? path.resolve(value.replace(HOME_SHORTHAND_RE, os.homedir())) : value;
+  return value ? path.resolve(value.replace(HOME_SHORTHAND_RE, () => os.homedir())) : value;
 }
 
 export async function exists(filePath: string): Promise<boolean> {

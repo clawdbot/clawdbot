@@ -1,5 +1,5 @@
 // Amazon Bedrock Mantle tests cover discovery plugin behavior.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 const discoveryDebugSpy = vi.hoisted(() => vi.fn());
 const discoveryLoggerState = vi.hoisted(() => ({ debugEnabled: true }));
@@ -87,12 +87,10 @@ function modelDiscoveryResponse(body: unknown, init?: ResponseInit): Response {
 }
 
 describe("bedrock mantle discovery", () => {
-  const originalEnv = process.env;
   let testRegionIndex = 0;
   let testRegion = "";
 
   beforeEach(() => {
-    process.env = { ...originalEnv };
     vi.restoreAllMocks();
     discoveryDebugSpy.mockClear();
     discoveryLoggerState.debugEnabled = true;
@@ -101,7 +99,6 @@ describe("bedrock mantle discovery", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    process.env = originalEnv;
   });
 
   // ---------------------------------------------------------------------------
@@ -542,33 +539,35 @@ describe("bedrock mantle discovery", () => {
     expect(byId["mistral.mistral-large-3-675b-instruct"]?.reasoning).toBe(false);
   });
 
-  it("returns empty array on permission error", async () => {
+  it("rejects permission failures and releases the response body", async () => {
     const response = modelDiscoveryResponse(
       { error: "forbidden" },
       { status: 403, statusText: "Forbidden" },
     );
     const mockFetch = vi.fn().mockResolvedValue(response);
 
-    const models = await discoverMantleModels({
-      region: testRegion,
-      bearerToken: "test-token",
-      fetchFn: mockFetch as unknown as typeof fetch,
-    });
-
-    expect(models).toStrictEqual([]);
+    await expect(
+      discoverMantleModels({
+        discoveryMode: "strict",
+        region: testRegion,
+        bearerToken: "test-token",
+        fetchFn: mockFetch as unknown as typeof fetch,
+      }),
+    ).rejects.toMatchObject({ status: 403 });
     expect(response.bodyUsed).toBe(true);
   });
 
-  it("returns empty array on network error", async () => {
+  it("rejects network failures", async () => {
     const mockFetch = vi.fn().mockRejectedValue(new Error("ECONNREFUSED"));
 
-    const models = await discoverMantleModels({
-      region: testRegion,
-      bearerToken: "test-token",
-      fetchFn: mockFetch as unknown as typeof fetch,
-    });
-
-    expect(models).toStrictEqual([]);
+    await expect(
+      discoverMantleModels({
+        discoveryMode: "strict",
+        region: testRegion,
+        bearerToken: "test-token",
+        fetchFn: mockFetch as unknown as typeof fetch,
+      }),
+    ).rejects.toThrow("ECONNREFUSED");
   });
 
   it("filters out models with empty IDs", async () => {
@@ -622,14 +621,33 @@ describe("bedrock mantle discovery", () => {
     Object.defineProperty(response, "json", { value: json });
     const mockFetch = vi.fn().mockResolvedValue(response);
 
-    const models = await discoverMantleModels({
-      region: testRegion,
-      bearerToken: "test-token",
-      fetchFn: mockFetch as unknown as typeof fetch,
-    });
-
-    expect(models).toStrictEqual([]);
+    await expect(
+      discoverMantleModels({
+        discoveryMode: "strict",
+        region: testRegion,
+        bearerToken: "test-token",
+        fetchFn: mockFetch as unknown as typeof fetch,
+      }),
+    ).rejects.toThrow("JSON response exceeds 4194304 bytes");
     expect(json).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid UTF-8 model discovery responses", async () => {
+    const prefix = new TextEncoder().encode('{"data":[{"id":"anthropic.');
+    const suffix = new TextEncoder().encode('.model","object":"model"}]}');
+    const invalidBody = new Uint8Array([...prefix, 0xff, ...suffix]);
+    const mockFetch = vi.fn<typeof fetch>(
+      async () => new Response(invalidBody, { headers: { "content-type": "application/json" } }),
+    );
+
+    await expect(
+      discoverMantleModels({
+        discoveryMode: "strict",
+        region: testRegion,
+        bearerToken: "test-token",
+        fetchFn: mockFetch,
+      }),
+    ).rejects.toThrow();
   });
 
   // ---------------------------------------------------------------------------
@@ -638,7 +656,7 @@ describe("bedrock mantle discovery", () => {
 
   it("returns cached models on subsequent calls within refresh interval", async () => {
     let now = 1000000;
-    const mockFetch = vi.fn().mockResolvedValue(
+    const mockFetch = vi.fn<typeof fetch>(async () =>
       modelDiscoveryResponse({
         data: [{ id: "anthropic.claude-sonnet-4-6", object: "model" }],
       }),
@@ -677,35 +695,119 @@ describe("bedrock mantle discovery", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2); // Re-fetched
   });
 
-  it("returns stale cache on fetch failure", async () => {
-    let now = 1000000;
+  it.each([503, "network", "malformed", "invalid-json"])(
+    "rejects expired refresh failure %s and recovers",
+    async (failure) => {
+      let now = 1000000;
+      const mockFetch = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(
+          modelDiscoveryResponse({
+            data: [{ id: "anthropic.claude-sonnet-4-6", object: "model" }],
+          }),
+        )
+        .mockImplementationOnce(async () => {
+          if (failure === "network") {
+            throw new Error("ECONNREFUSED");
+          }
+          return failure === "invalid-json"
+            ? new Response("{")
+            : modelDiscoveryResponse({}, { status: failure === 503 ? 503 : 200 });
+        })
+        .mockResolvedValueOnce(modelDiscoveryResponse({ data: [{ id: "openai.gpt-oss-120b" }] }));
+
+      // First call — succeeds
+      await discoverMantleModels({
+        region: testRegion,
+        bearerToken: "test-token",
+        fetchFn: mockFetch,
+        now: () => now,
+      });
+
+      now += 7200_000;
+      const params = {
+        discoveryMode: "strict" as const,
+        region: testRegion,
+        bearerToken: "test-token",
+        fetchFn: mockFetch,
+        now: () => now,
+      };
+      await expect(discoverMantleModels(params)).rejects.toThrow();
+      await expect(discoverMantleModels(params)).resolves.toMatchObject([
+        { id: "openai.gpt-oss-120b" },
+      ]);
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it("scopes fresh catalogs to the region and actual bearer credential", async () => {
     const mockFetch = vi
-      .fn()
-      .mockResolvedValueOnce(
-        modelDiscoveryResponse({
-          data: [{ id: "anthropic.claude-sonnet-4-6", object: "model" }],
-        }),
-      )
-      .mockRejectedValueOnce(new Error("ECONNREFUSED"));
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(modelDiscoveryResponse({ data: [{ id: "first-account" }] }))
+      .mockResolvedValueOnce(modelDiscoveryResponse({ data: [{ id: "second-account" }] }))
+      .mockResolvedValueOnce(modelDiscoveryResponse({ data: [{ id: "second-region" }] }));
+    for (const [region, bearerToken, id] of [
+      [testRegion, "first-token", "first-account"],
+      [testRegion, "second-token", "second-account"],
+      [`${testRegion}-other`, "second-token", "second-region"],
+    ] as const) {
+      await expect(
+        discoverMantleModels({ region, bearerToken, fetchFn: mockFetch }),
+      ).resolves.toMatchObject([{ id }]);
+    }
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
 
-    // First call — succeeds
-    await discoverMantleModels({
-      region: testRegion,
-      bearerToken: "test-token",
-      fetchFn: mockFetch as unknown as typeof fetch,
-      now: () => now,
-    });
+  it.each([undefined, "strict"] as const)(
+    "preserves the %s empty resolver contract without IAM generation",
+    async (discoveryMode) => {
+      const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(modelDiscoveryResponse({ data: [] }));
+      const tokenProviderFactory = vi.fn(() => {
+        throw new Error("Explicit bearer takes precedence");
+      });
+      const params = {
+        env: {
+          AWS_REGION: "eu-south-1",
+          AWS_BEARER_TOKEN_BEDROCK: `empty-catalog-${discoveryMode}`,
+        },
+        discoveryMode,
+        fetchFn,
+        tokenProviderFactory,
+      };
+      const first = await resolveImplicitMantleProvider(params);
+      const second = await resolveImplicitMantleProvider(params);
+      if (discoveryMode === "strict") {
+        expect(first).toMatchObject({ models: [] });
+        expect(second).toMatchObject({ models: [] });
+      } else {
+        expect(first).toBeNull();
+        expect(second).toBeNull();
+      }
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(tokenProviderFactory).not.toHaveBeenCalled();
+    },
+  );
 
-    // Second call after expiry — fails but returns stale cache
-    now += 7200_000;
-    const stale = await discoverMantleModels({
-      region: testRegion,
-      bearerToken: "test-token",
-      fetchFn: mockFetch as unknown as typeof fetch,
-      now: () => now,
-    });
-    expect(stale).toHaveLength(1);
-    expect(stale[0]?.id).toBe("anthropic.claude-sonnet-4-6");
+  it("preserves advisory failure defaults without sharing stale rows across credentials", async () => {
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(modelDiscoveryResponse({ data: [{ id: "public-model" }] }))
+      .mockRejectedValue(new Error("offline"));
+    const params = { region: testRegion, bearerToken: "first", fetchFn };
+    const first = await discoverMantleModels({ ...params, now: () => 1000 });
+    await expect(discoverMantleModels({ ...params, now: () => 7201000 })).resolves.toEqual(first);
+    await expect(
+      discoverMantleModels({ ...params, discoveryMode: "strict", now: () => 7201000 }),
+    ).rejects.toThrow("offline");
+    await expect(
+      discoverMantleModels({ ...params, bearerToken: "second", now: () => 7201000 }),
+    ).resolves.toEqual([]);
+    await expect(
+      resolveImplicitMantleProvider({
+        env: { AWS_REGION: "us-east-2", AWS_BEARER_TOKEN_BEDROCK: "public-implicit-failure" },
+        fetchFn,
+      }),
+    ).resolves.toBeNull();
   });
 
   // ---------------------------------------------------------------------------
@@ -713,6 +815,9 @@ describe("bedrock mantle discovery", () => {
   // ---------------------------------------------------------------------------
 
   it("resolves implicit provider when bearer token is set", async () => {
+    // This catalog includes the promotional contract before the September pricing cutover.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 7, 31));
+    onTestFinished(() => clock.mockRestore());
     const mockFetch = vi.fn().mockResolvedValue(
       modelDiscoveryResponse({
         data: [{ id: "anthropic.claude-sonnet-4-6", object: "model" }],

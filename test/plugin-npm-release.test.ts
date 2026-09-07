@@ -1,12 +1,15 @@
 // Plugin npm release tests validate plugin npm release artifacts.
-import { mkdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectClawHubPublishablePluginPackages } from "../scripts/lib/plugin-clawhub-release.ts";
 import {
+  assertPluginReleaseDependencyFreshness,
   collectChangedExtensionIdsFromPaths,
-  collectPluginReleaseDependencyFreshnessErrors,
+  collectPluginReleaseDependencyFreshnessWarnings,
+  collectPluginNpmGitRangeSelection,
   collectPluginReleasePlan,
   collectPluginReleaseVersionFloorErrors,
   collectPublishablePluginPackages,
@@ -20,11 +23,12 @@ import {
   resolveSelectedPublishablePluginPackages,
   type PublishablePluginPackage,
 } from "../scripts/lib/plugin-npm-release.ts";
+import { createDeferred } from "./helpers/promise.js";
 import { writePublishablePluginFixture } from "./helpers/publishable-plugin-fixture.js";
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "./helpers/temp-dir.js";
 import { writeJsonFile } from "./helpers/temp-repo.js";
 
-type ExecFileSync = typeof import("node:child_process").execFileSync;
+type ExecFileSync = typeof execFileSync;
 
 const childProcessMock = vi.hoisted(() => ({
   execFileSyncOverride: undefined as ExecFileSync | undefined,
@@ -32,19 +36,20 @@ const childProcessMock = vi.hoisted(() => ({
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
-  const execFileSync = ((...args: unknown[]) => {
+  const mockedExecFileSync = ((...args: unknown[]) => {
     const implementation = (childProcessMock.execFileSyncOverride ?? actual.execFileSync) as (
       ...args: unknown[]
     ) => unknown;
     return implementation(...args);
   }) as ExecFileSync;
-  return { ...actual, execFileSync };
+  return { ...actual, execFileSync: mockedExecFileSync };
 });
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
   childProcessMock.execFileSyncOverride = undefined;
+  vi.unstubAllGlobals();
   cleanupTempDirs(tempDirs);
 });
 
@@ -414,7 +419,7 @@ describe("collectPluginReleaseVersionFloorErrors", () => {
   });
 });
 
-describe("collectPluginReleaseDependencyFreshnessErrors", () => {
+describe("collectPluginReleaseDependencyFreshnessWarnings", () => {
   const plugin: PublishablePluginPackage = {
     extensionId: "codex",
     packageDir: "extensions/codex",
@@ -430,15 +435,35 @@ describe("collectPluginReleaseDependencyFreshnessErrors", () => {
     ],
   };
 
-  it("rejects release dependencies older than the npm latest dist-tag", () => {
-    expect(collectPluginReleaseDependencyFreshnessErrors([plugin], () => "0.142.5")).toEqual([
-      '@openclaw/codex@2026.6.11: @openai/codex must match npm latest for release; found "0.139.0", latest is "0.142.5".',
+  afterEach(() => vi.restoreAllMocks());
+
+  it("warns once per stale dependency without blocking or inspecting Git", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const git = vi.fn(() => {
+      throw new Error("not a Git checkout");
+    });
+    childProcessMock.execFileSyncOverride = git as unknown as ExecFileSync;
+    const resolveLatest = vi.fn(() => "0.153.0");
+    const warnings = assertPluginReleaseDependencyFreshness(
+      [plugin, { ...plugin, packageName: "@openclaw/another-harness" }],
+      "release check",
+      resolveLatest,
+    );
+
+    expect(warnings).toEqual([
+      '@openclaw/codex@2026.6.11: @openai/codex pinned "0.139.0", npm latest is "0.153.0". Freshness is advisory; retain the release-validated pin.',
+      '@openclaw/another-harness@2026.6.11: @openai/codex pinned "0.139.0", npm latest is "0.153.0". Freshness is advisory; retain the release-validated pin.',
     ]);
+    expect(warn.mock.calls).toEqual(
+      warnings.map((warning) => [`release check: warning: ${warning}`]),
+    );
+    expect(resolveLatest).toHaveBeenCalledExactlyOnceWith("@openai/codex");
+    expect(git).not.toHaveBeenCalled();
   });
 
   it("accepts release dependencies matching the npm latest dist-tag", () => {
     expect(
-      collectPluginReleaseDependencyFreshnessErrors(
+      collectPluginReleaseDependencyFreshnessWarnings(
         [
           {
             ...plugin,
@@ -455,17 +480,26 @@ describe("collectPluginReleaseDependencyFreshnessErrors", () => {
     ).toEqual([]);
   });
 
-  it("fails closed when npm latest cannot be resolved", () => {
+  it.each([
+    { npm: "<=11", payload: "0.139.0" },
+    { npm: "12", payload: ["0.139.0"] },
+  ])("reads npm $npm latest metadata through the default resolver", ({ payload }) => {
+    childProcessMock.execFileSyncOverride = (() =>
+      JSON.stringify(payload)) as unknown as ExecFileSync;
+    expect(collectPluginReleaseDependencyFreshnessWarnings([plugin])).toEqual([]);
+  });
+
+  it("reports unavailable npm latest as advisory", () => {
     expect(
-      collectPluginReleaseDependencyFreshnessErrors([plugin], () => {
+      collectPluginReleaseDependencyFreshnessWarnings([plugin], () => {
         throw new Error("registry unavailable");
       }),
     ).toEqual([
-      "@openclaw/codex@2026.6.11: could not resolve npm latest for @openai/codex: registry unavailable",
+      '@openclaw/codex@2026.6.11: could not resolve npm latest for @openai/codex (pinned "0.139.0"); freshness is advisory: registry unavailable',
     ]);
   });
 
-  it("fails closed when the npm latest lookup times out", () => {
+  it("bounds the advisory npm latest lookup timeout", () => {
     childProcessMock.execFileSyncOverride = ((
       command: string,
       args?: readonly string[],
@@ -487,38 +521,129 @@ describe("collectPluginReleaseDependencyFreshnessErrors", () => {
       throw Object.assign(new Error("spawnSync npm ETIMEDOUT"), { code: "ETIMEDOUT" });
     }) as unknown as ExecFileSync;
 
-    expect(collectPluginReleaseDependencyFreshnessErrors([plugin])).toEqual([
-      "@openclaw/codex@2026.6.11: could not resolve npm latest for @openai/codex: npm view timed out after 60000ms.",
+    expect(collectPluginReleaseDependencyFreshnessWarnings([plugin])).toEqual([
+      '@openclaw/codex@2026.6.11: could not resolve npm latest for @openai/codex (pinned "0.139.0"); freshness is advisory: npm view timed out after 60000ms.',
     ]);
   });
 });
 
 describe("collectPluginReleasePlan", () => {
-  it("fails closed when the published-version lookup times out", () => {
+  it.each(["stale", "unavailable"])(
+    "keeps npm publish candidates when latest is %s",
+    async (scenario) => {
+      const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+      writePublishablePluginFixture(repoDir, {
+        version: "2026.9.1",
+        publishTo: "npm",
+        dependency: { packageName: "demo-runtime", version: "1.2.3", requireLatest: true },
+      });
+      childProcessMock.execFileSyncOverride = (() => {
+        if (scenario === "unavailable") {
+          throw new Error("registry unavailable");
+        }
+        return JSON.stringify("1.2.4");
+      }) as unknown as ExecFileSync;
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 404 })));
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const plan = await collectPluginReleasePlan({
+          rootDir: repoDir,
+          selectionMode: "all-publishable",
+        });
+        expect(plan.candidates.map((plugin) => plugin.packageName)).toEqual([
+          "@openclaw/demo-plugin",
+        ]);
+        expect(plan.warnings).toHaveLength(1);
+        expect(plan.warnings[0]).toContain("demo-runtime");
+        expect(plan.warnings[0]).toContain('"1.2.3"');
+        expect(warn).toHaveBeenCalledExactlyOnceWith(
+          `Plugin NPM release plan: warning: ${plan.warnings[0]}`,
+        );
+      } finally {
+        warn.mockRestore();
+      }
+    },
+  );
+
+  it("fails closed when the registry refuses the published-version lookup", async () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
     writePublishablePluginFixture(repoDir, {
       version: "2026.4.10",
       publishTo: "npm",
     });
-    childProcessMock.execFileSyncOverride = ((command: string, args?: readonly string[]) => {
-      expect(command).toBe("npm");
-      expect(args).toEqual([
-        "view",
-        "@openclaw/demo-plugin@2026.4.10",
-        "version",
-        "--userconfig",
-        expect.stringContaining("openclaw-plugin-npm-view-"),
-      ]);
-      throw Object.assign(new Error("spawnSync npm ETIMEDOUT"), { code: "ETIMEDOUT" });
-    }) as unknown as ExecFileSync;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 401 })));
 
-    expect(() => collectPluginReleasePlan({ rootDir: repoDir })).toThrow(
-      "npm view timed out after 60000ms.",
+    await expect(collectPluginReleasePlan({ rootDir: repoDir })).rejects.toThrow(
+      "npm registry returned HTTP 401",
     );
+  });
+
+  it("bounds parallel registry reads and partitions every selected package", async () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    const version = "2026.4.10";
+    const names = Array.from({ length: 10 }, (_, index) => {
+      const extensionId = `demo-${index}`;
+      return writePublishablePluginFixture(repoDir, {
+        extensionId,
+        version,
+        publishTo: "npm",
+      }).packageName;
+    });
+    const release = createDeferred();
+    let active = 0;
+    let maximumActive = 0;
+    const fetchMock = vi.fn(async (url: string) => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await release.promise;
+      active -= 1;
+      const name = decodeURIComponent(new URL(url).pathname.slice(1));
+      if (name === names[0]) {
+        return new Response(null, { status: 404 });
+      }
+      const versions = names.indexOf(name) % 2 === 0 ? { [version]: { version } } : {};
+      return Response.json({ versions });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pending = collectPluginReleasePlan({ rootDir: repoDir });
+    try {
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(8));
+    } finally {
+      release.resolve();
+      await pending;
+    }
+    const plan = await pending;
+
+    expect(maximumActive).toBe(8);
+    expect(plan.all.map((plugin) => plugin.packageName)).toEqual(names);
+    expect(plan.candidates.map((plugin) => plugin.packageName)).toEqual(
+      names.filter((_, index) => index === 0 || index % 2 === 1),
+    );
+    expect(plan.skippedPublished.map((plugin) => plugin.packageName)).toEqual(
+      names.filter((_, index) => index !== 0 && index % 2 === 0),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(names.length);
   });
 });
 
 describe("collectPublishablePluginPackages", () => {
+  it("rejects duplicate npm package names from different plugin directories", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    for (const extensionId of ["demo-one", "demo-two"]) {
+      writePublishablePluginFixture(repoDir, {
+        extensionId,
+        packageName: "@openclaw/shared-plugin",
+        version: "2026.4.10",
+        publishTo: "npm",
+      });
+    }
+
+    expect(() => collectPublishablePluginPackages(repoDir)).toThrow(
+      "package @openclaw/shared-plugin is declared by multiple plugin sources: demo-one (extensions/demo-one), demo-two (extensions/demo-two).",
+    );
+  });
+
   it("defers explicitly bundled plugins from npm and ClawHub release plans", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
     writePublishablePluginFixture(repoDir, {
@@ -612,7 +737,7 @@ describe("collectPublishablePluginPackages", () => {
     ).toThrow("must match root package version 2026.7.34");
   });
 
-  it("collects exact release dependencies that must match npm latest", () => {
+  it("collects release dependencies for advisory npm latest checks", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
     writePublishablePluginFixture(repoDir, {
       version: "2026.4.10",
@@ -773,6 +898,26 @@ describe("resolveSelectedPublishablePluginPackages", () => {
       }),
     ).toThrowError("Unknown or non-publishable plugin package selection: @openclaw/missing.");
   });
+
+  it("rejects duplicate selected package provenance instead of choosing the last entry", () => {
+    const firstPlugin = publishablePlugins[0];
+    if (!firstPlugin) {
+      throw new Error("publishable plugin fixture is missing");
+    }
+    expect(() =>
+      resolveSelectedPublishablePluginPackages({
+        plugins: [
+          firstPlugin,
+          {
+            ...firstPlugin,
+            extensionId: "feishu-shadow",
+            packageDir: "extensions/feishu-shadow",
+          },
+        ],
+        selection: ["@openclaw/feishu"],
+      }),
+    ).toThrow("Plugin selection has conflicting plugin package provenance");
+  });
 });
 
 describe("collectChangedExtensionIdsFromPaths", () => {
@@ -785,6 +930,74 @@ describe("collectChangedExtensionIdsFromPaths", () => {
         "docs/reference/RELEASING.md",
       ]),
     ).toEqual(["feishu", "zalo"]);
+  });
+});
+
+describe("collectPluginNpmGitRangeSelection", () => {
+  it.each([
+    ".github/actions/setup-node-env/action.yml",
+    "packages/normalization-core/src/record-coerce.ts",
+    "packages/plugin-package-contract/src/schema.ts",
+    "scripts/lib/plugin-publication-candidates.ts",
+    "scripts/lib/plugin-publication-collector.ts",
+    "scripts/lib/tsx-cli-shim.mjs",
+    "scripts/tsx.mjs",
+    "scripts/plugin-npm-release-plan.ts",
+    "src/plugins/package-entrypoints.ts",
+  ])("selects all publishable plugins for an authority-only %s change", (changedPath) => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-range-");
+    const absolutePath = join(repoDir, changedPath);
+    mkdirSync(dirname(absolutePath), { recursive: true });
+    writeFileSync(absolutePath, "// before\n");
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repoDir });
+    execFileSync("git", ["add", "."], { cwd: repoDir });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=OpenClaw Tests",
+        "-c",
+        "user.email=tests@openclaw.invalid",
+        "commit",
+        "-qm",
+        "base",
+      ],
+      { cwd: repoDir },
+    );
+    const baseRef = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoDir,
+      encoding: "utf8",
+    }).trim();
+
+    writeFileSync(absolutePath, "// after\n");
+    execFileSync("git", ["add", "."], { cwd: repoDir });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=OpenClaw Tests",
+        "-c",
+        "user.email=tests@openclaw.invalid",
+        "commit",
+        "-qm",
+        "change",
+      ],
+      { cwd: repoDir },
+    );
+    const headRef = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoDir,
+      encoding: "utf8",
+    }).trim();
+
+    expect(
+      collectPluginNpmGitRangeSelection({
+        rootDir: repoDir,
+        gitRange: { baseRef, headRef },
+      }),
+    ).toEqual({
+      authorityChanged: true,
+      changedExtensionIds: [],
+    });
   });
 });
 

@@ -27,6 +27,7 @@ export type SessionIngestionFileState = {
   lineCount: number;
   /** Consumption cursor within that snapshot; it may trail lineCount. */
   lastContentLine: number;
+  excludedReason?: string;
 };
 
 export type SessionIngestionState = {
@@ -99,6 +100,9 @@ export function normalizeSessionIngestionState(raw: unknown): SessionIngestionSt
         contentHash: typeof file.contentHash === "string" ? file.contentHash.trim() : "",
         lineCount,
         lastContentLine: Math.min(lineCount, lastContentLine),
+        ...(typeof file.excludedReason === "string" && file.excludedReason.trim()
+          ? { excludedReason: file.excludedReason.trim() }
+          : {}),
       };
     }
   }

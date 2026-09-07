@@ -1,8 +1,8 @@
 /**
  * Builds tool-search execution plans from allowlists and available controls.
  */
-import { getPluginToolMeta } from "../../../plugins/tools.js";
-import { isToolAllowedByPolicyName } from "../../tool-policy-match.js";
+import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { createToolPolicyMatcher } from "../../tool-policy-match.js";
 import { normalizeToolPolicyName } from "../../tool-policy.js";
 import {
   collectUniqueCatalogToolNames,
@@ -29,21 +29,23 @@ type ToolSearchRunPlan = {
   replayAllowedToolNames: Set<string>;
   liveAllowedToolNames: Set<string>;
   capabilityToolNames: Set<string>;
-  emptyAllowlistCallableNames: string[];
+  hasCallableTools: boolean;
 };
 
-function collectExplicitlyAllowedClientToolNames(params: {
+function hasExplicitlyAllowedClientTool(params: {
   clientTools?: CollectAllowedToolNamesParams["clientTools"];
   explicitAllowlistSources: Array<{ entries: string[] }>;
-}): string[] {
-  return (params.clientTools ?? [])
+}): boolean {
+  const names = (params.clientTools ?? [])
     .map((tool) => tool.function?.name)
-    .filter((name): name is string => Boolean(name?.trim()))
-    .filter((name) =>
-      params.explicitAllowlistSources.some((source) =>
-        isToolAllowedByPolicyName(name, { allow: source.entries }),
-      ),
-    );
+    .filter((name): name is string => Boolean(name?.trim()));
+  if (names.length === 0) {
+    return false;
+  }
+  const matchers = params.explicitAllowlistSources.map((source) =>
+    createToolPolicyMatcher({ allow: source.entries }),
+  );
+  return names.some((name) => matchers.some((matches) => matches(name)));
 }
 
 function collectOpenClawCapabilityToolNames(
@@ -56,8 +58,7 @@ function collectOpenClawCapabilityToolNames(
 
 /**
  * Builds the complete tool-search allowlist plan for one run. Visible tools use
- * compacted prompt state, replay tools use uncompacted state, and catalog-backed
- * client tools are represented through synthetic tool-search callable names.
+ * compacted prompt state, while replay tools use uncompacted state.
  */
 export function buildToolSearchRunPlan(params: {
   visibleTools: CollectAllowedToolNamesParams["tools"];
@@ -119,29 +120,30 @@ export function buildToolSearchRunPlan(params: {
       (controlName) => !explicitControlAllowlistNames.has(normalizeToolPolicyName(controlName)),
     ),
   );
-  const explicitlyAllowedClientToolNames = collectExplicitlyAllowedClientToolNames({
+  const explicitlyAllowedClientTool = hasExplicitlyAllowedClientTool({
     clientTools: params.clientTools,
     explicitAllowlistSources: params.explicitAllowlistSources,
   });
   const emptyAllowlistVisibleToolNames = params.deferredToolsCallable
     ? collectAllowedToolNames({ tools: params.visibleTools })
     : visibleAllowedToolNames;
-  const explicitClientCallableNames = params.clientToolsCataloged
-    ? explicitlyAllowedClientToolNames.map((name) => `tool-search-client:${name}`)
-    : params.deferredToolsCallable
-      ? explicitlyAllowedClientToolNames
-      : [];
+  // The guard needs presence, not catalog-sized synthetic names. Auto-added
+  // controls alone must not conceal an explicit allowlist that matched nothing.
+  let hasCallableTools =
+    params.catalogToolCount > 0 ||
+    ((params.clientToolsCataloged || params.deferredToolsCallable === true) &&
+      explicitlyAllowedClientTool);
+  for (const toolName of emptyAllowlistVisibleToolNames) {
+    if (!autoAddedControlNames.has(toolName)) {
+      hasCallableTools = true;
+      break;
+    }
+  }
   return {
     visibleAllowedToolNames,
     replayAllowedToolNames,
     liveAllowedToolNames,
     capabilityToolNames,
-    emptyAllowlistCallableNames: [
-      ...[...emptyAllowlistVisibleToolNames].filter(
-        (toolName) => !autoAddedControlNames.has(toolName),
-      ),
-      ...Array.from({ length: params.catalogToolCount }, (_, index) => `tool-search:${index}`),
-      ...explicitClientCallableNames,
-    ],
+    hasCallableTools,
   };
 }

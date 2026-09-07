@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "./types.js";
 
 type ControlUiLinkConfig = Pick<OpenClawConfig, "gateway"> | null | undefined;
 
-function resolveControlUiLinkLocation(
+export function resolveControlUiLinkLocation(
   cfg: ControlUiLinkConfig,
 ): { origin: string; basePath: string } | undefined {
   if (cfg?.gateway?.controlUi?.enabled === false) {
@@ -34,6 +34,21 @@ export function resolveControlUiSessionLinkBase(cfg: ControlUiLinkConfig): strin
   // Model-context budget: bound every model-visible injection at its producer.
   // Omit oversized bases because truncation would produce incorrect URLs.
   return sessionLinkBase.length <= 200 ? sessionLinkBase : undefined;
+}
+
+export function resolveControlUiAutomationRunUrl(
+  cfg: ControlUiLinkConfig,
+  params: { jobId: string; runId?: string },
+): string | undefined {
+  const location = resolveControlUiLinkLocation(cfg);
+  if (!location) {
+    return undefined;
+  }
+  const query = new URLSearchParams({ job: params.jobId });
+  if (params.runId) {
+    query.set("run", params.runId);
+  }
+  return `${location.origin}${location.basePath}/automations?${query}`;
 }
 
 export function resolveControlUiSessionUrl(

@@ -8,8 +8,8 @@ import type {
   ProviderReplaySessionEntry,
   ProviderSanitizeReplayHistoryContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
+  createCapturedPluginRegistration,
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -17,7 +17,6 @@ import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
-  RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
@@ -72,13 +71,10 @@ function createLazyRealtimeBridge(
   onReady?: () => void,
   onClose?: (reason: "completed" | "error") => void,
 ) {
-  let realtimeProvider: RealtimeVoiceProviderPlugin | undefined;
-  googlePlugin.register(
-    createTestPluginApi({
-      registerRealtimeVoiceProvider(provider) {
-        realtimeProvider = provider;
-      },
-    }),
+  const captured = createCapturedPluginRegistration({ id: "google" });
+  googlePlugin.register(captured.api);
+  const realtimeProvider = captured.realtimeVoiceProviders.find(
+    (provider) => provider.id === "google",
   );
   const bridge = realtimeProvider?.createBridge({
     providerConfig: { apiKey: "gemini-key" },
@@ -627,7 +623,10 @@ describe("google provider plugin hooks", () => {
     signalRealtimeBridgeReady();
 
     expect(loaded.sendAudio).toHaveBeenCalledTimes(2);
-    expect(loaded.sendAudio.mock.calls[0]?.[0]).toEqual(Buffer.alloc(512 * 1024, 0x02));
+    const retainedAudio = loaded.sendAudio.mock.calls[0]?.[0];
+    expect(
+      Buffer.isBuffer(retainedAudio) && retainedAudio.equals(Buffer.alloc(512 * 1024, 0x02)),
+    ).toBe(true);
     expect(loaded.sendAudio.mock.calls[1]?.[0]).toEqual(Buffer.from([0x03]));
   });
 
@@ -654,6 +653,76 @@ describe("google provider plugin hooks", () => {
     expect(loaded.sendAudio).toHaveBeenCalledOnce();
     expect(loaded.sendAudio).toHaveBeenCalledWith(Buffer.from([0x03]));
     bridge.close();
+  });
+
+  it("reopens the provider bridge after an explicit close", async () => {
+    let firstConnected = false;
+    let replacementConnected = false;
+    const first = createMockRealtimeBridge(async () => {
+      firstConnected = true;
+    });
+    first.bridge.isConnected = vi.fn(() => firstConnected);
+    const replacement = createMockRealtimeBridge(async () => {
+      replacementConnected = true;
+    });
+    replacement.close.mockImplementation(() => {
+      replacementConnected = false;
+    });
+    replacement.bridge.isConnected = vi.fn(() => replacementConnected);
+    createRealtimeBridgeMock
+      .mockReturnValueOnce(first.bridge)
+      .mockReturnValueOnce(replacement.bridge);
+    const onReady = vi.fn();
+    const onClose = vi.fn();
+    const { bridge } = createLazyRealtimeBridge(vi.fn(), onReady, onClose);
+
+    await bridge.connect();
+    const firstRequest = createRealtimeBridgeMock.mock.calls[0]?.[0];
+    expect(bridge.isConnected()).toBe(true);
+
+    bridge.close();
+    bridge.sendAudio(Buffer.from([0x01]));
+    expect(bridge.isConnected()).toBe(false);
+
+    const reconnectPromise = bridge.connect();
+    bridge.sendAudio(Buffer.from([0x02]));
+    await reconnectPromise;
+    signalRealtimeBridgeReady();
+
+    expect(bridge.isConnected()).toBe(true);
+    expect(first.close).toHaveBeenCalledOnce();
+    expect(first.sendAudio).not.toHaveBeenCalled();
+    expect(replacement.connect).toHaveBeenCalledOnce();
+    expect(replacement.close).not.toHaveBeenCalled();
+    expect(replacement.sendAudio).toHaveBeenCalledExactlyOnceWith(Buffer.from([0x02]));
+    firstRequest?.onReady?.();
+    firstRequest?.onClose?.("error");
+    expect(onReady).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledExactlyOnceWith("completed");
+  });
+
+  it("fences a provider generation closed during lazy load before reconnecting", async () => {
+    const first = createMockRealtimeBridge();
+    const replacement = createMockRealtimeBridge();
+    replacement.bridge.isConnected = vi.fn(() => replacement.connect.mock.calls.length > 0);
+    createRealtimeBridgeMock
+      .mockReturnValueOnce(first.bridge)
+      .mockReturnValueOnce(replacement.bridge);
+    const { bridge } = createLazyRealtimeBridge();
+
+    const staleConnect = bridge.connect();
+    bridge.close();
+    const replacementConnect = bridge.connect();
+    bridge.sendAudio(Buffer.from([0x02]));
+    await Promise.all([staleConnect, replacementConnect]);
+    signalRealtimeBridgeReady();
+
+    expect(first.connect).not.toHaveBeenCalled();
+    expect(first.close).toHaveBeenCalledOnce();
+    expect(replacement.connect).toHaveBeenCalledOnce();
+    expect(replacement.close).not.toHaveBeenCalled();
+    expect(replacement.sendAudio).toHaveBeenCalledExactlyOnceWith(Buffer.from([0x02]));
+    expect(bridge.isConnected()).toBe(true);
   });
 
   it("reports and cleans up a lazy realtime connect failure before reconnecting", async () => {

@@ -1,6 +1,6 @@
 // Check Cli Startup Memory tests cover check cli startup memory script behavior.
 import { spawnSync } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -14,8 +14,10 @@ function expectNoNodeStack(stderr: string): void {
   expect(stderr).not.toContain("\n    at ");
 }
 
-function runStartupMemoryCheckWithHelpSamples(helpSamplesMb: number[]) {
-  const tempRoot = tempRoots.make("openclaw-startup-memory-test-");
+function runStartupMemoryCheckWithHelpSamples(
+  helpSamplesMb: number[],
+  tempRoot = tempRoots.make("openclaw-startup-memory-test-"),
+) {
   let sampleIndex = 0;
   return testing.runStartupMemoryCheck(
     [
@@ -83,31 +85,46 @@ describe("check-cli-startup-memory", () => {
     expect(testing.resolveDefaultLimitsMb("linux").statusJson).toBe(450);
   });
 
-  it("uses the median of three cold-start RSS samples", () => {
+  it("applies bounded runner RSS tolerance to the median of three cold-start samples", () => {
     if (process.platform !== "darwin" && process.platform !== "linux") {
       return;
     }
 
-    const helpSamplesMb = [120, 80, 85];
-    const result = runStartupMemoryCheckWithHelpSamples(helpSamplesMb);
+    const tempRoot = tempRoots.make("openclaw-startup-memory-test-");
+    const helpLimitMb = testing.resolveDefaultLimitsMb(process.platform).help;
+    const helpSamplesMb = [helpLimitMb + 20, helpLimitMb + 0.5, helpLimitMb - 20];
+    const result = runStartupMemoryCheckWithHelpSamples(helpSamplesMb, tempRoot);
 
     expect(result.results[0]).toMatchObject({
-      maxRssMb: 85,
+      limitMb: helpLimitMb,
+      rssToleranceMb: 1,
+      effectiveLimitMb: helpLimitMb + 1,
+      maxRssMb: helpLimitMb + 0.5,
       rssSamplesMb: helpSamplesMb,
       status: "pass",
     });
+    const report = JSON.parse(readFileSync(path.join(tempRoot, "startup-memory.json"), "utf8"));
+    expect(report.results[0]).toMatchObject({
+      limitMb: helpLimitMb,
+      rssToleranceMb: 1,
+      effectiveLimitMb: helpLimitMb + 1,
+      rssSamplesMb: helpSamplesMb,
+    });
+    expect(readFileSync(path.join(tempRoot, "summary.md"), "utf8")).toContain(
+      `base limit ${helpLimitMb.toFixed(1)} MB; RSS tolerance 1.0 MB; effective ceiling ${(helpLimitMb + 1).toFixed(1)} MB; samples: ${helpSamplesMb.map((sample) => `${sample.toFixed(1)} MB`).join(", ")}`,
+    );
   });
 
-  it("still fails when most cold-start RSS samples exceed the budget", () => {
+  it("still fails when most cold-start RSS samples exceed the bounded tolerance", () => {
     if (process.platform !== "darwin" && process.platform !== "linux") {
       return;
     }
 
     const helpLimitMb = testing.resolveDefaultLimitsMb(process.platform).help;
-    const helpSamplesMb = [helpLimitMb + 20, helpLimitMb + 10, 80];
+    const helpSamplesMb = [helpLimitMb + 1.5, helpLimitMb + 1.25, helpLimitMb - 20];
 
     expect(() => runStartupMemoryCheckWithHelpSamples(helpSamplesMb)).toThrow(
-      `--help median max RSS ${(helpLimitMb + 10).toFixed(1)} MB exceeded ${helpLimitMb} MB`,
+      `--help median max RSS ${(helpLimitMb + 1.25).toFixed(1)} MB exceeded effective ceiling ${helpLimitMb + 1} MB (base limit ${helpLimitMb} MB; RSS tolerance 1 MB; samples: ${helpSamplesMb.map((sample) => sample.toFixed(1)).join(", ")} MB)`,
     );
   });
 
@@ -318,8 +335,12 @@ describe("check-cli-startup-memory", () => {
     expect(seenArgs).toHaveLength(testing.cases.length * testing.sampleCount);
     expect(new Set(seenHomes).size).toBe(seenArgs.length);
     for (const args of seenArgs) {
-      expect(args[0]).toBe("--import");
-      expect(args[1]).toMatch(/^file:/u);
+      // The bench entry runs the launcher in-process instead of preloading an
+      // --import hook, which would disable the dist ESM resolve fast path and
+      // measure a non-default resolution configuration.
+      expect(args[0]).toMatch(/bench-entry\.mjs$/u);
+      expect(args[0]).not.toBe("--import");
+      expect(args[1]).not.toBe("openclaw.mjs");
     }
   });
 });

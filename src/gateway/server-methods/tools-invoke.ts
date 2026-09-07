@@ -54,6 +54,9 @@ export const toolsInvokeHandlers: GatewayRequestHandlers = {
     const outcome = await invokeGatewayTool({
       cfg: context.getRuntimeConfig(),
       input: params,
+      authenticatedUserProfile: client?.authenticatedUserProfile,
+      operatorRoleActor: client?.internal?.operatorRoleActor,
+      operatorScopes: client?.connect.scopes,
       senderIsOwner: client?.connect?.scopes?.includes("operator.admin"),
       clientCaps: client?.connect?.caps,
       conversationReadOrigin: resolveGatewayConversationReadOrigin({

@@ -10,10 +10,12 @@ import {
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
+  isRecord,
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -137,6 +139,12 @@ export async function handleNextcloudTalkInbound(params: {
 
   const rawBody = message.text?.trim() ?? "";
   if (!rawBody) {
+    logInboundDrop({
+      log: (messageLocal) => runtime.log?.(messageLocal),
+      channel: CHANNEL_ID,
+      reason: `empty message body (mediaType=${message.mediaType})`,
+      target: message.senderId,
+    });
     return;
   }
 
@@ -162,7 +170,18 @@ export async function handleNextcloudTalkInbound(params: {
     cfg: config as OpenClawConfig,
     surface: CHANNEL_ID,
   });
-  const hasControlCommand = core.channel.text.hasControlCommand(rawBody, config as OpenClawConfig);
+  // Talk encodes message text and rich parameters inside object.content. Keep
+  // the raw payload for the agent; command detection and execution share decoded text.
+  const structuredBody = rawBody.startsWith("{") ? safeParseJson<unknown>(rawBody) : undefined;
+  const structuredText =
+    isRecord(structuredBody) && Object.hasOwn(structuredBody, "parameters")
+      ? normalizeOptionalString(structuredBody.message)
+      : undefined;
+  const commandBody = structuredText?.startsWith("/") ? structuredText : rawBody;
+  const hasControlCommand = core.channel.text.hasControlCommand(
+    commandBody,
+    config as OpenClawConfig,
+  );
   const shouldRequireMention = isGroup
     ? resolveNextcloudTalkGroupRequireMention({
         cfg: config as OpenClawConfig,
@@ -361,7 +380,7 @@ export async function handleNextcloudTalkInbound(params: {
       routeSessionKey: route.sessionKey,
     },
     reply: { to: `nextcloud-talk:${roomToken}`, originatingTo: `nextcloud-talk:${roomToken}` },
-    message: { body, bodyForAgent: rawBody, rawBody, commandBody: rawBody },
+    message: { body, bodyForAgent: rawBody, rawBody, commandBody },
     access: {
       commands: { authorized: commandAuthorized },
       mentions: { canDetectMention: isGroup, wasMentioned: isGroup && wasMentioned },

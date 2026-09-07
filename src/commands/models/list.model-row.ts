@@ -15,6 +15,14 @@ export type ListRowModel = {
   contextTokens?: number | null;
 };
 
+export function toListRowInput(input: readonly string[] | undefined): ListRowModel["input"] {
+  const parsed = input?.filter(
+    (item): item is NonNullable<ListRowModel["input"]>[number] =>
+      item === "text" || item === "image" || item === "document",
+  );
+  return parsed?.length ? parsed : ["text"];
+}
+
 /** Builds a display row, preserving configured tags and alias metadata. */
 export function toModelRow(params: {
   model?: ListRowModel;

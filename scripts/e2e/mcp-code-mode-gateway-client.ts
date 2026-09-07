@@ -111,7 +111,7 @@ async function readSessionLogMentions(stateDir: string): Promise<Record<string, 
       apiFileRead: "API.read",
       mcpNamespace: "MCP.fixture",
       mcpTool: "MCP.fixture.lookupNote",
-      toolSearchPollution: 'tools.search("lookup note"',
+      toolSearchPollution: 'catalog.search("lookup note"',
     },
   });
 }
@@ -152,7 +152,7 @@ async function main() {
                 'const api = await API.read("mcp/fixture.d.ts");',
                 'const result = await MCP.fixture.lookupNote({ id: "alpha" });',
                 'return { marker: "MCP_CODE_MODE_FILE_TOOL_RESULT", files: files.files.map((file) => file.path), rootHasFixture: root.content.includes("fixture"), headerHasLookup: api.content.includes("function lookupNote"), note: result.content?.[0]?.text };',
-                "Do not use tools.search for MCP and do not call the inline MCP API helper.",
+                "Do not use catalog.search for MCP and do not call the inline MCP API helper.",
                 "After exec finishes, send a normal assistant reply; do not stop after only the tool call.",
                 "Reply with MCP_CODE_MODE_FILE_OK note=fixture-note-alpha unclear=none only after the MCP call returns fixture-note-alpha.",
               ].join(" "),

@@ -8,23 +8,25 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { loadAgentIdentityFromFile } from "../agents/identity-file.js";
+import {
+  type AgentIdentityFile,
+  loadAgentIdentityFromFile,
+  loadAgentIdentityFromWorkspace,
+} from "../agents/identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import { ExpectedCliError } from "../cli/failure-output.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { replaceConfigFile } from "../config/config.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { logConfigUpdated } from "../config/logging.js";
-import type { AgentConfig, IdentityConfig } from "../config/types.js";
+import type { IdentityConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
-import {
-  type AgentIdentity,
-  findAgentEntryIndex,
-  listAgentEntries,
-  loadAgentIdentity,
-} from "./agents.config.js";
+import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
 import { requireValidConfigFileSnapshot } from "./config-validation.js";
 
 type AgentsSetIdentityOptions = {
@@ -40,6 +42,10 @@ type AgentsSetIdentityOptions = {
 };
 
 const normalizeWorkspacePath = (input: string) => path.resolve(resolveUserPath(input));
+
+function failAgentIdentity(message: string): never {
+  throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
+}
 
 function resolveAgentIdByWorkspace(
   cfg: Parameters<typeof resolveAgentWorkspaceDir>[0],
@@ -81,20 +87,20 @@ export async function agentsSetIdentityCommand(
   const wantsIdentityFile = Boolean(opts.fromIdentity || identityFileRaw || !hasExplicitIdentity);
   const normalizedAgent = opts.agent === undefined ? null : normalizeAgentIdStrict(opts.agent);
   if (normalizedAgent && !normalizedAgent.ok) {
-    runtime.error(`Agent "${opts.agent}" not found. Create it with \`openclaw agents add\`.`);
-    runtime.exit(1);
-    return;
+    failAgentIdentity(`Agent "${opts.agent}" not found. Create it with \`openclaw agents add\`.`);
   }
   let agentId = normalizedAgent?.value;
 
   let identityFilePath: string | undefined;
   let workspaceDir: string | undefined;
+  let workspaceLocatorDir: string | undefined;
 
   if (identityFileRaw) {
     identityFilePath = normalizeWorkspacePath(identityFileRaw);
     workspaceDir = path.dirname(identityFilePath);
   } else if (workspaceRaw) {
-    workspaceDir = normalizeWorkspacePath(workspaceRaw);
+    workspaceLocatorDir = normalizeWorkspacePath(workspaceRaw);
+    workspaceDir = workspaceLocatorDir;
   } else if (agentId && wantsIdentityFile) {
     workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   } else if (wantsIdentityFile || !agentId) {
@@ -102,25 +108,17 @@ export async function agentsSetIdentityCommand(
   }
 
   if (!agentId) {
-    if (!workspaceDir) {
-      runtime.error("Select an agent with --agent or provide a workspace via --workspace.");
-      runtime.exit(1);
-      return;
-    }
-    const matches = resolveAgentIdByWorkspace(cfg, workspaceDir);
+    const resolvedWorkspace = expectDefined(workspaceDir, "agent workspace");
+    const matches = resolveAgentIdByWorkspace(cfg, resolvedWorkspace);
     if (matches.length === 0) {
-      runtime.error(
-        `No agent workspace matches ${shortenHomePath(workspaceDir)}. Pass --agent to target a specific agent.`,
+      failAgentIdentity(
+        `No agent workspace matches ${shortenHomePath(resolvedWorkspace)}. Pass --agent to target a specific agent.`,
       );
-      runtime.exit(1);
-      return;
     }
     if (matches.length > 1) {
-      runtime.error(
-        `Multiple agents match ${shortenHomePath(workspaceDir)}: ${matches.join(", ")}. Pass --agent to choose one.`,
+      failAgentIdentity(
+        `Multiple agents match ${shortenHomePath(resolvedWorkspace)}: ${matches.join(", ")}. Pass --agent to choose one.`,
       );
-      runtime.exit(1);
-      return;
     }
     agentId = matches[0];
   }
@@ -128,33 +126,26 @@ export async function agentsSetIdentityCommand(
   const resolvedAgentId = expectDefined(agentId, "agent id");
   const resolvedAgentIds = listAgentIds(cfg).map((id) => normalizeAgentId(id));
   if (!resolvedAgentIds.includes(resolvedAgentId)) {
-    runtime.error(`Agent "${resolvedAgentId}" not found. Create it with \`openclaw agents add\`.`);
-    runtime.exit(1);
-    return;
+    failAgentIdentity(
+      `Agent "${resolvedAgentId}" not found. Create it with \`openclaw agents add\`.`,
+    );
   }
-  const list = listAgentEntries(cfg);
-  const index = findAgentEntryIndex(list, resolvedAgentId);
-
-  let identityFromFile: AgentIdentity | null = null;
+  let identityFromFile: AgentIdentityFile | null = null;
   if (wantsIdentityFile) {
     if (identityFilePath) {
       try {
         identityFromFile = await loadAgentIdentityFromFile(identityFilePath);
       } catch (error) {
-        runtime.error(formatErrorMessage(error));
-        runtime.exit(1);
-        return;
+        failAgentIdentity(formatErrorMessage(error));
       }
     } else if (workspaceDir) {
-      identityFromFile = loadAgentIdentity(workspaceDir);
+      identityFromFile = loadAgentIdentityFromWorkspace(workspaceDir);
     }
     if (!identityFromFile) {
       const targetPath =
         identityFilePath ??
         (workspaceDir ? path.join(workspaceDir, DEFAULT_IDENTITY_FILENAME) : "IDENTITY.md");
-      runtime.error(`No identity data found in ${shortenHomePath(targetPath)}.`);
-      runtime.exit(1);
-      return;
+      failAgentIdentity(`No identity data found in ${shortenHomePath(targetPath)}.`);
     }
   }
 
@@ -169,62 +160,37 @@ export async function agentsSetIdentityCommand(
       : {}),
   };
 
-  if (
-    !incomingIdentity.name &&
-    !incomingIdentity.emoji &&
-    !incomingIdentity.theme &&
-    !incomingIdentity.avatar
-  ) {
-    runtime.error(
-      "No identity fields provided. Use --name/--emoji/--theme/--avatar or --from-identity.",
-    );
-    runtime.exit(1);
-    return;
-  }
-
-  const base: AgentConfig =
-    index >= 0 ? expectDefined(list[index], "agent config") : { id: resolvedAgentId };
-  const nextIdentity: IdentityConfig = {
-    ...base.identity,
-    ...incomingIdentity,
-  };
-
-  const nextEntry = {
-    ...base,
-    identity: nextIdentity,
-  };
-
-  const nextList = [...list];
-  if (index >= 0) {
-    nextList[index] = nextEntry;
-  } else {
-    // An empty list still resolves to the implicit default agent; materialize only that known id.
-    nextList.push(nextEntry);
-  }
-
-  const nextConfig = {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      entries: Object.fromEntries(
-        nextList.map((entry) => {
-          const { id, ...config } = entry;
-          return [id, config];
-        }),
-      ),
-    },
-  };
-
-  await replaceConfigFile({
+  const nextConfig = applyAgentConfig(cfg, {
+    agentId: resolvedAgentId,
+    identity: incomingIdentity,
+  });
+  const committed = await replaceConfigFile({
     nextConfig,
     ...(baseHash !== undefined ? { baseHash } : {}),
   });
 
+  const committedEntry = expectDefined(
+    listAgentEntries(committed.nextConfig).find(
+      (entry) => normalizeAgentId(entry.id) === resolvedAgentId,
+    ),
+    "committed agent config",
+  );
+  const committedIdentity = expectDefined(committedEntry.identity, "committed agent identity");
+  const storedWorkspaceDir = resolveAgentWorkspaceDir(committed.nextConfig, resolvedAgentId);
+  const identitySourceDir = identityFromFile ? workspaceDir : undefined;
+  const locatorDiffers =
+    workspaceLocatorDir !== undefined &&
+    normalizeWorkspacePath(workspaceLocatorDir) !== normalizeWorkspacePath(storedWorkspaceDir);
+  const identitySourceDiffers =
+    identitySourceDir !== undefined &&
+    normalizeWorkspacePath(identitySourceDir) !== normalizeWorkspacePath(storedWorkspaceDir);
+
   if (opts.json) {
     writeRuntimeJson(runtime, {
-      agentId,
-      identity: nextIdentity,
+      agentId: resolvedAgentId,
+      identity: committedIdentity,
       workspace: workspaceDir ?? null,
+      storedWorkspace: storedWorkspaceDir,
       identityFile: identityFilePath ?? null,
     });
     return;
@@ -232,19 +198,25 @@ export async function agentsSetIdentityCommand(
 
   logConfigUpdated(runtime);
   runtime.log(`Agent: ${sanitizeTerminalText(resolvedAgentId)}`);
-  if (nextIdentity.name) {
-    runtime.log(`Name: ${sanitizeTerminalText(nextIdentity.name)}`);
+  if (committedIdentity.name) {
+    runtime.log(`Name: ${sanitizeTerminalText(committedIdentity.name)}`);
   }
-  if (nextIdentity.theme) {
-    runtime.log(`Theme: ${sanitizeTerminalText(nextIdentity.theme)}`);
+  if (committedIdentity.theme) {
+    runtime.log(`Theme: ${sanitizeTerminalText(committedIdentity.theme)}`);
   }
-  if (nextIdentity.emoji) {
-    runtime.log(`Emoji: ${sanitizeTerminalText(nextIdentity.emoji)}`);
+  if (committedIdentity.emoji) {
+    runtime.log(`Emoji: ${sanitizeTerminalText(committedIdentity.emoji)}`);
   }
-  if (nextIdentity.avatar) {
-    runtime.log(`Avatar: ${sanitizeTerminalText(nextIdentity.avatar)}`);
+  if (committedIdentity.avatar) {
+    runtime.log(`Avatar: ${sanitizeTerminalText(committedIdentity.avatar)}`);
   }
-  if (workspaceDir) {
-    runtime.log(`Workspace: ${sanitizeTerminalText(shortenHomePath(workspaceDir))}`);
+  runtime.log(`Workspace: ${sanitizeTerminalText(shortenHomePath(storedWorkspaceDir))}`);
+  if (locatorDiffers && workspaceLocatorDir) {
+    runtime.log(`Workspace locator: ${sanitizeTerminalText(shortenHomePath(workspaceLocatorDir))}`);
+    runtime.log(
+      `Stored workspace unchanged. Relocate with ${formatCliCommand(`openclaw config set agents.entries.${resolvedAgentId}.workspace ${quoteCliArg(workspaceLocatorDir)}`)}.`,
+    );
+  } else if (identitySourceDiffers && identitySourceDir) {
+    runtime.log(`Identity source: ${sanitizeTerminalText(shortenHomePath(identitySourceDir))}`);
   }
 }

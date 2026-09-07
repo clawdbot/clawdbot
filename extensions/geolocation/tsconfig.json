@@ -1,0 +1,3 @@
+{
+  "extends": "../tsconfig.package-boundary.base.json"
+}

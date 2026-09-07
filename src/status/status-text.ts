@@ -4,17 +4,17 @@ import {
   resolveAgentConfig,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
   resolveSessionAgentId,
   resolveAgentModelFallbacksOverride,
 } from "../agents/agent-scope.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
-import { resolveContextTokensForModel, waitForContextWindowCacheLoad } from "../agents/context.js";
+import { ensureAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
+import { waitForContextWindowCacheLoad } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveAgentHarnessAutoSelectionHint } from "../agents/harness/auto-selection.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
+import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
 import {
   areRuntimeModelRefsEquivalent,
   shouldPreferActiveRuntimeAliasAuthLabel,
@@ -41,13 +41,14 @@ import {
 import { resolveActiveProviderThinkingProfile } from "../plugins/provider-thinking-active.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
-import { createLazyPromise, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { createLazyPromise } from "../shared/lazy-runtime.js";
 import {
   listTasksForAgentIdForStatus,
   listTasksForSessionKeyForStatus,
 } from "../tasks/task-status-access.js";
 import {
   buildTaskStatusSnapshot,
+  formatTaskStatus,
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../tasks/task-status.js";
@@ -101,46 +102,29 @@ function resolveStatusChannelFeatureLine(params: {
   );
   const richMessagesSetting = accountConfig?.richMessages ?? telegramConfig?.richMessages;
   if (richMessagesSetting === true) {
-    return "Telegram rich messages: on · Bot API 10.2 sendRichMessage enabled";
+    return "Telegram rich messages: on · Bot API 10.3 sendRichMessage enabled";
   }
   return accountConfig?.richMessages === false
     ? "Telegram rich messages: off · enable richMessages for this Telegram account"
     : "Telegram rich messages: off · set channels.telegram.richMessages=true for tables/details/rich media";
 }
 
-const loadStatusMessageRuntime = createLazyPromise(
-  () =>
-    import("./status-message.runtime.js").then((module) => module.loadStatusMessageRuntimeModule()),
-  { cacheRejections: true },
+// Status loaders keep the lazy-promise eviction default: a transient module-load
+// failure on one /status request self-heals on the next instead of poisoning
+// every reply. Deliberately not createLazyRuntimeModule, whose sticky rejection
+// cache would pin the failure for the process lifetime.
+const loadStatusMessageRuntime = createLazyPromise(() =>
+  import("./status-message.runtime.js").then((module) => module.loadStatusMessageRuntimeModule()),
 );
-const loadAgentThinkingRuntime = createLazyRuntimeModule(
-  () => import("../agents/thinking-runtime.js"),
-);
-const loadThinkingLevelRuntime = createLazyRuntimeModule(() => import("../auto-reply/thinking.js"));
-const loadStatusSubagentsRuntime = createLazyRuntimeModule(
-  () => import("./status-subagents.runtime.js"),
-);
+const loadAgentThinkingRuntime = createLazyPromise(() => import("../agents/thinking-runtime.js"));
+const loadThinkingLevelRuntime = createLazyPromise(() => import("../auto-reply/thinking.js"));
+const loadStatusSubagentsRuntime = createLazyPromise(() => import("./status-subagents.runtime.js"));
 
-const loadStatusQueueRuntime = createLazyRuntimeModule(() => import("./status-queue.runtime.js"));
+const loadStatusQueueRuntime = createLazyPromise(() => import("./status-queue.runtime.js"));
 
-const loadStatusPluginHealthRuntime = createLazyRuntimeModule(
+const loadStatusPluginHealthRuntime = createLazyPromise(
   () => import("./status-plugin-health.runtime.js"),
 );
-
-// Context lookup stays synchronous/non-refreshing so status output does not
-// trigger provider/catalog IO while rendering a command response.
-function resolveStatusRuntimeContextTokens(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  model: string;
-}): number | undefined {
-  return resolveContextTokensForModel({
-    cfg: params.cfg,
-    provider: params.provider,
-    model: params.model,
-    allowAsyncLoad: false,
-  });
-}
 
 function shouldLoadUsageSummary(params: {
   provider?: string;
@@ -192,8 +176,8 @@ function resolveCodexSyntheticUsageAuthProfileId(params: {
   }
 }
 
-function formatSessionTaskLine(sessionKey: string): string | undefined {
-  const snapshot = buildTaskStatusSnapshot(listTasksForSessionKeyForStatus(sessionKey));
+function formatSessionTaskLine(sessionKey: string, agentId: string): string | undefined {
+  const snapshot = buildTaskStatusSnapshot(listTasksForSessionKeyForStatus(sessionKey, agentId));
   const task = snapshot.focus;
   if (!task) {
     return undefined;
@@ -206,7 +190,8 @@ function formatSessionTaskLine(sessionKey: string): string | undefined {
         : "recently finished";
   const title = formatTaskStatusTitle(task);
   const detail = formatTaskStatusDetail(task);
-  const parts = [headline, task.runtime, title, detail].filter(Boolean);
+  const blocked = formatTaskStatus(task) === "blocked" ? "blocked" : undefined;
+  const parts = [headline, blocked, task.runtime, title, detail].filter(Boolean);
   return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
 }
 
@@ -335,9 +320,7 @@ export async function buildStatusReplyParts(
     isGroup,
     defaultGroupActivation,
   } = params;
-  const statusAgentId = sessionKey
-    ? resolveSessionAgentId({ sessionKey, config: cfg })
-    : resolveDefaultAgentId(cfg);
+  const statusAgentId = resolveSessionAgentId({ sessionKey, config: cfg, agentId: params.agentId });
   const statusAgentDir = resolveAgentDir(cfg, statusAgentId);
   const statusWorkspaceDir =
     params.workspaceDir ??
@@ -546,20 +529,21 @@ export async function buildStatusReplyParts(
     // runtime registries, not necessarily the external key passed to the command.
     taskLine = params.skipDefaultTaskLookup
       ? params.taskLineOverride
-      : (params.taskLineOverride ?? formatSessionTaskLine(requesterKey));
+      : (params.taskLineOverride ?? formatSessionTaskLine(requesterKey, statusAgentId));
     if (!taskLine && !params.skipDefaultTaskLookup) {
       taskLine = formatAgentTaskCountsLine(statusAgentId);
     }
     const { buildControlledSubagentRunsReadContext, buildSubagentsStatusLine } =
       await loadStatusSubagentsRuntime();
-    const subagentReadContext = buildControlledSubagentRunsReadContext(requesterKey);
-    const runs = subagentReadContext.runs;
+    const subagentReadContext = buildControlledSubagentRunsReadContext(
+      requesterKey,
+      statusAgentId,
+      cfg,
+    );
     const verboseEnabled = resolvedVerboseLevel && resolvedVerboseLevel !== "off";
     subagentsLine = buildSubagentsStatusLine({
-      runs,
+      context: subagentReadContext,
       verboseEnabled,
-      pendingDescendantsForRun: (entry) =>
-        subagentReadContext.countPendingDescendantRuns(entry.childSessionKey),
     });
   }
   const groupActivation = isGroup
@@ -597,17 +581,18 @@ export async function buildStatusReplyParts(
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
     (agentDefaults.thinkingDefault as ThinkLevel | undefined);
-  const runtimeContextTokens = resolveStatusRuntimeContextTokens({
-    cfg,
-    provider: activeStatusProvider,
-    model: modelRefs.active.model || model,
-  });
-  const statusRuntimeContextTokens = activeRuntimeIsAuthoritative
-    ? (runtimeContextTokens ??
-      (fallbackState.active && typeof contextTokens === "number" && contextTokens > 0
-        ? contextTokens
-        : undefined))
-    : undefined;
+  const preparedContextTokens =
+    typeof contextTokens === "number" && contextTokens > 0 ? contextTokens : undefined;
+  const selectedCatalogEntry = findModelInCatalog(
+    thinkingCatalog ?? [],
+    selectedLookupProvider,
+    selectedLookupModel,
+  );
+  const initialActiveCatalogEntry = findModelInCatalog(
+    thinkingCatalog ?? [],
+    activeProvider,
+    modelRefs.active.model || model,
+  );
   const requestedThinkLevel =
     resolvedThinkLevel ??
     explicitThinkingDefault ??
@@ -665,7 +650,16 @@ export async function buildStatusReplyParts(
     },
     agentId: statusAgentId,
     configuredDefaultModelLabel,
-    runtimeContextTokens: statusRuntimeContextTokens,
+    selectedContextWindow: selectedCatalogEntry?.contextWindow,
+    selectedContextTokens:
+      selectedCatalogEntry?.contextTokens ??
+      (selectedCatalogEntry && !activeRuntimeIsAuthoritative ? preparedContextTokens : undefined),
+    thinkingCatalog,
+    runtimeContextProvider: activeRuntimeIsAuthoritative ? activeStatusProvider : undefined,
+    runtimeContextTokens:
+      activeRuntimeIsAuthoritative && (initialActiveCatalogEntry || fallbackState.active)
+        ? preparedContextTokens
+        : undefined,
     sessionEntry,
     sessionKey,
     parentSessionKey,

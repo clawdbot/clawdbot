@@ -3,6 +3,7 @@ import {
   GATEWAY_SERVER_CAPS,
   PROTOCOL_VERSION,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { resolveControlUiLinkLocation } from "../../../config/control-ui-link-base.js";
 import { sha256Base64Url } from "../../../infra/crypto-digest.js";
 import {
   redeemDeviceBootstrapTokenProfile,
@@ -12,9 +13,11 @@ import {
   finalizeNodePairingCleanupClaim,
   recordPairedNodeConnection,
 } from "../../../infra/device-pairing-node.js";
+import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-admission.js";
 import { hasMultipleSessionSharingIdentities } from "../../../state/user-profiles.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
 import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
+import { resolveControlUiIdentity } from "../../control-ui-identity.js";
 import {
   listControlUiPluginTabs,
   listControlUiPluginWidgetKinds,
@@ -29,11 +32,17 @@ import {
 import { canReadDetailedUpdateMetadata } from "../../events.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
-import { MAX_BUFFERED_BYTES, MAX_PAYLOAD_BYTES, TICK_INTERVAL_MS } from "../../server-constants.js";
+import {
+  MAX_BUFFERED_BYTES,
+  MAX_PAYLOAD_BYTES,
+  TICK_INTERVAL_MS,
+  WEBSOCKET_OPEN_READY_STATE,
+} from "../../server-constants.js";
 import { formatError } from "../../server-utils.js";
 import { allowedSessionVisibilities } from "../../session-sharing.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { buildGatewaySnapshot, getHealthCache, getHealthVersion } from "../health-state.js";
+import { broadcastPresenceSnapshot } from "../presence-events.js";
 import { emitGatewayAuthSecurityEvent } from "./connect-auth-security.js";
 import type {
   DeviceAuthorizedGatewayConnect,
@@ -48,6 +57,7 @@ export async function sendGatewayHello(
 ): Promise<void> {
   const {
     connId,
+    bootId,
     nodeReapprovalCoordinator,
     gatewayMethods,
     events,
@@ -83,8 +93,11 @@ export async function sendGatewayHello(
     deviceToken,
     bootstrapDeviceTokens,
   } = state;
-  // Prefer the authenticated human; principal scopes never inherit device-token rows.
-  const authenticatedPrincipal = authenticatedUserProfileId ?? authResult.user;
+  // Only an upstream-verified identity owns principal recovery; owner profiles
+  // attribute shared-secret/device connections without changing their recovery scope.
+  const authenticatedPrincipal = authResult.user
+    ? (authenticatedUserProfileId ?? authResult.user)
+    : undefined;
   const recoveryScopeMaterial = authenticatedPrincipal
     ? ["principal", authenticatedPrincipal, device?.id ?? ""]
     : deviceToken?.token
@@ -100,8 +113,10 @@ export async function sendGatewayHello(
       : undefined;
   const canMigrateRecovery = role === "operator" && !authenticatedPrincipal && Boolean(deviceToken);
   const snapshot = buildGatewaySnapshot({
+    client: context.handler.getClient(),
     includeSensitive: scopes.includes(ADMIN_SCOPE),
     includeUpdateDetails: canReadDetailedUpdateMetadata(role, scopes),
+    revisionProjector: buildRequestContext().configRevisionProjector,
   });
   const cachedHealth = getHealthCache();
   if (cachedHealth) {
@@ -112,12 +127,13 @@ export async function sendGatewayHello(
     requireGatewayAuthGrant: resolvedAuth.mode !== "none",
   });
   const controlUiWidgetKinds = listControlUiPluginWidgetKinds(scopes);
-  // A configured UI root can be built independently from the Gateway. Exact
-  // comparison is authoritative only for the package-owned bundled artifact.
+  const controlUiLocation = resolveControlUiLinkLocation(context.configSnapshot);
+  // Gateway runtime provenance is independent of the UI artifact source.
+  // Consumers use the source field to decide whether UI build comparison applies.
   const controlUiBuildSource = context.configSnapshot.gateway?.controlUi?.root
     ? ("configured" as const)
     : ("bundled" as const);
-  const serverBuildId = controlUiBuildSource === "bundled" ? resolveRuntimeServiceBuildId() : null;
+  const serverBuildId = resolveRuntimeServiceBuildId();
   const helloOk = {
     type: "hello-ok",
     // Admission already verified range overlap; this field reports the server's current protocol.
@@ -125,6 +141,7 @@ export async function sendGatewayHello(
     server: {
       version: resolveRuntimeServiceVersion(process.env),
       ...(serverBuildId ? { buildId: serverBuildId } : {}),
+      bootId,
       controlUiBuildSource,
       connId,
     },
@@ -137,12 +154,23 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.GATEWAY_RESTART_TARGET_SAFE,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM,
+        GATEWAY_SERVER_CAPS.PROGRESS_CARD_AGENT_SCOPE,
+        GATEWAY_SERVER_CAPS.SESSION_SCOPED_CHAT_METADATA,
+        GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
+        GATEWAY_SERVER_CAPS.SESSION_GOAL_START,
+        GATEWAY_SERVER_CAPS.SESSION_SETTINGS_CONTRACT,
+        GATEWAY_SERVER_CAPS.SESSION_SETTINGS_CAS,
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
         GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,
       ],
     },
     snapshot,
+    ...(controlUiLocation
+      ? { controlUiUrl: `${controlUiLocation.origin}${controlUiLocation.basePath}` }
+      : {}),
     ...(controlUiTabs.length > 0 ? { controlUiTabs } : {}),
     ...(controlUiWidgetKinds.length > 0 ? { controlUiWidgetKinds } : {}),
     ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
@@ -207,6 +235,25 @@ export async function sendGatewayHello(
     }
   }
   try {
+    // Bootstrap bookkeeping can await; read live ingress and suspension at delivery.
+    if (role === "operator") {
+      const identity = resolveControlUiIdentity(context.configSnapshot, resolvedAuth);
+      if (identity) {
+        snapshot.controlUiIdentityUrl = identity.url;
+        if (identity.signal && !context.handler.isClosed()) {
+          const signal = identity.signal;
+          const withdraw = () => {
+            setCloseCause("browser-identity-route-withdrawn");
+            close(1012, "browser identity route changed");
+          };
+          // Hello is frozen for this connection. Bind its route lifetime before
+          // delivery can await, so a vanished claim cannot remain advertised.
+          signal.addEventListener("abort", withdraw, { once: true });
+          context.handler.socket.once("close", () => signal.removeEventListener("abort", withdraw));
+        }
+      }
+    }
+    snapshot.suspension = { phase: getGatewaySuspendAdmissionPhase() };
     await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
   } catch (err) {
     if (bootstrapHandoff) {
@@ -360,4 +407,15 @@ export async function sendGatewayHello(
   void refreshHealthSnapshot({ probe: false }).catch((err: unknown) =>
     logHealth.error(`post-connect health refresh failed: ${formatError(err)}`),
   );
+  const client = context.handler.getClient();
+  if (
+    client?.presenceKey &&
+    !client.invalidated &&
+    client.socket.readyState === WEBSOCKET_OPEN_READY_STATE &&
+    !context.handler.isClosed()
+  ) {
+    // The row is already in hello's snapshot. Notify established readers now,
+    // without queueing this connection's redundant snapshot ahead of hello.
+    broadcastPresenceSnapshot(buildRequestContext());
+  }
 }

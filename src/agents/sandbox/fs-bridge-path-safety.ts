@@ -15,7 +15,7 @@ import {
   relativePathEscapesContainerRoot,
 } from "./path-utils.js";
 
-type BoundaryAllowedType = "file" | "directory";
+type BoundaryAllowedType = "file" | "directory" | "file-or-directory";
 
 function sandboxBoundaryError(action: string, containerPath: string, error: unknown): Error {
   if (error instanceof Error && !(error instanceof FsSafeError && error.code === "not-file")) {
@@ -30,7 +30,7 @@ function sandboxBoundaryError(action: string, containerPath: string, error: unkn
 type PathSafetyOptions = {
   action: string;
   aliasPolicy?: PathAliasPolicy;
-  requireWritable?: boolean;
+  requireWritable?: boolean | "subtree";
   allowedType?: BoundaryAllowedType;
 };
 
@@ -86,11 +86,19 @@ export class SandboxFsPathGuard {
   }
 
   async assertPathSafety(target: SandboxResolvedFsPath, options: PathSafetyOptions) {
+    // fs-safe pins one expected type. Select directory mutations explicitly;
+    // its descriptor/type checks still reject swaps after this observation.
+    const allowedType =
+      options.allowedType === "file-or-directory"
+        ? this.pathIsExistingDirectory(target.hostPath)
+          ? "directory"
+          : "file"
+        : options.allowedType;
     const guarded = await this.openBoundaryWithinRequiredMount(target, options.action, {
       aliasPolicy: options.aliasPolicy,
-      allowedType: options.allowedType,
+      allowedType,
     });
-    await this.assertGuardedPathSafety(target, options, guarded);
+    await this.assertGuardedPathSafety(target, { ...options, allowedType }, guarded);
   }
 
   async openReadableFile(
@@ -139,7 +147,9 @@ export class SandboxFsPathGuard {
     if (!guarded.ok) {
       if (guarded.reason !== "path") {
         const canFallbackToDirectoryStat =
-          options.allowedType === "directory" && this.pathIsExistingDirectory(target.hostPath);
+          guarded.reason === "io" &&
+          options.allowedType === "directory" &&
+          this.pathIsExistingDirectory(target.hostPath);
         if (!canFallbackToDirectoryStat) {
           throw sandboxBoundaryError(options.action, target.containerPath, guarded.error);
         }
@@ -154,7 +164,17 @@ export class SandboxFsPathGuard {
     });
     // Re-check the canonical path against mounts so symlinks cannot escape the sandbox root.
     const canonicalMount = this.resolveRequiredMount(canonicalContainerPath, options.action);
-    if (options.requireWritable && !canonicalMount.writable) {
+    // Removing or moving a parent must not bypass a narrower read-only mount.
+    if (
+      options.requireWritable &&
+      (!canonicalMount.writable ||
+        (options.requireWritable === "subtree" &&
+          this.mountsByContainer.some(
+            (mount) =>
+              !mount.writable &&
+              isPathInsideContainerRoot(canonicalContainerPath, mount.containerRoot),
+          )))
+    ) {
       throw new Error(
         `Sandbox path is read-only; cannot ${options.action}: ${target.containerPath}`,
       );
@@ -166,7 +186,7 @@ export class SandboxFsPathGuard {
     action: string,
     options?: {
       aliasPolicy?: PathAliasPolicy;
-      allowedType?: BoundaryAllowedType;
+      allowedType?: "file" | "directory";
     },
   ): Promise<RootFileOpenResult> {
     const lexicalMount = this.resolveRequiredMount(target.containerPath, action);
@@ -234,6 +254,18 @@ export class SandboxFsPathGuard {
       targetPath: target.containerPath,
       action,
     });
+  }
+
+  async resolveAnchoredPinnedDirectoryEntry(
+    target: SandboxResolvedFsPath,
+    action: string,
+  ): Promise<PinnedSandboxDirectoryEntry> {
+    // Resolve allowed aliases before no-follow descriptor traversal pins the directory.
+    const containerPath = await this.resolveCanonicalContainerPath({
+      containerPath: target.containerPath,
+      allowFinalSymlinkForUnlink: false,
+    });
+    return this.resolvePinnedDirectoryEntry({ ...target, containerPath }, action);
   }
 
   resolvePinnedDirectoryEntry(

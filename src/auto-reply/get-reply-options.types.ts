@@ -1,7 +1,9 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 /** Public option types for reply generation callbacks, streaming, and delivery policy. */
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { AgentPlanStep } from "../channels/streaming.js";
+import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import type { ImageContent } from "../llm/types.js";
 import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
@@ -12,11 +14,31 @@ import type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types
 
 export type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
 
+/** A successful runtime append, independent of optional active-path projection anchors. */
+export type ReplyDispatchAssistantTranscript = Pick<
+  TranscriptEntryAnchor,
+  "agentId" | "sessionId" | "sessionKey" | "storePath"
+> & {
+  messageId: string;
+  anchor?: TranscriptEntryAnchor;
+  idempotencyKey: string;
+};
+
+export type ReplyDispatchRun = {
+  completionSource: "reply-dispatch";
+  getResult: () => {
+    assistantTranscript?: ReplyDispatchAssistantTranscript;
+    terminalOutcome?: AgentRunTerminalOutcome;
+  };
+};
+
 export type BlockReplyContext = {
   abortSignal?: AbortSignal;
   timeoutMs?: number;
   /** Source assistant message index from the upstream stream, when available. */
   assistantMessageIndex?: number;
+  /** @internal Stable durable outbound intent owned by the producing runtime. */
+  deliveryIntentId?: string;
 };
 
 /** Context passed to onModelSelected callback with actual model used. */
@@ -70,6 +92,8 @@ export type TurnAdoptionLifecycle = {
   onAdopted: () => void | Promise<void>;
   /** Return false to reject followup enqueue. */
   onDeferred?: () => boolean | void;
+  /** Reports that a deferred turn is still queued behind an active turn. */
+  onDeferredHeartbeat?: () => void;
   /** Deferred turn finished without owning the reply lane. */
   onAbandoned?: () => void;
   /** Always fires when the followup ownership cycle ends (admitted or not). Gateway cleanup. */
@@ -117,17 +141,25 @@ export type GetReplyOptions = {
   promptCacheKey?: string;
   /** Abort signal for the underlying agent run. */
   abortSignal?: AbortSignal;
+  /** Ephemeral channel owner check for a targeted Stop; never serialized as authority. */
+  isCommandTargetCurrent?: () => boolean;
   /** Optional inbound images (used for webchat attachments). */
   images?: ImageContent[];
   /** Original inline/offloaded attachment order for inbound images. */
   imageOrder?: PromptImageOrderEntry[];
   /** Ordered media facts whose model-facing text projection is already present in the prompt. */
   media?: MediaFact[];
-  /** Notifies when an agent run actually starts (useful for webchat command handling). */
+  /**
+   * Notifies when an agent run starts. Return "reply-dispatch" synchronously to accept
+   * completion ownership offered in options; all other legacy callback results are ignored.
+   */
   onAgentRunStart?: (
     runId: string,
     executionIdentityToken?: ExecutionIdentityAdmissionToken,
-  ) => void;
+    options?: ReplyDispatchRun,
+  ) => unknown;
+  /** Reports the terminal agent-run classification to the shared dispatch owner. */
+  onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
   /**
    * Canonical adoption lifecycle (adopted / deferred / abandoned / settled + pre-adoption abort).
    */
@@ -159,10 +191,6 @@ export type GetReplyOptions = {
   fastModeAutoOnSecondsOverride?: number;
   /** Controls bootstrap workspace context injection (default: full). */
   bootstrapContextMode?: "full" | "lightweight";
-  /** If true, suppress tool error warning payloads for this run. */
-  suppressToolErrorWarnings?: boolean;
-  /** Dynamic form used when verbose progress visibility can change mid-run. */
-  shouldSuppressToolErrorWarnings?: () => boolean | undefined;
   /** If true, run the model without OpenClaw tools for this turn. */
   disableTools?: boolean;
   /** Runtime tool allow-list for this turn. Empty means no tools. */
@@ -171,6 +199,12 @@ export type GetReplyOptions = {
   enableHeartbeatTool?: boolean;
   /** If true, keep the heartbeat response tool available even under narrow tool profiles. */
   forceHeartbeatTool?: boolean;
+  /**
+   * @deprecated Ignored. The tool-failure warning is delivered whenever a run ends
+   * without a reply and cannot be suppressed. Kept only so plugin-sdk callers that
+   * still pass it keep compiling; removed in the first stable release after 2026.10.
+   */
+  suppressToolErrorWarnings?: boolean;
   /**
    * If true, dispatch skips default tool/progress text messages and expects the
    * channel to surface progress via its own streaming/edit UX.
@@ -323,8 +357,10 @@ export type GetReplyOptions = {
   }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when context auto-compaction starts (allows UX feedback during the pause). */
   onCompactionStart?: () => Promise<ProgressCallbackResult> | ProgressCallbackResult;
-  /** Called when context auto-compaction completes. */
-  onCompactionEnd?: () => Promise<ProgressCallbackResult> | ProgressCallbackResult;
+  /** Called when context auto-compaction ends; omitted outcome means completed for legacy callers. */
+  onCompactionEnd?: (payload?: {
+    completed: boolean;
+  }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
   onModelSelected?: (ctx: ModelSelectedContext) => void;

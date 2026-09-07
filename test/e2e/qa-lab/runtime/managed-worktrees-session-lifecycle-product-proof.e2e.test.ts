@@ -6,12 +6,13 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { startQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
 import type { SessionsDeleteResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type {
   ManagedWorktreeGcResult,
   ManagedWorktreeRecord,
 } from "../../../../src/agents/worktrees/types.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const execFileAsync = promisify(execFile);
@@ -32,11 +33,15 @@ type SessionListResult = {
 type WorktreeListResult = { worktrees: ManagedWorktreeRecord[] };
 type GatewayRunResult = { runId?: unknown; status?: unknown };
 
-let harness: Awaited<ReturnType<typeof startQaLiveLaneGateway>> | undefined;
+let gatewayOwner: ReturnType<typeof createQaLiveLaneGateway> | undefined;
+let harness: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>> | undefined;
 
 afterEach(async () => {
-  await harness?.stop().catch(() => undefined);
+  if (gatewayOwner) {
+    await stopQaGatewayFixture(gatewayOwner);
+  }
   harness = undefined;
+  gatewayOwner = undefined;
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -96,7 +101,8 @@ describe("managed worktrees session-owner product proof", () => {
       const canonicalTmp = await fs.realpath(os.tmpdir());
       const fixtureRoot = tempDirs.make("openclaw-managed-worktree-session-", canonicalTmp);
       const { baseCommit, repo } = await initializeRepository(fixtureRoot);
-      harness = await startQaLiveLaneGateway({
+      gatewayOwner = createQaLiveLaneGateway();
+      harness = await gatewayOwner.start({
         repoRoot: process.cwd(),
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.6-luna",

@@ -1,16 +1,13 @@
-// Canvas doctor contract migrates documents from configured host roots into core storage.
+// Canvas Doctor keeps copy-time dependencies cold until legacy documents exist.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import {
-  asOptionalRecord as readRecord,
-  readStringValue as readString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
-import { migrateCanvasHostConfig } from "./src/config-migration.js";
+  listLegacyCanvasDocumentIds,
+  migrateCanvasHostConfig,
+  resolveLegacyCanvasDocumentsDir,
+} from "./src/config-migration.js";
 
 const RETIRED_CANVAS_HOST_CONFIG_PATH = ["plugins", "entries", "canvas", "config", "host"] as const;
 
@@ -35,43 +32,16 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   return migrateCanvasHostConfig(cfg) ?? { config: cfg, changes: [] };
 }
 
-type StateMigrationParams = Parameters<PluginDoctorStateMigration["detectLegacyState"]>[0];
-
-function resolveLegacyDocumentsDir(params: StateMigrationParams): string | null {
-  const pluginConfig = resolvePluginConfigObject(params.config, "canvas");
-  const configuredRoot = readString(readRecord(pluginConfig?.host)?.root)?.trim();
-  if (!configuredRoot) {
-    return null;
-  }
-  const legacyDir = path.join(
-    path.resolve(resolveUserPath(configuredRoot, params.env)),
-    "documents",
-  );
-  const coreDir = path.resolve(params.stateDir, "canvas", "documents");
-  return legacyDir === coreDir ? null : legacyDir;
-}
-
-async function listDocumentIds(documentsDir: string): Promise<string[]> {
-  try {
-    return (await fs.readdir(documentsDir, { withFileTypes: true }))
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name)
-      .toSorted();
-  } catch {
-    return [];
-  }
-}
-
 export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "canvas-custom-root-documents-to-core",
     label: "Canvas documents in a custom host root",
     async detectLegacyState(params) {
-      const legacyDir = resolveLegacyDocumentsDir(params);
+      const legacyDir = resolveLegacyCanvasDocumentsDir(params);
       if (!legacyDir) {
         return null;
       }
-      const documentIds = await listDocumentIds(legacyDir);
+      const documentIds = listLegacyCanvasDocumentIds(legacyDir);
       if (documentIds.length === 0) {
         return null;
       }
@@ -85,14 +55,15 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async migrateLegacyState(params) {
       const changes: string[] = [];
       const warnings: string[] = [];
-      const legacyDir = resolveLegacyDocumentsDir(params);
+      const legacyDir = resolveLegacyCanvasDocumentsDir(params);
       if (!legacyDir) {
         return { changes, warnings };
       }
-      const documentIds = await listDocumentIds(legacyDir);
+      const documentIds = listLegacyCanvasDocumentIds(legacyDir);
       if (documentIds.length === 0) {
         return { changes, warnings };
       }
+      const { pathExists } = await import("openclaw/plugin-sdk/text-utility-runtime");
 
       const coreDir = path.resolve(params.stateDir, "canvas", "documents");
       await fs.mkdir(coreDir, { recursive: true });
@@ -121,7 +92,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           migrated += 1;
         } catch (error) {
           warnings.push(
-            `Skipped Canvas document ${documentId}; core target may already exist: ${String(error)}`,
+            `Skipped Canvas document ${documentId}; core target may already exist: ${String(error)}. Keep plugins.entries.canvas.config.host.root, resolve the copy or target conflict, then rerun "openclaw doctor --fix".`,
           );
         } finally {
           if (tempParent) {

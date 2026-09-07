@@ -1,14 +1,39 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
+import { getUpdateRun } from "../../infra/update-run-ledger.js";
+import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
-import { resolveGlobalManager } from "./shared.js";
-import { formatSchemaRefusalLines, hasSchemaRefusal } from "./update-command-git.js";
-import type { ManagedServiceRootRedirect } from "./update-command-service.js";
+import { printResult } from "./progress.js";
+import { formatSchemaRefusalLines, hasSchemaRefusal } from "./schema-preflight.js";
+import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
+import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
+
+export async function handleDryRunPreflightError(
+  error: unknown,
+  notes: string[],
+  refuseUpdate: (reason: string, message: string) => Promise<void>,
+): Promise<OpenClawDatabaseSchemaPreflight> {
+  if (!(error instanceof UpdatePreMutationError)) {
+    throw error;
+  }
+  if (
+    error.reason === "database-schema-preflight" ||
+    error.reason === "target-metadata-preflight"
+  ) {
+    // A best-effort preview reports incomplete admission; it never authorizes mutation.
+    notes.push(error.message.replace(/^Update refused:/u, "Would refuse update:"));
+    return { incompatible: [], indeterminate: [] };
+  }
+  await refuseUpdate(error.reason, error.message);
+  return { incompatible: [], indeterminate: [] };
+}
 
 type UpdateDryRunPreview = {
+  runId: string;
+  run?: UpdateRunRecord;
   dryRun: true;
   root: string;
   installKind: "git" | "package" | "unknown";
@@ -67,10 +92,12 @@ function printDryRunPreview(preview: UpdateDryRunPreview, jsonMode: boolean): vo
   }
 }
 
-export async function printUpdateDryRun(params: {
+export function printUpdateDryRun(params: {
+  runId: string;
   root: string;
   installKind: "git" | "package" | "unknown";
   updateInstallKind: "git" | "package" | "unknown";
+  mode: UpdateRunResult["mode"];
   switchToGit: boolean;
   switchToPackage: boolean;
   shouldRestart: boolean;
@@ -87,20 +114,9 @@ export async function printUpdateDryRun(params: {
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
   explicitTag: string | null;
   packageSchemaPreflight: OpenClawDatabaseSchemaPreflight;
-  timeoutMs: number;
-  opts: { tag?: string; json?: boolean };
-}): Promise<void> {
-  let mode: UpdateRunResult["mode"] = "unknown";
-  if (params.updateInstallKind === "git") {
-    mode = "git";
-  } else if (params.updateInstallKind === "package") {
-    mode = await resolveGlobalManager({
-      root: params.root,
-      installKind: params.installKind,
-      timeoutMs: params.timeoutMs,
-    });
-  }
-
+  preflightNotes?: readonly string[];
+  opts: Pick<UpdateCommandOptions, "tag" | "json" | "run">;
+}): void {
   const actions: string[] = [];
   if (params.requestedChannel && params.requestedChannel !== params.storedChannel) {
     actions.push(`Persist update.channel=${params.requestedChannel} in config`);
@@ -108,7 +124,7 @@ export async function printUpdateDryRun(params: {
   if (params.switchToGit) {
     actions.push("Switch install mode from package to git checkout (dev channel)");
   } else if (params.switchToPackage) {
-    actions.push(`Switch install mode from git to package manager (${mode})`);
+    actions.push(`Switch install mode from git to package manager (${params.mode})`);
   } else if (params.updateInstallKind === "git") {
     actions.push(`Run git update flow on channel ${params.channel} (fetch/rebase/build/doctor)`);
   } else if (params.packageAlreadyCurrent) {
@@ -128,7 +144,7 @@ export async function printUpdateDryRun(params: {
       : "Skip restart (because --no-restart is set)",
   );
 
-  const notes: string[] = [];
+  const notes: string[] = [...(params.preflightNotes ?? [])];
   if (params.opts.tag && params.updateInstallKind === "git") {
     notes.push("--tag applies to npm installs only; git updates ignore it.");
   }
@@ -147,19 +163,19 @@ export async function printUpdateDryRun(params: {
     notes.push(...formatSchemaRefusalLines(params.packageSchemaPreflight, true));
   }
   if (params.updateInstallKind === "git") {
-    // The git target revision is resolved inside the real update run, so its
-    // schema support cannot be previewed here without duplicating that flow.
     notes.push(
-      "Database schema compatibility of the git target is verified during the real update; this preview does not check it.",
+      "Git preview does not execute target scripts or select a build-tested development fallback. The real update repeats database admission before executing each candidate.",
     );
   }
 
   printDryRunPreview(
     {
+      runId: params.runId,
+      run: getUpdateRun(params.runId, { env: params.opts.run?.env }),
       dryRun: true,
       root: params.root,
       installKind: params.installKind,
-      mode,
+      mode: params.mode,
       updateInstallKind: params.updateInstallKind,
       switchToGit: params.switchToGit,
       switchToPackage: params.switchToPackage,
@@ -176,4 +192,17 @@ export async function printUpdateDryRun(params: {
     },
     Boolean(params.opts.json),
   );
+  if (!params.opts.json) {
+    printResult(
+      {
+        runId: params.runId,
+        status: "skipped",
+        mode: params.mode,
+        reason: "dry-run",
+        steps: [],
+        durationMs: 0,
+      },
+      params.opts,
+    );
+  }
 }

@@ -13,9 +13,9 @@ import type {
 } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveAgentSkillsFilter, selectableAgentsList } from "../../lib/agents/display.ts";
 import {
@@ -32,6 +32,7 @@ import {
   loadChatMetadata,
   peekChatMetadata,
   revalidateChatMetadata,
+  subscribeChatMetadata,
 } from "../../lib/chat/chat-metadata-store.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import {
@@ -52,7 +53,6 @@ import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { loadAgentFileContent, saveAgentFile } from "./files.ts";
-import { GitHubIdentityController } from "./github-identity-controller.ts";
 import {
   resetIdentityDraft,
   saveIdentityDraft,
@@ -72,7 +72,6 @@ import { clearAgentSkillFilter, loadAgentSkills } from "./skills.ts";
 import { renderAgents } from "./view.ts";
 
 const AGENTS_DOCS_URL = "https://docs.openclaw.ai/concepts/multi-agent";
-
 type AgentsRequestSources = Partial<
   Pick<ApplicationContext, "agents" | "agentIdentity" | "sessions">
 >;
@@ -106,6 +105,7 @@ class AgentsPage
   @state() agentFileDrafts: Record<string, string> = {};
   @state() agentFileActive: string | null = null;
   @state() agentFileSaving = false;
+  readonly agentFileWriteRevisions = new Map<string, number>();
   @state() agentIdentityLoading = false;
   @state() agentIdentityError: string | null = null;
   @state() identityDraft: AgentIdentityDraft = { name: null, emoji: null, avatar: null };
@@ -125,13 +125,12 @@ class AgentsPage
   private agentIdentitySource: ApplicationContext["agentIdentity"] | null = null;
   private hasBoundSessions = false;
   private sessionsSource: ApplicationContext["sessions"] | null = null;
-  private chatModelCatalogAgentId: string | null = null;
-  private chatModelCatalogRequest: {
-    client: GatewayBrowserClient;
-    generation: number;
-    agentId: string;
+  private chatModelCatalogSubscription: {
+    isCurrent: () => boolean;
+    unsubscribe: () => void;
   } | null = null;
   private normalizedLocation = "";
+  private githubProfileId: string | null = null;
   private readonly githubIdentity = new GitHubIdentityController({
     requestUpdate: () => this.requestUpdate(),
     runExternalMutation: (task, options) =>
@@ -145,9 +144,7 @@ class AgentsPage
         return;
       }
       this.invalidateTransientRequests();
-      this.chatModelCatalog = [];
-      this.chatModelCatalogAgentId = null;
-      this.chatModelCatalogError = null;
+      this.resetModelCatalog();
     },
     onSnapshot: () => this.syncGatewayState(),
     ensureInitialData: () => this.ensureInitialData(),
@@ -252,6 +249,10 @@ class AgentsPage
     return this.context.sessions;
   }
 
+  get agents() {
+    return this.context.agents;
+  }
+
   get client() {
     return this.gateway.client;
   }
@@ -282,6 +283,7 @@ class AgentsPage
   }
 
   override disconnectedCallback() {
+    this.githubIdentity.dispose();
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
@@ -315,10 +317,19 @@ class AgentsPage
     this.syncCurrentAgentFiles(agents);
   }
 
-  private ensureSelectedAgentInList(agentsList: AgentsListResult) {
-    const selected = this.agentsSelectedId;
-    if (!selected || !agentsList.agents.some((entry) => entry.id === selected)) {
-      this.agentsSelectedId = agentsList.defaultId ?? agentsList.agents[0]?.id ?? null;
+  private ensureSelectedAgentInList(
+    agentsList: AgentsListResult,
+    selected = this.routeData?.requestedAgentId ?? this.agentsSelectedId,
+  ) {
+    // Route intent survives hello/reconnect; only the roster is connection-scoped.
+    // Unknown explicit ids retain their URL while the picker uses the default.
+    const nextSelectedId =
+      selected && agentsList.agents.some((entry) => entry.id === selected)
+        ? selected
+        : (agentsList.defaultId ?? agentsList.agents[0]?.id ?? null);
+    if (nextSelectedId !== this.agentsSelectedId) {
+      this.agentsSelectedId = nextSelectedId;
+      this.resetSelectionState();
     }
   }
 
@@ -332,26 +343,24 @@ class AgentsPage
       return;
     }
     this.agentFilesList = status.list;
-    this.agentFilesError = status.error;
     void this.selectDefaultAgentFile(agentId);
   }
 
-  private async selectDefaultAgentFile(agentId: string) {
+  private async selectDefaultAgentFile(agentId: string, force = false) {
     const files = this.agentFilesList?.files ?? [];
     if (!this.agentFileActive || !files.some((file) => file.name === this.agentFileActive)) {
       this.agentFileActive = files.find((file) => file.name === "AGENTS.md")?.name ?? null;
     }
     if (this.agentFileActive) {
-      await loadAgentFileContent(this, agentId, this.agentFileActive);
+      await loadAgentFileContent(this, agentId, this.agentFileActive, {
+        force,
+      });
     }
   }
 
   private resetForClientChange() {
     this.agentsList = null;
     this.agentsSelectedId = null;
-    this.chatModelCatalog = [];
-    this.chatModelCatalogAgentId = null;
-    this.chatModelCatalogError = null;
     this.resetSelectionState();
   }
 
@@ -369,8 +378,7 @@ class AgentsPage
     this.agentSkillsLoading = false;
     this.toolsCatalogLoading = false;
     this.toolsCatalogLoadingAgentId = null;
-    this.toolsEffectiveLoading = false;
-    this.toolsEffectiveLoadingKey = null;
+    resetToolsEffectiveState(this);
     this.cron = {
       ...this.cron,
       cronLoading: false,
@@ -388,18 +396,11 @@ class AgentsPage
       return;
     }
     this.routeDataInitialized = true;
-    if (!this.gateway.isRouteDataCurrent(data)) {
-      return;
-    }
-    if (data.agentsList) {
+    if (this.gateway.isRouteDataCurrent(data) && data.agentsList) {
       this.agentsList = data.agentsList;
-      const nextSelectedId = data.selectedAgentId ?? this.resolveSelectedAgentId();
-      if (nextSelectedId !== this.agentsSelectedId) {
-        this.agentsSelectedId = nextSelectedId;
-        // Route-driven agent switches (chip menu "Agent settings") must not
-        // carry per-agent panel caches or identity drafts across agents.
-        this.resetSelectionState();
-      }
+    }
+    if (this.agentsList) {
+      this.ensureSelectedAgentInList(this.agentsList, data.requestedAgentId);
     }
   }
 
@@ -433,17 +434,6 @@ class AgentsPage
     return Object.fromEntries(
       this.context.agentIdentity.entries().map((entry) => [entry.agentId, entry]),
     );
-  }
-
-  // Local /avatar/<id> images need a bearer credential when gateway auth is
-  // active; the agent select uses this to decide whether <img> URLs can load.
-  private controlUiAuthToken(): string | null {
-    const { snapshot, connection } = this.context.gateway;
-    return resolveControlUiAuthToken({
-      hello: snapshot.hello,
-      settings: connection,
-      password: connection.password,
-    });
   }
 
   private ensureInitialData() {
@@ -530,7 +520,7 @@ class AgentsPage
       }
       this.loadEffectiveToolsForAgent(agentId);
       if (
-        this.githubIdentity.supported &&
+        this.githubIdentity.statusReadable &&
         !this.githubIdentity.status &&
         !this.githubIdentity.loading &&
         !this.githubIdentity.error
@@ -558,15 +548,41 @@ class AgentsPage
   }
 
   private syncGitHubIdentity(agentId: string | null) {
+    const snapshot = this.context.gateway.snapshot;
+    const profileId = snapshot.selfUser?.id ?? null;
+    if (profileId !== this.githubProfileId) {
+      this.githubIdentity.dispose();
+      this.githubProfileId = profileId;
+    }
+    const hasScope = (method: string, scope: GatewayMethodOperatorScope) =>
+      canCallGatewayMethod(snapshot, method, scope, { requireAdvertisement: false });
     this.githubIdentity.sync({
       client: this.client,
       connected: this.connected,
-      agentId,
-      config: currentConfigObject(this.context.runtimeConfig.state),
-      supported: this.canCall("tools.github.status", "operator.read"),
-      configurable: this.canCall("tools.github.configure", "operator.admin"),
+      target: agentId
+        ? {
+            kind: "shared",
+            scope: "agent",
+            agentId,
+            config: currentConfigObject(this.context.runtimeConfig.state),
+          }
+        : null,
+      statusReadable: hasScope("tools.github.status", "operator.read"),
+      configurable: hasScope("tools.github.configure", "operator.admin"),
+      authorizable: [
+        "tools.github.authorize.start",
+        "tools.github.authorize.poll",
+        "tools.github.authorize.cancel",
+      ].every((method) => hasScope(method, "operator.admin")),
       clientRevision: this.requestGeneration,
     });
+  }
+
+  private resetModelCatalog() {
+    this.chatModelCatalogSubscription?.unsubscribe();
+    this.chatModelCatalogSubscription = null;
+    this.chatModelCatalog = [];
+    this.chatModelCatalogError = null;
   }
 
   private ensureModelCatalog(options: { refresh?: boolean } = {}) {
@@ -575,55 +591,44 @@ class AgentsPage
     if (!client || !this.connected || !agentId) {
       return;
     }
-    if (!options.refresh) {
-      const cached = peekChatMetadata(client, agentId);
+    if (!this.chatModelCatalogSubscription?.isCurrent()) {
+      this.resetModelCatalog();
+      const generation = this.requestGeneration;
+      const gateway = this.context?.gateway;
+      const agents = this.context?.agents;
+      const subscription = {
+        isCurrent: () =>
+          this.chatModelCatalogSubscription === subscription &&
+          this.context?.gateway === gateway &&
+          this.isCurrentRequest(client, generation, agentId, { agents }),
+        unsubscribe: subscribeChatMetadata(client, { agentId }, (update) => {
+          if (!subscription.isCurrent()) {
+            return;
+          }
+          if (update.type === "invalidated") {
+            this.ensureModelCatalog();
+          } else if (update.type === "error") {
+            this.chatModelCatalogError = formatUiError(update.error);
+          } else {
+            this.chatModelCatalogError = null;
+            if (update.type === "result") {
+              this.chatModelCatalog = update.result.models ?? [];
+            }
+          }
+        }),
+      };
+      this.chatModelCatalogSubscription = subscription;
+      const cached = peekChatMetadata(client, { agentId });
       if (cached) {
         this.chatModelCatalog = cached.models ?? [];
-        this.chatModelCatalogAgentId = agentId;
-        this.chatModelCatalogError = null;
-        return;
       }
     }
-    const generation = this.requestGeneration;
-    const previousRequest = this.chatModelCatalogRequest;
-    if (
-      previousRequest?.client === client &&
-      previousRequest.generation === generation &&
-      previousRequest.agentId === agentId
-    ) {
-      return;
-    }
-    if (this.chatModelCatalogAgentId !== agentId) {
-      this.chatModelCatalog = [];
-    }
-    const request = { client, generation, agentId };
-    this.chatModelCatalogRequest = request;
-    this.chatModelCatalogError = null;
-    // Chat metadata carries the selected agent's already-prepared startup models
-    // without initiating the live discovery reserved for explicit picker use.
+    // The store owns current publications and pending reads. A superseded promise
+    // must not overwrite its newer result or erase retained choices on failure.
     const metadataRequest = options.refresh
-      ? revalidateChatMetadata(client, agentId)
-      : loadChatMetadata(client, agentId);
-    void metadataRequest
-      .then((result) => {
-        if (this.isCurrentRequest(client, generation, agentId)) {
-          const models = result.models ?? [];
-          this.chatModelCatalog = models;
-          this.chatModelCatalogAgentId = agentId;
-          this.chatModelCatalogError = null;
-        }
-      })
-      .catch((error: unknown) => {
-        if (this.isCurrentRequest(client, generation, agentId)) {
-          this.chatModelCatalogAgentId = null;
-          this.chatModelCatalogError = formatUiError(error);
-        }
-      })
-      .finally(() => {
-        if (this.chatModelCatalogRequest === request) {
-          this.chatModelCatalogRequest = null;
-        }
-      });
+      ? revalidateChatMetadata(client, { agentId })
+      : loadChatMetadata(client, { agentId });
+    void metadataRequest.catch(() => undefined);
   }
 
   private async loadAgentsAndCommit() {
@@ -662,14 +667,13 @@ class AgentsPage
         return;
       }
       this.agentFilesList = list ?? agents.files(agentId).list;
-      this.agentFilesError = agents.files(agentId).error;
     } finally {
       if (this.isCurrentRequest(client, generation, agentId, { agents })) {
         this.agentFilesLoading = false;
       }
     }
     if (this.isCurrentRequest(client, generation, agentId, { agents })) {
-      await this.selectDefaultAgentFile(agentId);
+      await this.selectDefaultAgentFile(agentId, force);
     }
   }
 
@@ -728,14 +732,13 @@ class AgentsPage
 
   private resetSelectionState() {
     this.gateway.invalidate();
-    this.chatModelCatalog = [];
-    this.chatModelCatalogAgentId = null;
-    this.chatModelCatalogError = null;
+    this.resetModelCatalog();
     this.agentFilesList = null;
     this.agentFilesError = null;
     this.agentFileActive = null;
     this.agentFileContents = {};
     this.agentFileDrafts = {};
+    this.agentFileWriteRevisions.clear();
     this.agentFilesLoading = false;
     this.agentFileSaving = false;
     this.agentSkillsReport = null;
@@ -849,17 +852,7 @@ class AgentsPage
     if (!this.canCall("agents.files.set", "operator.admin")) {
       return;
     }
-    const client = this.client;
-    const generation = this.requestGeneration;
-    const agents = this.context.agents;
-    if (!client) {
-      return;
-    }
-    void saveAgentFile(this, agentId, name, content).then((saved) => {
-      if (saved && this.isCurrentRequest(client, generation, agentId, { agents })) {
-        void this.loadAgentFiles(agentId, true);
-      }
-    });
+    void saveAgentFile(this, agentId, name, content);
   }
 
   private reloadConfig() {
@@ -924,7 +917,7 @@ class AgentsPage
         <div>
           <div class="page-title">${titleForRoute("agents")}</div>
           <div class="page-subtitle">
-            ${subtitleForRoute("agents")} ${renderDocsLink(AGENTS_DOCS_URL, t("common.learnMore"))}
+            ${subtitleForRoute("agents")} ${renderLearnMoreLink(AGENTS_DOCS_URL)}
           </div>
         </div>
       </section>
@@ -932,7 +925,6 @@ class AgentsPage
         renderAgents({
           access,
           basePath: this.context.basePath,
-          authToken: this.controlUiAuthToken(),
           loading: agentsState.agentsLoading,
           error: agentsState.agentsError,
           agentsList: this.agentsList,
@@ -943,11 +935,7 @@ class AgentsPage
             loading: configState.configLoading,
             saving: configState.configSaving,
             dirty: configState.configFormDirty,
-            error:
-              configState.configAutoSaveStatus === "error" ||
-              configState.configAutoSaveStatus === "conflict"
-                ? configState.lastError
-                : null,
+            error: configState.lastError,
           },
           channels: {
             snapshot: this.context.channels.state.channelsSnapshot,
@@ -969,7 +957,7 @@ class AgentsPage
           agentFiles: {
             list: this.agentFilesList,
             loading: this.agentFilesLoading,
-            error: this.agentFilesError,
+            error: this.agentFilesError ?? this.context.agents.files(selectedAgentId).error,
             active: this.agentFileActive,
             contents: this.agentFileContents,
             drafts: this.agentFileDrafts,
@@ -999,6 +987,8 @@ class AgentsPage
             result: this.toolsEffectiveResult,
           },
           githubIdentity: this.githubIdentity,
+          onOpenGitHubConnections: () =>
+            this.context.navigate("profile", { hash: "#settings-profile-github-connections" }),
           runtimeSessionKey: this.sessionKey,
           runtimeSessionMatchesSelectedAgent: selectedAgentId === this.chatAgentId(),
           modelCatalog: this.chatModelCatalog,

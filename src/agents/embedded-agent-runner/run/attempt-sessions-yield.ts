@@ -1,54 +1,27 @@
+import type { AssistantMessage, AssistantMessageEventStreamLike } from "../../../llm/types.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { buildSessionsYieldContextMessage } from "../../sessions-yield-context.js";
 import type { SessionManager } from "../../sessions/index.js";
 /**
  * Handles sessions-yield interruption, persistence, and artifact cleanup.
  */
 import { isRunnerAbortError } from "../abort.js";
-import { log } from "../logger.js";
-import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt-finalize.js";
+import { waitForEmbeddedAbortSettle } from "./attempt-subscription-cleanup.js";
 
 const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
-const SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE = "openclaw.sessions_yield";
-
-const SESSIONS_YIELD_ABORT_SETTLE_TIMEOUT_MS = resolveEmbeddedAbortSettleTimeoutMs();
-
-// Persist a hidden context reminder so the next turn knows why the runner stopped.
-function buildSessionsYieldContextMessage(message: string): string {
-  return `${message}\n\n[Context: The previous turn ended intentionally via sessions_yield while waiting for a follow-up event.]`;
-}
 
 export async function waitForSessionsYieldAbortSettle(params: {
   settlePromise: Promise<void> | null;
   runId: string;
   sessionId: string;
 }): Promise<void> {
-  if (!params.settlePromise) {
-    return;
-  }
-
-  let timeout: NodeJS.Timeout | undefined;
-  const outcome = await Promise.race([
-    params.settlePromise
-      .then(() => "settled" as const)
-      .catch((err: unknown) => {
-        log.warn(
-          `sessions_yield abort settle failed: runId=${params.runId} sessionId=${params.sessionId} err=${String(err)}`,
-        );
-        return "errored" as const;
-      }),
-    new Promise<"timed_out">((resolve) => {
-      timeout = setTimeout(() => resolve("timed_out"), SESSIONS_YIELD_ABORT_SETTLE_TIMEOUT_MS);
-    }),
-  ]);
-  if (timeout) {
-    clearTimeout(timeout);
-  }
-  if (outcome === "timed_out") {
-    log.warn(
-      `sessions_yield abort settle timed out: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${SESSIONS_YIELD_ABORT_SETTLE_TIMEOUT_MS}`,
-    );
-  }
+  await waitForEmbeddedAbortSettle({
+    promise: params.settlePromise,
+    runId: params.runId,
+    sessionId: params.sessionId,
+    reason: "sessions_yield",
+  });
 }
 
 // Return a synthetic aborted response so agent runtime unwinds without a real provider call.
@@ -56,36 +29,11 @@ export function createYieldAbortedResponse(model: {
   api?: string;
   provider?: string;
   id?: string;
-}): {
-  [Symbol.asyncIterator]: () => AsyncGenerator<never, void, unknown>;
-  result: () => Promise<{
-    role: "assistant";
-    content: Array<{ type: "text"; text: string }>;
-    stopReason: "aborted";
-    api: string;
-    provider: string;
-    model: string;
-    usage: {
-      input: number;
-      output: number;
-      cacheRead: number;
-      cacheWrite: number;
-      totalTokens: number;
-      cost: {
-        input: number;
-        output: number;
-        cacheRead: number;
-        cacheWrite: number;
-        total: number;
-      };
-    };
-    timestamp: number;
-  }>;
-} {
-  const message = {
-    role: "assistant" as const,
-    content: [{ type: "text" as const, text: "" }],
-    stopReason: "aborted" as const,
+}): AssistantMessageEventStreamLike {
+  const message: AssistantMessage = {
+    role: "assistant",
+    content: [{ type: "text", text: "" }],
+    stopReason: "aborted",
     api: model.api ?? "",
     provider: model.provider ?? "",
     model: model.id ?? "",
@@ -160,15 +108,9 @@ export async function persistSessionsYieldContextMessage(
   },
   message: string,
 ) {
-  await activeSession.sendCustomMessage(
-    {
-      customType: SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE,
-      content: buildSessionsYieldContextMessage(message),
-      display: false,
-      details: { source: "sessions_yield", message },
-    },
-    { triggerTurn: false },
-  );
+  await activeSession.sendCustomMessage(buildSessionsYieldContextMessage(message), {
+    triggerTurn: false,
+  });
 }
 
 // Remove the synthetic yield interrupt + aborted assistant entry from the live transcript.
@@ -198,8 +140,6 @@ export function stripSessionsYieldArtifacts(activeSession: {
   if (removedMessages.length === 0) {
     return;
   }
-
-  activeSession.agent.state.messages = strippedMessages;
 
   // The interrupt marker can settle independently in live and persisted state.
   // Only assistant removals need the live-suffix cap to prevent data loss.
@@ -232,4 +172,5 @@ export function stripSessionsYieldArtifacts(activeSession: {
         (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
     },
   );
+  activeSession.agent.state.messages = strippedMessages;
 }

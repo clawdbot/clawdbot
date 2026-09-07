@@ -1,12 +1,15 @@
 /** Gateway-backed archive and delete commands for stored sessions. */
 import type {
   PreservedSessionWorktree,
+  SessionRow,
   SessionsDeleteResult,
   WorktreePreservationReason,
 } from "../../packages/gateway-protocol/src/index.js";
+import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatCliJsonFailure, rethrowExpectedCliError } from "../cli/failure-output.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { SESSION_ARCHIVE_REQUEST_TIMEOUT_MS } from "../shared/session-archive-timeout.js";
@@ -44,11 +47,7 @@ type SessionsLifecycleResult = {
   worktreePreserved?: PreservedSessionWorktree;
 };
 
-type SessionsListRow = {
-  key: string;
-  sessionId?: string;
-  archived?: boolean;
-};
+type SessionsListRow = Pick<SessionRow, "key" | "sessionId" | "archived" | "isMain">;
 
 type SessionsListResult = {
   sessions?: SessionsListRow[];
@@ -67,6 +66,14 @@ type SessionsLifecycleRpcOptions = Parameters<typeof callGatewayFromCliWithTrans
 // Keep each read bounded while exhausting pagination when an invalid key must
 // be distinguished from a session outside the first Gateway list page.
 const SESSION_TARGET_PAGE_SIZE = 200;
+
+function resolveLifecycleAgentId(rawAgent: string | undefined): string | undefined {
+  const requested = rawAgent?.trim();
+  if (rawAgent !== undefined && !requested) {
+    throw new Error("--agent must not be blank");
+  }
+  return requested ? resolveConfiguredAgentId(getRuntimeConfig(), requested) : undefined;
+}
 
 function listHint(agent?: string): string {
   const agentFlag = agent ? ` --agent ${agent}` : "";
@@ -210,8 +217,12 @@ async function runSessionsLifecycleCommand(
     json: opts.json,
   };
   let sessions: Map<string, SessionsListRow>;
+  let agent: string | undefined;
   try {
-    sessions = await listRequestedSessions(keys.filter(Boolean), opts.agent, rpcOptions);
+    // The not-found hint points at `sessions list --agent <id>`, which rejects an unconfigured id
+    // locally. Validating here keeps that suggestion runnable instead of handing back a dead end.
+    agent = resolveLifecycleAgentId(opts.agent);
+    sessions = await listRequestedSessions(keys.filter(Boolean), agent, rpcOptions);
   } catch (error) {
     rethrowExpectedCliError(error);
     const message = formatErrorMessage(error);
@@ -226,7 +237,7 @@ async function runSessionsLifecycleCommand(
   }
 
   const results = keys.map((key): SessionsLifecycleResult | undefined =>
-    key && sessions.has(key) ? undefined : notFoundResult(key, opts.agent),
+    key && sessions.has(key) ? undefined : notFoundResult(key, agent),
   );
   const listedTargets = keys.flatMap((key, index) => {
     const session = sessions.get(key);
@@ -272,31 +283,34 @@ async function runSessionsLifecycleCommand(
   }
 
   for (const { index, session } of validTargets) {
-    if (opts.dryRun) {
-      results[index] = {
-        key: session.key,
-        ok: true,
-        status:
-          operation === "archive"
-            ? session.archived === true
-              ? "already_archived"
-              : "would_archive"
-            : "would_delete",
-      };
-      continue;
-    }
     if (operation === "archive" && session.archived === true) {
       results[index] = { key: session.key, ok: true, status: "already_archived" };
       continue;
     }
     try {
+      if (opts.dryRun) {
+        // Global classification does not encode selected-agent deletion eligibility.
+        if (session.isMain === true && session.key !== "global") {
+          throw new Error(
+            operation === "archive"
+              ? "Cannot archive an agent's main session."
+              : `Cannot delete the main session (${session.key}).`,
+          );
+        }
+        results[index] = {
+          key: session.key,
+          ok: true,
+          status: operation === "archive" ? "would_archive" : "would_delete",
+        };
+        continue;
+      }
       if (operation === "archive") {
         const response = (await callGatewayFromCliWithTransport(
           "sessions.patch",
           rpcOptions,
           {
             key: session.key,
-            ...(opts.agent ? { agentId: opts.agent } : {}),
+            ...(agent ? { agentId: agent } : {}),
             ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
             archived: true,
           },
@@ -312,15 +326,15 @@ async function runSessionsLifecycleCommand(
           rpcOptions,
           {
             key: session.key,
-            ...(opts.agent ? { agentId: opts.agent } : {}),
+            ...(agent ? { agentId: agent } : {}),
             ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
             deleteTranscript: true,
             ...(session.archived === true ? { archivedOnly: true } : {}),
           },
-          { defaultTimeoutMs: 30_000 },
+          { defaultTimeoutMs: SESSION_ARCHIVE_REQUEST_TIMEOUT_MS },
         )) as SessionsDeleteResult;
         if (!response.deleted) {
-          results[index] = notFoundResult(session.key, opts.agent);
+          results[index] = notFoundResult(session.key, agent);
           continue;
         }
         results[index] = {

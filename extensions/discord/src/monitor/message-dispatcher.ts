@@ -1,10 +1,12 @@
 // Discord plugin module dispatches inbound messages into the processing queue.
 import {
   createChannelInboundDebouncer,
+  resolveInboundDebounceMs,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import type { Client } from "../internal/discord.js";
@@ -16,17 +18,18 @@ import type {
 } from "./ingress.js";
 import type { DiscordMessageEvent } from "./listeners.js";
 import { createDiscordAvatarResolver } from "./message-avatar.js";
+import { resolveDiscordMessageChannelId } from "./message-channel-info.js";
+import {
+  hasDiscordMessageStickers,
+  resolveDiscordReferencedReplyMessageId,
+} from "./message-forwarded.js";
 import { applyImplicitReplyBatchGate } from "./message-handler.batch-gate.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import {
   createDiscordMessageRunQueue,
   type DiscordMessageRunQueueTestingHooks,
 } from "./message-run-queue.js";
-import {
-  hasDiscordMessageStickers,
-  resolveDiscordMessageChannelId,
-  resolveDiscordMessageText,
-} from "./message-utils.js";
+import { resolveDiscordMessageText } from "./message-text.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
 
 type PreflightDiscordMessage =
@@ -72,10 +75,7 @@ export function createDiscordMessageDispatcher(
     groupPolicy: params.discordConfig?.groupPolicy,
     defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
   });
-  const ackReactionScope =
-    params.discordConfig?.ackReactionScope ??
-    params.cfg.messages?.ackReactionScope ??
-    "group-mentions";
+  const readConfig = createRuntimeConfigReader(params.cfg);
   const preflightDiscordMessageImpl = params.testing?.preflightDiscordMessage;
   const messageRunQueue = createDiscordMessageRunQueue({
     runtime: params.runtime,
@@ -105,11 +105,16 @@ export function createDiscordMessageDispatcher(
       message,
       eventChannelId: entry.data.channel_id,
     });
-    return channelId ? `discord:${params.accountId}:${channelId}:${authorId}` : null;
+    if (!channelId) {
+      return null;
+    }
+    const replyTargetId = resolveDiscordReferencedReplyMessageId(message);
+    return `discord:${params.accountId}:${channelId}:${authorId}:reply:${replyTargetId ?? "none"}`;
   };
   const { debouncer } = createChannelInboundDebouncer<DiscordDebounceEntry>({
     cfg: params.cfg,
     channel: "discord",
+    resolveDebounceMs: () => resolveInboundDebounceMs({ cfg: readConfig(), channel: "discord" }),
     buildKey: resolveDebounceKey,
     shouldDebounce: (entry) => {
       const message = entry.data.message;
@@ -145,73 +150,25 @@ export function createDiscordMessageDispatcher(
             return;
           }
           try {
-            if (entries.length === 1) {
-              const preflight =
-                preflightDiscordMessageImpl ??
-                (await loadMessagePreflightRuntime()).preflightDiscordMessage;
-              const ctx = await preflight({
-                ...params,
-                avatarResolver,
-                ackReactionScope,
-                groupPolicy,
-                abortSignal,
-                data: last.data,
-                client: last.client,
-                turnAdoptionLifecycle: admissionLifecycle,
-              });
-              if (abortSignal?.aborted) {
-                await ingress.cancel();
-                return;
-              }
-              if (!ctx) {
-                await ingress.settle();
-                return;
-              }
-              applyImplicitReplyBatchGate(ctx, params.replyToMode, false);
-              messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { ingressSettlement: ingress }));
-              return;
-            }
-            const combinedBaseText = entries
-              .map((entry) =>
-                resolveDiscordMessageText(entry.data.message, { includeForwarded: false }),
-              )
-              .filter(Boolean)
-              .join("\n");
-            const syntheticMessage = Object.create(Object.getPrototypeOf(last.data.message), {
-              ...Object.getOwnPropertyDescriptors(last.data.message),
-              content: { value: combinedBaseText, enumerable: true, configurable: true },
-              attachments: { value: [], enumerable: true, configurable: true },
-              message_snapshots: {
-                value: (last.data.message as { message_snapshots?: unknown }).message_snapshots,
-                enumerable: true,
-                configurable: true,
-              },
-              messageSnapshots: {
-                value: (last.data.message as { messageSnapshots?: unknown }).messageSnapshots,
-                enumerable: true,
-                configurable: true,
-              },
-              rawData: {
-                value: { ...(last.data.message as { rawData?: Record<string, unknown> }).rawData },
-                enumerable: true,
-                configurable: true,
-              },
-            }) as DiscordMessageEvent["message"];
-            const syntheticData: DiscordMessageEvent = {
-              ...last.data,
-              message: syntheticMessage,
-            };
+            const cfg = readConfig();
             const preflight =
               preflightDiscordMessageImpl ??
               (await loadMessagePreflightRuntime()).preflightDiscordMessage;
             const ctx = await preflight({
               ...params,
+              cfg,
               avatarResolver,
-              ackReactionScope,
+              ackReactionScope:
+                params.discordConfig?.ackReactionScope ??
+                cfg.messages?.ackReactionScope ??
+                "group-mentions",
               groupPolicy,
               abortSignal,
-              data: syntheticData,
+              data: last.data,
               client: last.client,
+              // Preflight hydrates each original before deriving mention facts
+              // or rendering the batch, so neither text nor metadata is lost.
+              precedingMessages: entries.slice(0, -1).map((entry) => entry.data.message),
               turnAdoptionLifecycle: admissionLifecycle,
             });
             if (abortSignal?.aborted) {
@@ -222,9 +179,9 @@ export function createDiscordMessageDispatcher(
               await ingress.settle();
               return;
             }
-            applyImplicitReplyBatchGate(ctx, params.replyToMode, true);
+            applyImplicitReplyBatchGate(ctx, params.replyToMode, entries.length > 1);
             const ids = entries.map((entry) => entry.data.message?.id).filter(isNonEmptyString);
-            if (ids.length > 0) {
+            if (entries.length > 1 && ids.length > 0) {
               const ctxBatch = ctx as typeof ctx & {
                 MessageSids?: string[];
                 MessageSidFirst?: string;

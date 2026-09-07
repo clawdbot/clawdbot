@@ -7,11 +7,11 @@ import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   postJsonRequest,
+  readProviderBinaryResponse,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GeneratedVideoAsset,
@@ -389,11 +389,14 @@ async function downloadOpenRouterVideo(params: {
     const fileName = `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`;
     let exceededMaxBytes = false;
     let buffer: Buffer;
+    const downloadLabel = "OpenRouter generated video download";
     try {
-      buffer = await readResponseWithLimit(response, params.maxBytes, {
+      buffer = await readProviderBinaryResponse(response, downloadLabel, "video", {
+        maxBytes: params.maxBytes,
+        chunkTimeoutMs: 0,
         onOverflow: ({ maxBytes }) => {
           exceededMaxBytes = true;
-          return new Error(`OpenRouter generated video download exceeds ${maxBytes} bytes`);
+          return new Error(`${downloadLabel} exceeds ${maxBytes} bytes`);
         },
       });
     } catch (error) {
