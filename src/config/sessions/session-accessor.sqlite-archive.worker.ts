@@ -41,6 +41,7 @@ import {
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
+import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   markSqliteReclamationSettled,
   waitForSqliteReclamationCommit,
@@ -49,7 +50,6 @@ import type {
   SqliteReclamationWorkerMessage,
   SqliteReclamationWorkerRequest,
 } from "./session-accessor.sqlite-reclamation-worker.js";
-import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-reclamation.js";
 
 type TranscriptArchiveDatabase = Pick<
   OpenClawAgentKyselyDatabase,

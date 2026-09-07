@@ -11,11 +11,11 @@ import {
   runExclusiveSqliteTranscriptArchiveWorker,
 } from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
-import { withSqliteReclamationAuthorization } from "./session-accessor.sqlite-reclamation-commit.js";
 import type {
   SqliteSessionReclamationPlan,
   SqliteSessionReclamationResult,
-} from "./session-accessor.sqlite-reclamation.js";
+} from "./session-accessor.sqlite-lifecycle-types.js";
+import { withSqliteReclamationAuthorization } from "./session-accessor.sqlite-reclamation-commit.js";
 
 type DatabaseOptions = SqliteSessionReclamationPlan["databaseOptions"];
 export type SqliteReclamationWorkerRequest = {
