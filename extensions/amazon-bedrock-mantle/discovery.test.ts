@@ -820,7 +820,15 @@ describe("bedrock mantle discovery", () => {
     onTestFinished(() => clock.mockRestore());
     const mockFetch = vi.fn().mockResolvedValue(
       modelDiscoveryResponse({
-        data: [{ id: "anthropic.claude-sonnet-4-6", object: "model" }],
+        data: [
+          { id: "anthropic.claude-sonnet-4-6", object: "model" },
+          { id: "openai.gpt-5.4", object: "model" },
+          { id: "openai.gpt-5.5", object: "model" },
+          { id: "openai.gpt-5.6-sol", object: "model" },
+          { id: "openai.gpt-5.6-terra", object: "model" },
+          { id: "openai.gpt-5.6-luna", object: "model" },
+          { id: "openai.gpt-oss-120b", object: "model" },
+        ],
       }),
     );
 
@@ -836,7 +844,7 @@ describe("bedrock mantle discovery", () => {
     expect(provider?.api).toBe("openai-completions");
     expect(provider?.auth).toBe("api-key");
     expect(provider?.apiKey).toBe("env:AWS_BEARER_TOKEN_BEDROCK");
-    expect(provider?.models).toHaveLength(6);
+    expect(provider?.models).toHaveLength(12);
     const opus5 = provider?.models?.find((model) => model.id === "anthropic.claude-opus-5");
     expect(opus5).toMatchObject({
       api: "anthropic-messages",
@@ -883,6 +891,32 @@ describe("bedrock mantle discovery", () => {
       contextWindow: 1_000_000,
       maxTokens: 128_000,
     });
+    for (const id of [
+      "openai.gpt-5.4",
+      "openai.gpt-5.5",
+      "openai.gpt-5.6-sol",
+      "openai.gpt-5.6-terra",
+      "openai.gpt-5.6-luna",
+    ]) {
+      expect(provider?.models?.find((model) => model.id === id)).toMatchObject({
+        api: "openai-responses",
+        baseUrl: "https://bedrock-mantle.us-east-1.api.aws/openai/v1",
+        input: ["text", "image"],
+        contextWindow: 272_000,
+      });
+    }
+    expect(provider?.models?.find((model) => model.id === "openai.gpt-oss-120b")).toEqual(
+      expect.objectContaining({
+        input: ["text"],
+        contextWindow: 32_000,
+      }),
+    );
+    expect(provider?.models?.find((model) => model.id === "openai.gpt-oss-120b")).not.toHaveProperty(
+      "api",
+    );
+    expect(provider?.models?.find((model) => model.id === "openai.gpt-oss-120b")).not.toHaveProperty(
+      "baseUrl",
+    );
   });
 
   it("rolls Claude Sonnet 5 to standard pricing on September 1, 2026", async () => {

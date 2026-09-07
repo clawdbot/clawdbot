@@ -273,6 +273,14 @@ const REASONING_PATTERNS = [
   "gpt-oss-safeguard-120b",
 ];
 
+const MANTLE_OPENAI_RESPONSES_MODEL_IDS = new Set([
+  "openai.gpt-5.4",
+  "openai.gpt-5.5",
+  "openai.gpt-5.6-sol",
+  "openai.gpt-5.6-terra",
+  "openai.gpt-5.6-luna",
+]);
+
 function inferReasoningSupport(modelId: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(modelId);
   return REASONING_PATTERNS.some((p) => lower.includes(p));
@@ -516,10 +524,23 @@ export async function resolveImplicitMantleProvider(params: {
       maxTokens: 128_000,
     },
   ];
+  // These OpenAI models use Mantle's special `/openai/v1/responses` path.
+  // Keep the list exact so other discovered OpenAI models retain the provider default.
+  const modelsWithResponsesOverrides: ModelDefinitionConfig[] = models.map((model) =>
+    MANTLE_OPENAI_RESPONSES_MODEL_IDS.has(model.id)
+      ? {
+          ...model,
+          api: "openai-responses" as const,
+          baseUrl: `${mantleEndpoint(region)}/openai/v1`,
+          input: ["text", "image"],
+          contextWindow: 272_000,
+        }
+      : model,
+  );
   // Replace generic discovery rows so first-match lookup sees exact Claude metadata.
   const exactClaudeModelIds = new Set(claudeModels.map((model) => model.id));
   const allModels = [
-    ...models.filter((model) => !exactClaudeModelIds.has(model.id)),
+    ...modelsWithResponsesOverrides.filter((model) => !exactClaudeModelIds.has(model.id)),
     ...claudeModels,
   ];
 
