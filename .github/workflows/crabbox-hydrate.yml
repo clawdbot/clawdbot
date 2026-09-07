@@ -49,9 +49,11 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24"
+        shell: bash
+        run: |
+          set -euo pipefail
+          source .github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "24.x"
 
       - name: Setup pnpm and dependencies
         shell: bash
@@ -99,6 +101,11 @@ jobs:
               exit 1
               ;;
           esac
+          image_corepack_home="$(node .github/actions/setup-pnpm-store-cache/seed-pnpm-from-image.mjs "$package_manager")"
+          if [[ -n "$image_corepack_home" ]]; then
+            export COREPACK_HOME="$image_corepack_home"
+            echo "COREPACK_HOME=$COREPACK_HOME" >> "$GITHUB_ENV"
+          fi
           corepack enable --install-directory "$PNPM_HOME"
           for attempt in 1 2 3; do
             if corepack prepare "$package_manager" --activate; then
