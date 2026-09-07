@@ -129,9 +129,9 @@ extension DashboardWindowController {
         return .cancel
     }
 
-    static func newWindowAction(for url: URL?, sourceIsLinkBrowser: Bool) -> DashboardNewWindowAction {
+    static func newWindowAction(for url: URL?, sourceIsNativeReadingTab: Bool) -> DashboardNewWindowAction {
         guard let url, self.isHTTPURL(url) else { return .ignore }
-        return sourceIsLinkBrowser ? .openTab(url) : .openExternal(url)
+        return sourceIsNativeReadingTab ? .openTab(url) : .openExternal(url)
     }
 
     private static func sameOrigin(_ lhs: URL, _ rhs: URL) -> Bool {

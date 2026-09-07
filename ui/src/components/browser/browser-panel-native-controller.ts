@@ -146,9 +146,21 @@ export class BrowserPanelNativeController {
     }
     const tabId = `mac-${crypto.randomUUID()}`;
     this.pendingActivation = tabId;
-    const opened = await this.send({ type: "open", tabId, url, activate: true });
-    if (!opened && this.pendingActivation === tabId) {
+    const reply = await postNativeBrowserMessage({ type: "open", tabId, url, activate: true });
+    if (this.pendingActivation !== tabId) {
+      return;
+    }
+    if (!reply?.ok || !reply.tabId) {
       this.pendingActivation = null;
+      if (reply && !reply.ok) {
+        this.controller.reportError(reply.error);
+      }
+      return;
+    }
+    this.pendingActivation = reply.tabId;
+    if (this.nativeTabs.some((tab) => tab.id === reply.tabId)) {
+      this.pendingActivation = null;
+      await this.controller.selectTab(reply.tabId);
     }
   }
 

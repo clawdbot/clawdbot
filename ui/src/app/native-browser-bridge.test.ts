@@ -66,7 +66,9 @@ describe("native browser bridge wire contract", () => {
       postMessage(message: NativeBrowserMessage) {
         expect(this).toBe(bridge);
         messages.push(message);
-        return Promise.resolve({ ok: true });
+        return Promise.resolve(
+          message.type === "open" ? { ok: true, tabId: message.tabId } : { ok: true },
+        );
       },
     };
     vi.stubGlobal("webkit", { messageHandlers: { openclawBrowser: bridge } });
@@ -75,7 +77,9 @@ describe("native browser bridge wire contract", () => {
       { type: "present", scope: "scope", tabId: null, rect: null, visible: false },
       { type: "release-scope", scope: "scope" },
     ] satisfies NativeBrowserMessage[]) {
-      expect(await postNativeBrowserMessage(message)).toEqual({ ok: true });
+      expect(await postNativeBrowserMessage(message)).toEqual(
+        message.type === "open" ? { ok: true, tabId: message.tabId } : { ok: true },
+      );
     }
     expect(messages).toEqual([
       { type: "open", tabId: "mac-1", url: "about:blank", activate: false },

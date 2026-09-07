@@ -5,6 +5,9 @@
  * {tabId,url}, back/forward/reload/stop/close/snapshot {tabId}, inspect {tabId,x,y},
  * present {scope,tabId,rect:{x,y,width,height}|null,visible}, release-scope {scope}.
  * IDs and scopes are opaque; web-created IDs are `mac-${crypto.randomUUID()}`.
+ * Open replies include tabId. The host reuses a tab at the requested URL or its
+ * retained initial-request alias, so the returned ID may differ from the request.
+ * The requesting panel selects that returned tab; it need not wait for a new tab.
  * Rects are dashboard viewport CSS pixels. Null tab/rect or invisible hides a scope.
  * Tabs are window-owned; release-scope never closes them. If scopes present the
  * same tab, the most recent presentation wins until it is hidden or released.
@@ -44,6 +47,7 @@ export type NativeBrowserMessage =
 export type NativeBrowserReply =
   | {
       ok: true;
+      tabId?: string;
       dataUrl?: string;
       cssWidth?: number;
       cssHeight?: number;
@@ -203,6 +207,11 @@ export async function postNativeBrowserMessage(
     }
     if (!isRecord(reply) || reply.ok !== true) {
       return { ok: false, error: "Invalid native browser reply" };
+    }
+    if (message.type === "open") {
+      return nonempty(reply.tabId)
+        ? { ok: true, tabId: reply.tabId }
+        : { ok: false, error: "Invalid native browser reply" };
     }
     if (message.type === "snapshot") {
       if (

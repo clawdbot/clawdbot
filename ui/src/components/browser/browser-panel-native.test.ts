@@ -39,7 +39,7 @@ function fakeNativeBrowser(tabs: NativeBrowserTab[] = []) {
     switch (message.type) {
       case "open":
         publish([...state.tabs, nativeTab(message.tabId, message.url)]);
-        break;
+        return { ok: true, tabId: message.tabId };
       case "close":
         publish(state.tabs.filter((tab) => tab.id !== message.tabId));
         break;
@@ -150,6 +150,32 @@ afterEach(() => {
 });
 
 describe("native Browser panel ownership", () => {
+  it.each([true, false])(
+    "selects a reused tab from the open reply when state arrives before the reply: %s",
+    async (stateBeforeReply) => {
+      const native = fakeNativeBrowser([nativeTab("mac-other", "https://example.test/other")]);
+      const { controller } = controllerFixture();
+      const existing = nativeTab("mac-existing", "https://example.test/final");
+      const state = [nativeTab("mac-other", "https://example.test/other"), existing];
+      native.postMessage.mockImplementationOnce(async () => {
+        if (stateBeforeReply) {
+          native.publish(state);
+        }
+        return { ok: true, tabId: existing.id };
+      });
+
+      await controller.openUrl("https://example.test/short", { newTab: true, native: true });
+      if (!stateBeforeReply) {
+        expect(controller.activeTargetId).toBe("mac-other");
+        native.publish(state);
+      }
+
+      expect(controller.activeTargetId).toBe(existing.id);
+      expect(controller.urlDraft).toBe(existing.url);
+      expect(controller.tabs.map((tab) => tab.id)).toEqual(["mac-other", "mac-existing"]);
+    },
+  );
+
   it("opens and presents a user link through the actual panel when the old preference is off", async () => {
     const native = fakeNativeBrowser();
     const panel = document.createElement("openclaw-browser-panel");

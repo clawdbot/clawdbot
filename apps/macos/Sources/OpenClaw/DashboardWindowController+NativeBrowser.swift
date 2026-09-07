@@ -20,7 +20,9 @@ extension DashboardWindowController {
             switch request {
             case let .open(tabId, url, _):
                 // Activation is presentation owned by the requesting web panel.
-                try self.nativeBrowser.open(tabId: tabId, url: url)
+                let openedTabId = try self.nativeBrowser.open(tabId: tabId, url: url)
+                replyHandler(["ok": true, "tabId": openedTabId], nil)
+                return
             case let .navigate(tabId, url):
                 try self.nativeBrowser.navigate(tabId: tabId, url: url)
             case let .action(.snapshot, tabId):

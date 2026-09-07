@@ -156,6 +156,39 @@ struct DashboardNativeBrowserContractTests {
         #expect(actual == expected)
     }
 
+    @MainActor
+    @Test func `new windows route HTTP reading links and ignore blank popups`() throws {
+        let url = try #require(URL(string: "https://example.test/new"))
+        #expect(DashboardWindowController.newWindowAction(
+            for: url, sourceIsNativeReadingTab: true) == .openTab(url))
+        #expect(DashboardWindowController.newWindowAction(
+            for: url, sourceIsNativeReadingTab: false) == .openExternal(url))
+        for sourceIsNativeReadingTab in [false, true] {
+            for address in ["about:blank", "file:///tmp/private", "mailto:reader@example.test"] {
+                let target = try #require(URL(string: address))
+                #expect(DashboardWindowController.newWindowAction(
+                    for: target,
+                    sourceIsNativeReadingTab: sourceIsNativeReadingTab) == .ignore)
+            }
+            #expect(DashboardWindowController.newWindowAction(
+                for: nil, sourceIsNativeReadingTab: sourceIsNativeReadingTab) == .ignore)
+        }
+    }
+
+    @MainActor
+    @Test func `reading browser navigation reserves auxiliary schemes for subframes`() throws {
+        let webURL = try #require(URL(string: "https://example.test/"))
+        let blankURL = try #require(URL(string: "about:blank"))
+        #expect(DashboardWindowController.shouldAllowBrowserNavigation(to: webURL, isMainFrame: true))
+        #expect(DashboardWindowController.shouldAllowBrowserNavigation(to: webURL, isMainFrame: false))
+        #expect(!DashboardWindowController.shouldAllowBrowserNavigation(to: blankURL, isMainFrame: true))
+        #expect(DashboardWindowController.shouldAllowBrowserNavigation(to: blankURL, isMainFrame: false))
+        for address in ["file:///tmp/private", "mailto:reader@example.test"] {
+            #expect(try !DashboardWindowController.shouldAllowBrowserNavigation(
+                to: #require(URL(string: address)), isMainFrame: false))
+        }
+    }
+
     @Test func `CSS rectangles flip vertically and clip to the dashboard frame`() {
         let dashboard = CGRect(x: 20, y: 30, width: 800, height: 600)
         #expect(DashboardNativeBrowserHost.mappedFrame(
@@ -180,7 +213,7 @@ struct DashboardNativeBrowserHostTests {
         defer { fixture.host.dispose() }
         let url = try #require(URL(string: "about:blank"))
         try fixture.host.open(tabId: "mac-first", url: url)
-        try fixture.host.open(tabId: "mac-second", url: url)
+        try fixture.host.open(tabId: "mac-second", url: #require(URL(string: "http://127.0.0.1:1/second")))
         let first = try #require(fixture.host.webView(for: "mac-first"))
         let second = try #require(fixture.host.webView(for: "mac-second"))
         #expect(first.configuration.websiteDataStore === second.configuration.websiteDataStore)
@@ -233,7 +266,7 @@ struct DashboardNativeBrowserHostTests {
     @Test func `page opened tabs publish native provenance and the opener identity`() throws {
         let fixture = self.fixture()
         defer { fixture.host.dispose() }
-        let url = try #require(URL(string: "about:blank"))
+        let url = try #require(URL(string: "http://127.0.0.1:1/popup"))
         try fixture.host.open(tabId: "mac-parent", url: url)
         let opener = try #require(fixture.host.webView(for: "mac-parent"))
         fixture.host.openNewWindow(url, opener: opener)
@@ -244,8 +277,72 @@ struct DashboardNativeBrowserHostTests {
         #expect(child.id != "mac-parent")
         #expect(child.openedBy == "native")
         #expect(child.openerTabId == "mac-parent")
-        #expect(child.url == "about:blank")
+        #expect(child.url == url.absoluteString)
         #expect(fixture.host.webView(for: child.id) != nil)
+    }
+
+    @Test func `opening a reading link reuses its current URL or retained requested alias`() throws {
+        let fixture = self.fixture()
+        defer { fixture.host.dispose() }
+        let requested = try #require(URL(string: "http://127.0.0.1:1/short"))
+        let redirected = try #require(URL(string: "http://127.0.0.1:1/final"))
+        #expect(try fixture.host.open(tabId: "mac-original", url: requested) == "mac-original")
+        let original = try #require(fixture.host.webView(for: "mac-original"))
+        #expect(try fixture.host.open(tabId: "mac-same", url: requested) == "mac-original")
+        fixture.host.navigationWillStart(redirected, in: original)
+        #expect(try fixture.host.open(tabId: "mac-alias", url: requested) == "mac-original")
+        #expect(try fixture.host.open(tabId: "mac-current", url: redirected) == "mac-original")
+        #expect(fixture.host.state.tabs.map(\.id) == ["mac-original"])
+        #expect(fixture.host.webView(for: "mac-original") === original)
+
+        fixture.host.openNewWindow(requested, opener: original)
+        let current = try #require(fixture.host.state.tabs.last)
+        #expect(current.id != "mac-original")
+        #expect(try fixture.host.open(tabId: "mac-prefer-current", url: requested) == current.id)
+        #expect(fixture.host.state.tabs.count == 2)
+
+        try fixture.host.close(tabId: current.id)
+        fixture.host.navigationDidFail(for: original)
+        #expect(try fixture.host.open(tabId: "mac-retry", url: requested) == "mac-retry")
+        #expect(fixture.host.state.tabs.map(\.id) == ["mac-original", "mac-retry"])
+    }
+
+    @Test func `requested alias survives the initial redirect chain and retires on later navigation`() throws {
+        let requested = try #require(URL(string: "http://127.0.0.1:1/short"))
+        let redirected = try #require(URL(string: "http://127.0.0.1:1/final"))
+        let tab = DashboardBrowserTab(websiteDataStore: .nonPersistent(), requestedURL: requested)
+        defer { tab.dispose() }
+        let navigation = NSObject()
+        tab.startNavigation(navigation)
+        tab.updateRepresentedURL(redirected)
+        tab.startNavigation(navigation)
+        #expect(tab.requestedURLAlias == requested)
+        tab.finishNavigation(navigation, at: redirected, title: "Final page")
+        #expect(tab.requestedURLAlias == requested)
+        #expect(tab.representedURL == redirected)
+        tab.startNavigation(NSObject())
+        #expect(tab.requestedURLAlias == nil)
+        #expect(tab.representedURL == redirected)
+    }
+
+    @Test(arguments: ["replacement", "failure", "same-document"])
+    func `requested alias retires when the original page is no longer reusable`(_ transition: String) throws {
+        let requested = try #require(URL(string: "http://127.0.0.1:1/short"))
+        let redirected = try #require(URL(string: "http://127.0.0.1:1/final"))
+        let replacement = try #require(URL(string: "http://127.0.0.1:1/replacement"))
+        let tab = DashboardBrowserTab(websiteDataStore: .nonPersistent(), requestedURL: requested)
+        defer { tab.dispose() }
+        let navigation = NSObject()
+        tab.startNavigation(navigation)
+        tab.updateRepresentedURL(redirected)
+        switch transition {
+        case "replacement": tab.startNavigation(NSObject())
+        case "failure": tab.failNavigation()
+        default:
+            tab.finishNavigation(navigation, at: redirected, title: nil)
+            tab.updateRepresentedURL(replacement)
+        }
+        #expect(tab.requestedURLAlias == nil)
     }
 
     @Test func `state pushes coalesce in the same main runloop turn`() async {

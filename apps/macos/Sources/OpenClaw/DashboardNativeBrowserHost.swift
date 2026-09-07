@@ -104,8 +104,22 @@ final class DashboardNativeBrowserHost {
         self.tabs.first { $0.id == tabId }?.browser.webView
     }
 
-    func open(tabId: String, url: URL, openedBy: String = "web", openerTabId: String? = nil) throws {
-        _ = try DashboardBrowserMessageHandler.url(url.absoluteString)
+    @discardableResult
+    func open(tabId: String, url: URL) throws -> String {
+        let requestedURL = try DashboardBrowserMessageHandler.url(url.absoluteString)
+        // Prefer the page currently at this URL over another tab's initial redirect alias.
+        if let existing = self.tabs.first(where: { $0.browser.representedURL == requestedURL }) ??
+            self.tabs.first(where: { $0.browser.requestedURLAlias == requestedURL })
+        {
+            self.onOpen?()
+            self.scheduleStatePush()
+            return existing.id
+        }
+        try self.createTab(tabId: tabId, url: requestedURL, openedBy: "web", openerTabId: nil)
+        return tabId
+    }
+
+    private func createTab(tabId: String, url: URL, openedBy: String, openerTabId: String?) throws {
         guard self.webView(for: tabId) == nil else { throw DashboardBrowserError.duplicateTab }
         guard let container, let dashboardWebView else { throw DashboardBrowserError.unavailable }
         let browser = DashboardBrowserTab(websiteDataStore: self.websiteDataStore, requestedURL: url)
@@ -174,8 +188,11 @@ final class DashboardNativeBrowserHost {
     }
 
     func openNewWindow(_ url: URL, opener: WKWebView) {
-        guard let tab = self.tabs.first(where: { $0.browser.webView === opener }) else { return }
-        try? self.open(tabId: "mac-" + UUID().uuidString, url: url, openedBy: "native", openerTabId: tab.id)
+        guard let tab = self.tabs.first(where: { $0.browser.webView === opener }),
+              let requestedURL = try? DashboardBrowserMessageHandler.url(url.absoluteString)
+        else { return }
+        try? self.createTab(
+            tabId: "mac-" + UUID().uuidString, url: requestedURL, openedBy: "native", openerTabId: tab.id)
     }
 
     func navigationWillStart(_ url: URL, in webView: WKWebView) {

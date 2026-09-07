@@ -1,7 +1,32 @@
 import AppKit
 import Foundation
+import ObjectiveC
+import os
 import Testing
+import WebKit
 @testable import OpenClaw
+
+private enum DashboardExternalOpenCapture {
+    struct State {
+        var target: URL?
+        var opened: [URL] = []
+    }
+
+    static let state = OSAllocatedUnfairLock(initialState: State())
+}
+
+extension NSWorkspace {
+    @objc fileprivate dynamic nonisolated func dashboardTestOpen(_ url: URL) -> Bool {
+        let intercepted = DashboardExternalOpenCapture.state.withLock { state in
+            guard state.target == url else { return false }
+            state.opened.append(url)
+            return true
+        }
+        if intercepted { return true }
+        // During the exchange, this Objective-C slot holds the original open implementation.
+        return self.dashboardTestOpen(url)
+    }
+}
 
 private actor DashboardRouteAuthGate {
     private var token: String?
@@ -315,13 +340,18 @@ struct DashboardWindowSmokeTests {
         defer { controller.closeDashboard() }
         #expect(controller._testNavigationWebViewIdentity == controller._testDashboardWebViewIdentity)
 
-        controller._testOpenLinkBrowser(readerServer.url("/docs/"))
-        let linkWebView = try #require(controller._testLinkBrowserWebViewIdentity)
-        #expect(controller._testFocusLinkBrowser())
-        #expect(controller._testNavigationWebViewIdentity == linkWebView)
+        try controller.nativeBrowser.open(tabId: "mac-focused", url: readerServer.url("/docs/"))
+        let readingWebView = try #require(controller.nativeBrowser.webView(for: "mac-focused"))
+        try controller.nativeBrowser.present(
+            scope: "focus-test", tabId: "mac-focused",
+            rect: .init(x: 0, y: 0, width: 300, height: 200), visible: true)
+        #expect(controller.window?.makeFirstResponder(readingWebView) == true)
+        #expect(controller._testNavigationWebViewIdentity == ObjectIdentifier(readingWebView))
+        #expect(controller.window?.makeFirstResponder(controller.webView) == true)
+        #expect(controller._testNavigationWebViewIdentity == controller._testDashboardWebViewIdentity)
     }
 
-    @Test func `browser import offer retries until the first completed inline browser request`() async throws {
+    @Test func `first Mac tab requests browser import and retries until the offer completes`() async throws {
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }
         let readerServer = try await DashboardHTTPFixture.start()
@@ -349,13 +379,7 @@ struct DashboardWindowSmokeTests {
         #expect(requestCount == 0)
 
         let link = readerServer.url("/docs/")
-        controller._testOpenLinkBrowser(link)
-        controller.update(
-            url: dashboard,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
-        #expect(requestCount == 0)
-
-        controller._testOpenLinkBrowser(link, requestBrowserProfileImportOffer: true)
+        try controller.nativeBrowser.open(tabId: "mac-import", url: link)
         for _ in 0..<200 where firstRequestContinuation == nil {
             await Task.yield()
         }
@@ -371,8 +395,8 @@ struct DashboardWindowSmokeTests {
         }
         #expect(requestCount == 2)
 
-        controller._testCloseLinkBrowser()
-        controller._testOpenLinkBrowser(link, requestBrowserProfileImportOffer: true)
+        try controller.nativeBrowser.close(tabId: "mac-import")
+        try controller.nativeBrowser.open(tabId: "mac-import", url: link)
         for _ in 0..<10 {
             await Task.yield()
         }
@@ -397,7 +421,7 @@ struct DashboardWindowSmokeTests {
         manager._testSetController(controller)
 
         let link = readerServer.url("/docs/")
-        controller._testOpenLinkBrowser(link, requestBrowserProfileImportOffer: true)
+        try controller.nativeBrowser.open(tabId: "mac-import", url: link)
         for _ in 0..<200 where gate.requestCount == 0 {
             await Task.yield()
         }
@@ -417,7 +441,7 @@ struct DashboardWindowSmokeTests {
         #expect(gate.requestCount == 2)
     }
 
-    @Test func `closing inline browser invalidates an in-flight import offer`() async throws {
+    @Test func `closing the last Mac tab invalidates an in-flight import offer`() async throws {
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }
         let readerServer = try await DashboardHTTPFixture.start()
@@ -445,24 +469,126 @@ struct DashboardWindowSmokeTests {
         defer { controller.closeDashboard() }
 
         let link = readerServer.url("/docs/")
-        controller._testOpenLinkBrowser(link, requestBrowserProfileImportOffer: true)
+        try controller.nativeBrowser.open(tabId: "mac-import", url: link)
         for _ in 0..<200 where firstRequestContinuation == nil {
             await Task.yield()
         }
         #expect(requestCount == 1)
 
-        controller._testCloseLinkBrowser()
+        try controller.nativeBrowser.close(tabId: "mac-import")
         firstRequestContinuation?.resume()
         for _ in 0..<200 where firstRequestApplied == nil {
             await Task.yield()
         }
         #expect(firstRequestApplied == false)
 
-        controller._testOpenLinkBrowser(link, requestBrowserProfileImportOffer: true)
+        try controller.nativeBrowser.open(tabId: "mac-import", url: link)
         for _ in 0..<200 where requestCount == 1 {
             await Task.yield()
         }
         #expect(requestCount == 2)
+    }
+
+    @Test func `older dashboard inline link messages hand off to the default browser`() async throws {
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let dashboard = server.url("/control/")
+        let target = server.url("/legacy-link/" + UUID().uuidString)
+        let auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
+        let controller = DashboardWindowController(
+            url: dashboard, auth: auth,
+            websiteDataStore: .nonPersistent(), windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
+        controller.show()
+        let deadline = ContinuousClock.now + .seconds(10)
+        while controller.webView.url != dashboard || controller.webView.isLoading, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        try #require(controller.webView.url == dashboard && !controller.webView.isLoading)
+        let original = try #require(class_getInstanceMethod(NSWorkspace.self, #selector(NSWorkspace.open(_:))))
+        let replacement = try #require(class_getInstanceMethod(
+            NSWorkspace.self, #selector(NSWorkspace.dashboardTestOpen(_:))))
+        DashboardExternalOpenCapture.state.withLock { $0 = .init(target: target) }
+        method_exchangeImplementations(original, replacement)
+        defer {
+            // Retire WebKit delivery before restoring the process-wide method slot.
+            controller.closeDashboard()
+            method_exchangeImplementations(original, replacement)
+            DashboardExternalOpenCapture.state.withLock { $0 = .init() }
+        }
+
+        _ = try await controller.webView.evaluateJavaScript("""
+        window.webkit.messageHandlers.openclawLink.postMessage({
+          type: "open-link", url: "\(target.absoluteString)", target: "inline"
+        });
+        null;
+        """)
+        let deliveryDeadline = ContinuousClock.now + .seconds(5)
+        while DashboardExternalOpenCapture.state.withLock({ $0.opened.isEmpty }),
+              ContinuousClock.now < deliveryDeadline
+        {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(DashboardExternalOpenCapture.state.withLock { $0.opened } == [target])
+        #expect(!controller.nativeBrowser.hasTabs)
+    }
+
+    @Test(arguments: ["close", "invalidate", "replacement"])
+    func `retiring a dashboard disposes its Mac tabs without affecting another window`(
+        _ transition: String) async throws
+    {
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let dashboard = server.url("/control/")
+        let dataStore = WKWebsiteDataStore.nonPersistent()
+        let controller = DashboardWindowController(
+            url: dashboard,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            websiteDataStore: dataStore, windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
+        let other = DashboardWindowController(
+            url: dashboard,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            websiteDataStore: dataStore, windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { other.closeDashboard() }
+        #expect(!controller.nativeBrowser.hasTabs)
+        let url = server.url("/reader/first")
+        try controller.nativeBrowser.open(tabId: "mac-first", url: url)
+        try controller.nativeBrowser.open(tabId: "mac-second", url: server.url("/reader/second"))
+        try other.nativeBrowser.open(tabId: "mac-first", url: url)
+        let first = try #require(controller.nativeBrowser.webView(for: "mac-first"))
+        let second = try #require(controller.nativeBrowser.webView(for: "mac-second"))
+        let otherTab = try #require(other.nativeBrowser.webView(for: "mac-first"))
+        #expect(first !== otherTab)
+        #expect(first.configuration.websiteDataStore === dataStore)
+        #expect(first.configuration.userContentController.userScripts.isEmpty)
+        #expect(!first.configuration.preferences.javaScriptCanOpenWindowsAutomatically)
+        #expect(first.configuration.preferences.tabFocusesLinks)
+        #expect(first.navigationDelegate === controller)
+        #expect(first.uiDelegate === controller)
+        #expect(first.superview != nil)
+        try controller.nativeBrowser.present(
+            scope: "lifecycle", tabId: "mac-first",
+            rect: .init(x: 0, y: 0, width: 300, height: 200), visible: true)
+        #expect(!first.isHidden)
+
+        switch transition {
+        case "close": controller.closeDashboard()
+        case "invalidate": controller.invalidateBrowserSession()
+        default: controller.detachWindowForReplacement()?.close()
+        }
+        #expect(!controller.nativeBrowser.hasTabs)
+        for webView in [first, second] {
+            #expect(webView.superview == nil)
+            #expect(webView.navigationDelegate == nil)
+            #expect(webView.uiDelegate == nil)
+            #expect(!controller.nativeBrowser.owns(webView))
+        }
+        #expect(other.nativeBrowser.webView(for: "mac-first") === otherTab)
+        #expect(otherTab.superview != nil)
     }
 
     @Test func `dashboard parses only bounded native link requests`() throws {
@@ -541,416 +667,6 @@ struct DashboardWindowSmokeTests {
 }
 
 extension DashboardWindowSmokeTests {
-    @Test func `dashboard link browser tabs preserve isolation and lifecycle`() async throws {
-        let server = try await DashboardHTTPFixture.start()
-        defer { server.stop() }
-        let readerServer = try await DashboardHTTPFixture.start()
-        defer { readerServer.stop() }
-        let dashboard = server.url("/control/")
-        let controller = DashboardWindowController(
-            url: dashboard,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
-            websiteDataStore: .nonPersistent(),
-            windowAutosaveName: "",
-            requestBrowserProfileImportOffer: { _ in false })
-        defer { controller.closeDashboard() }
-        #expect(controller._testLinkBrowserIsCollapsed)
-        #expect(controller._testLinkBrowserTabCount == 0)
-        #expect(controller._testLinkBrowserActiveTabIndex == nil)
-        #expect(controller._testLinkBrowserWebViewIdentity == nil)
-        #expect(controller._testLinkBrowserDataStore === controller._testDashboardDataStore)
-        #expect(!controller._testCanOpenWindowsAutomatically)
-        #expect(controller._testAllWebViewsEnableTabNavigation)
-        #expect(controller._testLinkBrowserNavigationObservationCount == 0)
-        #expect(controller._testLinkBrowserTabBarIsHidden)
-        #expect(controller._testLinkBrowserTabBarHeight == 0)
-        #expect(controller._testLinkBrowserToolbarHeight == DashboardWindowLayout.linkBrowserToolbarHeight)
-
-        let urlA = readerServer.url("/reader/a")
-        let urlB = readerServer.url("/reader/b")
-        controller._testOpenLinkBrowser(urlA)
-        #expect(controller._testLinkBrowserTabCount == 1)
-        #expect(controller._testLinkBrowserTabURLs == [urlA])
-        #expect(controller._testLinkBrowserActiveTabIndex == 0)
-        #expect(!controller._testLinkBrowserIsCollapsed)
-        #expect(controller._testLinkBrowserRepresentedURL == urlA)
-        #expect(!controller._testCanOpenWindowsAutomatically)
-        #expect(controller._testAllWebViewsEnableTabNavigation)
-        #expect(controller._testLinkBrowserTabBarIsHidden)
-        #expect(controller._testLinkBrowserTabBarHeight == 0)
-        #expect(controller._testLinkBrowserToolbarHeight == DashboardWindowLayout.linkBrowserToolbarHeight)
-
-        controller._testOpenLinkBrowser(urlB)
-        #expect(controller._testLinkBrowserTabURLs == [urlA, urlB])
-        #expect(controller._testLinkBrowserActiveTabIndex == 1)
-        #expect(!controller._testLinkBrowserTabBarIsHidden)
-        #expect(controller._testLinkBrowserTabBarHeight == DashboardWindowLayout.linkBrowserTabBarHeight)
-        #expect(
-            controller._testLinkBrowserToolbarHeight ==
-                DashboardWindowLayout.linkBrowserToolbarWithTabsHeight)
-        controller._testOpenLinkBrowser(urlA)
-        #expect(controller._testLinkBrowserTabURLs == [urlA, urlB])
-        #expect(controller._testLinkBrowserActiveTabIndex == 0)
-
-        controller._testLinkBrowserOpenInNewTab(urlA)
-        #expect(controller._testLinkBrowserTabURLs == [urlA, urlB, urlA])
-        #expect(controller._testLinkBrowserActiveTabIndex == 2)
-        controller._testLinkBrowserSelectTab(at: 1)
-        controller._testLinkBrowserCloseTab(at: 1)
-        #expect(controller._testLinkBrowserTabURLs == [urlA, urlA])
-        #expect(controller._testLinkBrowserActiveTabIndex == 1)
-        controller._testLinkBrowserCloseTab(at: 0)
-        #expect(controller._testLinkBrowserTabBarIsHidden)
-        #expect(controller._testLinkBrowserTabBarHeight == 0)
-        #expect(controller._testLinkBrowserToolbarHeight == DashboardWindowLayout.linkBrowserToolbarHeight)
-        controller._testLinkBrowserCloseTab(at: 0)
-        #expect(controller._testLinkBrowserIsCollapsed)
-        #expect(controller._testLinkBrowserTabCount == 0)
-        #expect(controller._testLinkBrowserRepresentedURL == nil)
-
-        controller._testOpenLinkBrowser(urlB)
-        #expect(!controller._testLinkBrowserIsCollapsed)
-        #expect(controller._testLinkBrowserTabCount == 1)
-        #expect(controller._testLinkBrowserWebViewURL == nil)
-        #expect(controller._testLinkBrowserHistoryIsEmpty)
-        #expect(controller._testLinkBrowserDelegatesAreInstalled)
-        #expect(controller._testLinkBrowserWebViewIsInstalled)
-        #expect(controller._testLinkBrowserNavigationObservationCount == 5)
-        #expect(controller._testLinkBrowserDataStore === controller._testDashboardDataStore)
-        controller._testLinkBrowserOpenInNewTab(urlA)
-        #expect(controller._testLinkBrowserTabCount == 2)
-        controller._testCloseLinkBrowser()
-        #expect(controller._testLinkBrowserIsCollapsed)
-        #expect(controller._testLinkBrowserTabCount == 0)
-        #expect(controller._testLinkBrowserRepresentedURL == nil)
-    }
-
-    @Test func `dashboard link browser opens half width and remembers resizable pane width`() async throws {
-        let server = try await DashboardHTTPFixture.start()
-        defer { server.stop() }
-        let readerServer = try await DashboardHTTPFixture.start()
-        defer { readerServer.stop() }
-        #expect(!DashboardWindowLayout.dividerMoved(from: nil, to: 100))
-        #expect(!DashboardWindowLayout.dividerMoved(from: 100, to: 100))
-        #expect(DashboardWindowLayout.dividerMoved(from: 100, to: 101))
-        #expect(DashboardWindowLayout.linkBrowserWidth(
-            splitWidth: 1241,
-            dividerThickness: 1,
-            persistedWidth: nil) == 620)
-        #expect(DashboardWindowLayout.linkBrowserWidth(
-            splitWidth: 1241,
-            dividerThickness: 1,
-            persistedWidth: 400) == 400)
-
-        let key = DashboardWindowLayout.linkBrowserWidthDefaultsKey
-        try await TestIsolation.withUserDefaultsValues([key: nil]) {
-            let defaults = AppDefaults.standard
-            let dashboard = server.url("/control/")
-            let link = readerServer.url("/reader/half-width")
-            let controller = DashboardWindowController(
-                url: dashboard,
-                auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
-                websiteDataStore: .nonPersistent(),
-                windowAutosaveName: "",
-                requestBrowserProfileImportOffer: { _ in false })
-            controller.show()
-            defer { controller.closeDashboard() }
-            controller.window?.setContentSize(DashboardWindowLayout.windowSize)
-
-            controller._testOpenLinkBrowser(link)
-            let openedSplitWidth = controller._testLinkBrowserSplitWidth
-            let dividerThickness = controller._testLinkBrowserDividerThickness
-            let openedLinkBrowserWidth = controller._testLinkBrowserWidth
-            let expectedWidth = DashboardWindowLayout.linkBrowserWidth(
-                splitWidth: openedSplitWidth,
-                dividerThickness: dividerThickness,
-                persistedWidth: nil)
-            #expect(abs(openedLinkBrowserWidth - expectedWidth) < 1)
-            #expect(
-                openedSplitWidth - dividerThickness - openedLinkBrowserWidth >=
-                    DashboardWindowLayout.mainBrowserMinWidth)
-            #expect(controller._testLinkBrowserMaximumThickness == NSSplitViewItem.unspecifiedDimension)
-
-            let window = try #require(controller.window)
-            let widerWidth = min(
-                openedLinkBrowserWidth + 80,
-                openedSplitWidth - dividerThickness - DashboardWindowLayout.mainBrowserMinWidth)
-            let narrowerWidth = max(openedLinkBrowserWidth - 80, DashboardWindowLayout.linkBrowserMinWidth)
-            for url in [link, readerServer.url("/reader/second")] {
-                controller._testOpenLinkBrowser(url)
-                for width in [widerWidth, narrowerWidth] {
-                    try Self.resizeLinkBrowser(in: window, toWidth: width)
-                    #expect(abs(controller._testLinkBrowserWidth - width) < 1)
-                }
-            }
-            let resizedWidth = controller._testLinkBrowserWidth
-            defaults.set(Double(resizedWidth), forKey: key)
-
-            controller._testCloseLinkBrowser()
-            controller.window?.setContentSize(DashboardWindowLayout.windowMinSize)
-            controller._testOpenLinkBrowser(link)
-            let compactExpectedWidth = DashboardWindowLayout.linkBrowserWidth(
-                splitWidth: controller._testLinkBrowserSplitWidth,
-                dividerThickness: controller._testLinkBrowserDividerThickness,
-                persistedWidth: resizedWidth)
-            #expect(abs(controller._testLinkBrowserWidth - compactExpectedWidth) < 1)
-            #expect(abs(CGFloat(defaults.double(forKey: key)) - resizedWidth) < 1)
-
-            controller._testCloseLinkBrowser()
-            controller.window?.setContentSize(DashboardWindowLayout.windowSize)
-            controller._testOpenLinkBrowser(link)
-            let restoredExpectedWidth = DashboardWindowLayout.linkBrowserWidth(
-                splitWidth: controller._testLinkBrowserSplitWidth,
-                dividerThickness: controller._testLinkBrowserDividerThickness,
-                persistedWidth: resizedWidth)
-            #expect(abs(controller._testLinkBrowserWidth - restoredExpectedWidth) < 1)
-
-            for (size, width) in [
-                (DashboardWindowLayout.windowSize, CGFloat(800)),
-                (DashboardWindowLayout.windowMinSize, CGFloat(500)),
-            ] {
-                defaults.set(Double(width), forKey: key)
-                controller._testCloseLinkBrowser()
-                controller.window?.setContentSize(size)
-                controller._testOpenLinkBrowser(link)
-                #expect(abs(controller._testLinkBrowserWidth - width) < 1)
-            }
-        }
-    }
-
-    private static func resizeLinkBrowser(in window: NSWindow, toWidth width: CGFloat) throws {
-        var descendants = try [#require(window.contentView)]
-        var splitView: NSSplitView?
-        while let view = descendants.popLast() {
-            if let split = view as? NSSplitView {
-                splitView = split
-                break
-            }
-            descendants.append(contentsOf: view.subviews)
-        }
-        let split = try #require(splitView)
-        split.layoutSubtreeIfNeeded()
-        // AppKit applies the same constraints as a user drag without entering
-        // a nested mouse-tracking loop inside Swift Testing's executor.
-        split.setPosition(split.bounds.width - width - split.dividerThickness, ofDividerAt: 0)
-        split.layoutSubtreeIfNeeded()
-    }
-
-    @Test func `dashboard link browser reorders and closes other tabs`() async throws {
-        let server = try await DashboardHTTPFixture.start()
-        defer { server.stop() }
-        let readerServer = try await DashboardHTTPFixture.start()
-        defer { readerServer.stop() }
-        let dashboard = server.url("/control/")
-        let controller = DashboardWindowController(
-            url: dashboard,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
-            websiteDataStore: .nonPersistent(),
-            windowAutosaveName: "",
-            requestBrowserProfileImportOffer: { _ in false })
-        defer { controller.closeDashboard() }
-        let urlA = readerServer.url("/reader/a")
-        let urlB = readerServer.url("/reader/b")
-        let urlC = readerServer.url("/reader/c")
-        controller._testOpenLinkBrowser(urlA)
-        controller._testOpenLinkBrowser(urlB)
-        controller._testOpenLinkBrowser(urlC)
-        controller._testLinkBrowserSelectTab(at: 1)
-        let activeIdentity = controller._testLinkBrowserWebViewIdentity
-
-        controller._testLinkBrowserMoveTab(from: 0, to: 2)
-        #expect(controller._testLinkBrowserTabURLs == [urlB, urlC, urlA])
-        #expect(controller._testLinkBrowserActiveTabIndex == 0)
-        #expect(controller._testLinkBrowserWebViewIdentity == activeIdentity)
-
-        let menu = try #require(controller._testLinkBrowserContextMenu(forTabAt: 2))
-        #expect(menu.items.map(\.title) == [
-            "Open in Default Browser",
-            "Copy Link",
-            "Reload",
-            "",
-            "Close Tab",
-            "Close Other Tabs",
-        ])
-        #expect(menu.items[0].isEnabled)
-        #expect(menu.items[1].isEnabled)
-        #expect(menu.items[2].isEnabled)
-        #expect(menu.items[4].isEnabled)
-        #expect(menu.items[5].isEnabled)
-        menu.performActionForItem(at: 5)
-        #expect(controller._testLinkBrowserTabURLs == [urlA])
-        #expect(controller._testLinkBrowserActiveTabIndex == 0)
-    }
-
-    @Test func `dashboard link browser calculates final drag insertion indexes`() {
-        let midpoints: [CGFloat] = [50, 150, 250]
-        let cases: [(currentIndex: Int, locationX: CGFloat, targetIndex: Int?, order: [Int])] = [
-            (0, 100, nil, [0, 1, 2]),
-            (0, 150, 1, [1, 0, 2]),
-            (0, 200, 1, [1, 0, 2]),
-            (0, 300, 2, [1, 2, 0]),
-            (2, 100, 1, [0, 2, 1]),
-            (2, 0, 0, [2, 0, 1]),
-            (1, 150, nil, [0, 1, 2]),
-        ]
-        for testCase in cases {
-            let targetIndex = DashboardLinkBrowserTabBar.dropIndex(
-                currentIndex: testCase.currentIndex,
-                itemMidpoints: midpoints,
-                locationX: testCase.locationX)
-            #expect(targetIndex == testCase.targetIndex)
-
-            var order = Array(midpoints.indices)
-            if let targetIndex {
-                let moved = order.remove(at: testCase.currentIndex)
-                order.insert(moved, at: targetIndex)
-            }
-            #expect(order == testCase.order)
-        }
-    }
-
-    @Test func `dashboard link browser retires initial URL after later navigation`() async throws {
-        let server = try await DashboardHTTPFixture.start()
-        defer { server.stop() }
-        let view = DashboardLinkBrowserView(websiteDataStore: .nonPersistent())
-        defer { view.closeBrowser() }
-        let requestedURL = server.url("/reader/short")
-        let currentURL = server.url("/reader/final")
-        view.open(requestedURL)
-        let webView = try #require(view._testActiveWebView)
-        let initialNavigation = NSObject()
-        view._testStartNavigation(initialNavigation, in: webView)
-        view.navigationWillStart(currentURL, in: webView)
-
-        view.open(requestedURL)
-        #expect(view._testTabCount == 1)
-        #expect(view._testActiveWebView === webView)
-
-        view.open(currentURL)
-        #expect(view._testTabCount == 1)
-        #expect(view._testActiveWebView === webView)
-
-        view._testFinishNavigation(initialNavigation, at: currentURL, in: webView)
-        view.open(requestedURL)
-        #expect(view._testTabCount == 1)
-        #expect(view._testActiveWebView === webView)
-
-        view._testStartNavigation(NSObject(), in: webView)
-        view.navigationWillStart(currentURL, in: webView)
-        view.open(requestedURL)
-        #expect(view._testTabCount == 2)
-        #expect(view._testActiveWebView !== webView)
-    }
-
-    @Test func `dashboard link browser retires initial URL when navigation is replaced`() async throws {
-        let server = try await DashboardHTTPFixture.start()
-        defer { server.stop() }
-        let view = DashboardLinkBrowserView(websiteDataStore: .nonPersistent())
-        defer { view.closeBrowser() }
-        let requestedURL = server.url("/reader/short")
-        let redirectURL = server.url("/reader/redirect")
-        let replacementURL = server.url("/reader/replacement")
-        view.open(requestedURL)
-        let webView = try #require(view._testActiveWebView)
-        view._testStartNavigation(NSObject(), in: webView)
-        view.navigationWillStart(redirectURL, in: webView)
-        view._testStartNavigation(NSObject(), in: webView)
-        view.navigationWillStart(replacementURL, in: webView)
-
-        view.open(requestedURL)
-
-        #expect(view._testTabCount == 2)
-        #expect(view._testActiveWebView !== webView)
-    }
-
-    @Test func `dashboard link browser retires initial URL when redirected navigation fails`() async throws {
-        let server = try await DashboardHTTPFixture.start()
-        defer { server.stop() }
-        let view = DashboardLinkBrowserView(websiteDataStore: .nonPersistent())
-        defer { view.closeBrowser() }
-        let requestedURL = server.url("/reader/short")
-        let redirectURL = server.url("/reader/redirect")
-        view.open(requestedURL)
-        let webView = try #require(view._testActiveWebView)
-        view._testStartNavigation(NSObject(), in: webView)
-        view.navigationWillStart(redirectURL, in: webView)
-        view.navigationDidFail(for: webView)
-
-        view.open(requestedURL)
-
-        #expect(view._testTabCount == 2)
-        #expect(view._testActiveWebView !== webView)
-    }
-
-    @Test func `dashboard link browser prefers current URL over initial alias`() async throws {
-        let server = try await DashboardHTTPFixture.start()
-        defer { server.stop() }
-        let view = DashboardLinkBrowserView(websiteDataStore: .nonPersistent())
-        defer { view.closeBrowser() }
-        let requestedURL = server.url("/reader/short")
-        let currentURL = server.url("/reader/final")
-        view.open(requestedURL)
-        let redirectedWebView = try #require(view._testActiveWebView)
-        view.navigationWillStart(currentURL, in: redirectedWebView)
-        view._testOpenInNewTab(requestedURL)
-        let currentWebView = try #require(view._testActiveWebView)
-        view._testSelectTab(at: 0)
-
-        view.open(requestedURL)
-
-        #expect(view._testTabCount == 2)
-        #expect(view._testActiveWebView === currentWebView)
-    }
-
-    @Test func `dashboard link browser menu disables URL actions for blank tab`() async throws {
-        let server = try await DashboardHTTPFixture.start()
-        defer { server.stop() }
-        let view = DashboardLinkBrowserView(websiteDataStore: .nonPersistent())
-        defer { view.closeBrowser() }
-        let url = server.url("/reader/blank")
-        view.open(url)
-        let webView = try #require(view._testActiveWebView)
-        #expect(webView.url == nil)
-        view.navigationURLDidChange(for: webView)
-        let menu = try #require(view._testContextMenu(forTabAt: 0))
-        #expect(!menu.items[0].isEnabled)
-        #expect(!menu.items[1].isEnabled)
-        #expect(!menu.items[2].isEnabled)
-        #expect(menu.items[4].isEnabled)
-        #expect(!menu.items[5].isEnabled)
-        view.closeBrowser()
-    }
-
-    @Test func `dashboard new windows route by source browser`() throws {
-        let url = try #require(URL(string: "https://127.0.0.1:1/new"))
-        let fileURL = try #require(URL(string: "file:///tmp/private"))
-        #expect(DashboardWindowController.newWindowAction(
-            for: url,
-            sourceIsLinkBrowser: true) == .openTab(url))
-        #expect(DashboardWindowController.newWindowAction(
-            for: url,
-            sourceIsLinkBrowser: false) == .openExternal(url))
-        #expect(DashboardWindowController.newWindowAction(
-            for: fileURL,
-            sourceIsLinkBrowser: true) == .ignore)
-        #expect(DashboardWindowController.newWindowAction(
-            for: nil,
-            sourceIsLinkBrowser: false) == .ignore)
-    }
-
-    @Test func `sidebar browser reserves auxiliary schemes for subframes`() throws {
-        let webURL = try #require(URL(string: "https://github.com/openclaw/openclaw"))
-        let blankURL = try #require(URL(string: "about:blank"))
-        let fileURL = try #require(URL(string: "file:///tmp/private"))
-        let mailURL = try #require(URL(string: "mailto:hello@example.com"))
-        #expect(DashboardWindowController.shouldAllowBrowserNavigation(to: webURL, isMainFrame: true))
-        #expect(DashboardWindowController.shouldAllowBrowserNavigation(to: webURL, isMainFrame: false))
-        #expect(!DashboardWindowController.shouldAllowBrowserNavigation(to: blankURL, isMainFrame: true))
-        #expect(DashboardWindowController.shouldAllowBrowserNavigation(to: blankURL, isMainFrame: false))
-        #expect(!DashboardWindowController.shouldAllowBrowserNavigation(to: fileURL, isMainFrame: false))
-        #expect(!DashboardWindowController.shouldAllowBrowserNavigation(to: mailURL, isMainFrame: false))
-    }
-
     @Test func `external pointer fallback rejects synthetic link activation`() throws {
         let webURL = try #require(URL(string: "https://docs.openclaw.ai/"))
         let mailURL = try #require(URL(string: "mailto:hello@example.com"))

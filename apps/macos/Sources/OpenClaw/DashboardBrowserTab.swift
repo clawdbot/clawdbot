@@ -13,7 +13,6 @@ final class DashboardBrowserTab {
         case retired
     }
 
-    let id = UUID()
     let webView: WKWebView
     let requestedURL: URL
     var representedURL: URL?
