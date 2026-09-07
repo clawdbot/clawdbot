@@ -172,6 +172,7 @@ function loadControlUiSessionPreview(
   }
   const row = buildGatewaySessionRow({
     cfg,
+    agentId: target.agentId,
     storePath,
     store,
     key: target.canonicalKey,
@@ -182,7 +183,7 @@ function loadControlUiSessionPreview(
   });
   return {
     sessionKey: row.key,
-    agentId: row.agentId ?? target.agentId,
+    agentId: target.agentId,
     title: row.displayName,
     derivedTitle: row.derivedTitle,
     kind: row.kind,

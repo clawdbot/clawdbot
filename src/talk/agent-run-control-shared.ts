@@ -271,11 +271,15 @@ function parseRealtimeVoiceAgentControlToolArgsRecord(args: unknown): unknown {
   }
 }
 
+/** Fixed user-visible failure; private execution/readiness errors stay in host diagnostics. */
+export const REALTIME_VOICE_AGENT_CONTROL_FAILURE_MESSAGE =
+  "OpenClaw could not process that voice control. Please try again.";
+
 /** Build the system-style instruction that forces exact spoken status output. */
 export function buildRealtimeVoiceAgentControlSpeechMessage(text: string): string {
   return [
     "Internal OpenClaw voice control result.",
-    "Do not call openclaw_agent_consult or any other tool for this message.",
+    "Do not delegate this message or call any tools.",
     "Speak this exact OpenClaw status to the voice call, without adding, removing, or rephrasing words.",
     `Status: ${JSON.stringify(text)}`,
   ].join("\n");
@@ -306,6 +310,9 @@ export function formatRealtimeVoiceAgentQueueRejection(
   mode: RealtimeVoiceAgentControlMode,
   reason: string,
 ): string {
+  if (reason === "guarded_injection_unsupported") {
+    return "This agent runtime cannot safely accept scoped voice steering. Check status, cancel the run, or start a new explicit request. Update the runtime when guarded injection is supported.";
+  }
   if (reason === "compacting") {
     return "OpenClaw is compacting the active run and cannot accept voice steering yet.";
   }

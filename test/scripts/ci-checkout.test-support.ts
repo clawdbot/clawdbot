@@ -61,22 +61,29 @@ export function readCiCheckoutStep(job: string, name = "Checkout"): Step & { run
 export function renderGitTestClock(
   source: string,
   options: { realClock?: boolean; realDrain?: boolean } = {},
-) {
+): string {
+  // Change Python before shell quoting, so injected clock literals cannot alter
+  // the generated argument or reintroduce a pipe-backed source transport.
+  const embedded = /^(run_owner ')([\s\S]*?)('\n# End generated CI Git owner\.)$/mu;
+  if (embedded.test(source)) {
+    return source.replace(embedded, (_match, prefix: string, body: string, suffix: string) => {
+      const adjusted = renderGitTestClock(body.replaceAll("'\\''", "'"), options);
+      return prefix + adjusted.replaceAll("'", "'\\''") + suffix;
+    });
+  }
   // Command deadlines and TERM grace are independent. Real-clock callers keep
   // real grace unless they explicitly opt into the fixture's immediate escalation.
-  if (!(options.realDrain ?? options.realClock)) {
-    source = source.replace(
-      "kill_at = deadline - cleanup_seconds / 2",
-      "kill_at = time.monotonic()",
-    );
-  }
+  const clockSource =
+    (options.realDrain ?? options.realClock)
+      ? source
+      : source.replace("kill_at = deadline - cleanup_seconds / 2", "kill_at = time.monotonic()");
   if (options.realClock) {
-    return source;
+    return clockSource;
   }
   // Only a ready, deliberately stalled tree advances the fetch clock. Real
   // process startup and teardown retain their independent wall-clock watchdogs.
   return (
-    source
+    clockSource
       .replace(/fetch_timeout_seconds = [^\n]+/u, "fetch_timeout_seconds = 2")
       .replace(
         "def run_git(",

@@ -2,14 +2,14 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  classifySystemAgentApprovalIntent,
+  classifySystemAgentApprovalIntent as classifySystemAgentApprovalIntentImpl,
   type SystemAgentApprovalIntentDeps,
 } from "./approval-intent.js";
 import { classifySystemAgentApprovalText } from "./operator-approval.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture,
   installSystemAgentClaudeCliBackendTestFixture,
-  installSystemAgentPluginMetadataTestSnapshot,
+  createSystemAgentPluginMetadataTestSnapshot,
   type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
 import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
@@ -39,33 +39,35 @@ function verifiedInferenceConfig(model: string): OpenClawConfig {
 
 async function createVerifiedInference(
   model = "openai/gpt-5.5@openai:p2",
+  metadata = cliPluginMetadataSnapshot!,
 ): Promise<SystemAgentVerifiedInferenceBinding> {
-  return (await createSystemAgentVerifiedInferenceTestFixture(verifiedInferenceConfig(model)))
-    .binding;
+  return metadata.run(
+    async () =>
+      (await createSystemAgentVerifiedInferenceTestFixture(verifiedInferenceConfig(model))).binding,
+    verifiedInferenceConfig(model),
+  );
 }
 
 let sharedVerifiedInference: SystemAgentVerifiedInferenceBinding | undefined;
 let restoreCliBackendFixture: (() => void) | undefined;
 let cliPluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
+const classifySystemAgentApprovalIntent: typeof classifySystemAgentApprovalIntentImpl = (...args) =>
+  cliPluginMetadataSnapshot!.run(() => classifySystemAgentApprovalIntentImpl(...args));
+
 beforeAll(async () => {
   restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
-  const defaultSnapshot = installSystemAgentPluginMetadataTestSnapshot(
+  const defaultSnapshot = createSystemAgentPluginMetadataTestSnapshot(
     verifiedInferenceConfig(DEFAULT_MODEL),
   );
-  try {
-    sharedVerifiedInference = await createVerifiedInference(DEFAULT_MODEL);
-  } finally {
-    defaultSnapshot.restore();
-  }
-  cliPluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot(
+  sharedVerifiedInference = await createVerifiedInference(DEFAULT_MODEL, defaultSnapshot);
+  cliPluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot(
     verifiedInferenceConfig(CLI_MODEL),
   );
 });
 
 afterAll(() => {
   restoreCliBackendFixture?.();
-  cliPluginMetadataSnapshot?.restore();
 });
 
 function requireSharedVerifiedInference(): SystemAgentVerifiedInferenceBinding {

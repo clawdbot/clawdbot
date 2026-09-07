@@ -164,6 +164,17 @@ function slashCommand(
 }
 
 describe("getSlashCommandCompletions", () => {
+  it("presents the first-class dashboard command with the dashboard icon", () => {
+    const dashboard = SLASH_COMMANDS.find((entry) => entry.name === "dashboard");
+
+    expect(dashboard).toMatchObject({
+      category: "tools",
+      allowsInlineMultiWordArgs: true,
+      icon: "layoutDashboard",
+      source: "native",
+    });
+  });
+
   it("ranks an exact name above prefixes and description-only matches", () => {
     replaceSlashCommands([
       slashCommand("openclaw", {

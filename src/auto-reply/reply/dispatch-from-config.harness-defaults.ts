@@ -26,6 +26,7 @@ import {
   loadSessionStoreEntry,
   resolveSessionStorePathCore,
 } from "./dispatch-from-config.runtime.js";
+import type { ReplyRunVerbosity } from "./get-reply.types.js";
 
 type HarnessSourceVisibleRepliesDefault = "automatic" | "message_tool";
 
@@ -41,6 +42,7 @@ export function createShouldEmitVerboseProgress(params: {
   initialExplicitLevel?: string;
   fallbackLevel: string;
 }) {
+  let runVerbosity: ReplyRunVerbosity | undefined;
   const resolveCurrentExplicitLevel = () => {
     if (params.sessionKey && params.storePath) {
       try {
@@ -58,14 +60,17 @@ export function createShouldEmitVerboseProgress(params: {
     }
     return normalizeVerboseLevel(params.initialExplicitLevel ?? "");
   };
-  const resolveLevel = () => {
-    const explicitLevel = resolveCurrentExplicitLevel();
-    if (explicitLevel) {
-      return explicitLevel;
-    }
-    return normalizeVerboseLevel(params.fallbackLevel) ?? "off";
-  };
+  const resolveLevel = () =>
+    runVerbosity?.verboseLevelOverride ??
+    resolveCurrentExplicitLevel() ??
+    runVerbosity?.resolvedVerboseLevel ??
+    normalizeVerboseLevel(params.fallbackLevel) ??
+    "off";
   return {
+    noteRunVerbosity: (settings: ReplyRunVerbosity) => {
+      // A reused queued dispatcher must clear the previous turn's explicit choice.
+      runVerbosity = settings;
+    },
     shouldEmit: () => resolveLevel() !== "off",
     shouldEmitFull: () => resolveLevel() === "full",
   };

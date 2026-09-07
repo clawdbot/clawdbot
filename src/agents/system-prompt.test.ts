@@ -9,61 +9,15 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
-import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
-import type { AnyAgentTool } from "./agent-tools.types.js";
 import { resolveOwnerPromptNumbers } from "./owner-display.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "./prompt-surface.js";
 import { buildSystemPromptParams } from "./system-prompt-params.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
-import { describeSessionsSpawnTool } from "./tool-description-presets.js";
-import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
 describe("buildAgentSystemPrompt", () => {
-  it.each([
-    { available: [], mode: "suggest", deferred: false },
-    { available: ["sessions_yield"], mode: "suggest", deferred: false },
-    { available: ["agents_wait"], mode: "suggest", deferred: false },
-    { available: ["sessions_yield", "agents_wait"], mode: "suggest", deferred: false },
-    { available: [], mode: "prefer", deferred: true },
-    { available: ["sessions_yield"], mode: "prefer", deferred: true },
-    { available: ["agents_wait"], mode: "prefer", deferred: true },
-    { available: ["sessions_yield", "agents_wait"], mode: "prefer", deferred: true },
-  ] as const)(
-    "separates collector waits from announcing yields: $available $mode deferred=$deferred",
-    ({ available, mode, deferred }) => {
-      const availableNames = new Set<string>(available);
-      const tools = applyToolAvailabilityDescriptions([
-        { name: "sessions_spawn", description: describeSessionsSpawnTool({ swarmEnabled: true }) },
-        ...available.map((name) =>
-          name === "sessions_yield" ? createSessionsYieldTool() : { name, description: "Wait" },
-        ),
-      ] as AnyAgentTool[]);
-      const toolNames = tools.map((tool) => tool.name);
-      const prompt = buildAgentSystemPrompt({
-        workspaceDir: "/tmp/openclaw",
-        subagentDelegationMode: mode,
-        toolNames: deferred ? ["tool_search"] : toolNames,
-        capabilityToolNames: deferred ? toolNames : [],
-      });
-      const guidance = [prompt, ...tools.map((tool) => tool.description)].join("\n");
-      expect.soft(guidance).toMatch(/collector[^.\n]*no completion notification/i);
-      expect.soft(guidance).not.toContain("completion push-based.");
-      expect.soft(guidance).not.toContain("Need results before reply: `sessions_yield`");
-      expect
-        .soft(guidance)
-        .not.toContain("End turn after subagent spawn; results arrive next message");
-      for (const name of ["agents_wait", "sessions_yield"] as const) {
-        expect(guidance.includes(name)).toBe(availableNames.has(name));
-      }
-      if (availableNames.has("agents_wait")) {
-        expect(guidance).toMatch(/await with agents_wait/);
-      }
-    },
-  );
-
   it("resolves helper session keys to scoped prompt surfaces", () => {
     expect(resolveAgentPromptSurfaceForSessionKey("agent:main:subagent:child")).toBe("subagent");
     expect(resolveAgentPromptSurfaceForSessionKey("agent:codex:acp:child")).toBe("acp_backend");
@@ -501,60 +455,30 @@ describe("buildAgentSystemPrompt", () => {
   });
 
   it.each(["full", "minimal"] as const)(
-    "keeps credential collection out of transcript-bearing %s prompts",
+    "protects reusable secrets while allowing authorized sign-in in %s prompts",
     (promptMode) => {
       const prompt = buildAgentSystemPrompt({
         workspaceDir: "/tmp/openclaw",
         promptMode,
       });
-      const credentialGuidance = prompt
-        .split("\n")
-        .filter((line) => /credentials?|secrets?|authentication|pairing codes?/iu.test(line));
-
-      expect(
-        credentialGuidance.some(
-          (line) =>
-            /(?:never|do not)/iu.test(line) &&
-            /(?:ask for|request)/iu.test(line) &&
-            /(?:chat|conversation|message|reply|transcript)/iu.test(line),
-        ),
-      ).toBe(true);
-      expect(
-        credentialGuidance.some(
-          (line) =>
-            /(?:never|do not)/iu.test(line) &&
-            /(?:echo|repeat)/iu.test(line) &&
-            /(?:chat|conversation|message|reply|transcript)/iu.test(line),
-        ),
-      ).toBe(true);
-      expect(
-        credentialGuidance.some(
-          (line) =>
-            /(?:never|do not)/iu.test(line) &&
-            /(?:place|put|include)/iu.test(line) &&
-            /(?:recommend|suggest)/iu.test(line) &&
-            /(?:command(?:-line)?|arguments?)/iu.test(line) &&
-            /urls?/iu.test(line) &&
-            /shell/iu.test(line) &&
-            /(?:variable|interpolat)/iu.test(line),
-        ),
-      ).toBe(true);
-      expect(
-        credentialGuidance.some(
-          (line) =>
-            /(?:never|do not)/iu.test(line) &&
-            /(?:ask|request)/iu.test(line) &&
-            /(?:report|share|provide)/iu.test(line) &&
-            /(?:authentication|pairing)/iu.test(line) &&
-            /codes?/iu.test(line) &&
-            /(?:chat|conversation|message|reply|transcript)/iu.test(line),
-        ),
-      ).toBe(true);
-      expect(
-        credentialGuidance.some(
-          (line) => /(?:masked|secure)/iu.test(line) && /(?:entry|input|setup|wizard)/iu.test(line),
-        ),
-      ).toBe(true);
+      expect(prompt).toContain("using existing access or the service's supported credential flow");
+      expect(prompt).toContain("their request already authorizes the handoff");
+      expect(prompt).toContain(
+        "first select a private conversation with the requesting user from trusted conversation context",
+      );
+      expect(prompt).toContain("recovery/backup codes, and hidden device tokens");
+      expect(prompt).toContain(
+        "Keep these secrets out of chat, tool arguments, URLs, logs, and shell text",
+      );
+      expect(prompt).toContain("host-owned masked credential entry");
+      expect(prompt).toContain(
+        "trusted flow's short-lived user-facing code and verification URL only there",
+      );
+      expect(prompt).toContain("user-provided short-lived one-time codes or OAuth callbacks");
+      expect(prompt).toContain("same pending flow");
+      expect(prompt).toContain(
+        "Keep messages intact unless the user requests deletion. Confirm completion from the login result.",
+      );
     },
   );
 
@@ -581,7 +505,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Native shell/sandbox/node: no protected injection");
     expect(prompt).toContain("late saves need next turn");
     expect(prompt).toContain(
-      "no_answer: report blocker or continue with best judgment; never ask in chat",
+      "no_answer: continue independent work; if the credential blocks progress, explain the missing setup",
     );
   });
 
@@ -1281,6 +1205,29 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("15:26");
   });
 
+  it("preserves the cached prefix when source delivery modes alternate", () => {
+    const prompts = (["automatic", "message_tool_only", "automatic"] as const).map(
+      (sourceReplyDeliveryMode) =>
+        buildAgentSystemPrompt({
+          workspaceDir: "/tmp/openclaw",
+          toolNames: ["message"],
+          sourceReplyDeliveryMode,
+          runtimeInfo: { channel: "telegram" },
+        }),
+    );
+    const prefixes = prompts.map((prompt) =>
+      prompt.slice(0, prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY)),
+    );
+
+    expect(prefixes[1]).toBe(prefixes[0]);
+    expect(prefixes[2]).toBe(prefixes[0]);
+    expect(prefixes[0]).not.toContain("## Assistant Output Directives");
+    expect(prefixes[0]).not.toContain("## Silent Replies");
+    expect(prompts[0]).toContain("Media attachment: own line `MEDIA:<path-or-url>` per item");
+    expect(prompts[1]).toContain("Current source visible reply MUST use `message(action=send)`");
+    expect(prompts[2]).toBe(prompts[0]);
+  });
+
   it("keeps date rollover and timezone changes below the prompt-cache boundary", () => {
     const buildPrompt = (userDate: string, userTimezone: string) =>
       buildAgentSystemPrompt({
@@ -1681,7 +1628,7 @@ describe("buildAgentSystemPrompt", () => {
     const registrations = ["zeta-channel", "alpha-channel"].map((id) => ({
       pluginId: id,
       source: "test" as const,
-      plugin: { id },
+      plugin: createChannelTestPluginBase({ id }),
     }));
     const buildPrompt = () =>
       buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", toolNames: ["message"] });
@@ -2183,7 +2130,6 @@ describe("buildAgentSystemPrompt", () => {
         channel: "telegram",
         capabilities: ["inlineButtons"],
       },
-      defaultThinkLevel: "low",
     });
 
     expect(prompt).toContain("agent=work");
@@ -2198,7 +2144,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("active_node=mac-123");
     expect(prompt).toContain("channel=telegram");
     expect(prompt).toContain("capabilities=inlinebuttons");
-    expect(prompt).toContain("thinking=low");
   });
 
   it("keeps the runtime line cache-stable across isolated cron runs", () => {

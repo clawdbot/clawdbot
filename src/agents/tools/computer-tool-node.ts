@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { parseScreenSnapshotPayload } from "../../cli/nodes-screen.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   ComputerActParams,
@@ -12,7 +11,9 @@ import type {
 } from "../../plugins/computer-use-contract.js";
 import {
   COMPUTER_CONTRACT_MISMATCH,
+  COMPUTER_STALE_OBSERVATION,
   parseComputerActResult,
+  parseScreenSnapshotResult,
 } from "../../plugins/computer-use-contract.js";
 import {
   type EligibleNodeMessages,
@@ -328,13 +329,18 @@ export class ComputerToolSession {
     }
   }
 
-  recordObservation(resolved: ResolvedComputerTarget, result: ComputerActResult): void {
+  recordObservation(
+    resolved: ResolvedComputerTarget,
+    result: ComputerActResult,
+    imageCoordinates?: ComputerObservationState["imageCoordinates"],
+  ): void {
     const observationId = result.observation?.observationId;
     if (observationId && resolved.capabilities) {
       this.observationState = {
         nodeId: resolved.target.nodeId,
         providerGeneration: resolved.capabilities.provider.generation,
         observationId,
+        imageCoordinates,
       };
     }
   }
@@ -463,7 +469,7 @@ export class ComputerToolSession {
         commandParams,
         signal,
       });
-      const parsed = parseScreenSnapshotPayload(payload);
+      const parsed = parseScreenSnapshotResult(payload);
       if (!parsed.displayFrameId) {
         throw new Error(
           "screen.snapshot response missing displayFrameId; update the node app before computer use",
@@ -495,6 +501,32 @@ export class ComputerToolSession {
         : undefined;
     const invokeTimeoutMs = durationMs ? durationMs + 10_000 : undefined;
     params.signal?.throwIfAborted();
+    const commandParams: Record<string, unknown> = { ...params.wireParams };
+    const imageCoordinates =
+      commandParams.windowRef &&
+      commandParams.observationId === this.observationState?.observationId
+        ? this.observationState?.imageCoordinates
+        : undefined;
+    if (imageCoordinates) {
+      // Map only the image bound to this validated observation. Browser CSS requests
+      // have no windowRef; native coordinate spaces and element refs remain unchanged.
+      for (const [x, y] of [
+        ["x", "y"],
+        ["fromX", "fromY"],
+        ["x1", "y1"],
+        ["x2", "y2"],
+      ] as const) {
+        if (typeof commandParams[x] === "number" && typeof commandParams[y] === "number") {
+          if (imageCoordinates.kind === "unavailable") {
+            throw new Error(
+              `${COMPUTER_STALE_OBSERVATION}: take a fresh image observation and retry`,
+            );
+          }
+          commandParams[x] *= imageCoordinates.scaleX;
+          commandParams[y] *= imageCoordinates.scaleY;
+        }
+      }
+    }
     this.prepareScreenshotTarget(params.resolved.target);
     if (params.wireParams.action === "left_mouse_down") {
       this.heldButtonTarget = params.resolved.target;
@@ -505,7 +537,7 @@ export class ComputerToolSession {
         await this.executionNodes.get(params.resolved.target.nodeId)!.invoke({
           nodeId: params.resolved.target.nodeId,
           command: COMPUTER_ACT_COMMAND,
-          commandParams: { ...params.wireParams },
+          commandParams,
           timeoutMs: invokeTimeoutMs,
           idempotencyKey: computerActIdempotencyKey({
             scope: this.options.idempotencyScope,

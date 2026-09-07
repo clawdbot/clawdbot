@@ -598,6 +598,29 @@ describe("deliverSlackSlashReplies chunking", () => {
     });
   });
 
+  it("delivers a valid field-rich section in one slash response", async () => {
+    const respond = vi.fn(async () => undefined);
+    const fields = ["Alpha", "Beta", "Gamma"].map((label) => ({
+      type: "plain_text",
+      text: label.padEnd(1_500, "."),
+    }));
+    const blocks = [{ type: "section", fields }];
+
+    await deliverSlackSlashReplies({
+      replies: [{ channelData: { slack: { blocks } } }],
+      respond,
+      ephemeral: true,
+      textLimit: 8000,
+    });
+
+    expect(respond).toHaveBeenCalledExactlyOnceWith({
+      blocks,
+      text: fields.map((field) => field.text).join("\n"),
+      mrkdwn: false,
+      response_type: "ephemeral",
+    });
+  });
+
   it("splits non-native blocks before slash accessibility text exceeds 40k", async () => {
     const respond = vi.fn(async () => undefined);
     const blocks = Array.from({ length: 20 }, (_entry, index) => ({
@@ -1482,7 +1505,7 @@ describe("deliverReplies message_sent hook", () => {
         await deliverReplies(
           baseParams({
             replies: [payload],
-            eventScope: { teamId: "T123", client: { chat: { postMessage } } },
+            eventScope: { teamId: "T123", client: {}, writeClient: { chat: { postMessage } } },
           }),
         ),
       onError,

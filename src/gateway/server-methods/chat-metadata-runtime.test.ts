@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentCredentialMap } from "../../agents/agent-auth-credentials.js";
@@ -12,109 +11,58 @@ import {
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  clearUserProfileAuthLink,
-  listUserProfileAuthLinks,
-} from "../../state/user-model-accounts.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  connectChatMetadataAccount,
   createChatMetadataHarness,
   createChatMetadataOwner,
   createDraftChatMetadataScope,
   createOpenAIChatMetadataConfig,
-  createPersonalChatMetadataFixture,
 } from "./chat-metadata-runtime.test-support.js";
-import { WITHOUT_OPENAI_ENV_AUTH } from "./models-list-result.openai-routes.test-support.js";
 
 describe("gateway chat metadata runtime", () => {
-  test.each(["metadata", "startup"] as const)(
-    "keeps persisted-session %s separate from personal defaults and draft previews",
-    async (surface) => {
-      await withOpenClawTestState(
-        { layout: "state-only", prefix: "personal-chat-metadata-", env: WITHOUT_OPENAI_ENV_AUTH },
-        async () => {
-          const { harness, owner, alice, bob, aliceScope, bobScope } =
-            await createPersonalChatMetadataFixture();
-          const shared = await harness.runtime.read({ agentId: "main" });
-          expect(await harness.runtime.read(aliceScope)).toEqual(shared);
-          const aliceAuthId = connectChatMetadataAccount(alice.id);
-          const available = {
-            models: expect.arrayContaining([
-              expect.objectContaining({ id: "gpt-5.6-luna", available: true }),
-            ]),
-          };
-          await expect(harness.runtime.read(aliceScope)).resolves.toMatchObject(available);
-          for (const selector of [
-            { sessionKey: "agent:main:existing", sessionEntry: { sessionId: randomUUID() } },
-            { sessionKey: "agent:main:missing" },
-            { sessionEntry: { sessionId: randomUUID() } },
-          ]) {
-            const request = { ...aliceScope, ...selector };
-            const metadata =
-              surface === "metadata"
-                ? await harness.runtime.read(request)
-                : (await harness.runtime.readStartup(request))?.metadata;
-            expect(metadata).toEqual(shared);
-          }
-          expect(await harness.runtime.read(bobScope)).toEqual(shared);
-          expect(await harness.runtime.read({ agentId: "main" })).toEqual(shared);
+  test("retains an unsuperseded preparation failure without silently retrying", async () => {
+    const failure = new Error("metadata preparation failed");
+    const beforeRefresh = vi.fn(async () => {
+      throw failure;
+    });
+    const harness = createChatMetadataHarness(undefined, { beforeRefresh });
+    try {
+      await expect(harness.runtime.refresh()).rejects.toBe(failure);
+      await expect(harness.runtime.read({ agentId: "main" })).rejects.toBe(failure);
+      expect(beforeRefresh).toHaveBeenCalledOnce();
+    } finally {
+      await harness.runtime.stop();
+    }
+  });
 
-          const pinned = {
-            ...bobScope,
-            sessionEntry: {
-              authProfileOverride: aliceAuthId,
-              authProfileOverrideSource: "user-link" as const,
-            },
-          };
-          await expect(harness.runtime.readStartup(pinned)).resolves.toMatchObject({
-            metadata: available,
-          });
-          expect((await harness.runtime.read(pinned)).accountSelection).toEqual({
-            kind: "personal",
-            label: "Alice's account",
-            source: "user-link",
-          });
-          const ownerView = await harness.runtime.readStartup({
-            ...pinned,
-            requesterProfileId: alice.id,
-          });
-          expect(ownerView?.metadata?.accountSelection).toEqual({
-            kind: "personal",
-            label: "Private provider account",
-            authProfileId: aliceAuthId,
-            source: "user-link",
-          });
-          clearUserProfileAuthLink({ profileId: alice.id, provider: "openai" });
-          expect(await harness.runtime.read(aliceScope)).toEqual(shared);
-          await expect(
-            harness.runtime.read(createDraftChatMetadataScope(alice.id, aliceAuthId).params),
-          ).resolves.toMatchObject({
-            ...available,
-            accountSelection: { kind: "personal", authProfileId: aliceAuthId, source: "user" },
-          });
-          expect(listUserProfileAuthLinks(alice.id)).toEqual([]);
-          await expect(harness.runtime.readStartup(pinned)).resolves.toMatchObject({
-            metadata: available,
-          });
-
-          connectChatMetadataAccount(bob.id);
-          await expect(
-            harness.runtime.read({
-              ...pinned,
-              sessionEntry: {
-                ...pinned.sessionEntry,
-                authProfileOverride: `personal:${alice.id}:${randomUUID()}`,
-              },
-            }),
-          ).resolves.toMatchObject({
-            models: [expect.objectContaining({ available: false })],
-          });
-          expect(harness.getPreparedAuthStore()?.profiles).toEqual({});
-          expect(owner.authModes).toEqual({});
-        },
-      );
-    },
-  );
+  test("retires a superseded preparation failure while the replacement prepares fresh facts", async () => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const failure = new Error("obsolete metadata preparation failed");
+    const beforeRefresh = vi.fn(async () => {});
+    beforeRefresh.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      throw failure;
+    });
+    const harness = createChatMetadataHarness(undefined, { beforeRefresh });
+    const oldRefresh = harness.runtime.refresh();
+    void oldRefresh.catch(() => undefined);
+    let replacement: Promise<void> | undefined;
+    try {
+      await entered.promise;
+      harness.runtime.invalidate();
+      replacement = harness.runtime.refresh();
+      const completed = Promise.all([oldRefresh, replacement]);
+      release.resolve();
+      await expect(completed).resolves.toEqual([undefined, undefined]);
+      await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+        models: [expect.objectContaining({ id: "first" })],
+      });
+    } finally {
+      release.resolve();
+      await harness.runtime.stop();
+      await Promise.allSettled([oldRefresh, replacement]);
+    }
+  });
 
   test("notifies once per settlement, including same-epoch recovery, without an unavailable-read loop", async () => {
     const onChanged = vi.fn();
@@ -319,7 +267,7 @@ describe("gateway chat metadata runtime", () => {
     expect(harness.buildProjection).toHaveBeenLastCalledWith(
       expect.objectContaining({
         preferredProfileId: "test:session",
-        lockedProfileId: "test:session",
+        pinnedProfileId: "test:session",
       }),
     );
   });
@@ -542,11 +490,11 @@ describe("gateway chat metadata runtime", () => {
     if (locked) {
       expect(projectionParams).toEqual(
         expect.objectContaining({
-          lockedProfileId: sessionEntry.authProfileOverride,
+          pinnedProfileId: sessionEntry.authProfileOverride,
         }),
       );
     } else {
-      expect(projectionParams).not.toHaveProperty("lockedProfileId");
+      expect(projectionParams).not.toHaveProperty("pinnedProfileId");
     }
   });
 
@@ -1001,6 +949,7 @@ describe("gateway chat metadata runtime", () => {
     });
 
     harness.runtime.invalidate();
+    const waitingRead = harness.runtime.read({ agentId: "main" });
     const firstRefresh = harness.runtime.refresh();
     await vi.waitFor(() => expect(harness.buildCommands).toHaveBeenCalledTimes(2));
 
@@ -1009,14 +958,9 @@ describe("gateway chat metadata runtime", () => {
     releaseCommands.resolve();
     await Promise.all([firstRefresh, secondRefresh]);
 
-    const timedOut = Symbol("timed out");
-    const result = await Promise.race([
-      harness.runtime.read({ agentId: "main" }),
-      new Promise<typeof timedOut>((resolve) => {
-        setTimeout(() => resolve(timedOut), 100);
-      }),
-    ]);
-    expect(result).not.toBe(timedOut);
+    await expect(waitingRead).resolves.toMatchObject({
+      models: [expect.objectContaining({ id: "first" })],
+    });
   });
 
   test("retries an unavailable owner on the next read once it is published again", async () => {

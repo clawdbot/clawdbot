@@ -196,18 +196,24 @@ describe("models scan command", () => {
     });
   });
 
-  it.each([
-    [{ minParams: "7b" }, "--min-params"],
-    [{ maxAgeDays: "30d" }, "--max-age-days"],
-    [{ maxCandidates: "2.5" }, "--max-candidates"],
-    [{ timeout: "1000ms" }, "--timeout"],
-    [{ concurrency: "2x" }, "--concurrency"],
-  ])("rejects partial numeric option %s", async (opts, label) => {
-    const runtime = createRuntime();
+  describe.each([
+    ["minParams", "--min-params", "7b"],
+    ["maxAgeDays", "--max-age-days", "30d"],
+    ["maxCandidates", "--max-candidates", "2.5"],
+    ["timeout", "--timeout", "1000ms"],
+    ["concurrency", "--concurrency", "2x"],
+  ] as const)("%s numeric value", (key, label, partial) => {
+    it.each(["", "   ", partial])("rejects %j before scanning", async (raw) => {
+      const runtime = createRuntime();
 
-    await expect(modelsScanCommand(opts, runtime)).rejects.toThrow(label);
+      await expect(
+        modelsScanCommand({ [key]: raw, probe: false, setDefault: true }, runtime),
+      ).rejects.toThrow(label);
 
-    expect(mocks.scanOpenRouterModels).not.toHaveBeenCalled();
+      expect(mocks.loadModelsConfig).not.toHaveBeenCalled();
+      expect(mocks.resolveApiKeyForProviderCore).not.toHaveBeenCalled();
+      expect(mocks.scanOpenRouterModels).not.toHaveBeenCalled();
+    });
   });
 
   it("rejects applying auto-downgraded metadata-only scan results before scanning", async () => {

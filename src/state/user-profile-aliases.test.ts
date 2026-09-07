@@ -9,14 +9,20 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
-import { onUserProfilesChanged, readUserProfileVersion } from "./user-profile-events.js";
+import {
+  onUserProfilesChanged,
+  readUserProfileAliasRevision,
+  readUserProfileVersion,
+} from "./user-profile-events.js";
 import {
   ensureProfileForEmail,
   linkEmail,
   listProfiles,
   readUserProfileAliases,
   resolveUserProfileId,
+  setAvatar,
   setDisplayName,
+  syncGitHubIdentity,
 } from "./user-profiles.js";
 
 const roots = createTempDirTracker();
@@ -34,58 +40,124 @@ afterEach(() => {
 });
 
 describe("profile alias reader lifecycle", () => {
-  it("publishes committed merges, not rollbacks or links to the same canonical profile", () => {
-    const options = stateOptions();
-    const source = ensureProfileForEmail("source@aliases.test", options);
-    const target = ensureProfileForEmail("target@aliases.test", options);
-    const read = () => readUserProfileAliases(target.id, options);
-    expect(read()).toEqual(new Set([target.id]));
-    const published = vi.fn(() => expect(read()).toEqual(new Set([source.id, target.id])));
-    const stop = onUserProfilesChanged(published);
-    try {
-      expect(() =>
-        runOpenClawStateWriteTransaction(() => {
-          linkEmail("source@aliases.test", target.id, options);
-          expect(read()).toEqual(new Set([target.id]));
-          expect(published).not.toHaveBeenCalled();
-          throw new Error("rollback");
-        }, options),
-      ).toThrow("rollback");
+  it.each(["email", "github"])(
+    "publishes committed %s merges, not rollbacks or canonical no-ops",
+    (producer) => {
+      const options = stateOptions();
+      const source = ensureProfileForEmail("source@aliases.test", options);
+      const target = ensureProfileForEmail("target@aliases.test", options);
+      const verifiedIdentity = { accountId: 123, login: "verified-profile" };
+      if (producer === "github") {
+        syncGitHubIdentity(
+          {
+            identity: verifiedIdentity,
+            authenticationAlias: { kind: "email", email: "target@aliases.test" },
+          },
+          options,
+        );
+      }
+      const merge = () =>
+        producer === "email"
+          ? linkEmail("source@aliases.test", target.id, options)
+          : syncGitHubIdentity(
+              {
+                identity: verifiedIdentity,
+                authenticationAlias: { kind: "email", email: "source@aliases.test" },
+              },
+              options,
+            );
+      const read = () => readUserProfileAliases(target.id, options);
       expect(read()).toEqual(new Set([target.id]));
-      expect(published).not.toHaveBeenCalled();
-      runOpenClawStateWriteTransaction(() => {
-        linkEmail("source@aliases.test", target.id, options);
+      const aliasRevision = readUserProfileAliasRevision();
+      const published = vi.fn(() => ({
+        aliases: read(),
+        aliasRevision: readUserProfileAliasRevision(),
+      }));
+      const stop = onUserProfilesChanged(published);
+      try {
+        expect(() =>
+          runOpenClawStateWriteTransaction(() => {
+            merge();
+            expect(read()).toEqual(new Set([target.id]));
+            expect(readUserProfileAliasRevision()).toBe(aliasRevision);
+            expect(published).not.toHaveBeenCalled();
+            throw new Error("rollback");
+          }, options),
+        ).toThrow("rollback");
         expect(read()).toEqual(new Set([target.id]));
-      }, options);
-      expect(published).toHaveBeenCalledOnce();
-      expect(linkEmail("source@aliases.test", source.id, options)).toMatchObject({
-        id: target.id,
-        mergedInto: null,
-      });
-      expect(ensureProfileForEmail("source@aliases.test", options).id).toBe(target.id);
-      expect(published).toHaveBeenCalledOnce();
-      expect(read()).toEqual(new Set([source.id, target.id]));
-      expect(readUserProfileAliases(source.id, options)).toEqual(new Set([source.id, target.id]));
-      expect(listProfiles(options)).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ id: source.id, mergedInto: target.id }),
-          expect.objectContaining({ id: target.id, mergedInto: null }),
-        ]),
-      );
-    } finally {
-      stop();
-    }
-  });
+        expect(readUserProfileAliasRevision()).toBe(aliasRevision);
+        expect(published).not.toHaveBeenCalled();
+        runOpenClawStateWriteTransaction(() => {
+          expect(() =>
+            runOpenClawStateWriteTransaction(() => {
+              merge();
+              throw new Error("nested rollback");
+            }, options),
+          ).toThrow("nested rollback");
+        }, options);
+        expect(read()).toEqual(new Set([target.id]));
+        expect(readUserProfileAliasRevision()).toBe(aliasRevision);
+        expect(published).not.toHaveBeenCalled();
+        runOpenClawStateWriteTransaction(() => {
+          merge();
+          expect(read()).toEqual(new Set([target.id]));
+          expect(readUserProfileAliasRevision()).toBe(aliasRevision);
+        }, options);
+        expect(published).toHaveBeenCalledOnce();
+        expect(published.mock.results[0]?.value).toEqual({
+          aliases: new Set([source.id, target.id]),
+          aliasRevision: aliasRevision + 1,
+        });
+        expect(readUserProfileAliasRevision()).toBe(aliasRevision + 1);
+        expect(linkEmail("source@aliases.test", source.id, options)).toMatchObject({
+          id: target.id,
+          mergedInto: null,
+        });
+        expect(ensureProfileForEmail("source@aliases.test", options).id).toBe(target.id);
+        expect(published).toHaveBeenCalledOnce();
+        expect(readUserProfileAliasRevision()).toBe(aliasRevision + 1);
+        expect(read()).toEqual(new Set([source.id, target.id]));
+        expect(readUserProfileAliases(source.id, options)).toEqual(new Set([source.id, target.id]));
+        expect(listProfiles(options)).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ id: source.id, mergedInto: target.id }),
+            expect.objectContaining({ id: target.id, mergedInto: null }),
+          ]),
+        );
+      } finally {
+        stop();
+      }
+    },
+  );
 
   it("does not merge profiles when moving only one of a source's emails", () => {
     const options = stateOptions();
     const source = ensureProfileForEmail("source@aliases.test", options);
     const target = ensureProfileForEmail("target@aliases.test", options);
+    const aliasRevision = readUserProfileAliasRevision();
     linkEmail("retained@aliases.test", source.id, options);
     expect(readUserProfileAliases(target.id, options)).toEqual(new Set([target.id]));
     linkEmail("source@aliases.test", target.id, options);
     expect(readUserProfileAliases(target.id, options)).toEqual(new Set([target.id]));
     expect(readUserProfileAliases(source.id, options)).toEqual(new Set([source.id]));
+    expect(readUserProfileAliasRevision()).toBe(aliasRevision);
+  });
+
+  it("keeps alias access stable across profile creation, cosmetics and same-head GitHub refresh", () => {
+    const options = stateOptions();
+    const aliasRevision = readUserProfileAliasRevision();
+    const profile = ensureProfileForEmail("cosmetic@aliases.test", options);
+    setDisplayName(profile.id, "Updated name", options);
+    expect(setAvatar(profile.id, new Uint8Array([1]), "image/png", options).ok).toBe(true);
+    const identity = { accountId: 123, login: "verified-profile" };
+    const authenticationAlias = { kind: "email" as const, email: "cosmetic@aliases.test" };
+    syncGitHubIdentity({ identity, authenticationAlias }, options);
+    syncGitHubIdentity(
+      { identity: { ...identity, login: "renamed-profile" }, authenticationAlias },
+      options,
+    );
+    expect(readUserProfileAliases(profile.id, options)).toEqual(new Set([profile.id]));
+    expect(readUserProfileAliasRevision()).toBe(aliasRevision);
   });
 
   it("moves aliases and leaves an aliasless source profile as a one-hop tombstone", () => {
@@ -113,10 +185,12 @@ describe("profile alias reader lifecycle", () => {
     const a = ensureProfileForEmail("a@example.com", options);
     const b = ensureProfileForEmail("b@example.com", options);
     const c = ensureProfileForEmail("c@example.com", options);
+    const aliasRevision = readUserProfileAliasRevision();
 
     linkEmail("a@example.com", b.id, options);
     linkEmail("a@example.com", c.id, options);
     linkEmail("b@example.com", c.id, options);
+    expect(readUserProfileAliasRevision()).toBe(aliasRevision + 2);
 
     expect(setDisplayName(a.id, "Durable A", options)).toMatchObject({ id: c.id });
     expect(resolveUserProfileId(a.id, options)).toBe(c.id);

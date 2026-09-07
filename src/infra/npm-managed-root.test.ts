@@ -11,11 +11,9 @@ import { captureEnv } from "../test-utils/env.js";
 import {
   listMissingRequiredPlatformPackages,
   repairManagedNpmRootOpenClawPeer,
-  removeManagedNpmRootDependency,
   readManagedNpmRootInstalledDependency,
   readOpenClawManagedNpmRootOverrides,
   resolveManagedNpmRootDependencySpec,
-  restoreManagedNpmRootPeerDependencySnapshot,
   syncManagedNpmRootPeerDependencies,
   upsertManagedNpmRootDependency,
 } from "./npm-managed-root.js";
@@ -532,56 +530,6 @@ describe("managed npm root", () => {
       dependencies: {
         plugin: "1.0.0",
         "runtime-peer": "5.0.0",
-      },
-    });
-  });
-
-  it("realigns restored managed peer pins with manifest overrides", async () => {
-    const npmRoot = await makeTempRoot();
-    await fs.writeFile(
-      path.join(npmRoot, "package.json"),
-      `${JSON.stringify(
-        {
-          private: true,
-          dependencies: {
-            plugin: "1.0.0",
-            "runtime-peer": "4.12.18",
-          },
-          overrides: {
-            "runtime-peer": "4.12.18",
-          },
-          openclaw: {
-            managedOverrides: ["runtime-peer"],
-            managedPeerDependencies: ["runtime-peer"],
-          },
-        },
-        null,
-        2,
-      )}\n`,
-    );
-
-    await restoreManagedNpmRootPeerDependencySnapshot({
-      npmRoot,
-      snapshot: {
-        dependencies: { "runtime-peer": "4.12.23" },
-        managedPeerDependencies: ["runtime-peer"],
-      },
-    });
-
-    await expect(
-      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
-    ).resolves.toEqual({
-      private: true,
-      dependencies: {
-        plugin: "1.0.0",
-        "runtime-peer": "4.12.18",
-      },
-      overrides: {
-        "runtime-peer": "4.12.18",
-      },
-      openclaw: {
-        managedOverrides: ["runtime-peer"],
-        managedPeerDependencies: ["runtime-peer"],
       },
     });
   });
@@ -1297,44 +1245,6 @@ describe("managed npm root", () => {
       private: true,
       dependencies: {
         plugin: "file:./plugin.tgz",
-      },
-    });
-  });
-
-  it("removes one managed dependency without dropping unrelated metadata", async () => {
-    const npmRoot = await makeTempRoot();
-    await fs.writeFile(
-      path.join(npmRoot, "package.json"),
-      `${JSON.stringify(
-        {
-          private: true,
-          dependencies: {
-            "@openclaw/discord": "2026.5.2",
-            "@openclaw/voice-call": "2026.5.2",
-          },
-          devDependencies: {
-            fixture: "1.0.0",
-          },
-        },
-        null,
-        2,
-      )}\n`,
-    );
-
-    await removeManagedNpmRootDependency({
-      npmRoot,
-      packageName: "@openclaw/voice-call",
-    });
-
-    await expect(
-      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
-    ).resolves.toEqual({
-      private: true,
-      dependencies: {
-        "@openclaw/discord": "2026.5.2",
-      },
-      devDependencies: {
-        fixture: "1.0.0",
       },
     });
   });

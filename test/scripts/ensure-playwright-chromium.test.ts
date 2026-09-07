@@ -1,14 +1,19 @@
 // Ensure Playwright Chromium tests cover ensure playwright chromium script behavior.
+import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   ensurePlaywrightChromium,
   installLinuxSystemChromiumPackage,
-  resolvePlaywrightInstallRunner,
   shouldEnsureFfmpegFromArgv,
   shouldInstallPlaywrightSystemDependencies,
   shouldRequirePlaywrightChromiumFromArgv,
 } from "../../scripts/ensure-playwright-chromium.mts";
+
+const playwrightCli = path.join(
+  path.dirname(createRequire(path.resolve("ui/package.json")).resolve("playwright/package.json")),
+  "cli.js",
+);
 
 describe("ensurePlaywrightChromium", () => {
   it("does nothing when the browser binary exists and runs", () => {
@@ -82,7 +87,7 @@ describe("ensurePlaywrightChromium", () => {
   it("installs Playwright Chromium when the lane requires its pinned browser", () => {
     let managedChromiumInstalled = false;
     const spawnSync = vi.fn((command: string, args: string[]) => {
-      if (command === "pnpm" && args.includes("chromium")) {
+      if (command === process.execPath && args.includes("chromium")) {
         managedChromiumInstalled = true;
         return { status: 0 };
       }
@@ -110,9 +115,9 @@ describe("ensurePlaywrightChromium", () => {
       }),
     ).toBe(0);
     expect(spawnSync).toHaveBeenCalledWith(
-      "pnpm",
-      ["--dir", "ui", "exec", "playwright", "install", "chromium"],
-      expect.objectContaining({ cwd: "/repo", stdio: "pipe" }),
+      process.execPath,
+      [playwrightCli, "install", "chromium"],
+      expect.objectContaining({ cwd: path.resolve("/repo", "ui"), stdio: "pipe" }),
     );
     expect(spawnSync).not.toHaveBeenCalledWith("/usr/bin/chromium-browser", ["--version"], {
       stdio: "ignore",
@@ -127,11 +132,11 @@ describe("ensurePlaywrightChromium", () => {
     let installedExecutable: string | undefined;
     const spawnSync = vi.fn(
       (command: string, args: string[], options?: Record<string, unknown>) => {
-        if (command === "pnpm" && args.includes("chromium")) {
+        if (command === process.execPath && args.includes("chromium")) {
           const installerEnv = options?.env as NodeJS.ProcessEnv;
           const configuredCache = installerEnv.PLAYWRIGHT_BROWSERS_PATH ?? "";
-          const installerDirectory = path.join(String(options?.cwd), "ui");
-          // pnpm --dir ui resolves a relative cache in the UI package, not the caller.
+          const installerDirectory = String(options?.cwd);
+          // The installer resolves relative caches from the UI package, not the caller.
           const installedCache = path.isAbsolute(configuredCache)
             ? configuredCache
             : path.resolve(installerDirectory, configuredCache);
@@ -196,8 +201,8 @@ describe("ensurePlaywrightChromium", () => {
       }),
     ).toBe(0);
     expect(spawnSync).toHaveBeenCalledWith(
-      "pnpm",
-      ["--dir", "ui", "exec", "playwright", "install", "ffmpeg"],
+      process.execPath,
+      [playwrightCli, "install", "ffmpeg"],
       expect.objectContaining({ env }),
     );
     expect(env.PLAYWRIGHT_BROWSERS_PATH).toBe(configuredPath);
@@ -222,17 +227,12 @@ describe("ensurePlaywrightChromium", () => {
     expect(spawnSync).toHaveBeenCalledWith("/usr/bin/chromium-browser", ["--version"], {
       stdio: "ignore",
     });
-    expect(spawnSync).toHaveBeenCalledWith(
-      "pnpm",
-      ["--dir", "ui", "exec", "playwright", "install", "ffmpeg"],
-      {
-        cwd: "/repo",
-        env: { PATH: "/bin" },
-        shell: false,
-        stdio: "pipe",
-        windowsVerbatimArguments: undefined,
-      },
-    );
+    expect(spawnSync).toHaveBeenCalledWith(process.execPath, [playwrightCli, "install", "ffmpeg"], {
+      cwd: path.resolve("/repo", "ui"),
+      env: { PATH: "/bin" },
+      shell: false,
+      stdio: "pipe",
+    });
     expect(logs.join("\n")).toContain("Using system Chromium at /usr/bin/chromium-browser");
   });
 
@@ -294,14 +294,13 @@ describe("ensurePlaywrightChromium", () => {
       }),
     ).toBe(0);
     expect(spawnSync).toHaveBeenCalledWith(
-      "pnpm",
-      ["--dir", "ui", "exec", "playwright", "install", "chromium"],
+      process.execPath,
+      [playwrightCli, "install", "chromium"],
       {
-        cwd: "/repo",
+        cwd: path.resolve("/repo", "ui"),
         env: { PATH: "/bin" },
         shell: false,
         stdio: "pipe",
-        windowsVerbatimArguments: undefined,
       },
     );
   });
@@ -330,26 +329,24 @@ describe("ensurePlaywrightChromium", () => {
     ).toBe(0);
     expect(spawnSync).toHaveBeenNthCalledWith(
       2,
-      "pnpm",
-      ["--dir", "ui", "exec", "playwright", "install", "chromium"],
+      process.execPath,
+      [playwrightCli, "install", "chromium"],
       {
-        cwd: "/repo",
+        cwd: path.resolve("/repo", "ui"),
         env: { PATH: "/bin" },
         shell: false,
         stdio: "pipe",
-        windowsVerbatimArguments: undefined,
       },
     );
     expect(spawnSync).toHaveBeenNthCalledWith(
       4,
-      "pnpm",
-      ["--dir", "ui", "exec", "playwright", "install", "--with-deps", "chromium"],
+      process.execPath,
+      [playwrightCli, "install", "--with-deps", "chromium"],
       {
-        cwd: "/repo",
+        cwd: path.resolve("/repo", "ui"),
         env: { PATH: "/bin" },
         shell: false,
         stdio: "pipe",
-        windowsVerbatimArguments: undefined,
       },
     );
   });
@@ -379,26 +376,24 @@ describe("ensurePlaywrightChromium", () => {
     ).toBe(0);
     expect(spawnSync).toHaveBeenNthCalledWith(
       1,
-      "pnpm",
-      ["--dir", "ui", "exec", "playwright", "install", "chromium"],
+      process.execPath,
+      [playwrightCli, "install", "chromium"],
       {
-        cwd: "/repo",
+        cwd: path.resolve("/repo", "ui"),
         env: { CI: "1", PATH: "/bin" },
         shell: false,
         stdio: "pipe",
-        windowsVerbatimArguments: undefined,
       },
     );
     expect(spawnSync).toHaveBeenNthCalledWith(
       2,
-      "pnpm",
-      ["--dir", "ui", "exec", "playwright", "install", "--with-deps", "chromium"],
+      process.execPath,
+      [playwrightCli, "install", "--with-deps", "chromium"],
       {
-        cwd: "/repo",
+        cwd: path.resolve("/repo", "ui"),
         env: { CI: "1", PATH: "/bin" },
         shell: false,
         stdio: "pipe",
-        windowsVerbatimArguments: undefined,
       },
     );
     expect(logs.join("\n")).toContain("installing Linux system dependencies");
@@ -408,7 +403,7 @@ describe("ensurePlaywrightChromium", () => {
     const logs: string[] = [];
     let installedSystemChromium = false;
     const spawnSync = vi.fn((command: string, args: string[]) => {
-      if (command === "pnpm" && args.includes("chromium")) {
+      if (command === process.execPath && args.includes("chromium")) {
         return { status: 1 };
       }
       if (command === "apt-get" && args.includes("update")) {
@@ -500,14 +495,13 @@ describe("ensurePlaywrightChromium", () => {
     });
     expect(spawnSync).toHaveBeenNthCalledWith(
       2,
-      "pnpm",
-      ["--dir", "ui", "exec", "playwright", "install", "chromium"],
+      process.execPath,
+      [playwrightCli, "install", "chromium"],
       {
-        cwd: "/repo",
+        cwd: path.resolve("/repo", "ui"),
         env: { PATH: "/bin" },
         shell: false,
         stdio: "pipe",
-        windowsVerbatimArguments: undefined,
       },
     );
     expect(spawnSync).toHaveBeenNthCalledWith(3, "/cache/chromium/chrome", ["--version"], {
@@ -526,37 +520,6 @@ describe("ensurePlaywrightChromium", () => {
         systemExecutablePath: "",
       }),
     ).toBe(23);
-  });
-
-  it("wraps the pnpm command shim on Windows", () => {
-    expect(
-      resolvePlaywrightInstallRunner({
-        comSpec: "C:\\Windows\\System32\\cmd.exe",
-        env: {},
-        platform: "win32",
-      }),
-    ).toEqual({
-      args: ["/d", "/s", "/c", "pnpm.cmd --dir ui exec playwright install chromium"],
-      command: "C:\\Windows\\System32\\cmd.exe",
-      shell: false,
-      windowsVerbatimArguments: true,
-    });
-  });
-
-  it("wraps the dependency install command shim on Windows", () => {
-    expect(
-      resolvePlaywrightInstallRunner({
-        comSpec: "C:\\Windows\\System32\\cmd.exe",
-        env: {},
-        platform: "win32",
-        withDeps: true,
-      }),
-    ).toEqual({
-      args: ["/d", "/s", "/c", "pnpm.cmd --dir ui exec playwright install --with-deps chromium"],
-      command: "C:\\Windows\\System32\\cmd.exe",
-      shell: false,
-      windowsVerbatimArguments: true,
-    });
   });
 
   it("allows dependency installation for Linux CI lanes", () => {

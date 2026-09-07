@@ -224,7 +224,7 @@ backend intentionally needs its own watchdog policy.
 
 Choose the value from the CLI or SDK session contract, not from a provider id
 or broad error class. The bundled Anthropic backend uses `"invalidated-only"`;
-its Agent SDK contract does not treat non-expiration failures as proof that the
+its native session contract does not treat non-expiration failures as proof that the
 conversation can no longer resume.
 
 Prefer the smallest static config that matches the CLI. Add plugin callbacks
@@ -245,6 +245,7 @@ only for behavior that really belongs to the backend.
 | `authEpochMode`                    | Decide how auth changes invalidate stored CLI sessions                      |
 | `nativeToolMode`                   | Declare whether native tools are absent, always on, or host-selectable      |
 | `toolAvailabilityEnforcement`      | Declare whether exact tool caps are enforced in argv or execution staging   |
+| `projectNativeToolAuthority`       | Map the observed native tool list to canonical capabilities for cron caps   |
 | `sideQuestionToolMode`             | Declare disabled native tools for `/btw` side questions                     |
 | `bundleMcp` / `bundleMcpMode`      | Opt into OpenClaw's loopback MCP tool bridge                                |
 | `ownsNativeCompaction`             | Backend owns its own automatic compaction - OpenClaw defers                 |
@@ -264,17 +265,19 @@ applied through launch environment or staged configuration; the same field is
 available to `resolveExecutionArgs(ctx)` for native CLI flags.
 
 `prepareExecution(ctx)` may also return an optional `execute` transport when a
-backend owns a vendor-supported SDK for the installed CLI. The transport
-receives the exact prepared command, arguments, environment, prompt, session,
-and tool availability; it yields the backend's existing structured stream
-records. Optional `promptContext.prependContext` and `promptContext.appendContext`
+backend owns the installed CLI's protocol or SDK integration. The transport
+receives the exact prepared command, arguments, optional `argv0`, environment,
+prompt, session, and tool availability; it yields the backend's existing structured
+stream records. Preserve the prepared command, `argv0`, and interpreter or script
+prefix in `args` when constructing the CLI invocation. `argv0` preserves
+the invocation name of a PATH shim. Optional `promptContext.prependContext` and `promptContext.appendContext`
 are private prompt-build additions, separate from the ordinary `prompt`. Transport
-them through the native SDK's private context mechanism; never record them as
+them through the native runtime's private context mechanism; never record them as
 operator-authored input. OpenClaw's policy and observation hooks still receive the
 complete logical prompt. Native tool actions must use the provided, run-bound
 `requestToolPermission` callback rather than creating independent approval
 authority. OpenClaw retains cancellation, watchdogs, session policy, and MCP
-grant ownership. Explicit credential forwarding, paired-node execution, and
+grant ownership. Paired-node execution and
 manual compaction continue through the existing host-managed process path.
 
 `runtimeArtifact` is plugin-owned. It is consulted
@@ -322,6 +325,36 @@ Declare how the backend enforces that contract:
 Runtime caps such as cron `toolsAllow` are normalized and group-expanded by
 OpenClaw before this contract is built. Native tools are disabled, and a
 backend without a complete declared enforcement path fails before execution.
+
+A backend whose native tools are model-callable may declare
+`projectNativeToolAuthority(nativeTools)` so that automations created from its
+sessions keep the creator's native capabilities. For Claude stream-JSON, the
+input is the parent turn's `system/init.tools` list, intersected with
+`toolAvailability.native` when a host selection exists. Managed native settings
+can remove tools after CLI argument selection, so defaults are never inferred.
+Each turn starts with pending authority: MCP discovery remains available, but
+tool calls reject visibly until initialization supplies the list. Warm turns
+cannot borrow a previous turn's snapshot. Return only canonical names from the
+core vocabulary (`read`, `write`, `edit`, `apply_patch`, `exec`, `process`,
+`web_search`, `web_fetch`), each derived from a native tool the host enforces
+through this contract. Core validates the result before updating the active
+loopback grant and again at final creator-cap capture; any other name fails the
+turn. Updating the snapshot invalidates earlier cached tool projections.
+Project only equivalent capabilities: Claude's `Glob` locates paths and
+`NotebookEdit` edits notebook cells, so neither grants general `read` or `edit`.
+The native list contains tool names, not permission-rule patterns.
+Codex native code mode projects `read` and `exec` after OpenClaw explicitly
+requests the shell and rejects managed requirements or legacy managed settings
+that disable it. The effective setting and its source are checked at each
+preflight; a user-local shell disable is overridden for native mode, while a
+managed denial rejects before capture. It never infers `write`, `edit`,
+`apply_patch`, or `process`. The pinned Codex registry has
+no shell-disabled models; a custom model that disables its shell remains an
+unobservable exception because Codex does not expose that model capability.
+
+Previously saved empty automation caps remain restricted. Recreate the job or
+explicitly edit its tools from a fresh authorized creator turn; an old empty cap
+cannot safely be distinguished from an intentional denial.
 
 ### `parseJsonlEvent`: provider-specific JSONL streams
 

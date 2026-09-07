@@ -129,7 +129,6 @@ describe("repairLoadedGatewayServiceForStart", () => {
     resolveBunRuntimeInfoMock.mockResolvedValue({ status: "supported" });
 
     resolveGatewayInstallTokenMock.mockResolvedValue({
-      tokenRefConfigured: false,
       warnings: [],
     });
     readConfigFileSnapshotForWriteMock.mockResolvedValue({

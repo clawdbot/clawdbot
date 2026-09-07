@@ -84,10 +84,41 @@ export function createQaGatewayChildLogCollector() {
   let recent = "";
   let end = 0;
 
-  const readFrom = (mark: number) => {
+  const resolveRead = (mark: number) => {
     const start = end - recent.length;
     const wasTruncated = mark < start;
-    const text = recent.slice(Math.max(0, mark - start));
+    const offset = Math.min(recent.length, Math.max(0, mark - start));
+    return {
+      prefix: recent.slice(0, offset),
+      text: recent.slice(offset),
+      wasTruncated,
+    };
+  };
+  const resolveRedactedRead = (mark: number) => {
+    const retainedStart = end - recent.length;
+    const firstSafeOffset =
+      retainedStart === 0
+        ? 0
+        : (() => {
+            const newline = recent.indexOf("\n");
+            return newline < 0 ? recent.length : newline + 1;
+          })();
+    const redactionSafeRecent = recent.slice(firstSafeOffset);
+    const start = retainedStart + firstSafeOffset;
+    const offset = Math.min(redactionSafeRecent.length, Math.max(0, mark - start));
+    const lineBoundaryOffset =
+      offset === 0 || redactionSafeRecent[offset - 1] === "\n"
+        ? offset
+        : (() => {
+            const newline = redactionSafeRecent.indexOf("\n", offset);
+            return newline < 0 ? redactionSafeRecent.length : newline + 1;
+          })();
+    return {
+      text: redactionSafeRecent.slice(lineBoundaryOffset),
+      wasTruncated: mark < start,
+    };
+  };
+  const withTruncationMarker = (text: string, wasTruncated: boolean) => {
     return `${wasTruncated ? QA_GATEWAY_CHILD_LOG_TRUNCATION_MARKER : ""}${text}`;
   };
   return {
@@ -103,11 +134,28 @@ export function createQaGatewayChildLogCollector() {
       return end;
     },
     readSince(mark: number) {
-      return readFrom(mark);
+      const read = resolveRead(mark);
+      return withTruncationMarker(read.text, read.wasTruncated);
+    },
+    readRedactedSince(mark: number) {
+      const read = resolveRedactedRead(mark);
+      // Redaction can change string length. Expose only a complete suffix so a
+      // raw cursor can never reconstruct a command or credential across lines.
+      return withTruncationMarker(redactQaGatewayDebugText(read.text), read.wasTruncated);
     },
     text() {
       return `${end > recent.length ? QA_GATEWAY_CHILD_LOG_TRUNCATION_MARKER : ""}${recent}`.trim();
     },
+  };
+}
+
+export function createQaGatewayChildLogAccess(output: {
+  mark(): number;
+  readRedactedSince(mark: number): string;
+}) {
+  return {
+    markLogs: () => output.mark(),
+    readLogsSince: (mark: number) => output.readRedactedSince(mark),
   };
 }
 

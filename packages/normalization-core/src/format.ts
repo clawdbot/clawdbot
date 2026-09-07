@@ -63,3 +63,31 @@ export function formatByteSize(bytes: number, options: ByteSizeFormatOptions): s
   }
   return `${value.toFixed(fractionDigits)}${options.separator}${label}`;
 }
+
+/** Formats token units while callers retain input validation and whole-token rounding. */
+export function formatCompactTokenCount(
+  tokens: number,
+  options: {
+    thousandsPrecision?: 0 | 1;
+    thousandsSuffix?: string;
+    millionsSuffix?: string;
+    trimTrailingZero?: boolean;
+    maxUnit?: "million" | "billion";
+  } = {},
+): string {
+  if (tokens < 1_000) {
+    return String(Math.round(tokens));
+  }
+  const trim = (value: string) => (options.trimTrailingZero ? value.replace(/\.0$/, "") : value);
+  // Billion presentation is based on the count, not rounded millions.
+  if (options.maxUnit === "billion" && tokens >= 1_000_000_000) {
+    return `${trim((tokens / 1_000_000_000).toFixed(1))}B`;
+  }
+  if (tokens < 1_000_000) {
+    const thousands = (tokens / 1_000).toFixed(options.thousandsPrecision ?? 1);
+    if (Number(thousands) < 1_000) {
+      return `${trim(thousands)}${options.thousandsSuffix ?? "k"}`;
+    }
+  }
+  return `${trim((tokens / 1_000_000).toFixed(1))}${options.millionsSuffix ?? "m"}`;
+}

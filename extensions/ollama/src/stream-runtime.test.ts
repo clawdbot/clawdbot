@@ -805,15 +805,21 @@ describe("convertToOllamaMessages", () => {
     expect(result).toEqual([{ role: "tool", content: "file1.txt\nfile2.txt" }]);
   });
 
-  it("preserves significant boundary whitespace in tool results", () => {
+  it.each([
+    "  indented\n",
+    `${"file row with significant trailing spaces   \n".repeat(370)}😀\n[Use offset=225 to continue.]\n`,
+  ])("preserves producer-budgeted tool text and continuation on the Ollama wire: %#", (text) => {
     const result = convertToOllamaMessages([
       {
         role: "toolResult",
         toolCallId: "call_ws",
-        content: [{ type: "text", text: "  indented\n" }],
+        toolName: "read",
+        content: [{ type: "text", text }],
       },
     ]);
-    expect(result).toEqual([{ role: "tool", content: "  indented\n", tool_call_id: "call_ws" }]);
+    expect(result).toEqual([
+      { role: "tool", content: text, tool_call_id: "call_ws", tool_name: "read" },
+    ]);
   });
 
   it("converts SDK 'toolResult' role to Ollama 'tool' role", () => {
@@ -1196,7 +1202,54 @@ describe("buildAssistantMessage", () => {
       },
     );
     const result = buildAssistantMessage(response, modelInfo);
-    expect(result.usage.cacheTelemetry).toEqual({ state: "unavailable" });
+    expect(result.usage).toMatchObject({
+      input: 10,
+      output: 2,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 12,
+      cacheTelemetry: { state: "unavailable" },
+    });
+  });
+
+  it("records an available zero cache read when Ollama reports it", () => {
+    const response = createAssistantResponse(
+      { content: "ok" },
+      {
+        prompt_eval_count: 10,
+        prompt_eval_cached_count: 0,
+        eval_count: 2,
+      },
+    );
+    const result = buildAssistantMessage(response, modelInfo);
+    expect(result.usage).toMatchObject({
+      input: 10,
+      output: 2,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 12,
+      cacheTelemetry: { state: "available" },
+    });
+  });
+
+  it("separates cached prompt tokens from uncached input without changing the total", () => {
+    const response = createAssistantResponse(
+      { content: "ok" },
+      {
+        prompt_eval_count: 10,
+        prompt_eval_cached_count: 6,
+        eval_count: 2,
+      },
+    );
+    const result = buildAssistantMessage(response, modelInfo);
+    expect(result.usage).toMatchObject({
+      input: 4,
+      output: 2,
+      cacheRead: 6,
+      cacheWrite: 0,
+      totalTokens: 12,
+      cacheTelemetry: { state: "available" },
+    });
   });
 });
 
@@ -1869,7 +1922,7 @@ describe("createOllamaStreamFn streaming events", () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response("rate limited", {
         status: 429,
-        headers: { "Retry-After": "30" },
+        headers: { "Content-Type": "text/plain;charset=UTF-8", "Retry-After": "30" },
       }),
       release: vi.fn(async () => undefined),
     });
@@ -2922,6 +2975,46 @@ describe("createOllamaStreamFn", () => {
     expect(JSON.stringify(context)).toContain("dG9vbC1pbWFnZQ==");
   });
 
+  it.each([
+    {
+      name: "preserves local history by default",
+      baseUrl: "http://ollama-host:11434",
+      model: {},
+      expected: false,
+    },
+    {
+      name: "preserves explicit native history settings",
+      baseUrl: "http://ollama-host:11434",
+      model: { params: { truncate: true, shift: true } },
+      expected: true,
+    },
+    {
+      name: "leaves hosted history settings to the server",
+      baseUrl: "https://ollama.com",
+      model: {},
+      expected: undefined,
+    },
+    {
+      name: "preserves cloud-provider routing through a custom proxy",
+      baseUrl: "https://proxy.example.test",
+      model: { provider: "ollama-cloud", id: "glm-5.2" },
+      expected: undefined,
+    },
+    {
+      name: "leaves locally proxied cloud history settings to the server",
+      baseUrl: "http://ollama-host:11434",
+      model: { id: "qwen3:32b-cloud" },
+      expected: undefined,
+    },
+  ])("$name", async ({ baseUrl, model, expected }) => {
+    await expectSuccessfulOllamaRequest({ baseUrl, model }, ({ body }) => {
+      expect(body.truncate).toBe(expected);
+      expect(body.shift).toBe(expected);
+      expect(requireOptionalRecord(body.options)?.truncate).toBeUndefined();
+      expect(requireOptionalRecord(body.options)?.shift).toBeUndefined();
+    });
+  });
+
   it("normalizes /v1 baseUrl and maps maxTokens + signal", async () => {
     const signal = new AbortController().signal;
     await expectSuccessfulOllamaRequest(
@@ -3099,6 +3192,49 @@ describe("createOllamaStreamFn", () => {
       },
       ({ body }) => expect(body).not.toHaveProperty("format"),
     );
+  });
+
+  it("keeps serialized native Ollama tools stable when discovery order changes", async () => {
+    const tools = [
+      {
+        name: "write",
+        description: "Write a file",
+        parameters: {
+          type: "object",
+          properties: { content: { type: "string" } },
+        },
+      },
+      {
+        name: "read",
+        description: "Read a file",
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string" } },
+        },
+      },
+    ];
+    const serializedTools: string[] = [];
+    for (const orderedTools of [tools, tools.toReversed()]) {
+      fetchWithSsrFGuardMock.mockClear();
+      await expectSuccessfulOllamaRequest(
+        {
+          baseUrl: "http://ollama-host:11434",
+          context: {
+            messages: [{ role: "user", content: "hello" }],
+            tools: orderedTools,
+          },
+        },
+        ({ body }) => {
+          expect(body.tools).toHaveLength(2);
+          expect(body.tools).toEqual(
+            expect.arrayContaining(tools.map((tool) => ({ type: "function", function: tool }))),
+          );
+          serializedTools.push(JSON.stringify(body.tools));
+        },
+      );
+    }
+    expect(serializedTools[1]).toBe(serializedTools[0]);
+    expect(tools.map((tool) => tool.name)).toEqual(["write", "read"]);
   });
 
   it("lets native Ollama tools win over responseFormat", async () => {

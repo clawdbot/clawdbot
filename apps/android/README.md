@@ -7,6 +7,7 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - Pair with a Gateway using a QR code, setup code, or manual connection. Gateway credentials are stored encrypted.
 - Stream chat replies, choose models and reasoning effort, manage session permissions, and expand task progress. The compact composer keeps one control row; tap the model name for permissions and usage details, or the effort dial for Fast mode. Dictation, voice messages, and Talk are part of Chat, not a separate Voice tab.
 - Select agents, pin sessions, and browse available native session catalogs from the sidebar. Connecting creates or adopts a dedicated Android session without resetting its history. Native sessions keep their runtime-owned model: Android shows that ownership instead of offering a model change. New session starts independently of the current native thread. Generic child-session forks and new worktrees are unavailable for those sessions; supported message-level forks remain available.
+- Search from Overview or Settings to find settings by their displayed name or category, alongside quick actions and recent threads. Local destinations such as Appearance, Profile, and Licenses work without connecting a Gateway. Back from a settings detail returns to the screen that opened search; Desktop appears only when the connected Gateway supports it.
 - Choose a theme family, color mode, accent, and app language in **Settings → Appearance**. Theme and accent edits sync with a connected writable profile. Read-only or unknown-profile edits, including new edits after restarting offline, stay on the device; choose them again after connecting to sync. Already profile-bound edits wait for that profile to reconnect, without discarding or replacing newer device-local choices.
 - Configure foreground on-device Voice Wake and Gateway-synced wake words in **Settings → Voice**.
 - Use **Settings → OpenClaw** for guided Gateway setup and repair. New replies stay visible at the end of the conversation; scrolling back preserves your reading position until you return or tap **Jump to latest**.
@@ -22,6 +23,51 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 ## Session colors
 
 Long-press a row on the **Threads** page and choose **Color**, then select a swatch or **Default** to clear it. The eight colors are red, blue, green, yellow, purple, orange, pink, and cyan. Colored sessions show a narrow leading stripe in the sidebar and Threads page, plus a colored ring around the agent avatar in the open chat header. Unset colors add no indicator. Colors sync through the Gateway and remain visible in the local session cache while offline.
+
+## Foldable layout
+
+With a full-height vertical separator reported by AndroidX WindowManager, the
+main app places its sidebar on the reading-direction start plane and the active
+page on the other plane. Both use the reported bounds, including off-center
+hinges. The sidebar remains visible after selecting a page or session.
+
+Book panes require at least 280 dp for the sidebar, 320 dp for the active page,
+and 320 dp of height. Onboarding and layouts without a supported split use the
+largest rectangular region clear of separating folds and fully occluding hinges.
+Equal regions prefer the top, then the reading-direction start side. Opening
+the keyboard does not select a different fallback region for this outer host.
+Without an intersecting separator, the app keeps its full-window layout and
+modal sidebar.
+
+In Chat, a full-width horizontal separator can place the conversation header,
+transcript, and status above the hinge and the same composer below it. Each
+usable pane must be at least 320 dp wide. The measured space must fit the complete
+header, a transcript band with a complete text line, and status above, with a
+complete input line and controls below, accounting for the current font size
+and padding.
+
+Layout changes retain the draft, cursor, reader position, and existing local
+capture state owners. If keyboard insets or larger text leave too little space,
+Chat uses the existing one-region fallback based on the space remaining after
+insets, then restores the split when it fits.
+
+Command search and gateway trust prompts retain the single-region host.
+
+Gateway trust, QR scan-error, Replace gateway setup, and Forget gateway prompts
+also stay within one safe region. Their complete contents and actions scroll when
+space is limited; opening the keyboard does not move them to another region.
+If the keyboard covers that region entirely, dismiss the keyboard to reach the
+prompt again.
+
+Chat actions and Add attachment (Photos, Videos, Files) menus stay in the safe
+region containing their trigger. These popups remain focusable without becoming
+keyboard (IME) targets. If folds, insets, or layout changes invalidate an open
+menu, it closes without choosing an action. Reopen it explicitly when space
+permits; it does not reopen automatically when the layout recovers. Dismissing
+the menu does not reset Chat's draft, editor, or reader state.
+
+The Thinking control opens an effort sheet, not an adapted dropdown. Other
+dialogs, sheets, and popup menus are not fold-adapted yet.
 
 ## Wear OS companion
 

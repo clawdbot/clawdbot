@@ -632,15 +632,14 @@ export function renderAgentFiles(params: {
                                         const modal = (e.currentTarget as HTMLElement).closest(
                                           "openclaw-modal-dialog",
                                         ) as OpenClawModalDialog | null;
+                                        const textarea = modal
+                                          ?.closest(".settings-group")
+                                          ?.querySelector<HTMLElement>(".agent-file-textarea");
+                                        modal?.setReturnFocusTarget(textarea ?? null);
                                         modal?.hide();
                                         if (modal) {
                                           resetAgentFilePreview(modal);
                                         }
-                                        const textarea =
-                                          document.querySelector<HTMLElement>(
-                                            ".agent-file-textarea",
-                                          );
-                                        textarea?.focus();
                                       }}
                                     >
                                       <span aria-hidden="true">${icons.edit}</span>

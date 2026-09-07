@@ -42,7 +42,7 @@ import {
   scheduleSessionCatalogRefresh,
   type SessionCatalogDataOwner,
   type SessionDataControllerHost,
-  updateSessionCatalogData as updateSessionCatalogDataForHost,
+  updateSessionCatalogData,
 } from "./session-data-controller-catalog.ts";
 import {
   hasSidebarListFilter,
@@ -191,9 +191,13 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   }
 
   hostUpdated(): void {
-    this.synchronizeSessionScope();
-    this.scroll.synchronize(this.host);
-    this.updateSessionCatalogData(true);
+    // Lit can finish a queued update after disconnect. Keep retired timers and
+    // observers closed until the host reconnects.
+    if (this.host.isConnected) {
+      this.synchronizeSessionScope();
+      this.scroll.synchronize(this.host);
+      updateSessionCatalogData(this, true);
+    }
   }
 
   hostDisconnected(): void {
@@ -243,17 +247,16 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     globalThis.removeEventListener("focus", this.handleSessionCatalogPageActivation);
   }
 
-  retireSessionCatalogData(resetConnection = false): void {
+  retireSessionCatalogData(): void {
     this.sessionScopeGeneration += 1;
     this.sessionsLoading = false;
     this.loadingMoreSessionCatalogIds = new Set();
-    this.sessionCatalogLive.retireConnection(resetConnection);
+    this.sessionCatalogLive.clear();
   }
 
   resetSessionCatalogConnection(): void {
     this.retireSessionCatalogData();
     this.sessionCatalogRevision += 1;
-    this.sessionCatalogLive.resetConnection();
     this.sessionCatalogs = [];
     this.sessionCatalogRefreshStatus = createPanelRefreshStatus();
     this.sessionCatalogPageDepths.clear();
@@ -314,10 +317,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     ) {
       void this.refreshSidebarSessions();
     }
-  }
-
-  updateSessionCatalogData(defer = false): void {
-    updateSessionCatalogDataForHost(this, defer);
   }
 
   handleSessionCatalogHostEvent(payload: unknown): void {
@@ -495,7 +494,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     }
     this.notify();
     if (!sourceOrClientChanged) {
-      this.retireSessionCatalogData(!connected);
+      this.retireSessionCatalogData();
       if (connected && this.sessionsSource && hasSidebarListFilter(this.host)) {
         void this.refreshSidebarSessions();
       }

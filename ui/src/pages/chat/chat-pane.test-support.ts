@@ -27,8 +27,11 @@ import type { ApplicationPlacementStartupStatus } from "../../app/session-placem
 import { loadSettings } from "../../app/settings.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import type { TaskSuggestionAcceptMode } from "../../lib/task-suggestion-acceptance.ts";
 import "./chat-pane.ts";
+import {
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+} from "../../test-helpers/gateway-client.ts";
 import {
   gatewayHelloForMethods,
   SESSION_MUTATION_TEST_METHODS,
@@ -42,8 +45,10 @@ import type { ChatProps } from "./chat-view.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
+import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
+import type { SidebarLayout } from "./sidebar-layout.ts";
 
 export type TestChatPane = HTMLElement & {
   catalogMessages: unknown[];
@@ -79,16 +84,12 @@ export type TestChatPane = HTMLElement & {
   disconnectedCallback: () => void;
   discardStagedAttachments?: () => void;
   resumeStagedAttachments?: () => void;
-  acceptTaskSuggestion: (
-    suggestion: TaskSuggestion,
-    mode: TaskSuggestionAcceptMode,
-    cloudProfileId?: string,
-  ) => Promise<void>;
+  acceptTaskSuggestion: (suggestion: TaskSuggestion) => Promise<void>;
   copyTaskSuggestionPrompt: (suggestion: TaskSuggestion) => Promise<void>;
   handleDocumentKeydown: (event: KeyboardEvent) => void;
   handleTaskSuggestionEvent: (event: TaskSuggestionEvent) => void;
   refreshTaskSuggestions: () => Promise<void>;
-  refreshSessionPullRequests: (options?: { refresh?: boolean }) => Promise<void>;
+  refreshSessionPullRequests: (options?: { refresh?: boolean }) => boolean;
   sessionPullRequests: ControlUiSessionPullRequest[];
   sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
   taskSuggestions: TaskSuggestion[];
@@ -174,17 +175,27 @@ export type TestChatPane = HTMLElement & {
     agentWorkspace: undefined,
     workspaceGit: boolean,
     placementStartupStatus: ApplicationPlacementStartupStatus | null | undefined,
+    sidebarLayout?: SidebarLayout,
+    panelDefinitions?: SidebarPanelDefinition[],
   ) => TemplateResult;
 };
 
 type GatewayBrowserClientFixtureOverrides = Omit<Partial<GatewayBrowserClient>, "request"> & {
-  request?: (method: string, params?: unknown) => unknown;
+  request?: GatewayRequestHandler;
 };
 
 export function createGatewayBrowserClientFixture(
   overrides: GatewayBrowserClientFixtureOverrides = {},
 ): GatewayBrowserClient {
-  return overrides as typeof overrides & GatewayBrowserClient;
+  const {
+    request = (method) => (method === "sessions.describe" ? { session: null } : {}),
+    ...properties
+  } = overrides;
+  const client = createTestGatewayClient(request);
+  for (const [key, value] of Object.entries(properties)) {
+    Object.defineProperty(client, key, { configurable: true, writable: true, value });
+  }
+  return client;
 }
 
 function withLivePreferences(context: Omit<ApplicationContext, "theme">): ApplicationContext {
@@ -231,7 +242,6 @@ export function createInitializationContext(): ApplicationContext {
           avatarReason: null,
         },
         serverVersion: null,
-        localMediaPreviewRoots: [],
         embedSandboxMode: "strict",
         allowExternalEmbedUrls: false,
         terminalEnabled: false,
@@ -341,7 +351,7 @@ export function createSessionContext(
     chatSubmissions: createChatSubmissions(),
     chatAttachmentHandoff: createChatAttachmentHandoff(),
     nativeChatDrafts: { subscribe: () => () => undefined },
-    placementStartup: { get: vi.fn(() => null), pause: vi.fn() },
+    placementStartup: { get: vi.fn(() => null), hasPendingTurn: () => false, pause: vi.fn() },
     sessions,
   } as unknown as Omit<ApplicationContext, "theme">);
 }
@@ -390,8 +400,6 @@ export function createTestChatPane(params: {
     sidebarLayout: { columns: [] },
     ...createInitialChatRealtimeState(),
     // Minimal scroll host so scheduleChatScroll is a no-op instead of throwing.
-    chatScrollGeneration: 0,
-    chatScrollCommitCleanup: null,
     handleChatScroll: vi.fn(),
     resetToolStream: vi.fn(),
     renderLifecycle: { afterCommit: () => () => {}, invalidate: () => {} },
@@ -408,6 +416,11 @@ export function createTestChatPane(params: {
   pane.state = state;
   pane.connectedClient = params.client;
   pane.connectionGeneration = 4;
+  onTestFinished(async () => {
+    pane.disconnectedCallback();
+    // Let lazy pane imports observe disconnect before Vitest removes their environment.
+    await vi.dynamicImportSettled();
+  });
   return {
     pane,
     requestUpdate,

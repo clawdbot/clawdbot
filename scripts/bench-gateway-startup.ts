@@ -1129,16 +1129,12 @@ async function main() {
 }
 
 export const testing = {
-  classifyGatewayReadyLog,
-  collectOutputLines,
   collectResultFailures,
   collectStartupTrace,
   listIncidentPackagedPluginArtifacts,
   parseOptions,
   sanitizedEnv,
-  stopChild,
   summarizeCase,
-  waitForProbe,
   waitForStartupTracePhase,
   withGatewayBenchRoot,
   writeIncidentFixture,

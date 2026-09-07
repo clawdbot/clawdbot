@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { Bot } from "grammy";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { deliverReplies } from "./bot/delivery.js";
@@ -158,6 +159,15 @@ describe("Telegram physical send acceptance over HTTP", () => {
     });
   }
 
+  it("projects unspaced labeled links through the public Telegram plain-text contract", async () => {
+    const source = "<https://example.com/a.pdf|Manual>";
+    const text = sanitizeForPlainText(source, { style: "markdown" });
+
+    await sendThrough("public", text, async () => {});
+
+    expect(requests.at(-1)?.fields.text).toBe("Manual");
+  });
+
   it("fences provider-owned delivery after async dispatch refresh and before HTTP", async () => {
     const authorityRevoked = new Error("delivery authority revoked after dispatch refresh");
     let authorityActive = true;
@@ -243,6 +253,28 @@ describe("Telegram physical send acceptance over HTTP", () => {
       ]);
       expect(requests.flatMap(({ fields }, index) => (fields.reply_markup ? [index] : []))).toEqual(
         [entry === "direct" ? 1 : 3],
+      );
+    },
+  );
+
+  it.each([
+    ["direct", true],
+    ["direct", false],
+    ["public", true],
+    ["public", false],
+  ] as const)(
+    "keeps %s delivery when a rendered-empty chunk comes first=%s",
+    async (entry, first) => {
+      const empty = "Bad Request: text must be non-empty";
+      rejections.push(...(first ? [empty, empty, ""] : ["", empty, empty]));
+
+      await sendThrough(entry, `${"A".repeat(4000)}${"B".repeat(4000)}`, async () => {});
+
+      expect(requests.map(({ fields }) => fields.text)).toEqual(
+        (first ? ["A", "A", "B"] : ["A", "B", "B"]).map((text) => text.repeat(4000)),
+      );
+      expect(requests.map(({ fields }) => fields.parse_mode)).toEqual(
+        first ? ["HTML", undefined, "HTML"] : ["HTML", "HTML", undefined],
       );
     },
   );

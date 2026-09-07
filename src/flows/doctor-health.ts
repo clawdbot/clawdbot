@@ -4,7 +4,9 @@ import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
+import { guardUpdateDoctorSchemaUpgrade } from "../commands/doctor-update-schema-guard.js";
 import { resolveStateDir } from "../config/paths.js";
+import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
@@ -15,13 +17,13 @@ const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? messa
 
 const loadConfigModule = createLazyRuntimeModule(() => import("../config/config.js"));
 
-async function assertDoctorDatabaseSchemasCompatible(): Promise<void> {
+async function assertDoctorDatabaseSchemasCompatible() {
   const [databasePreflight, agentDatabase, stateDatabase] = await Promise.all([
     import("../state/openclaw-database-preflight.js"),
     import("../state/openclaw-agent-db-contract.js"),
     import("../state/openclaw-state-db-contract.js"),
   ]);
-  const databaseSchemas = databasePreflight.preflightOpenClawDatabaseSchemas({
+  const databaseSchemas = await databasePreflight.preflightOpenClawDatabaseSchemas({
     env: process.env,
     supportedVersions: {
       state: stateDatabase.OPENCLAW_STATE_SCHEMA_VERSION,
@@ -41,6 +43,7 @@ async function assertDoctorDatabaseSchemasCompatible(): Promise<void> {
       `Doctor cannot continue because the shared state database is unreadable: ${unreadableStateDatabase.path}: ${unreadableStateDatabase.reason}. The database was left unchanged; doctor will not recreate it because that could discard persistent operator data. Stop the Gateway and other OpenClaw processes, then restore this file from a verified backup or repair it manually. After recovery, run ${formatCliCommand("openclaw doctor --fix")} again. See ${stateDatabase.OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
     );
   }
+  return databaseSchemas;
 }
 
 function stateDirectoryExistsAtDoctorStart(): boolean {
@@ -83,7 +86,8 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
 
   // A stale source checkout may update itself, but no diagnostic or repair may
   // touch state until the surviving build proves it understands every database.
-  await assertDoctorDatabaseSchemasCompatible();
+  const schemas = await assertDoctorDatabaseSchemasCompatible();
+  await guardUpdateDoctorSchemaUpgrade({ schemas, runtime: effectiveRuntime, json: options.json });
   if (options.repair === true || options.yes === true || options.generateGatewayToken === true) {
     const { assertConfigWriteAllowedInCurrentMode } = await loadConfigModule();
     assertConfigWriteAllowedInCurrentMode();
@@ -150,7 +154,7 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
         await import("../state/openclaw-database-preflight.js");
       const { resolveConfiguredAgentDatabaseTargets } =
         await import("../config/sessions/targets.js");
-      assertOpenClawDatabasesReady({
+      await assertOpenClawDatabasesReady({
         env: process.env,
         operation: "doctor",
         configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(ctx.cfg, {
@@ -182,7 +186,7 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
       }
     }
   } catch (error) {
-    if (maintenance) {
+    if (maintenance && !(error instanceof DoctorStateMigrationRefusalError)) {
       effectiveRuntime.error(
         "Doctor could not complete maintenance. Check the reported service state, resolve the failure, and rerun doctor --fix.",
       );

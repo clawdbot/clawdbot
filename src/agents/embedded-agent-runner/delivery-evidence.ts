@@ -36,8 +36,12 @@ export type AgentDeliveryEvidence = {
   /** Durable recovery evidence sets this when its bounded target projection omitted entries. */
   messagingToolSentTargetsTruncated?: unknown;
   acceptedSessionSpawns?: unknown;
+  requesterContinuationSettled?: unknown;
   successfulCronAdds?: unknown;
   meta?: {
+    yielded?: unknown;
+    error?: unknown;
+    aborted?: unknown;
     toolSummary?: {
       calls?: unknown;
     };

@@ -44,7 +44,7 @@ vi.mock("../session-utils.js", async () => {
   return {
     ...actual,
     loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({
-      agentIdBySessionKey: new Map(),
+      targetsBySessionKey: new Map(),
       durableTargets: [],
       storePath: "(multiple)",
       store: {},

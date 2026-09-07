@@ -1,4 +1,6 @@
+import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createNodeMeetingRealtimeAudioTransport } from "./realtime-node-audio-transport.js";
 
 function createTransport(
@@ -100,6 +102,27 @@ describe("node meeting realtime audio transport", () => {
     });
 
     await transport.stop();
+  });
+
+  it("cannot verify stopped output from a pending input pull", async () => {
+    const pendingPull = createDeferredCore<{ base64: string }>();
+    const invoke = vi.fn(async ({ params }: { params: { action: string } }) =>
+      params.action === "pullAudio" ? pendingPull.promise : {},
+    );
+    const transport = createTransport(invoke);
+    const output = Buffer.alloc(80 * 240 * 2);
+    for (let sample = 0; sample < output.byteLength / 2; sample += 1) {
+      const amplitude = 400 + ((Math.floor(sample / 240) * 7919) % 12_000);
+      output.writeInt16LE(sample % 2 === 0 ? amplitude : -amplitude, sample * 2);
+    }
+    await transport.writeOutput(output);
+    const health = transport.getHealth?.();
+    transport.startInput(() => {});
+    await transport.stop();
+    pendingPull.resolve({ base64: output.toString("base64") });
+    await setImmediate();
+
+    expect(transport.getHealth?.()).toEqual(health);
   });
 
   it("fences output writes across clear and stop", async () => {

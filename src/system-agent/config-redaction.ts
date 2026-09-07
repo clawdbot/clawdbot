@@ -12,6 +12,7 @@ import {
   collectChannelSchemaMetadataCore,
   collectPluginSchemaMetadataCore,
 } from "../config/channel-config-metadata.js";
+import { resolveChannelSchemaSelection } from "../config/channel-schema-selection.js";
 import { REDACTED_SENTINEL, redactConfigObject } from "../config/redact-snapshot.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
@@ -75,20 +76,29 @@ const invalidConfigRedactionMetadata: SystemAgentConfigRedactionMetadata = {
   ...baseConfigRedactionMetadata,
   channelIds: new Set(),
 };
+// Inventory survives config reloads; the selected channel schemas do not.
+// Bind cached redaction to both snapshots so path classification follows the current owner.
 const metadataConfigRedaction = new WeakMap<
   PluginMetadataSnapshot,
-  SystemAgentConfigRedactionMetadata
+  WeakMap<object, SystemAgentConfigRedactionMetadata>
 >();
 
 function resolveMetadataConfigRedaction(
   snapshot: PluginMetadataSnapshot,
+  config?: OpenClawConfig,
 ): SystemAgentConfigRedactionMetadata {
-  const cached = metadataConfigRedaction.get(snapshot);
+  const byConfig =
+    metadataConfigRedaction.get(snapshot) ??
+    new WeakMap<object, SystemAgentConfigRedactionMetadata>();
+  const cached = byConfig.get(config ?? snapshot);
   if (cached) {
     return cached;
   }
   const plugins = collectPluginSchemaMetadataCore(snapshot.manifestRegistry);
-  const channels = collectChannelSchemaMetadataCore(snapshot.manifestRegistry);
+  const channels = collectChannelSchemaMetadataCore(
+    snapshot.manifestRegistry,
+    config ? resolveChannelSchemaSelection(snapshot.manifestRegistry, config) : undefined,
+  );
   const schema = buildConfigSchemaCore({ plugins, channels });
   const uiHints = schema.uiHints;
   const metadata = {
@@ -111,7 +121,8 @@ function resolveMetadataConfigRedaction(
         .map((channel) => channel.id),
     ]),
   };
-  metadataConfigRedaction.set(snapshot, metadata);
+  byConfig.set(config ?? snapshot, metadata);
+  metadataConfigRedaction.set(snapshot, byConfig);
   return metadata;
 }
 
@@ -137,7 +148,7 @@ function resolveSystemAgentConfigRedactionMetadata(
     env: process.env,
     allowWorkspaceScopedSnapshot: true,
   });
-  return snapshot ? resolveMetadataConfigRedaction(snapshot) : baseConfigRedactionMetadata;
+  return snapshot ? resolveMetadataConfigRedaction(snapshot, config) : baseConfigRedactionMetadata;
 }
 
 function splitConfigHintPath(path: string): string[] {

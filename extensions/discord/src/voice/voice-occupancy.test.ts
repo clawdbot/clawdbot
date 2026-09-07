@@ -14,6 +14,8 @@ defineDiscordVoiceTests(
     createRealtimeVoiceBridgeSessionMock,
     makeAgentProxyConfig,
     ChannelType,
+    startTranscripts,
+    stopTranscripts,
   }) => {
     const room = { guildId: "g1", channelId: "1001" };
     const voiceState = (userId: string, channelId: string | null, bot = false): APIVoiceState =>
@@ -47,16 +49,21 @@ defineDiscordVoiceTests(
       try {
         await update(voiceState("helper-bot", "1001", true));
         await update(voiceState("own-bot", "1001"));
-        expect(listener).not.toHaveBeenCalled();
+        expect(listener).toHaveBeenCalledExactlyOnceWith({ occupied: false });
         await update(voiceState("human-one", "1001"));
         await update(voiceState("human-two", "1001"));
         await update(voiceState("human-one", null));
         await update(voiceState("human-two", "1002"));
-        expect(listener.mock.calls).toEqual([[{ occupied: true }], [{ occupied: false }]]);
+        expect(listener.mock.calls).toEqual([
+          [{ occupied: false }],
+          [{ occupied: true }],
+          [{ occupied: false }],
+        ]);
         stop();
         await update(voiceState("human-one", "1001"));
-        expect(listener).toHaveBeenCalledTimes(2);
+        expect(listener).toHaveBeenCalledTimes(3);
         expect(otherListener.mock.calls).toEqual([
+          [{ occupied: false }],
           [{ occupied: true }],
           [{ occupied: false }],
           [{ occupied: true }],
@@ -108,8 +115,8 @@ defineDiscordVoiceTests(
       expect(listener).toHaveBeenCalledExactlyOnceWith({ occupied: true });
       try {
         for (const sessionId of ["first", "second"]) {
-          await manager.join(room, { transcripts: { sessionId, onUtterance: vi.fn() } });
-          await manager.leave(room, { transcriptsSessionId: sessionId });
+          await startTranscripts(manager, vi.fn(), sessionId, "1001", "primary");
+          await stopTranscripts(sessionId, "1001", "primary");
         }
         await update(voiceState("human-one", null));
         await update(voiceState("human-one", "1001"));
@@ -154,8 +161,16 @@ defineDiscordVoiceTests(
         expect(client.fetchChannel).toHaveBeenCalledExactlyOnceWith("1001");
         expect(createRealtimeVoiceBridgeSessionMock).not.toHaveBeenCalled();
       } finally {
-        setDiscordTranscriptsVoiceManager({ accountId: "primary", manager: null });
+        await discordVoiceTranscriptsSourceProvider.stop?.({
+          sessionId: "notes",
+          source: { providerId: "discord-voice", accountId: "primary", ...room },
+        });
         await manager.destroy();
+        setDiscordTranscriptsVoiceManager({
+          accountId: "primary",
+          manager: null,
+          expectedManager: manager,
+        });
       }
     });
   },

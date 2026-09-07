@@ -10,6 +10,9 @@ export const runtimeProcessDeclarationEntries = {
 };
 export const vitestWorkerDeclarationEntries = {
   ...runtimeProcessDeclarationEntries,
+  "infra/update-managed-service-handoff-runtime-assets":
+    "src/infra/update-managed-service-handoff-runtime-assets.ts",
+  "infra/triage-runtime.test-support": "src/infra/triage-runtime.test-support.ts",
   "cli/cli-entrypoint.test-support": "src/cli/cli-entrypoint.test-support.ts",
   "test-support/channel-ingress-gateway-restart-entrypoint":
     "test/fixtures/channel-ingress-gateway-restart-entrypoint.ts",
@@ -22,6 +25,8 @@ export const vitestWorkerDeclarationEntries = {
   "cron/owner-hardening-runtime.test-support": "src/cron/owner-hardening-runtime.test-support.ts",
   "gateway/server-methods/sessions-list-cache-retention-entrypoint.test-support":
     "src/gateway/server-methods/sessions-list-cache-retention-entrypoint.test-support.ts",
+  "gateway/session-child-cache-retention-entrypoint.test-support":
+    "src/gateway/session-child-cache-retention-entrypoint.test-support.ts",
   "gateway/session-title-retention.test-support":
     "src/gateway/session-title-retention.test-support.ts",
   "node-host/config-runtime.test-support": "src/node-host/config-runtime.test-support.ts",

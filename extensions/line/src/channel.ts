@@ -179,9 +179,10 @@ export const linePlugin: LineChannelPlugin = createChatChannelPlugin({
       idLabel: "lineUserId",
       message: "OpenClaw: your access has been approved.",
       normalizeAllowEntry: createPairingPrefixStripper(/^line:(?:user:)?/i),
-      notify: async ({ cfg, id, message }) => {
+      notify: async ({ cfg, id, message, accountId }) => {
         const account = (getLineRuntime().channel.line?.resolveLineAccount ?? resolveLineAccount)({
           cfg,
+          accountId,
         });
         if (!account.channelAccessToken) {
           throw new Error("LINE channel access token not configured");
