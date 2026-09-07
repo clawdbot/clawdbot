@@ -11,3 +11,9 @@
 .cron-load-more {
   align-self: flex-start;
 }
+
+@media (max-width: 640px) {
+  .cron-table__footer {
+    flex-wrap: wrap;
+  }
+}

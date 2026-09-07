@@ -20,6 +20,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.net.toUri
@@ -28,6 +29,31 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+
+/** Settings entry point; the caller retains native recovery when document-start injection is unavailable. */
+@Composable
+internal fun DashboardSettingsWebView(
+  page: NodeRuntime.GatewayControlPage,
+  modifier: Modifier = Modifier,
+  onUnsupportedWebView: @Composable () -> Unit,
+) {
+  if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+    onUnsupportedWebView()
+    return
+  }
+  val base = page.baseUrl.toUri()
+  val url =
+    base
+      .buildUpon()
+      .encodedPath("${base.encodedPath.orEmpty().trimEnd('/')}/settings")
+      .clearQuery()
+      .fragment(null)
+      .build()
+      .toString()
+  key(page) {
+    ControlUiWebView(page = page, url = url, modifier = modifier, nativeEmbed = true)
+  }
+}
 
 /** Authenticated, hardened WebView host for gateway-served Control UI pages. */
 @SuppressLint("SetJavaScriptEnabled")
@@ -38,8 +64,15 @@ internal fun ControlUiWebView(
   page: NodeRuntime.GatewayControlPage,
   url: String,
   modifier: Modifier = Modifier,
+  nativeEmbed: Boolean = false,
 ) {
   val context = LocalContext.current
+  val formFactor =
+    if (nativeEmbed) {
+      if (LocalConfiguration.current.smallestScreenWidthDp >= 600) "pad" else "phone"
+    } else {
+      null
+    }
   val darkAppearance = LocalResolvedAppearanceIsDark.current
   var rendererGeneration by remember { mutableIntStateOf(0) }
 
@@ -47,7 +80,7 @@ internal fun ControlUiWebView(
   // flip has to rebuild it; keying on the resolved boolean keeps that to real dark/light changes.
   // The reload is safe because both Control UI surfaces reattach to server-side state: the shell
   // outlives the page, and the desktop session lingers on the Gateway long enough to re-observe.
-  key(darkAppearance, rendererGeneration) {
+  key(darkAppearance, rendererGeneration, nativeEmbed, formFactor) {
     AndroidView(
       modifier = modifier,
       factory = {
@@ -75,6 +108,9 @@ internal fun ControlUiWebView(
         // The same client protects both terminal and dashboard pages.
         webView.webViewClient = ControlUiWebViewClient(page) { rendererGeneration += 1 }
         installControlUiAuthScript(webView, page)
+        if (formFactor != null) {
+          installControlUiEmbedScript(webView, page.baseUrl, formFactor)
+        }
         webView.loadUrl(url)
         webView
       },
@@ -83,6 +119,32 @@ internal fun ControlUiWebView(
       },
     )
   }
+}
+
+private fun installControlUiEmbedScript(
+  webView: WebView,
+  baseUrl: String,
+  formFactor: String,
+) {
+  val originRule = controlUiOriginRule(baseUrl) ?: return
+  val payload =
+    buildJsonObject {
+      put("platform", "android")
+      put("formFactor", formFactor)
+    }
+  // Same-origin child frames must not be presented as the native settings document.
+  WebViewCompat.addDocumentStartJavaScript(
+    webView,
+    """
+    if (window === window.top) {
+      Object.defineProperty(window, "__OPENCLAW_NATIVE_EMBED__", {
+        value: $payload,
+        configurable: true,
+      });
+    }
+    """.trimIndent(),
+    setOf(originRule),
+  )
 }
 
 private fun controlUiWebViewContext(
