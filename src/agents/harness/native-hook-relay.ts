@@ -10,8 +10,10 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { resolveProjectedMcpCodexToolApprovalMode } from "../mcp-codex-tool-approval.js";
 import { retainBeforeToolCallForNativeHookRelay } from "./host-private-capabilities.js";
 import {
+  assertNativeHookRelayBridgeReplacementCurrent,
+  beginNativeHookRelayBridgeReplacement,
   clearNativeHookRelayBridgesForTests,
-  NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
+  disposeNativeHookRelayBridgeReplacement,
   NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
   readNativeHookRelayBridgeRecordIfExists,
   registerNativeHookRelayBridge,
@@ -47,6 +49,7 @@ import type {
   ActiveNativeHookRelayRegistration,
   ActiveNativeHookRelayRegistrationHandle,
   InvokeNativeHookRelayParams,
+  NativeHookRelayBridgeReplacement,
   NativeHookRelayEvent,
   NativeHookRelayInvocation,
   NativeHookRelayPermissionApprovalRequest,
@@ -180,13 +183,18 @@ function registerNativeHookRelayInternal(
   }
   const allowedEvents = normalizeAllowedEvents(params.allowedEvents);
   const stateDbPath = resolveOpenClawStateSqlitePath();
-  const deliverReplacedRegistrationUnregister = unregisterNativeHookRelay(relayId, undefined, {
-    deferBridgeRecordRemovalMs: NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
-    deferOnUnregister: true,
-  });
+  // Acquire transport cleanup before old teardown: successor construction can
+  // fail before a registration or its expiry timer exists.
+  const bridgeReplacement = beginNativeHookRelayBridgeReplacement(relayId);
+  let deliverReplacedRegistrationUnregister: (() => void) | undefined;
   let partialRegistration: ActiveNativeHookRelayRegistration | undefined;
+  let retained: RelayLifetime["retained"];
   try {
-    const retained =
+    deliverReplacedRegistrationUnregister = unregisterNativeHookRelay(relayId, undefined, {
+      bridgeReplacement,
+      deferOnUnregister: true,
+    });
+    retained =
       params.runBeforeToolCall && retention
         ? retainBeforeToolCallForNativeHookRelay(params.runBeforeToolCall)
         : undefined;
@@ -227,6 +235,9 @@ function registerNativeHookRelayInternal(
       ...(params.onPreToolUseFailure ? { onPreToolUseFailure: params.onPreToolUseFailure } : {}),
       // SAFETY: the literal supplies the complete mutable internal registration contract.
     } as ActiveNativeHookRelayRegistration;
+    // Old cleanup and registration inputs can reenter. Do not overwrite the
+    // core owner if another replacement already adopted transport cleanup.
+    assertNativeHookRelayBridgeReplacementCurrent(relayId, bridgeReplacement);
     partialRegistration = registration;
     relays.set(relayId, registration);
     setRelayLifetime(registration, {
@@ -245,7 +256,12 @@ function registerNativeHookRelayInternal(
         throw new Error("native hook relay registration aborted");
       }
     }
-    registerNativeHookRelayBridge(registration, stateDbPath, invokeNativeHookRelay);
+    registerNativeHookRelayBridge(
+      registration,
+      stateDbPath,
+      invokeNativeHookRelay,
+      bridgeReplacement,
+    );
     scheduleNativeHookRelayExpiry(relayId, registration);
     const handle: ActiveNativeHookRelayRegistrationHandle = {
       ...registration,
@@ -286,7 +302,10 @@ function registerNativeHookRelayInternal(
   } catch (error) {
     if (partialRegistration) {
       unregisterNativeHookRelay(relayId, partialRegistration);
+    } else {
+      retained?.release();
     }
+    disposeNativeHookRelayBridgeReplacement(relayId, bridgeReplacement);
     throw error;
   } finally {
     // The successor is authoritative before the old callback runs. A reentrant
@@ -300,7 +319,10 @@ function registerNativeHookRelayInternal(
 function unregisterNativeHookRelay(
   relayId: string,
   expectedRegistration?: ActiveNativeHookRelayRegistration,
-  options?: { deferBridgeRecordRemovalMs?: number; deferOnUnregister?: boolean },
+  options?: {
+    bridgeReplacement?: NativeHookRelayBridgeReplacement;
+    deferOnUnregister?: boolean;
+  },
 ): (() => void) | undefined {
   if (expectedRegistration && relays.get(relayId) !== expectedRegistration) {
     return undefined;

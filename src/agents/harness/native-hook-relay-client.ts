@@ -10,6 +10,7 @@ import type {
   NativeHookRelayProcessResponse,
 } from "./native-hook-relay-types.js";
 import {
+  isJsonObject,
   normalizePositiveInteger,
   readNativeHookRelayEvent,
   readNativeHookRelayProvider,
@@ -18,6 +19,7 @@ import {
 
 const MAX_NATIVE_HOOK_BRIDGE_RESPONSE_BYTES = 5_000_000;
 const NATIVE_HOOK_BRIDGE_RETRY_INTERVAL_MS = 25;
+const NATIVE_HOOK_RELAY_BRIDGE_RETIRED_CODE = "NATIVE_HOOK_RELAY_BRIDGE_RETIRED";
 export const NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS = 250;
 export const NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR =
   "native hook relay bridge stale registration";
@@ -139,12 +141,18 @@ function postNativeHookRelayBridgeRecord(params: {
           try {
             const parsed = JSON.parse(responseText) as
               | { ok: true; result: NativeHookRelayProcessResponse }
-              | { ok: false; error?: string };
+              | { ok: false; error?: string; retryable?: boolean };
             if (parsed.ok) {
               resolveOnce(parsed.result);
               return;
             }
-            rejectOnce(new Error(parsed.error || "native hook relay bridge failed"));
+            const error = new Error(parsed.error || "native hook relay bridge failed");
+            if (res.statusCode === 410 && isRetiredNativeHookRelayBridgeResponse(parsed)) {
+              // The bridge rejected before invoking hooks. Refresh the locator
+              // within the original deadline; generation failures keep their old bound.
+              Object.assign(error, { code: NATIVE_HOOK_RELAY_BRIDGE_RETIRED_CODE });
+            }
+            rejectOnce(error);
           } catch (error) {
             rejectOnce(error);
           }
@@ -159,12 +167,23 @@ function postNativeHookRelayBridgeRecord(params: {
   });
 }
 
+function isRetiredNativeHookRelayBridgeResponse(value: unknown): boolean {
+  return (
+    isJsonObject(value) &&
+    value.ok === false &&
+    value.retryable === true &&
+    value.error === NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR
+  );
+}
+
 function isRetryableNativeHookRelayBridgeError(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException).code;
   return (
     code === "ENOENT" ||
     code === "ECONNREFUSED" ||
     code === "EAGAIN" ||
+    (code === NATIVE_HOOK_RELAY_BRIDGE_RETIRED_CODE &&
+      isNativeHookRelayBridgeStaleRegistrationError(error)) ||
     (error instanceof Error && error.message === "native hook relay bridge not found")
   );
 }

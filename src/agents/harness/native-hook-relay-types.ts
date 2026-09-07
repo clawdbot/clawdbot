@@ -248,16 +248,25 @@ export type NativeHookRelayDeferredApprovalOutcome =
       failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">;
     };
 
+/** Exact replacement attempt owning predecessor transport cleanup. */
+export type NativeHookRelayBridgeReplacement = {
+  retired: Set<NativeHookRelayBridgeRegistration>;
+};
+
 export type NativeHookRelayBridgeRegistration = {
   relayId: string;
   stateDbPath: string;
   token: string;
   server: Server;
+  replacement: NativeHookRelayBridgeReplacement;
+  closeTimer?: ReturnType<typeof setTimeout>;
 };
 
 export type NativeHookRelaySharedState = {
   relays: Map<string, ActiveNativeHookRelayRegistration>;
   relayBridges: Map<string, NativeHookRelayBridgeRegistration>;
+  relayBridgeReplacements: Map<string, NativeHookRelayBridgeReplacement>;
+  closingRelayBridges: Set<NativeHookRelayBridgeRegistration>;
   invocations: NativeHookRelayInvocation[];
   pendingPermissionApprovals: Map<string, Promise<NativeHookRelayPermissionApprovalResult>>;
   pendingPreToolUseApprovals: Map<string, NativeHookRelayPreToolUseApproval>;

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { createServer, request as httpRequest } from "node:http";
+import { createServer, request as httpRequest, Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
@@ -141,7 +141,7 @@ function openDeferredNativeHookRelayBridgeRequest(
   record: Pick<NativeHookRelayBridgeRecord, "hostname" | "port" | "token">,
   payload: Record<string, unknown>,
 ): {
-  connected: Promise<void>;
+  readyForBody: Promise<void>;
   response: Promise<Record<string, unknown>>;
   sendBody: () => void;
 } {
@@ -163,6 +163,7 @@ function openDeferredNativeHookRelayBridgeRequest(
         authorization: `Bearer ${record.token}`,
         "content-type": "application/json",
         "content-length": Buffer.byteLength(body),
+        expect: "100-continue",
       },
     },
     (res) => {
@@ -181,15 +182,9 @@ function openDeferredNativeHookRelayBridgeRequest(
       });
     },
   );
-  const connected = new Promise<void>((resolve, reject) => {
-    req.on("socket", (socket) => {
-      socket.on("error", reject);
-      if (socket.connecting) {
-        socket.once("connect", resolve);
-        return;
-      }
-      resolve();
-    });
+  const readyForBody = new Promise<void>((resolve, reject) => {
+    req.once("continue", resolve);
+    req.once("error", reject);
   });
   req.on("error", (error) => {
     if (!settled) {
@@ -199,7 +194,7 @@ function openDeferredNativeHookRelayBridgeRequest(
   });
   req.flushHeaders();
   return {
-    connected,
+    readyForBody,
     response,
     sendBody: () => req.end(body),
   };
@@ -226,6 +221,46 @@ function getNativeHookRelaySharedStateForTests(): NativeHookRelaySharedStateForT
     throw new Error("Expected native hook relay shared state to be initialized");
   }
   return state;
+}
+
+function pauseNextNativeHookRelayListen() {
+  let pending: { server: Server; args: unknown[] } | undefined;
+  const listenSpy = vi.spyOn(Server.prototype, "listen").mockImplementationOnce(function (
+    this: Server,
+    ...args: unknown[]
+  ) {
+    pending = { server: this, args };
+    return this;
+  });
+  const readPending = () => {
+    if (!pending) {
+      throw new Error("Expected pending native hook relay listen");
+    }
+    return pending;
+  };
+  return {
+    readServer: () => readPending().server,
+    resume: async () => {
+      const { server, args } = readPending();
+      listenSpy.mockRestore();
+      await new Promise<void>((resolve, reject) => {
+        server.once("listening", resolve);
+        server.once("error", reject);
+        Reflect.apply(server.listen.bind(server), server, args);
+      });
+    },
+  };
+}
+
+function readNativeHookRelayServerForTests(relayId: string): Server {
+  const bridge = requireRecord(
+    getNativeHookRelaySharedStateForTests().relayBridges.get(relayId),
+    "native hook relay bridge",
+  );
+  if (!(bridge.server instanceof Server)) {
+    throw new Error("Expected native hook relay HTTP server");
+  }
+  return bridge.server;
 }
 
 type NativeHookRelayModuleForTests = typeof import("./native-hook-relay.js");
@@ -886,6 +921,9 @@ describe("native hook relay registry", () => {
         },
       },
     });
+    await waitForNativeHookRelayBridgeRecord(relayId);
+    const predecessorServer = readNativeHookRelayServerForTests(relayId);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const replacementUnregistered = vi.fn();
     registerRetainedNativeHookRelay({
       provider: "codex",
@@ -906,6 +944,14 @@ describe("native hook relay registry", () => {
     expect(testing.getNativeHookRelayRegistrationForTests(relayId)?.runId).toBe(
       "run-callback-successor",
     );
+    const successorServer = readNativeHookRelayServerForTests(relayId);
+    await new Promise<void>((resolve) => {
+      successorServer.once("listening", resolve);
+    });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(predecessorServer.listening).toBe(false);
+    expect(successorServer.listening).toBe(true);
+    vi.useRealTimers();
     await expect(
       invokeNativeHookRelayBridge({
         provider: "codex",
@@ -1530,6 +1576,223 @@ describe("native hook relay registry", () => {
     expect(testing.getNativeHookRelayRegistrationForTests(first.relayId)).toBeUndefined();
   });
 
+  it("keeps the published predecessor listening until successor publication", async () => {
+    const first = registerNativeHookRelay({
+      provider: "codex",
+      relayId: uniqueNativeHookRelayIdForTests("pending-successor-publication"),
+      sessionId: "session-1",
+      runId: "run-first",
+      allowedEvents: ["post_tool_use"],
+    });
+    const firstRecord = await waitForNativeHookRelayBridgeRecord(first.relayId);
+    const firstServer = readNativeHookRelayServerForTests(first.relayId);
+    const pending = pauseNextNativeHookRelayListen();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const successor = registerNativeHookRelay({
+      provider: "codex",
+      relayId: first.relayId,
+      sessionId: "session-1",
+      runId: "run-successor",
+      allowedEvents: ["post_tool_use"],
+    });
+
+    try {
+      // Startup readiness owns handoff. A fixed retirement grace must not make
+      // the still-published endpoint disappear while listen is pending.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(readNativeHookRelayBridgeRecord({ relayId: first.relayId })).toEqual(firstRecord);
+      expect(firstServer.listening).toBe(true);
+      expect(pending.readServer().listening).toBe(false);
+      await pending.resume();
+      const successorRecord = await waitForNativeHookRelayBridgeRecord(first.relayId);
+      expect(successorRecord.token).not.toBe(firstRecord.token);
+      expect(firstServer.listening).toBe(true);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(firstServer.listening).toBe(false);
+      vi.useRealTimers();
+      first.unregister();
+      expect(readNativeHookRelayBridgeRecord({ relayId: first.relayId })).toEqual(successorRecord);
+      await expect(
+        invokeNativeHookRelayBridge({
+          provider: "codex",
+          relayId: successor.relayId,
+          generation: successor.generation,
+          event: "post_tool_use",
+          timeoutMs: 2_000,
+          rawPayload: { hook_event_name: "PostToolUse", tool_name: "Bash", tool_response: {} },
+        }),
+      ).resolves.toMatchObject({ exitCode: 0 });
+    } finally {
+      successor.unregister();
+      firstServer.close();
+      pending.readServer().close();
+    }
+  });
+
+  it("keeps successor commands pending while publication exceeds the replacement grace", async () => {
+    const first = registerNativeHookRelay({
+      provider: "codex",
+      relayId: uniqueNativeHookRelayIdForTests("slow-successor-command"),
+      sessionId: "session-1",
+      runId: "run-first",
+      allowedEvents: ["post_tool_use"],
+    });
+    await waitForNativeHookRelayBridgeRecord(first.relayId);
+    const firstServer = readNativeHookRelayServerForTests(first.relayId);
+    const pending = pauseNextNativeHookRelayListen();
+    const successor = registerNativeHookRelay({
+      provider: "codex",
+      relayId: first.relayId,
+      sessionId: "session-1",
+      runId: "run-successor",
+      allowedEvents: ["post_tool_use"],
+    });
+    const firstResponse = new Promise<void>((resolve) => {
+      firstServer.prependOnceListener("request", (_request, response) => {
+        response.once("finish", resolve);
+      });
+    });
+    let settled = false;
+    const consumer = invokeNativeHookRelayBridge({
+      provider: "codex",
+      relayId: successor.relayId,
+      generation: successor.generation,
+      event: "post_tool_use",
+      timeoutMs: 2_000,
+      rawPayload: { hook_event_name: "PostToolUse", tool_name: "Bash", tool_response: {} },
+    }).then(
+      (result) => {
+        settled = true;
+        return { ok: true as const, result };
+      },
+      (error: unknown) => {
+        settled = true;
+        return { ok: false as const, error };
+      },
+    );
+
+    try {
+      await Promise.race([
+        firstResponse,
+        consumer.then(() => {
+          throw new Error("Successor command settled before the predecessor responded");
+        }),
+      ]);
+      // Delay is the regression stimulus: valid successor commands must survive
+      // a readiness handoff longer than the old 250 ms stale-response grace.
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 350);
+      });
+      expect(settled).toBe(false);
+      expect(firstServer.listening).toBe(true);
+      expect(pending.readServer().listening).toBe(false);
+      await pending.resume();
+      await expect(consumer).resolves.toEqual({
+        ok: true,
+        result: { stdout: "", stderr: "", exitCode: 0 },
+      });
+    } finally {
+      successor.unregister();
+      firstServer.close();
+      pending.readServer().close();
+      await consumer;
+    }
+  });
+
+  it.each(["listen error", "unregister"] as const)(
+    "releases the published predecessor when the pending successor ends by %s",
+    async (outcome) => {
+      const first = registerNativeHookRelay({
+        provider: "codex",
+        relayId: uniqueNativeHookRelayIdForTests("failed-successor-publication"),
+        sessionId: "session-1",
+        runId: "run-first",
+      });
+      await waitForNativeHookRelayBridgeRecord(first.relayId);
+      const firstServer = readNativeHookRelayServerForTests(first.relayId);
+      const pending = pauseNextNativeHookRelayListen();
+      const successor = registerNativeHookRelay({
+        provider: "codex",
+        relayId: first.relayId,
+        sessionId: "session-1",
+        runId: "run-successor",
+      });
+
+      try {
+        if (outcome === "listen error") {
+          pending.readServer().emit("error", new Error("synthetic listener startup failure"));
+        } else {
+          successor.unregister();
+        }
+        expect(firstServer.listening).toBe(false);
+        expect(readNativeHookRelayBridgeRecord({ relayId: first.relayId })).toBeUndefined();
+        if (outcome === "listen error") {
+          // The bridge can fail while the same registration remains usable
+          // through the existing Gateway transport.
+          expect(testing.getNativeHookRelayRegistrationForTests(first.relayId)?.runId).toBe(
+            "run-successor",
+          );
+        } else {
+          expect(testing.getNativeHookRelayRegistrationForTests(first.relayId)).toBeUndefined();
+        }
+
+        // A late listen completion after cancellation cannot republish or leak
+        // a listener whose registration is no longer authoritative.
+        await pending.resume();
+        expect(pending.readServer().listening).toBe(false);
+        expect(readNativeHookRelayBridgeRecord({ relayId: first.relayId })).toBeUndefined();
+      } finally {
+        successor.unregister();
+        firstServer.close();
+        pending.readServer().close();
+      }
+    },
+  );
+
+  it.each(["registration", "bridge"] as const)(
+    "removes the published predecessor when successor %s construction throws",
+    async (phase) => {
+      const first = registerNativeHookRelay({
+        provider: "codex",
+        relayId: uniqueNativeHookRelayIdForTests("successor-construction-failure"),
+        sessionId: "session-1",
+        runId: "run-first",
+      });
+      await waitForNativeHookRelayBridgeRecord(first.relayId);
+      const firstServer = readNativeHookRelayServerForTests(first.relayId);
+      const fail = () => {
+        throw new Error("synthetic construction failure");
+      };
+      if (phase === "bridge") {
+        vi.spyOn(nativeHookRelayBridge, "registerNativeHookRelayBridge").mockImplementationOnce(
+          fail,
+        );
+      }
+
+      try {
+        expect(() =>
+          registerNativeHookRelay({
+            provider: "codex",
+            relayId: first.relayId,
+            sessionId: "session-1",
+            runId: "run-successor",
+            get runBeforeToolCall() {
+              if (phase === "registration") {
+                fail();
+              }
+              return undefined;
+            },
+          }),
+        ).toThrow("synthetic construction failure");
+        expect(firstServer.listening).toBe(false);
+        expect(readNativeHookRelayBridgeRecord({ relayId: first.relayId })).toBeUndefined();
+        expect(testing.getNativeHookRelayRegistrationForTests(first.relayId)).toBeUndefined();
+      } finally {
+        firstServer.close();
+      }
+    },
+  );
+
   it("exposes registered relays through the direct hook bridge", async () => {
     const relay = registerNativeHookRelay({
       provider: "codex",
@@ -1580,10 +1843,7 @@ describe("native hook relay registry", () => {
         tool_input: { command: "pnpm test" },
       },
     });
-    await staleRequest.connected;
-    await new Promise((resolve) => {
-      setTimeout(resolve, 25);
-    });
+    await staleRequest.readyForBody;
 
     const second = registerNativeHookRelay({
       provider: "codex",
@@ -1614,6 +1874,48 @@ describe("native hook relay registry", () => {
         },
       }),
     ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
+  });
+
+  it("cleans connections still draining after a predecessor listener closes", async () => {
+    const first = registerNativeHookRelay({
+      provider: "codex",
+      relayId: uniqueNativeHookRelayIdForTests("draining-predecessor"),
+      sessionId: "session-1",
+      runId: "run-first",
+    });
+    const record = await waitForNativeHookRelayBridgeRecord(first.relayId);
+    const predecessor = readNativeHookRelayServerForTests(first.relayId);
+    const request = openDeferredNativeHookRelayBridgeRequest(record, {
+      provider: "codex",
+      relayId: first.relayId,
+      generation: first.generation,
+      event: "post_tool_use",
+      rawPayload: { hook_event_name: "PostToolUse", tool_name: "Bash", tool_response: {} },
+    });
+    const closed = request.response.then(
+      () => false,
+      () => true,
+    );
+    await request.readyForBody;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    registerNativeHookRelay({
+      provider: "codex",
+      relayId: first.relayId,
+      sessionId: "session-1",
+      runId: "run-successor",
+    });
+    const successor = readNativeHookRelayServerForTests(first.relayId);
+    await new Promise<void>((resolve) => {
+      successor.once("listening", resolve);
+    });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(predecessor.listening).toBe(false);
+    vi.useRealTimers();
+
+    // Graceful close still owns the request waiting for its body. Teardown
+    // must reach that retired socket even after it stopped accepting traffic.
+    testing.clearNativeHookRelaysForTests();
+    await expect(closed).resolves.toBe(true);
   });
 
   it("rejects late stale direct bridge commands after stable relay id replacement", async () => {
