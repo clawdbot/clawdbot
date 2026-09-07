@@ -120,6 +120,36 @@ describe("Telegram setup promotion contract", () => {
     ]);
     expect(next.channels?.telegram?.botToken).toBeUndefined();
   });
+
+  it("keeps the default token when the configured default matches no account during named setup", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          botToken: "root-tok",
+          defaultAccount: "missing",
+          accounts: { personal: { name: "P" } },
+        },
+      },
+    };
+    const promoted = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg,
+      channelKey: "telegram",
+      setupSurface: telegramSetupContract as ChannelSetupAdapter,
+    });
+    const written = telegramSetupContract.applyAccountConfig({
+      cfg: promoted,
+      accountId: "new-account",
+      input: { token: "789:NEW_TEST_TOKEN" },
+    });
+    // Check the serialized configuration rather than an in-memory clone.
+    const serialized = JSON.stringify(written);
+    const next = JSON.parse(serialized) as OpenClawConfig;
+
+    expect(resolveTelegramAccount({ cfg: next, accountId: "default" }).token).toBe("root-tok");
+    expect(next.channels?.telegram?.accounts?.personal).toEqual({ name: "P" });
+    expect(next.channels?.telegram?.accounts?.missing).toBeUndefined();
+    expect(next.channels?.telegram?.botToken).toBeUndefined();
+  });
 });
 
 describe("ensureTelegramDefaultGroupMentionGate", () => {

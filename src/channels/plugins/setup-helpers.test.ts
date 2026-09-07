@@ -647,6 +647,31 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
     expect(channel.botToken).toBeUndefined();
   });
 
+  it("falls back to default when the configured default matches no account", () => {
+    const next = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg: asConfig({
+        channels: {
+          telegram: {
+            botToken: "root-tok",
+            defaultAccount: "missing",
+            accounts: { personal: { name: "P" } },
+          },
+        },
+      }),
+      channelKey: "telegram",
+      setupSurface: {
+        applyAccountConfig: ({ cfg }) => cfg,
+        singleAccountKeysToMove: ["botToken"],
+      },
+    });
+
+    const channel = channelRecord(next, "telegram");
+    expect(accountsRecord(channel).default).toEqual({ botToken: "root-tok" });
+    expect(accountsRecord(channel).personal).toEqual({ name: "P" });
+    expect(accountsRecord(channel).missing).toBeUndefined();
+    expect(channel.botToken).toBeUndefined();
+  });
+
   it("takes the exact key beside a dotted alias listed first when the channel declares nothing", () => {
     const next = moveSingleAccountChannelSectionToDefaultAccount({
       cfg: asConfig({
@@ -743,11 +768,9 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
       setupSurface: signalSetupSurface,
     });
 
-    // The default-account branch names the first key normalizing to "ops", which is "Ops.", and
-    // Signal's resolver selects "OPS" for that id, so the promotion lands there and keeps the
-    // authored spelling instead of creating a canonical "ops" entry. The shape is a Signal one on
-    // purpose. Matrix declares nothing, its reader selects "Ops." through
-    // resolveNormalizedAccountEntry, and the default rule keeps promoting into "Ops." for it.
+    // The configured default names the id "ops". Signal's declared writer selects "OPS" for it
+    // and leaves "Ops." untouched. Without the declaration, the normalized scan selects "Ops."
+    // in this map, which is also the key Matrix's normalized account lookup selects.
     const channel = channelRecord(next, "signal");
     expect(accountRecord(channel, "OPS")).toEqual({ name: "Variant", account: "+15555550100" });
     expect(accountRecord(channel, "Ops.")).toEqual({ name: "Alias" });

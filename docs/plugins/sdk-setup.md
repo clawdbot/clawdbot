@@ -438,7 +438,7 @@ When a channel upgrades from a single-account top-level config to `channels.<id>
 Every channel plugin can extend or narrow that promotion through its setup adapter:
 
 - `configPromotion: "preserve-root"`: keep all root values in place, including common name, policy, and delivery fields; the plugin owns its account layout
-- `accountEntryLookup: "case-insensitive"`: the channel's readers select account entries with `resolveAccountEntry` (the exact key, else the first case-folded key), so promoted values land where that lookup reads. Omit it for the default, which keeps the previous promotion rule, the first key that normalizes to the target, and takes an exact key ahead of it. That pair is not the whole of `resolveNormalizedAccountEntry`, which also passes over blocked keys and keys with no canonical form
+- `accountEntryLookup: "case-insensitive"`: the channel's readers select account entries with `resolveAccountEntry` (the exact key, else the first case-folded key), so promoted values land where that lookup reads. When omitted, promotion prefers an exact target key, then uses the existing normalized fallback scan. That pair is not the whole of `resolveNormalizedAccountEntry`, which also passes over blocked keys and keys with no canonical form
 - `singleAccountKeysToMove`: extra top-level keys that should move into the promoted account
 - `namedAccountPromotionKeys`: when named accounts already exist, only these keys move into the promoted account; shared policy/delivery keys stay at the channel root
 - `resolveSingleAccountPromotionTarget(...)`: choose which existing account receives promoted values

@@ -252,11 +252,9 @@ describe("signalSetupAdapter account keys", () => {
       accounts: { "!!!": { name: "Bang" } },
     });
 
-    // Signal lists "!!!" as default (listConfiguredAccountIds in
-    // src/channels/plugins/account-helpers.ts) and the promotion, with one map key, writes the root
-    // number into that key however it is spelled (src/channels/plugins/setup-helpers.ts:385-386),
-    // while the account lookup never selects it. An oracle that drops keys with no optional
-    // normalized form would preview no write there and let the number vanish into "!!!".
+    // Signal lists "!!!" as default, and the declared writer targets the canonical default key.
+    // The guard checks that written id against the unrepaired alias and asks for repair before
+    // setup can create a second entry. The authored "!!!" key is not the write destination.
     expect(
       signalSetupAdapter.validateInput?.({ cfg, accountId: "work", input: externalNativeInput }),
     ).toBe(
@@ -290,9 +288,8 @@ describe("signalSetupAdapter account keys", () => {
     });
     const authored = structuredClone(cfg);
 
-    // The configured defaultAccount resolves to the first key normalizing to "work-phone"
-    // (src/channels/plugins/setup-helpers.ts:375-384), the case variant the account lookup also
-    // selects, so the promotion lands where the account resolver looks.
+    // The configured default names the id "work-phone". The declared writer selects "Work-Phone"
+    // for that id, matching the account resolver, and leaves the "Work Phone" alias untouched.
     expect(
       signalSetupAdapter.validateInput?.({
         cfg,

@@ -329,15 +329,8 @@ function resolveExistingAccountKey(
   accountEntryLookup: ChannelSetupAdapter["accountEntryLookup"],
 ): string {
   if (accountEntryLookup !== "case-insensitive") {
-    // The exact-key step mirrors the first step of resolveNormalizedAccountEntry, the lookup these
-    // channels' readers use (src/routing/account-lookup.ts:35-37), so accounts.default receives the
-    // moved values even when accounts.Default is listed before it. The scan below is the previous
-    // promotion rule unchanged, the first key in map order whose normalized id is the target, which
-    // keeps an alias such as accounts["Work.Bot"] from gaining a canonical twin that would shadow
-    // it. Together they are not that whole lookup, which also passes over blocked keys and keys
-    // with no canonical form (:39-47). The target is still a raw existing key on the sole-named-key
-    // path, and Object.hasOwn returns it just as the scan's fallback would, since no second named
-    // key can carry the same id.
+    // Prefer an exact target key before the existing normalized scan. The scan retains its
+    // existing treatment of blocked and canonical-less keys.
     if (Object.hasOwn(accounts, targetAccountId)) {
       return targetAccountId;
     }
