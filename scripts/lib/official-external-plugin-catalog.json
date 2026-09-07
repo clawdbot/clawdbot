@@ -711,6 +711,24 @@
       }
     },
     {
+      "name": "@openclaw/team-reports",
+      "description": "OpenClaw team activity reports plugin (GitHub org + Discord activity with model summaries)",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "team-reports",
+          "label": "Team Reports"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/team-reports",
+          "npmSpec": "@openclaw/team-reports",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/teams-meetings",
       "description": "OpenClaw Microsoft Teams browser meeting participant plugin.",
       "source": "official",
