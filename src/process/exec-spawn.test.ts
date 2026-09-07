@@ -1,3 +1,4 @@
+import type { ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import process from "node:process";
 import { describe, expect, it } from "vitest";
@@ -17,14 +18,15 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
         stdio: "ignore",
         reject: false,
       });
-      let child: ReturnType<typeof spawnCommand> | undefined;
+      let child: ChildProcess | undefined;
+      let childResult: Promise<unknown> | undefined;
       let descendantPid: number | undefined;
       const failure = new Error("scope fixture failure");
       try {
         const running = withCommandProcessScope(async (stop) => {
           const descendant =
             "process.on('SIGTERM',()=>{});setInterval(()=>{},1000);process.send('ready');";
-          child = spawnCommand(
+          const command = spawnCommand(
             [
               process.execPath,
               "-e",
@@ -35,13 +37,15 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
             ],
             { stdio: ["ignore", "pipe", "pipe"], ipc: true, reject: false },
           );
-          const [message] = await once(child.nodeChildProcess, "message", {
+          child = command.nodeChildProcess;
+          childResult = command;
+          const [message] = await once(child, "message", {
             signal: AbortSignal.timeout(3_000),
           });
           descendantPid = Number(message);
           expect(Number.isSafeInteger(descendantPid)).toBe(true);
           if (exitParent) {
-            await child;
+            await command;
           }
           expect(isPidAlive(descendantPid)).toBe(true);
           if (completion === "explicit") {
@@ -62,13 +66,13 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
           throw new Error("Scope did not receive its descendant PID");
         }
         expect(await waitForPidToExit(descendantPid)).toBe(true);
-        await child;
+        await childResult;
         expect(isPidAlive(unrelated.pid!)).toBe(true);
       } finally {
         killPidIfAlive(child?.pid);
         killPidIfAlive(descendantPid);
         killPidIfAlive(unrelated.pid);
-        await child;
+        await childResult;
         await unrelated;
       }
     },
