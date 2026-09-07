@@ -797,9 +797,8 @@ with recovery guidance. `config.set` acknowledges persistence only.
 channel policy diagnostics shown in the Control UI and `openclaw channels status`.
 `channels.start` also returns a diagnostic when that channel's reload is deferred;
 manual stop/start continues to use the published runtime configuration. Wait for
-active work to finish and refresh status, or use `config.get` to inspect the active
-configuration. These diagnostics describe deferred channel reloads, not every
-persisted-but-unapplied configuration state.
+active work to finish and refresh status. These diagnostics describe deferred
+channel reloads, not every persisted-but-unapplied configuration state.
 
 Once a reload has committed, it finishes its model and channel work before a
 newer config is applied. If that work needs restart recovery, the RPC returns

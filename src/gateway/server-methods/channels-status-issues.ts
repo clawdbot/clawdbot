@@ -21,7 +21,7 @@ export function resolveDeferredChannelReloadIssue(
     message: deferred.publicationPending
       ? "Channel configuration reload is deferred while active work finishes. The previous configuration is still in use."
       : "Channel reload is deferred while active work finishes.",
-    fix: "Wait for active work to finish, then refresh channel status. Stopping and starting the channel does not apply unpublished configuration; use config.get to inspect the active configuration.",
+    fix: "Wait for active work to finish, then refresh channel status. Stopping and starting the channel does not apply unpublished configuration.",
   };
 }
 
