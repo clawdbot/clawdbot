@@ -18,10 +18,10 @@ export function createStageTimingTracker(now: () => number = () => Date.now()) {
     return currentAt;
   };
   return {
-    mark(name: string) {
+    mark: (name: string) => {
       previousAt = record(name, previousAt);
     },
-    async measure<T>(name: string, run: () => Promise<T> | T): Promise<T> {
+    measure: async <T>(name: string, run: () => Promise<T> | T): Promise<T> => {
       const spanStartedAt = now();
       try {
         return await run();
@@ -29,7 +29,7 @@ export function createStageTimingTracker(now: () => number = () => Date.now()) {
         record(name, spanStartedAt);
       }
     },
-    measureSync<T>(name: string, run: () => T): T {
+    measureSync: <T>(name: string, run: () => T): T => {
       const spanStartedAt = now();
       try {
         return run();
@@ -37,7 +37,7 @@ export function createStageTimingTracker(now: () => number = () => Date.now()) {
         record(name, spanStartedAt);
       }
     },
-    snapshot(): StageTimingSummary {
+    snapshot: (): StageTimingSummary => {
       return { totalMs: toMs(now() - startedAt), stages: stages.slice() };
     },
   };
