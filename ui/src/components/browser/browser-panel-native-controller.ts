@@ -123,6 +123,9 @@ export class BrowserPanelNativeController {
       this.controller.exitCaptureModes();
       if (next) {
         void this.controller.selectTab(next.id);
+      } else {
+        // The closed tab's address must not linger in the empty panel.
+        this.controller.syncUrlDraft("");
       }
     } else if (!this.controller.activeTargetId && this.nativeTabs[0]) {
       void this.controller.selectTab(this.nativeTabs[0].id);

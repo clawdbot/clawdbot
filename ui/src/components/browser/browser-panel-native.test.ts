@@ -303,6 +303,19 @@ describe("native Browser panel ownership", () => {
     expect(controller.tabs.map((tab) => tab.id)).toEqual(["mac-one", "remote"]);
   });
 
+  it("clears the address bar when the last tab closes without a successor", async () => {
+    fakeNativeBrowser([nativeTab("mac-one")]);
+    const { controller } = controllerFixture();
+    await controller.refreshAll();
+    await controller.closeTab("remote");
+    await controller.selectTab("mac-one");
+    expect(controller.urlDraft).toBe("https://example.test/page");
+    await controller.closeTab("mac-one");
+    expect(controller.activeTargetId).toBeNull();
+    expect(controller.tabs).toEqual([]);
+    expect(controller.urlDraft).toBe("");
+  });
+
   it("deduplicates presentations, hides a covered stage, and restores only after every occluder closes", () => {
     const native = fakeNativeBrowser([nativeTab("mac-one")]);
     const { controller } = controllerFixture();
