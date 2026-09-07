@@ -67,6 +67,14 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
       message: "Sync the team calendar and summarize schedule conflicts.",
     },
     delivery: { mode: "announce", channel: "telegram", to: "@operations" },
+    failureAlert: {
+      after: 2,
+      channel: "telegram",
+      to: "@operations",
+      cooldownMs: 3_600_000,
+      includeSkipped: false,
+      mode: "announce",
+    },
     state: {
       nextRunAtMs: baseTime + 5 * hour,
       lastRunAtMs: baseTime - 5 * minute,
@@ -76,6 +84,8 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
       lastDurationMs: 8_420,
       consecutiveErrors: 2,
       lastDeliveryStatus: "not-requested",
+      lastFailureNotificationDelivered: true,
+      lastFailureNotificationDeliveryStatus: "delivered",
     },
   };
   const extraFailedJobs: CronJob[] = richAttention
@@ -249,6 +259,7 @@ export function buildCronMocks(baseTime: number, options: { richAttention?: bool
       durationMs: overdueJob.state?.lastDurationMs,
       summary: "Classified 23 messages and prepared 6 replies.",
       deliveryStatus: "not-requested",
+      deliverySuppressionReason: "Delivery mode is none for this inbox-only automation.",
       model: "gpt-5.6-sol",
       provider: "openai",
     },

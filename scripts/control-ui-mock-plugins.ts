@@ -304,3 +304,61 @@ export function buildPluginSetEnabledMock() {
     ],
   };
 }
+
+export function buildPluginLifecycleMocks() {
+  const catalog = buildPluginCatalogMock().plugins;
+  const installCases = ["browser", "canvas"].map((pluginId) => {
+    const plugin = catalog.find((entry) => entry.id === pluginId);
+    if (!plugin) {
+      throw new Error(`Mock catalog plugin "${pluginId}" is missing`);
+    }
+    return {
+      match: { source: "official", pluginId },
+      response: {
+        ok: true,
+        plugin: { ...plugin, installed: true, enabled: true, state: "enabled" },
+        restartRequired: true,
+      },
+    };
+  });
+  return {
+    search: {
+      cases: [
+        {
+          match: { query: "browser" },
+          response: {
+            results: [
+              {
+                score: 1,
+                package: {
+                  name: "openclaw/browser",
+                  displayName: "Browser",
+                  family: "code-plugin",
+                  channel: "official",
+                  isOfficial: true,
+                  runtimeId: "browser",
+                  summary: "Managed browser research and automation.",
+                },
+              },
+            ],
+          },
+        },
+        { response: { results: [] } },
+      ],
+    },
+    install: { cases: installCases },
+    uninstall: {
+      cases: [
+        {
+          match: { pluginId: "discord" },
+          response: {
+            ok: true,
+            pluginId: "discord",
+            restartRequired: true,
+            removed: ["config entry", "install record", "plugin directory"],
+          },
+        },
+      ],
+    },
+  };
+}

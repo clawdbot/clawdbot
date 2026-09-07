@@ -39,6 +39,38 @@ export function buildSkillWorkshopMocks(baseTime: number) {
       scanState: "clean",
     },
   ];
+  const revisionHash = "b".repeat(64);
+  const recordFor = (proposal: (typeof proposals)[number]) => ({
+    schema: "openclaw.skill-workshop.proposal.v1",
+    ...proposal,
+    createdBy: { type: "agent", id: "main" },
+    proposedVersion: "2",
+    draftFile: "PROPOSAL.md",
+    draftHash: "a".repeat(64),
+    target: { skillName: proposal.skillName, skillKey: proposal.skillKey },
+    scan: { state: proposal.scanState, scannedAt: new Date(baseTime - hour).toISOString() },
+  });
+  const evaluation = {
+    id: "evaluation-control-ui-mock",
+    proposedVersion: "2",
+    revisionHash,
+    trigger: "manual",
+    startedAt: new Date(baseTime - 20_000).toISOString(),
+    completedAt: new Date(baseTime - 18_000).toISOString(),
+    outcomes: [
+      {
+        pluginId: "fixture-quality",
+        pluginVersion: "1.0.0",
+        evaluatorId: "readability",
+        status: "completed",
+        result: {
+          summary: "The workflow is bounded and includes a recovery step.",
+          decision: "allow",
+          decisionReason: "No blocking findings in the sanitized fixture.",
+        },
+      },
+    ],
+  };
   return {
     list: {
       schema: "openclaw.skill-workshop.proposals-manifest.v1",
@@ -51,10 +83,10 @@ export function buildSkillWorkshopMocks(baseTime: number) {
         match: { proposalId: proposal.id },
         response: {
           record: {
-            ...proposal,
-            proposedVersion: "2",
-            target: { skillName: proposal.skillName, skillKey: proposal.skillKey },
+            ...recordFor(proposal),
+            ...(proposal.id === "prop-release-tweets" ? { evaluation } : {}),
           },
+          revisionHash,
           content: [
             `# ${proposal.title}`,
             "",
@@ -68,6 +100,36 @@ export function buildSkillWorkshopMocks(baseTime: number) {
         },
       })),
     },
+    evaluate: {
+      cases: proposals.map((proposal) => ({
+        match: { proposalId: proposal.id },
+        response: { record: { ...recordFor(proposal), evaluation }, evaluation },
+      })),
+    },
+    apply: {
+      cases: proposals.map((proposal) => ({
+        match: { proposalId: proposal.id },
+        response: {
+          record: {
+            ...recordFor(proposal),
+            status: "applied",
+            appliedAt: new Date(baseTime).toISOString(),
+          },
+          targetSkillFile: `.agents/skills/${proposal.skillKey}/SKILL.md`,
+        },
+      })),
+    },
+    reject: {
+      cases: proposals.map((proposal) => ({
+        match: { proposalId: proposal.id },
+        response: {
+          ...recordFor(proposal),
+          status: "rejected",
+          rejectedAt: new Date(baseTime).toISOString(),
+        },
+      })),
+    },
+    requestRevision: { runId: "skill-workshop-revision-mock", status: "started" },
     historyStatus: {
       schema: "openclaw.skill-workshop.history-scan.v1",
       hasScanned: false,
