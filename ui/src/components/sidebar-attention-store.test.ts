@@ -119,6 +119,54 @@ describe("sidebar attention source publication", () => {
     );
   });
 
+  it.each(["hidden", "disposed"] as const)(
+    "does not restart a changed inventory snapshot after becoming %s during append",
+    async (boundary) => {
+      let visibility: DocumentVisibilityState = "visible";
+      vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+      const pendingAppend = deferred<CronJobsListResult>();
+      const offsets: number[] = [];
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        if (method === "cron.list") {
+          const offset = isRecord(params) ? Number(params.offset ?? 0) : 0;
+          offsets.push(offset);
+          if (offset === 1) {
+            return pendingAppend.promise;
+          }
+          return offsets.length === 1
+            ? { ...cronPage("previous"), total: 2, hasMore: true, nextOffset: 1 }
+            : cronPage("current");
+        }
+        return method === "cron.status"
+          ? { enabled: true, triggersEnabled: true, jobs: 2 }
+          : { ts: 1, providers: [] };
+      });
+      const harness = createGatewayHarness(mockClient(request));
+      store = createStore(harness.gateway);
+      store.activate(SidebarAttentionStoreController);
+      await waitForFast(() => expect(offsets).toEqual([0, 1]));
+
+      if (boundary === "hidden") {
+        visibility = "hidden";
+        document.dispatchEvent(new Event("visibilitychange"));
+      } else {
+        store.dispose();
+      }
+      pendingAppend.resolve({ ...cronPage("changed"), total: 2, offset: 1 });
+      await new Promise<void>((resolve) => {
+        globalThis.setTimeout(resolve, 0);
+      });
+      expect(offsets).toEqual([0, 1]);
+
+      if (boundary === "hidden") {
+        visibility = "visible";
+        document.dispatchEvent(new Event("visibilitychange"));
+        await waitForFast(() => expect(store?.entries).toMatchObject([{ label: "current" }]));
+        expect(offsets).toEqual([0, 1, 0]);
+      }
+    },
+  );
+
   it.each(["list", "status"] as const)(
     "coalesces cron bursts until the whole inventory pair settles (%s first)",
     async (first) => {

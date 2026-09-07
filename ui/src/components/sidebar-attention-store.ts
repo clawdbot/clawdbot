@@ -236,6 +236,7 @@ export class SidebarAttentionStoreController implements StoreController {
             }
             refresh.requested = false;
             const cron = createInitialCronState({ client, connected: true });
+            cron.canRefresh = canRefreshCron;
             cron.cronAgentId = agentScope.scopeId;
             await Promise.all([loadCronJobsPage(cron), loadCronStatus(cron)]);
             while (
