@@ -140,6 +140,7 @@ describe("Baseten provider registration", () => {
       });
       const noninteractive = await method.runNonInteractive({
         authChoice: "baseten-api-key",
+        opts: {},
         config,
         baseConfig: config,
         runtime: createRuntimeEnv(),
@@ -203,6 +204,7 @@ describe("Baseten provider registration", () => {
       const authenticate = (config: OpenClawConfig) =>
         run({
           authChoice: "baseten-api-key",
+          opts: {},
           config,
           baseConfig: config,
           runtime: createRuntimeEnv(),
