@@ -1680,6 +1680,7 @@
     "deps:pins:check": "node --import ./scripts/tsx.mjs scripts/check-dependency-pins.mts",
     "deps:npm-lock:check": "node scripts/generate-npm-package-lock.mjs --all",
     "deps:npm-lock:check:changed": "node scripts/generate-npm-package-lock.mjs --changed",
+    "deps:npm-lock:report": "node --import ./scripts/tsx.mjs scripts/npm-package-locks-report.mts",
     "deps:ownership-surface:check": "node --import ./scripts/tsx.mjs scripts/dependency-ownership-surface-report.mts --check",
     "deps:ownership-surface:report": "node --import ./scripts/tsx.mjs scripts/dependency-ownership-surface-report.mts",
     "deps:transitive-risk:report": "node --import ./scripts/tsx.mjs scripts/transitive-manifest-risk-report.mts",
