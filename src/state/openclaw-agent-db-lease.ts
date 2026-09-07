@@ -179,7 +179,7 @@ export function assertNoOpenClawAgentDatabaseLeases(
       database.db,
       db
         .selectFrom("agent_database_leases")
-        .select(["agent_id", "lease_id", "owner_pid", "owner_start_time", "path"]),
+        .select(["agent_id", "lease_id", "owner_pid", "owner_start_time", "opened_at", "path"]),
     ).rows;
   }, options);
 
@@ -189,6 +189,15 @@ export function assertNoOpenClawAgentDatabaseLeases(
         return true;
       }
       const currentStartTime = getFileLockProcessStartTime(row.owner_pid);
+      // Legacy Windows rows lack exact process identity. Both timestamps are epoch
+      // milliseconds, so a later process start proves that the PID was reused.
+      if (
+        process.platform === "win32" &&
+        row.owner_start_time === null &&
+        currentStartTime !== null
+      ) {
+        return currentStartTime > row.opened_at;
+      }
       return (
         row.owner_start_time !== null &&
         currentStartTime !== null &&
