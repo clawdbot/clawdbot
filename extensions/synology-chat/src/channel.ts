@@ -221,6 +221,7 @@ type SynologyChatPlugin = Omit<
   };
   outbound: {
     deliveryMode: "gateway";
+    resolveTarget: NonNullable<ChannelOutboundAdapter["resolveTarget"]>;
     chunker: NonNullable<ChannelOutboundAdapter["chunker"]>;
     chunkerMode: NonNullable<ChannelOutboundAdapter["chunkerMode"]>;
     textChunkLimit: number;
@@ -323,13 +324,11 @@ async function sendSynologyChatMedia(
     mediaReadFile: ctx.mediaReadFile,
   });
   const dispatch = ctx.onPlatformSendDispatch;
-  const sendResult = await sendHostedFileUrl(
-    incomingUrl,
-    prepared.url,
-    ctx.to,
-    account.allowInsecureSsl,
-    ...(dispatch ? [dispatch] : []),
-  ).catch(async (error: unknown) => {
+  const sendArgs: Parameters<typeof sendHostedFileUrl> =
+    dispatch || ctx.text
+      ? [incomingUrl, prepared.url, ctx.to, account.allowInsecureSsl, dispatch, ctx.text]
+      : [incomingUrl, prepared.url, ctx.to, account.allowInsecureSsl];
+  const sendResult = await sendHostedFileUrl(...sendArgs).catch(async (error: unknown) => {
     await Promise.allSettled([prepared.cleanup()]);
     throw error;
   });
@@ -538,6 +537,12 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
     },
     outbound: {
       deliveryMode: "gateway" as const,
+      resolveTarget: ({ to }) => {
+        const target = normalizeSynologyChatTarget(to ?? "");
+        return target
+          ? { ok: true as const, to: target }
+          : { ok: false as const, error: new Error("Synology Chat target must be a user ID") };
+      },
       chunker: chunkTextForOutbound,
       chunkerMode: "markdown" as const,
       textChunkLimit: SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT,

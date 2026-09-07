@@ -60,6 +60,16 @@ describe("Synology Chat client loopback", () => {
     }
   });
 
+  it("validates and canonicalizes outbound recipients before delivery", () => {
+    expect(synologyChatPlugin.outbound.resolveTarget?.({ to: "42abc" })).toMatchObject({
+      ok: false,
+    });
+    expect(synologyChatPlugin.outbound.resolveTarget?.({ to: " synology-chat:+0042 " })).toEqual({
+      ok: true,
+      to: "42",
+    });
+  });
+
   it("retries once when a real connection refusal occurs before the listener starts", async () => {
     const port = await reserveLoopbackPort();
     const nativeSetTimeout = globalThis.setTimeout;
@@ -289,7 +299,11 @@ describe("Synology Chat client loopback", () => {
       { text: "native outbound text", user_ids: [42] },
       { file_url: hostedCapabilityUrl, user_ids: [42] },
       { text: "durable adapter text", user_ids: [42] },
-      { file_url: hostedCapabilityUrl, user_ids: [42] },
+      {
+        text: "durable adapter media",
+        file_url: hostedCapabilityUrl,
+        user_ids: [42],
+      },
     ]);
     expect(durableText).toBeDefined();
     expect(durableMedia).toBeDefined();

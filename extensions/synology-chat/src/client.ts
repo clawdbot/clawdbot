@@ -181,10 +181,14 @@ export async function sendHostedFileUrl(
   userId?: string | number,
   allowInsecureSsl = false,
   onPlatformSendDispatch?: () => Promise<void>,
+  text?: string,
 ): Promise<SynologyHostedFileSendResult> {
   let body: string;
   try {
-    body = buildWebhookBody({ file_url: assertHostedMediaUrl(fileUrl) }, userId);
+    body = buildWebhookBody(
+      { file_url: assertHostedMediaUrl(fileUrl), ...(text ? { text } : {}) },
+      userId,
+    );
   } catch {
     return { status: "not-dispatched" };
   }
