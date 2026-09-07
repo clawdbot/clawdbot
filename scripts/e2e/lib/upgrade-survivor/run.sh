@@ -68,7 +68,11 @@ chmod 700 "$RUNTIME_ROOT"
 export TMPDIR="${OPENCLAW_UPGRADE_SURVIVOR_TMPDIR:-$RUNTIME_ROOT/tmp}"
 export OPENCLAW_TEST_STATE_TMPDIR="${OPENCLAW_UPGRADE_SURVIVOR_TEST_STATE_TMPDIR:-$RUNTIME_ROOT/state-tmp}"
 mkdir -p "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR"
-export npm_config_prefix="$ARTIFACT_ROOT/npm-prefix"
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  export npm_config_prefix="$RUNTIME_ROOT/npm-prefix"
+else
+  export npm_config_prefix="$ARTIFACT_ROOT/npm-prefix"
+fi
 export NPM_CONFIG_PREFIX="$npm_config_prefix"
 export npm_config_cache="${OPENCLAW_UPGRADE_SURVIVOR_NPM_CACHE:-$OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT/npm-cache}"
 export NPM_CONFIG_CACHE="$npm_config_cache"
@@ -100,6 +104,7 @@ FAILURE_SIGNAL=""
 gateway_pid=""
 plugin_registry_pid=""
 clawhub_fixture_pid=""
+mock_openai_pid=""
 baseline_spec=""
 baseline_version=""
 baseline_version_expected="0"
@@ -118,6 +123,8 @@ initial_update_observation_root=""
 last_update_observation_root=""
 idempotence_seconds=""
 run_completed="0"
+update_outcome=""
+update_exit_code=""
 
 BASELINE_INSTALL_LOG="$ARTIFACT_ROOT/baseline-install.log"
 UPDATE_JSON="$ARTIFACT_ROOT/update.json"
@@ -258,6 +265,7 @@ write_summary() {
     SUMMARY_CANDIDATE_INSTALL_MODE="$candidate_install_mode" \
     SUMMARY_SCENARIO="$SCENARIO" \
     SUMMARY_UPDATE_RESTART_MODE="$UPDATE_RESTART_MODE" \
+    SUMMARY_UPDATE_OUTCOME="${update_outcome:-success}" \
     SUMMARY_UPDATE_REPAIR_REQUIRED="$update_repair_required" \
     SUMMARY_UPDATE_RESTART_SOURCE="$update_restart_source" \
     SUMMARY_START_SECONDS="$start_seconds" \
@@ -305,6 +313,7 @@ const summary = {
   installedVersion: process.env.SUMMARY_INSTALLED_VERSION || null,
   candidateInstallMode: process.env.SUMMARY_CANDIDATE_INSTALL_MODE || "updater",
   updateRestartMode: process.env.SUMMARY_UPDATE_RESTART_MODE || "manual",
+  updateOutcome: process.env.SUMMARY_UPDATE_OUTCOME || "success",
   updateRecovery: process.env.SUMMARY_UPDATE_REPAIR_REQUIRED === "1" ? "capability-consent" : null,
   updateRestartSource: process.env.SUMMARY_UPDATE_RESTART_SOURCE || null,
   timings: {
@@ -448,6 +457,7 @@ cleanup() {
   stop_gateway
   openclaw_e2e_stop_process "${plugin_registry_pid:-}"
   openclaw_e2e_stop_process "${clawhub_fixture_pid:-}"
+  openclaw_e2e_stop_process "${mock_openai_pid:-}"
 }
 
 on_error() {
@@ -519,6 +529,7 @@ companion_survivor_scenario() {
 
 run_plugin_fixture_phase() {
   companion_survivor_scenario && return 0
+  [ "$SCENARIO" = "legacy-operator-state" ] && return 0
   phase "$@"
 }
 
@@ -633,7 +644,9 @@ assert_prepublish_fixture_idle() {
 assert_prepublish_plugin_install() {
   local allow_pending="${1:-0}" plugin_id="whatsapp" help consent
   local consent_supported=0 pending_args=()
-  if configured_plugin_installs_enabled; then
+  if [ "$SCENARIO" = "legacy-operator-state" ]; then
+    plugin_id="discord"
+  elif configured_plugin_installs_enabled; then
     plugin_id="matrix"
   fi
   help="$(openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw plugins install --help)" || return "$?"
@@ -647,14 +660,32 @@ assert_prepublish_plugin_install() {
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     assert-npm-plugin-install "$plugin_id" "@openclaw/$plugin_id" "$candidate_version" \
     "$consent_supported" ${pending_args[@]+"${pending_args[@]}"} || return "$?"
+  [ "$SCENARIO" = "legacy-operator-state" ] && return 0
   assert_prepublish_fixture_idle
 }
 
 configure_plugin_registry() {
+  local stage="${1:-candidate}"
   local fixture_root="$ARTIFACT_ROOT/plugin-registry"
   local package_dir="$fixture_root/package"
   local tarball="$fixture_root/openclaw-brave-plugin-${candidate_version}.tgz"
   local registry_args=()
+  local registry_dist_tags="${OPENCLAW_NPM_REGISTRY_DIST_TAGS-}"
+
+  if [ "$SCENARIO" = "legacy-operator-state" ]; then
+    if [ "$stage" = "baseline" ]; then
+      mkdir -p "$fixture_root/baseline"
+      # A moving selector preserves ordinary plugin updates; an exact spec is a pin.
+      local baseline_tarball
+      baseline_tarball="$(npm pack "@openclaw/discord@$baseline_version" \
+        --registry=https://registry.npmjs.org --pack-destination "$fixture_root/baseline" --silent)"
+      registry_args+=("@openclaw/discord" "$baseline_version" "$fixture_root/baseline/$baseline_tarball")
+      registry_dist_tags="latest=$baseline_version,beta=$baseline_version"
+    else
+      registry_dist_tags="latest=$candidate_version,beta=$candidate_version"
+    fi
+    registry_args+=("openclaw" "$candidate_version" "$CANDIDATE_SPEC")
+  fi
 
   if configured_plugin_installs_enabled; then
     mkdir -p "$package_dir"
@@ -720,6 +751,9 @@ NODE
     [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] || return 0
   fi
 
+  if [ "$SCENARIO" = "legacy-operator-state" ]; then
+    export OPENCLAW_NPM_REGISTRY_DIST_TAGS="$registry_dist_tags"
+  fi
   openclaw_prepublish_plugin_registry_start \
     "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" \
     "${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" \
@@ -876,11 +910,95 @@ seed_state() {
 }
 
 apply_baseline_config_recipe() {
+  if [ "$SCENARIO" = "legacy-operator-state" ]; then
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed-legacy-operator
+    return
+  fi
   # Source recipes need the runner's native tsx, not a host dependency mount.
   openclaw_e2e_run_script_entrypoint \
     scripts/e2e/lib/upgrade-survivor/config-recipe apply \
     --summary "$CONFIG_COVERAGE_JSON" \
     --baseline-version "$baseline_version"
+}
+
+install_companion_plugins() {
+  openclaw_e2e_fixture_plugin_command openclaw -- \
+    plugins install "@openclaw/discord@latest"
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-baseline-plugin "$baseline_version"
+}
+
+seed_legacy_operator_gateway() {
+  export MOCK_REQUEST_LOG="$ARTIFACT_ROOT/legacy-operator-requests.jsonl"
+  mock_openai_pid="$(openclaw_e2e_start_mock_openai 44081 "$ARTIFACT_ROOT/legacy-operator-mock.log")"
+  openclaw_e2e_wait_mock_openai 44081
+  start_gateway
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed-legacy-operator-default-cron
+  stop_gateway
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed-legacy-operator-agent
+  start_gateway
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed-legacy-operator-gateway
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs legacy-operator-turn baseline
+  stop_gateway
+}
+
+prepare_schema_expectation() {
+  if [ "$CANDIDATE_KIND" != "tarball" ]; then
+    echo "legacy-operator-state requires one packed candidate tarball" >&2
+    return 1
+  fi
+  node scripts/e2e/lib/upgrade-survivor/schema-expectation.mjs \
+    prepare "$baseline_version" "$CANDIDATE_SPEC" "$OPENCLAW_STATE_DIR" \
+    "$ARTIFACT_ROOT/schema-before.json" "$OPENCLAW_CONFIG_PATH"
+}
+
+assert_schema_outcome() {
+  node scripts/e2e/lib/upgrade-survivor/schema-expectation.mjs assert \
+    "$ARTIFACT_ROOT/schema-before.json" "$update_exit_code" "$installed_version" "$update_outcome" \
+    "$ARTIFACT_ROOT/schema-after.json"
+}
+
+assert_legacy_operator_update_noop() {
+  # An explicit tarball requests a refresh; the registry's exact candidate
+  # version exercises the operator's already-current path without a reinstall.
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update \
+    --tag "$candidate_version" --yes --no-restart --json \
+    >"$ARTIFACT_ROOT/update-noop.json" 2>"$ARTIFACT_ROOT/update-noop.err"
+  node --input-type=module - "$ARTIFACT_ROOT/update-noop.json" <<'NODE'
+import assert from "node:assert/strict";
+import fs from "node:fs";
+const text = fs.readFileSync(process.argv[2], "utf8");
+const result = JSON.parse(text.slice(text.indexOf("{")));
+assert.equal(result.status, "skipped", "second update was not a clean no-op");
+assert.equal(result.reason, "already-current", "second update was not already current");
+assert.deepEqual(result.steps, [], "second update executed package mutations");
+assert(!result.nextAction, "second update requested repair");
+console.log("Second update: already-current, no package mutations or repair required.");
+NODE
+  assert_survival
+  check_gateway_probes
+}
+
+assert_legacy_operator_doctor_clean() {
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw doctor --lint --json \
+    >"$ARTIFACT_ROOT/doctor-lint.json" 2>"$ARTIFACT_ROOT/doctor-lint.err"
+  node --input-type=module - "$ARTIFACT_ROOT/doctor-lint.json" "$STATUS_JSON" "$candidate_version" <<'NODE'
+import assert from "node:assert/strict";
+import fs from "node:fs";
+const report = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+assert.equal(report.ok, true, "Doctor reported an unhealthy candidate");
+assert(report.checksRun > 0, "Doctor did not run health checks");
+assert.deepEqual(report.findings, [], "Doctor reported unresolved findings");
+const gateway = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+assert.equal(gateway.gateway.version, process.argv[4], "Gateway is not serving the candidate version");
+console.log(`Doctor clean; Gateway serves candidate ${process.argv[4]}.`);
+NODE
+}
+
+probe_legacy_operator_migration() {
+  start_gateway
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    assert-legacy-operator-gateway post-update
+  stop_gateway
 }
 
 configure_watchos_tls_fixture() {
@@ -1072,7 +1190,9 @@ prepare_update_restart_probe() {
     check_gateway_status || probe_status=$?
   fi
   if [ "$probe_status" -eq 0 ]; then
-    assert_prepublish_fixture_idle || probe_status=$?
+    if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
+      assert_prepublish_fixture_idle || probe_status=$?
+    fi
   fi
   # The installed baseline must be offline before restoring authored config or seeding state.
   stop_update_restart_probe_gateway "$COMMAND_TIMEOUT" || return "$?"
@@ -1176,8 +1296,12 @@ update_candidate() {
   echo "Updating baseline $baseline_spec to candidate $CANDIDATE_KIND:$update_spec ($candidate_version)"
   local update_start=""
   local update_end=""
-  local previous_service_pid="" previous_systemctl_lines=0
-  if [ "$after_repair" = "1" ] && [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+  local previous_service_pid="" previous_systemctl_lines=0 verify_restart=0
+  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ] && {
+    [ "$after_repair" = "1" ] ||
+    [ "$SCENARIO" = "legacy-operator-state" ]
+  }; then
+    verify_restart=1
     previous_service_pid="$(cat "$SYSTEMCTL_SHIM_PID_FILE")"
     previous_systemctl_lines="$(wc -l <"$SYSTEMCTL_SHIM_LOG")"
   fi
@@ -1190,7 +1314,7 @@ update_candidate() {
   )
   # Historical updaters can restart before reporting denied capabilities.
   # Prove migrations first; only the current updater performs the auth restart.
-  if [ "$after_repair" != "1" ] || [ "$UPDATE_RESTART_MODE" = "manual" ]; then
+  if [ "$verify_restart" != "1" ]; then
     update_args+=(--no-restart)
   else
     update_start="$(node -e "process.stdout.write(String(Date.now()))")"
@@ -1216,22 +1340,14 @@ update_candidate() {
   # The package swap can precede a failed Doctor. Observe installed bytes before
   # classifying the result; an unreadable package must not retain the baseline.
   installed_version="$(read_installed_version)" || installed_version=""
+  update_exit_code="$update_status"
   if [ "$after_repair" != "1" ] && [ "$update_status" -le 1 ] && node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     assert-recoverable-update-json "$update_json" "$candidate_version" "$observation_root" "$baseline_version" >"$ARTIFACT_ROOT/update-result-check.log" 2>&1; then
     update_repair_required="1"
+    update_outcome="recoverable"
   elif [ "$update_status" -eq 0 ] && node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     assert-successful-update-json "$update_json" "$candidate_version" "$observation_root"; then
-    if [ "$after_repair" = "1" ] && [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
-      update_end="$(node -e "process.stdout.write(String(Date.now()))")"
-      update_restart_seconds=$(((update_end - update_start + 999) / 1000))
-      # A successful code update may intentionally skip an unverifiable service.
-      # Require this invocation's actual replacement before claiming restart proof.
-      assert_update_restart_service_replaced "$previous_service_pid" "$previous_systemctl_lines" || return 1
-      update_restart_source="candidate-update"
-      if [ "$update_repair_required" = "1" ]; then
-        update_restart_source="candidate-after-repair"
-      fi
-    fi
+    update_outcome="success"
   else
     echo "openclaw update failed before the recoverable post-core boundary" >&2
     local validate_status=0
@@ -1243,6 +1359,18 @@ update_candidate() {
     openclaw_e2e_print_log "$update_json" >&2 || true
     [ "$update_status" -ne 0 ] || update_status=1
     return "$update_status"
+  fi
+  if [ "$verify_restart" = "1" ]; then
+    update_end="$(node -e "process.stdout.write(String(Date.now()))")"
+    update_restart_seconds=$(((update_end - update_start + 999) / 1000))
+    # Accepted plugin warnings do not waive this invocation's restart proof.
+    assert_update_restart_service_replaced "$previous_service_pid" "$previous_systemctl_lines" || return 1
+    update_restart_source="candidate-update"
+    if [ "$SCENARIO" = "legacy-operator-state" ]; then
+      update_restart_source="baseline-update"
+    elif [ "$update_repair_required" = "1" ]; then
+      update_restart_source="candidate-after-repair"
+    fi
   fi
   if [ "$installed_version" != "$candidate_version" ]; then
     echo "update did not leave the candidate installed: $installed_version" >&2
@@ -1390,6 +1518,7 @@ run_doctor() {
 }
 
 repair_update_restart_auth() {
+  [ "$SCENARIO" = "legacy-operator-state" ] && return 0
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
     # Start is preparation only. The following updater must replace this exact
     # supervisor itself; its existing replacement and auth assertions remain required.
@@ -1612,7 +1741,7 @@ fi
 phase validate-baseline-config validate_baseline_config
 phase resolve-candidate resolve_candidate_version
 phase resolve-candidate-install-mode resolve_candidate_install_mode
-if companion_survivor_scenario; then
+if companion_survivor_scenario || [ "$SCENARIO" = "legacy-operator-state" ]; then
   unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL
 else
   phase configure-clawhub-fixture configure_clawhub_fixture
@@ -1622,6 +1751,13 @@ phase bootstrap-mobile-pairing bootstrap_mobile_pairing
 # Start the published baseline before adding migration specimens: its startup
 # guards correctly reject them, and baseline Doctor would consume candidate proof.
 phase seed-state seed_state
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  phase configure-baseline-plugin-registry configure_plugin_registry baseline
+  phase install-companion-plugin install_companion_plugins
+  phase seed-legacy-operator-gateway seed_legacy_operator_gateway
+  openclaw_e2e_stop_process "$plugin_registry_pid"
+  phase configure-candidate-plugin-registry configure_plugin_registry
+fi
 run_plugin_fixture_phase install-baseline-plugin-dependencies install_baseline_plugin_dependencies
 run_plugin_fixture_phase seed-legacy-plugin-dependency-debris seed_legacy_plugin_dependency_debris
 run_plugin_fixture_phase assert-legacy-plugin-dependency-debris assert_legacy_plugin_dependency_debris_present
@@ -1648,13 +1784,30 @@ if [ "$SCENARIO" = "recovery-cleanup" ]; then
   phase recovery-package-evidence node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs packages "$baseline_spec" "$CANDIDATE_SPEC"
 fi
 run_plugin_fixture_phase configure-plugin-registry configure_plugin_registry
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  phase prepare-schema-expectation prepare_schema_expectation
+  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+    phase prepare-baseline-update-service run_update_restart_probe_gateway start 18789 "$COMMAND_TIMEOUT"
+  fi
+fi
 phase update-candidate update_candidate_for_install_mode
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  phase assert-candidate-schemas assert_schema_outcome
+fi
 if [ "$candidate_install_mode" = "historical-package-replacement" ]; then
   phase assert-historical-package-replacement-prestart \
     assert_historical_package_replacement_prestart
 else
   # A standalone Doctor pass would conceal missing migrations in the updater.
   phase assert-automatic-migration assert_survival
+fi
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+    phase legacy-operator-first-hop-cron node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+      assert-legacy-operator-gateway post-update
+  else
+    phase legacy-operator-first-hop-cron probe_legacy_operator_migration
+  fi
 fi
 phase mobile-pairing-candidate-first verify_mobile_pairing_once \
   candidate-first "$MOBILE_PAIRING_CANDIDATE_FIRST_EVIDENCE"
@@ -1672,7 +1825,7 @@ if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
 fi
 phase root-managed-vps-cli-usable assert_root_managed_vps_cli_usable
 run_plugin_fixture_phase assert-package-local-dependency-cleanup assert_legacy_plugin_dependency_debris_cleaned
-if [ "$SCENARIO" != "sqlite-volume" ] && [ "$SCENARIO" != "recovery-cleanup" ]; then
+if [ "$SCENARIO" != "sqlite-volume" ] && [ "$SCENARIO" != "recovery-cleanup" ] && [ "$SCENARIO" != "legacy-operator-state" ]; then
   phase doctor run_doctor
 fi
 run_plugin_fixture_phase assert-legacy-plugin-dependency-debris-cleaned assert_legacy_plugin_dependency_debris_cleaned
@@ -1680,6 +1833,9 @@ run_plugin_fixture_phase assert-legacy-runtime-deps-symlink-repaired assert_lega
 phase validate-post-doctor-config validate_post_doctor_config
 phase assert-survival assert_survival
 run_plugin_fixture_phase fixture-plugin-consent repair_fixture_plugin_consent
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  phase fixture-plugin-consent repair_fixture_plugin_consent
+fi
 if companion_survivor_scenario; then
   repair_update_restart_auth
 fi
@@ -1694,6 +1850,15 @@ fi
 phase gateway-start ensure_gateway_started
 phase gateway-probes check_gateway_probes
 phase gateway-status check_gateway_status
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  phase legacy-operator-cron-owners node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    assert-legacy-operator-gateway candidate
+  phase legacy-operator-agent-turn node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    legacy-operator-turn candidate
+  phase legacy-operator-plugin assert_prepublish_plugin_install
+  phase legacy-operator-update-noop assert_legacy_operator_update_noop
+  phase legacy-operator-doctor-clean assert_legacy_operator_doctor_clean
+fi
 if [ "$SCENARIO" = "watchos-direct-node" ]; then
   phase watchos-candidate-reconnect watchos_reconnect_candidate
   phase gateway-stop stop_gateway

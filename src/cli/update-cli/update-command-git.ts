@@ -451,6 +451,7 @@ export async function updateGitInstall(params: {
   validateCandidate?: (root: string) => Promise<void>;
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
   prepareRecovery?: PreparePackageRecovery;
+  onConfigSnapshot?: Parameters<typeof runPackageUpdateDoctor>[0]["onConfigSnapshot"];
   getManagedServiceEnv: () => NodeJS.ProcessEnv | undefined;
   invocationCwd?: string;
   nodeRunner?: string;

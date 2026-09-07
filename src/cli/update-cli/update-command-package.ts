@@ -1,5 +1,6 @@
 import path from "node:path";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { resolveConfigPath } from "../../config/paths.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import type {
@@ -46,7 +47,11 @@ import {
   UpdatePreMutationError,
   type UpdateCommandOptions,
 } from "./shared.js";
-import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
+import {
+  createUpdateConfigSnapshot,
+  readUpdateConfigSnapshot,
+  type UpdateConfigSnapshot,
+} from "./update-command-config-snapshot.js";
 import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
 import { beginUpdateCommandStartup } from "./update-command-startup.js";
 
@@ -108,6 +113,7 @@ type PackageDoctorOptions = {
   managedServiceEnv?: NodeJS.ProcessEnv;
   invocationCwd?: string;
   nodeRunner?: string;
+  onConfigSnapshot?: (snapshot: UpdateConfigSnapshot) => void;
 };
 
 export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
@@ -143,6 +149,9 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     total: 0,
   };
   params.progress?.onStepStart?.(doctorProgressInfo);
+  const configSnapshot = params.onConfigSnapshot
+    ? await readUpdateConfigSnapshot(resolveConfigPath(doctorEnv))
+    : undefined;
   const doctorStep = await runUpdateStep({
     name: `${CLI_NAME} doctor`,
     argv: doctorArgv,
@@ -161,6 +170,21 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     timeoutMs: params.timeoutMs,
   });
   const doctorResult = await consumeUpdatePostInstallDoctorResult(doctorResultPath);
+  if (configSnapshot) {
+    // Only the child writer can attribute bytes to Doctor; a later read may contain an operator save.
+    const { hash } = await readUpdateConfigSnapshot(configSnapshot.path);
+    const doctorHash = doctorResult?.configHash;
+    const doctorInputHash = doctorResult?.configInputHash;
+    params.onConfigSnapshot?.({
+      ...configSnapshot,
+      hash,
+      doctorOwned:
+        doctorInputHash === undefined
+          ? hash === configSnapshot.hash
+          : doctorInputHash === configSnapshot.hash &&
+            hash === (doctorHash === "unchanged" ? doctorInputHash : doctorHash),
+    });
+  }
   const completedDoctorStep = markPackagePostInstallDoctorAdvisory(doctorStep, doctorResult);
   params.progress?.onStepComplete?.({
     ...doctorProgressInfo,
@@ -247,6 +271,7 @@ export type PackageInstallUpdateParams = {
   onTransaction: (transaction: PackageUpdateTransaction) => void;
   recovery?: PackageRecoveryHooks;
   prepareRecovery?: PreparePackageRecovery;
+  onConfigSnapshot?: PackageDoctorOptions["onConfigSnapshot"];
 };
 
 export async function runPackageInstallUpdate(

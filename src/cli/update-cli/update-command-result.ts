@@ -3,6 +3,8 @@ import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../packages/gateway-pr
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
+import type { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
   markControlPlaneUpdateRestartSentinelFailure,
   resolveManagedServiceUpdateFailureExitCode,
@@ -14,12 +16,30 @@ import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledge
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
+import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { printResult } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
+import type { OwnedManagedUpdateContext } from "./update-command-managed-context.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
 import type { PreManagedServiceStop } from "./update-command-service-maintenance.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
+
+export type MutableUpdateExecutionResult = {
+  mutationStarted: boolean;
+  result: UpdateRunResult;
+  failure?: { cause: unknown; detail: string };
+  preManagedServiceStop: PreManagedServiceStop | undefined;
+  ownedManagedUpdateContext: OwnedManagedUpdateContext | undefined;
+  recoveryEnv: NodeJS.ProcessEnv | undefined;
+  packageTransaction?: PackageUpdateTransaction;
+  schemaVersions?: Awaited<ReturnType<typeof readUpdateStateSchemaVersions>>;
+  candidateSchemaVersions?: OpenClawSchemaVersions;
+  previousSchemaVersions?: OpenClawSchemaVersions;
+  previousVerified?: boolean;
+  activationConfig?: UpdateConfigSnapshot;
+};
 
 /** Report rejected read-only admission without creating a run or recovery diagnostics. */
 export async function withUpdateAdmissionReporting<T>(

@@ -79,6 +79,7 @@ export type FinishUpdateParams = UpdateRestartParams & {
   candidateSchemaVersions?: OpenClawSchemaVersions;
   previousSchemaVersions?: OpenClawSchemaVersions;
   previousVerified?: boolean;
+  activationConfig?: import("./update-command-config-snapshot.js").UpdateConfigSnapshot;
   rollbackBlockedReason?: "state-migrated-no-rollback" | "rollback-state-unverified";
 };
 
@@ -203,9 +204,8 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
           candidateSchemaVersions: params.candidateSchemaVersions,
           previousSchemaVersions: params.previousSchemaVersions,
           previousVerified: params.previousVerified,
-          config:
-            params.configSnapshot.sourceConfigBeforeMigrations ??
-            params.configSnapshot.sourceConfig,
+          configSnapshot: params.configSnapshot,
+          activationConfig: params.activationConfig,
           opts: params.opts,
           preManagedServiceStop: params.preManagedServiceStop,
           timeoutMs: params.updateStepTimeoutMs,

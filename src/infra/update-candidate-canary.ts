@@ -261,6 +261,7 @@ export async function validateUpdateCandidateCanary(params: {
       throw new Error("Candidate Doctor cannot enforce isolated service-repair ownership");
     }
     rehearsal ??= await prepareUpdateCandidateRehearsal({
+      candidateRoot: params.root,
       config: params.config,
       stateDir: params.stateDir,
       env: sourceEnv,

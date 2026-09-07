@@ -21,61 +21,65 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("persists the actual staged runtime before the native preparation boundary", async () => {
-  const base = await fs.realpath(dirs.make("startup-source-"));
-  const privateRoot = path.join(base, "control");
-  await fs.mkdir(privateRoot, { mode: 0o700 });
-  vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(privateRoot);
-  const fixture = await createPackageSwapFixture(base);
-  const env = { HOME: base, OPENCLAW_STATE_DIR: path.join(base, "state-root") };
-  const run: NonNullable<UpdateCommandOptions["run"]> = {
-    runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
-    env,
-  };
-  const opts: UpdateCommandOptions = { run };
-  const failure = new Error("pause before native effects");
-  let observed = false;
-  await withUpdateCommandExecutor(run.runId, async (executor) => {
-    run.executorFence = await executor.enter(fixture.packageRoot);
-    const operation = swapStagedPackageInstall({
-      ...fixture.params,
-      prepareRecovery: async (source) =>
-        (
-          await beginUpdateCommandStartup({
-            opts,
-            root: fixture.packageRoot,
-            env,
-            source,
-          })
-        ).hooks,
-      beforeActivate: async () => {
-        const record = loadUpdateRecovery(run.runId, { env });
-        expect(record).toMatchObject({
-          from: { root: fixture.packageRoot, version: "1.0.0" },
-          to: { root: fixture.packageRoot, version: "2.0.0" },
-          package: {
-            descriptor: {
-              liveRoot: fixture.packageRoot,
-              stageRoot: fixture.params.stage.packageRoot,
+it.each([undefined, "node"])(
+  "persists the actual staged runtime before the native preparation boundary (%s)",
+  async (nodeRunner) => {
+    const base = await fs.realpath(dirs.make("startup-source-"));
+    const privateRoot = path.join(base, "control");
+    await fs.mkdir(privateRoot, { mode: 0o700 });
+    vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(privateRoot);
+    const fixture = await createPackageSwapFixture(base);
+    const env = { HOME: base, OPENCLAW_STATE_DIR: path.join(base, "state-root") };
+    const run: NonNullable<UpdateCommandOptions["run"]> = {
+      runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
+      env,
+    };
+    const opts: UpdateCommandOptions = { run };
+    const failure = new Error("pause before native effects");
+    let observed = false;
+    await withUpdateCommandExecutor(run.runId, async (executor) => {
+      run.executorFence = await executor.enter(fixture.packageRoot);
+      const operation = swapStagedPackageInstall({
+        ...fixture.params,
+        prepareRecovery: async (source) =>
+          (
+            await beginUpdateCommandStartup({
+              opts,
+              root: fixture.packageRoot,
+              env,
+              source,
+              nodeRunner,
+            })
+          ).hooks,
+        beforeActivate: async () => {
+          const record = loadUpdateRecovery(run.runId, { env });
+          expect(record).toMatchObject({
+            from: { root: fixture.packageRoot, version: "1.0.0" },
+            to: { root: fixture.packageRoot, version: "2.0.0" },
+            package: {
+              descriptor: {
+                liveRoot: fixture.packageRoot,
+                stageRoot: fixture.params.stage.packageRoot,
+              },
             },
-          },
-          effects: [],
-        });
-        expect(record?.preimages).toBeDefined();
-        expect(opts.recovery?.getRecord()).toEqual(record);
-        observed = true;
-        throw failure;
-      },
+            effects: [],
+          });
+          expect(record?.preimages).toBeDefined();
+          expect(opts.recovery?.getRecord()).toEqual(record);
+          observed = true;
+          throw failure;
+        },
+      });
+      await expect(operation).rejects.toMatchObject({ cause: failure });
+      expect(observed).toBe(true);
+      expect(await fs.readFile(path.join(fixture.packageRoot, "package.json"), "utf8")).toContain(
+        '"1.0.0"',
+      );
+      expect(await fs.readFile(fixture.launcher, "utf8")).toBe("old launcher\n");
+      expect(await fs.stat(fixture.params.stage.packageRoot)).toBeDefined();
     });
-    await expect(operation).rejects.toMatchObject({ cause: failure });
-    expect(observed).toBe(true);
-    expect(await fs.readFile(path.join(fixture.packageRoot, "package.json"), "utf8")).toContain(
-      '"1.0.0"',
-    );
-    expect(await fs.readFile(fixture.launcher, "utf8")).toBe("old launcher\n");
-    expect(await fs.stat(fixture.params.stage.packageRoot)).toBeDefined();
-  });
-});
+  },
+);
 
 it.each(["lost preparation acknowledgement", "unsupported native helper"])(
   "does not create an orphan recovery row: %s",

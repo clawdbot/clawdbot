@@ -4,6 +4,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createConfigIO } from "../../config/io.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../../infra/node-sqlite.js";
 import { inspectCheckpointFile } from "../../infra/update-checkpoint-files.js";
 import { validateUpdateCheckpointPreviousRuntimeDatabase } from "../../infra/update-checkpoint-runtime.js";
@@ -48,6 +49,7 @@ async function fixture(sealed: boolean | "fresh" = true) {
   const options = { env };
   const file = path.join(root, "state", "openclaw.sqlite");
   const configPath = path.join(root, "openclaw.json");
+  const configSnapshot = await createConfigIO({ env, configPath }).readConfigFileSnapshot();
   const runtime = { ...(await buildCheckpointReaderRuntime(root)).runtime, buildId: null };
   const run = { runId: createUpdateRun({ trigger: "cli" }, options).runId, env };
   // Isolated fixture setup only; the actual consumer interval below acquires
@@ -177,7 +179,7 @@ async function fixture(sealed: boolean | "fresh" = true) {
         durationMs: 1,
       },
       previousRoot: root,
-      config: {},
+      configSnapshot,
       opts,
       timeoutMs: 1000,
       packageTransaction: { rollback, complete, backupRoot: path.join(root, "retained") },

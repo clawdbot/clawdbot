@@ -69,6 +69,7 @@ import {
 } from "./update-command-package.js";
 import { assertUpdateCommandRecovery } from "./update-command-recovery.js";
 import { runUpdateCommandRepair } from "./update-command-repair.js";
+import type { MutableUpdateExecutionResult } from "./update-command-result.js";
 import {
   GatewayServiceUpdateOwnershipError,
   gatewayServiceCommandUsesRoot,
@@ -85,20 +86,6 @@ import {
 } from "./update-command-service.js";
 
 const CLI_NAME = resolveCliName();
-
-type MutableUpdateExecutionResult = {
-  mutationStarted: boolean;
-  result: UpdateRunResult;
-  failure?: { cause: unknown; detail: string };
-  preManagedServiceStop: PreManagedServiceStop | undefined;
-  ownedManagedUpdateContext: OwnedManagedUpdateContext | undefined;
-  recoveryEnv: NodeJS.ProcessEnv | undefined;
-  packageTransaction?: PackageUpdateTransaction;
-  schemaVersions?: Awaited<ReturnType<typeof readUpdateStateSchemaVersions>>;
-  candidateSchemaVersions?: OpenClawSchemaVersions;
-  previousSchemaVersions?: OpenClawSchemaVersions;
-  previousVerified?: boolean;
-};
 
 export async function executeMutableUpdate(params: {
   root: string;
@@ -171,6 +158,10 @@ export async function executeMutableUpdate(params: {
   let checkpointContinuation = false;
   let previousSchemaVersions: OpenClawSchemaVersions | undefined;
   let previousVerified = false;
+  let activationConfig: MutableUpdateExecutionResult["activationConfig"];
+  const onConfigSnapshot: PackageInstallUpdateParams["onConfigSnapshot"] = (snapshot) => {
+    activationConfig = snapshot;
+  };
   let candidateFailureReason: string | undefined;
   let validatedConfigSnapshot: { config: OpenClawConfig; hash?: string | null } | undefined;
   const originalRecovery = () =>
@@ -591,6 +582,7 @@ export async function executeMutableUpdate(params: {
         onTransaction: (transaction) => {
           packageTransaction = transaction;
         },
+        onConfigSnapshot,
       };
       await recheckSchemas(params.packageTargetSchemaVersions);
       result = await runPackageInstallUpdate(packageUpdate);
@@ -626,6 +618,7 @@ export async function executeMutableUpdate(params: {
         onTransaction: (transaction) => {
           packageTransaction = transaction;
         },
+        onConfigSnapshot,
         // Foreign inspection metadata cannot authorize backup or Doctor writes.
         getManagedServiceEnv: () => ownedManagedUpdateContext?.env,
         invocationCwd: params.invocationCwd,
@@ -713,5 +706,6 @@ export async function executeMutableUpdate(params: {
     candidateSchemaVersions,
     previousSchemaVersions,
     previousVerified,
+    activationConfig,
   };
 }

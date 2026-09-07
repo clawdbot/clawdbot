@@ -69,9 +69,8 @@ export async function finishDurableUpdate(
           candidateSchemaVersions: params.candidateSchemaVersions,
           previousSchemaVersions: params.previousSchemaVersions,
           previousVerified: params.previousVerified,
-          config:
-            params.configSnapshot.sourceConfigBeforeMigrations ??
-            params.configSnapshot.sourceConfig,
+          configSnapshot: params.configSnapshot,
+          activationConfig: params.activationConfig,
           opts,
           preManagedServiceStop: params.preManagedServiceStop,
           timeoutMs: params.updateStepTimeoutMs,

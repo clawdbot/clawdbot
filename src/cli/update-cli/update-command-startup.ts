@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
+import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { createPackageIntegrityReader } from "../../infra/package-update-integrity.js";
 import type {
   PackageRecoveryHooks,
@@ -58,6 +59,12 @@ export async function beginUpdateCommandStartup(params: {
       "Startup source differs from its admitted installation.",
     );
   }
+  const nodeRunner = resolveExecutablePath(params.nodeRunner ?? resolveNodeRunner(), {
+    env: params.env,
+  });
+  if (!nodeRunner) {
+    throw new UpdateCommandRecoveryPendingError("Candidate Node executable could not be resolved.");
+  }
   const [
     previousVersion,
     candidateVersion,
@@ -71,7 +78,7 @@ export async function beginUpdateCommandStartup(params: {
     readBuiltGatewayBuildId(source.liveRoot),
     readBuiltGatewayBuildId(source.stageRoot),
     fs.realpath(process.execPath),
-    fs.realpath(params.nodeRunner ?? resolveNodeRunner()),
+    fs.realpath(nodeRunner),
   ]);
   assertCurrent();
   if (

@@ -120,9 +120,20 @@ page includes **Open in a new window** with that page's own URL. If the browser
 blocks that action too, copy the link into a new tab. Gateway authentication
 still applies there.
 
-Pages render on the server, work without JavaScript, and follow the browser's
-light or dark color preference. The index shows recent reports and a 28-day
-activity trend; people pages show each member's recent daily history.
+Pages render on the server and work without JavaScript. They use the Carapace
+visual contract, with a dark default and a light palette when your operating
+system prefers light mode. The embedded page follows that preference independently
+of the Control UI theme. The index shows recent reports and a 28-day activity
+trend; people pages show each member's recent daily history. Closed and partial
+periods have distinct status badges, and coverage and summary warnings remain
+visible alongside the report.
+
+Roster members and other GitHub actors show GitHub avatars from
+`avatars.githubusercontent.com`, using the primary GitHub login. Images load
+lazily without sending a referrer. Initials remain visible when an image cannot
+load; invalid logins use initials only. Display names and Discord IDs are never
+used to construct avatar URLs. The pages bundle their styles and use system
+fonts, so no external stylesheets, web fonts, or scripts are needed.
 
 ## Configuration
 

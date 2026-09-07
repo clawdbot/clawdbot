@@ -6,6 +6,7 @@ import { isVerbose } from "../global-state.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
+import { recordUpdateDoctorConfigWrite } from "../infra/update-doctor-result.js";
 import { initializeNativeSessionCatalogPreferences } from "../plugins/native-session-catalog-config.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
 import { collectChangedPaths } from "./config-change-paths.js";
@@ -488,6 +489,7 @@ export async function writeConfigFileFromContext(
         });
       },
     });
+    recordUpdateDoctorConfigWrite(configPath, previousHash, nextHash);
     try {
       options.assertConfigPathForWrite?.();
     } catch (error) {

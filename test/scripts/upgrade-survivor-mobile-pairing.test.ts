@@ -779,44 +779,70 @@ run_plugin_fixture_phase fixture-phase true
       "fixture-plugin-consent",
     ];
 
-    expect(orchestration).toContain(
-      [
-        "if companion_survivor_scenario; then",
-        "  unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL",
-        "else",
-        "  phase configure-clawhub-fixture configure_clawhub_fixture",
-        "fi",
-      ].join("\n"),
-    );
     for (const phase of guardedPhases) {
       expect(orchestration).toContain(`run_plugin_fixture_phase ${phase} `);
       expect(orchestration).not.toMatch(new RegExp(`^phase ${phase} `, "mu"));
     }
-    expect(orchestration).toContain(
-      [
-        "run_plugin_fixture_phase fixture-plugin-consent repair_fixture_plugin_consent",
-        "if companion_survivor_scenario; then",
-        "  repair_update_restart_auth",
-        "fi",
-      ].join("\n"),
+    const helpers = source.slice(
+      source.indexOf("companion_survivor_scenario()"),
+      source.indexOf("\npackage_root()"),
     );
+    const fixtureSetup = orchestration.slice(
+      orchestration.indexOf("if companion_survivor_scenario"),
+      orchestration.indexOf("\nphase prepare-update-restart-probe"),
+    );
+    const recoveryStart = orchestration.indexOf("run_plugin_fixture_phase fixture-plugin-consent");
+    const fixtureRecovery = orchestration.slice(
+      recoveryStart,
+      orchestration.indexOf('if [ "$SCENARIO" = "recovery-cleanup" ]; then', recoveryStart),
+    );
+    for (const scenario of ["watchos-direct-node", "mobile-pairing-reconnect", "base"]) {
+      const result = execFileSync(
+        "bash",
+        [
+          "-c",
+          `set -eu
+SCENARIO="$1"
+OPENCLAW_CLAWHUB_URL=synthetic
+CLAWHUB_URL=synthetic
+${helpers}
+phase() { printf '%s\\n' "$1"; }
+repair_update_restart_auth() { printf 'recovery-update-restart\\n'; }
+${fixtureSetup}
+${fixtureRecovery}
+printf 'clawhub=%s/%s\\n' "\${OPENCLAW_CLAWHUB_URL-}" "\${CLAWHUB_URL-}"
+`,
+          "survivor-companion-routing",
+          scenario,
+        ],
+        { encoding: "utf8" },
+      );
+      expect(result.trim().split("\n"), scenario).toEqual(
+        scenario === "base"
+          ? ["configure-clawhub-fixture", "fixture-plugin-consent", "clawhub=synthetic/synthetic"]
+          : ["recovery-update-restart", "clawhub=/"],
+      );
+    }
     expect(orchestration).toContain("phase bootstrap-mobile-pairing bootstrap_mobile_pairing");
     expect(orchestration).toContain("phase mobile-pairing-candidate-first");
     expect(orchestration).toContain("phase mobile-pairing-candidate-restart");
     expect(orchestration).toContain("phase mobile-pairing-final");
   });
 
-  it("preserves update auto-auth recovery for companion survivors", () => {
-    const source = readFileSync(RUNNER_PATH, "utf8");
-    const helper = source.slice(
-      source.indexOf("repair_update_restart_auth()"),
-      source.indexOf("\nrepair_fixture_plugin_consent()"),
-    );
-    const result = execFileSync(
-      "bash",
-      [
-        "-c",
-        `set -eu
+  it.each(["watchos-direct-node", "mobile-pairing-reconnect"])(
+    "preserves update auto-auth recovery for the %s companion survivor",
+    (scenario) => {
+      const source = readFileSync(RUNNER_PATH, "utf8");
+      const helper = source.slice(
+        source.indexOf("repair_update_restart_auth()"),
+        source.indexOf("\nrepair_fixture_plugin_consent()"),
+      );
+      const result = execFileSync(
+        "bash",
+        [
+          "-c",
+          `set -eu
+SCENARIO="$1"
 UPDATE_RESTART_MODE=auto-auth
 COMMAND_TIMEOUT=1
 ARTIFACT_ROOT=/tmp
@@ -826,16 +852,19 @@ phase() { printf '%s\\n' "$1"; }
 assert_survival() { :; }
 repair_update_restart_auth
 `,
-      ],
-      { encoding: "utf8" },
-    );
+          "companion-auto-auth-recovery",
+          scenario,
+        ],
+        { encoding: "utf8" },
+      );
 
-    expect(result.trim().split("\n")).toEqual([
-      "prepare-recovery-service",
-      "prepared-gateway-auth",
-      "recovery-update-restart",
-    ]);
-  });
+      expect(result.trim().split("\n")).toEqual([
+        "prepare-recovery-service",
+        "prepared-gateway-auth",
+        "recovery-update-restart",
+      ]);
+    },
+  );
 
   it("selects package replacement by the immutable 8.1 source SHA, not its version alone", () => {
     const source = readFileSync(RUNNER_PATH, "utf8");

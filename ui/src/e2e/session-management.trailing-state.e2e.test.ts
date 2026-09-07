@@ -290,7 +290,7 @@ suite.define(() => {
     }
   });
 
-  it("aligns trailing unread dots and trades unread/PR icons for hover actions", async () => {
+  it("keeps unread glyph badges visible while PR icons yield to hover actions", async () => {
     const plainKey = "agent:main:unread-plain";
     const pullRequestKey = "agent:main:unread-pr";
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
@@ -304,9 +304,10 @@ suite.define(() => {
         [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
         "sessions.list": sessionsListResponse([
           sessionRow("agent:main:main", "Main", Date.now()),
-          sessionRow(plainKey, "Unread plain", Date.now() - 1, { unread: true }),
-          sessionRow(pullRequestKey, "Unread with PR", Date.now() - 2, {
+          sessionRow(plainKey, "Inbox triage", Date.now() - 1, { unread: true, icon: "📬" }),
+          sessionRow(pullRequestKey, "Fix login", Date.now() - 2, {
             unread: true,
+            icon: "📬",
             worktree: {
               id: "unread-pr-worktree",
               branch: "fix/unread-pr",
@@ -362,40 +363,60 @@ suite.define(() => {
         .poll(() => pullRequestRow.locator("[data-pull-request-state='merged']").isVisible())
         .toBe(true);
 
-      const dotInsetFromRowRight = async (row: typeof plainRow) => {
-        const [rowBounds, dotBounds] = await Promise.all([
-          row.boundingBox(),
-          row.locator(".session-unread-dot").boundingBox(),
+      const badgeInsetFromGlyphRight = async (row: typeof plainRow) => {
+        const [glyphBounds, badgeBounds] = await Promise.all([
+          row.locator(".sidebar-session-indicator .session-glyph").boundingBox(),
+          row.locator(".sidebar-session-indicator .session-glyph__badge--unread").boundingBox(),
         ]);
-        if (!rowBounds || !dotBounds) {
-          throw new Error("Expected visible row and unread dot geometry");
+        if (!glyphBounds || !badgeBounds) {
+          throw new Error("Expected visible glyph and unread badge geometry");
         }
-        return rowBounds.x + rowBounds.width - (dotBounds.x + dotBounds.width / 2);
+        expect(badgeBounds.width).toBe(7);
+        expect(badgeBounds.height).toBe(7);
+        expect(badgeBounds.y).toBeCloseTo(glyphBounds.y - 2, 1);
+        return glyphBounds.x + glyphBounds.width - (badgeBounds.x + badgeBounds.width);
       };
-      // The dot is the trailing glyph either way, so a PR icon ahead of it must
-      // not pull it off the axis dot-only rows share with the action icons.
-      // Centring the whole endcap group as one box moved it 3.5px inboard.
-      expect(await dotInsetFromRowRight(pullRequestRow)).toBeCloseTo(
-        await dotInsetFromRowRight(plainRow),
-        0,
+      // Trailing metadata cannot move unread off the row's own glyph corner.
+      expect(await badgeInsetFromGlyphRight(pullRequestRow)).toBeCloseTo(-2, 1);
+      expect(await badgeInsetFromGlyphRight(pullRequestRow)).toBeCloseTo(
+        await badgeInsetFromGlyphRight(plainRow),
+        1,
       );
       const pullRequestIcon = pullRequestRow.locator("[data-pull-request-state='merged']");
-      const unreadDot = pullRequestRow.locator(".session-unread-dot");
-      const trailingState = pullRequestRow.locator(".session-row-state");
+      const unreadBadge = pullRequestRow.locator(
+        ".sidebar-session-indicator .session-glyph__badge--unread",
+      );
+      expect(await pullRequestRow.locator(".session-row-state").count()).toBe(0);
+      const badgeBounds = await unreadBadge.boundingBox();
+      const accessibility = await context.newCDPSession(page);
+      const { nodes } = await accessibility.send("Accessibility.getFullAXTree");
+      for (const title of ["Inbox triage", "Fix login"]) {
+        const linkNode = nodes.find(
+          (node) => node.role?.value === "link" && node.name?.value.includes(title),
+        );
+        expect(linkNode).toBeDefined();
+        expect(
+          `${linkNode?.name?.value} ${linkNode?.description?.value ?? ""}`.match(/Unread/g),
+        ).toHaveLength(1);
+        expect(linkNode?.description?.value ?? "").not.toContain("Unread");
+      }
+      await accessibility.detach();
       await captureUiProof(suite, page, "sidebar-pr-before-hover.png");
       await pullRequestRow.hover();
       await captureUiProof(suite, page, "sidebar-pr-hover.png");
       await pullRequestIcon.waitFor({ state: "hidden" });
-      await unreadDot.waitFor({ state: "hidden" });
-      await trailingState.waitFor({ state: "hidden" });
+      await unreadBadge.waitFor({ state: "visible" });
+      expect(await unreadBadge.boundingBox()).toEqual(badgeBounds);
       await page.mouse.move(0, 0);
       await pullRequestIcon.waitFor({ state: "visible" });
-      await unreadDot.waitFor({ state: "visible" });
+      await unreadBadge.waitFor({ state: "visible" });
       await pullRequestRow.getByRole("button", { name: "Open session menu" }).focus();
-      await trailingState.waitFor({ state: "hidden" });
+      await pullRequestIcon.waitFor({ state: "hidden" });
+      await unreadBadge.waitFor({ state: "visible" });
+      expect(await unreadBadge.boundingBox()).toEqual(badgeBounds);
       await codingToggle.focus();
       await pullRequestIcon.waitFor({ state: "visible" });
-      await unreadDot.waitFor({ state: "visible" });
+      await unreadBadge.waitFor({ state: "visible" });
     } finally {
       await context.close();
     }
@@ -520,17 +541,18 @@ suite.define(() => {
 
       const row = page.locator('[data-session-key="agent:main:combined-state"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
-      const state = row.locator(".session-row-state");
+      const state = row.locator(".sidebar-session-indicator .session-unread-dot");
+      expect(await row.locator(".session-row-state").count()).toBe(0);
       await expect
         .poll(() =>
           row.locator(".sidebar-recent-session__name .sidebar-session-fork-indicator").isVisible(),
         )
         .toBe(true);
-      await expect.poll(() => state.locator('[aria-label="Forked session"]').count()).toBe(0);
+      await expect.poll(() => row.locator('[aria-label="Forked session"]').count()).toBe(1);
       await expect
         .poll(() => row.locator("[data-pull-request-state='open']").isVisible())
         .toBe(true);
-      await expect.poll(() => state.locator(".session-unread-dot").isVisible()).toBe(true);
+      await expect.poll(() => state.isVisible()).toBe(true);
       await expect.poll(() => row.locator(".session-glyph__ring").count()).toBe(0);
       const prIcon = row.locator("[data-pull-request-state='open'] svg");
       expect(
@@ -540,17 +562,6 @@ suite.define(() => {
         }),
       ).toEqual({ width: 12, height: 12 });
       const stateLayout = await row.evaluate((element) => {
-        const endcap = element.querySelector<HTMLElement>(
-          ".sidebar-recent-session__details-endcap",
-        );
-        const atoms = Array.from(
-          element.querySelectorAll<HTMLElement>(
-            ".sidebar-recent-session__details-endcap :is([data-pull-request-state='open'], .session-unread-dot)",
-          ),
-        );
-        if (!endcap || atoms.length !== 2) {
-          throw new Error("Expected visible session state geometry");
-        }
         const layoutLeft = (node: HTMLElement) => {
           let left = 0;
           for (
@@ -562,19 +573,28 @@ suite.define(() => {
           }
           return left;
         };
-        const endcapLeft = layoutLeft(endcap);
-        return {
-          endcapLeft,
-          endcapRight: endcapLeft + endcap.offsetWidth,
-          atoms: atoms.map((atom) => ({
+        return (
+          [
+            [".sidebar-recent-session__details-endcap", "[data-pull-request-state='open']"],
+            [".sidebar-session-indicator", ".session-unread-dot"],
+          ] as const
+        ).map(([containerSelector, atomSelector]) => {
+          const container = element.querySelector<HTMLElement>(containerSelector);
+          const atom = container?.querySelector<HTMLElement>(atomSelector);
+          if (!container || !atom) {
+            throw new Error("Expected visible session state geometry");
+          }
+          return {
+            containerLeft: layoutLeft(container),
+            containerRight: layoutLeft(container) + container.offsetWidth,
             left: layoutLeft(atom),
             right: layoutLeft(atom) + atom.offsetWidth,
-          })),
-        };
+          };
+        });
       });
-      for (const atom of stateLayout.atoms) {
-        expect(atom.left).toBeGreaterThanOrEqual(stateLayout.endcapLeft);
-        expect(atom.right).toBeLessThanOrEqual(stateLayout.endcapRight);
+      for (const atom of stateLayout) {
+        expect(atom.left).toBeGreaterThanOrEqual(atom.containerLeft);
+        expect(atom.right).toBeLessThanOrEqual(atom.containerRight);
       }
       const link = row.locator(".sidebar-recent-session__link");
       const titleRow = row.locator(".sidebar-recent-session__title-row");
@@ -587,7 +607,7 @@ suite.define(() => {
       const [restingTextBounds, restingStateBounds, restingPinBounds, restingMenuBounds] =
         await Promise.all([
           row.locator(".sidebar-recent-session__text").boundingBox(),
-          state.boundingBox(),
+          row.locator("[data-pull-request-state='open']").boundingBox(),
           pin.boundingBox(),
           menu.boundingBox(),
         ]);

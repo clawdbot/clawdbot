@@ -211,6 +211,7 @@ type WorkflowJob = {
   "runs-on"?: string;
   strategy?: {
     "fail-fast"?: boolean;
+    "max-parallel"?: number;
     matrix?: {
       include?: WorkflowMatrixEntry[];
       lane?: string;
@@ -1351,7 +1352,7 @@ function runPackageAcceptanceBaselineStep(params: {
     `#!/bin/sh
 printf '%s\n' "$*" >> "$NPM_LOG"
 if [ "$1 $2 $3" = "view openclaw versions" ]; then
-  printf '%s\n' '["2026.7.1","2026.7.1-2","2026.8.1","2026.9.1"]'
+  printf '%s\n' '["2026.6.34","2026.6.35","2026.7.1","2026.7.1-2","2026.8.1","2026.9.1"]'
 elif [ "$1 $2" = "view openclaw@latest" ]; then
   printf '%s\n' '2026.9.1'
 else
@@ -1384,6 +1385,87 @@ fi
     npmCalls: existsSync(npmLog) ? readFileSync(npmLog, "utf8").trim().split("\n") : [],
     output: existsSync(outputPath) ? readFileSync(outputPath, "utf8") : "",
     result,
+  };
+}
+
+function runReleaseSurvivorProfileStep(params: {
+  candidateVersion?: string;
+  published?: boolean;
+  soak?: boolean;
+  context?: string;
+  ref?: string;
+  override?: string;
+  supportsScenario?: boolean;
+  metadataError?: boolean;
+}) {
+  const step = workflowStep(
+    workflowJob(RELEASE_CHECKS_WORKFLOW, "prepare_release_package"),
+    "Select candidate-compatible upgrade survivor profile",
+  );
+  const root = tempDirs.make("release-survivor-profile-");
+  const bin = join(root, "bin");
+  const output = join(root, "output");
+  const calls = join(root, "calls");
+  mkdirSync(bin);
+  symlinkSync(resolve("scripts"), join(root, "scripts"), "dir");
+  writeFileSync(join(root, "package.json"), JSON.stringify({ version: "2026.9.3" }));
+  for (const tool of ["gh", "npm"]) {
+    writeFileSync(
+      join(bin, tool),
+      `#!${process.execPath}
+const fs = require("node:fs");
+const tool = require("node:path").basename(process.argv[1]);
+fs.appendFileSync(process.env.FIXTURE_CALLS, JSON.stringify({ tool, args: process.argv.slice(2) }) + "\\n");
+if (tool === "gh") {
+  if (process.env.FIXTURE_METADATA_ERROR === "true") process.exit(1);
+  process.stdout.write(process.env.FIXTURE_DIRECTORY);
+} else {
+  process.exit(75);
+}
+`,
+      { mode: 0o755 },
+    );
+  }
+  const result = spawnSync("bash", ["-c", step.run ?? ""], {
+    cwd: root,
+    encoding: "utf8",
+    env: {
+      PATH: `${bin}:${process.env.PATH}`,
+      GITHUB_OUTPUT: output,
+      GITHUB_REPOSITORY: "openclaw/openclaw",
+      CANDIDATE_PUBLISHED: String(params.published ?? false),
+      CANDIDATE_SOURCE_SHA: "a".repeat(40),
+      CANDIDATE_VERSION: params.candidateVersion ?? "2026.9.3",
+      CANDIDATE_REF: params.ref ?? "main",
+      PACKAGE_ACCEPTANCE_PACKAGE_SPEC: params.override ?? "",
+      TARGET_CONTEXT_REF: params.context ?? "",
+      RUN_RELEASE_SOAK: String(params.soak ?? false),
+      FIXTURE_CALLS: calls,
+      FIXTURE_METADATA_ERROR: String(params.metadataError ?? false),
+      FIXTURE_DIRECTORY: JSON.stringify(
+        params.supportsScenario === false ? ["run.sh"] : ["run.sh", "legacy-operator-state.mjs"],
+      ),
+    },
+  });
+  return {
+    result,
+    output: existsSync(output)
+      ? Object.fromEntries(
+          readFileSync(output, "utf8")
+            .trimEnd()
+            .split("\n")
+            .map((line) => {
+              const split = line.indexOf("=");
+              return [line.slice(0, split), line.slice(split + 1)];
+            }),
+        )
+      : {},
+    calls: existsSync(calls)
+      ? readFileSync(calls, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line))
+      : [],
   };
 }
 
@@ -5196,18 +5278,29 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(publishedArtifact.args).not.toContain("--plugin-registry-output-dir");
   });
 
-  it("derives the default baseline from the resolved candidate, not a moving latest tag", () => {
-    const result = runPackageAcceptanceBaselineStep({
-      candidateVersion: "2026.8.1",
-      source: "npm",
-    });
+  it.each([
+    { candidateVersion: "2026.8.1", targetContextRef: "", expected: "2026.7.1-2" },
+    {
+      candidateVersion: "2026.6.35",
+      targetContextRef: "extended-stable/2026.6.33",
+      expected: "2026.6.34",
+    },
+  ])(
+    "derives the default baseline from resolved candidate $candidateVersion, not a moving latest tag",
+    ({ candidateVersion, targetContextRef, expected }) => {
+      const result = runPackageAcceptanceBaselineStep({
+        candidateVersion,
+        targetContextRef,
+        source: "npm",
+      });
 
-    expect(result.result.status, result.result.stderr).toBe(0);
-    expect(result.output).toContain("baseline=openclaw@2026.7.1-2\n");
-    expect(result.npmCalls).toHaveLength(1);
-    expect(result.npmCalls[0]).toContain("view openclaw versions");
-    expect(result.npmCalls[0]).not.toContain("openclaw@latest");
-  });
+      expect(result.result.status, result.result.stderr).toBe(0);
+      expect(result.output).toContain(`baseline=openclaw@${expected}\n`);
+      expect(result.npmCalls).toHaveLength(1);
+      expect(result.npmCalls[0]).toContain("view openclaw versions");
+      expect(result.npmCalls[0]).not.toContain("openclaw@latest");
+    },
+  );
 
   it("reuses a propagated artifact baseline without resolving npm metadata again", () => {
     const result = runPackageAcceptanceBaselineStep({
@@ -5711,7 +5804,7 @@ test "$package_manager" = "pnpm@12.1.0"
     }
   });
 
-  it("keeps update migration manual with optional historical replays", () => {
+  it("runs secretless weekly supported-line migration with optional manual historical replays", () => {
     const workflow = readFileSync(UPDATE_MIGRATION_WORKFLOW, "utf8");
     const packageWorkflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
     const job = workflowJob(UPDATE_MIGRATION_WORKFLOW, "update_migration");
@@ -5724,24 +5817,24 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(
       readWorkflow(UPDATE_MIGRATION_WORKFLOW).on?.workflow_dispatch?.inputs?.baselines,
     ).toMatchObject({
-      default: "",
+      default: "supported-lines",
       required: false,
     });
     expect(
       readWorkflow(UPDATE_MIGRATION_WORKFLOW).on?.workflow_dispatch?.inputs,
     ).not.toHaveProperty("allow_frozen_target_scenario_omissions");
-    expect(workflow).toContain("default: plugin-deps-cleanup");
-    expect(workflow).not.toMatch(/\n {2}schedule:/u);
+    expect(readWorkflow(UPDATE_MIGRATION_WORKFLOW).on?.schedule).toEqual([{ cron: "17 3 * * 0" }]);
     expect(job.with).toMatchObject({
-      workflow_ref: "${{ inputs.workflow_ref }}",
-      package_ref: "${{ inputs.package_ref }}",
-      published_upgrade_survivor_baselines: "${{ inputs.baselines }}",
-      published_upgrade_survivor_scenarios: "${{ inputs.scenarios }}",
+      workflow_ref: "${{ inputs.workflow_ref || 'main' }}",
+      package_ref: "${{ inputs.package_ref || 'main' }}",
+      published_upgrade_survivor_baselines: "${{ inputs.baselines || 'supported-lines' }}",
+      published_upgrade_survivor_scenarios:
+        "${{ inputs.scenarios || 'plugin-deps-cleanup legacy-operator-state' }}",
     });
     expect(job.with).not.toHaveProperty("allow_frozen_target_scenario_omissions");
     expect(workflow).toContain("telegram_mode: none");
-    expect(workflow).toContain("secrets: inherit");
-    expect(packageWorkflow).toContain("published-upgrade-survivor/update-migration");
+    expect(job.secrets).toBeUndefined();
+    expect(packageWorkflow).toContain("supported-lines for latest/previous/extended/floor");
   });
 });
 
@@ -6013,6 +6106,29 @@ describe("package artifact reuse", () => {
       RELEASE_TEST_PROFILE: "${{ inputs.release_test_profile }}",
     });
     expect(workflow).toContain("plan_docker_lane_groups:");
+    const reusable = readWorkflow(LIVE_E2E_WORKFLOW);
+    expect(reusable.on?.workflow_dispatch?.inputs).not.toHaveProperty(
+      "published_upgrade_survivor_baseline_scope",
+    );
+    expect(reusable.on?.workflow_call?.inputs).toHaveProperty(
+      "published_upgrade_survivor_baseline_scope",
+    );
+    const groupPlanner = workflowStep(
+      workflowJob(LIVE_E2E_WORKFLOW, "plan_docker_lane_groups"),
+      "Build targeted Docker lane groups",
+    );
+    expect(groupPlanner.env).toMatchObject({
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "${{ inputs.published_upgrade_survivor_baseline }}",
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE:
+        "${{ inputs.published_upgrade_survivor_baseline_scope || 'all-scenarios' }}",
+    });
+    expect(workflowJob(LIVE_E2E_WORKFLOW, "validate_docker_lanes").strategy?.["max-parallel"]).toBe(
+      32,
+    );
+    expect(workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "docker_acceptance").with).toMatchObject({
+      published_upgrade_survivor_baseline_scope:
+        "${{ needs.resolve_package.outputs.published_upgrade_survivor_baseline_scope }}",
+    });
     expect(workflow).toContain("targeted_docker_lane_group_size:");
     expect(workflow).toContain("scripts/plan-targeted-docker-lane-groups.mjs");
     expect(workflow).toContain(
@@ -6636,7 +6752,6 @@ describe("package artifact reuse", () => {
     expect(weekly.with).not.toHaveProperty("docker_e2e_bare_image");
     expect(weekly.with).not.toHaveProperty("docker_e2e_functional_image");
     expect(weekly.with).not.toHaveProperty("allow_frozen_target_scenario_omissions");
-    expect(readWorkflow(UPDATE_MIGRATION_WORKFLOW).on?.schedule).toBeUndefined();
   });
 
   it.each([false, true])(
@@ -8253,6 +8368,120 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     },
   );
 
+  it.each([false, true])(
+    "selects the candidate-compatible upgrade survivor profile for current source (soak=%s)",
+    (soak) => {
+      const { result, output, calls } = runReleaseSurvivorProfileStep({ soak });
+      expect(result.status, result.stderr).toBe(0);
+      expect(output).toEqual({
+        baselines: "supported-lines",
+        scenarios: soak ? "reported-issues" : "base legacy-operator-state",
+      });
+      expect(calls).toEqual([
+        {
+          tool: "gh",
+          args: [
+            "api",
+            `repos/openclaw/openclaw/contents/scripts/e2e/lib/upgrade-survivor?ref=${"a".repeat(40)}`,
+            "--jq",
+            "[.[].name]",
+          ],
+        },
+      ]);
+    },
+  );
+
+  it.each([
+    {
+      name: "frozen June published candidate",
+      candidateVersion: "2026.6.35",
+      published: true,
+      context: "extended-stable/2026.6.33",
+    },
+    { name: "historical source candidate", candidateVersion: "2026.6.35" },
+    {
+      name: "older published candidate on the current line",
+      candidateVersion: "2026.9.3-beta.1",
+      published: true,
+    },
+    { name: "npm package override", override: "openclaw@2026.6.35" },
+    { name: "source before the new scenario", supportsScenario: false },
+    {
+      name: "frozen source with the new scenario",
+      candidateVersion: "2026.9.35",
+      context: "refs/heads/extended-stable/2026.9.33",
+    },
+    {
+      name: "frozen source branch without separate context",
+      candidateVersion: "2026.9.35",
+      ref: "extended-stable/2026.9.33",
+    },
+  ])("keeps the candidate-compatible upgrade survivor predecessor for $name", (params) => {
+    const { result, output } = runReleaseSurvivorProfileStep(params);
+    expect(result.status, result.stderr).toBe(0);
+    expect(output).toEqual({ baselines: "", scenarios: "base" });
+  });
+
+  it("preserves the historical candidate-compatible upgrade survivor soak inventory without the new scenario", () => {
+    const { result, output } = runReleaseSurvivorProfileStep({
+      candidateVersion: "2026.6.35",
+      soak: true,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(output.baselines).toBe("");
+    expect(output.scenarios?.split(" ")).toEqual([
+      "base",
+      "acpx-openclaw-tools-bridge",
+      "feishu-channel",
+      "bootstrap-persona",
+      "channel-post-core-restore",
+      "plugin-deps-cleanup",
+      "configured-plugin-installs",
+      "stale-source-plugin-shadow",
+      "tilde-log-path",
+      "meeting-transcripts-sqlite",
+      "versioned-runtime-deps",
+      "cron-scheduled-authority",
+    ]);
+  });
+
+  it.each([false, true])(
+    "keeps published candidate-compatible upgrade survivor fixtures on the predecessor (soak=%s)",
+    (soak) => {
+      const { result, output, calls } = runReleaseSurvivorProfileStep({
+        published: true,
+        soak,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(output.baselines).toBe("");
+      expect(output.scenarios?.split(" ")).toEqual(
+        soak
+          ? [
+              "base",
+              "acpx-openclaw-tools-bridge",
+              "feishu-channel",
+              "bootstrap-persona",
+              "channel-post-core-restore",
+              "plugin-deps-cleanup",
+              "configured-plugin-installs",
+              "stale-source-plugin-shadow",
+              "tilde-log-path",
+              "meeting-transcripts-sqlite",
+              "versioned-runtime-deps",
+              "cron-scheduled-authority",
+            ]
+          : ["base"],
+      );
+      expect(calls).toEqual([]);
+    },
+  );
+
+  it("fails candidate-compatible upgrade survivor source qualification when metadata cannot be read", () => {
+    const { result, output } = runReleaseSurvivorProfileStep({ metadataError: true });
+    expect(result.status).not.toBe(0);
+    expect(output).toEqual({});
+  });
+
   it("includes package acceptance in release checks", () => {
     const workflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
     const filterValidator = readFileSync(RELEASE_FILTER_VALIDATOR, "utf8");
@@ -8375,9 +8604,11 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "plugin-update",
       "plugin-binding-command-escape",
     ]);
-    expect(packageAcceptanceJob.with?.published_upgrade_survivor_baselines).toBeUndefined();
-    expect(workflow).toContain(
-      "published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}",
+    expect(packageAcceptanceJob.with?.published_upgrade_survivor_baselines).toBe(
+      "${{ needs.prepare_release_package.outputs.upgrade_survivor_baselines }}",
+    );
+    expect(packageAcceptanceJob.with?.published_upgrade_survivor_scenarios).toBe(
+      "${{ needs.prepare_release_package.outputs.upgrade_survivor_scenarios }}",
     );
     expect(readWorkflow(RELEASE_CHECKS_WORKFLOW).on?.workflow_dispatch?.inputs).toMatchObject({
       skip_package_telegram_e2e: {
@@ -12004,7 +12235,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       readFileSync("docs/ci.md", "utf8"),
       ...readdirSync("docs/ci")
         .filter((name) => name.endsWith(".md"))
-        .sort()
+        .toSorted()
         .map((name) => readFileSync(`docs/ci/${name}`, "utf8")),
     ].join("\n");
     const fullReleaseDocs = readFileSync("docs/reference/full-release-validation.md", "utf8");
