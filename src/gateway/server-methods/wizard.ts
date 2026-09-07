@@ -1,7 +1,10 @@
 // Wizard gateway methods manage interactive setup wizard sessions and route
 // start/next/status/cancel RPCs through the wizard runtime.
 import { randomUUID } from "node:crypto";
-import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -83,8 +86,20 @@ function findWizardSessionOrRespond(params: {
   context: GatewayRequestContext;
   respond: RespondFn;
   sessionId: string;
-}): WizardSession | null {
-  const session = params.context.wizardSessions.get(params.sessionId);
+}): { session: WizardSession; sessionId: string } | null {
+  // Exact Map lookup; clipboard/RPC padding must not fake "wizard not found".
+  const sessionId = normalizeOptionalString(params.sessionId);
+  if (!sessionId) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found", {
+        details: { code: GatewayErrorDetailCodes.WIZARD_NOT_FOUND },
+      }),
+    );
+    return null;
+  }
+  const session = params.context.wizardSessions.get(sessionId);
   if (!session) {
     params.respond(
       false,
@@ -95,7 +110,7 @@ function findWizardSessionOrRespond(params: {
     );
     return null;
   }
-  return session;
+  return { session, sessionId };
 }
 
 /** Gateway handlers for the interactive setup wizard session lifecycle. */
@@ -155,11 +170,15 @@ export const wizardHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateWizardNextParams, "wizard.next", respond)) {
       return;
     }
-    const sessionId = params.sessionId;
-    const session = findWizardSessionOrRespond({ context, respond, sessionId });
-    if (!session) {
+    const resolved = findWizardSessionOrRespond({
+      context,
+      respond,
+      sessionId: params.sessionId,
+    });
+    if (!resolved) {
       return;
     }
+    const { session, sessionId } = resolved;
     const answer = params.answer as { stepId?: string; value?: unknown } | undefined;
     if (answer) {
       if (session.getStatus() !== "running") {
@@ -196,11 +215,15 @@ export const wizardHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateWizardCancelParams, "wizard.cancel", respond)) {
       return;
     }
-    const sessionId = params.sessionId;
-    const session = findWizardSessionOrRespond({ context, respond, sessionId });
-    if (!session) {
+    const resolved = findWizardSessionOrRespond({
+      context,
+      respond,
+      sessionId: params.sessionId,
+    });
+    if (!resolved) {
       return;
     }
+    const { session, sessionId } = resolved;
     const cancelled = session.cancel();
     const status = readWizardStatus(session);
     if (cancelled) {
@@ -215,11 +238,15 @@ export const wizardHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateWizardStatusParams, "wizard.status", respond)) {
       return;
     }
-    const sessionId = params.sessionId;
-    const session = findWizardSessionOrRespond({ context, respond, sessionId });
-    if (!session) {
+    const resolved = findWizardSessionOrRespond({
+      context,
+      respond,
+      sessionId: params.sessionId,
+    });
+    if (!resolved) {
       return;
     }
+    const { session, sessionId } = resolved;
     const status = readWizardStatus(session);
     if (status.status !== "running") {
       await whenAdmittedWizardSessionSettled(session);
