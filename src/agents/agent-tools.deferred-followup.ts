@@ -69,9 +69,15 @@ function describeAvailableTool(tool: AnyAgentTool, availableTools: ReadonlySet<s
         "No spawn for quick lookup/single read.",
         `No spawn for quick lookup/single read. Check spawns via ${guidance}.`,
       );
+    }
+    // sessions_history returns sanitized transcript/pagination only, never a
+    // run's terminal status (a cancelled/timed-out child can leave no terminal
+    // message at all) -- only `subagents` actually reports failed/timed_out/
+    // cancelled, so the follow-up check names that tool specifically.
+    if (availableTools.has("subagents")) {
       description = description.replace(
         "After spawn, do non-overlap work; follow the receipt's completion mode.",
-        `After spawn, do non-overlap work; follow the receipt's completion mode. Before moving on, check own spawned children via ${guidance} for failed/timeout/killed status and follow up instead of leaving them stalled.`,
+        "After spawn, do non-overlap work; follow the receipt's completion mode. Before moving on, check own spawned children via `subagents` for failed/timed_out/cancelled status and follow up instead of leaving them stalled.",
       );
     }
   }
