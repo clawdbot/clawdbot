@@ -10,6 +10,7 @@ vi.mock("./shared/guarded-json-api.js", () => ({
   guardedJsonApiRequest: guardedJsonApiRequestMock,
 }));
 
+import { chunkTelephonyReply } from "../telephony-tts-chunking.js";
 import type { WebhookContext } from "../types.js";
 import { TwilioProvider } from "./twilio.js";
 import { TwilioApiError } from "./twilio/api.js";
@@ -844,6 +845,123 @@ describe("TwilioProvider", () => {
       await playExpectation;
       expect(sendAudio).toHaveBeenCalledTimes(3);
       expect(clearAudio).toHaveBeenCalledWith("MZ-dropped");
+      expect(sendMarkAndWait).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("splits a long reply into ordered, bounded synthesis requests with one completion mark", async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = createProvider();
+      provider.registerCallStream("CA-long", "MZ-long");
+
+      const synthCalls: string[] = [];
+      const sendAudio = vi.fn(() => ({ sent: true }));
+      const sendMarkAndWait = vi.fn(async () => {});
+      const mediaStreamHandler = {
+        queueTts: async (
+          _streamSid: string,
+          playFn: (signal: AbortSignal) => Promise<void>,
+        ): Promise<void> => {
+          await playFn(new AbortController().signal);
+        },
+        sendAudio,
+        sendMarkAndWait,
+      };
+
+      provider.setMediaStreamHandler(mediaStreamHandler as never);
+      provider.setTTSProvider({
+        synthesisTimeoutMs: 5000,
+        synthesizeForTelephony: async (text: string) => {
+          synthCalls.push(text);
+          return Buffer.alloc(160);
+        },
+      });
+
+      // A reply well over the 320-char synthesis budget, several sentences long.
+      const longText = Array.from(
+        { length: 12 },
+        (_, i) => `This is sentence number ${i} with some filler words.`,
+      ).join(" ");
+      const expectedChunks = chunkTelephonyReply(longText, 320);
+      expect(expectedChunks.length).toBeGreaterThan(1);
+
+      const playback = provider.playTts({
+        callId: "call-long",
+        providerCallId: "CA-long",
+        text: longText,
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await playback;
+
+      // One synthesis request per bounded piece, delivered in order.
+      expect(synthCalls).toEqual(expectedChunks);
+      // Every piece stays within the synthesis budget (hard-bounded, no oversized token).
+      for (const piece of synthCalls) {
+        expect(piece.length).toBeLessThanOrEqual(320);
+      }
+      // Exactly one completion mark, sent after all pieces stream.
+      expect(sendMarkAndWait).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips remaining text chunks when a barge-in aborts mid-playback", async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = createProvider();
+      provider.registerCallStream("CA-barge", "MZ-barge");
+
+      const controller = new AbortController();
+      const synthCalls: string[] = [];
+      const sendAudio = vi.fn(() => ({ sent: true }));
+      const sendMarkAndWait = vi.fn(async () => {});
+      const mediaStreamHandler = {
+        queueTts: async (
+          _streamSid: string,
+          playFn: (signal: AbortSignal) => Promise<void>,
+        ): Promise<void> => {
+          await playFn(controller.signal);
+        },
+        sendAudio,
+        sendMarkAndWait,
+      };
+
+      provider.setMediaStreamHandler(mediaStreamHandler as never);
+      provider.setTTSProvider({
+        synthesisTimeoutMs: 5000,
+        synthesizeForTelephony: async (text: string) => {
+          synthCalls.push(text);
+          // Simulate a caller barge-in the moment the first piece synthesizes.
+          if (synthCalls.length === 1) {
+            controller.abort();
+          }
+          return Buffer.alloc(160);
+        },
+      });
+
+      const longText = Array.from(
+        { length: 12 },
+        (_, i) => `This is sentence number ${i} with a little filler.`,
+      ).join(" ");
+      expect(chunkTelephonyReply(longText, 320).length).toBeGreaterThan(1);
+
+      const playback = provider.playTts({
+        callId: "call-barge",
+        providerCallId: "CA-barge",
+        text: longText,
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await playback;
+
+      // The whole reply streams inside one serialized queueTts slot, so a barge-in
+      // aborts the slot: only the first piece is synthesized and every remaining
+      // chunk is skipped — not left queued to play after the caller stops talking.
+      expect(synthCalls.length).toBe(1);
+      // No completion mark is sent for an aborted playback.
       expect(sendMarkAndWait).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();

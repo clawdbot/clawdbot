@@ -1089,11 +1089,22 @@ export class VoiceCallWebhookServer {
     }
 
     const response = this.manager.createAutoResponseGuard(call);
+    // Tracks the text most recently handed to speech within this auto-response
+    // run. Long (chunked) replies keep playback in flight long enough that a
+    // second delivery event (run completion or a later flush) can request the
+    // identical text again; dedupe here so the caller never hears the same
+    // reply twice back to back.
+    let inFlightText: string | null = null;
     const speakResponse = async (text: string): Promise<boolean> => {
       if (!response.isCurrent()) {
         this.logger.info(`Discarding superseded automatic reply ${callId}`);
         return false;
       }
+      if (inFlightText === text) {
+        this.logger.info(`Skipping duplicate automatic reply ${callId} chars=${text.length}`);
+        return true;
+      }
+      inFlightText = text;
       this.logger.info(`AI response queued ${callId} chars=${text.length}`);
       const result = await this.manager.speak(callId, text, { listenAfterPlayback: true });
       return result.success;

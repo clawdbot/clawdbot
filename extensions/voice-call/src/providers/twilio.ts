@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { getHeader } from "../http-headers.js";
 import type { MediaStreamHandler } from "../media-stream.js";
 import { chunkAudio } from "../telephony-audio.js";
+import { chunkTelephonyReply } from "../telephony-tts-chunking.js";
 import type { TelephonyTtsProvider } from "../telephony-tts.js";
 import type {
   GetCallStatusInput,
@@ -690,6 +691,11 @@ export class TwilioProvider implements VoiceCallProvider {
     const CHUNK_SIZE = 160;
     const CHUNK_DELAY_MS = 20;
     const SILENCE_CHUNK = Buffer.alloc(CHUNK_SIZE, 0xff);
+    // Max characters per synthesis request. Long replies synthesized as a single
+    // request can exceed the provider synthesis timeout and be dropped silently,
+    // so we split into bounded pieces below. Kept as an internal constant rather
+    // than an operator-facing flag.
+    const MAX_TELEPHONY_TTS_SYNTH_CHARS = 320;
 
     const handler = this.mediaStreamHandler;
     const ttsProvider = this.ttsProvider;
@@ -714,88 +720,118 @@ export class TwilioProvider implements VoiceCallProvider {
       return normalizeSendResult(raw);
     };
 
+    // Split long replies into bounded pieces on natural sentence boundaries
+    // (falling back to a hard-bounded split for an over-long sentence), so every
+    // piece fits the synthesis budget. Pieces are synthesized and streamed
+    // sequentially within a single queueTts slot, which serializes playback and
+    // preserves order. Native-provider paths are untouched: this splitting is
+    // internal to the media-stream synthesis owner.
+    const speechChunks = chunkTelephonyReply(text, MAX_TELEPHONY_TTS_SYNTH_CHARS);
+    const textChunks = speechChunks.length > 0 ? speechChunks : [text];
+    if (textChunks.length > 1) {
+      console.log(
+        `[voice-call] Telephony TTS split into ${textChunks.length} chunks ` +
+          `[${textChunks.map((c) => c.length).join(", ")}] (streamSid=${streamSid})`,
+      );
+    }
+
     await handler.queueTts(streamSid, async (signal) => {
       const sendKeepAlive = () => {
         sendAudioChunk(SILENCE_CHUNK);
       };
-      sendKeepAlive();
-      const keepAlive = setInterval(() => {
-        if (!signal.aborted) {
-          sendKeepAlive();
-        }
-      }, CHUNK_DELAY_MS);
-
-      // Generate audio with core TTS (returns mu-law at 8kHz)
-      let muLawAudio: Buffer;
-      let synthTimeout: ReturnType<typeof setTimeout> | null = null;
-      let removeAbortListener = () => {};
-      const synthTimeoutMs = ttsProvider.synthesisTimeoutMs;
-      try {
-        const synthPromise = ttsProvider.synthesizeForTelephony(text);
-        const timeoutPromise = new Promise<Buffer>((_, reject) => {
-          synthTimeout = setTimeout(() => {
-            reject(new Error(`Telephony TTS synthesis timed out after ${synthTimeoutMs}ms`));
-          }, synthTimeoutMs);
-        });
-        const abortPromise = new Promise<never>((_, reject) => {
-          const onAbort = () => {
-            reject(
-              signal.reason instanceof Error
-                ? signal.reason
-                : new Error("Telephony TTS synthesis aborted"),
-            );
-          };
-          signal.addEventListener("abort", onAbort, { once: true });
-          removeAbortListener = () => signal.removeEventListener("abort", onAbort);
-          if (signal.aborted) {
-            onAbort();
-          }
-        });
-        muLawAudio = await Promise.race([synthPromise, timeoutPromise, abortPromise]);
-      } finally {
-        if (synthTimeout) {
-          clearTimeout(synthTimeout);
-        }
-        clearInterval(keepAlive);
-        removeAbortListener();
-      }
-
-      if (muLawAudio.length === 0) {
-        throw new Error("Telephony TTS produced no audio");
-      }
 
       let chunkAttempts = 0;
       let chunkDelivered = 0;
-      let nextChunkDueAt = Date.now() + CHUNK_DELAY_MS;
-      for (const chunk of chunkAudio(muLawAudio, CHUNK_SIZE)) {
+      let totalMuLawBytes = 0;
+
+      for (const speech of textChunks) {
         if (signal.aborted) {
           break;
         }
-        chunkAttempts += 1;
-        const chunkResult = sendAudioChunk(chunk);
-        if (!chunkResult.sent) {
-          handler.clearAudio(streamSid);
-          throw new Error(
-            `Telephony stream playback failed: audio chunk ${chunkAttempts} not delivered`,
-          );
+
+        // Keep the stream warm while this piece synthesizes.
+        sendKeepAlive();
+        const keepAlive = setInterval(() => {
+          if (!signal.aborted) {
+            sendKeepAlive();
+          }
+        }, CHUNK_DELAY_MS);
+
+        // Generate audio with core TTS (returns mu-law at 8kHz)
+        let muLawAudio: Buffer;
+        let synthTimeout: ReturnType<typeof setTimeout> | null = null;
+        let removeAbortListener = () => {};
+        const synthTimeoutMs = ttsProvider.synthesisTimeoutMs;
+        try {
+          const synthPromise = ttsProvider.synthesizeForTelephony(speech);
+          const timeoutPromise = new Promise<Buffer>((_, reject) => {
+            synthTimeout = setTimeout(() => {
+              reject(new Error(`Telephony TTS synthesis timed out after ${synthTimeoutMs}ms`));
+            }, synthTimeoutMs);
+          });
+          const abortPromise = new Promise<never>((_, reject) => {
+            const onAbort = () => {
+              reject(
+                signal.reason instanceof Error
+                  ? signal.reason
+                  : new Error("Telephony TTS synthesis aborted"),
+              );
+            };
+            signal.addEventListener("abort", onAbort, { once: true });
+            removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+            if (signal.aborted) {
+              onAbort();
+            }
+          });
+          muLawAudio = await Promise.race([synthPromise, timeoutPromise, abortPromise]);
+        } finally {
+          if (synthTimeout) {
+            clearTimeout(synthTimeout);
+          }
+          clearInterval(keepAlive);
+          removeAbortListener();
         }
-        chunkDelivered += 1;
+
+        if (signal.aborted) {
+          break;
+        }
+
+        if (muLawAudio.length === 0) {
+          throw new Error("Telephony TTS produced no audio");
+        }
+        totalMuLawBytes += muLawAudio.length;
 
         // Drift-corrected pacing: schedule against an absolute clock to avoid cumulative delay.
-        const waitMs = nextChunkDueAt - Date.now();
-        if (waitMs > 0) {
-          try {
-            await sleepWithAbort(Math.ceil(waitMs), signal);
-          } catch (error) {
-            if (!signal.aborted) {
-              throw error;
-            }
+        let nextChunkDueAt = Date.now() + CHUNK_DELAY_MS;
+        for (const chunk of chunkAudio(muLawAudio, CHUNK_SIZE)) {
+          if (signal.aborted) {
             break;
           }
-        }
-        nextChunkDueAt += CHUNK_DELAY_MS;
-        if (signal.aborted) {
-          break;
+          chunkAttempts += 1;
+          const chunkResult = sendAudioChunk(chunk);
+          if (!chunkResult.sent) {
+            handler.clearAudio(streamSid);
+            throw new Error(
+              `Telephony stream playback failed: audio chunk ${chunkAttempts} not delivered`,
+            );
+          }
+          chunkDelivered += 1;
+
+          const waitMs = nextChunkDueAt - Date.now();
+          if (waitMs > 0) {
+            try {
+              await sleepWithAbort(Math.ceil(waitMs), signal);
+            } catch (error) {
+              if (!signal.aborted) {
+                throw error;
+              }
+              break;
+            }
+          }
+          nextChunkDueAt += CHUNK_DELAY_MS;
+          if (signal.aborted) {
+            break;
+          }
         }
       }
 
@@ -806,7 +842,7 @@ export class TwilioProvider implements VoiceCallProvider {
         throw new Error("Telephony stream playback failed: incomplete audio delivery");
       }
       const markName = `tts-${Date.now()}-${++this.playbackMarkSequence}`;
-      await handler.sendMarkAndWait(streamSid, markName, muLawAudio.length / 8, signal);
+      await handler.sendMarkAndWait(streamSid, markName, totalMuLawBytes / 8, signal);
     });
   }
 
