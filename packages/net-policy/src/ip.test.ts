@@ -52,6 +52,16 @@ describe("shared ip helpers", () => {
     ["fe80::1%eth0", "fe80::1%eth0", true],
     ["fe80::1%eth0", "fe80::1%eth1/128", true],
     ["::ffff:127.0.0.1", "::ffff:127.0.0.1/128", true],
+    ["10.1.2.3", "::ffff:10.0.0.0/104", true],
+    ["::ffff:10.1.2.3", "::ffff:10.0.0.0/104", true],
+    ["11.1.2.3", "::ffff:10.0.0.0/104", false],
+    ["10.42.0.59", "::ffff:10.42.0.0/120", true],
+    ["10.42.1.59", "::ffff:10.42.0.0/120", false],
+    ["10.0.0.1", "::ffff:10.0.0.0/128", false],
+    ["203.0.113.9", "::ffff:0:0/96", true],
+    ["::ffff:203.0.113.9", "::ffff:0:0/96", true],
+    ["203.0.113.9", "::ffff:10.0.0.0/64", true],
+    ["2001:db8::1", "::ffff:0:0/96", false],
   ])("matches %s against %s: %s", (ip, range, expected) => {
     expect(isIpInCidr(ip, range)).toBe(expected);
   });

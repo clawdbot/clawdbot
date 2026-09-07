@@ -112,6 +112,7 @@ Internal Gateway clients that do not travel through the reverse proxy should use
 
 <ParamField path="gateway.trustedProxies" type="string[]" required>
   Array of proxy IP addresses (or CIDRs) to trust. Requests from other IPs are rejected.
+  IPv4 ranges may be written plainly (`10.0.0.0/8`) or in IPv4-mapped IPv6 form (`::ffff:10.0.0.0/104`); the two are equivalent, and both match a peer connecting as `10.1.2.3` or as `::ffff:10.1.2.3`. A mapped prefix counts the 96 leading mapped bits, so `::ffff:0:0/96` denotes all of IPv4 — including loopback, which still requires `gateway.auth.trustedProxy.allowLoopback`. Native IPv6 peers never match a mapped range.
 </ParamField>
 <ParamField path="gateway.auth.mode" type="string" required>
   Must be `"trusted-proxy"`.
