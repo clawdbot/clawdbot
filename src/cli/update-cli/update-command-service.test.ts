@@ -1,8 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import {
+  createUpdateRun,
+  recordUpdateRunStep,
+  recordUpdateRunVerification,
+} from "../../infra/update-run-ledger.js";
 import {
   beginUpdateRecovery,
+  claimUpdateRecovery,
+  recordUpdateRecoveryFailure,
   recordUpdateRecoveryIntent,
   recordUpdateRecoveryObservation,
   loadUpdateRecovery,
@@ -102,9 +108,9 @@ describe("maybeRestartService", () => {
     });
   });
 
-  it.each([false, true])(
-    "persists private serving proof before success, revoked=%s",
-    async (revoked) => {
+  it.each(["current", "revoked", "reclaimed", "advanced", "ack-advanced"] as const)(
+    "persists private serving proof only for the original recovery record: %s",
+    async (change) => {
       const home = tempDirs.make("serving-recovery-consumer-");
       const options = { env: { HOME: home, OPENCLAW_STATE_DIR: home } };
       const admitted = createUpdateRun({ trigger: "cli" }, options);
@@ -146,7 +152,17 @@ describe("maybeRestartService", () => {
       );
       const proof = { ...receipt, runId: admitted.runId };
       mocks.verifyUpdateServing.mockImplementationOnce(async () => {
-        current = !revoked;
+        current = change !== "revoked";
+        if (change === "reclaimed") {
+          record = claimUpdateRecovery(record, fence, options);
+        } else if (change === "advanced") {
+          record = recordUpdateRecoveryFailure(
+            record,
+            { code: "execution-interrupted", effectId: null },
+            fence,
+            options,
+          );
+        }
         return { status: "verified", receipt: proof };
       });
       const onVerified = vi.fn(() => {
@@ -159,6 +175,14 @@ describe("maybeRestartService", () => {
           getRecord: () => record,
           onRecord: (next: typeof record) => {
             record = next;
+            if (change === "ack-advanced") {
+              record = recordUpdateRecoveryFailure(
+                record,
+                { code: "execution-interrupted", effectId: null },
+                fence,
+                options,
+              );
+            }
           },
           fence,
           options,
@@ -174,10 +198,22 @@ describe("maybeRestartService", () => {
         expectedBuildId: runtime.buildId,
         onVerified,
       });
-      if (revoked) {
-        await expect(verification).rejects.toThrow("owner revoked");
+      if (change !== "current") {
+        await expect(verification).rejects.toMatchObject({
+          name: change === "revoked" ? "Error" : "UpdateRecoveryConflictError",
+        });
         expect(onVerified).not.toHaveBeenCalled();
         expect(loadUpdateRecovery(admitted.runId, options)?.verification).toBeNull();
+        expect(recordUpdateRunVerification).not.toHaveBeenCalledWith(
+          admitted.runId,
+          expect.objectContaining({ inferenceProbe: "passed" }),
+          expect.anything(),
+        );
+        expect(recordUpdateRunStep).not.toHaveBeenCalledWith(
+          admitted.runId,
+          expect.objectContaining({ step: "gateway verification", status: "completed" }),
+          expect.anything(),
+        );
       } else {
         await expect(verification).resolves.toMatchObject({ ok: true });
         expect(onVerified).toHaveBeenCalledOnce();

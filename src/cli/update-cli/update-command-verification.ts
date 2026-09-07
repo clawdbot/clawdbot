@@ -80,11 +80,14 @@ export async function verifyUpdatedGateway(params: {
     launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null;
   }>;
 }): Promise<UpdateRepairValidation> {
+  // Proof belongs to the recovery record that began this observation. Reloading
+  // the executor's newest record after an await could bless a reclaimed run.
+  let expectedRecovery = params.opts.recovery?.getRecord();
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
     if (params.opts.recovery) {
-      assertUpdateCommandRecovery(params.opts);
+      assertUpdateCommandRecovery(params.opts, expectedRecovery);
     }
   };
   assertCurrent();
@@ -156,6 +159,10 @@ export async function verifyUpdatedGateway(params: {
           ? ({ status: "failed", reason: "invalid-request" } as const)
           : ({ status: "unavailable", reason: "identity-unavailable" } as const);
     assertCurrent();
+    if (serving.status === "verified") {
+      expectedRecovery = persistUpdateCommandServingReceipt(params.opts, serving.receipt);
+      assertCurrent();
+    }
     if (run) {
       recordUpdateRunVerification(
         run.runId,
@@ -186,7 +193,6 @@ export async function verifyUpdatedGateway(params: {
       defaultRuntime.error(`Gateway serving verification failed: ${serving.reason}.`);
       return { ok: false, score: 7, summary: reason };
     }
-    persistUpdateCommandServingReceipt(params.opts, serving.receipt);
     assertCurrent();
     params.onVerified?.(serving.receipt.verifiedAtMs);
     if (!params.opts.json) {

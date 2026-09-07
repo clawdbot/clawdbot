@@ -22,7 +22,10 @@ export class UpdateCommandRecoveryPendingError extends Error {
 }
 
 /** Stop legacy finalization before diagnostic writes, restarts, or backup cleanup. */
-export function assertUpdateCommandRecovery(opts: UpdateCommandOptions): void {
+export function assertUpdateCommandRecovery(
+  opts: UpdateCommandOptions,
+  expected = opts.recovery?.getRecord(),
+): void {
   if (!opts.run) {
     if (opts.recovery) {
       throw new UpdateCommandRecoveryPendingError("Recovery requires its admitted update run.");
@@ -36,8 +39,7 @@ export function assertUpdateCommandRecovery(opts: UpdateCommandOptions): void {
     }
     return;
   }
-  const expected = opts.recovery.getRecord();
-  if (!current || expected.runId !== opts.run.runId) {
+  if (!current || !expected || expected.runId !== opts.run.runId) {
     throw new UpdateCommandRecoveryPendingError("Recovery does not match the admitted run.");
   }
   // The run-selected DB is authoritative; a supplied options object cannot redirect it.
@@ -47,10 +49,10 @@ export function assertUpdateCommandRecovery(opts: UpdateCommandOptions): void {
 export function persistUpdateCommandServingReceipt(
   opts: UpdateCommandOptions,
   receipt: UpdateServingReceipt,
-): void {
+): UpdateRecoveryRecord | undefined {
   const recovery = opts.recovery;
   if (!recovery) {
-    return;
+    return undefined;
   }
   if (!opts.run) {
     throw new UpdateCommandRecoveryPendingError("Recovery requires its admitted update run.");
@@ -68,7 +70,8 @@ export function persistUpdateCommandServingReceipt(
     { env: opts.run.env },
   );
   recovery.onRecord(next);
-  assertUpdateCommandRecovery(opts);
+  assertUpdateCommandRecovery(opts, next);
+  return next;
 }
 
 /**
