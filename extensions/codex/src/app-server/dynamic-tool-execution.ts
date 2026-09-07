@@ -15,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
   addTimerTimeoutGraceMs,
+  parseStrictFiniteNumber,
   parseStrictNonNegativeInteger,
 } from "openclaw/plugin-sdk/number-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -581,14 +582,28 @@ function readComputerToolTimeoutMs(value: JsonValue | undefined): number {
   // legacy pairing list. Screenshot/wait then capture once; input also acts.
   const gatewayCallCount = action === "screenshot" || action === "wait" ? 3 : 4;
   const durationMs =
-    action === "wait" || action === "hold_key"
-      ? Math.max(0, Number(args?.duration) || 0) * 1000
-      : 0;
+    action === "wait" || action === "hold_key" ? readComputerDurationMs(args?.duration) * 1000 : 0;
   // `timeoutMs` is a per-Gateway-call transport budget, not the whole dynamic
   // tool deadline. Computer use can resolve a node, perform/wait, then capture.
   return (
     durationMs + gatewayCallCount * gatewayTimeoutMs + CODEX_DYNAMIC_COMPUTER_COMPLETION_GRACE_MS
   );
+}
+
+/** Seconds for wait/hold_key; matches computer-tool readFiniteNumberParam grammar. */
+function readComputerDurationMs(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(0, value);
+  }
+  if (typeof value === "string") {
+    // parseStrictFiniteNumber rejects hex ("0x10") but accepts decimal/scientific
+    // fractions ("100.5", "1e2") — same as computer-tool strict number params.
+    const parsed = parseStrictFiniteNumber(value);
+    if (parsed !== undefined) {
+      return Math.max(0, parsed);
+    }
+  }
+  return 0;
 }
 
 function readDynamicToolCallTimeoutMs(value: JsonValue | undefined): number | undefined {

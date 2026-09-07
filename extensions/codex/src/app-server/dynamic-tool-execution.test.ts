@@ -228,6 +228,93 @@ describe("dynamic tool execution helpers", () => {
     ).toBe(CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS);
   });
 
+  it("aligns computer duration strings with computer-tool parseStrictFiniteNumber", () => {
+    // Hex "0x10" would be 16 under Number() — reject, fall back to baseline.
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-computer-wait-hex",
+          namespace: null,
+          tool: "computer",
+          arguments: { action: "wait", duration: "0x10" },
+        },
+        config: undefined,
+      }),
+    ).toBe(120_000);
+    // Exponent "1e2" honored (100s) — same as computer-tool strict finite parse.
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-computer-hold-exp",
+          namespace: null,
+          tool: "computer",
+          arguments: { action: "hold_key", duration: "1e2" },
+        },
+        config: undefined,
+      }),
+    ).toBe(250_000);
+    // Fraction string "100.5" honored — avoid underbudgeting computer-tool.
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-computer-wait-frac",
+          namespace: null,
+          tool: "computer",
+          arguments: { action: "wait", duration: "100.5" },
+        },
+        config: undefined,
+      }),
+    ).toBe(220_500);
+    // Fraction string "0.5" honored.
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-computer-wait-frac-half",
+          namespace: null,
+          tool: "computer",
+          arguments: { action: "wait", duration: "0.5" },
+        },
+        config: undefined,
+      }),
+    ).toBe(120_500);
+    // Numeric fraction 0.5 — preserved (500ms).
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-computer-wait-num-frac",
+          namespace: null,
+          tool: "computer",
+          arguments: { action: "wait", duration: 0.5 },
+        },
+        config: undefined,
+      }),
+    ).toBe(120_500);
+    // Decimal string "100" — still honored.
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-computer-wait-decimal",
+          namespace: null,
+          tool: "computer",
+          arguments: { action: "wait", duration: "100" },
+        },
+        config: undefined,
+      }),
+    ).toBe(220_000);
+  });
+
   it("uses media image config and caps excessive dynamic tool timeouts", () => {
     expect(
       resolveDynamicToolCallTimeoutMs({
