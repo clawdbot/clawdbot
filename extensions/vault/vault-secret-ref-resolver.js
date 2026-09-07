@@ -6,6 +6,57 @@ import { parseVaultSecretId } from "./vault-secret-id.js";
 const KUBERNETES_SERVICE_ACCOUNT_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token";
 const VAULT_FETCH_TIMEOUT_MS = 5000;
 const VAULT_ERROR_BODY_MAX_BYTES = 64 * 1024;
+// Secret payloads are small; keep the same 16 MiB campaign cap used by
+// readProviderJsonResponse so a hostile/misbehaving Vault cannot OOM the
+// SecretRef helper subprocess via an unbounded success-path response.json().
+const VAULT_JSON_MAX_BYTES = 16 * 1024 * 1024;
+
+async function cancelResponseBody(response) {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // Best-effort: body may already be locked or closed.
+  }
+}
+
+async function readVaultSuccessJsonResponse(response) {
+  const contentLengthHeader = response.headers.get("content-length");
+  if (contentLengthHeader != null) {
+    const contentLength = Number(contentLengthHeader);
+    if (Number.isFinite(contentLength) && contentLength > VAULT_JSON_MAX_BYTES) {
+      await cancelResponseBody(response);
+      throw new Error(`Vault response exceeds ${VAULT_JSON_MAX_BYTES} bytes.`);
+    }
+  }
+  if (!response.body) {
+    const text = await response.text();
+    if (Buffer.byteLength(text, "utf8") > VAULT_JSON_MAX_BYTES) {
+      throw new Error(`Vault response exceeds ${VAULT_JSON_MAX_BYTES} bytes.`);
+    }
+    return text ? JSON.parse(text) : undefined;
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    total += value.byteLength;
+    if (total > VAULT_JSON_MAX_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error(`Vault response exceeds ${VAULT_JSON_MAX_BYTES} bytes.`);
+    }
+    chunks.push(value);
+  }
+  if (chunks.length === 0) {
+    return undefined;
+  }
+  const bytes = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
+  return JSON.parse(bytes.toString("utf8"));
+}
+
 
 class VaultProviderError extends Error {}
 class VaultForbiddenError extends Error {}
@@ -201,7 +252,9 @@ async function fetchVault(baseUrl, url, init) {
     });
     return {
       response,
-      payload: response.ok ? await response.json() : await readVaultErrorPayload(response),
+      payload: response.ok
+        ? await readVaultSuccessJsonResponse(response)
+        : await readVaultErrorPayload(response),
     };
   } finally {
     clearTimeout(timeout);

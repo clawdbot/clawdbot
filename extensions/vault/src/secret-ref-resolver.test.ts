@@ -996,4 +996,82 @@ describe("vault SecretRef resolver", () => {
       },
     });
   });
+  it("rejects oversized success-path Vault JSON before buffering the full body", async () => {
+    const VAULT_JSON_MAX_BYTES = 16 * 1024 * 1024;
+    let bytesWritten = 0;
+    let clientCancelled = false;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      // Stream without Content-Length so the client must bound while reading.
+      response.write('{"data":{"data":{"apiKey":"');
+      bytesWritten += 26;
+      const chunk = Buffer.alloc(64 * 1024, 0x78);
+      const writeMore = () => {
+        if (response.destroyed || response.writableEnded) {
+          clientCancelled = true;
+          return;
+        }
+        if (bytesWritten >= 24 * 1024 * 1024) {
+          response.write('"}}}');
+          response.end();
+          return;
+        }
+        const ok = response.write(chunk);
+        bytesWritten += chunk.length;
+        if (!ok) {
+          response.once("drain", writeMore);
+          return;
+        }
+        setImmediate(writeMore);
+      };
+      response.on("close", () => {
+        if (!response.writableFinished) {
+          clientCancelled = true;
+        }
+      });
+      writeMore();
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    servers.push({
+      close: () =>
+        new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+          server.closeAllConnections();
+        }),
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("fixture server did not bind to a TCP port");
+    }
+
+    const result = await runResolver({
+      request: {
+        protocolVersion: 1,
+        provider: "vault",
+        ids: ["providers/openai/apiKey"],
+      },
+      env: {
+        VAULT_ADDR: `http://127.0.0.1:${address.port}`,
+        VAULT_TOKEN: "not-a-real-auth-header",
+      },
+      timeoutMs: 30_000,
+    });
+
+    expect(result).toMatchObject({ code: 0, stderr: "", timedOut: false });
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      protocolVersion: 1,
+      values: {},
+      errors: {
+        "providers/openai/apiKey": {
+          message: expect.stringContaining(`exceeds ${VAULT_JSON_MAX_BYTES} bytes`),
+        },
+      },
+    });
+    // Client cancel + backpressure should stop well under the full 24 MiB stream.
+    expect(clientCancelled || bytesWritten < 20 * 1024 * 1024).toBe(true);
+    expect(bytesWritten).toBeGreaterThan(VAULT_JSON_MAX_BYTES);
+  });
+
 });
