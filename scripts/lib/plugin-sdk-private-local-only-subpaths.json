@@ -179,6 +179,8 @@
   "speech-provider",
   "sqlite-runtime",
   "sqlite-runtime-testing",
+  "sqlite-vec-runtime",
+  "node-sqlite-runtime",
   "ssrf-dispatcher",
   "ssrf-runtime-internal",
   "string-normalization-runtime",
