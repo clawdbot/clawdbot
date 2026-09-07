@@ -209,19 +209,6 @@ export class BrowserPanelStream {
       return;
     }
     attempt.metadata = metadata;
-    const view = this.host.view;
-    if (
-      this.host.mode === "interact" &&
-      attempt.live &&
-      view?.targetId === attempt.targetId &&
-      view.metrics
-    ) {
-      this.host.setState("view", {
-        ...view,
-        url: metadata.url,
-        metrics: { ...view.metrics, ...metadata },
-      });
-    }
     this.host.setState(
       "tabs",
       this.host.tabs.map((tab) =>

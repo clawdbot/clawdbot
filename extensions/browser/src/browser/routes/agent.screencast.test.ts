@@ -73,34 +73,59 @@ describe("browser screencast mint route", () => {
     clearBrowserScreencastTokens();
   });
 
-  it.each(["before request", "during tab resolution"])(
-    "rejects a requester revoked %s",
-    async (when) => {
-      const requester = new AbortController();
-      const { request, ensureTabAvailable } = setup();
-      if (when === "before request") {
-        requester.abort();
+  it.each([
+    { when: "before request", abort: true },
+    { when: "during tab resolution", abort: true },
+    { when: "before request", abort: false },
+    { when: "during tab resolution", abort: false },
+  ])("rejects a requester invalidated $when (socket closed: $abort)", async ({ when, abort }) => {
+    const connection = new AbortController();
+    const requester = {
+      invalidated: false,
+      signal: connection.signal,
+      isCurrent: () => !requester.invalidated && !connection.signal.aborted,
+    };
+    const revoke = () => {
+      if (abort) {
+        connection.abort();
       } else {
-        const resolveTab = ensureTabAvailable.getMockImplementation()!;
-        ensureTabAvailable.mockImplementationOnce(async () => {
-          requester.abort();
-          return await resolveTab();
-        });
+        requester.invalidated = true;
       }
-      const response = await request({}, { signal: requester.signal });
-      expect(response.statusCode).toBe(401);
-      expect(response.body).toMatchObject({ code: "SCREENCAST_REQUESTER_GONE" });
-      expect(response.body).not.toHaveProperty("token");
-    },
-  );
+    };
+    const { request, ensureTabAvailable } = setup();
+    if (when === "before request") {
+      revoke();
+    } else {
+      const resolveTab = ensureTabAvailable.getMockImplementation()!;
+      ensureTabAvailable.mockImplementationOnce(async () => {
+        revoke();
+        return await resolveTab();
+      });
+    }
+    const response = await request({}, requester);
+    expect(connection.signal.aborted).toBe(abort);
+    expect(response.statusCode).toBe(401);
+    expect(response.body).toMatchObject({ code: "SCREENCAST_REQUESTER_GONE" });
+    expect(response.body).not.toHaveProperty("token");
+  });
 
-  it("binds a minted token to the requester lifetime", async () => {
-    const requester = new AbortController();
+  it.each(["socket close", "invalidation"])("binds a minted token to requester %s", async (end) => {
+    const connection = new AbortController();
+    const requester = {
+      invalidated: false,
+      signal: connection.signal,
+      isCurrent: () => !requester.invalidated && !connection.signal.aborted,
+    };
     const { request } = setup();
-    const response = await request({}, { signal: requester.signal });
+    const response = await request({}, requester);
     const token = (response.body as { token: string }).token;
     expect(response.statusCode).toBe(200);
-    requester.abort();
+    if (end === "socket close") {
+      connection.abort();
+    } else {
+      requester.invalidated = true;
+    }
+    expect(connection.signal.aborted).toBe(end === "socket close");
     expect(consumeBrowserScreencastToken(token)).toBeUndefined();
   });
 

@@ -25,7 +25,7 @@ export function registerBrowserAgentScreencastRoutes(
 ) {
   app.post("/screencast", async (req, res) => {
     const requesterGone = () => {
-      if (!req.requester?.signal.aborted) {
+      if (!req.requester || req.requester.isCurrent()) {
         return false;
       }
       res.status(401).json({
@@ -95,6 +95,7 @@ export function registerBrowserAgentScreencastRoutes(
           lifecycleGeneration: generation,
           lifecycleSignal: lifecycle.controller.signal,
           requesterSignal: req.requester?.signal,
+          isRequesterCurrent: req.requester?.isCurrent,
           assertCurrent,
           checkNavigationAllowed: async (nextUrl) => {
             await assertBrowserNavigationResultAllowed({

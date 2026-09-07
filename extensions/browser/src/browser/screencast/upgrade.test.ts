@@ -87,6 +87,22 @@ describe("browser screencast WebSocket upgrade", () => {
     expect(mocks.attach).not.toHaveBeenCalled();
   });
 
+  it("rejects and consumes a minted ticket after requester invalidation before its close handshake finishes", async () => {
+    const requester = { invalidated: false, signal: new AbortController().signal };
+    const token = mintBrowserScreencastToken(
+      screencastParams({
+        requesterSignal: requester.signal,
+        isRequesterCurrent: () => !requester.invalidated,
+      }),
+    );
+    requester.invalidated = true;
+    expect(requester.signal.aborted).toBe(false);
+    expect(await rejected(token.token)).toBe(401);
+    requester.invalidated = false;
+    expect(await rejected(token.token)).toBe(401);
+    expect(mocks.attach).not.toHaveBeenCalled();
+  });
+
   it("rejects binary input on the view-only socket", async () => {
     const ws = connect(mintBrowserScreencastToken(screencastParams()).token);
     await once(ws, "open");

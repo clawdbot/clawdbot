@@ -144,6 +144,22 @@ describe("Browser panel stream ownership", () => {
     },
   );
 
+  it("keeps annotation context on the displayed frame when navigation metadata arrives first", async () => {
+    const { controller } = setup();
+    const socket = await start(controller);
+    socket.receive(JSON.stringify({ type: "meta", url: NEXT_URL, title: "Next" }));
+    controller.setMode("annotate");
+
+    expect(controller.mode).toBe("annotate");
+    expect(controller.view).toMatchObject({
+      dataUrl: "blob:frame-0",
+      url: PAGE_URL,
+      metrics: { title: "Page", url: PAGE_URL },
+    });
+    expect(controller.tabs[0]).toMatchObject({ title: "Next", url: NEXT_URL });
+    expect(controller.urlDraft).toBe(NEXT_URL);
+  });
+
   it("holds a frame whose decode finishes after capture mode begins", async () => {
     const { controller } = setup();
     const socket = await start(controller);
@@ -185,9 +201,20 @@ describe("Browser panel stream ownership", () => {
     expect(calls("/screencast")).toHaveLength(1);
     expect(controller.loading).toBe(false);
     socket.receive(JSON.stringify({ type: "meta", url: NEXT_URL, title: "Next" }));
-    expect(controller.view?.metrics).toMatchObject({ title: "Next", url: NEXT_URL });
+    expect(controller.view).toMatchObject({
+      dataUrl: "blob:frame-0",
+      url: PAGE_URL,
+      metrics: { title: "Page", url: PAGE_URL },
+    });
     expect(controller.tabs[0]).toMatchObject({ title: "Next", url: NEXT_URL });
     expect(controller.urlDraft).toBe(NEXT_URL);
+    socket.receive(screencastFrame(NEXT_URL));
+    await flush();
+    expect(controller.view).toMatchObject({
+      dataUrl: "blob:frame-1",
+      url: NEXT_URL,
+      metrics: { title: "Next", url: NEXT_URL },
+    });
     controller.setUrlDraftEditing(true);
     controller.setUrlDraft("editing");
     socket.receive(JSON.stringify({ type: "meta", url: PAGE_URL, title: "Page again" }));
@@ -374,13 +401,18 @@ describe("Browser panel stream ownership", () => {
     expect(images).toHaveLength(1);
     images[0]!.dispatchEvent(new Event("load"));
     await flush();
-    expect(controller.view?.url).toBe(NEXT_URL);
+    expect(controller.view).toMatchObject({
+      dataUrl: "blob:frame-0",
+      url: PAGE_URL,
+      metrics: { title: "Page", url: PAGE_URL },
+    });
     expect(images).toHaveLength(2);
     expect(revokedUrls).toContain("blob:frame-1");
     images[1]!.dispatchEvent(new Event("load"));
     await flush();
     expect(controller.view).toMatchObject({
       dataUrl: "blob:frame-2",
+      url: NEXT_URL,
       metrics: { cssWidth: 300, title: "Next", url: NEXT_URL },
     });
     expect(revokedUrls).toContain("blob:frame-0");

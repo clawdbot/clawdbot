@@ -9,9 +9,10 @@ const FRAME_INTERVAL_MS = 50;
 const sessions = new Map<string, BrowserScreencastSession>();
 
 type ScreencastFrame = Parameters<typeof encodeBrowserScreencastFrame>[1] & { sessionId: number };
+type ViewerRequester = { signal?: AbortSignal; isCurrent?: () => boolean };
 
 class BrowserScreencastSession {
-  readonly viewers = new Set<WebSocket>();
+  readonly viewers = new Map<WebSocket, ViewerRequester>();
   private readonly readyViewers = new Set<WebSocket>();
   private readonly acknowledgements = new Set<ReturnType<typeof setTimeout>>();
   private page?: Page;
@@ -31,23 +32,34 @@ class BrowserScreencastSession {
     params.lifecycleSignal.addEventListener("abort", this.onTargetClosed, { once: true });
   }
 
-  addViewer(ws: WebSocket, requesterSignal?: AbortSignal): void {
+  addViewer(ws: WebSocket, requester: ViewerRequester): void {
     const onRequesterGone = () => ws.close(4006, "authority_revoked");
-    this.viewers.add(ws);
+    this.viewers.set(ws, requester);
     ws.once("close", () => {
-      requesterSignal?.removeEventListener("abort", onRequesterGone);
+      requester.signal?.removeEventListener("abort", onRequesterGone);
       this.viewers.delete(ws);
       this.readyViewers.delete(ws);
       if (this.viewers.size === 0) {
         void this.close();
       }
     });
-    requesterSignal?.addEventListener("abort", onRequesterGone, { once: true });
-    if (requesterSignal?.aborted) {
-      onRequesterGone();
+    requester.signal?.addEventListener("abort", onRequesterGone, { once: true });
+    if (!this.isViewerCurrent(ws)) {
       return;
     }
     this.sendReady();
+  }
+
+  private isViewerCurrent(ws: WebSocket): boolean {
+    const requester = this.viewers.get(ws);
+    if (!requester) {
+      return false;
+    }
+    if (requester.signal?.aborted || requester.isCurrent?.() === false) {
+      ws.close(4006, "authority_revoked");
+      return false;
+    }
+    return true;
   }
 
   private isCurrent(): boolean {
@@ -191,20 +203,25 @@ class BrowserScreencastSession {
     ) {
       return;
     }
-    for (const ws of this.viewers) {
-      if (!this.readyViewers.has(ws) && ws.readyState === 1) {
+    for (const ws of this.viewers.keys()) {
+      if (
+        !this.readyViewers.has(ws) &&
         this.send(
           ws,
           JSON.stringify({ type: "ready", targetId: this.params.targetId, ...this.metadata }),
-        );
+        )
+      ) {
         this.readyViewers.add(ws);
       }
     }
   }
 
-  private send(ws: WebSocket, data: string | Buffer): void {
-    if (ws.readyState !== 1) {
-      return;
+  private send(ws: WebSocket, data: string | Buffer): boolean {
+    if (!this.isViewerCurrent(ws) || ws.readyState !== 1) {
+      return false;
+    }
+    if (typeof data !== "string" && ws.bufferedAmount >= MAX_BUFFERED_BYTES) {
+      return false;
     }
     try {
       ws.send(data, (error) => {
@@ -212,8 +229,10 @@ class BrowserScreencastSession {
           ws.terminate();
         }
       });
+      return true;
     } catch {
       ws.terminate();
+      return false;
     }
   }
 
@@ -247,9 +266,7 @@ class BrowserScreencastSession {
     this.acknowledgements.add(timer);
     const wire = encodeBrowserScreencastFrame(url, frame);
     for (const ws of this.readyViewers) {
-      if (ws.bufferedAmount < MAX_BUFFERED_BYTES) {
-        this.send(ws, wire);
-      }
+      this.send(ws, wire);
     }
   }
 
@@ -262,7 +279,7 @@ class BrowserScreencastSession {
     this.page?.off("close", this.onTargetClosed);
     this.page?.off("framenavigated", this.onNavigation);
     this.page?.off("load", this.onLoad);
-    const viewers = [...this.viewers];
+    const viewers = [...this.viewers.keys()];
     this.viewers.clear();
     this.readyViewers.clear();
     // Publish the drain before closing sockets; their close callbacks may reenter.
@@ -305,7 +322,7 @@ export function attachBrowserScreencastViewer(
   params: BrowserScreencastTokenParams,
   ws: WebSocket,
 ): void {
-  if (params.requesterSignal?.aborted) {
+  if (params.requesterSignal?.aborted || params.isRequesterCurrent?.() === false) {
     ws.close(4006, "authority_revoked");
     return;
   }
@@ -317,6 +334,7 @@ export function attachBrowserScreencastViewer(
     return;
   }
   const key = `${params.profileName}:${params.targetId}`;
+  const requester = { signal: params.requesterSignal, isCurrent: params.isRequesterCurrent };
   let session = sessions.get(key);
   let previousDrain: Promise<void> | undefined;
   if (
@@ -327,12 +345,12 @@ export function attachBrowserScreencastViewer(
     session = undefined;
   }
   if (session) {
-    session.addViewer(ws, params.requesterSignal);
+    session.addViewer(ws, requester);
     return;
   }
   session = new BrowserScreencastSession(key, params);
   sessions.set(key, session);
-  session.addViewer(ws, params.requesterSignal);
+  session.addViewer(ws, requester);
   const next = session;
   // Finish retiring the predecessor before attaching a replacement to the same page.
   void Promise.resolve(previousDrain).then(() => next.start());

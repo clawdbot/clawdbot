@@ -14,8 +14,8 @@ export type BrowserRequest = {
    * timeouts and (where supported) cancel long-running operations.
    */
   signal?: AbortSignal;
-  /** Gateway connection lifetime, independent of the request timeout. */
-  requester?: { connId?: string; signal: AbortSignal };
+  /** Gateway authority, including invalidation before transport retirement; independent of request timeout. */
+  requester?: { connId?: string; signal: AbortSignal; isCurrent: () => boolean };
 };
 
 /** Response shape used by browser route handlers. */

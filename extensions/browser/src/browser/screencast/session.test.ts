@@ -122,6 +122,66 @@ describe("browser screencast sessions", () => {
     expect(viewer.close).toHaveBeenCalledOnce();
   });
 
+  it("fences frames immediately on requester invalidation before its close handshake finishes, preserving live viewers", async () => {
+    const requester = { invalidated: false, signal: new AbortController().signal };
+    const first = await attach(
+      screencastParams({
+        requesterSignal: requester.signal,
+        isRequesterCurrent: () => !requester.invalidated,
+      }),
+    );
+    const second = await attach(
+      screencastParams({
+        requesterSignal: new AbortController().signal,
+        isRequesterCurrent: () => true,
+      }),
+    );
+    page.paint(1);
+    expect(first.frames()).toHaveLength(1);
+    expect(second.frames()[0]).toBe(first.frames()[0]);
+    requester.invalidated = true;
+    page.paint(2);
+    page.paint(3);
+    expect(requester.signal.aborted).toBe(false);
+    expect(first.frames()).toHaveLength(1);
+    expect(first.close.mock.calls).toEqual([[4006, "authority_revoked"]]);
+    expect(getEventListeners(requester.signal, "abort")).toHaveLength(0);
+    expect(second.frames()).toHaveLength(3);
+    expect(second.close).not.toHaveBeenCalled();
+    expect(page.cdp.detach).not.toHaveBeenCalled();
+  });
+
+  it.each(["ready", "meta"])(
+    "fences %s after requester invalidation during the awaited title read without a socket close",
+    async (message) => {
+      const requester = { invalidated: false, signal: new AbortController().signal };
+      const params = screencastParams({
+        requesterSignal: requester.signal,
+        isRequesterCurrent: () => !requester.invalidated,
+      });
+      const viewer = new ScreencastViewer();
+      if (message === "meta") {
+        attachBrowserScreencastViewer(params, viewer as unknown as WebSocket);
+        await flush();
+        expect(viewer.messages()).toHaveLength(1);
+        viewer.send.mockClear();
+      }
+      page.title.mockImplementationOnce(async () => {
+        requester.invalidated = true;
+        return "Revoked title";
+      });
+      if (message === "ready") {
+        attachBrowserScreencastViewer(params, viewer as unknown as WebSocket);
+      } else {
+        page.emit("load");
+      }
+      await flush();
+      expect(requester.signal.aborted).toBe(false);
+      expect(viewer.send).not.toHaveBeenCalled();
+      expect(viewer.close.mock.calls).toEqual([[4006, "authority_revoked"]]);
+    },
+  );
+
   it("rejects a requester revoked before viewer attachment without starting capture", async () => {
     const viewer = await attach(screencastParams({ requesterSignal: AbortSignal.abort() }));
     expect(viewer.close).toHaveBeenCalledWith(4006, "authority_revoked");

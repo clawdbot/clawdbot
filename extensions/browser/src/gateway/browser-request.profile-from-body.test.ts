@@ -176,8 +176,9 @@ describe("browser.request profile selection", () => {
     };
   }
 
-  it("keeps dispatched requester authority bound to the Gateway connection after the request", async () => {
+  it("invalidates dispatched requester authority immediately before the Gateway close handshake finishes", async () => {
     const connection = new AbortController();
+    const client = requesterClient(connection.signal);
     startBrowserControlServiceFromConfigMock.mockResolvedValueOnce(true);
     dispatchBrowserRouteMock.mockResolvedValueOnce({ status: 200, body: {} });
     await runBrowserRequest(
@@ -185,18 +186,25 @@ describe("browser.request profile selection", () => {
       undefined,
       [],
       {
-        client: requesterClient(connection.signal),
+        client,
       },
     );
     const dispatched = dispatchBrowserRouteMock.mock.calls[0]?.[0];
-    expect(dispatched.requester).toEqual({ connId: "requester-1", signal: connection.signal });
+    expect(dispatched.requester).toMatchObject({
+      connId: "requester-1",
+      signal: connection.signal,
+    });
+    expect(dispatched.requester.signal.aborted).toBe(false);
+    expect(dispatched.requester.isCurrent()).toBe(true);
+    client.invalidated = true;
+    expect(dispatched.requester.isCurrent()).toBe(false);
     expect(dispatched.requester.signal.aborted).toBe(false);
     connection.abort();
     expect(dispatched.requester.signal.aborted).toBe(true);
   });
 
   it.each(["connection closed", "authority revoked"])(
-    "dispatches an aborted requester when %s",
+    "dispatches a requester without current authority when %s",
     async (reason) => {
       const connection = new AbortController();
       if (reason === "connection closed") {
@@ -213,7 +221,9 @@ describe("browser.request profile selection", () => {
           hasCurrentClientAuthority: () => reason !== "authority revoked",
         },
       );
-      expect(dispatchBrowserRouteMock.mock.calls[0]?.[0].requester.signal.aborted).toBe(true);
+      const requester = dispatchBrowserRouteMock.mock.calls[0]?.[0].requester;
+      expect(requester.signal).toBe(connection.signal);
+      expect(requester.isCurrent()).toBe(false);
     },
   );
 

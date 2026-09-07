@@ -12,6 +12,7 @@ export type BrowserScreencastTokenParams = {
   lifecycleGeneration: number;
   lifecycleSignal: AbortSignal;
   requesterSignal?: AbortSignal;
+  isRequesterCurrent?: () => boolean;
   assertCurrent: () => void;
   checkNavigationAllowed: (url: string) => Promise<void>;
 };
@@ -61,7 +62,12 @@ export function consumeBrowserScreencastToken(
   }
   const entry = tokens.get(token);
   deleteToken(token);
-  return entry && entry.expiresAtMs > Date.now() ? entry.params : undefined;
+  return entry &&
+    entry.expiresAtMs > Date.now() &&
+    !entry.params.requesterSignal?.aborted &&
+    entry.params.isRequesterCurrent?.() !== false
+    ? entry.params
+    : undefined;
 }
 
 export function clearBrowserScreencastTokens(): void {

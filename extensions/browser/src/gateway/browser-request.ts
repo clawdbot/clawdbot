@@ -291,11 +291,19 @@ export async function handleBrowserGatewayRequest({
     return;
   }
 
-  const requesterSignal =
-    hasCurrentClientAuthority?.() === false ? AbortSignal.abort() : client?.connectionSignal;
-  const requester = requesterSignal
-    ? { connId: client?.connId, signal: requesterSignal }
-    : undefined;
+  // Invalidation precedes the socket's close event; retain live authority separately.
+  const requesterSignal = client?.connectionSignal;
+  const requester =
+    client && requesterSignal
+      ? {
+          connId: client.connId,
+          signal: requesterSignal,
+          isCurrent: () =>
+            client.invalidated !== true &&
+            !requesterSignal.aborted &&
+            hasCurrentClientAuthority?.() !== false,
+        }
+      : undefined;
   let result;
   try {
     result = timeoutMs
