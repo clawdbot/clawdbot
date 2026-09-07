@@ -703,8 +703,9 @@ If a proposal's draft is missing, Suggestions marks it unavailable. You can
 reject it, but cannot apply, evaluate, or revise content that is no longer there.
 Run `openclaw doctor --fix` to mark these proposals stale and remove them from
 actionable Suggestions. Doctor preserves their metadata and remaining files.
-If a proposal has unfinished apply recovery, Doctor leaves it pending and asks
-you to restore the draft before retrying; it does not discard rollback evidence
+If a proposal has unfinished apply recovery, Reject and Quarantine refuse to
+dismiss it. Doctor leaves it pending and asks you to restore the draft before
+retrying; it does not discard rollback evidence
 or change the installed skill.
 
 ## Limits
