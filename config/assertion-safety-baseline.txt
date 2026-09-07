@@ -3377,7 +3377,7 @@ src/plugins/manifest-install-owner.ts	1
 src/plugins/manifest-registry.ts	2
 src/plugins/manifest-setup-normalizers.ts	5
 src/plugins/manifest.ts	2
-src/plugins/marketplace.ts	7
+src/plugins/marketplace.ts	6
 src/plugins/memory-runtime.ts	1
 src/plugins/module-export.ts	2
 src/plugins/native-module-require.ts	3
