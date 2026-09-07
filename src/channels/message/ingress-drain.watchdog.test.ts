@@ -98,6 +98,7 @@ describe("channel ingress drain watchdog", () => {
       const queue = createTestIngressQueue(stateDir, { now: () => clock });
       await queue.enqueue("evt-def-stall", { text: "x" }, { laneKey: "l1" });
       let heartbeat: (() => void) | undefined;
+      let heartbeatIntervalMs: number | undefined;
 
       const drain = createChannelIngressDrain<Payload>({
         queue,
@@ -106,6 +107,7 @@ describe("channel ingress drain watchdog", () => {
         dispatchClaimedEvent: async (_event, lifecycle) => {
           lifecycle.onDeferred();
           heartbeat = lifecycle.onDeferredHeartbeat;
+          heartbeatIntervalMs = lifecycle.deferredHeartbeatIntervalMs;
           // Stay deferred without adoption -- watchdog must still fire.
           await new Promise(() => {});
         },
@@ -113,6 +115,7 @@ describe("channel ingress drain watchdog", () => {
 
       await drain.drainOnce();
       expect(await queue.listClaims()).toHaveLength(1);
+      expect(heartbeatIntervalMs).toBe(1_666);
       clock += 4_000;
       await vi.advanceTimersByTimeAsync(4_000);
       heartbeat?.();

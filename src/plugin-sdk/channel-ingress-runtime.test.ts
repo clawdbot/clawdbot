@@ -44,6 +44,7 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
       abortSignal: new AbortController().signal,
       onAdopted: vi.fn(async () => {}),
       onDeferred: vi.fn(),
+      deferredHeartbeatIntervalMs: 3_000,
       onAdoptionFinalizing: vi.fn(),
       onFailed: vi.fn(async () => {}),
       onCancelled: vi.fn(async () => {}),
@@ -51,9 +52,12 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
     });
     const first = createLifecycle();
     const second = createLifecycle();
+    second.deferredHeartbeatIntervalMs = 1_000;
     const cancellation = fanInChannelIngressLifecycles([first, second]);
     await cancellation.lifecycle?.onCancelled?.();
     const combined = fanInChannelIngressLifecycles([undefined, first, second]);
+
+    expect(combined.lifecycle?.deferredHeartbeatIntervalMs).toBe(1_000);
 
     combined.lifecycle?.onAdoptionFinalizing();
     await combined.lifecycle?.onAdopted();

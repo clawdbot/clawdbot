@@ -293,8 +293,67 @@ const admittingTurnAdoptionLifecycles = new WeakMap<TurnAdoptionLifecycle, Promi
 const retiredTurnAdoptionCancellationLifecycles = new WeakSet<TurnAdoptionLifecycle>();
 const completedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
 const completedTurnAdoptionLifecycleCallbacks = new WeakSet<TurnAdoptionLifecycle>();
+const deferredHeartbeatTimers = new WeakMap<
+  TurnAdoptionLifecycle,
+  ReturnType<typeof setInterval>
+>();
 
 type FollowupLifecycleRun = Pick<FollowupRun, "steerPending" | "turnAdoptionLifecycle">;
+
+function stopFollowupRunDeferredHeartbeat(lifecycle: TurnAdoptionLifecycle | undefined): void {
+  if (!lifecycle) {
+    return;
+  }
+  const timer = deferredHeartbeatTimers.get(lifecycle);
+  if (!timer) {
+    return;
+  }
+  clearInterval(timer);
+  deferredHeartbeatTimers.delete(lifecycle);
+}
+
+export function startFollowupRunDeferredHeartbeat(
+  run: FollowupLifecycleRun,
+  isQueueOwner: () => boolean,
+): void {
+  const lifecycle = run.turnAdoptionLifecycle;
+  const requestedIntervalMs = lifecycle?.deferredHeartbeatIntervalMs;
+  if (
+    !lifecycle?.onDeferredHeartbeat ||
+    requestedIntervalMs === undefined ||
+    !Number.isFinite(requestedIntervalMs) ||
+    requestedIntervalMs <= 0 ||
+    deferredHeartbeatTimers.has(lifecycle)
+  ) {
+    return;
+  }
+  if (!isQueueOwner()) {
+    return;
+  }
+  try {
+    lifecycle.onDeferredHeartbeat();
+  } catch {
+    // A broken liveness callback must not take down the queue. Leave the
+    // watchdog unrenewed so it can recover the orphaned claim.
+    return;
+  }
+  const intervalMs = Math.max(1, Math.floor(requestedIntervalMs));
+  const timer = setInterval(() => {
+    if (!isQueueOwner()) {
+      stopFollowupRunDeferredHeartbeat(lifecycle);
+      return;
+    }
+    try {
+      lifecycle.onDeferredHeartbeat?.();
+    } catch {
+      // A broken liveness callback must not take down the queue. Stop renewing
+      // so the ingress watchdog can recover the orphaned claim.
+      stopFollowupRunDeferredHeartbeat(lifecycle);
+    }
+  }, intervalMs);
+  timer.unref?.();
+  deferredHeartbeatTimers.set(lifecycle, timer);
+}
 
 export function markFollowupRunEnqueued(run: FollowupLifecycleRun): boolean {
   const lifecycle = run.turnAdoptionLifecycle;
@@ -334,6 +393,7 @@ export async function admitFollowupRunLifecycle(run: FollowupLifecycleRun): Prom
     if (!admittedTurnAdoptionLifecycles.has(lifecycle)) {
       await lifecycle.onAdopted();
       admittedTurnAdoptionLifecycles.add(lifecycle);
+      stopFollowupRunDeferredHeartbeat(lifecycle);
     }
   });
 
@@ -351,6 +411,7 @@ export function completeFollowupRunLifecycle(
 ): void {
   run.steerPending?.settle(false);
   const lifecycle = run.turnAdoptionLifecycle;
+  stopFollowupRunDeferredHeartbeat(lifecycle);
 
   const finish = () => {
     if (!lifecycle || completedTurnAdoptionLifecycleCallbacks.has(lifecycle)) {

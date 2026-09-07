@@ -183,6 +183,7 @@ export function createFeishuBroadcastIngressSettlement(params: {
             defer();
           },
           onDeferredHeartbeat: () => params.lifecycle?.onDeferredHeartbeat?.(),
+          deferredHeartbeatIntervalMs: params.lifecycle?.deferredHeartbeatIntervalMs,
           onAdoptionFinalizing: beginFinalizing,
           onAbandoned: async () => {
             if (

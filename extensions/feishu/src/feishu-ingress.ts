@@ -317,6 +317,7 @@ export function buildFeishuFlushIngressLifecycle(
         transportLifecycle.onDeferred();
       },
       onDeferredHeartbeat: () => transportLifecycle.onDeferredHeartbeat?.(),
+      deferredHeartbeatIntervalMs: transportLifecycle.deferredHeartbeatIntervalMs,
       onAdoptionFinalizing: () => {
         transportLifecycle.onAdoptionFinalizing();
       },

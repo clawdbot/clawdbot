@@ -165,6 +165,12 @@ export function fanInChannelIngressLifecycles(
       lifecycle.onFailed ? lifecycle.onFailed(error) : lifecycle.onAbandoned(),
     );
   const supportsCancellation = lifecycles.every((lifecycle) => lifecycle.onCancelled !== undefined);
+  const deferredHeartbeatIntervals = lifecycles
+    .map((lifecycle) => lifecycle.deferredHeartbeatIntervalMs)
+    .filter(
+      (interval): interval is number =>
+        interval !== undefined && Number.isFinite(interval) && interval > 0,
+    );
   // Omit aggregate cancellation unless every durable source supports it. Callers
   // can then use settle/abandon without an acknowledged-but-unsettled claim.
   const cancelAll = () =>
@@ -192,6 +198,9 @@ export function fanInChannelIngressLifecycles(
           lifecycle.onDeferredHeartbeat?.();
         }
       },
+      ...(deferredHeartbeatIntervals.length > 0
+        ? { deferredHeartbeatIntervalMs: Math.min(...deferredHeartbeatIntervals) }
+        : {}),
       onAdoptionFinalizing: () => {
         for (const lifecycle of lifecycles) {
           lifecycle.onAdoptionFinalizing();

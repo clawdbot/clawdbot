@@ -37,6 +37,7 @@ import {
   isFollowupRunAborted,
   markFollowupRunEnqueued,
   resolveFollowupAbortSignal,
+  startFollowupRunDeferredHeartbeat,
   type EnqueueFollowupRunOptions,
   type FollowupRun,
   type QueueDedupeMode,
@@ -115,6 +116,23 @@ function appendQueueItem(params: {
   params.queue.lastRun = params.run.run;
   params.run.queueAbortSignal = params.queue.abortController.signal;
   params.queue.items[params.front ? "unshift" : "push"](params.run);
+  const lifecycle = params.run.turnAdoptionLifecycle;
+  startFollowupRunDeferredHeartbeat(params.run, () => {
+    if (!lifecycle) {
+      return false;
+    }
+    const queue = FOLLOWUP_QUEUES.get(params.key);
+    if (!queue) {
+      return false;
+    }
+    const ownsLifecycle = (run: FollowupRun) => run.turnAdoptionLifecycle === lifecycle;
+    return (
+      queue.items.some(ownsLifecycle) ||
+      [...queue.inFlight].some(ownsLifecycle) ||
+      queue.summarySources.some(ownsLifecycle) ||
+      queue.summaryElisions.some((entry) => entry.sources.some(ownsLifecycle))
+    );
+  });
   if (params.recentMessageIdKey) {
     recordRecentQueueMessageId(params.run, params.recentMessageIdKey);
   }
@@ -123,7 +141,6 @@ function appendQueueItem(params: {
     rememberFollowupDrainCallback(params.key, runFollowup);
   }
   const signal = params.run.abortSignal;
-  const lifecycle = params.run.turnAdoptionLifecycle;
   if (signal && lifecycle && runFollowup) {
     const onAbort = () => {
       const queue = getExistingFollowupQueue(params.key);

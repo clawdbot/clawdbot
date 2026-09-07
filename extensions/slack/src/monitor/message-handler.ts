@@ -285,6 +285,13 @@ export function createSlackMessageHandler(params: {
                     return;
                   }
                   await turnAdoptionLifecycle?.onSessionRouted?.(prepared.route.sessionKey);
+                  const deferredHeartbeatIntervals = [
+                    turnAdoptionLifecycle?.deferredHeartbeatIntervalMs,
+                    admissionLifecycle.deferredHeartbeatIntervalMs,
+                  ].filter(
+                    (interval): interval is number =>
+                      interval !== undefined && Number.isFinite(interval) && interval > 0,
+                  );
                   // Commit at adoption (durable turn ownership), release on abandonment;
                   // deferred turns hand settlement to the reply lane with the claim held.
                   prepared.turnAdoptionLifecycle = {
@@ -311,6 +318,9 @@ export function createSlackMessageHandler(params: {
                       turnAdoptionLifecycle?.onDeferredHeartbeat?.();
                       admissionLifecycle.onDeferredHeartbeat?.();
                     },
+                    ...(deferredHeartbeatIntervals.length > 0
+                      ? { deferredHeartbeatIntervalMs: Math.min(...deferredHeartbeatIntervals) }
+                      : {}),
                     onAbandoned: () => {
                       settlementHandedOff = true;
                       releaseClaims();
