@@ -10,8 +10,8 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { ensureSessionTranscriptArchiveSchema } from "../../state/openclaw-agent-session-transcript-archive-schema.js";
+import { resolveRegisteredSqliteTranscriptArchiveName } from "./session-accessor.sqlite-archive-artifact.js";
 import {
-  resolveRegisteredSqliteTranscriptArchiveName,
   runSqliteTranscriptArchivePublishWorker,
   type MaterializedSessionStateDeletePlan,
 } from "./session-accessor.sqlite-archive.js";

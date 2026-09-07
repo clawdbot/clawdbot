@@ -27,12 +27,14 @@ import {
   MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES,
   publishEncodedSessionTranscriptArchive,
   resolveSqliteTranscriptArchivePath,
-  type TranscriptArchivePublishPlan,
-  type TranscriptArchivePublishResult,
-  type TranscriptArchivePublishWorkerMessage,
-  type TranscriptArchiveWorkerMessage,
-  type TranscriptArchiveWorkerPlan,
-  type TranscriptArchiveWorkerResult,
+} from "./session-accessor.sqlite-archive-artifact.js";
+import type {
+  TranscriptArchivePublishPlan,
+  TranscriptArchivePublishResult,
+  TranscriptArchivePublishWorkerMessage,
+  TranscriptArchiveWorkerMessage,
+  TranscriptArchiveWorkerPlan,
+  TranscriptArchiveWorkerResult,
 } from "./session-accessor.sqlite-archive.js";
 import {
   readSessionStateDeleteSnapshot,
@@ -47,10 +49,7 @@ import type {
   SqliteReclamationWorkerMessage,
   SqliteReclamationWorkerRequest,
 } from "./session-accessor.sqlite-reclamation-worker.js";
-import {
-  reclaimSqliteSessionInTransaction,
-  type SqliteSessionReclamationPlan,
-} from "./session-accessor.sqlite-reclamation.js";
+import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-reclamation.js";
 
 type TranscriptArchiveDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -430,6 +429,9 @@ async function runReclamationWorkerPort(
   port: NonNullable<typeof parentPort>,
   databaseOptions: SqliteSessionReclamationPlan["databaseOptions"],
 ): Promise<void> {
+  // Materialize/publish never need the session write/lifecycle implementation.
+  const { reclaimSqliteSessionInTransaction } =
+    await import("./session-accessor.sqlite-reclamation.js");
   let borrowed: ReturnType<typeof borrowOpenClawAgentDatabase> | undefined;
   let commitGate: SharedArrayBuffer | undefined;
   let operationId = 0;
