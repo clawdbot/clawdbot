@@ -2,6 +2,9 @@ import { once } from "node:events";
 // MCP framing and disposal preserve the spawn owner's independent cleanup receipt.
 import fs from "node:fs/promises";
 import { PassThrough, type Writable } from "node:stream";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { ReadBuffer } from "@modelcontextprotocol/sdk/shared/stdio.js";
+import { EmptyResultSchema, JSONRPCRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { OwnedStdioCleanupError, type OwnedStdioProcess } from "../process/owned-stdio.js";
@@ -122,6 +125,81 @@ describe("OpenClawStdioClientTransport", () => {
     });
     expect(transport.pid).toBe(4321);
     expect(transport.stderr).toBeInstanceOf(PassThrough);
+  });
+
+  it("binds an exact environment without importing MCP default variables", async () => {
+    createChild();
+    await createTransport({
+      command: "node",
+      exactEnv: true,
+      env: { ONLY: "1", OMIT: undefined },
+    }).start();
+    expect(spawnMock).toHaveBeenCalledWith(
+      expect.objectContaining({ exactEnv: true, env: { ONLY: "1" } }),
+    );
+  });
+
+  it("uses the caller's bounded decoder", async () => {
+    const fixture = createChild();
+    const transport = createTransport({
+      command: "node",
+      decoder: new ReadBuffer({ maxBufferSize: 8 }),
+    });
+    const onerror = vi.fn();
+    transport.onerror = onerror;
+    await transport.start();
+    fixture.stdout.write(Buffer.alloc(9, 0x20));
+    expect(onerror).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ message: "ReadBuffer exceeded maximum size of 8 bytes" }),
+    );
+  });
+
+  it("retires SDK requests immediately while TERM cleanup still owns descendants", async () => {
+    const fixture = createChild();
+    const transport = createTransport({ command: "node" });
+    const received = vi.fn();
+    transport.onmessage = received;
+    const client = new Client({ name: "stdio-ownership-test", version: "1" });
+    const connecting = client.connect(transport);
+    await vi.waitFor(() => expect(fixture.stdin.readableLength).toBeGreaterThan(0));
+    const initialize = JSONRPCRequestSchema.parse(
+      JSON.parse(fixture.stdin.read().toString("utf8")),
+    );
+    fixture.stdout.write(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: initialize.id,
+        result: {
+          protocolVersion: initialize.params?.protocolVersion,
+          capabilities: {},
+          serverInfo: { name: "fixture", version: "1" },
+        },
+      }) + "\n",
+    );
+    await connecting;
+    vi.useFakeTimers();
+    const pending = client.request({ method: "ping" }, EmptyResultSchema, { timeout: 120_000 });
+    const rejected = expect(pending).rejects.toThrow("Connection closed");
+    const onexit = vi.fn();
+    transport.onexit = onexit;
+    const closed = vi.fn();
+    const closing = transport.terminate().then(closed);
+    await rejected;
+    expect(vi.getTimerCount()).toBe(0);
+    expect(fixture.child.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+    await expect(transport.send({ jsonrpc: "2.0", id: 9, method: "ping" })).rejects.toThrow(
+      "Not connected",
+    );
+    fixture.stdout.write('{"jsonrpc":"2.0","id":9,"result":{}}\n');
+    expect(received).toHaveBeenCalledOnce();
+    expect(closed).not.toHaveBeenCalled();
+    fixture.root.resolve({ code: null, signal: "SIGTERM" });
+    await Promise.resolve();
+    expect(onexit).toHaveBeenCalledExactlyOnceWith({ code: null, signal: "SIGTERM" });
+    expect(closed).not.toHaveBeenCalled();
+    fixture.extinction.resolve();
+    await closing;
+    expect(closed).toHaveBeenCalledOnce();
   });
 
   it("does not infer plugin data directory ownership from server environment", async () => {
@@ -351,6 +429,19 @@ describe("OpenClawStdioClientTransport", () => {
     fixture.extinction.resolve();
     await transport.close();
     expect(Buffer.concat(received)).toEqual(Buffer.alloc(chunk.length * 64, 0xad));
+  });
+
+  it("keeps default malformed-frame recovery when the caller does not retire", async () => {
+    const fixture = createChild();
+    const transport = createTransport({ command: "node" });
+    const onerror = vi.fn();
+    const onmessage = vi.fn();
+    transport.onerror = onerror;
+    transport.onmessage = onmessage;
+    await transport.start();
+    fixture.stdout.write('invalid\n{"jsonrpc":"2.0","id":1,"result":{}}\n');
+    expect(onerror).toHaveBeenCalledOnce();
+    expect(onmessage).toHaveBeenCalledExactlyOnceWith({ jsonrpc: "2.0", id: 1, result: {} });
   });
 
   it("reports an oversized stdout frame without an unhandled error crash", async () => {

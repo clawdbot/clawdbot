@@ -133,6 +133,7 @@
   "host-runtime",
   "types",
   "process-runtime",
+  "mcp-stdio-runtime",
   "windows-spawn",
   "acp-runtime",
   "acp-runtime-backend",

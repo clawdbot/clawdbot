@@ -81,6 +81,9 @@ export const pluginSdkDocMetadata = {
   "widget-html": {
     category: "utilities",
   },
+  "mcp-stdio-runtime": {
+    category: "runtime",
+  },
   "runtime-store": {
     category: "runtime",
   },

@@ -1,6 +1,10 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { ActionResult } from "@trycua/cua-driver";
+import type {
+  McpMessage,
+  McpStdioClient,
+  McpStdioDecoder,
+} from "openclaw/plugin-sdk/mcp-stdio-runtime";
 import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   ClickButton,
@@ -13,7 +17,6 @@ import {
 const MCP_PROTOCOL_VERSION = "2025-06-18";
 const MCP_STARTUP_TIMEOUT_MS = 10_000;
 const MCP_REQUEST_TIMEOUT_MS = 120_000;
-const MCP_SHUTDOWN_TIMEOUT_MS = 2_000;
 const MAX_MCP_LINE_BYTES = 256 * 1024 * 1024;
 const MAX_PENDING_REQUESTS = 64;
 const MAX_STDERR_BYTES = 32 * 1024;
@@ -41,21 +44,6 @@ const ACTION_RESULT_TOOLS = new Set([
   "browser_pointer",
   "browser_type",
 ]);
-
-type JsonRpcResponse = {
-  jsonrpc?: unknown;
-  id?: unknown;
-  result?: unknown;
-  error?: { code?: unknown; message?: unknown };
-};
-
-type PendingRequest = {
-  resolve: (value: unknown) => void;
-  reject: (error: Error) => void;
-  timer: NodeJS.Timeout;
-  signal?: AbortSignal;
-  onAbort?: () => void;
-};
 
 type McpToolResult = {
   content?: Array<{ type?: unknown; text?: unknown; data?: unknown; mimeType?: unknown }>;
@@ -188,51 +176,119 @@ function normalizeMcpToolResult(tool: string, raw: unknown): CuaToolResult {
   };
 }
 
+class CuaMcpResponseDecoder implements McpStdioDecoder {
+  private pending = Buffer.alloc(0);
+  private pendingBytes = 0;
+  private chunk = Buffer.alloc(0);
+  private cursor = 0;
+
+  constructor(private readonly fail: (error: Error) => void) {}
+
+  append(chunk: Buffer): void {
+    if (this.pendingBytes + chunk.length > MAX_MCP_LINE_BYTES) {
+      throw this.protocolError("CUA MCP response exceeded the line-size limit");
+    }
+    this.chunk = chunk;
+    this.cursor = 0;
+  }
+
+  readMessage(): McpMessage | null {
+    while (this.cursor < this.chunk.length) {
+      const newline = this.chunk.indexOf(0x0a, this.cursor);
+      if (newline < 0) {
+        this.appendPending(this.chunk.subarray(this.cursor));
+        this.chunk = Buffer.alloc(0);
+        this.cursor = 0;
+        return null;
+      }
+      let line = this.chunk.subarray(this.cursor, newline);
+      this.cursor = newline + 1;
+      if (this.pendingBytes > 0) {
+        this.appendPending(line);
+        line = this.pending.subarray(0, this.pendingBytes);
+        this.pending = Buffer.alloc(0);
+        this.pendingBytes = 0;
+      }
+      if (this.cursor === this.chunk.length) {
+        this.chunk = Buffer.alloc(0);
+        this.cursor = 0;
+      }
+      if (line.length === 0) {
+        continue;
+      }
+      let response: Record<string, unknown> | undefined;
+      try {
+        response = record(JSON.parse(line.toString("utf8")));
+      } catch (error) {
+        throw this.protocolError("CUA MCP proxy returned invalid JSON", error);
+      }
+      if (response?.jsonrpc !== "2.0") {
+        throw this.protocolError("CUA MCP proxy returned an invalid JSON-RPC version");
+      }
+      if (typeof response.id !== "number" || !Number.isSafeInteger(response.id)) {
+        throw this.protocolError("CUA MCP proxy returned an invalid response id");
+      }
+      // Preserve CUA's response/error policy; SDK correlation sees a standard result envelope.
+      return {
+        jsonrpc: "2.0",
+        id: response.id - 1,
+        result: { value: response.result, error: response.error },
+      };
+    }
+    return null;
+  }
+
+  clear(): void {
+    this.pending = Buffer.alloc(0);
+    this.pendingBytes = 0;
+    this.chunk = Buffer.alloc(0);
+    this.cursor = 0;
+  }
+
+  private appendPending(chunk: Buffer): void {
+    const required = this.pendingBytes + chunk.length;
+    if (required > this.pending.length) {
+      const capacity = Math.min(MAX_MCP_LINE_BYTES, Math.max(required, this.pending.length * 2));
+      const pending = Buffer.allocUnsafe(capacity);
+      this.pending.copy(pending, 0, 0, this.pendingBytes);
+      this.pending = pending;
+    }
+    chunk.copy(this.pending, this.pendingBytes);
+    this.pendingBytes = required;
+  }
+
+  private protocolError(message: string, cause?: unknown): Error {
+    const error = driverProtocolError(message, cause);
+    this.fail(error);
+    return error;
+  }
+}
+
+type CuaMcpConnection = Pick<McpStdioClient, "request" | "isTimeout"> & {
+  retire: () => Promise<void>;
+  terminate: () => Promise<void>;
+  dispose: () => Promise<"closed" | "uncertain">;
+};
+
 class CuaMcpProxyClient {
-  private readonly child: ChildProcessWithoutNullStreams;
-  private readonly pending = new Map<number, PendingRequest>();
+  private readonly startup: Promise<void>;
   private readonly ready: Promise<void>;
-  private nextId = 0;
-  private stdout = Buffer.alloc(0);
-  private stdoutBytes = 0;
+  private rejectFatal?: (error: Error) => void;
+  private readonly fatal = new Promise<never>((_resolve, reject) => {
+    this.rejectFatal = reject;
+  });
+  private readonly decoder = new CuaMcpResponseDecoder((error) => this.fail(error));
+  private connection?: CuaMcpConnection;
+  private shutdown?: Promise<void>;
+  private inFlight = 0;
   private stderr = Buffer.alloc(0);
   private available = false;
   private failure: Error | undefined;
   private stopped = false;
 
   constructor(binaryPath: string, socketPath: string, env: NodeJS.ProcessEnv) {
-    const proxyEnvironment = { ...env };
-    for (const key of Object.keys(proxyEnvironment)) {
-      if (key.startsWith("CUA_DRIVER_") || key === "CUA_TELEMETRY_ENABLED") {
-        delete proxyEnvironment[key];
-      }
-    }
-    this.child = spawn(binaryPath, ["mcp", "--embedded", "--socket", socketPath], {
-      env: {
-        ...proxyEnvironment,
-        CUA_DRIVER_RS_TELEMETRY_ENABLED: "false",
-        CUA_DRIVER_RS_UPDATE_CHECK: "false",
-      },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    this.child.stdout.on("data", (chunk: Buffer) => this.handleStdout(chunk));
-    this.child.stderr.on("data", (chunk: Buffer) => {
-      this.stderr = Buffer.concat([this.stderr, chunk]).subarray(-MAX_STDERR_BYTES);
-    });
-    this.child.once("error", (error) =>
-      this.fail(driverUnavailable("failed to start CUA MCP proxy", error)),
-    );
-    this.child.once("exit", (code, signal) => {
-      if (!this.stopped) {
-        const detail = this.stderr.toString("utf8").trim();
-        this.fail(
-          driverUnavailable(
-            `CUA MCP proxy exited (${signal ?? code ?? "unknown"})${detail ? `: ${detail}` : ""}`,
-          ),
-        );
-      }
-    });
-    this.ready = this.initialize();
+    this.startup = this.initialize(binaryPath, socketPath, env);
+    this.ready = Promise.race([this.startup, this.fatal]);
     void this.ready.catch(() => {});
   }
 
@@ -253,161 +309,194 @@ class CuaMcpProxyClient {
   }
 
   async stop(): Promise<void> {
-    if (this.stopped) {
-      return;
-    }
     this.stopped = true;
     this.available = false;
-    this.rejectPending(driverUnavailable("CUA MCP proxy is stopping"));
-    this.stdout = Buffer.alloc(0);
-    this.stdoutBytes = 0;
-    this.child.stdin.end();
-    if (await this.waitForExit(MCP_SHUTDOWN_TIMEOUT_MS)) {
-      return;
-    }
-    this.child.kill("SIGTERM");
-    if (await this.waitForExit(MCP_SHUTDOWN_TIMEOUT_MS)) {
-      return;
-    }
-    this.child.kill("SIGKILL");
+    this.rejectFatal?.(driverUnavailable("CUA MCP proxy is stopping"));
+    void this.connection?.retire().catch(() => undefined);
+    this.beginShutdown();
+    await this.startup.catch(() => undefined);
+    await this.shutdown;
   }
 
-  private async initialize(): Promise<void> {
-    const initialized = record(
-      await this.request(
-        "initialize",
-        {
-          protocolVersion: MCP_PROTOCOL_VERSION,
-          capabilities: {},
-          clientInfo: { name: "openclaw-cua-computer", version: "1" },
+  private async initialize(
+    binaryPath: string,
+    socketPath: string,
+    env: NodeJS.ProcessEnv,
+  ): Promise<void> {
+    const proxyEnvironment = { ...env };
+    for (const key of Object.keys(proxyEnvironment)) {
+      if (key.startsWith("CUA_DRIVER_") || key === "CUA_TELEMETRY_ENABLED") {
+        delete proxyEnvironment[key];
+      }
+    }
+    // The normal Windows/Linux SDK route never loads the MCP runtime graph.
+    const {
+      createMcpStdioClient,
+      OpenClawStdioClientTransport,
+      connectMcpClient,
+      disposeMcpClient,
+    } = await import("openclaw/plugin-sdk/mcp-stdio-runtime");
+    if (this.stopped) {
+      throw driverUnavailable("CUA MCP proxy is stopping");
+    }
+    const owner = this;
+    class CuaTransport extends OpenClawStdioClientTransport {
+      override async send(message: McpMessage): Promise<void> {
+        if ("method" in message && message.method === "notifications/cancelled") {
+          return;
+        }
+        try {
+          // Keep the proxy's one-based wire IDs while SDK correlation remains zero-based.
+          await super.send(
+            "id" in message && typeof message.id === "number"
+              ? { ...message, id: message.id + 1 }
+              : message,
+          );
+        } catch (error) {
+          owner.fail(driverUnavailable("failed writing to CUA MCP proxy", error));
+          throw error;
+        }
+      }
+    }
+    const transport = new CuaTransport({
+      command: binaryPath,
+      args: ["mcp", "--embedded", "--socket", socketPath],
+      env: {
+        ...proxyEnvironment,
+        CUA_DRIVER_RS_TELEMETRY_ENABLED: "false",
+        CUA_DRIVER_RS_UPDATE_CHECK: "false",
+      },
+      exactEnv: true,
+      stderr: "pipe",
+      decoder: this.decoder,
+    });
+    const protocol = createMcpStdioClient();
+    const stderr = (chunk: Buffer) => {
+      this.stderr = Buffer.concat([this.stderr, chunk]).subarray(-MAX_STDERR_BYTES);
+    };
+    transport.stderr?.on("data", stderr);
+    transport.onerror = (error) =>
+      this.fail(driverUnavailable("failed to start CUA MCP proxy", error));
+    transport.onexit = ({ code, signal }) => {
+      if (!this.stopped && !this.failure) {
+        const detail = this.stderr.toString("utf8").trim();
+        this.fail(
+          driverUnavailable(
+            `CUA MCP proxy exited (${signal ?? code ?? "unknown"})${detail ? `: ${detail}` : ""}`,
+          ),
+        );
+      }
+    };
+    this.connection = {
+      request: protocol.request,
+      retire: () => transport.retire(),
+      terminate: () => transport.terminate(),
+      dispose: () =>
+        disposeMcpClient({
+          client: protocol,
+          transport,
+          transportType: "stdio",
+          detachStderr: () => {
+            transport.stderr?.off("data", stderr);
+          },
+        }),
+      isTimeout: protocol.isTimeout,
+    };
+    try {
+      await connectMcpClient({
+        client: {
+          connect: async (target, options) => {
+            const signal = options?.signal;
+            const onAbort = () =>
+              this.fail(
+                driverUnavailable(`CUA MCP initialize timed out after ${MCP_STARTUP_TIMEOUT_MS}ms`),
+              );
+            signal?.addEventListener("abort", onAbort, { once: true });
+            try {
+              if (signal?.aborted) {
+                onAbort();
+                signal.throwIfAborted();
+              }
+              await protocol.connect(target);
+              const initialized = record(
+                await this.request(
+                  "initialize",
+                  {
+                    protocolVersion: MCP_PROTOCOL_VERSION,
+                    capabilities: {},
+                    clientInfo: { name: "openclaw-cua-computer", version: "1" },
+                  },
+                  MCP_STARTUP_TIMEOUT_MS,
+                ),
+              );
+              if (initialized?.protocolVersion !== MCP_PROTOCOL_VERSION) {
+                throw driverProtocolError(
+                  "CUA MCP proxy returned an incompatible protocol version",
+                );
+              }
+              await protocol.notification("notifications/initialized", {});
+              this.available = !this.stopped && !this.failure;
+            } finally {
+              signal?.removeEventListener("abort", onAbort);
+            }
+          },
+          close: () => protocol.close(),
         },
-        MCP_STARTUP_TIMEOUT_MS,
-      ),
-    );
-    if (initialized?.protocolVersion !== MCP_PROTOCOL_VERSION) {
-      throw driverProtocolError("CUA MCP proxy returned an incompatible protocol version");
+        transport,
+        timeoutMs: MCP_STARTUP_TIMEOUT_MS,
+      });
+    } catch (error) {
+      this.fail(
+        error instanceof Error ? error : driverUnavailable("failed to start CUA MCP proxy", error),
+      );
+      throw this.failure ?? error;
     }
-    this.notify("notifications/initialized", {});
-    this.available = true;
   }
 
-  private request(
+  private async request(
     method: string,
     params: Record<string, unknown>,
     timeoutMs: number,
     signal?: AbortSignal,
   ): Promise<unknown> {
     if (this.failure) {
-      return Promise.reject(this.failure);
+      throw this.failure;
     }
     if (this.stopped) {
-      return Promise.reject(driverUnavailable("CUA MCP proxy is stopping"));
+      throw driverUnavailable("CUA MCP proxy is stopping");
     }
     if (signal?.aborted) {
-      return Promise.reject(driverUnavailable("CUA MCP request was cancelled", signal.reason));
+      throw driverUnavailable("CUA MCP request was cancelled", signal.reason);
     }
-    if (this.pending.size >= MAX_PENDING_REQUESTS) {
-      return Promise.reject(driverUnavailable("CUA MCP proxy has too many pending requests"));
+    if (this.inFlight >= MAX_PENDING_REQUESTS) {
+      throw driverUnavailable("CUA MCP proxy has too many pending requests");
     }
-    const id = ++this.nextId;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+    const connection = this.connection;
+    if (!connection) {
+      throw driverUnavailable("CUA MCP proxy is not connected");
+    }
+    this.inFlight += 1;
+    const onAbort = () =>
+      this.fail(driverUnavailable("CUA MCP request was cancelled", signal?.reason));
+    signal?.addEventListener("abort", onAbort, { once: true });
+    let result: Record<string, unknown>;
+    try {
+      result = await connection.request(method, params, timeoutMs);
+    } catch (error) {
+      if (connection.isTimeout(error)) {
         this.fail(driverUnavailable(`CUA MCP ${method} timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
-      timer.unref?.();
-      const pending: PendingRequest = { resolve, reject, timer, signal };
-      if (signal) {
-        pending.onAbort = () =>
-          this.fail(driverUnavailable("CUA MCP request was cancelled", signal.reason));
-        signal.addEventListener("abort", pending.onAbort, { once: true });
       }
-      this.pending.set(id, pending);
-      this.write({ jsonrpc: "2.0", id, method, params });
-    });
-  }
-
-  private notify(method: string, params: Record<string, unknown>): void {
-    this.write({ jsonrpc: "2.0", method, params });
-  }
-
-  private write(value: Record<string, unknown>): void {
-    this.child.stdin.write(`${JSON.stringify(value)}\n`, (error) => {
-      if (error) {
-        this.fail(driverUnavailable("failed writing to CUA MCP proxy", error));
-      }
-    });
-  }
-
-  private handleStdout(chunk: Buffer): void {
-    if (this.failure || this.stopped) {
-      return;
+      throw this.failure ?? error;
+    } finally {
+      this.inFlight -= 1;
+      signal?.removeEventListener("abort", onAbort);
     }
-    // Preserve the existing pre-drain cap for the entire delivered stdout chunk.
-    if (this.stdoutBytes + chunk.length > MAX_MCP_LINE_BYTES) {
-      this.fail(driverProtocolError("CUA MCP response exceeded the line-size limit"));
-      return;
+    if (result.error) {
+      const error = record(result.error);
+      const message = typeof error?.message === "string" ? error.message : "unknown JSON-RPC error";
+      throw driverProtocolError(`CUA MCP request failed: ${message}`);
     }
-    let start = 0;
-    while (start < chunk.length) {
-      const newline = chunk.indexOf(0x0a, start);
-      if (newline < 0) {
-        this.appendStdout(chunk.subarray(start));
-        return;
-      }
-      let line = chunk.subarray(start, newline);
-      start = newline + 1;
-      if (this.stdoutBytes > 0) {
-        this.appendStdout(line);
-        line = this.stdout.subarray(0, this.stdoutBytes);
-        this.stdout = Buffer.alloc(0);
-        this.stdoutBytes = 0;
-      }
-      if (line.length === 0) {
-        continue;
-      }
-      let response: JsonRpcResponse;
-      try {
-        response = JSON.parse(line.toString("utf8")) as JsonRpcResponse;
-      } catch (error) {
-        this.fail(driverProtocolError("CUA MCP proxy returned invalid JSON", error));
-        return;
-      }
-      if (response.jsonrpc !== "2.0") {
-        this.fail(driverProtocolError("CUA MCP proxy returned an invalid JSON-RPC version"));
-        return;
-      }
-      if (typeof response.id !== "number" || !Number.isSafeInteger(response.id)) {
-        this.fail(driverProtocolError("CUA MCP proxy returned an invalid response id"));
-        return;
-      }
-      const pending = this.pending.get(response.id);
-      if (!pending) {
-        continue;
-      }
-      this.pending.delete(response.id);
-      this.clearPending(pending);
-      if (response.error) {
-        const message =
-          typeof response.error.message === "string"
-            ? response.error.message
-            : "unknown JSON-RPC error";
-        pending.reject(driverProtocolError(`CUA MCP request failed: ${message}`));
-      } else {
-        pending.resolve(response.result);
-      }
-    }
-  }
-
-  private appendStdout(chunk: Buffer): void {
-    const required = this.stdoutBytes + chunk.length;
-    if (required > this.stdout.length) {
-      const capacity = Math.min(MAX_MCP_LINE_BYTES, Math.max(required, this.stdout.length * 2));
-      const stdout = Buffer.allocUnsafe(capacity);
-      this.stdout.copy(stdout, 0, 0, this.stdoutBytes);
-      this.stdout = stdout;
-    }
-    chunk.copy(this.stdout, this.stdoutBytes);
-    this.stdoutBytes = required;
+    return result.value;
   }
 
   private fail(error: Error): void {
@@ -416,43 +505,22 @@ class CuaMcpProxyClient {
     }
     this.failure = error;
     this.available = false;
-    this.rejectPending(error);
-    this.stdout = Buffer.alloc(0);
-    this.stdoutBytes = 0;
-    this.child.kill("SIGTERM");
+    this.rejectFatal?.(error);
+    // Retirement clears the SDK request registry immediately; shutdown retains the process receipt.
+    void this.connection?.terminate().catch(() => undefined);
+    this.beginShutdown();
   }
 
-  private rejectPending(error: Error): void {
-    for (const pending of this.pending.values()) {
-      this.clearPending(pending);
-      pending.reject(error);
+  private beginShutdown(): void {
+    if (!this.connection) {
+      return;
     }
-    this.pending.clear();
-  }
-
-  private clearPending(pending: PendingRequest): void {
-    clearTimeout(pending.timer);
-    if (pending.signal && pending.onAbort) {
-      pending.signal.removeEventListener("abort", pending.onAbort);
-    }
-  }
-
-  private async waitForExit(timeoutMs: number): Promise<boolean> {
-    if (this.child.exitCode !== null || this.child.signalCode !== null) {
-      return true;
-    }
-    return await new Promise<boolean>((resolve) => {
-      const onExit = () => {
-        clearTimeout(timer);
-        resolve(true);
-      };
-      const timer = setTimeout(() => {
-        this.child.removeListener("exit", onExit);
-        resolve(false);
-      }, timeoutMs);
-      timer.unref?.();
-      this.child.once("exit", onExit);
+    this.shutdown ??= this.connection.dispose().then((outcome) => {
+      if (outcome !== "closed") {
+        throw driverUnavailable("CUA MCP proxy cleanup could not be confirmed");
+      }
     });
+    void this.shutdown.catch(() => {});
   }
 }
 

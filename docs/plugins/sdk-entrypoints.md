@@ -640,3 +640,15 @@ Use `openclaw plugins inspect <id>` to see a plugin's shape.
 - [Setup and Config](/plugins/sdk-setup) - manifest and setup entry loading
 - [Channel Plugins](/plugins/sdk-channel-plugins) - building the `ChannelPlugin` object
 - [Provider Plugins](/plugins/sdk-provider-plugins) - provider registration and hooks
+
+## MCP subprocess runtime
+
+**Import:** `openclaw/plugin-sdk/mcp-stdio-runtime` using dynamic `import()` when opening the connection.
+
+Use this seam when a plugin owns an MCP proxy subprocess. `createMcpStdioClient()` creates a client backed by the MCP SDK's request correlation and deadlines. Its `connect(transport)` attaches the transport; the caller then performs initialization with `request(method, params, timeoutMs)` and sends notifications with `notification(method, params)`. Requests return an object result. `close()` closes the connection, and `isTimeout(error)` identifies an MCP request-timeout error. Initialization policy stays with the plugin; the SDK's experimental task and server-handler APIs are not exposed. `McpStdioClient` and `McpMessage` describe this boundary.
+
+`OpenClawStdioClientTransport` owns the launched subprocess and its descendants. It accepts `command`, optional `args`, `cwd`, `env`, `prepareDataDir`, and `stderr`. By default it merges the MCP SDK's default environment with `env` and uses the SDK's bounded JSON-RPC decoder. `exactEnv: true` uses only the supplied environment. A custom `McpStdioDecoder` implements `append`, `readMessage`, and `clear`; it must enforce byte bounds before buffering and validate each returned `McpMessage`.
+
+`onexit` receives the root process's `{ code, signal }`. It is separate from cleanup confirmation: `onclose` retires the connection, while `close()` joins owned-process cleanup. `retire()` closes input and retires RPC admission immediately; `terminate()` additionally sends TERM. Each operation retains cleanup ownership, and its returned promise still joins cleanup. `forceClose()` requests KILL. These methods own only the spawned process tree, never a separately started service reached through its socket.
+
+`connectMcpClient({ client, transport, timeoutMs, signal? })` applies one startup deadline around the client's connection operation. Keep transport startup and initialization inside that operation. The client's `connect` callback receives the composed abort signal in its request options; observe it to retire caller admission immediately while cleanup finishes. Always dispose the owned session with `disposeMcpClient({ client, transport, transportType: "stdio", detachStderr? })`; its result is `"closed"` or `"uncertain"`. Report uncertain cleanup instead of treating it as confirmed shutdown. Keep this runtime out of plugin registration and paths that do not open MCP connections.

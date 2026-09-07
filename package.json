@@ -876,6 +876,10 @@
     "./plugin-sdk/process-runtime": {
       "default": "./dist/plugin-sdk/process-runtime.js"
     },
+    "./plugin-sdk/mcp-stdio-runtime": {
+      "types": "./dist/plugin-sdk/mcp-stdio-runtime.d.ts",
+      "default": "./dist/plugin-sdk/mcp-stdio-runtime.js"
+    },
     "./plugin-sdk/windows-spawn": {
       "default": "./dist/plugin-sdk/windows-spawn.js"
     },
