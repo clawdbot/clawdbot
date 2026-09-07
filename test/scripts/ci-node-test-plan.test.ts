@@ -2249,75 +2249,35 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         vi.resetModules();
       }
     };
-    const baseline = await createPlanWithInventory(false);
-    const baselineToolingFiles = baseline
-      .flatMap((job) => job.groups)
-      .filter(isNumberedToolingGroup)
-      .flatMap((group) => group.includePatterns ?? []);
-    const grown = await createPlanWithInventory(true);
-    const toolingGroups = grown.flatMap((job) => job.groups).filter(isNumberedToolingGroup);
-    const toolingFiles = toolingGroups.flatMap((group) => group.includePatterns ?? []);
-    const crossRunnerHostedJobs: CompactNodeTestShard[] = [];
-
-    expect(grown.length).toBeLessThanOrEqual(80);
-    expect(new Set(toolingFiles).size).toBe(toolingFiles.length);
-    expect(toolingFiles.toSorted()).toEqual(
-      [...baselineToolingFiles, inventoryGrowthFile].toSorted(),
-    );
-    expect(nonToolingPlacement(grown)).toEqual(nonToolingPlacement(baseline));
-
-    for (const job of grown) {
-      const hostedToolingGroups = job.groups.filter(isHostedToolingGroup);
-      if (hostedToolingGroups.length === 0) {
-        continue;
-      }
-      const families = hostedToolingGroups.map((group) =>
-        group.shard_name.replace(/-hosted-\d+$/u, ""),
-      );
-      expect(new Set(families).size).toBe(families.length);
-      expect(job.requiresDist).toBe(false);
-      expect(job.planConcurrency).toBe(1);
-      expect(job.groups.length).toBeLessThanOrEqual(10);
-      if (job.groups.length > 1) {
-        expect(job.predictedSeconds).toBeLessThanOrEqual(150);
-      }
-      expect(job.runner).toBe(job.groups[0]?.runner);
-      expect(
-        hostedToolingGroups.every(
-          (group) => (runnerRanks.get(job.runner) ?? -1) >= (runnerRanks.get(group.runner) ?? 0),
-        ),
-      ).toBe(true);
-      if (hostedToolingGroups.some((group) => group.runner !== job.runner)) {
-        crossRunnerHostedJobs.push(job);
-        expect(job.groups.every(isHostedToolingGroup)).toBe(true);
-        expect(job.pretestBuildMode).toBeUndefined();
-        expect(job.groups.every((group) => group.pretestBuildMode === undefined)).toBe(true);
-      }
-    }
-    // Inventory growth can move numbered stripes; validate every mixed-capacity
-    // job above instead of pinning one incidental packing layout.
-    expect(crossRunnerHostedJobs.length).toBeGreaterThan(0);
-
-    for (const extraFiles of extraInventories) {
-      const extraBaseline = await createPlanWithInventory(false, extraFiles);
-      const expanded = await createPlanWithInventory(true, extraFiles);
-      const expandedToolingFiles = expanded
+    // Growth changes only the tracked-file mock; real unit-fast discovery sees unchanged disk inputs.
+    const unitFastPaths = await import("../vitest/vitest.unit-fast-paths.mjs");
+    try {
+      vi.doMock("../vitest/vitest.unit-fast-paths.mjs", () => unitFastPaths);
+      const baseline = await createPlanWithInventory(false);
+      const baselineToolingFiles = baseline
         .flatMap((job) => job.groups)
         .filter(isNumberedToolingGroup)
         .flatMap((group) => group.includePatterns ?? []);
-      expect(expanded.length).toBeLessThanOrEqual(80);
-      expect(new Set(expandedToolingFiles).size).toBe(expandedToolingFiles.length);
-      expect(expandedToolingFiles.toSorted()).toEqual(
-        [...new Set([...baselineToolingFiles, inventoryGrowthFile, ...extraFiles])].toSorted(),
+      const grown = await createPlanWithInventory(true);
+      const toolingGroups = grown.flatMap((job) => job.groups).filter(isNumberedToolingGroup);
+      const toolingFiles = toolingGroups.flatMap((group) => group.includePatterns ?? []);
+      const crossRunnerHostedJobs: CompactNodeTestShard[] = [];
+
+      expect(grown.length).toBeLessThanOrEqual(80);
+      expect(new Set(toolingFiles).size).toBe(toolingFiles.length);
+      expect(toolingFiles.toSorted()).toEqual(
+        [...baselineToolingFiles, inventoryGrowthFile].toSorted(),
       );
-      expect(nonToolingPlacement(extraBaseline)).toEqual(nonToolingPlacement(baseline));
-      expect(nonToolingPlacement(expanded)).toEqual(nonToolingPlacement(extraBaseline));
-      for (const job of expanded.filter((candidate) =>
-        candidate.groups.some(isHostedToolingGroup),
-      )) {
-        const families = job.groups
-          .filter(isHostedToolingGroup)
-          .map((group) => group.shard_name.replace(/-hosted-\d+$/u, ""));
+      expect(nonToolingPlacement(grown)).toEqual(nonToolingPlacement(baseline));
+
+      for (const job of grown) {
+        const hostedToolingGroups = job.groups.filter(isHostedToolingGroup);
+        if (hostedToolingGroups.length === 0) {
+          continue;
+        }
+        const families = hostedToolingGroups.map((group) =>
+          group.shard_name.replace(/-hosted-\d+$/u, ""),
+        );
         expect(new Set(families).size).toBe(families.length);
         expect(job.requiresDist).toBe(false);
         expect(job.planConcurrency).toBe(1);
@@ -2327,11 +2287,61 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         }
         expect(job.runner).toBe(job.groups[0]?.runner);
         expect(
-          job.groups.every(
+          hostedToolingGroups.every(
             (group) => (runnerRanks.get(job.runner) ?? -1) >= (runnerRanks.get(group.runner) ?? 0),
           ),
         ).toBe(true);
+        if (hostedToolingGroups.some((group) => group.runner !== job.runner)) {
+          crossRunnerHostedJobs.push(job);
+          expect(job.groups.every(isHostedToolingGroup)).toBe(true);
+          expect(job.pretestBuildMode).toBeUndefined();
+          expect(job.groups.every((group) => group.pretestBuildMode === undefined)).toBe(true);
+        }
       }
+      // Inventory growth can move numbered stripes; validate every mixed-capacity
+      // job above instead of pinning one incidental packing layout.
+      expect(crossRunnerHostedJobs.length).toBeGreaterThan(0);
+
+      for (const extraFiles of extraInventories) {
+        const extraBaseline = await createPlanWithInventory(false, extraFiles);
+        const expanded = await createPlanWithInventory(true, extraFiles);
+        const expandedToolingFiles = expanded
+          .flatMap((job) => job.groups)
+          .filter(isNumberedToolingGroup)
+          .flatMap((group) => group.includePatterns ?? []);
+        expect(expanded.length).toBeLessThanOrEqual(80);
+        expect(new Set(expandedToolingFiles).size).toBe(expandedToolingFiles.length);
+        expect(expandedToolingFiles.toSorted()).toEqual(
+          [...new Set([...baselineToolingFiles, inventoryGrowthFile, ...extraFiles])].toSorted(),
+        );
+        expect(nonToolingPlacement(extraBaseline)).toEqual(nonToolingPlacement(baseline));
+        expect(nonToolingPlacement(expanded)).toEqual(nonToolingPlacement(extraBaseline));
+        for (const job of expanded.filter((candidate) =>
+          candidate.groups.some(isHostedToolingGroup),
+        )) {
+          const families = job.groups
+            .filter(isHostedToolingGroup)
+            .map((group) => group.shard_name.replace(/-hosted-\d+$/u, ""));
+          expect(new Set(families).size).toBe(families.length);
+          expect(job.requiresDist).toBe(false);
+          expect(job.planConcurrency).toBe(1);
+          expect(job.groups.length).toBeLessThanOrEqual(10);
+          if (job.groups.length > 1) {
+            expect(job.predictedSeconds).toBeLessThanOrEqual(150);
+          }
+          expect(job.runner).toBe(job.groups[0]?.runner);
+          expect(
+            job.groups.every(
+              (group) =>
+                (runnerRanks.get(job.runner) ?? -1) >= (runnerRanks.get(group.runner) ?? 0),
+            ),
+          ).toBe(true);
+        }
+      }
+    } finally {
+      vi.doUnmock("../../scripts/lib/list-test-files.mts");
+      vi.doUnmock("../vitest/vitest.unit-fast-paths.mjs");
+      vi.resetModules();
     }
   });
 
