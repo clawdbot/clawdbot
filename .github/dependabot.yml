@@ -132,6 +132,22 @@ updates:
           - patch
     open-pull-requests-limit: 5
 
+  # Cargo - Linux desktop app
+  - package-ecosystem: cargo
+    directory: /apps/linux/src-tauri
+    schedule:
+      interval: daily
+    cooldown:
+      default-days: 2
+    groups:
+      linux-rust-deps:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+
   # Docker base images
   - package-ecosystem: docker
     directory: /
