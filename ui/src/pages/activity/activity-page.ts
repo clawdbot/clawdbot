@@ -26,6 +26,7 @@ import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gatew
 import { projectPresencePayload } from "../../lib/presence-users.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import {
+  isUiGlobalScopeConfigured,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
 } from "../../lib/sessions/session-key.ts";
@@ -111,6 +112,10 @@ class ActivityPage extends OpenClawLightDomElement {
     isEnabled: () => this.autoFollow,
   });
   private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.agents,
+      (agents, notify) => agents.subscribe(notify),
+    )
     .watch(
       () => this.context?.liveActivity,
       (activity, notify) => activity.subscribe(notify),
@@ -574,11 +579,16 @@ class ActivityPage extends OpenClawLightDomElement {
             this.syncRunInspector(this.context.gateway, this.context.gateway.snapshot, true),
         })}`;
     }
+    const sessionHost = {
+      agentsList: this.context.agents.state.agentsList,
+      hello: this.context.gateway.snapshot.hello,
+    };
     return html`<div id="activity-live-panel">
       ${renderCurrentWork({
         basePath: this.context.basePath,
-        fallbackAgentId: resolveUiDefaultAgentId({ hello: this.context.gateway.snapshot.hello }),
-        mainKey: resolveUiConfiguredMainKey({ hello: this.context.gateway.snapshot.hello }),
+        fallbackAgentId: resolveUiDefaultAgentId(sessionHost),
+        mainKey: resolveUiConfiguredMainKey(sessionHost),
+        globalScope: isUiGlobalScopeConfigured(sessionHost),
         navigate: this.context.navigate,
         connected: this.context.gateway.snapshot.phase === "connected",
         result: this.sessionActivity.result,

@@ -19,6 +19,7 @@ type CurrentWorkProps = {
   basePath: string;
   fallbackAgentId: string;
   mainKey: string;
+  globalScope: boolean;
   navigate: ApplicationContext["navigate"];
   connected: boolean;
   result?: SessionsListResult;
@@ -35,8 +36,8 @@ function renderCurrentSession(props: CurrentWorkProps, row: GatewaySessionRow) {
       >
     </span>
     ${renderSettingsStatus({ kind: "warn", label: row.status === "queued" ? t("activity.currentWork.queued") : t("activity.status.running") })}`;
-  // The existing URL grammar addresses a literal agent:<id>:unknown, not this sentinel.
-  if (row.key === "unknown") {
+  // The Home URL addresses raw global only in global scope; raw unknown has no exact URL.
+  if (row.key === "unknown" || (row.key === "global" && !props.globalScope)) {
     return html`<div
       class="activity-current-work__row"
       data-session-key=${row.key}

@@ -103,7 +103,7 @@ suite.define(() => {
 
   it("reconciles completion during the first snapshot and keeps global navigation owner-specific", async () => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      const globals = ["main", "work"].map((agentId) =>
+      const globalRow = (agentId: string) =>
         Object.assign({}, running, {
           key: "global",
           agentId,
@@ -111,8 +111,9 @@ suite.define(() => {
           label: `${agentId} global work`,
           sessionId: `global-${agentId}`,
           activeRunIds: [`run-${agentId}`],
-        }),
-      );
+        });
+      const mainGlobal = globalRow("main");
+      const workGlobal = globalRow("work");
       const literal = {
         ...running,
         key: "agent:work:global",
@@ -135,7 +136,7 @@ suite.define(() => {
         sessionId: "literal-unknown",
         label: "Literal unknown session",
       };
-      const activeRows = [...globals, literal, ...unknown, literalUnknown];
+      const activeRows = [mainGlobal, workGlobal, literal, ...unknown, literalUnknown];
       const gateway = await installMockGateway(page, {
         sessionScope: "global",
         heldMethods: ["sessions.list"],
@@ -150,8 +151,8 @@ suite.define(() => {
           "sessions.list": {
             cases: [
               { match: { activeOnly: true }, response: listing(activeRows) },
-              { match: { agentId: "work" }, response: listing([globals[1], literal]) },
-              { match: {}, response: listing([globals[0], literal]) },
+              { match: { agentId: "work" }, response: listing([workGlobal, literal]) },
+              { match: {}, response: listing([mainGlobal, literal]) },
             ],
           },
         },
