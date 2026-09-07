@@ -231,3 +231,45 @@ it.each(["cancel", "expiry"])(
     }
   },
 );
+
+it("releases each guest-discarded timer lease before the cell closes", async () => {
+  const h = createCodeModeHarness();
+  applyCodeModeCatalog({ ...h.ctx, tools: h.tools });
+  try {
+    let result = resultDetails(
+      await h.tools[0]!.execute("discarded-timers", {
+        code: `for (let i = 0; i < 6; i++) {
+        const timer = setTimeout(() => { throw new Error("discarded timer fired"); }, 60_000);
+        await yield_control("armed");
+        clearTimeout(timer);
+        await yield_control("cleared");
+      }
+      return "done";`,
+      }),
+    );
+    for (let round = 0; round < 6; round++) {
+      expect(result.status).toBe("waiting");
+      const parked = testing.activeRuns.get(String(result.runId))!;
+      const timer = parked.pending.find((entry) => entry.method === "sleep")!;
+      expect(timer).toBeDefined();
+      expect(timer.settled).toBeUndefined();
+      const release = vi.spyOn(timer.reply, "release");
+      result = resultDetails(await h.tools[1]!.execute("discard-timer", { runId: result.runId }));
+      expect(result.status).toBe("waiting");
+      expect(parked.owner.signal.aborted).toBe(false);
+      expect(release).toHaveBeenCalledOnce();
+      expect(() => timer.reply.take()).toThrow("unavailable");
+      expect(
+        testing.activeRuns
+          .get(String(result.runId))!
+          .pending.some((entry) => entry.id === timer.id),
+      ).toBe(false);
+      release.mockRestore();
+      result = resultDetails(await h.tools[1]!.execute("next-timer", { runId: result.runId }));
+    }
+    expect(result).toMatchObject({ status: "completed", value: "done" });
+  } finally {
+    clearToolSearchCatalog(h.ctx);
+    vi.restoreAllMocks();
+  }
+});

@@ -220,7 +220,13 @@ export function cancelPendingBridgeStatesById(
     return;
   }
   const canceled = new Set(canceledRequestIds);
-  cancelPendingBridgeStates(pending.filter((entry) => canceled.has(entry.id)));
+  const discarded = pending.filter((entry) => canceled.has(entry.id));
+  cancelPendingBridgeStates(discarded);
+  // The guest removed these requests; no cancellation reply will be delivered.
+  // Keep ordinary cancellation catchable, but release guest-discarded leases now.
+  for (const entry of discarded) {
+    entry.reply.release();
+  }
   pending.splice(0, pending.length, ...pending.filter((entry) => !canceled.has(entry.id)));
 }
 
