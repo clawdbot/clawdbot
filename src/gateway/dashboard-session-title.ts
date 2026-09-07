@@ -13,6 +13,7 @@ import { withTimeout } from "../infra/fs-safe.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { isValidAttachmentBase64, type ChatAttachment } from "./chat-attachments.js";
+import { deriveGoalSessionTitle } from "./derive-goal-session-title.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { readSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 
@@ -98,8 +99,21 @@ type SessionTitleAttempt =
   | { kind: "skipped" }
   | { kind: "in-flight"; settled: Promise<boolean> };
 
+/** Android stamps this prefix on its node main session; it is not a user rename. */
+const PLATFORM_AUTO_SESSION_LABEL_RE = /^OpenClaw App(?:\s*·|$)/i;
+
+export function isPlatformAutoSessionLabel(value: string | null | undefined): boolean {
+  const trimmed = value?.trim();
+  return Boolean(trimmed && PLATFORM_AUTO_SESSION_LABEL_RE.test(trimmed));
+}
+
 export function resolveExplicitSessionName(entry: SessionEntry | undefined): string | undefined {
-  return [entry?.label, entry?.displayName, entry?.subject, entry?.groupChannel, entry?.space]
+  const label = entry?.label?.trim();
+  if (label && !isPlatformAutoSessionLabel(label)) {
+    return label;
+  }
+  // Platform auto-labels must not block generated displayName titles.
+  return [entry?.displayName, entry?.subject, entry?.groupChannel, entry?.space]
     .map((value) => value?.trim())
     .find(Boolean);
 }
@@ -108,17 +122,21 @@ export function hasExplicitSessionName(entry: SessionEntry | undefined): boolean
   return Boolean(resolveExplicitSessionName(entry));
 }
 
-function isDashboardSessionKey(sessionKey: string): boolean {
-  return parseAgentSessionKey(sessionKey)?.rest.startsWith("dashboard:") === true;
+function isAutoTitleSessionKey(sessionKey: string): boolean {
+  const rest = parseAgentSessionKey(sessionKey)?.rest ?? "";
+  return (
+    rest.startsWith("dashboard:") || rest.startsWith("ios-") || rest.startsWith("node-")
+  );
 }
 
+/** True when this interactive chat key should receive an automatic topic title. */
 export function isDashboardSessionTitleCandidate(params: {
   sessionKey: string;
   userMessage: string;
 }): boolean {
   const sourceText = params.userMessage.trim();
   return Boolean(
-    sourceText && !sourceText.startsWith("/") && isDashboardSessionKey(params.sessionKey),
+    sourceText && !sourceText.startsWith("/") && isAutoTitleSessionKey(params.sessionKey),
   );
 }
 
@@ -196,23 +214,36 @@ async function generateDashboardSessionTitle(params: {
     primaryProvider: regularModel.provider,
     primaryModelRef: regularModelRef,
   });
-  const generated = await generateConversationLabelWithFallback({
-    userMessage: truncateUtf16Safe(sourceText, DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS),
-    prompt: DASHBOARD_SESSION_TITLE_PROMPT,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    ...(agentHarnessRuntimeOverride ? { agentHarnessRuntimeOverride } : {}),
-    ...(utilityModelRef ? { utilityModelRef } : {}),
-    regularModelRef,
-    ...(preferredProfile ? { preferredProfile } : {}),
-    normalizeLabel: normalizeDashboardSessionTitle,
-    maxLength: DASHBOARD_SESSION_TITLE_MAX_CHARS,
-    abortSignal: params.abortSignal,
-    assertCurrent: params.assertCurrent,
-    ...(params.timeoutMs ? { timeoutMs: params.timeoutMs } : {}),
-    ...(params.utilityOnly ? { utilityOnly: true } : {}),
-  });
-  return generated ? normalizeDashboardSessionTitle(generated) : null;
+  const boundedSource = truncateUtf16Safe(sourceText, DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS);
+  try {
+    const generated = await generateConversationLabelWithFallback({
+      userMessage: boundedSource,
+      prompt: DASHBOARD_SESSION_TITLE_PROMPT,
+      cfg: params.cfg,
+      agentId: params.agentId,
+      ...(agentHarnessRuntimeOverride ? { agentHarnessRuntimeOverride } : {}),
+      ...(utilityModelRef ? { utilityModelRef } : {}),
+      regularModelRef,
+      ...(preferredProfile ? { preferredProfile } : {}),
+      normalizeLabel: normalizeDashboardSessionTitle,
+      maxLength: DASHBOARD_SESSION_TITLE_MAX_CHARS,
+      abortSignal: params.abortSignal,
+      assertCurrent: params.assertCurrent,
+      ...(params.timeoutMs ? { timeoutMs: params.timeoutMs } : {}),
+      ...(params.utilityOnly ? { utilityOnly: true } : {}),
+    });
+    if (generated) {
+      return normalizeDashboardSessionTitle(generated);
+    }
+  } catch {
+    params.assertCurrent?.();
+    params.abortSignal?.throwIfAborted();
+    // Fall through to the deterministic goal title; keep provider errors private.
+  }
+  // No model (or a failed isolated completion): persist a readable topic from the
+  // first real user task so phone/Control UI sidebars are not first-bubble leftovers.
+  const fallback = deriveGoalSessionTitle(boundedSource, DASHBOARD_SESSION_TITLE_MAX_CHARS);
+  return fallback ? normalizeDashboardSessionTitle(fallback) : null;
 }
 
 /** Prepares a creation draft's title without creating or updating a session. */
@@ -229,8 +260,10 @@ export async function prepareDashboardSessionTitle(params: {
   } catch {
     params.assertCurrent?.();
     params.abortSignal?.throwIfAborted();
-    // Speculation is optional; provider diagnostics and draft contents stay private.
-    return null;
+    // Speculation is optional; still offer a deterministic draft title.
+    const sourceText = buildDashboardSessionTitleSource({ message: params.userMessage });
+    const fallback = deriveGoalSessionTitle(sourceText, DASHBOARD_SESSION_TITLE_MAX_CHARS);
+    return fallback ? normalizeDashboardSessionTitle(fallback) : null;
   }
 }
 

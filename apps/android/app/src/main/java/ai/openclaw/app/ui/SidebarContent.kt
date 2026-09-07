@@ -232,14 +232,30 @@ internal fun sidebarSessionPresentation(
   )
 }
 
+internal fun isAndroidAppSessionLabel(label: String?): Boolean {
+  val trimmed = label?.trim().orEmpty()
+  return trimmed == "OpenClaw App" || trimmed.startsWith("OpenClaw App ·")
+}
+
 internal fun sessionPresentationTitle(
   session: ChatSessionEntry,
   unnamedTitle: () -> String,
-): String =
-  session.label?.trim()?.takeIf(String::isNotEmpty)
-    ?: session.displayName?.trim()?.takeIf(String::isNotEmpty)
-    ?: nativeString("New chat").takeIf { session.isDashboardSession() }
-    ?: unnamedTitle()
+): String {
+  val label = session.label?.trim()?.takeIf(String::isNotEmpty)
+  val displayName = session.displayName?.trim()?.takeIf(String::isNotEmpty)
+  // User renames live in label; Android's connect stamp is not a rename and must
+  // yield to a generated topic title once the gateway persists displayName.
+  if (label != null && !isAndroidAppSessionLabel(label)) {
+    return label
+  }
+  if (displayName != null) {
+    return displayName
+  }
+  if (label != null) {
+    return label
+  }
+  return nativeString("New chat").takeIf { session.isDashboardSession() } ?: unnamedTitle()
+}
 
 private fun ChatSessionEntry.isDashboardSession(): Boolean {
   if (classification == "dashboard") return true

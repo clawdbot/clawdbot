@@ -180,14 +180,24 @@ public enum ChatSessionSidebarModel {
     }
 
     public static func displayName(for session: OpenClawChatSessionEntry) -> String {
-        for candidate in [session.displayName, session.label] {
-            if let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !trimmed.isEmpty
-            {
-                return trimmed
-            }
+        let label = session.label?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let generated = session.displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        // User renames live in label. Platform auto-labels (Android node stamp) must
+        // not outrank a generated topic title.
+        if let label, !label.isEmpty, !self.isPlatformAutoSessionLabel(label) {
+            return label
+        }
+        if let generated, !generated.isEmpty {
+            return generated
+        }
+        if let label, !label.isEmpty {
+            return label
         }
         return self.displayName(forKey: session.key)
+    }
+
+    private static func isPlatformAutoSessionLabel(_ label: String) -> Bool {
+        label == "OpenClaw App" || label.hasPrefix("OpenClaw App ·")
     }
 
     /// Compact "repo \u{2387} branch" line for worktree/work sessions; mirrors the

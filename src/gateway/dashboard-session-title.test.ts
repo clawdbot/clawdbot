@@ -260,7 +260,8 @@ describe("maybeGenerateDashboardSessionTitle", () => {
   });
 
   it.each([
-    ["non-dashboard session", { sessionKey: "agent:main:main" }],
+    ["legacy main session", { sessionKey: "agent:main:main" }],
+    ["cron session", { sessionKey: "agent:main:cron:job-1" }],
     ["slash command", { userMessage: "/status" }],
     ["manual label", { entry: { ...baseEntry, label: "My release" } }],
     ["persisted display name", { entry: { ...baseEntry, displayName: "My release" } }],
@@ -276,6 +277,29 @@ describe("maybeGenerateDashboardSessionTitle", () => {
 
     expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
     expect(updateSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["ios new-session key", "agent:main:ios-7f3a9c2b1d0e"],
+    ["android node key", "agent:main:node-1234567890ab"],
+  ])("titles %s", async (_name, sessionKey) => {
+    await expect(
+      maybeGenerateDashboardSessionTitle({ ...titleParams(), sessionKey }),
+    ).resolves.toBe(true);
+    expect(generateConversationLabelWithFallback).toHaveBeenCalledOnce();
+  });
+
+  it("titles over an Android platform auto-label without treating it as a rename", async () => {
+    const entry = {
+      ...baseEntry,
+      label: "OpenClaw App · Pixel · 1234567890ab",
+    };
+    mockSessionUpdate(entry);
+
+    await expect(maybeGenerateDashboardSessionTitle(titleParams(entry))).resolves.toBe(true);
+
+    const update = updateSessionEntry.mock.calls[0]?.[1];
+    expect(await update?.({ ...entry })).toEqual({ displayName: "Release Planning" });
   });
 
   it("retries a historical session from the transcript's first user message", async () => {
@@ -318,16 +342,30 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     );
   });
 
-  it("evicts a failed request so later activity can retry", async () => {
+  it("persists a deterministic goal title when model labeling fails", async () => {
+    generateConversationLabelWithFallback.mockRejectedValueOnce(new Error("route unavailable"));
+
+    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
+    expect(generateConversationLabelWithFallback).toHaveBeenCalledTimes(1);
+    const update = updateSessionEntry.mock.calls[0]?.[1];
+    expect(await update?.({ ...baseEntry })).toEqual({
+      displayName: "Help me plan the release",
+    });
+  });
+
+  it("evicts a settled naming request so a later rename attempt can run", async () => {
     generateConversationLabelWithFallback
       .mockRejectedValueOnce(new Error("route unavailable"))
       .mockResolvedValueOnce("Release Planning");
 
-    await expect(maybeGenerateDashboardSessionTitle(titleParams())).rejects.toThrow(
-      "route unavailable",
-    );
+    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
+    // Clear the persisted name so a later send can claim naming again.
+    loadSessionEntry.mockReturnValue(baseEntry);
+    mockSessionUpdate(baseEntry);
     await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
     expect(generateConversationLabelWithFallback).toHaveBeenCalledTimes(2);
+    const update = updateSessionEntry.mock.calls.at(-1)?.[1];
+    expect(await update?.({ ...baseEntry })).toEqual({ displayName: "Release Planning" });
   });
 
   it("does not overwrite a name added while the model request is running", async () => {

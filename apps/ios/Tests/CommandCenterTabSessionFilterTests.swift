@@ -38,4 +38,47 @@ struct CommandCenterTabSessionFilterTests {
             "agent:main:slack:channel:c1:thread:123",
             defaultSessionKey: "main"))
     }
+
+    @Test func `prefers generated display names over ios key placeholders`() {
+        func entry(
+            key: String,
+            displayName: String? = nil,
+            label: String? = nil) -> OpenClawChatSessionEntry
+        {
+            OpenClawChatSessionEntry(
+                key: key,
+                kind: nil,
+                displayName: displayName,
+                surface: nil,
+                subject: nil,
+                room: nil,
+                space: nil,
+                updatedAt: 1,
+                sessionId: nil,
+                systemSent: nil,
+                abortedLastRun: nil,
+                thinkingLevel: nil,
+                verboseLevel: nil,
+                inputTokens: nil,
+                outputTokens: nil,
+                totalTokens: nil,
+                modelProvider: nil,
+                model: nil,
+                contextTokens: nil,
+                label: label)
+        }
+
+        #expect(
+            CommandCenterTab.sessionTitle(
+                entry(key: "agent:main:ios-abc123", displayName: "Compare session naming"))
+                == "Compare session naming")
+        #expect(CommandCenterTab.sessionTitle(entry(key: "agent:main:ios-abc123")) == "iOS chat")
+        #expect(
+            CommandCenterTab.sessionTitle(
+                entry(
+                    key: "agent:main:ios-abc123",
+                    displayName: "Compare session naming",
+                    label: "My thread"))
+                == "My thread")
+    }
 }
