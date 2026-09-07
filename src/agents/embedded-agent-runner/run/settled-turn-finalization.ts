@@ -280,10 +280,12 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     ...completion,
     lastRunPromptUsage,
   });
-  // The isolated finalizer cannot call a message tool. Its answer is
-  // host-owned recovery output and must cross that source-reply suppression.
+  // Only a real finalizer answer may cross source-reply suppression. The
+  // synthetic fallback remains a private diagnostic on message-tool-only runs.
   finalizedPrepared.payloadsWithToolMedia?.forEach((payload) => {
-    markReplyPayloadForSourceSuppressionDelivery(payload);
+    if (finalizationOutcome === "answered") {
+      markReplyPayloadForSourceSuppressionDelivery(payload);
+    }
     if (sessionWriterDeliveryAuthority) {
       setReplyPayloadMetadata(payload, { sessionWriterDeliveryAuthority });
     }
@@ -291,6 +293,12 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   // A failure-honest final answer cannot turn a settled cron denial into success.
   prepared = {
     ...finalizedPrepared,
+    // Do not offer the private diagnostic to stranded-reply recovery as an
+    // undelivered model answer. Automatic-delivery callers retain their fallback.
+    ...(finalizationOutcome !== "answered" &&
+    runParams.sourceReplyDeliveryMode === "message_tool_only"
+      ? { finalAssistantVisibleText: "", finalAssistantRawText: "" }
+      : {}),
     failureSignal: settledFailureSignal,
     terminalToolFailure: settledTerminalToolFailure,
   };

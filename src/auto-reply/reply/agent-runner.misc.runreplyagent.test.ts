@@ -3,7 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 // Tests miscellaneous run-reply-agent behaviors and artifact output.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
@@ -52,7 +52,11 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
-import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  markReplyPayloadForSourceSuppressionDelivery,
+  type ReplyPayload,
+} from "../reply-payload.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import type { VerboseLevel } from "../thinking.shared.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -3066,6 +3070,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     didDeliverSourceReplyViaMessageTool?: boolean;
     finalAssistantText?: string;
     finalAssistantRawText?: string;
+    stopReason?: string;
     payloads?: ReplyPayload[];
     payloadText?: string;
     successfulCronAdds?: number;
@@ -3105,6 +3110,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       meta: {
         agentMeta: {},
         finalAssistantVisibleText: finalAssistantText,
+        ...(params.stopReason ? { stopReason: params.stopReason } : {}),
         ...(params.pendingContinuation ? { yielded: true } : {}),
         ...(params.finalAssistantRawText
           ? { finalAssistantRawText: params.finalAssistantRawText }
@@ -3396,6 +3402,42 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     });
 
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "does not recover a source-owned terminal reply before delivery (retry=%s)",
+    async (strandedReplyRetry) => {
+      const text =
+        "The requested action completed once. This recovered answer contains the result of the completed work and is ready for delivery to the original conversation. No completed action needs to run again.";
+      const { result } = await runPrivateFinalCase({
+        finalAssistantText: text,
+        payloads: [markReplyPayloadForSourceSuppressionDelivery({ text })],
+        strandedReplyRetry,
+      });
+
+      const payloads = normalizeReplyPayloads(result);
+      expect(payloads).toEqual([expect.objectContaining({ text })]);
+      const [payload] = payloads;
+      assert(payload);
+      expect(getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression).toBe(true);
+      expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    },
+  );
+
+  it("surfaces a canonical failure despite a private partial reply", async () => {
+    const privateText =
+      "Private partial output before the provider failed. These internal notes describe unfinished work and must stay private. They are not a completed answer or a substitute for the terminal failure.";
+    const { result } = await runPrivateFinalCase({
+      finalAssistantText: privateText,
+      stopReason: "error",
+    });
+
+    const deliverable = normalizeReplyPayloads(result).filter(
+      (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
+    );
+    expect(deliverable).toEqual([expect.objectContaining({ isError: true })]);
+    expect(deliverable[0]?.text).not.toBe(privateText);
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
   });
 

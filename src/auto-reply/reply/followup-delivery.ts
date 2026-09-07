@@ -181,21 +181,18 @@ export function resolveFollowupDeliveryDecision(params: {
     sentTargets: result.messagingToolSentTargets,
     sentTexts: result.messagingToolSentTexts,
   });
-  const hasExplicitlyDeliverablePayload = payloads.some(
-    (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
-  );
-  const recovery =
-    hasExplicitlyDeliverablePayload || accounting.terminalFailurePayload
-      ? ({ kind: "none" } as const)
-      : resolveStrandedReplyRecovery({
-          base: turn.queued,
-          finalText: assistantFinalText,
-          sourceReplyDeliveryMode: sourcePolicy.sourceReplyDeliveryMode,
-          sendPolicyDenied: sourcePolicy.sendPolicyDenied,
-          successfulSourceReplyDelivery: completedSourceDelivery,
-          isHeartbeat: opts?.isHeartbeat === true,
-          isRoomEvent: false,
-        });
+  const recovery = accounting.terminalFailurePayload
+    ? ({ kind: "none" } as const)
+    : resolveStrandedReplyRecovery({
+        base: turn.queued,
+        payloads,
+        finalText: assistantFinalText,
+        sourceReplyDeliveryMode: sourcePolicy.sourceReplyDeliveryMode,
+        sendPolicyDenied: sourcePolicy.sendPolicyDenied,
+        successfulSourceReplyDelivery: completedSourceDelivery,
+        isHeartbeat: opts?.isHeartbeat === true,
+        isRoomEvent: false,
+      });
   if (recovery.kind === "retry") {
     return {
       kind: "retry-source-delivery",
@@ -261,7 +258,10 @@ export function resolveFollowupDeliveryDecision(params: {
   const hasTerminalPayload = payloads.some(
     (payload) =>
       isReplyPayloadTerminalContent(payload) &&
-      (sourcePolicy.sourceReplyDeliveryMode !== "message_tool_only" ||
+      // Private terminal content is not an empty result. Source visibility is
+      // enforced below; genuine failures and yield acknowledgments still win.
+      ((!accounting.terminalFailurePayload && result.meta?.yielded !== true) ||
+        sourcePolicy.sourceReplyDeliveryMode !== "message_tool_only" ||
         getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true),
   );
   if (!hasTerminalPayload && fallbackPayload) {

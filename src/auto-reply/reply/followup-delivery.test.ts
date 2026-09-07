@@ -483,7 +483,7 @@ describe("resolveFollowupDeliveryDecision", () => {
     });
   });
 
-  it("delivers a yield acknowledgment in configured group message-tool-only mode", () => {
+  it("delivers a yield acknowledgment despite private partial output in group message-tool-only mode", () => {
     const turn = createTurn();
     turn.queued.originatingChatType = "group";
     turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
@@ -500,7 +500,7 @@ describe("resolveFollowupDeliveryDecision", () => {
       resolveFollowupDeliveryDecision({
         turn,
         execution,
-        accounting: createAccounting(),
+        accounting: createAccounting([{ text: "Private partial output." }]),
       }),
     ).toMatchObject({
       kind: "deliver",
@@ -841,12 +841,14 @@ describe("resolveFollowupDeliveryDecision", () => {
   );
 
   it.each([
-    { label: "accidental", intentionalTerminalCompletion: undefined },
-    { label: "intentional terminal tool", intentionalTerminalCompletion: "tool-batch" as const },
-  ])(
-    "accounts for an $label empty message-tool-only completion",
-    ({ intentionalTerminalCompletion }) => {
+    ["accidental", undefined, undefined],
+    ["intentional terminal tool", "tool-batch", undefined],
+    ["private terminal diagnostic", undefined, "Private terminal diagnostic."],
+  ] as const)(
+    "accounts for %s message-tool-only completion",
+    (_label, intentionalTerminalCompletion, privateText) => {
       const turn = createTurn();
+      turn.queued.originatingChatType = privateText ? "group" : turn.queued.originatingChatType;
       turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
       const execution = createSettledExecution();
       if (execution.outcome.kind === "settled" && intentionalTerminalCompletion) {
@@ -856,9 +858,9 @@ describe("resolveFollowupDeliveryDecision", () => {
       const decision = resolveFollowupDeliveryDecision({
         turn,
         execution,
-        accounting: createAccounting(),
+        accounting: createAccounting(privateText ? [{ text: privateText }] : []),
       });
-      if (intentionalTerminalCompletion) {
+      if (intentionalTerminalCompletion || privateText) {
         expect(decision).toEqual({ kind: "suppress", reason: "message-tool-only" });
         return;
       }
@@ -866,10 +868,7 @@ describe("resolveFollowupDeliveryDecision", () => {
       expect(decision).toMatchObject({
         kind: "deliver",
         payloads: [
-          {
-            text: expect.stringContaining("did not produce a visible reply"),
-            isError: true,
-          },
+          { text: expect.stringContaining("did not produce a visible reply"), isError: true },
         ],
       });
       if (decision.kind === "deliver") {

@@ -179,6 +179,34 @@ describe("Telegram native command dispatch delivery", () => {
     expect(deliveryMocks.deliverReplies).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    "honors native send-policy denial when fallback delivery fails=%s",
+    async (deliveryFailed) => {
+      dispatchChannelInboundTurnMock.mockImplementationOnce(async (plan) => {
+        plan.dispatcherOptions?.onSkip?.({}, { kind: "final", reason: "empty" });
+        if (deliveryFailed) {
+          plan.delivery.onError?.(new Error("Final delivery failed"), { kind: "final" });
+        }
+        return {
+          admission: { kind: "dispatch" },
+          dispatched: true,
+          ctxPayload: plan.ctxPayload,
+          routeSessionKey: plan.route.sessionKey,
+          dispatchResult: {
+            queuedFinal: false,
+            counts: { block: 0, final: 0, tool: 0 },
+            sendPolicyDenied: true,
+          },
+        };
+      });
+      const { handler } = registerAndResolveStatusHandler({ cfg: {} });
+
+      await handler(createTelegramPrivateCommandContext());
+
+      expect(deliveryMocks.deliverReplies).not.toHaveBeenCalled();
+    },
+  );
+
   it("retains the native fallback when message-tool-only delivery also fails", async () => {
     dispatchChannelInboundTurnMock.mockImplementationOnce(async (plan) => {
       plan.dispatcherOptions?.onSkip?.({}, { kind: "final", reason: "empty" });

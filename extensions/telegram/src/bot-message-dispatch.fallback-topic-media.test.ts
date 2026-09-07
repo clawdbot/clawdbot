@@ -200,6 +200,31 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    "honors send-policy denial when fallback delivery fails=%s",
+    async (deliveryFailed) => {
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+        dispatcherOptions.onSkip?.({}, { kind: "final", reason: "empty" });
+        if (deliveryFailed) {
+          await dispatcherOptions.onError?.(new Error("Final delivery failed"), { kind: "final" });
+        }
+        return {
+          queuedFinal: false,
+          counts: { block: 0, final: 0, tool: 0 },
+          sendPolicyDenied: true,
+        };
+      });
+
+      await dispatchWithContext({
+        cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
+        context: createMessageToolOnlyGroupContext(),
+        streamMode: "off",
+      });
+
+      expect(deliverReplies).not.toHaveBeenCalled();
+    },
+  );
+
   it("retains the failure fallback when message-tool-only delivery also fails", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       dispatcherOptions.onSkip?.({}, { kind: "final", reason: "empty" });

@@ -161,6 +161,7 @@ export async function completeReplyAgentRun(input: {
     // recovering here would duplicate that message.
     const recovery = resolveStrandedReplyRecovery({
       base: followupRun,
+      payloads: finalPayloads,
       finalText: assistantFinalText,
       sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
       sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,

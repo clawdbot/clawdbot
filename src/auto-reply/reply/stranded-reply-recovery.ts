@@ -1,6 +1,10 @@
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  isReplyPayloadTerminalContent,
+  markReplyPayloadForSourceSuppressionDelivery,
+} from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
   classifyPrivateMessageToolFinal,
@@ -28,6 +32,7 @@ type StrandedReplyRecovery =
 /** Resolve the one allowed recovery action for a final that missed source delivery. */
 export function resolveStrandedReplyRecovery(params: {
   base: FollowupRun;
+  payloads: readonly ReplyPayload[];
   finalText: string;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
   sendPolicyDenied: boolean;
@@ -35,7 +40,15 @@ export function resolveStrandedReplyRecovery(params: {
   isHeartbeat: boolean;
   isRoomEvent: boolean;
 }): StrandedReplyRecovery {
-  if (!shouldClassifyPrivateMessageToolFinal(params)) {
+  // Host-owned payloads can still be awaiting transport when completion bookkeeping runs.
+  if (
+    !shouldClassifyPrivateMessageToolFinal(params) ||
+    params.payloads.some(
+      (payload) =>
+        isReplyPayloadTerminalContent(payload) &&
+        getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
+    )
+  ) {
     return { kind: "none" };
   }
   const classification = classifyPrivateMessageToolFinal(params);
