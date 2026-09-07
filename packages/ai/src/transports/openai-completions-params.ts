@@ -448,10 +448,8 @@ export function buildOpenAICompletionsRequest(
       ) {
         params.tool_choice = "auto";
       }
-    } else {
-      if (hasToolCallHistory(context.messages)) {
-        params.tools = [];
-      }
+    } else if (hasToolCallHistory(context.messages)) {
+      params.tools = [];
     }
     if (
       compatDetection?.capabilities.usesExplicitProxyLikeEndpoint &&
