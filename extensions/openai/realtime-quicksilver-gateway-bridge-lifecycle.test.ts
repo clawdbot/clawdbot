@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import {
+  OpenAIQuicksilverAudioPeer,
+  type OpenAIQuicksilverAudioPeerCallbacks,
+} from "./realtime-quicksilver-peer.runtime.js";
+import {
   createCallResponse,
   emitSideband,
   FakeSocket,
@@ -90,6 +94,101 @@ function emitDelegation(socket: FakeSocket, id: string, text: string): void {
 }
 
 describe("OpenAI Quicksilver gateway bridge lifecycle", () => {
+  it("logs a dropped media packet without tearing down the call", async () => {
+    let peerCallbacks: OpenAIQuicksilverAudioPeerCallbacks | undefined;
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    const onClose = vi.fn();
+    const bridge = new OpenAIQuicksilverGatewayBridge(
+      {
+        providerConfig: {},
+        model: "gpt-live-1-codex",
+        voice: "marin",
+        audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+        onClose,
+        runAgentConsult: vi.fn(async () => ({ text: "done" })),
+        logger,
+        resolveAuth: vi.fn(async () => ({
+          type: "oauth" as const,
+          token: "oauth-token",
+          accountId: "account-1",
+        })),
+        createPeer: vi.fn(async (callbacks: OpenAIQuicksilverAudioPeerCallbacks) => {
+          peerCallbacks = callbacks;
+          return {
+            createOffer: vi.fn(async () => "v=offer\r\n"),
+            applyAnswer: vi.fn(async () => undefined),
+            adoptPendingAudio: vi.fn(),
+            sendAudio: vi.fn(),
+            close: vi.fn(),
+          };
+        }),
+        fetchImpl: vi.fn(async () => createCallResponse("v=answer\r\n", "rtc_media_error")),
+        webSocketFactory: () => new FakeSocket(),
+      },
+      openAIRealtimeHost,
+    );
+    try {
+      await bridge.connect();
+
+      // A single undecodable/lost RTP packet is recoverable: log and continue.
+      peerCallbacks?.onMediaError?.(
+        new Error("OpenAI GPT-Live WebRTC media failed: bad RTP packet payload"),
+      );
+
+      expect(onClose).not.toHaveBeenCalled();
+      expect(logger.debug).toHaveBeenCalledWith(
+        expect.stringContaining("GPT-Live WebRTC media packet dropped"),
+      );
+      expect(bridge.isConnected()).toBe(true);
+
+      // A terminal peer error still tears the call down.
+      peerCallbacks?.onError(new Error("GPT-Live WebRTC media connection disconnected"));
+      expect(onClose).toHaveBeenCalledWith("error");
+      expect(bridge.isConnected()).toBe(false);
+    } finally {
+      bridge.close();
+    }
+  });
+
+  it("routes per-packet media failures to onMediaError instead of onError when provided", async () => {
+    const { RtpHeader, RtpPacket } = await import("werift");
+    const onError = vi.fn();
+    const onMediaError = vi.fn();
+    const peer = await OpenAIQuicksilverAudioPeer.create({
+      callbacks: { onAudio: vi.fn(), onError, onMediaError },
+      iceServers: [],
+    });
+    type TestableAudioPeer = {
+      state: { decoder: { decode(packet: unknown): Int16Array } };
+      handleInboundRtp(packet: unknown): void;
+    };
+    const testPeer = peer as unknown as TestableAudioPeer;
+    vi.spyOn(testPeer.state.decoder, "decode").mockImplementation(() => new Int16Array(960 * 2));
+    const packet = (sequenceNumber: number, ssrc: number) =>
+      new RtpPacket(
+        new RtpHeader({
+          payloadType: 111,
+          sequenceNumber,
+          ssrc,
+          timestamp: (sequenceNumber * 960) >>> 0,
+        }),
+        Buffer.from([sequenceNumber & 0xff]),
+      );
+    try {
+      testPeer.handleInboundRtp(packet(10, 1));
+      testPeer.handleInboundRtp(packet(200, 2));
+
+      expect(onMediaError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "GPT-Live WebRTC audio source changed unexpectedly" }),
+      );
+      expect(onError).not.toHaveBeenCalled();
+    } finally {
+      peer.close();
+    }
+  });
+
   it("reports recoverable provider errors to the relay while preserving its connection", async () => {
     const onError = vi.fn();
     const onTranscript = vi.fn();

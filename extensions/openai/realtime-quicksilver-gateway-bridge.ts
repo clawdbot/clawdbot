@@ -266,6 +266,10 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       {
         onAudio: (audio) => this.config.onAudio(audio),
         onError: (error) => this.fail(error),
+        // A single undecodable/lost RTP packet must not kill a healthy call:
+        // the peer drops it and continues, so log instead of tearing down.
+        onMediaError: (error) =>
+          this.config.logger.debug(`GPT-Live WebRTC media packet dropped: ${error.message}`),
         onRtpPacket: () => this.config.onEvent?.({ direction: "server", type: "output_audio.rtp" }),
       },
       connectSignal,

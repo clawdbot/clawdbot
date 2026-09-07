@@ -45,6 +45,10 @@ type InboundRtpState = {
 export type OpenAIQuicksilverAudioPeerCallbacks = {
   onAudio: (audio: Buffer) => void;
   onError: (error: Error) => void;
+  // Per-packet media failures (decode/reorder/send of a single RTP packet).
+  // Recoverable by design: the peer drops the packet and continues. When
+  // omitted, they fall back to onError so existing hosts keep fail-fast.
+  onMediaError?: (error: Error) => void;
   onRtpPacket?: () => void;
 };
 
@@ -282,6 +286,16 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     track.onReceiveRtp.subscribe((packet) => this.handleInboundRtp(packet));
   }
 
+  private reportMediaError(error: unknown): void {
+    const mediaError = toErrorObject(error, "OpenAI GPT-Live WebRTC media failed");
+    const onMediaError = this.state.callbacks.onMediaError;
+    if (onMediaError) {
+      onMediaError(mediaError);
+      return;
+    }
+    this.state.callbacks.onError(mediaError);
+  }
+
   private handleInboundRtp(packet: WeriftRtpPacket): void {
     if (this.closed) {
       return;
@@ -322,7 +336,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       this.flushInboundReorderWindow(state);
       this.scheduleInboundFlush(state);
     } catch (error) {
-      this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
+      this.reportMediaError(error);
     }
   }
 
@@ -393,7 +407,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       try {
         this.flushInboundReorderWindow(state, true);
       } catch (error) {
-        this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
+        this.reportMediaError(error);
       }
     }, INBOUND_REORDER_DEPTH * OPUS_FRAME_DURATION_MS);
     state.flushTimer.unref?.();
@@ -468,7 +482,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       // werift queues encrypted UDP synchronously before sendRtp yields
       // (rtpSender.js:538; transport/dtls.js:455), preserving per-tick order.
       void this.state.transceiver.sender.sendRtp(rtp).catch((error: unknown) => {
-        this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
+        this.reportMediaError(error);
       });
     } catch (error) {
       this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
