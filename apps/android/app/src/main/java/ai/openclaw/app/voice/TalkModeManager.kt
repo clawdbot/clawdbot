@@ -268,6 +268,7 @@ class TalkModeManager internal constructor(
   private val currentStatus: TalkStatus get() = status.value
   val statusText: StateFlow<String> = LocaleResolvingStateFlow(status) { it.text.resolveNativeText() }
   val awaitingAgent: StateFlow<Boolean> = LocaleResolvingStateFlow(status) { it.awaitingAgent }
+  val hasFailure: StateFlow<Boolean> = LocaleResolvingStateFlow(status) { it.state == TalkStatusState.TalkFailure }
 
   private fun setStatus(
     text: NativeText,
@@ -313,7 +314,7 @@ class TalkModeManager internal constructor(
   private val interruptOnSpeech get() = configCache.get().value.interruptOnSpeech ?: false
   private var mainSessionKey: String = "main"
   private val speechLocale get() = configCache.get().value.speechLocale
-  private val realtimeRelayModelSupported get() = configCache.get().value.realtimeRelayModelSupported
+  private val useRealtimeRelay get() = configCache.get().value.useRealtimeRelay
 
   @Volatile private var pendingRunId: String? = null
   private var pendingFinal: CompletableDeferred<Boolean>? = null
@@ -413,7 +414,8 @@ class TalkModeManager internal constructor(
   fun setMainSessionKey(sessionKey: String?) {
     val trimmed = sessionKey?.trim().orEmpty()
     if (trimmed.isEmpty()) return
-    mainSessionKey = trimmed
+    // A different target retires the call, not just its displayed agent name.
+    stop(nextSessionKey = trimmed)?.invoke()
   }
 
   /** Starts or stops continuous realtime TalkMode capture. */
@@ -994,7 +996,7 @@ class TalkModeManager internal constructor(
         audioRetirement.await()
         ensureConfigLoaded()
         if (generation != startGeneration.get() || !_isEnabled.value || stopRequested) return@launch
-        if (realtimeRelayModelSupported) {
+        if (useRealtimeRelay) {
           startRealtimeRelay(generation)
         } else {
           startNativeTalk(generation)
@@ -1007,13 +1009,19 @@ class TalkModeManager internal constructor(
     }
   }
 
-  private fun stop() {
-    val cancelled =
+  private fun stop(nextSessionKey: String? = null): (() -> Unit)? {
+    val (cancelled, notifyStopped) =
       synchronized(realtimeCapturePauseLock) {
+        if (nextSessionKey != null) {
+          if (nextSessionKey == mainSessionKey) return null
+          mainSessionKey = nextSessionKey
+          _conversation.value = emptyList()
+        }
         stopRequested = true
         listeningMode = false
         activePttCaptureId = null
         startGeneration.incrementAndGet()
+        val notifyStopped = if (nextSessionKey != null) disableRealtimeModeLocked() else null
         val jobs =
           listOfNotNull(
             synchronized(finishingPttLock) { finishingPttJob },
@@ -1045,12 +1053,13 @@ class TalkModeManager internal constructor(
           completedRunTexts.clear()
         }
         retireRecognizer()
-        jobs
+        jobs to notifyStopped
       }
     // Completion handlers and SystemSpeech's beforeSpeak callback can reenter capture ownership.
     cancelled.forEach { it.cancel() }
     cancelActivePlayback()
     systemSpeech.shutdown()
+    return notifyStopped
   }
 
   private fun retireRecognizer() =
@@ -1090,6 +1099,7 @@ class TalkModeManager internal constructor(
     }
 
   private suspend fun startRealtimeRelay(generation: Long) {
+    val sessionKey = synchronized(realtimeCapturePauseLock) { mainSessionKey.ifBlank { "main" } }
     if (!isConnected()) {
       Log.w(tag, "realtime start: gateway not connected")
       disableRealtimeModeAndNotifyOwner(generation, nativeText("Gateway not connected"))
@@ -1124,10 +1134,11 @@ class TalkModeManager internal constructor(
       requestPhoneRealtimeSessionWithLanguageFallback(language) { requestedLanguage ->
         val params =
           buildJsonObject {
-            put("sessionKey", JsonPrimitive(mainSessionKey.ifBlank { "main" }))
+            put("sessionKey", JsonPrimitive(sessionKey))
             put("mode", JsonPrimitive("realtime"))
             put("transport", JsonPrimitive("gateway-relay"))
             put("brain", JsonPrimitive("agent-consult"))
+            put("consultRouting", JsonPrimitive("agent-only"))
             requestedLanguage?.let { put("language", JsonPrimitive(it)) }
           }
         lease.request("talk.session.create", params.toString(), timeoutMs = 15_000) { enqueue ->
@@ -1155,7 +1166,7 @@ class TalkModeManager internal constructor(
         realtimeAgentCoordinator.beginSession(
           RealtimeAgentSession(
             relaySessionId = sessionId,
-            sessionKey = mainSessionKey.ifBlank { "main" },
+            sessionKey = sessionKey,
           ),
         )
         realtimeSessionId = sessionId
@@ -1221,7 +1232,7 @@ class TalkModeManager internal constructor(
     val stopped =
       synchronized(realtimeCapturePauseLock) {
         if (generation != startGeneration.get()) return
-        setStatus(status)
+        setTalkFailure(status)
         stopRealtimeRelay(closeSession = false, preserveStatus = true)
         disableRealtimeModeLocked()
       }
@@ -1721,7 +1732,7 @@ class TalkModeManager internal constructor(
         }
         // Native Talk has no relay ID. A completed PTT turn may have already
         // restarted it; cancellation and empty turns still need that restart.
-        if (!realtimeRelayModelSupported && current.sessionId == null && !listeningMode) {
+        if (!useRealtimeRelay && current.sessionId == null && !listeningMode) {
           realtimeCapturePause = null
           return@synchronized RealtimeCaptureResume.Restart
         }

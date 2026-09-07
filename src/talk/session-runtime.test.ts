@@ -18,6 +18,43 @@ function expectBridgeRequest(
 }
 
 describe("realtime voice bridge session runtime", () => {
+  it.each([true, false])(
+    "requires declared readback support without changing ordinary prompts (supported=%s)",
+    (supported) => {
+      const sendUserMessage = vi.fn();
+      const onResponseRequest = vi.fn();
+      const session = createRealtimeVoiceBridgeSession({
+        provider: {
+          id: "test",
+          label: "Test",
+          isConfigured: () => true,
+          createBridge: () => makeBridge({ supportsReadback: supported, sendUserMessage }),
+        },
+        providerConfig: {},
+        audioSink: { sendAudio: vi.fn() },
+        onResponseRequest,
+      });
+      if (supported) {
+        session.sendUserMessage("Agent result", { mode: "readback" });
+        expect(sendUserMessage).toHaveBeenCalledWith("Agent result", { mode: "readback" });
+        expect(onResponseRequest).toHaveBeenCalledOnce();
+      } else {
+        expect(() => session.sendUserMessage("Agent result", { mode: "readback" })).toThrow(
+          "agent-only readback",
+        );
+        expect(sendUserMessage).not.toHaveBeenCalled();
+        expect(onResponseRequest).not.toHaveBeenCalled();
+        session.sendUserMessage("A normal model prompt");
+        expect(sendUserMessage).toHaveBeenCalledWith("A normal model prompt");
+      }
+      session.close();
+      sendUserMessage.mockClear();
+      if (supported) {
+        session.sendUserMessage("Late agent result", { mode: "readback" });
+      }
+      expect(sendUserMessage).not.toHaveBeenCalled();
+    },
+  );
   it.each(["sink", "provider", "session"] as const)(
     "fences scoped transport acknowledgments after the %s closes",
     (closing) => {

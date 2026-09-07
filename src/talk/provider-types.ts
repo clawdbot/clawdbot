@@ -347,7 +347,13 @@ export type RealtimeVoiceBrowserSession =
   | RealtimeVoiceBrowserGatewayRelaySession
   | RealtimeVoiceBrowserManagedRoomSession;
 
+export type RealtimeVoiceUserMessageOptions =
+  | { mode: "readback"; toolChoice?: never }
+  | { mode?: undefined; toolChoice?: { type: "function"; name: string } };
+
 export type RealtimeVoiceBridge = {
+  /** Readback isolates host-supplied speech from conversation context and model tools. */
+  supportsReadback?: boolean;
   supportsToolResultContinuation?: boolean;
   /** False when the provider cannot accept a tool result without starting a response. */
   supportsToolResultSuppression?: boolean;
@@ -356,10 +362,7 @@ export type RealtimeVoiceBridge = {
   connect(): Promise<void>;
   sendAudio(audio: Buffer): void;
   setMediaTimestamp(ts: number): void;
-  sendUserMessage?(
-    text: string,
-    options?: { toolChoice?: { type: "function"; name: string } },
-  ): void;
+  sendUserMessage?(text: string, options?: RealtimeVoiceUserMessageOptions): void;
   triggerGreeting?(instructions?: string): void;
   handleBargeIn?(options?: RealtimeVoiceBargeInOptions): void;
   /**

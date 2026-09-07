@@ -107,6 +107,162 @@ import kotlin.coroutines.CoroutineContext
 @Config(sdk = [34])
 class TalkModeManagerTest {
   @Test
+  fun realtimeLaunchRequiresTheSelectedAgentForEveryAnswer() =
+    runBlocking {
+      val creates = ConcurrentLinkedQueue<JsonObject>()
+      withStartedTalk(
+        sessionKey = "agent:chosen:voice-chat",
+        responseForRequest = { request, _ ->
+          if (request.getValue("method").jsonPrimitive.content == "talk.session.create") {
+            creates.add(request.getValue("params").jsonObject)
+          }
+          null
+        },
+      ) {
+        assertEquals("agent:chosen:voice-chat", creates.single()["sessionKey"]?.jsonPrimitive?.content)
+        assertEquals("agent-only", creates.single()["consultRouting"]?.jsonPrimitive?.content)
+      }
+    }
+
+  @Test
+  fun selectingAnotherAgentRetiresThePreviousTalkCall() =
+    runBlocking {
+      val closed = ConcurrentLinkedQueue<String>()
+      var ownerStopped = false
+      withStartedTalk(
+        sessionKey = "agent:first:voice-chat",
+        captureRelayStopNotification = { { isCurrent -> if (isCurrent()) ownerStopped = true } },
+        responseForRequest = { request, _ ->
+          if (request.getValue("method").jsonPrimitive.content == "talk.session.close") {
+            closed.add(
+              request
+                .getValue("params")
+                .jsonObject
+                .getValue("sessionId")
+                .jsonPrimitive.content,
+            )
+          }
+          null
+        },
+      ) { proof ->
+        proof.manager.setMainSessionKey("agent:second:voice-chat")
+        assertFalse("Changing the selected agent must end the old call", proof.manager.isEnabled.value)
+        assertTrue("The microphone owner must observe the stopped call", ownerStopped)
+        awaitTalkWork(proof) { closed.isNotEmpty() }
+        assertEquals(listOf("playback-relay"), closed.toList())
+        proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"assistant","text":"Old agent answer","final":true}""")
+        assertTrue(
+          proof.manager.conversation.value
+            .isEmpty(),
+        )
+      }
+    }
+
+  @Test
+  fun unsupportedAgentOnlyRouteFailsVisiblyWithoutNativeSpeechFallback() =
+    runBlocking {
+      installSpeechRecognitionService()
+      withStartedTalk(
+        expectFailure = true,
+        responseForRequest = { request, _ ->
+          if (request.getValue("method").jsonPrimitive.content == "talk.config") {
+            """{"config":{"talk":{"realtime":{"model":"gpt-live"}}}}"""
+          } else {
+            null
+          }
+        },
+        interceptRequest = { request, socket ->
+          if (request.getValue("method").jsonPrimitive.content == "talk.session.create") {
+            socket.send(
+              buildJsonObject {
+                put("type", "res")
+                put("id", request.getValue("id"))
+                put("ok", false)
+                put(
+                  "error",
+                  buildJsonObject {
+                    put("code", "INVALID_REQUEST")
+                    put("message", "Selected realtime route cannot provide agent-only replies")
+                  },
+                )
+              }.toString(),
+            )
+            true
+          } else {
+            false
+          }
+        },
+      ) { proof ->
+        assertFalse(proof.manager.isEnabled.value)
+        assertTrue(proof.manager.hasFailure.value)
+        assertTrue(
+          proof.manager.statusText.value
+            .contains("cannot provide agent-only replies"),
+        )
+        assertNull(ShadowSpeechRecognizer.getLatestSpeechRecognizer())
+        assertFalse(proof.synthesizer.requested.isCompleted)
+      }
+    }
+
+  @Test
+  fun agentSwitchClosesALateCreateOnItsOriginalConnection() =
+    runBlocking {
+      val creates = AtomicLong()
+      val pending = CompletableDeferred<Pair<JsonObject, WebSocket>>()
+      val closed = ConcurrentLinkedQueue<String>()
+      withStartedTalk(
+        sessionKey = "agent:first:voice-chat",
+        responseForRequest = { request, _ ->
+          if (request.getValue("method").jsonPrimitive.content == "talk.session.close") {
+            closed.add(
+              request
+                .getValue("params")
+                .jsonObject
+                .getValue("sessionId")
+                .jsonPrimitive.content,
+            )
+          }
+          null
+        },
+        interceptRequest = { request, socket ->
+          if (request.getValue("method").jsonPrimitive.content == "talk.session.create" && creates.incrementAndGet() > 1) {
+            pending.complete(request to socket)
+            true
+          } else {
+            false
+          }
+        },
+      ) { proof ->
+        proof.manager.setEnabled(false)
+        proof.drainCancelledCapture()
+        proof.scheduler.runCurrent()
+        proof.manager.setEnabled(true)
+        awaitTalkWork(proof) { pending.isCompleted }
+        val (request, socket) = pending.await()
+        assertEquals(
+          "agent:first:voice-chat",
+          request
+            .getValue("params")
+            .jsonObject
+            .getValue("sessionKey")
+            .jsonPrimitive.content,
+        )
+        proof.manager.setMainSessionKey("agent:second:voice-chat")
+        socket.send(
+          buildJsonObject {
+            put("type", "res")
+            put("id", request.getValue("id"))
+            put("ok", true)
+            put("payload", buildJsonObject { put("relaySessionId", "late-first-agent") })
+          }.toString(),
+        )
+        awaitTalkWork(proof) { closed.contains("late-first-agent") }
+        assertFalse(proof.manager.isEnabled.value)
+        assertFalse(proof.manager.isListening.value)
+      }
+    }
+
+  @Test
   fun phoneRealtimeRetriesWithoutLanguageWhenOlderGatewayRejectsCreateParams() =
     runTest {
       val requestedLanguages = mutableListOf<String?>()
@@ -994,7 +1150,7 @@ class TalkModeManagerTest {
             "talk",
             buildJsonObject {
               put("speechLocale", locale)
-              put("realtime", buildJsonObject { put("model", "gpt-live") })
+              put("realtime", buildJsonObject { put("mode", "stt-tts") })
               interrupt?.let { put("interruptOnSpeech", it) }
             },
           )
@@ -1248,7 +1404,7 @@ class TalkModeManagerTest {
       responseForRequest = { request, _ ->
         when (request.getValue("method").jsonPrimitive.content) {
           "talk.config" -> {
-            """{"config":{"talk":{"realtime":{"model":"gpt-live"},"silenceTimeoutMs":800}}}"""
+            """{"config":{"talk":{"realtime":{"mode":"stt-tts"},"silenceTimeoutMs":800}}}"""
           }
 
           "talk.session.create" -> {
@@ -2542,6 +2698,7 @@ class TalkModeManagerTest {
 
   private suspend fun withStartedTalk(
     sessionKey: String = "main",
+    expectFailure: Boolean = false,
     captureRelayStopNotification: () -> ((() -> Boolean) -> Unit) = { {} },
     responseForRequest: (JsonObject, WebSocket) -> String? = { _, _ -> null },
     interceptRequest: (JsonObject, WebSocket) -> Boolean = { _, _ -> false },
@@ -2654,7 +2811,7 @@ class TalkModeManagerTest {
         manager.setMainSessionKey(sessionKey)
         manager.setEnabled(true)
         val deadline = System.nanoTime() + 5_000_000_000L
-        while (!manager.isListening.value) {
+        while (if (expectFailure) manager.isEnabled.value else !manager.isListening.value) {
           scheduler.runCurrent()
           check(System.nanoTime() < deadline) { "Real gateway session did not start realtime Talk: ${manager.statusText.value}" }
           withContext(Dispatchers.Default) { delay(10) }

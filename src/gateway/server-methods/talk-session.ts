@@ -153,6 +153,16 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
     const transport = normalizeTalkSessionTransport({ mode, transport: params.transport });
     const brain = normalizeTalkSessionBrain({ mode, brain: params.brain });
 
+    if (
+      params.consultRouting &&
+      (mode !== "realtime" || transport !== "gateway-relay" || brain !== "agent-consult")
+    ) {
+      respondInvalidRequest(
+        respond,
+        "Forced agent consultation requires realtime Gateway relay with agent-consult brain",
+      );
+      return;
+    }
     if (transport === "webrtc" || transport === "provider-websocket") {
       respondInvalidRequest(
         respond,
@@ -283,7 +293,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           ...resolution,
           cfg: runtimeConfig,
           launchOptions,
-          consultRouting: realtimeConfig.consultRouting,
+          consultRouting: params.consultRouting ?? realtimeConfig.consultRouting,
         });
         if (relayLaunch.error) {
           // GPT-Live delegates natively; forced transcript consults are a GA-model mode.
@@ -344,6 +354,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           voice: launchOptions.voice,
           language: normalizeOptionalLowercaseString(params.language),
           forceAgentConsultOnFinalTranscript: relayLaunch.forceAgentConsultOnFinalTranscript,
+          ...(relayLaunch.requireAgentReadback ? { requireAgentReadback: true } : {}),
         });
         rememberUnifiedTalkSession(session.relaySessionId, {
           kind: "realtime-relay",

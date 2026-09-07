@@ -27,6 +27,7 @@ import {
 } from "./realtime-quicksilver-sideband.js";
 import {
   buildOpenAIQuicksilverSession,
+  buildOpenAIQuicksilverSidebandUrl,
   createOpenAIQuicksilverCall,
   type OpenAIQuicksilverAuth,
   type OpenAIQuicksilverRequestIds,
@@ -37,11 +38,13 @@ const QUICKSILVER_SESSION_TTL_MS = 30 * 60_000;
 const QUICKSILVER_CONNECT_TIMEOUT_MS = 30_000;
 const WEBSOCKET_OPEN = 1;
 
-type OpenAIQuicksilverBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
+export type OpenAIQuicksilverBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   model: string;
   voice: string;
   logger: Pick<PluginLogger, "debug" | "warn">;
   resolveAuth: () => Promise<OpenAIQuicksilverAuth>;
+  /** Host-only control policy; ordinary native calls retain delegation behavior. */
+  controlMode?: "capture" | "readback";
   createPeer?: (
     callbacks: OpenAIQuicksilverAudioPeerCallbacks,
     signal: AbortSignal,
@@ -49,6 +52,12 @@ type OpenAIQuicksilverBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   fetchImpl?: typeof fetch;
   webSocketFactory?: OpenAIQuicksilverSocketFactory;
   connectTimeoutMs?: number;
+};
+
+type AllocatedCall = {
+  auth: OpenAIQuicksilverAuth;
+  requestIds: OpenAIQuicksilverRequestIds;
+  url: string;
 };
 
 type ActiveSideband = {
@@ -101,6 +110,9 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
 
   private abortController = new AbortController();
   private connectPromise: Promise<void> | undefined;
+  private pendingCreation: Promise<unknown> | undefined;
+  private cleanupPromise: Promise<void> | undefined;
+  private allocatedCall: AllocatedCall | undefined;
   private delegations: OpenAIQuicksilverDelegationController | undefined;
   private connected = false;
   private closed = false;
@@ -115,10 +127,11 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     private readonly config: OpenAIQuicksilverBridgeConfig,
     private readonly runtime: OpenAIRealtimeHost,
   ) {
-    if (config.runAgentConsult) {
+    if (config.runAgentConsult || config.controlMode) {
       this.delegations = new OpenAIQuicksilverDelegationController(
         {
           getSocket: () => this.sideband?.socket,
+          controlMode: config.controlMode,
           handleDelegationInput: config.handleDelegationInput,
           logger: config.logger,
           onError: config.onError,
@@ -134,7 +147,16 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
               this.config.onReady?.();
             }
           },
-          onTranscript: (role, text, done) => this.config.onTranscript?.(role, text, done),
+          onTranscript: (role, text, done) => {
+            if (this.config.controlMode === "readback" && role === "assistant" && done) {
+              // Flush packets already held by the reorder window before the
+              // isolated output owner retires this call on native turn.done.
+              this.peer?.flushInboundAudio();
+            }
+            if (!this.closed && !this.abortController.signal.aborted) {
+              this.config.onTranscript?.(role, text, done);
+            }
+          },
           onWireEventType: (eventType) => {
             this.config.onEvent?.({ direction: "server", type: eventType });
             if (eventType === "output_audio_buffer.cleared") {
@@ -157,7 +179,20 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     return this.connectPromise;
   }
 
+  /** Serializes replacement even when a provider/factory ignores startup cancellation. */
+  async waitForPendingResources(): Promise<void> {
+    await this.pendingCreation?.catch(() => undefined);
+    await this.cleanupPromise;
+  }
+
   sendAudio(audio: Buffer): void {
+    if (
+      this.closed ||
+      this.abortController.signal.aborted ||
+      this.config.controlMode === "readback"
+    ) {
+      return;
+    }
     if (this.peer) {
       this.peer.sendAudio(audio);
     } else if (!this.closed && !this.abortController.signal.aborted) {
@@ -187,7 +222,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   }
 
   private async connectInternal(): Promise<void> {
-    if (!this.config.runAgentConsult) {
+    if (!this.config.runAgentConsult && !this.config.controlMode) {
       throw new Error("OpenAI GPT-Live gateway relay requires the Gateway agent-consult runtime");
     }
     const audioFormat = this.config.audioFormat;
@@ -214,16 +249,35 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         });
       const peerPromise = createPeer(
         {
-          onAudio: (audio) => this.config.onAudio(audio),
-          onError: (error) => this.fail(error),
-          onRtpPacket: () =>
-            this.config.onEvent?.({ direction: "server", type: "output_audio.rtp" }),
+          onAudio: (audio) => {
+            if (
+              !this.closed &&
+              !this.abortController.signal.aborted &&
+              this.config.controlMode !== "capture"
+            ) {
+              this.config.onAudio(audio);
+            }
+          },
+          onError: (error) => {
+            if (!this.closed) {
+              this.fail(error);
+            }
+          },
+          onRtpPacket: () => {
+            if (
+              !this.closed &&
+              !this.abortController.signal.aborted &&
+              this.config.controlMode !== "capture"
+            ) {
+              this.config.onEvent?.({ direction: "server", type: "output_audio.rtp" });
+            }
+          },
         },
         connectSignal,
       );
       // A factory can finish after the deadline. Close that late peer because the
       // timed-out connect path can no longer adopt or release it synchronously.
-      void peerPromise.then(
+      this.pendingCreation = peerPromise.then(
         (peer) => {
           if (connectSignal.aborted || this.closed) {
             peer.close();
@@ -246,25 +300,39 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         sessionId: randomUUID(),
         threadId: randomUUID(),
       };
-      const call = await waitForConnectStep(
-        createOpenAIQuicksilverCall(
-          {
-            auth,
-            requestIds,
-            sdp: offerSdp,
-            session: buildOpenAIQuicksilverSession({
+      const callPromise = createOpenAIQuicksilverCall(
+        {
+          auth,
+          requestIds,
+          sdp: offerSdp,
+          session: {
+            ...buildOpenAIQuicksilverSession({
               model: this.config.model,
               hostControlsInput: Boolean(this.config.handleDelegationInput),
               instructions: this.config.instructions,
               voice: this.config.voice,
             }),
-            signal: connectSignal,
-            fetchImpl: this.config.fetchImpl,
+            // Existing native ack_filler is optional speech, not mandatory
+            // delegation. Host-owned capture/readback must not produce it.
+            ...(this.config.controlMode
+              ? { delegation: { type: "client" as const, ack_filler: false as const } }
+              : {}),
           },
-          this.runtime,
-        ),
-        connectSignal,
+          signal: connectSignal,
+          fetchImpl: this.config.fetchImpl,
+          onCallAllocated: (callId) => {
+            const allocated = { auth, requestIds, url: buildOpenAIQuicksilverSidebandUrl(callId) };
+            if (connectSignal.aborted || this.closed) {
+              this.cleanupPromise = this.closeAllocatedCall(allocated);
+            } else {
+              this.allocatedCall = allocated;
+            }
+          },
+        },
+        this.runtime,
       );
+      this.pendingCreation = callPromise;
+      const call = await waitForConnectStep(callPromise, connectSignal);
       if (call.kind !== "gpt-live") {
         throw new Error("GPT-Live gateway relay unexpectedly used the GA realtime call shape");
       }
@@ -287,6 +355,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         connected.socket.close(1000, "session stopped");
         throw connectSignal.reason;
       }
+      this.allocatedCall = undefined;
       this.sideband = { socket: connected.socket, requestIds };
       this.attachSidebandHandlers(connected.socket);
       const terminalEvent = connected.detachBuffer();
@@ -303,8 +372,36 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         throw new Error(describeSidebandClose(terminalEvent.code, reason));
       }
     } catch (error) {
+      this.closed = true;
       this.releaseResources("abort");
       throw toErrorObject(error, "OpenAI GPT-Live gateway relay failed");
+    }
+  }
+
+  private async closeAllocatedCall(call: AllocatedCall): Promise<void> {
+    // Native calls expose session.close on their authenticated sideband, not a
+    // GA hangup endpoint. Reattach only to retire a call allocated after cancellation.
+    try {
+      const connected = await connectOpenAIQuicksilverSideband(
+        {
+          ...call,
+          createSocket:
+            this.config.webSocketFactory ?? ((url, options) => new WebSocket(url, options)),
+          signal: AbortSignal.timeout(
+            this.config.connectTimeoutMs ?? QUICKSILVER_CONNECT_TIMEOUT_MS,
+          ),
+        },
+        this.runtime,
+      );
+      connected.socket.on("error", () => undefined);
+      connected.detachBuffer();
+      try {
+        connected.socket.send(JSON.stringify({ type: "session.close" }));
+      } finally {
+        connected.socket.close(1000, "session closed");
+      }
+    } catch {
+      this.config.logger.warn("GPT-Live cancelled call could not be closed over its sideband");
     }
   }
 
@@ -325,7 +422,9 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   }
 
   private handleSidebandFrame(data: RawData, isBinary: boolean): void {
-    this.delegations?.handleFrame(data, isBinary);
+    if (!this.closed && !this.abortController.signal.aborted) {
+      this.delegations?.handleFrame(data, isBinary);
+    }
   }
 
   private scheduleExpiry(ttlMs: number): void {
@@ -372,6 +471,11 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       this.delegations?.stop(new Error("GPT-Live delegation stopped"));
     }
     this.abortController.abort(new Error("GPT-Live gateway relay bridge closed"));
+    const allocatedCall = this.allocatedCall;
+    this.allocatedCall = undefined;
+    if (allocatedCall) {
+      this.cleanupPromise = this.closeAllocatedCall(allocatedCall);
+    }
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = undefined;

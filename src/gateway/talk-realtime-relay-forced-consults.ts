@@ -167,7 +167,6 @@ export function scheduleForcedAgentConsult(
     if (!session.toolCalls.tryAdmit([handle.id])) {
       return;
     }
-    const turnId = ensureRelayTurn(session);
     const callId = handle.id;
     const itemId = `forced-consult-item-${randomUUID()}`;
     session.harness.forcedConsults.markStarted(handle);
@@ -175,6 +174,12 @@ export function scheduleForcedAgentConsult(
       { audioPlaybackActive: true, force: true },
       noFallbackRelayOutputFlush,
     );
+    // Provider callbacks may finish the old turn or close the relay synchronously.
+    // Claim the new consult turn only after that retirement and a live-owner check.
+    if (relaySessions.get(session.id) !== session) {
+      return;
+    }
+    const turnId = ensureRelayTurn(session);
     broadcastToOwner(session.context, session.connId, {
       relaySessionId: session.id,
       type: "toolCall",
@@ -377,7 +382,7 @@ export function submitForcedTalkRealtimeRelayToolResult(
   }
   const final = params.options?.willContinue !== true;
   if (!final) {
-    if (isWorkingToolResult(params.result)) {
+    if (!session.requireAgentReadback && isWorkingToolResult(params.result)) {
       session.bridge.sendUserMessage(buildForcedConsultCheckingPrompt());
     }
     broadcastToolResultToOwner(session, {
@@ -419,7 +424,11 @@ export function submitForcedTalkRealtimeRelayToolResult(
     }
     const hasNativeCalls = session.harness.forcedConsults.nativeCallIds(forcedConsult).length > 0;
     if (text && (!hasNativeCalls || providerOptions)) {
-      session.bridge.sendUserMessage(buildForcedConsultSpeechPrompt(text));
+      if (session.requireAgentReadback) {
+        session.bridge.sendUserMessage(text, { mode: "readback" });
+      } else {
+        session.bridge.sendUserMessage(buildForcedConsultSpeechPrompt(text));
+      }
     }
     broadcastToolResultToOwner(session, {
       callId: params.callId,

@@ -40,6 +40,7 @@ function createBridge(params: {
         createOffer: vi.fn(async () => "v=offer\r\n"),
         applyAnswer: vi.fn(async () => undefined),
         adoptPendingAudio: vi.fn(),
+        flushInboundAudio: vi.fn(),
         sendAudio: vi.fn(),
         close: vi.fn(),
       })),
@@ -186,4 +187,51 @@ describe("OpenAI Quicksilver gateway bridge lifecycle", () => {
       }
     },
   );
+
+  it("treats a normal upstream sideband close as completion", async () => {
+    let socket: FakeSocket | undefined;
+    const onClose = vi.fn();
+    const onError = vi.fn();
+    const bridge = new OpenAIQuicksilverGatewayBridge(
+      {
+        providerConfig: {},
+        model: "gpt-live-1-codex",
+        voice: "marin",
+        audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+        onClose,
+        onError,
+        runAgentConsult: vi.fn(async () => ({ text: "done" })),
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        resolveAuth: vi.fn(async () => ({
+          type: "oauth" as const,
+          token: "oauth-token",
+          accountId: "account-1",
+        })),
+        createPeer: vi.fn(async () => ({
+          createOffer: vi.fn(async () => "v=offer\r\n"),
+          applyAnswer: vi.fn(async () => undefined),
+          adoptPendingAudio: vi.fn(),
+          flushInboundAudio: vi.fn(),
+          sendAudio: vi.fn(),
+          close: vi.fn(),
+        })),
+        fetchImpl: vi.fn(async () => createCallResponse("v=answer\r\n", "rtc_close")),
+        webSocketFactory: () => {
+          socket = new FakeSocket();
+          return socket;
+        },
+      },
+      openAIRealtimeHost,
+    );
+
+    await bridge.connect();
+    if (!socket) {
+      throw new Error("expected sideband socket");
+    }
+    socket.close(1000, "complete");
+    expect(onError).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledWith("completed");
+  });
 });

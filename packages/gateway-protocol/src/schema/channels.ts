@@ -302,6 +302,8 @@ export const TalkSessionCreateParamsSchema = closedObject({
   mode: Type.Optional(TalkModeSchema),
   transport: Type.Optional(TalkTransportSchema),
   brain: Type.Optional(TalkBrainSchema),
+  // A caller may require agent-owned answers, never weaken a saved forced-consult policy.
+  consultRouting: Type.Optional(Type.Literal("agent-only")),
   ttlMs: Type.Optional(Type.Integer({ minimum: 1000, maximum: 3600000 })),
 });
 

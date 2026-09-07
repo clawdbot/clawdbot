@@ -99,7 +99,7 @@ describe("OpenAI realtime voice provider routing", () => {
 
   it.each([
     {
-      $name: "browser capability projection",
+      name: "browser capability projection",
       surface: "browser" as const,
       expected: {
         transports: ["webrtc", "gateway-relay"],
@@ -109,7 +109,7 @@ describe("OpenAI realtime voice provider routing", () => {
       },
     },
     {
-      $name: "gateway-relay capability projection",
+      name: "gateway-relay capability projection",
       surface: "gateway-relay" as const,
       expected: {
         transports: ["webrtc", "gateway-relay"],
@@ -236,7 +236,7 @@ describe("OpenAI realtime voice provider routing", () => {
 
   it.each([
     {
-      $name: "provider | gpt-live-1-mini | ChatGPT OAuth | standard endpoint | not ready",
+      name: "provider | gpt-live-1-mini | ChatGPT OAuth | standard endpoint | not ready",
       surface: "provider" as const,
       providerConfig: { model: "gpt-live-1-mini" },
       agentId: "main",
@@ -244,7 +244,7 @@ describe("OpenAI realtime voice provider routing", () => {
       expectAgentDir: false,
     },
     {
-      $name: "gateway-relay | gpt-live-1-mini | ChatGPT OAuth | standard endpoint | not ready",
+      name: "gateway-relay | gpt-live-1-mini | ChatGPT OAuth | standard endpoint | not ready",
       surface: "gateway-relay" as const,
       providerConfig: { model: "gpt-live-1-mini" },
       agentId: "main",
@@ -252,7 +252,7 @@ describe("OpenAI realtime voice provider routing", () => {
       expectAgentDir: false,
     },
     {
-      $name: "gateway-relay | gpt-live-1-mini | ChatGPT OAuth | Azure endpoint | not ready",
+      name: "gateway-relay | gpt-live-1-mini | ChatGPT OAuth | Azure endpoint | not ready",
       surface: "gateway-relay" as const,
       providerConfig: {
         model: "gpt-live-1-mini",
@@ -264,7 +264,7 @@ describe("OpenAI realtime voice provider routing", () => {
       expectAgentDir: false,
     },
     {
-      $name: "browser | gpt-live-1-mini | ChatGPT OAuth | standard endpoint | not ready",
+      name: "browser | gpt-live-1-mini | ChatGPT OAuth | standard endpoint | not ready",
       surface: "browser" as const,
       providerConfig: { model: "gpt-live-1-mini" },
       agentId: "main",
@@ -272,17 +272,15 @@ describe("OpenAI realtime voice provider routing", () => {
       expectAgentDir: false,
     },
     {
-      $name:
-        "gateway-relay | gpt-realtime-2.1 | Platform API key | standard endpoint | not applicable",
+      name: "gateway-relay | gpt-realtime-2.1 | Platform API key | standard endpoint | ready",
       surface: "gateway-relay" as const,
       providerConfig: { model: "gpt-realtime-2.1", apiKey: "test-api-key-platform" },
       agentId: "main",
-      expected: undefined,
+      expected: true,
       expectAgentDir: false,
     },
     {
-      $name:
-        "gateway-relay | gpt-realtime-2.1 | Platform API key | Azure endpoint | not applicable",
+      name: "gateway-relay | gpt-realtime-2.1 | Platform API key | Azure endpoint | not applicable",
       surface: "gateway-relay" as const,
       providerConfig: {
         model: "gpt-realtime-2.1",
@@ -294,8 +292,7 @@ describe("OpenAI realtime voice provider routing", () => {
       expectAgentDir: false,
     },
     {
-      $name:
-        "gateway-relay | gpt-live-1-codex | Platform API key + OAuth | Azure endpoint | not ready",
+      name: "gateway-relay | gpt-live-1-codex | Platform API key + OAuth | Azure endpoint | not ready",
       surface: "gateway-relay" as const,
       providerConfig: {
         model: "gpt-live-1-codex",
@@ -307,8 +304,7 @@ describe("OpenAI realtime voice provider routing", () => {
       expectAgentDir: false,
     },
     {
-      $name:
-        "gateway-relay | gpt-live-1-mini | Platform API key + OAuth | standard endpoint | not ready",
+      name: "gateway-relay | gpt-live-1-mini | Platform API key + OAuth | standard endpoint | not ready",
       surface: "gateway-relay" as const,
       providerConfig: { model: "gpt-live-1-mini", apiKey: "test-api-key-platform" },
       agentId: "main",
@@ -316,7 +312,7 @@ describe("OpenAI realtime voice provider routing", () => {
       expectAgentDir: false,
     },
     {
-      $name: "browser | gpt-live-1-mini | Platform API key + OAuth | standard endpoint | not ready",
+      name: "browser | gpt-live-1-mini | Platform API key + OAuth | standard endpoint | not ready",
       surface: "browser" as const,
       providerConfig: { model: "gpt-live-1-mini", apiKey: "test-api-key-platform" },
       agentId: "main",
@@ -324,7 +320,7 @@ describe("OpenAI realtime voice provider routing", () => {
       expectAgentDir: false,
     },
     {
-      $name: "gateway-relay | gpt-live-1-codex | ChatGPT OAuth | standard endpoint | ready",
+      name: "gateway-relay | gpt-live-1-codex | ChatGPT OAuth | standard endpoint | ready",
       surface: "gateway-relay" as const,
       providerConfig: { model: "gpt-live-1-codex" },
       agentId: "main",
@@ -332,8 +328,7 @@ describe("OpenAI realtime voice provider routing", () => {
       expectAgentDir: false,
     },
     {
-      $name:
-        "gateway-relay | gpt-live-1-codex | voice-agent ChatGPT OAuth | standard endpoint | ready",
+      name: "gateway-relay | gpt-live-1-codex | voice-agent ChatGPT OAuth | standard endpoint | ready",
       surface: "gateway-relay" as const,
       providerConfig: { model: "gpt-live-1-codex" },
       agentId: "voice-agent",
@@ -341,7 +336,7 @@ describe("OpenAI realtime voice provider routing", () => {
       expectAgentDir: true,
     },
     {
-      $name: "browser | gpt-live-1-codex | ChatGPT OAuth | standard endpoint | ready",
+      name: "browser | gpt-live-1-codex | ChatGPT OAuth | standard endpoint | ready",
       surface: "browser" as const,
       providerConfig: { model: "gpt-live-1-codex" },
       agentId: "main",
@@ -415,7 +410,36 @@ describe("OpenAI realtime voice provider routing", () => {
     );
   });
 
-  it("rejects forced consult routing for prefix-routed gpt-live sessions", () => {
+  it("uses isolated host readback only for suppressed native auto-response", () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    for (const autoRespondToAudio of [false, true, undefined]) {
+      const bridge = provider.createBridge({
+        providerConfig: { model: "gpt-live-1", voice: "juniper" },
+        autoRespondToAudio,
+        runAgentConsult: vi.fn(async () => ({ text: "agent result" })),
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+      });
+      expect(bridge.supportsReadback === true).toBe(autoRespondToAudio === false);
+      bridge.close();
+    }
+    expect(resolveProviderAuthProfileApiKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps suppressed backend callers on their existing non-Gateway transport", () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { model: "gpt-live-1", apiKey: "test-api-key-platform" },
+      autoRespondToAudio: false,
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    expect(bridge.supportsReadback).not.toBe(true);
+    bridge.close();
+    expect(resolveProviderAuthProfileApiKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("admits forced consult routing for prefix-routed gpt-live sessions", () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const internalApi = readInternalRealtimeVoiceProviderApi(provider);
 
@@ -424,7 +448,7 @@ describe("OpenAI realtime voice provider routing", () => {
         providerConfig: { model: "gpt-live-future-alias" },
         autoRespondToAudio: false,
       }),
-    ).toContain("cannot use forced agent consult routing");
+    ).toBeUndefined();
     expect(
       internalApi.validateGatewayRelayLaunch({
         providerConfig: { model: "gpt-realtime-2.1" },
@@ -489,6 +513,30 @@ describe("OpenAI realtime voice provider routing", () => {
     expect(capabilities.supportsToolCalls).toBe(false);
     expect(fixture.createBrowserSession).not.toHaveBeenCalled();
     expect(resolveProviderAuthProfileApiKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("admits GA OAuth only for Gateway-owned relay media, not browser sideband control", () => {
+    isProviderAuthProfileConfiguredMock.mockImplementation(
+      ({ profileTypes }: { profileTypes?: readonly string[] }) =>
+        profileTypes?.includes("oauth") === true,
+    );
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const api = readInternalRealtimeVoiceProviderApi(provider);
+    const params = { cfg: {}, providerConfig: { model: "gpt-realtime-2.1" } };
+    expect(api.isGatewayRelayConfigured(params)).toBe(true);
+    expect(api.resolveBrowserSessionCapabilities(params).supportsGatewayControl).not.toBe(true);
+    for (const azure of [
+      { azureEndpoint: "https://azure.example" },
+      { azureDeployment: "deployment" },
+      { azureApiVersion: "2024-10-01-preview" },
+    ]) {
+      expect(
+        api.isGatewayRelayConfigured({
+          ...params,
+          providerConfig: { ...params.providerConfig, ...azure },
+        }),
+      ).toBeUndefined();
+    }
   });
 
   it("does not advertise GA Gateway control for OAuth-only browser auth", () => {

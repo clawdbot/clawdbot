@@ -1115,15 +1115,34 @@ catalog, API-key auth, and dynamic model resolution.
         confirming a final result or clearing the linked run; reject it when
         submission fails.
         Set `supportsToolResultSuppression: false` when the provider cannot
-        honor `options.suppressResponse`. OpenClaw then avoids suppression for
-        internal forced-consult and cancellation results, and rejects direct
-        suppressed-result requests instead of silently starting a response.
+        honor `options.suppressResponse`. Ordinary sessions avoid unsupported
+        suppression, while agent-only relay sessions reject that bridge before
+        connecting. Direct suppressed-result requests also fail instead of
+        silently starting a response.
         Consumers of `createRealtimeVoiceBridgeSession` may likewise return a
         promise from `onToolCall`; synchronous throws and rejections are routed
         to the session's `onError` callback.
         The host may pass `sendUserMessage(text, { toolChoice })` while the
         response state is idle to force one named function for that response;
         later responses return to the session's configured tool choice.
+
+        A bridge can declare `supportsReadback: true` when it implements
+        `sendUserMessage(text, { mode: "readback" })` as isolated speech of
+        host-supplied text, not a new question. Exclude conversation history,
+        disable model tools, and request verbatim readback without added answers.
+        Cancellation must discard queued readbacks and fence late output callbacks.
+        The session facade rejects readback requests on bridges without this
+        capability; it never falls back to ordinary model generation. Agent-only
+        relay calls require this capability and prevent microphone-triggered
+        model answers from reaching the client. A provider without an automatic
+        response suppression control must isolate capture from output: permanently
+        discard capture-call assistant audio and transcripts, and create output
+        from approved host text only. Temporarily unmuting an uncorrelated capture
+        stream after a result is not sufficient. Pending call allocations must be
+        retired before replacement. Declare capabilities for the actual wire
+        dialect, not every transport offered by the provider. Other manual model
+        responses retain their existing behavior.
+
         Set `handlesInputAudioBargeIn` only when provider VAD confirms an
         interruption by calling `onClearAudio("barge-in")`. Providers that omit
         the flag use OpenClaw's local input-audio fallback detection.

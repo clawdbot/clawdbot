@@ -2207,6 +2207,56 @@ describe("talk.session unified handlers", () => {
     expect(closeRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
+  it("lets a scoped caller require agent-only replies without changing saved provider policy", async () => {
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: vi.fn(),
+    };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { model: "gpt-realtime-2", apiKey: "synthetic-test-key" },
+    });
+    mocks.createTalkRealtimeRelaySession.mockReturnValue({
+      provider: "openai",
+      transport: "gateway-relay",
+      relaySessionId: "forced-by-caller",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24000,
+      },
+      expiresAt: 1797986400,
+    });
+    const cfg = {
+      talk: { realtime: { provider: "openai", consultRouting: "provider-direct" } },
+    } as OpenClawConfig;
+    const respond = vi.fn();
+    await callTalkHandler("talk.session.create", {
+      params: {
+        sessionKey: "agent:main:voice",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        consultRouting: "agent-only",
+      },
+      respond,
+      context: { getRuntimeConfig: () => cfg },
+    });
+    expectRespondOk(respond, { relaySessionId: "forced-by-caller" });
+    expect(mocks.createTalkRealtimeRelaySession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        forceAgentConsultOnFinalTranscript: true,
+        requireAgentReadback: true,
+        providerConfig: { model: "gpt-realtime-2", apiKey: "synthetic-test-key" },
+        sessionTarget: expect.objectContaining({ agentId: "main", sessionKey: "agent:main:voice" }),
+      }),
+    );
+    expect(cfg.talk?.realtime?.consultRouting).toBe("provider-direct");
+  });
+
   it("uses talk.agentId for a bare realtime session in an explicit fleet", async () => {
     const provider = {
       id: "openai",
@@ -2370,6 +2420,29 @@ describe("talk.session unified handlers", () => {
     );
     expectRespondOk(respond, { relaySessionId: "relay-effective-model" });
   });
+
+  it.each(["transcription", "stt-tts"])(
+    "rejects an agent-only requirement for %s without starting a provider",
+    async (mode) => {
+      const respond = vi.fn();
+      await callTalkHandler("talk.session.create", {
+        params: {
+          mode,
+          transport: "gateway-relay",
+          brain: "agent-consult",
+          consultRouting: "agent-only",
+        },
+        respond,
+        context: {},
+      });
+      expectRespondError(respond, {
+        code: ErrorCodes.INVALID_REQUEST,
+        message:
+          "Forced agent consultation requires realtime Gateway relay with agent-consult brain",
+      });
+      expect(mocks.createTalkRealtimeRelaySession).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects forced consult routing when the provider resolves gpt-live", async () => {
     const provider = {

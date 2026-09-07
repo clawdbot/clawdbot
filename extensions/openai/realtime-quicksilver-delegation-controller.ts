@@ -43,7 +43,9 @@ type OpenAIQuicksilverDelegationControllerOptions = {
   onTranscript?: (role: "user" | "assistant", text: string, done: boolean) => void;
   handleDelegationInput?: RealtimeVoiceGatewayControl["handleDelegationInput"];
   onWireEventType?: (eventType: string) => void;
-  runAgentConsult: RealtimeVoiceAgentConsultRunner;
+  /** Local ownership only; these modes do not add provider protocol flags. */
+  controlMode?: "capture" | "readback";
+  runAgentConsult?: RealtimeVoiceAgentConsultRunner;
   signal: AbortSignal;
 };
 
@@ -120,7 +122,12 @@ export class OpenAIQuicksilverDelegationController {
       return;
     }
     if (event.kind === "transcript-delta" || event.kind === "transcript-done") {
-      this.appendTranscript(event);
+      if (this.options.controlMode === "capture" && event.role === "assistant") {
+        return;
+      }
+      if (!this.options.controlMode) {
+        this.appendTranscript(event);
+      }
       this.options.onTranscript?.(event.role, event.text, event.kind === "transcript-done");
       return;
     }
@@ -136,6 +143,14 @@ export class OpenAIQuicksilverDelegationController {
     }
     // Both consumers negotiate audio over WebRTC; sideband audio would duplicate it.
     if (event.kind === "audio") {
+      return;
+    }
+    if (this.options.controlMode === "capture") {
+      // Final user transcripts already belong to the Gateway forced-consult owner.
+      return;
+    }
+    if (this.options.controlMode === "readback") {
+      this.fail(new Error("GPT-Live readback attempted agent delegation; playback stopped"));
       return;
     }
     this.startDelegation(event.id, event.prompt);
@@ -282,6 +297,9 @@ export class OpenAIQuicksilverDelegationController {
           buildRealtimeVoiceAgentControlSpeechMessage("I’ll check that request."),
           "speakable",
         );
+      }
+      if (!this.options.runAgentConsult) {
+        throw new Error("GPT-Live native delegation requires an agent runner");
       }
       const result = await this.options.runAgentConsult({ prompt: delegation.prompt, signal });
       if (signal.aborted) {

@@ -48,11 +48,17 @@ export type OpenAIQuicksilverAudioPeerCallbacks = {
   onRtpPacket?: () => void;
 };
 
+export type OpenAIRealtimeDataChannelCallbacks = {
+  onOpen: () => void;
+  onMessage: (message: string | Buffer) => void;
+};
+
 export type OpenAIQuicksilverAudioPeerContract = {
   createOffer(): Promise<string>;
   applyAnswer(answerSdp: string): Promise<void>;
   adoptPendingAudio(pendingAudio: OpenAIQuicksilverPendingAudio): void;
   sendAudio(audio: Buffer): void;
+  flushInboundAudio(): void;
   close(): void;
 };
 
@@ -98,6 +104,7 @@ function forwardSequenceDistance(expected: number, sequenceNumber: number): numb
 export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerContract {
   static async create(params: {
     callbacks: OpenAIQuicksilverAudioPeerCallbacks;
+    gaDataChannel?: OpenAIRealtimeDataChannelCallbacks;
     iceServers?: Array<{ urls: string | string[]; username?: string; credential?: string }>;
     signal?: AbortSignal;
   }): Promise<OpenAIQuicksilverAudioPeer> {
@@ -148,6 +155,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       params.signal?.removeEventListener("abort", onAbort);
       return new OpenAIQuicksilverAudioPeer({
         callbacks: params.callbacks,
+        gaDataChannel: params.gaDataChannel,
         decoder,
         encoder,
         peer,
@@ -169,6 +177,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     return convertQuicksilverPcmToRelayPcm(pcm48kStereo);
   }
 
+  private readonly dataChannel?: ReturnType<WeriftPeerConnection["createDataChannel"]>;
   private connected = false;
   private closed = false;
   private activeInboundSsrc: number | undefined;
@@ -191,6 +200,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
   private constructor(
     private readonly state: {
       callbacks: OpenAIQuicksilverAudioPeerCallbacks;
+      gaDataChannel?: OpenAIRealtimeDataChannelCallbacks;
       decoder: LibopusDecoder;
       encoder: LibopusEncoder;
       peer: WeriftPeerConnection;
@@ -198,6 +208,33 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       werift: WeriftModule;
     },
   ) {
+    // GA WebRTC carries control on this ordered SCTP channel. Native GPT-Live
+    // leaves it absent and retains its original audio-only SDP and sideband.
+    if (state.gaDataChannel) {
+      const callbacks = state.gaDataChannel;
+      const channel = state.peer.createDataChannel("oai-events", { ordered: true });
+      this.dataChannel = channel;
+      channel.stateChange.subscribe((channelState) => {
+        if (this.closed) {
+          return;
+        }
+        if (channelState === "open") {
+          callbacks.onOpen();
+        } else if (channelState === "closed") {
+          state.callbacks.onError(new Error("OpenAI Realtime data channel closed"));
+        }
+      });
+      channel.onMessage.subscribe((message) => {
+        if (!this.closed) {
+          callbacks.onMessage(message);
+        }
+      });
+      channel.error.subscribe(() => {
+        if (!this.closed) {
+          state.callbacks.onError(new Error("OpenAI Realtime data channel failed"));
+        }
+      });
+    }
     state.peer.onTrack.subscribe((track) => this.attachInboundTrack(track));
     state.peer.connectionStateChange.subscribe((connectionState) => {
       if (this.closed) {
@@ -217,9 +254,70 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     });
   }
 
+  isControlOpen(): boolean {
+    return !this.closed && this.dataChannel?.readyState === "open";
+  }
+
+  sendControl(message: string): void {
+    const channel = this.dataChannel;
+    if (this.closed || !channel || channel.readyState !== "open") {
+      throw new Error("OpenAI Realtime data channel is not open");
+    }
+    if (Buffer.byteLength(message) + channel.bufferedAmount > 1024 * 1024) {
+      throw new Error("OpenAI Realtime data channel queue exceeded");
+    }
+    channel.send(message);
+  }
+
+  /** Delivers already-received RTP and resampler tail at a native turn terminal. */
+  flushInboundAudio(): void {
+    if (this.closed) {
+      return;
+    }
+    try {
+      const state = this.inboundRtpState;
+      this.clearInboundFlushTimer(state);
+      while (!this.closed && state.pendingPackets.size > 0) {
+        this.flushInboundReorderWindow(state, true);
+      }
+      if (!this.closed) {
+        const tail = this.inboundResampler.flush();
+        if (tail.length > 0) {
+          this.state.callbacks.onAudio(tail);
+        }
+      }
+    } catch (error) {
+      this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
+    }
+  }
+
+  discardInboundAudio(): void {
+    const state = this.inboundRtpState;
+    this.clearInboundFlushTimer(state);
+    // Retire queued PCM without forgetting which RTP packets were already seen.
+    // Resetting sequence history would re-admit delayed duplicates after a barge-in.
+    if (state.nextSequence !== undefined) {
+      const next = state.nextSequence;
+      let advance = 0;
+      for (const sequence of state.pendingPackets.keys()) {
+        const distance = forwardSequenceDistance(next, sequence);
+        if (distance < RTP_SEQUENCE_HALF_RANGE) {
+          advance = Math.max(advance, distance + 1);
+        }
+      }
+      state.nextSequence = (next + advance) & 0xffff;
+    }
+    state.pendingPackets.clear();
+    this.inboundResampler.flush();
+  }
+
   async createOffer(): Promise<string> {
+    this.requireOpen();
     const offer = await this.state.peer.createOffer();
+    // Certificate preparation yields; close must not be followed by fresh ICE gathering.
+    this.requireOpen();
     await this.state.peer.setLocalDescription(offer);
+    this.requireOpen();
     const sdp = this.state.peer.localDescription?.sdp;
     if (!sdp?.trim()) {
       throw new Error("werift did not produce a GPT-Live SDP offer");
@@ -228,10 +326,18 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
   }
 
   async applyAnswer(answerSdp: string): Promise<void> {
+    this.requireOpen();
     await this.state.peer.setRemoteDescription({ type: "answer", sdp: answerSdp });
+    this.requireOpen();
     // OpenAI answers may not declare SSRCs. Subscribe to the receiver's stable
     // default track directly instead of relying only on peer.ontrack demux.
     this.attachInboundTrack(this.state.transceiver.receiver.track);
+  }
+
+  private requireOpen(): void {
+    if (this.closed) {
+      throw new Error("OpenAI WebRTC media peer is closed");
+    }
   }
 
   adoptPendingAudio(pendingAudio: OpenAIQuicksilverPendingAudio): void {
@@ -271,11 +377,12 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     this.resetInboundRtpState();
     this.state.encoder.free();
     this.state.decoder.free();
+    this.dataChannel?.close();
     void this.state.peer.close().catch(() => undefined);
   }
 
   private attachInboundTrack(track: WeriftTrack): void {
-    if (track.kind !== "audio" || this.subscribedTracks.has(track.uuid)) {
+    if (this.closed || track.kind !== "audio" || this.subscribedTracks.has(track.uuid)) {
       return;
     }
     this.subscribedTracks.add(track.uuid);
@@ -354,9 +461,12 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     // Four 20 ms packets cover ordinary Internet reordering. The matching timer
     // flushes a short final tail; concealment is capped before a large discontinuity resync.
     const concealCount = Math.min(nearest.distance, INBOUND_REORDER_DEPTH);
-    for (let index = 0; index < concealCount; index += 1) {
+    for (let index = 0; index < concealCount && !this.closed; index += 1) {
       state.nextSequence = ((state.nextSequence ?? 0) + 1) & 0xffff;
       this.decodeInboundPacketLoss();
+    }
+    if (this.closed) {
+      return;
     }
     if (nearest.distance > INBOUND_REORDER_DEPTH) {
       state.nextSequence = nearest.sequenceNumber;
@@ -365,7 +475,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
   }
 
   private drainInboundPackets(state: InboundRtpState): void {
-    while (state.nextSequence !== undefined) {
+    while (!this.closed && state.nextSequence !== undefined) {
       const packet = state.pendingPackets.get(state.nextSequence);
       if (!packet) {
         break;
@@ -468,7 +578,9 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       // werift queues encrypted UDP synchronously before sendRtp yields
       // (rtpSender.js:538; transport/dtls.js:455), preserving per-tick order.
       void this.state.transceiver.sender.sendRtp(rtp).catch((error: unknown) => {
-        this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
+        if (!this.closed) {
+          this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));
+        }
       });
     } catch (error) {
       this.state.callbacks.onError(toErrorObject(error, "OpenAI GPT-Live WebRTC media failed"));

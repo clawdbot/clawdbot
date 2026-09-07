@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceSessionConnection,
-  RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
   coerceErrorMessage,
@@ -35,7 +34,6 @@ import {
   requireOpenAIRealtimePlatformAuth,
   resolveOpenAIRealtimeEnvApiKey,
   resolveOpenAIRealtimeSecretInput,
-  type OpenAIRealtimeUserMessageOptions,
   type OpenAIRealtimeVoiceBridgeConfig,
   type RealtimeEvent,
 } from "./realtime-voice-session-policy.js";
@@ -114,73 +112,11 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
     });
   }
 
-  sendUserMessage(text: string, options?: OpenAIRealtimeUserMessageOptions): void {
-    if (
-      options?.toolChoice &&
-      (this.interruptingPlayback ||
-        this.responseActive ||
-        this.responseCreateState !== "idle" ||
-        this.responseCancelInFlight ||
-        this.pendingToolCallIds.size > 0)
-    ) {
-      throw new Error("Forced realtime tool choice requires an idle response state");
-    }
-    if (this.pendingToolCallIds.size > 0) {
-      // Control/status speech must not wait behind the long-running consult whose
-      // function output owns the default conversation response.
-      this.standaloneSpeechQueue.push(text);
-      this.flushStandaloneSpeech();
-      return;
-    }
-    this.sendEvent({
-      type: "conversation.item.create",
-      item: {
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text }],
-      },
-    });
-    this.requestResponseCreate(options);
-  }
-
   triggerGreeting(instructions?: string): void {
     if (!this.isConnected() || !this.ws) {
       return;
     }
     this.sendUserMessage(instructions ?? this.config.instructions ?? "Greet the meeting.");
-  }
-
-  submitToolResult(
-    callId: string,
-    result: unknown,
-    options?: RealtimeVoiceToolResultOptions,
-  ): void {
-    if (this.lifecycle.phase() === "terminal" || !this.pendingToolCallIds.has(callId)) {
-      return;
-    }
-    const output = JSON.stringify(result);
-    if (typeof output !== "string") {
-      throw new Error("OpenAI realtime voice tool result is not JSON-serializable");
-    }
-    this.sendEvent({
-      type: "conversation.item.create",
-      item: {
-        type: "function_call_output",
-        call_id: callId,
-        output,
-      },
-    });
-    if (options?.willContinue === true) {
-      this.continuingToolCallIds.add(callId);
-      return;
-    }
-    this.continuingToolCallIds.delete(callId);
-    this.pendingToolCallIds.delete(callId);
-    if (options?.suppressResponse === true) {
-      this.flushPendingResponseCreate();
-      return;
-    }
-    this.requestResponseCreate();
   }
 
   close(): void {

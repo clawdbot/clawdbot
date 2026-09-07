@@ -97,37 +97,12 @@ class TalkModeConfigParsingTest {
   }
 
   @Test
-  fun gatesAndroidRealtimeRelayFromEffectiveModel() {
-    val browserOnly =
-      json
-        .parseToJsonElement(
-          """{"talk":{"realtime":{"model":"gpt-live-future"}}}""",
-        ).jsonObject
-    val relayCapable =
-      json
-        .parseToJsonElement(
-          """{"talk":{"realtime":{"model":"gpt-realtime-2.1"}}}""",
-        ).jsonObject
+  fun nativeSpeechRequiresAnExplicitModeInsteadOfARealtimeModelName() {
+    val native = json.parseToJsonElement("""{"talk":{"realtime":{"mode":"stt-tts","model":"gpt-realtime-2"}}}""").jsonObject
+    val realtime = json.parseToJsonElement("""{"talk":{"realtime":{"model":"gpt-live"}}}""").jsonObject
 
-    assertFalse(TalkModeGatewayConfigParser.parse(browserOnly).realtimeRelayModelSupported)
-    assertTrue(TalkModeGatewayConfigParser.parse(relayCapable).realtimeRelayModelSupported)
-  }
-
-  @Test
-  fun gatesAndroidRealtimeRelayFromProviderLevelModel() {
-    val providerLevelBrowserOnly =
-      json
-        .parseToJsonElement(
-          """{"talk":{"realtime":{"provider":"openai","providers":{"openai":{"model":"gpt-live-1-codex"}}}}}""",
-        ).jsonObject
-    val topLevelWins =
-      json
-        .parseToJsonElement(
-          """{"talk":{"realtime":{"provider":"openai","model":"gpt-realtime-2.1","providers":{"openai":{"model":"gpt-live-1-codex"}}}}}""",
-        ).jsonObject
-
-    assertFalse(TalkModeGatewayConfigParser.parse(providerLevelBrowserOnly).realtimeRelayModelSupported)
-    assertTrue(TalkModeGatewayConfigParser.parse(topLevelWins).realtimeRelayModelSupported)
+    assertFalse("Explicit native Talk must not open a realtime provider session", TalkModeGatewayConfigParser.parse(native).useRealtimeRelay)
+    assertTrue("A selected realtime model must not silently become native speech", TalkModeGatewayConfigParser.parse(realtime).useRealtimeRelay)
   }
 
   @Test

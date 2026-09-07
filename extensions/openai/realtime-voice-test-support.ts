@@ -163,6 +163,18 @@ export function createOpenAIRealtimeTestSupport<T extends FakeWebSocketLike>(dep
     item?: unknown;
     content_index?: number;
     audio_end_ms?: number;
+    response?: {
+      conversation?: "auto" | "none";
+      output_modalities?: Array<"audio" | "text">;
+      instructions?: string;
+      tools?: RealtimeVoiceTool[];
+      tool_choice?: "auto" | "none" | { type: "function"; name: string };
+      input?: Array<{
+        type: "message";
+        role: "user";
+        content: Array<{ type: "input_text"; text: string }>;
+      }>;
+    };
     session?: {
       type?: string;
       model?: string;

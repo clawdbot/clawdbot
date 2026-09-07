@@ -9,8 +9,10 @@ import type {
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-auth.js";
+import { createOpenAIRealtimeSelectedBridge } from "./realtime-ga-selected-bridge.js";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import { createOpenAIRealtimeClientSecret } from "./realtime-provider-shared.js";
+import { OpenAIQuicksilverAgentOwnedBridge } from "./realtime-quicksilver-agent-owned-bridge.js";
 import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import { buildOpenAIQuicksilverInstructions } from "./realtime-quicksilver-instructions.js";
@@ -41,6 +43,7 @@ import {
   resolveOpenAIRealtimePlatformAuth,
   resolveOpenAIQuicksilverBridgeAuth,
   type OpenAIRealtimeVoice,
+  type OpenAIRealtimeVoiceBridgeConfig,
   type OpenAIRealtimeVoiceProviderConfig,
 } from "./realtime-voice-session-policy.js";
 
@@ -414,7 +417,11 @@ export function buildOpenAIRealtimeVoiceProvider(
           );
         }
         if (req.runAgentConsult) {
-          return new OpenAIQuicksilverGatewayBridge(
+          const GatewayBridge =
+            req.autoRespondToAudio === false
+              ? OpenAIQuicksilverAgentOwnedBridge
+              : OpenAIQuicksilverGatewayBridge;
+          return new GatewayBridge(
             {
               ...req,
               model,
@@ -458,27 +465,33 @@ export function buildOpenAIRealtimeVoiceProvider(
           context,
         );
       }
-      return new OpenAIRealtimeBridge(
-        {
-          ...req,
-          apiKey: config.apiKey,
-          model: config.model,
-          voice: normalizeOpenAIRealtimeVoice(config.voice),
-          temperature: config.temperature,
-          vadThreshold: config.vadThreshold,
-          silenceDurationMs: config.silenceDurationMs,
-          prefixPaddingMs: config.prefixPaddingMs,
-          interruptResponseOnInputAudio:
-            req.interruptResponseOnInputAudio ?? config.interruptResponseOnInputAudio,
-          minBargeInAudioEndMs: config.minBargeInAudioEndMs,
-          reasoningEffort: config.reasoningEffort,
-          azureEndpoint: config.azureEndpoint,
-          azureDeployment: config.azureDeployment,
-          azureApiVersion: config.azureApiVersion,
-          logger: options?.logger ?? { warn: () => undefined },
-        },
-        context,
-      );
+      const bridgeConfig: OpenAIRealtimeVoiceBridgeConfig = {
+        ...req,
+        apiKey: config.apiKey,
+        model: config.model,
+        voice: normalizeOpenAIRealtimeVoice(config.voice),
+        temperature: config.temperature,
+        vadThreshold: config.vadThreshold,
+        silenceDurationMs: config.silenceDurationMs,
+        prefixPaddingMs: config.prefixPaddingMs,
+        interruptResponseOnInputAudio:
+          req.interruptResponseOnInputAudio ?? config.interruptResponseOnInputAudio,
+        minBargeInAudioEndMs: config.minBargeInAudioEndMs,
+        reasoningEffort: config.reasoningEffort,
+        azureEndpoint: config.azureEndpoint,
+        azureDeployment: config.azureDeployment,
+        azureApiVersion: config.azureApiVersion,
+        logger: options?.logger ?? { warn: () => undefined },
+      };
+      if (
+        req.runAgentConsult &&
+        !config.azureEndpoint &&
+        !config.azureDeployment &&
+        !config.azureApiVersion
+      ) {
+        return createOpenAIRealtimeSelectedBridge(bridgeConfig, context);
+      }
+      return new OpenAIRealtimeBridge(bridgeConfig, context);
     },
     createBrowserSession: (req) =>
       createOpenAIRealtimeBrowserSession(
@@ -557,23 +570,18 @@ export function buildOpenAIRealtimeVoiceProvider(
     },
     isGatewayRelayConfigured: ({ cfg, providerConfig, agentId }) => {
       const config = normalizeProviderConfig(providerConfig);
-      if (!isOpenAIGptLiveModel(config.model)) {
-        return undefined;
+      const native = isOpenAIGptLiveModel(config.model);
+      if (config.azureEndpoint || config.azureDeployment || (!native && config.azureApiVersion)) {
+        return native ? false : undefined;
       }
-      if (config.azureEndpoint || config.azureDeployment) {
+      if (native && !isSupportedOpenAIGptLiveModel(config.model)) {
         return false;
       }
       return (
-        isSupportedOpenAIGptLiveModel(config.model) &&
-        (hasOpenAIRealtimePlatformAuthInput(
-          {
-            configuredApiKey: config.apiKey,
-            cfg,
-            agentId,
-          },
+        hasOpenAIRealtimePlatformAuthInput(
+          { configuredApiKey: config.apiKey, cfg, agentId },
           context,
-        ) ||
-          hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context))
+        ) || hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context)
       );
     },
     resolveGatewayRelayCapabilities: ({ providerConfig, model }) => {
@@ -586,13 +594,7 @@ export function buildOpenAIRealtimeVoiceProvider(
       }
       return OPENAI_REALTIME_CAPABILITIES;
     },
-    validateGatewayRelayLaunch: ({ providerConfig, model, autoRespondToAudio }) => {
-      const config = normalizeProviderConfig(providerConfig);
-      if (autoRespondToAudio === false && isOpenAIGptLiveModel(model ?? config.model)) {
-        return "GPT-Live gateway-relay sessions cannot use forced agent consult routing; GPT-Live delegates to the agent natively";
-      }
-      return undefined;
-    },
+    validateGatewayRelayLaunch: () => undefined,
     cancelBrowserSession: (_request, session) =>
       options?.quicksilverBrowserSessionBroker?.cancelBrowserSession(session),
   };

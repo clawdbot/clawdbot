@@ -89,27 +89,7 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
           return;
         }
         const audio = base64ToBuffer(audioDelta);
-        if (event.item_id && event.item_id !== this.assistantAudioItem?.itemId) {
-          this.assistantAudioItem = {
-            itemId: event.item_id,
-            bytes: audio.byteLength,
-            startTimestamp: this.latestMediaTimestamp,
-          };
-        } else if (this.assistantAudioItem) {
-          // Playback clocks can lead provider output, but truncate cannot exceed item audio.
-          this.assistantAudioItem.bytes += audio.byteLength;
-        }
-        this.responseActive = true;
-        const generation = this.outputAudioGeneration;
-        const markName = this.createPlaybackMark();
-        this.config.onAudio(audio, event.item_id ? { itemId: event.item_id } : undefined);
-        if (generation === this.outputAudioGeneration && this.acceptsEvent(connection)) {
-          this.config.onMark?.(markName, () => {
-            if (this.acceptsEvent(connection)) {
-              this.acknowledgeMark(markName);
-            }
-          });
-        }
+        this.emitOutputAudio(audio, event.item_id, connection);
         return;
       }
 
@@ -124,7 +104,11 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
       case "response.output_text.delta":
       case "response.audio_transcript.delta":
       case "response.output_audio_transcript.delta":
-        if (event.delta) {
+        if (
+          event.delta &&
+          !this.responseCancelInFlight &&
+          audioGeneration === this.outputAudioGeneration
+        ) {
           this.config.onTranscript?.("assistant", event.delta, false);
         }
         return;
@@ -135,7 +119,11 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
       case "response.output_audio_transcript.done":
         {
           const transcript = event.transcript ?? event.text;
-          if (transcript) {
+          if (
+            transcript &&
+            !this.responseCancelInFlight &&
+            audioGeneration === this.outputAudioGeneration
+          ) {
             this.config.onTranscript?.("assistant", transcript, true);
           }
         }
@@ -234,11 +222,41 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
     }
   }
 
+  protected emitOutputAudio(
+    audio: Buffer,
+    itemId: string | undefined,
+    connection: RealtimeVoiceSessionConnection,
+  ): void {
+    if (itemId && itemId !== this.assistantAudioItem?.itemId) {
+      this.assistantAudioItem = {
+        itemId,
+        bytes: audio.byteLength,
+        startTimestamp: this.latestMediaTimestamp,
+      };
+    } else if (this.assistantAudioItem) {
+      // Playback clocks can lead provider output, but truncate cannot exceed item audio.
+      this.assistantAudioItem.bytes += audio.byteLength;
+    }
+    this.responseActive = true;
+    const generation = this.outputAudioGeneration;
+    const markName = this.createPlaybackMark();
+    this.config.onAudio(audio, itemId ? { itemId } : undefined);
+    if (generation === this.outputAudioGeneration && this.acceptsEvent(connection)) {
+      this.config.onMark?.(markName, () => {
+        if (this.acceptsEvent(connection)) {
+          this.acknowledgeMark(markName);
+        }
+      });
+    }
+  }
+
   private handleCompletedResponse(
     event: RealtimeEvent,
     connection: RealtimeVoiceSessionConnection,
   ): boolean {
     if (
+      this.standaloneReadbackActive ||
+      this.responseCancelInFlight ||
       event.response?.status !== "completed" ||
       !Array.isArray(event.response.output) ||
       !this.config.onToolCall
@@ -342,8 +360,16 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
       invoke(() => {
         providerTerminated = this.handleCompletedResponse(event, connection);
       });
-      invoke(() => this.config.onResponseDone?.(outcome));
-      invoke(emitServerEvent);
+      invoke(() => {
+        if (this.acceptsEvent(connection)) {
+          this.config.onResponseDone?.(outcome);
+        }
+      });
+      invoke(() => {
+        if (this.acceptsEvent(connection)) {
+          emitServerEvent();
+        }
+      });
     } finally {
       // response.done owns response state regardless of observer success. A fatal tool
       // boundary still clears state, but must not start queued work on a closing socket.

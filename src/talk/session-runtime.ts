@@ -19,6 +19,7 @@ import type {
   RealtimeVoiceTool,
   RealtimeVoiceToolCallEvent,
   RealtimeVoiceToolResultOptions,
+  RealtimeVoiceUserMessageOptions,
 } from "./provider-types.js";
 
 /**
@@ -46,7 +47,7 @@ export type RealtimeVoiceBridgeSession = {
   close(options?: RealtimeVoiceCloseOptions): void;
   connect(): Promise<void>;
   sendAudio(audio: Buffer): void;
-  sendUserMessage(text: string): void;
+  sendUserMessage(text: string, options?: RealtimeVoiceUserMessageOptions): void;
   handleBargeIn(options?: RealtimeVoiceBargeInOptions): void;
   setMediaTimestamp(ts: number): void;
   submitToolResult(
@@ -158,10 +159,17 @@ export function createRealtimeVoiceBridgeSession(
         requireBridge().sendAudio(audio);
       }
     },
-    sendUserMessage: (text) => {
+    sendUserMessage: (text, options) => {
       if (text.trim()) {
         const bridge = requireBridge();
-        requestResponse(bridge.sendUserMessage?.bind(bridge, text));
+        if (options?.mode === "readback" && bridge.supportsReadback !== true) {
+          throw new Error("Realtime provider does not support agent-only readback");
+        }
+        requestResponse(
+          options
+            ? bridge.sendUserMessage?.bind(bridge, text, options)
+            : bridge.sendUserMessage?.bind(bridge, text),
+        );
       }
     },
     handleBargeIn: (options) => requireBridge().handleBargeIn?.(options),

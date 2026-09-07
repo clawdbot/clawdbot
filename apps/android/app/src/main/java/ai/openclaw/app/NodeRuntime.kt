@@ -2317,6 +2317,9 @@ class NodeRuntime private constructor(
   val talkModeStatusText: StateFlow<String>
     get() = talkMode.statusText
 
+  val talkModeHasFailure: StateFlow<Boolean>
+    get() = talkMode.hasFailure
+
   private val wearRealtimeLifecycleMutex = Mutex()
 
   private val wearRealtimeTalkControllerLazy: Lazy<WearRealtimeTalkController> =
@@ -3780,6 +3783,7 @@ class NodeRuntime private constructor(
   }
 
   fun setTalkModeEnabled(value: Boolean) {
+    if (value) talkMode.setMainSessionKey(chat.sessionKey.value)
     setVoiceCaptureMode(if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off)
   }
 
@@ -5317,6 +5321,7 @@ class NodeRuntime private constructor(
     synchronized(gatewayDataScopeLock) {
       retirePendingChatSelection()
       chat.switchSession(sessionKey, ownerAgentId)
+      talkMode.setMainSessionKey(chat.sessionKey.value)
     }
   }
 

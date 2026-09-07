@@ -793,6 +793,24 @@ describe("validateTalkClientCreateParams", () => {
 });
 
 describe("validateTalkSession", () => {
+  it("allows a caller to require agent-only replies but not disable the configured policy", () => {
+    expectAccepted(validateTalkSessionCreateParams, [
+      {
+        sessionKey: "agent:selected:voice",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+        consultRouting: "agent-only",
+      },
+    ]);
+    expectRejected(validateTalkSessionCreateParams, [
+      {
+        mode: "realtime",
+        consultRouting: "provider-direct",
+      },
+    ]);
+  });
+
   it("accepts session-scoped provider, model, and voice selection", () => {
     expectAccepted(validateTalkSessionCreateParams, [
       talkClient({

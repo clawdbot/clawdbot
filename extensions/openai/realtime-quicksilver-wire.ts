@@ -305,6 +305,13 @@ export function buildOpenAIRealtimeSidebandUrl(callId: string): string {
   return url.toString();
 }
 
+export function buildOpenAIQuicksilverSidebandUrl(callId: string): string {
+  if (!isOpenAIQuicksilverCallId(callId)) {
+    throw new OpenAIQuicksilverCallError("GPT-Live call id is invalid");
+  }
+  return `wss://api.openai.com/v1/live/${callId}`;
+}
+
 function isOpenAIQuicksilverCallId(value: string): boolean {
   return (
     /^rtc_[\w-]+$/.test(value) ||
@@ -382,7 +389,10 @@ export async function createOpenAIQuicksilverCall(
     requestIds: OpenAIQuicksilverRequestIds;
     signal?: AbortSignal;
     fetchImpl?: typeof fetch;
-  } & ({ gaSideband: true; onCallAllocated: (callId: string) => void } | { gaSideband?: false }),
+  } & (
+    | { gaSideband: true; onCallAllocated: (callId: string) => void }
+    | { gaSideband?: false; onCallAllocated?: (callId: string) => void }
+  ),
   runtime: OpenAIRealtimeHost,
 ): Promise<
   | {
@@ -462,16 +472,26 @@ export async function createOpenAIQuicksilverCall(
       response.status,
     );
   }
-  let gaCallId: string | undefined;
-  if (params.gaSideband) {
+  let allocatedCallId: string | undefined;
+  if (params.onCallAllocated) {
     try {
-      gaCallId = parseOpenAIRealtimeCallLocation(response.headers.get("Location"));
-      // The successful headers allocate a remote resource even if SDP reading fails.
-      params.onCallAllocated(gaCallId);
+      allocatedCallId = isGptLive
+        ? decodeOpenAIQuicksilverCallId({
+            location: response.headers.get("Location"),
+            openAiSessionId: response.headers.get("openai-session-id"),
+            callUrl,
+          })
+        : parseOpenAIRealtimeCallLocation(response.headers.get("Location"));
+      // Bind every allocated call before awaited SDP reading can fail or be cancelled.
+      params.onCallAllocated(allocatedCallId);
     } catch (error) {
       await response.body?.cancel().catch(() => undefined);
       throw error;
     }
+  }
+  if (params.onCallAllocated && params.signal?.aborted) {
+    await response.body?.cancel().catch(() => undefined);
+    params.signal.throwIfAborted();
   }
   const answerSdp = await runtime.readProviderTextResponse(
     response,
@@ -484,52 +504,61 @@ export async function createOpenAIQuicksilverCall(
       response.status,
     );
   }
-  if (gaCallId) {
+  if (allocatedCallId && params.gaSideband) {
     return {
       kind: "ga-sideband",
       status: response.status,
       answerSdp,
-      callId: gaCallId,
-      sidebandUrl: buildOpenAIRealtimeSidebandUrl(gaCallId),
+      callId: allocatedCallId,
+      sidebandUrl: buildOpenAIRealtimeSidebandUrl(allocatedCallId),
     };
   }
   if (!isGptLive) {
     return { kind: "ga-realtime", status: response.status, answerSdp };
   }
-  const callId = decodeOpenAIQuicksilverCallId({
-    location: response.headers.get("Location"),
-    openAiSessionId: response.headers.get("openai-session-id"),
-    callUrl,
-  });
+  const callId =
+    allocatedCallId ??
+    decodeOpenAIQuicksilverCallId({
+      location: response.headers.get("Location"),
+      openAiSessionId: response.headers.get("openai-session-id"),
+      callUrl,
+    });
   return {
     kind: "gpt-live",
     status: response.status,
     answerSdp,
     callId,
-    sidebandUrl: `wss://api.openai.com/v1/live/${callId}`,
+    sidebandUrl: buildOpenAIQuicksilverSidebandUrl(callId),
   };
 }
 
 export async function hangupOpenAIRealtimeCall(
   params: {
-    apiKey: string;
     callId: string;
     signal?: AbortSignal;
     fetchImpl?: typeof fetch;
-  },
+  } & ({ apiKey: string; auth?: never } | { auth: OpenAIQuicksilverAuth; apiKey?: never }),
   { resolveProviderRequestHeaders }: OpenAIRealtimeHost,
 ): Promise<void> {
   if (!OPENAI_REALTIME_CALL_ID_RE.test(params.callId)) {
     throw new Error("OpenAI Realtime call id is invalid");
   }
   const url = `${OPENAI_REALTIME_CALL_URL}/${encodeURIComponent(params.callId)}/hangup`;
-  const headers = resolveProviderRequestHeaders({
-    provider: "openai",
-    baseUrl: url,
-    capability: "audio",
-    transport: "http",
-    defaultHeaders: { Authorization: `Bearer ${params.apiKey}` },
-  }) ?? { Authorization: `Bearer ${params.apiKey}` };
+  const auth = params.auth ?? { type: "api-key" as const, token: params.apiKey };
+  const authHeaders = {
+    Authorization: `Bearer ${auth.token}`,
+    ...(auth.type === "oauth" ? { "chatgpt-account-id": auth.accountId } : {}),
+  };
+  const headers = {
+    ...resolveProviderRequestHeaders({
+      provider: "openai",
+      baseUrl: url,
+      capability: "audio",
+      transport: "http",
+      defaultHeaders: authHeaders,
+    }),
+    ...authHeaders,
+  };
   const response = await (params.fetchImpl ?? fetch)(url, {
     method: "POST",
     headers,

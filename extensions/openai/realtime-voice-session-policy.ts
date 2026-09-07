@@ -34,10 +34,6 @@ import { OPENAI_GPT_LIVE_MODELS, OPENAI_GPT_LIVE_VOICES } from "./realtime-quick
 
 export type OpenAIRealtimeVoice = (typeof OPENAI_REALTIME_VOICES)[number];
 
-export type OpenAIRealtimeUserMessageOptions = {
-  toolChoice?: { type: "function"; name: string };
-};
-
 export type OpenAIRealtimeVoiceProviderConfig = {
   apiKey?: string;
   model?: string;
@@ -152,6 +148,7 @@ export type RealtimeEvent = {
   name?: string;
   arguments?: string;
   session?: unknown;
+  part?: { type?: string };
   item?: {
     id?: string;
     type?: string;

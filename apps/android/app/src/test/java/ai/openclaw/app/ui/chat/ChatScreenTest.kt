@@ -116,18 +116,14 @@ class ChatScreenTest {
   }
 
   @Test
-  fun realtimeTalkLaunchRequestsPermissionBeforeSetupOrStart() {
+  fun realtimeTalkLaunchRequestsPermissionBeforeTheScopedGatewayStart() {
     assertEquals(
       ChatRealtimeTalkLaunch.RequestPermission,
-      resolveChatRealtimeTalkLaunch(hasMicPermission = false, requiresSetup = true),
-    )
-    assertEquals(
-      ChatRealtimeTalkLaunch.ShowSetupMessage,
-      resolveChatRealtimeTalkLaunch(hasMicPermission = true, requiresSetup = true),
+      resolveChatRealtimeTalkLaunch(hasMicPermission = false),
     )
     assertEquals(
       ChatRealtimeTalkLaunch.StartTalk,
-      resolveChatRealtimeTalkLaunch(hasMicPermission = true, requiresSetup = false),
+      resolveChatRealtimeTalkLaunch(hasMicPermission = true),
     )
   }
 

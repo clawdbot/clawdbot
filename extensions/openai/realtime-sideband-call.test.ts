@@ -7,6 +7,33 @@ import {
 } from "./realtime-quicksilver-wire.js";
 
 describe("OpenAI Realtime sideband call wire", () => {
+  it("reports a GA OAuth allocation without sideband before a bounded SDP read fails", async () => {
+    const onCallAllocated = vi.fn();
+    const readProviderTextResponse = vi.fn(async () => {
+      expect(onCallAllocated).toHaveBeenCalledExactlyOnceWith("call_oauth");
+      throw new Error("SDP answer exceeds limit");
+    });
+    await expect(
+      createOpenAIQuicksilverCall(
+        {
+          auth: { type: "oauth", token: "oauth-fixture", accountId: "account-fixture" },
+          requestIds: { realtimeSessionId: "realtime", sessionId: "session", threadId: "thread" },
+          sdp: "v=offer\r\n",
+          session: { type: "realtime", model: "gpt-realtime-2.1" },
+          onCallAllocated,
+          fetchImpl: vi.fn(
+            async () =>
+              new Response("v=answer\r\n", {
+                status: 201,
+                headers: { Location: "/v1/realtime/calls/call_oauth" },
+              }),
+          ),
+        },
+        { ...openAIRealtimeHost, readProviderTextResponse },
+      ),
+    ).rejects.toThrow("SDP answer exceeds limit");
+  });
+
   it("posts bounded server-owned session config and returns the fixed sideband URL", async () => {
     const onCallAllocated = vi.fn();
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {

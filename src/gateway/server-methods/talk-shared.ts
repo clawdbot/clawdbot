@@ -458,11 +458,14 @@ export function resolveTalkRealtimeGatewayRelayLaunch(params: {
   launchOptions: RealtimeVoiceLaunchOptions;
   consultRouting?: string;
 }) {
-  const forceAgentConsultOnFinalTranscript = params.consultRouting === "force-agent-consult";
+  const requireAgentReadback = params.consultRouting === "agent-only";
+  const forceAgentConsultOnFinalTranscript =
+    requireAgentReadback || params.consultRouting === "force-agent-consult";
   const providerConfig = withRealtimeBrowserOverrides(params.providerConfig, params.launchOptions);
   return {
     providerConfig,
     forceAgentConsultOnFinalTranscript,
+    requireAgentReadback,
     error: resolveInternalRealtimeVoiceGatewayRelayLaunchError({
       provider: params.provider,
       cfg: params.cfg,

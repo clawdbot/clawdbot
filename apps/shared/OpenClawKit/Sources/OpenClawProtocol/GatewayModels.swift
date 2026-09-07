@@ -14690,6 +14690,7 @@ public struct TalkSessionCreateParams: Codable, Sendable {
     public let mode: AnyCodable?
     public let transport: AnyCodable?
     public let brain: AnyCodable?
+    public let consultrouting: String?
     public let ttlms: Int?
 
     public init(
@@ -14706,6 +14707,7 @@ public struct TalkSessionCreateParams: Codable, Sendable {
         mode: AnyCodable? = nil,
         transport: AnyCodable? = nil,
         brain: AnyCodable? = nil,
+        consultrouting: String? = nil,
         ttlms: Int? = nil)
     {
         self.sessionkey = sessionkey
@@ -14721,6 +14723,7 @@ public struct TalkSessionCreateParams: Codable, Sendable {
         self.mode = mode
         self.transport = transport
         self.brain = brain
+        self.consultrouting = consultrouting
         self.ttlms = ttlms
     }
 
@@ -14738,6 +14741,7 @@ public struct TalkSessionCreateParams: Codable, Sendable {
         case mode
         case transport
         case brain
+        case consultrouting = "consultRouting"
         case ttlms = "ttlMs"
     }
 }

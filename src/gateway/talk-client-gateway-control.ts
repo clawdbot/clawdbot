@@ -102,6 +102,7 @@ export function createTalkRealtimeRunControlOwner(params: {
   supportsToolCalls?: boolean;
   hasActiveRun: () => boolean;
   prepare: (args: unknown) => () => Promise<RealtimeVoiceAgentControlResult>;
+  /** Plain host-owned speech; the transport chooses readback versus native context. */
   speak: (message: string) => void;
   warn: (message: string) => void;
 }) {
@@ -161,8 +162,7 @@ export function createTalkRealtimeRunControlOwner(params: {
     if (!intent.shouldAutoControl || (!params.hasActiveRun() && !(allowIdle && intrinsic))) {
       return "consult";
     }
-    const reply = (message: string) =>
-      respond(buildRealtimeVoiceAgentControlSpeechMessage(message));
+    const reply = respond;
     if (
       !enqueue(
         { text, mode: intent.mode },
@@ -185,7 +185,15 @@ export function createTalkRealtimeRunControlOwner(params: {
   };
   return {
     enqueue,
-    handleDelegationInput: params.controlSource === "delegation" ? handleInput : undefined,
+    handleDelegationInput:
+      params.controlSource === "delegation"
+        ? (text: string, respond: (message: string) => void, ready?: () => Promise<void>) =>
+            handleInput(
+              text,
+              (message) => respond(buildRealtimeVoiceAgentControlSpeechMessage(message)),
+              ready,
+            )
+        : undefined,
     handleSpoken: (text: string, ready?: () => Promise<void>): boolean =>
       params.controlSource !== "delegation" && handleInput(text, params.speak, ready) === "control",
     close: () => {
@@ -388,7 +396,7 @@ export function createTalkClientGatewayControlOwner(params: {
       if (!commands?.sendUserMessage) {
         throw new Error("Realtime voice speech control is not available");
       }
-      commands.sendUserMessage(message);
+      commands.sendUserMessage(buildRealtimeVoiceAgentControlSpeechMessage(message));
     },
     warn,
   });

@@ -94,15 +94,6 @@ class GatewayTalkSetupReadinessTest {
   }
 
   @Test
-  fun browserOnlyModelsSkipAndroidRealtimeRelay() {
-    assertFalse(isAndroidRealtimeRelayModelSupported("gpt-live"))
-    assertFalse(isAndroidRealtimeRelayModelSupported(" GPT-LIVE-future "))
-    assertTrue(isAndroidRealtimeRelayModelSupported("gpt-realtime-2.1"))
-    assertTrue(isAndroidRealtimeRelayModelSupported("gpt-liveness"))
-    assertTrue(isAndroidRealtimeRelayModelSupported(null))
-  }
-
-  @Test
   fun activeProviderAliasSelectsCanonicalCatalogEntry() {
     val readiness =
       parseGatewayTalkSetupReadiness(

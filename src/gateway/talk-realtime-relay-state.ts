@@ -190,6 +190,7 @@ export type RelaySession = {
   connId: string;
   context: GatewayRequestContext;
   bridge: RealtimeVoiceBridgeSession;
+  requireAgentReadback: boolean;
   harness: RealtimeVoiceSessionHarness;
   outputOwnership: TalkRealtimeRelayOutputOwnership;
   sessionTarget: PreparedTalkSessionTarget;
@@ -235,6 +236,8 @@ export type CreateTalkRealtimeRelaySessionParams = {
   voice?: string;
   language?: string;
   forceAgentConsultOnFinalTranscript?: boolean;
+  /** Stronger per-call contract; the shipped force-agent-consult setting keeps provider speech. */
+  requireAgentReadback?: boolean;
 };
 
 export type TalkRealtimeRelaySessionResult = {

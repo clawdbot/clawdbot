@@ -262,6 +262,45 @@ describe("GPT-Live werift audio peer", () => {
     }
   });
 
+  it("flushes every received packet and resampler tail at a native turn terminal", async () => {
+    const { decodeOrder, onAudio, onError, packet, peer, testPeer } =
+      await createInboundAudioHarness();
+    vi.useFakeTimers();
+    try {
+      for (const sequenceNumber of [40, 42, 44]) {
+        testPeer.handleInboundRtp(packet(sequenceNumber));
+      }
+      expect(decodeOrder).toEqual([40]);
+      peer.flushInboundAudio();
+      expect(decodeOrder).toEqual([40, "plc", 42, "plc", 44]);
+      expect(Buffer.concat(onAudio.mock.calls.map(([audio]) => audio))).toHaveLength(5 * 480 * 2);
+      const calls = onAudio.mock.calls.length;
+      peer.close();
+      await vi.advanceTimersByTimeAsync(80);
+      expect(onAudio).toHaveBeenCalledTimes(calls);
+      expect(onError).not.toHaveBeenCalled();
+    } finally {
+      peer.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops terminal packet draining if an audio callback closes the peer", async () => {
+    const { decodeOrder, onAudio, onError, packet, peer, testPeer } =
+      await createInboundAudioHarness();
+    try {
+      for (const sequenceNumber of [40, 42, 44]) {
+        testPeer.handleInboundRtp(packet(sequenceNumber));
+      }
+      onAudio.mockImplementationOnce(() => peer.close());
+      peer.flushInboundAudio();
+      expect(decodeOrder).toEqual([40, "plc"]);
+      expect(onError).not.toHaveBeenCalled();
+    } finally {
+      peer.close();
+    }
+  });
+
   it("flushes a short reordered tail after the 80 ms window", async () => {
     const { decodeOrder, onError, packet, peer, testPeer } = await createInboundAudioHarness();
     vi.useFakeTimers();
@@ -615,6 +654,7 @@ describe("GPT-Live gateway relay bridge", () => {
       createOffer: vi.fn(async () => "v=offer\r\n"),
       applyAnswer: vi.fn(async () => undefined),
       adoptPendingAudio: vi.fn(),
+      flushInboundAudio: vi.fn(),
       sendAudio: vi.fn(),
       close: vi.fn(),
     } satisfies OpenAIQuicksilverAudioPeerContract;
@@ -865,6 +905,7 @@ describe("GPT-Live gateway relay bridge", () => {
       createOffer: vi.fn(async () => "v=offer\r\n"),
       applyAnswer: vi.fn(async () => undefined),
       adoptPendingAudio: vi.fn(),
+      flushInboundAudio: vi.fn(),
       sendAudio: vi.fn(),
       close: closePeer,
     });
@@ -881,6 +922,7 @@ describe("GPT-Live gateway relay bridge", () => {
       createOffer,
       applyAnswer,
       adoptPendingAudio,
+      flushInboundAudio: vi.fn(),
       sendAudio: vi.fn(),
       close: closePeer,
     };
@@ -1000,52 +1042,6 @@ describe("GPT-Live gateway relay bridge", () => {
     bridge.close();
     expect(closePeer).toHaveBeenCalledOnce();
     expect(connectedSocket.closed).toBe(true);
-    expect(onClose).toHaveBeenCalledWith("completed");
-  });
-
-  it("treats a normal upstream sideband close as completion", async () => {
-    let socket: FakeSocket | undefined;
-    const onClose = vi.fn();
-    const onError = vi.fn();
-    const bridge = new OpenAIQuicksilverGatewayBridge(
-      {
-        providerConfig: {},
-        model: "gpt-live-1-codex",
-        voice: "marin",
-        audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-        onAudio: vi.fn(),
-        onClearAudio: vi.fn(),
-        onClose,
-        onError,
-        runAgentConsult: vi.fn(async () => ({ text: "done" })),
-        logger: { debug: vi.fn(), warn: vi.fn() },
-        resolveAuth: vi.fn(async () => ({
-          type: "oauth" as const,
-          token: "oauth-token",
-          accountId: "account-1",
-        })),
-        createPeer: vi.fn(async () => ({
-          createOffer: vi.fn(async () => "v=offer\r\n"),
-          applyAnswer: vi.fn(async () => undefined),
-          adoptPendingAudio: vi.fn(),
-          sendAudio: vi.fn(),
-          close: vi.fn(),
-        })),
-        fetchImpl: vi.fn(async () => createCallResponse("v=answer\r\n", "rtc_close")),
-        webSocketFactory: () => {
-          socket = new FakeSocket();
-          return socket;
-        },
-      },
-      openAIRealtimeHost,
-    );
-
-    await bridge.connect();
-    if (!socket) {
-      throw new Error("expected sideband socket");
-    }
-    socket.close(1000, "complete");
-    expect(onError).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledWith("completed");
   });
 });
