@@ -32,7 +32,6 @@ const log = createSubsystemLogger("agents/harness/native-hook-relay");
 
 export {
   isRetryableNativeHookRelayBridgeLookupError,
-  NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
   NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
 } from "./native-hook-relay-client.js";
 
