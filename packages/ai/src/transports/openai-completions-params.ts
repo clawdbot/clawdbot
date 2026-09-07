@@ -348,6 +348,10 @@ export function buildOpenAICompletionsRequest(
     endpointClass !== "modelstudio-native" &&
     !(endpointClass === "default" && ["modelstudio", "dashscope", "qwen"].includes(model.provider));
   const cacheOptOutIndexes = new Set<number>();
+  // convertMessages owns the cache boundary here: it carries the marked runtime
+  // region past the tool schemas when a user turn can hold it, and strips the
+  // markers when the caller preserves the boundary instead. Pre-stripping the
+  // prompt at this call site would hide the boundary from that logic.
   let messages: unknown[] = convertMessages(model as never, context, compat as never, {
     cacheOptOutIndexes,
     preserveSystemPromptCacheBoundary:
