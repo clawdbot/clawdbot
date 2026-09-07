@@ -438,11 +438,10 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   }
 
   private renderExchange(question: string, answer: string, ts: number) {
+    const questionDir = detectTextDirection(question);
     return html`
       <article class="chat-session-rail__exchange">
-        <div class="chat-session-rail__question" dir=${detectTextDirection(question)}>
-          ${question}
-        </div>
+        <div class="chat-session-rail__question" dir=${questionDir}>${question}</div>
         <div class="chat-session-rail__answer" dir=${detectTextDirection(answer)}>
           ${unsafeHTML(toSanitizedMarkdownHtml(answer))}
         </div>

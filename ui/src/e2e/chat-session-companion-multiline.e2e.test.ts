@@ -75,6 +75,9 @@ suite.define(() => {
         const request = await gateway.waitForRequest("sessions.companion.ask");
         expect(request.params).toMatchObject({ question: "First paragraph.\nSecond paragraph." });
         await companion.getByText("Both paragraphs arrived together.", { exact: true }).waitFor();
+        const question = companion.locator(".chat-session-rail__question");
+        // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- textContent retains newlines even when CSS collapses them visually.
+        await expect.poll(() => question.innerText()).toBe("First paragraph.\nSecond paragraph.");
         await expect.poll(() => input.inputValue()).toBe("");
         await expect
           .poll(() => input.evaluate((element) => element.clientHeight))

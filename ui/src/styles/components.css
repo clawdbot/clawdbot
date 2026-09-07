@@ -2140,6 +2140,7 @@ openclaw-chat-session-rail {
   color: var(--text);
   font-weight: 600;
   overflow-wrap: anywhere;
+  white-space: pre-line;
 }
 
 .chat-session-rail__answer {
