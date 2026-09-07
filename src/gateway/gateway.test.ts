@@ -735,6 +735,10 @@ module.exports = {
       const { port, server } = await startLoopbackTokenGateway(token);
 
       try {
+        // The baseline counts startup's own workspace-plugin load, which the deferred
+        // sidecars publish. Without this the read races that load and the baseline moves.
+        await server.startupSettled;
+
         const beforeCount = await readCounterWithRetry(registerCountPath);
         expect(beforeCount).toBeGreaterThan(0);
 
