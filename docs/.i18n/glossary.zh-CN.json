@@ -728,6 +728,38 @@
     "target": "配置 — 智能体"
   },
   {
+    "source": "Configuration — agent workspace and bootstrap",
+    "target": "配置 — 智能体工作区和引导上下文"
+  },
+  {
+    "source": "Configuration — agent models",
+    "target": "配置 — 智能体模型"
+  },
+  {
+    "source": "Configuration — agent runtime and CLI backends",
+    "target": "配置 — 智能体运行时和 CLI 后端"
+  },
+  {
+    "source": "Configuration — agent heartbeat, compaction, and streaming",
+    "target": "配置 — 智能体心跳、压缩和流式输出"
+  },
+  {
+    "source": "Configuration — agent sandboxing",
+    "target": "配置 — 智能体沙箱"
+  },
+  {
+    "source": "Configuration — per-agent entries and multi-agent routing",
+    "target": "配置 — 单智能体条目和多智能体路由"
+  },
+  {
+    "source": "Configuration — agent sessions",
+    "target": "配置 — 智能体会话"
+  },
+  {
+    "source": "Configuration — messages and talk",
+    "target": "配置 — 消息和语音对话"
+  },
+  {
     "source": "Configuration — audit, logging, diagnostics, and telemetry",
     "target": "配置 — 审计、日志、诊断和遥测"
   },
@@ -2234,5 +2266,121 @@
   {
     "source": "Release channels",
     "target": "发布渠道"
+  },
+  {
+    "source": "Transport and framing",
+    "target": "传输与分帧"
+  },
+  {
+    "source": "Handshake and roles",
+    "target": "握手与角色"
+  },
+  {
+    "source": "Presence and events",
+    "target": "在线状态与事件"
+  },
+  {
+    "source": "RPC methods",
+    "target": "RPC 方法"
+  },
+  {
+    "source": "Ledger RPCs",
+    "target": "账本 RPC"
+  },
+  {
+    "source": "Operator methods",
+    "target": "操作员方法"
+  },
+  {
+    "source": "Versioning",
+    "target": "版本管理"
+  },
+  {
+    "source": "Auth and device identity",
+    "target": "身份验证与设备身份"
+  },
+  {
+    "source": "Gateway protocol transport",
+    "target": "Gateway 协议传输"
+  },
+  {
+    "source": "Gateway protocol handshake",
+    "target": "Gateway 协议握手"
+  },
+  {
+    "source": "Gateway protocol presence and events",
+    "target": "Gateway 协议在线状态与事件"
+  },
+  {
+    "source": "Gateway protocol RPC methods",
+    "target": "Gateway 协议 RPC 方法"
+  },
+  {
+    "source": "Gateway protocol ledger RPCs",
+    "target": "Gateway 协议账本 RPC"
+  },
+  {
+    "source": "Gateway protocol operator methods",
+    "target": "Gateway 协议操作员方法"
+  },
+  {
+    "source": "Gateway protocol versioning",
+    "target": "Gateway 协议版本管理"
+  },
+  {
+    "source": "Gateway protocol auth",
+    "target": "Gateway 协议身份验证"
+  },
+  {
+    "source": "Slack setup",
+    "target": "Slack 设置"
+  },
+  {
+    "source": "Slack transports",
+    "target": "Slack 传输方式"
+  },
+  {
+    "source": "Slack Enterprise Grid",
+    "target": "Slack Enterprise Grid"
+  },
+  {
+    "source": "Slack manifest and scopes",
+    "target": "Slack 清单与权限范围"
+  },
+  {
+    "source": "Slack access control",
+    "target": "Slack 访问控制"
+  },
+  {
+    "source": "Slack threads and sessions",
+    "target": "Slack 话题与会话"
+  },
+  {
+    "source": "Slack message behavior",
+    "target": "Slack 消息行为"
+  },
+  {
+    "source": "Slack media and attachments",
+    "target": "Slack 媒体与附件"
+  },
+  {
+    "source": "Slack charts, tables, and approvals",
+    "target": "Slack 图表、表格与审批"
+  },
+  {
+    "source": "Slack events and operations",
+    "target": "Slack 事件与运维"
+  },
+  {
+    "source": "Slack troubleshooting",
+    "target": "Slack 故障排查"
+  },
+  {
+    "source": "Media understanding pipeline",
+    "target": "媒体理解流程"
+  },
+  {
+    "source": "PDF tool",
+    "target": "PDF 工具"
   }
 ]
