@@ -76,7 +76,9 @@ async function fetchLmstudioEndpoint(params: {
   fetchImpl?: typeof fetch;
   ssrfPolicy?: SsrFPolicy;
   auditContext: string;
+  signal?: AbortSignal;
 }): Promise<{ response: Response; release: () => Promise<void> }> {
+  params.signal?.throwIfAborted();
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   let response: Response;
   let release: () => Promise<void>;
@@ -85,6 +87,7 @@ async function fetchLmstudioEndpoint(params: {
       url: params.url,
       init: params.init,
       timeoutMs,
+      signal: params.signal,
       fetchImpl: params.fetchImpl,
       policy: params.ssrfPolicy,
       auditContext: params.auditContext,
@@ -95,7 +98,9 @@ async function fetchLmstudioEndpoint(params: {
     const fetchFn = params.fetchImpl ?? fetch;
     response = await fetchFn(params.url, {
       ...params.init,
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: params.signal
+        ? AbortSignal.any([params.signal, AbortSignal.timeout(timeoutMs)])
+        : AbortSignal.timeout(timeoutMs),
     });
     release = async () => undefined;
   }
@@ -131,6 +136,7 @@ export async function fetchLmstudioModels(params: {
   headers?: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   timeoutMs?: number;
+  signal?: AbortSignal;
   /** Injectable fetch implementation; defaults to the global fetch. */
   fetchImpl?: typeof fetch;
 }): Promise<FetchLmstudioModelsResult> {
@@ -146,6 +152,7 @@ export async function fetchLmstudioModels(params: {
         }),
       },
       timeoutMs,
+      signal: params.signal,
       fetchImpl: params.fetchImpl,
       ssrfPolicy: params.ssrfPolicy,
       auditContext: "lmstudio-model-discovery",
@@ -242,6 +249,7 @@ type LmstudioModelLoadParams = {
   modelKey: string;
   requestedContextLength?: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
   /** Injectable fetch implementation; defaults to the global fetch. */
   fetchImpl?: typeof fetch;
 };
@@ -272,8 +280,10 @@ export async function prepareLmstudioModelForInference(
     headers: params.headers,
     ssrfPolicy: params.ssrfPolicy,
     timeoutMs,
+    signal: params.signal,
     fetchImpl: params.fetchImpl,
   });
+  params.signal?.throwIfAborted();
   if (!preflight.reachable) {
     throw new Error(`LM Studio model discovery failed: ${String(preflight.error)}`);
   }
@@ -326,6 +336,7 @@ export async function prepareLmstudioModelForInference(
         }),
       },
       timeoutMs,
+      signal: params.signal,
       fetchImpl: params.fetchImpl,
       ssrfPolicy: params.ssrfPolicy,
       auditContext: "lmstudio-model-load",

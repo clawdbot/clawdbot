@@ -61,6 +61,7 @@ test("doctor revocation after getMe prevents later Bot API calls and releases", 
           authorized: true,
           testDc: true,
           tdlibVersion: "1.8.56",
+          testerGroupWriteAccess: true,
           user: { id: 123 },
         }),
         stderr: "",
@@ -78,4 +79,46 @@ test("doctor revocation after getMe prevents later Bot API calls and releases", 
   assert.deepEqual(methods, ["getMe"]);
   assert.equal(proxyClosed, true);
   assert.equal(released, true);
+});
+
+test("doctor requires verified tester write access before Bot API work and releases the lease", async () => {
+  for (const access of [false, undefined]) {
+    let released = false;
+    const credential = {
+      driverEnv: {},
+      groupId: "-1001",
+      tdlibVersion: "1.8.67",
+      testerUserId: "123",
+      whenLeaseUnhealthy: new Promise(() => {}),
+      assertLeaseHealthy() {},
+      async release() {
+        released = true;
+      },
+    };
+    await assert.rejects(
+      runTelegramTestDoctor({
+        acquireCredential: async () => credential,
+        runCommandImpl: async (_command, args) => {
+          assert.deepEqual(args.slice(-4), ["status", "--check-chat", "-1001", "--json"]);
+          return {
+            status: 0,
+            timedOut: false,
+            stdout: JSON.stringify({
+              ok: true,
+              authorized: true,
+              testDc: true,
+              tdlibVersion: "1.8.67",
+              user: { id: 123 },
+              testerGroupWriteAccess: access,
+            }),
+          };
+        },
+        startProxy: async () => {
+          assert.fail("unverified tester must not proceed to bot work");
+        },
+      }),
+      /tester group membership and text permission were not verified/,
+    );
+    assert.equal(released, true);
+  }
 });

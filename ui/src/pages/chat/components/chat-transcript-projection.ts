@@ -300,6 +300,7 @@ export function projectChatTranscript(
     embedSandboxMode: props.embedSandboxMode ?? "scripts",
     allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
     fetchLinkFavicon: props.fetchLinkFavicon,
+    githubRepo: props.githubRepo,
     showAssistantAvatar: avatarPlacement === "gutter" && Boolean(assistantIdentity.avatar),
   } satisfies StreamGroupOptions;
   const streamGroupOptions = {
@@ -679,6 +680,8 @@ export function projectChatTranscript(
     props.embedSandboxMode ?? "scripts",
     props.allowExternalEmbedUrls ?? false,
     Boolean(props.fetchLinkFavicon),
+    props.githubRepo?.owner,
+    props.githubRepo?.repo,
     threadContextWindow,
     Boolean(props.onSetReply),
     Boolean(props.onRetryQueuedMessage),

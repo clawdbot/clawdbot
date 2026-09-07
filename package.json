@@ -404,7 +404,8 @@
     "!dist/plugin-sdk/session-catalog-paging.d.ts",
     "!dist/plugin-sdk/provider-auth-aliases.d.ts",
     "!dist/plugin-sdk/provider-model-metadata.d.ts",
-    "!dist/plugin-sdk/websocket-runtime.d.ts"
+    "!dist/plugin-sdk/websocket-runtime.d.ts",
+    "!dist/plugin-sdk/memory-core-host-engine-knn.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -1302,6 +1303,9 @@
     "./plugin-sdk/memory-core-host-engine-foundation": {
       "types": "./dist/plugin-sdk/memory-core-host-engine-foundation.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-engine-foundation.js"
+    },
+    "./plugin-sdk/memory-core-host-engine-knn": {
+      "default": "./dist/plugin-sdk/memory-core-host-engine-knn.js"
     },
     "./plugin-sdk/memory-core-host-engine-fs": {
       "default": "./dist/plugin-sdk/memory-core-host-engine-fs.js"

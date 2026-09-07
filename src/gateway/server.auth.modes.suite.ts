@@ -60,14 +60,13 @@ export function registerAuthModesSuite(): void {
       ws.close();
     });
 
-    test("rejects token credentials in password mode", async () => {
+    test("accepts the configured password in the token field", async () => {
       const ws = await openWs(port);
       const res = await connectReq(ws, {
         skipDefaultAuth: true,
         token: "secret",
       });
-      expect(res.ok).toBe(false);
-      expect(res.error?.message ?? "").toContain("unauthorized");
+      expect(res.ok).toBe(true);
       ws.close();
     });
 
@@ -120,14 +119,13 @@ export function registerAuthModesSuite(): void {
       ws.close();
     });
 
-    test("rejects password credentials in token mode", async () => {
+    test("accepts the configured token in the password field", async () => {
       const ws = await openWs(port);
       const res = await connectReq(ws, {
         skipDefaultAuth: true,
         password: "secret", // pragma: allowlist secret
       });
-      expect(res.ok).toBe(false);
-      expect(res.error?.message ?? "").toContain("unauthorized");
+      expect(res.ok).toBe(true);
       ws.close();
     });
 

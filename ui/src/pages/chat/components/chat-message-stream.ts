@@ -40,6 +40,7 @@ type StreamMessageOptions = Pick<
   | "embedSandboxMode"
   | "allowExternalEmbedUrls"
   | "fetchLinkFavicon"
+  | "githubRepo"
   | "onOpenWorkspaceFile"
 >;
 

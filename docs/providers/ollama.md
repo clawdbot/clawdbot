@@ -98,6 +98,12 @@ OpenAI-SDK-style examples, but new config should use `baseUrl`.
 
     `--custom-base-url` and `--custom-model-id` are optional; omitting them uses the local default host and the `gemma4` suggested model.
 
+    A local model advertised as embedding-only cannot be selected as the chat
+    default. Setup reports an error and leaves the existing configuration intact;
+    reset preflight also rejects an explicitly selected embedding-only model or
+    an inventory advertised as entirely embedding-only. Models that support both
+    completion and embeddings remain eligible.
+
   </Tab>
 
   <Tab title="Manual setup">

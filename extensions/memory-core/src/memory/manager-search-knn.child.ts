@@ -1,6 +1,8 @@
 // Child-process entrypoint for one hard-cancellable sqlite-vec KNN query.
-import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
-import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  loadSqliteVecExtension,
+  openNodeSqliteDatabase,
+} from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import {
   runVectorKnnQuery,
   type VectorKnnRequest,

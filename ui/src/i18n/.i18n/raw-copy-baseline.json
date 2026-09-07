@@ -398,14 +398,7 @@
       "kind": "html-attribute",
       "name": "placeholder",
       "path": "ui/src/pages/connection/view.ts",
-      "text": "ws://100.x.y.z:18789"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "placeholder",
-      "path": "ui/src/pages/connection/view.ts",
-      "text": "OPENCLAW_GATEWAY_TOKEN"
+      "text": "wss://gateway.example:443"
     },
     {
       "count": 1,

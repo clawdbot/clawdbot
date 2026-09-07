@@ -35,6 +35,29 @@ describe("chat transcript invalidation", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
+  it("updates settled GitHub reference chips when the session repository arrives or changes", () => {
+    vi.spyOn(Date, "now").mockReturnValue(60_000);
+    const props = threadProps("pane-github-repository", "agent:main:github-repository", [
+      { role: "assistant", content: "PR #141270", timestamp: 1_000 },
+    ]);
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () => render(renderChatThread(props, transcript), container);
+    const chip = () => container.querySelector<HTMLAnchorElement>("a.markdown-github-item");
+    rerender();
+    expect(chip()).toBeNull();
+
+    props.githubRepo = { owner: "openclaw", repo: "openclaw" };
+    rerender();
+    expect(chip()?.href).toBe("https://github.com/openclaw/openclaw/pull/141270");
+    props.githubRepo = { owner: "other", repo: "checkout" };
+    rerender();
+    expect(chip()?.href).toBe("https://github.com/other/checkout/pull/141270");
+    props.githubRepo = null;
+    rerender();
+    expect(chip()).toBeNull();
+  });
+
   it.each(["agent:main:main", "agent:main:dashboard:history"])(
     "does not normalize historical messages again when their transcript is projected in %s",
     (sessionKey) => {
