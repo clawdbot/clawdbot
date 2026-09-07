@@ -17,7 +17,9 @@ import {
   projectDiagnosticValue,
 } from "../utils/diagnostics.js";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
+import { shortHash } from "../utils/hash.js";
 import { headersToRecord } from "../utils/headers.js";
+import { repairJson } from "../utils/json-parse.js";
 import { projectProviderError, type ProviderErrorProjection } from "../utils/provider-error.js";
 import { isTransientNetworkError } from "../utils/retryable-network-errors.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
@@ -74,16 +76,61 @@ export function coerceTransportToolCallArguments(argumentsValue: unknown): Recor
   return {};
 }
 
+const MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE = "malformed_tool_call_arguments";
+
+/**
+ * Privacy-safe terminal parse diagnostics attached as the error `cause`: enough to
+ * correlate and size a failure across reports without echoing tool arguments.
+ */
+export type MalformedToolCallArgumentsCause = {
+  code: typeof MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE;
+  argumentChars: number;
+  argumentHash: string;
+  repairAttempted: boolean;
+};
+
+function createMalformedToolCallArgumentsError(value: unknown, errorMessage: string): Error {
+  const text = typeof value === "string" ? value : undefined;
+  const cause: MalformedToolCallArgumentsCause = {
+    code: MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE,
+    argumentChars: text?.length ?? 0,
+    argumentHash: text === undefined ? "" : shortHash(text),
+    repairAttempted: text !== undefined,
+  };
+  return new Error(errorMessage, { cause });
+}
+
+/**
+ * Repair a complete-but-invalid terminal argument buffer. Fine-grained tool streaming
+ * skips server-side JSON validation, so a finished tool_use block can still carry raw
+ * control characters or invalid escapes inside string values. Only string-literal
+ * repairs are applied; truncated or non-object buffers stay rejected so a cut-off
+ * write never executes with partial arguments.
+ */
+function repairTerminalToolCallArguments(value: string): Record<string, unknown> | null {
+  const repaired = repairJson(value);
+  if (repaired === value) {
+    return null;
+  }
+  return parseJsonObjectPreservingUnsafeIntegers(repaired);
+}
+
 /** Admit only complete object-shaped terminal tool arguments; partial parsing is preview-only. */
 export function parseTerminalToolCallArguments(
   value: unknown,
   errorMessage = MALFORMED_TOOL_CALL_TERMINAL_ERROR_MESSAGE,
 ): Record<string, unknown> {
   const parsed = parseJsonObjectPreservingUnsafeIntegers(value);
-  if (!parsed) {
-    throw new Error(errorMessage);
+  if (parsed) {
+    return parsed;
   }
-  return parsed;
+  if (typeof value === "string") {
+    const repaired = repairTerminalToolCallArguments(value);
+    if (repaired) {
+      return repaired;
+    }
+  }
+  throw createMalformedToolCallArgumentsError(value, errorMessage);
 }
 
 /** Validate a complete sibling set before mutating any call into executable state. */
