@@ -1,7 +1,21 @@
-import { postNativeBrowserMessage } from "../../app/native-browser-bridge.ts";
+import {
+  postNativeBrowserMessage,
+  type NativeBrowserTab,
+} from "../../app/native-browser-bridge.ts";
 import { subscribeNativeOverlayOcclusion } from "../../lib/native-overlay-occlusion.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import type { BrowserPanelController } from "./browser-panel-controller.ts";
+import type { BrowserPanelControllerHost } from "./browser-panel-operation-ownership.ts";
+
+interface BrowserPanelNativePresentationHost {
+  readonly host: Pick<
+    BrowserPanelControllerHost,
+    "isConnected" | "browserPanelIsOpen" | "renderRoot"
+  >;
+  readonly native: { readonly activeTab: NativeBrowserTab | undefined };
+  readonly activeTargetId: string | null;
+  readonly mode: "interact" | "annotate" | "inspect";
+  reportError(error: unknown): void;
+}
 
 let presentationOrder = 0;
 
@@ -22,7 +36,7 @@ export class BrowserPanelNativePresentation {
   private lastPayload = "";
   private connected = false;
 
-  constructor(private readonly controller: BrowserPanelController) {}
+  constructor(private readonly controller: BrowserPanelNativePresentationHost) {}
 
   connect(): void {
     if (this.connected) {

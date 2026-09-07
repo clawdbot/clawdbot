@@ -1,5 +1,22 @@
-import { resizeBrowserViewport, type BrowserPageMetrics } from "./browser-client.ts";
-import type { BrowserPanelController } from "./browser-panel-controller.ts";
+import type { NativeBrowserTab } from "../../app/native-browser-bridge.ts";
+import {
+  resizeBrowserViewport,
+  type BrowserPageMetrics,
+  type BrowserRequestClient,
+} from "./browser-client.ts";
+import type { BrowserPanelOperationOwnership } from "./browser-panel-operation-ownership.ts";
+import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
+import type { BrowserPanelView } from "./browser-panel-surface.ts";
+
+interface BrowserPanelViewportHost {
+  readonly host: { browserPanelIsOpen(): boolean };
+  readonly native: { readonly activeTab: NativeBrowserTab | undefined };
+  readonly activeTargetId: string | null;
+  readonly view: BrowserPanelView | null;
+  readonly operations: Pick<BrowserPanelOperationOwnership, "captureClient">;
+  readonly pendingInput: Pick<BrowserPanelPendingInput, "scheduleViewportResize">;
+  runAction(action: (client: BrowserRequestClient) => Promise<void>): Promise<boolean>;
+}
 
 const VIEWPORT_RESIZE_DELAY_MS = 300;
 const MIN_VIEWPORT_DIMENSION = 100;
@@ -10,7 +27,7 @@ export class BrowserPanelViewportController {
   private observedViewportSize: { width: number; height: number } | null = null;
   private lastRequestedViewport: { targetId: string; width: number; height: number } | null = null;
 
-  constructor(private readonly controller: BrowserPanelController) {}
+  constructor(private readonly controller: BrowserPanelViewportHost) {}
 
   invalidate(): void {
     // The agent may resize the same document between panel presentations.

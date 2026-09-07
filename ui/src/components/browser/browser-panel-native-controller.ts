@@ -8,14 +8,51 @@ import {
   type NativeBrowserTab,
 } from "../../app/native-browser-bridge.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import { readBrowserInspectedNode, type BrowserPanelTab } from "./browser-client.ts";
-import type { BrowserPanelController } from "./browser-panel-controller.ts";
+import {
+  readBrowserInspectedNode,
+  type BrowserInspectedNode,
+  type BrowserPanelTab,
+} from "./browser-client.ts";
 import { BrowserPanelNativePresentation } from "./browser-panel-native-presentation.ts";
+import type { BrowserPanelControllerHost } from "./browser-panel-operation-ownership.ts";
+import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
 import {
   browserPanelNormalizedPoint,
   browserPanelRemotePoint,
   loadBrowserPanelImage,
+  type BrowserPanelView,
 } from "./browser-panel-surface.ts";
+
+type BrowserPanelNativeState = {
+  tabs: BrowserPanelTab[];
+  activeTargetId: string | null;
+  view: BrowserPanelView | null;
+  mode: "interact" | "annotate" | "inspect";
+  loading: boolean;
+  errorText: string | null;
+  pendingNewTab: boolean;
+  urlDraft: string;
+  inspected: BrowserInspectedNode | null;
+  inspectPointer: { x: number; y: number } | null;
+};
+
+interface BrowserPanelNativeHost extends BrowserPanelNativeState {
+  readonly host: Pick<
+    BrowserPanelControllerHost,
+    "isConnected" | "browserPanelIsOpen" | "renderRoot" | "updateComplete"
+  >;
+  readonly native: { readonly activeTab: NativeBrowserTab | undefined };
+  readonly pendingInput: Pick<BrowserPanelPendingInput, "queueInspection">;
+  setState<Key extends keyof BrowserPanelNativeState>(
+    key: Key,
+    value: BrowserPanelNativeState[Key],
+  ): void;
+  selectTab(targetId: string): Promise<void>;
+  syncUrlDraft(url: string): void;
+  reportError(error: unknown): void;
+  exitCaptureModes(): void;
+  paintOverlay(): void;
+}
 
 const presenters = new Set<BrowserPanelNativeController>();
 const popupScopes = new Map<string, string>();
@@ -32,7 +69,7 @@ export class BrowserPanelNativeController {
   private captureGeneration = 0;
   private inspectionGeneration = 0;
 
-  constructor(private readonly controller: BrowserPanelController) {
+  constructor(private readonly controller: BrowserPanelNativeHost) {
     this.presentation = new BrowserPanelNativePresentation(controller);
   }
 

@@ -1,17 +1,52 @@
+import type { NativeBrowserTab } from "../../app/native-browser-bridge.ts";
 import {
   captureBrowserScreenshot,
   fetchBrowserScreenshotDataUrl,
   isBrowserNavigationBlockedError,
+  type BrowserPanelTab,
 } from "./browser-client.ts";
-import type { BrowserPanelController } from "./browser-panel-controller.ts";
-import { readBrowserPanelOwnedMetrics } from "./browser-panel-operation-ownership.ts";
-import { loadBrowserPanelImage } from "./browser-panel-surface.ts";
+import {
+  readBrowserPanelOwnedMetrics,
+  type BrowserPanelControllerHost,
+  type BrowserPanelOperationOwnership,
+} from "./browser-panel-operation-ownership.ts";
+import { loadBrowserPanelImage, type BrowserPanelView } from "./browser-panel-surface.ts";
 import type { BrowserPanelViewportController } from "./browser-panel-viewport-controller.ts";
+
+type BrowserPanelSnapshotState = {
+  tabs: BrowserPanelTab[];
+  view: BrowserPanelView | null;
+  loading: boolean;
+  evaluateUnavailable: boolean;
+};
+
+interface BrowserPanelSnapshotHost extends BrowserPanelSnapshotState {
+  readonly host: Pick<BrowserPanelControllerHost, "resourceBasePath" | "authToken">;
+  readonly native: { readonly activeTab: NativeBrowserTab | undefined };
+  readonly activeTargetId: string | null;
+  readonly operations: Pick<
+    BrowserPanelOperationOwnership,
+    | "epoch"
+    | "captureClient"
+    | "isLive"
+    | "beginCapture"
+    | "capturedTabs"
+    | "route"
+    | "completeCapture"
+  >;
+  setState<Key extends keyof BrowserPanelSnapshotState>(
+    key: Key,
+    value: BrowserPanelSnapshotState[Key],
+  ): void;
+  clearUnavailableView(): boolean;
+  syncUrlDraft(url: string): void;
+  reportError(error: unknown): void;
+}
 
 /** A remote snapshot owns both its image and the page metrics used for input. */
 export class BrowserPanelSnapshotController {
   constructor(
-    private readonly controller: BrowserPanelController,
+    private readonly controller: BrowserPanelSnapshotHost,
     private readonly viewport: BrowserPanelViewportController,
   ) {}
 
