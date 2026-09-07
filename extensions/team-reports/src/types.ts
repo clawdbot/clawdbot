@@ -1,10 +1,7 @@
 import type { z } from "zod";
 import type { reportDocumentSchema, summaryDocumentSchema } from "./store-schema.js";
 
-export type Period = "day" | "week" | "month";
-
-/** Report window. Day windows are UTC [00:00, 24:00); weeks are ISO weeks (Monday start); months are calendar months. */
-export type PeriodDescriptor = ReportDocument["period"];
+export type { Period, PeriodDescriptor } from "./periods.js";
 
 export type ActivityWindow = { sinceMs: number; untilMs: number };
 
