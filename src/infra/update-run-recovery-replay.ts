@@ -47,6 +47,8 @@ export function createUpdateRecoveryCheckpointReplay(
      * Called only after read-only publication reconciliation. The runtime owner
      * establishes actual prior-runtime readiness, without admission, history or
      * lease cleanup, and returns with database handles closed for reinspection.
+     * Under physical publication exclusion this must not open/retain a general
+     * canonical writer: bindPublishedRecord owns that synchronous aperture.
      * No identity/schema-only fallback is supplied by recovery.
      */
     prepareCanonicalWrite: (record: UpdateRecoveryRecord) => Promise<void>;

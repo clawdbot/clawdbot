@@ -11,6 +11,7 @@ import {
   verifyUpdateCheckpointRestore,
   type UpdateCheckpointRestorePlanRef,
 } from "./update-checkpoint-restore.js";
+import type { UpdateCheckpointReadAccess } from "./update-checkpoint.js";
 import { validateUpdateRecoveryPublicationDatabaseAtPath } from "./update-run-recovery-publication.js";
 import { UpdateRecoveryRecordSchema } from "./update-run-recovery-schema.js";
 import {
@@ -21,6 +22,11 @@ import {
   type UpdateRecoveryFence,
   type UpdateRecoveryRecord,
 } from "./update-run-recovery.js";
+
+type PublishedRecord = UpdateCheckpointReadAccess & {
+  planRef: UpdateCheckpointRestorePlanRef;
+  recoveryRecord: UpdateRecoveryRecord;
+};
 
 /**
  * Executor-owned bridge, never deserialized authority. The runtime assertion must
@@ -35,6 +41,16 @@ export function createUpdateRecoveryCheckpointAdapter(params: {
   fence: UpdateRecoveryFence;
   validateStagedDatabase: (db: DatabaseSync) => undefined;
   assertMatchingRuntime: (runtime: UpdateRecoveryRecord["from"]) => undefined;
+  /**
+   * Live publication owner opens ONLY the synchronous canonical writer aperture.
+   * It validates the original bindings/exact record before and after the CAS and
+   * closes issued handles before resolving. Awaited inspection/runtime readiness
+   * must stay outside write. Omit only for a standalone, non-lease executor.
+   */
+  bindPublishedRecord?: (
+    publication: PublishedRecord,
+    write: (assertOwned: () => void) => UpdateRecoveryRecord,
+  ) => Promise<PublishedRecord>;
 }) {
   let current = UpdateRecoveryRecordSchema.parse(params.expected);
   if (!current.checkpoint || !current.afterImages?.length) {
@@ -43,8 +59,14 @@ export function createUpdateRecoveryCheckpointAdapter(params: {
   const checkpoint = current.checkpoint;
   const afterImage = current.afterImages.at(-1)!;
   let busy = false;
+  let writeFailed = false;
+  function assertUsable() {
+    if (writeFailed) {
+      throw new UpdateRecoveryConflictError();
+    }
+  }
   async function exclusively<T>(operation: () => Promise<T>): Promise<T> {
-    if (busy) {
+    if (busy || writeFailed) {
       throw new UpdateRecoveryConflictError();
     }
     busy = true;
@@ -146,15 +168,84 @@ export function createUpdateRecoveryCheckpointAdapter(params: {
     return inspected;
   }
 
-  function assertWritable(recovery: Awaited<ReturnType<typeof readPlan>>["recovery"]) {
-    params.fence.assertCurrent();
+  function assertWritable(
+    recovery: Awaited<ReturnType<typeof readPlan>>["recovery"],
+    fence: UpdateRecoveryFence,
+  ) {
+    fence.assertCurrent();
     requireSynchronous(params.assertMatchingRuntime(current.from), "assertMatchingRuntime");
-    params.fence.assertCurrent();
+    fence.assertCurrent();
     validateUpdateRecoveryPublicationDatabaseAtPath(
       { ...recovery, role: "live-restored", expected: current },
       database,
     );
-    params.fence.assertCurrent();
+    fence.assertCurrent();
+  }
+
+  async function writePublished(
+    checked: Awaited<ReturnType<typeof published>>,
+    write: (fence: UpdateRecoveryFence) => UpdateRecoveryRecord,
+  ): Promise<UpdateRecoveryRecord> {
+    assertUsable();
+    const bind = params.bindPublishedRecord;
+    if (!bind) {
+      assertWritable(checked.recovery, params.fence);
+      current = write(params.fence);
+      return UpdateRecoveryRecordSchema.parse(current);
+    }
+    const publication: PublishedRecord = {
+      ...access,
+      planRef: planRef(),
+      recoveryRecord: UpdateRecoveryRecordSchema.parse(current),
+    };
+    let active = true;
+    let called = false;
+    let invalid = false;
+    let written: UpdateRecoveryRecord | undefined;
+    try {
+      const updated = await bind(structuredClone(publication), (assertOwned) => {
+        if (!active || called || writeFailed) {
+          writeFailed = true;
+          invalid = true;
+          throw new UpdateRecoveryConflictError();
+        }
+        called = true;
+        const fence = {
+          assertCurrent() {
+            assertUsable();
+            requireSynchronous(assertOwned(), "publication ownership");
+            requireSynchronous(params.fence.assertCurrent(), "recovery exclusion");
+            assertUsable();
+          },
+        };
+        // The bridge may await verification. Repeat exact readback here, inside
+        // its synchronous aperture, and pass BOTH authorities into the transaction.
+        assertWritable(checked.recovery, fence);
+        const next = write(fence);
+        written = UpdateRecoveryRecordSchema.parse(next);
+        return next;
+      });
+      if (
+        writeFailed ||
+        invalid ||
+        !written ||
+        !isDeepStrictEqual(updated, { ...publication, recoveryRecord: written })
+      ) {
+        throw new UpdateRecoveryConflictError();
+      }
+      requireSynchronous(params.fence.assertCurrent(), "recovery exclusion");
+      assertUsable();
+      current = written;
+      return UpdateRecoveryRecordSchema.parse(current);
+    } catch (error) {
+      // A CAS may have committed before an outer verification/acknowledgement
+      // failed. Never retry this adapter or adopt unverified returned evidence.
+      // The next executor must reconcile the exact durable record read-only.
+      writeFailed = true;
+      throw error;
+    } finally {
+      active = false;
+    }
   }
 
   return {
@@ -223,9 +314,7 @@ export function createUpdateRecoveryCheckpointAdapter(params: {
     claimPublished: () =>
       exclusively(async () => {
         const checked = await published();
-        assertWritable(checked.recovery);
-        current = claimUpdateRecovery(current, params.fence, database);
-        return UpdateRecoveryRecordSchema.parse(current);
+        return writePublished(checked, (fence) => claimUpdateRecovery(current, fence, database));
       }),
     observe: () =>
       exclusively(async () => {
@@ -234,14 +323,14 @@ export function createUpdateRecoveryCheckpointAdapter(params: {
         if (checked.result.observations[progress.resourceCursor]?.observed !== "after") {
           throw new UpdateRecoveryConflictError();
         }
-        assertWritable(checked.recovery);
-        current = recordUpdateRecoveryRestoreProgress(
-          current,
-          { ...progress, phase: "observed" },
-          params.fence,
-          database,
+        return writePublished(checked, (fence) =>
+          recordUpdateRecoveryRestoreProgress(
+            current,
+            { ...progress, phase: "observed" },
+            fence,
+            database,
+          ),
         );
-        return UpdateRecoveryRecordSchema.parse(current);
       }),
     next: () =>
       exclusively(async () => {
@@ -255,14 +344,14 @@ export function createUpdateRecoveryCheckpointAdapter(params: {
         ) {
           throw new UpdateRecoveryConflictError();
         }
-        assertWritable(checked.recovery);
-        current = recordUpdateRecoveryRestoreProgress(
-          current,
-          { ...progress, resourceCursor: progress.resourceCursor + 1, phase: "intent" },
-          params.fence,
-          database,
+        return writePublished(checked, (fence) =>
+          recordUpdateRecoveryRestoreProgress(
+            current,
+            { ...progress, resourceCursor: progress.resourceCursor + 1, phase: "intent" },
+            fence,
+            database,
+          ),
         );
-        return UpdateRecoveryRecordSchema.parse(current);
       }),
   };
 }

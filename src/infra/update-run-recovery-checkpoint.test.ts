@@ -27,6 +27,7 @@ import {
   type UpdateRecoveryNativeFacts,
 } from "./update-run-recovery-native.js";
 import { setupNativeManagerFixture } from "./update-run-recovery-native.test-support.js";
+import { registerPublicationWriteTests } from "./update-run-recovery-publication-write.test-support.js";
 import { createUpdateRecoveryCheckpointReplay } from "./update-run-recovery-replay.js";
 import {
   beginUpdateRecovery,
@@ -1024,3 +1025,5 @@ describe("sealed checkpoint replay driver", () => {
     expect(driver.record.restore?.phase).toBe("intent");
   });
 });
+
+registerPublicationWriteTests(fixture);
