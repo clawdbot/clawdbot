@@ -232,7 +232,7 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateNodePairApproveParams, "node.pair.approve", respond)) {
       return;
     }
-    const { requestId } = params;
+    const requestId = params.requestId.trim();
     // Intentionally fail closed for RPC callers without an explicit scoped session.
     const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
     await respondUnavailableOnThrow(respond, async () => {
@@ -334,7 +334,7 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateNodePairRejectParams, "node.pair.reject", respond)) {
       return;
     }
-    const { requestId } = params;
+    const requestId = params.requestId.trim();
     await respondUnavailableOnThrow(respond, async () => {
       if (
         !(await enforcePendingNodePairingOwnership({

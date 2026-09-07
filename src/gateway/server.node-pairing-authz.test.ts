@@ -596,6 +596,40 @@ describe("gateway node pairing authorization", () => {
       }
     });
 
+    test("approves a pending node pair when requestId has clipboard padding", async () => {
+      const victimNodeId = "node-padded-request-id-victim";
+      const request = await requestVictimNodeSurface(victimNodeId);
+      const operator = await issueOperatorToken({
+        name: "node-padded-request-id-operator",
+        approvedScopes: ["operator.pairing", "operator.write"],
+      });
+
+      const ws = await openTrackedWs(getStarted().port);
+      try {
+        await connectOk(ws, {
+          token: "secret",
+          deviceIdentityPath: operator.identityPath,
+          scopes: ["operator.pairing", "operator.write"],
+        });
+
+        const approve = await rpcReq(ws, "node.pair.approve", {
+          requestId: `  ${request.request.requestId}  `,
+        });
+        expect(approve.ok).toBe(true);
+        expect(approve.payload).toEqual(
+          expect.objectContaining({
+            requestId: request.request.requestId,
+            node: expect.objectContaining({ nodeId: victimNodeId }),
+          }),
+        );
+        await expect(findPairedNode(victimNodeId)).resolves.toMatchObject({
+          commands: [NODE_MCP_TOOLS_CALL_COMMAND],
+        });
+      } finally {
+        ws.close();
+      }
+    });
+
     test("allows an admin device-token session to manage another device's node surface", async () => {
       const victimNodeId = "node-admin-device-victim";
       const request = await requestVictimNodeSurface(victimNodeId);
