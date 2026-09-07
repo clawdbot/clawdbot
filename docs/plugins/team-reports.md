@@ -1,7 +1,7 @@
 ---
 summary: "Daily, weekly, and monthly team reports from GitHub activity and Discord discussion"
 read_when:
-  - You are enabling or configuring the bundled Team Reports plugin
+  - You are installing, enabling, or configuring the Team Reports plugin
   - You want team activity reports in the Control UI
   - You need to generate, export, or troubleshoot stored team reports
 title: "Team Reports plugin"
@@ -13,7 +13,10 @@ the Gateway and adds a **Reports** tab to the [Control UI](/web/control-ui).
 Reports include activity counts, per-person history, source warnings, and
 optional model-written summaries.
 
-The plugin is bundled and disabled by default. Report pages use Gateway
+Team Reports is an official external package: it is not part of the core
+`openclaw` npm package and is installed on demand from ClawHub or npm. Source
+checkouts of the repository load it directly from `extensions/team-reports`.
+It stays disabled until you enable it. Report pages use Gateway
 authentication. They are not public just because their default path is `/reports`.
 
 ## Before you begin
@@ -29,9 +32,16 @@ evidence sent to that model can include repository activity and opted-in
 Discord excerpts. Set `summaries.enabled: false` to generate reports with
 deterministic text and no summary model calls.
 
-## Enable Team Reports
+## Install and enable Team Reports
 
-Add the following to your OpenClaw configuration, replacing the example
+Install the package unless you run the Gateway from a source checkout, which
+already contains it:
+
+```bash
+openclaw plugins install @openclaw/team-reports
+```
+
+Then add the following to your OpenClaw configuration, replacing the example
 organization, team, and login with your own:
 
 ```json5

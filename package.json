@@ -336,6 +336,7 @@
     "!dist/extensions/synthetic/**",
     "!dist/extensions/synology-chat/**",
     "!dist/extensions/tavily/**",
+    "!dist/extensions/team-reports/**",
     "!dist/extensions/teams-meetings/**",
     "!dist/extensions/tencent/**",
     "!dist/extensions/tokenjuice/**",

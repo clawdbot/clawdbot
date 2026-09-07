@@ -1,8 +1,9 @@
 # Team Reports
 
-Bundled OpenClaw plugin for daily, weekly, and monthly GitHub activity reports
+Official external OpenClaw plugin for daily, weekly, and monthly GitHub activity reports
 with optional Discord discussion, model-written summaries, and a **Reports**
-tab in the Control UI. Disabled by default.
+tab in the Control UI. Installed on demand (`openclaw plugins install @openclaw/team-reports`);
+source checkouts load it from `extensions/team-reports`. Disabled by default.
 
 Configure `plugins.entries.team-reports.config` with a GitHub token or
 SecretRef, at least one organization, and team or inline identity entries.
