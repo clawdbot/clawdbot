@@ -1,18 +1,33 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { loadSettings } from "../../app/settings.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createTestChatPane } from "./chat-pane-history.test-support.ts";
+import * as bookmarkDialog from "./components/chat-bookmarks-dialog.ts";
+import { openResolvedImage } from "./components/chat-message-image-open.ts";
+import {
+  cacheManagedImageBlobUrl,
+  retainManagedImageBlobUrl,
+  observeChatMediaResource,
+  isChatMediaResourceCurrent,
+  releaseChatMediaResourceSubscriber,
+} from "./components/chat-message-media.ts";
 import {
   getTranscriptState,
   resetThreadPresentation,
   toggleTranscriptSearch,
 } from "./components/chat-thread-interactions.ts";
 
-function bookmarkPane() {
-  const client = createTestGatewayClient(async () => ({ status: "ok", entries: {} }));
+function bookmarkPane(
+  request: Parameters<typeof createTestGatewayClient>[0] = async () => ({
+    status: "ok",
+    entries: {},
+  }),
+) {
+  const client = createTestGatewayClient(request);
   const fixture = createTestChatPane({ client, sessions: {} as SessionCapability });
   const { pane, state } = fixture;
   pane.paneId = "logical-pane";
@@ -46,7 +61,7 @@ afterEach(() => resetThreadPresentation());
 
 describe("bookmark navigation presentation ownership", () => {
   it.each(["agent", "conversation", "generation"] as const)(
-    "does not open an all-conversations reference from another %s",
+    "does not redirect the live transcript to a reference from another %s",
     async (difference) => {
       const { pane, bookmark, reveal } = bookmarkPane();
       const foreign = { ...bookmark };
@@ -115,4 +130,52 @@ describe("bookmark navigation presentation ownership", () => {
       expect(reveal).toHaveBeenCalledOnce();
     },
   );
+});
+
+it("releases a late retained image after the historical reader closes while a shared reader remains", async () => {
+  const { pane, state, bookmark } = bookmarkPane(async (method) =>
+    method === "chat.history"
+      ? {
+          sessionId: "retired-generation",
+          messages: [{ role: "assistant", content: "Saved image", __openclaw: { id: "source" } }],
+        }
+      : { status: "ok", entries: {} },
+  );
+  const handled = vi.fn();
+  state.handleOpenImage = handled;
+  expectDefined(pane.syncBookmarks(), "bookmark access").open({
+    ...bookmark,
+    sessionId: "retired-generation",
+  });
+  await vi.waitFor(() => expect(pane.bookmarks.history?.result.status).toBe("loaded"));
+  const renderer = vi.spyOn(bookmarkDialog, "renderChatBookmarksDialog");
+  pane.renderBookmarksDialog();
+  const media = expectDefined(renderer.mock.calls.at(-1)?.[1].media, "reader media callbacks");
+  const open = expectDefined(media.onOpenImage, "image ownership receiver");
+  const reader = expectDefined(pane.bookmarks.history, "historical reader");
+  const sharedUpdate = vi.fn();
+  const key = "historical-shared-full-image";
+  const shared = observeChatMediaResource("managed-image", key, sharedUpdate);
+  observeChatMediaResource("managed-image", key, reader.updateMedia);
+  const deferred = createDeferred();
+  let retained: (() => void) | undefined;
+  const released = vi.fn(() => retained?.());
+  const opening = deferred.promise.then(() => {
+    const url = "blob:http://localhost/historical-shared-full-image";
+    cacheManagedImageBlobUrl(key, url);
+    retained = expectDefined(retainManagedImageBlobUrl(key), "retained full image");
+    openResolvedImage(open, url, "Saved image", released);
+  });
+  try {
+    pane.bookmarks.close();
+    expect(isChatMediaResourceCurrent(shared)).toBe(true);
+    deferred.resolve();
+    await opening;
+    expect(handled).not.toHaveBeenCalled();
+    expect(released).toHaveBeenCalledOnce();
+  } finally {
+    retained?.();
+    releaseChatMediaResourceSubscriber(sharedUpdate);
+    renderer.mockRestore();
+  }
 });

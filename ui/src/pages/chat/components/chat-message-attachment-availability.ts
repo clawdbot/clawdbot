@@ -140,8 +140,9 @@ export function resolveAssistantAttachmentAvailability(
       refreshingAvailability?.mediaTicket,
       options,
     );
-    const pending = fetch(`${attachmentUrl}&meta=1${allowImage ? "&allow=1" : ""}`, {
-      method: allowImage ? "POST" : "GET",
+    const requestPermission = allowImage && options.allowPermissionRequests !== false;
+    const pending = fetch(`${attachmentUrl}&meta=1${requestPermission ? "&allow=1" : ""}`, {
+      method: requestPermission ? "POST" : "GET",
       headers,
       credentials: "same-origin",
       signal: controller.signal,
@@ -233,6 +234,9 @@ export function retryAssistantAttachmentAvailability(
   options: ImageRenderOptions = {},
   allowImage = false,
 ): void {
+  if (allowImage && options.allowPermissionRequests === false) {
+    return;
+  }
   if (!isLocalAssistantAttachmentSource(source)) {
     options.onRequestUpdate?.();
     return;

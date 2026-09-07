@@ -8,7 +8,11 @@ import type {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerBookmarksEnglish } from "../../i18n/locales/en-bookmarks.ts";
+import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { persistedMessageEntryId, readChatThreadMessageIdentity } from "./chat-thread-items.ts";
+import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
 
 registerBookmarksEnglish();
 
@@ -19,6 +23,15 @@ export type ChatBookmark = {
   sessionId: string;
   messageId: string;
   name: string;
+};
+export type ChatBookmarkHistory = {
+  bookmark: ChatBookmark;
+  showContext: boolean;
+  updateMedia: () => void;
+  result:
+    | { status: "loading" }
+    | { status: "loaded"; messages: unknown[] }
+    | { status: "error"; message: string };
 };
 export type ChatBookmarkScope = {
   client: GatewayBrowserClient;
@@ -47,11 +60,16 @@ function readBookmark(id: string, value: unknown): ChatBookmark | null {
     !id.startsWith(PREFIX) ||
     !row ||
     typeof row.agentId !== "string" ||
+    !row.agentId.trim() ||
     typeof row.sessionKey !== "string" ||
+    !row.sessionKey.trim() ||
     typeof row.sessionId !== "string" ||
+    !row.sessionId.trim() ||
     typeof row.messageId !== "string" ||
+    !row.messageId.trim() ||
     typeof row.name !== "string" ||
     !row.name.trim() ||
+    row.name.includes("\0") ||
     Array.from(row.name).length > 70
   ) {
     return null;
@@ -80,6 +98,7 @@ export class ChatBookmarks {
   open = false;
   editor: { messageId: string; bookmark?: ChatBookmark; name: string } | null = null;
   selectedId: string | null = null;
+  history: ChatBookmarkHistory | null = null;
   private loadAttempt = 0;
 
   constructor(private readonly update: () => void) {}
@@ -103,6 +122,7 @@ export class ChatBookmarks {
     if (!previous && !scope) {
       return;
     }
+    this.clearHistory();
     this.scope = scope;
     this.loadAttempt++;
     this.bookmarks = [];
@@ -127,11 +147,7 @@ export class ChatBookmarks {
   }
 
   canOpen(bookmark: ChatBookmark): boolean {
-    return (
-      bookmark.agentId === this.scope?.agentId &&
-      bookmark.sessionKey === this.scope?.key &&
-      bookmark.sessionId === this.scope?.sessionId
-    );
+    return bookmark.agentId === this.scope?.agentId && bookmark.sessionKey === this.scope?.key;
   }
 
   get results(): ChatBookmark[] {
@@ -179,11 +195,92 @@ export class ChatBookmarks {
   }
 
   show(): void {
+    this.clearHistory();
     this.open = true;
     this.editor = null;
     this.query = "";
     this.allConversations = false;
     void this.refreshIndex();
+  }
+
+  private clearHistory(): void {
+    releaseChatMediaResourceSubscriber(this.history?.updateMedia);
+    this.history = null;
+  }
+
+  close(): void {
+    this.clearHistory();
+    this.editor = null;
+    this.open = false;
+    this.update();
+  }
+
+  backToList(): void {
+    this.clearHistory();
+    this.update();
+  }
+
+  async showHistory(bookmark: ChatBookmark): Promise<void> {
+    const scope = this.scope;
+    if (
+      !scope ||
+      !this.current(scope) ||
+      !this.canOpen(bookmark) ||
+      bookmark.sessionId === scope.sessionId
+    ) {
+      return;
+    }
+    this.clearHistory();
+    this.editor = null;
+    this.error = null;
+    this.open = true;
+    const current = () => this.current(scope) && this.open && this.history === history;
+    const history: ChatBookmarkHistory = {
+      bookmark: { ...bookmark },
+      showContext: false,
+      updateMedia: () => {
+        if (current()) {
+          this.update();
+        }
+      },
+      result: { status: "loading" },
+    };
+    this.history = history;
+    this.update();
+    try {
+      const result = await scope.client.request<ChatHistoryResult>("chat.history", {
+        agentId: bookmark.agentId,
+        sessionKey: bookmark.sessionKey,
+        sessionId: bookmark.sessionId,
+        messageId: bookmark.messageId,
+        limit: 5,
+        maxChars: 50_000,
+        maxBytes: 128_000,
+      });
+      if (!current()) {
+        return;
+      }
+      const messages = visibleChatHistoryMessages(result.messages).filter((message) => {
+        const role = readChatThreadMessageIdentity(message)?.role;
+        return role === "user" || role === "assistant";
+      });
+      // sessionInfo describes the live chat; only the top-level ID owns this archived read.
+      if (
+        result.sessionId !== history.bookmark.sessionId ||
+        !messages.some((message) => persistedMessageEntryId(message) === history.bookmark.messageId)
+      ) {
+        throw new Error(t("chat.bookmarks.historyUnavailable"));
+      }
+      history.result = { status: "loaded", messages };
+    } catch (error) {
+      if (current()) {
+        history.result = { status: "error", message: formatUiError(error) };
+      }
+    } finally {
+      if (current()) {
+        this.update();
+      }
+    }
   }
 
   toggle(messageId: string): void {
@@ -206,6 +303,7 @@ export class ChatBookmarks {
       this.conversationBookmarks.find(
         (item) => item.messageId === messageId && item.sessionId === this.scope?.sessionId,
       );
+    this.clearHistory();
     this.editor = { messageId, bookmark: saved, name: saved?.name ?? "" };
     this.open = true;
     this.error = null;
@@ -233,7 +331,7 @@ export class ChatBookmarks {
     if (!scope?.canWrite || !this.current(scope) || !this.indexReady || this.saving) {
       return;
     }
-    const editing = this.editor !== null;
+    const editing = this.editor;
     this.saving = true;
     this.error = null;
     this.update();
@@ -268,10 +366,9 @@ export class ChatBookmarks {
       if (result.status !== "ok") {
         throw new Error(t("chat.bookmarks.storageUnavailable"));
       }
-      this.editor = null;
       await this.refreshIndex();
-      if (this.current(scope) && editing && !this.error) {
-        this.open = false;
+      if (this.current(scope) && editing && this.editor === editing && !this.error) {
+        this.close();
       }
     } catch (error) {
       if (this.current(scope)) {

@@ -278,7 +278,7 @@ On mouse-hover devices, hover its edge area to reveal it; keyboard focus also ke
 On devices without hover, it remains visible when there is enough gutter space. Nearby bookmarks share a marker:
 activate it repeatedly to cycle through them, or choose a name in the menu.
 The rail hides when the pane has insufficient gutter space. Existing transcript
-display settings remain unchanged. Opening a bookmark closes transcript search
+display settings remain unchanged. Jumping to a bookmark in the current generation closes transcript search
 and reveals its commentary or containing work section without changing saved
 view preferences.
 
@@ -294,9 +294,18 @@ its contents; a shared Owner profile shares these preferences.
 
 Incognito, external catalog conversations, pending messages, and connections
 without a durable profile cannot create bookmarks. Writing requires write scope.
-A reset cannot redirect a saved location to a replacement message: references
-from the earlier generation remain listed for renaming or removal, but cannot
-be opened. Bookmarks do not restore deleted transcript content.
+A reset cannot redirect a saved location to a replacement message. Bookmarks
+from earlier generations of the same conversation open a **read-only excerpt**
+in the existing Bookmarks dialog. The saved message is highlighted; **Show context**
+reveals nearby messages and **Back to bookmarks** returns to the list. The current
+chat, draft, live messages, and position rail are unchanged.
+
+The reader uses the saved conversation and message IDs, follows current read and
+attachment permissions, and cannot send replies, run old tools, or grant file
+access. Closing it or changing the profile, connection, or conversation retires
+its pending results. Missing or inaccessible content produces a visible error;
+bookmarks do not restore deleted transcript content. References to other or
+deleted conversations remain manageable without switching to them.
 
 ## Chat message width
 

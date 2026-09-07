@@ -20,7 +20,20 @@ const enBookmarks = {
       empty: "No bookmarks found.",
       reload: "Reload",
       unavailable:
-        "This bookmark is outside the current conversation or its original generation. You can still rename or remove it.",
+        "This bookmark belongs to another conversation. You can still rename or remove it.",
+      earlier: "Earlier conversation",
+      readOnly: "Read-only",
+      historyNotice:
+        "This is a read-only excerpt from before the reset. Your current chat and draft are unchanged.",
+      historyUnavailable: "The saved message is no longer available in this conversation.",
+      back: "Back to bookmarks",
+      showContext: "Show context",
+      hideContext: "Hide context",
+      markedMessage: "Bookmarked message",
+      noPreview: "This message has no text or attachment preview.",
+      user: "User",
+      assistant: "Assistant",
+      closePreview: "Close preview",
     },
   },
 } satisfies TranslationMap;

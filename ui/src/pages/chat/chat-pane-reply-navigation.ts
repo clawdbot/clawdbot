@@ -10,10 +10,15 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { ChatBookmarks, type ChatBookmark, type ChatBookmarkAccess } from "./chat-bookmarks.ts";
 import { ChatPaneSession } from "./chat-pane-session.ts";
+import {
+  resolveAssistantAttachmentAuthToken,
+  resolveChatArtifactDownload,
+} from "./chat-pane-state.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { persistedMessageEntryId } from "./chat-thread.ts";
 import { renderChatBookmarksDialog } from "./components/chat-bookmarks-dialog.ts";
+import { assistantMediaPolicyKey } from "./components/chat-message-media.ts";
 import {
   closeTranscriptSearch,
   getTranscriptState,
@@ -117,8 +122,12 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
     if (!state || !scope?.isCurrent() || !this.bookmarks.canOpen(bookmark)) {
       return;
     }
+    if (bookmark.sessionId !== scope.sessionId) {
+      void this.bookmarks.showHistory(bookmark);
+      return;
+    }
     this.bookmarks.selectedId = bookmark.id;
-    this.bookmarks.open = false;
+    this.bookmarks.close();
     const transcriptState = getTranscriptState(this.presentationId);
     transcriptState.bookmarkReveal = {
       messageId: bookmark.messageId,
@@ -130,9 +139,43 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
   }
 
   protected renderBookmarksDialog() {
+    const state = this.state;
+    const scope = this.bookmarks.scope;
+    const history = this.bookmarks.history;
+    const currentHistory = () =>
+      Boolean(history && scope?.isCurrent() && this.bookmarks.history === history);
     return renderChatBookmarksDialog(this.bookmarks, {
       update: () => this.requestUpdate(),
       open: (bookmark) => this.openBookmark(bookmark),
+      media:
+        state && scope
+          ? {
+              sessionKey: scope.key,
+              agentId: scope.agentId,
+              connectionEpoch: state.connectionEpoch,
+              resourceBasePath: state.resourceBasePath,
+              authToken: resolveAssistantAttachmentAuthToken(state),
+              policyKey: assistantMediaPolicyKey(
+                selectedChatSessionRow(state),
+                state.mediaPolicyEpoch,
+              ),
+              resolveArtifactDownload: async (params) => {
+                if (!currentHistory()) {
+                  return null;
+                }
+                const result = await resolveChatArtifactDownload(state, params);
+                return currentHistory() ? result : null;
+              },
+              onRequestOpenImage: state.beginImageOpen,
+              onOpenImage: (item, version) => {
+                if (currentHistory()) {
+                  state.handleOpenImage(item, version);
+                } else {
+                  item.release?.();
+                }
+              },
+            }
+          : undefined,
     });
   }
 
