@@ -54,6 +54,7 @@ describe("describeImageWithModelCore", () => {
   }
 
   it("routes minimax-portal image models through the MiniMax VLM endpoint", async () => {
+    vi.useFakeTimers();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     const authStore = { version: 1, profiles: {} };
     const result = await describeImageWithModelCore({

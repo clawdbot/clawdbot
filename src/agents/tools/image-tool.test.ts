@@ -1513,6 +1513,112 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("keeps each sequential request timeout whole under one owner signal", async () => {
+    await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
+      await withTempAgentDir(async (agentDir) => {
+        const secondImagePath = path.join(workspaceDir, "second.png");
+        await fs.copyFile(imagePath, secondImagePath);
+        const requestTimeouts: number[] = [];
+        const requestSignals: Array<AbortSignal | undefined> = [];
+        const describeImage = vi.fn(async (params: ImageDescriptionRequest) => {
+          requestTimeouts.push(params.timeoutMs);
+          requestSignals.push(params.signal);
+          return { text: "ok", model: params.model };
+        });
+        installFastLocalImageProviderStubs({
+          id: "ollama",
+          capabilities: ["image"],
+          describeImage,
+        });
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              imageModel: {
+                primary: "ollama/gemma4:26b-a4b-it-q4_K_M",
+                fallbacks: ["fallback/vision"],
+              },
+            },
+          },
+          tools: {
+            media: {
+              image: { timeoutSeconds: 1 },
+              models: [
+                {
+                  provider: "ollama",
+                  model: "gemma4:26b-a4b-it-q4_K_M",
+                  capabilities: ["image"],
+                  timeoutSeconds: 2,
+                },
+              ],
+            },
+          },
+        };
+        const tool = createRequiredImageTool({ config: cfg, agentDir, workspaceDir });
+
+        await tool.execute("whole-request-budget", {
+          paths: [imagePath, secondImagePath],
+        });
+
+        expect(requestTimeouts).toEqual([2_000, 2_000]);
+        expect(requestSignals[0]).toBeInstanceOf(AbortSignal);
+        expect(requestSignals[1]).toBe(requestSignals[0]);
+      });
+    });
+  });
+
+  it("returns the owner timeout before starting a fallback after the deadline", async () => {
+    await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
+      await withTempAgentDir(async (agentDir) => {
+        const operationController = new AbortController();
+        const timeoutSpy = vi
+          .spyOn(AbortSignal, "timeout")
+          .mockReturnValue(operationController.signal);
+        let markPrimaryStarted!: () => void;
+        const primaryStarted = new Promise<void>((resolve) => {
+          markPrimaryStarted = resolve;
+        });
+        const primary = vi.fn(async () => {
+          markPrimaryStarted();
+          return await new Promise<never>(() => {});
+        });
+        const fallback = vi.fn(async (params: ImageDescriptionRequest) => ({
+          text: "fallback should not start",
+          model: params.model,
+        }));
+        installFastLocalImageProviderStubs(
+          { id: "primary", capabilities: ["image"], describeImage: primary },
+          { id: "fallback", capabilities: ["image"], describeImage: fallback },
+        );
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              imageModel: {
+                primary: "primary/vision",
+                fallbacks: ["fallback/vision"],
+              },
+            },
+          },
+          tools: { media: { image: { timeoutSeconds: 1 } } },
+        };
+        const tool = createRequiredImageTool({ config: cfg, agentDir, workspaceDir });
+
+        try {
+          const execution = tool.execute("image-operation-timeout", { path: imagePath });
+          await primaryStarted;
+          operationController.abort(new DOMException("owner timeout", "TimeoutError"));
+
+          await expect(execution).rejects.toThrow("Image inspection timed out after 600000ms");
+          expect(timeoutSpy).toHaveBeenCalledWith(600_000);
+          expect(firstImageRequest(primary).timeoutMs).toBe(1_000);
+          expect(primary).toHaveBeenCalledTimes(1);
+          expect(fallback).not.toHaveBeenCalled();
+        } finally {
+          timeoutSpy.mockRestore();
+        }
+      });
+    });
+  });
+
   it("pairs minimax-portal primary with MiniMax-VL-01 (and fallbacks) when auth exists", async () => {
     await withTempAgentDir(async (agentDir) => {
       await writeAuthProfiles(agentDir, {
@@ -3592,10 +3698,53 @@ describe("image tool run abort", () => {
       );
     });
 
-    expect(spies.describeImages).toHaveBeenCalledWith(
-      expect.objectContaining({ signal: controller.signal }),
-    );
+    const providerSignal = spies.describeImages.mock.calls[0]?.[0].signal;
+    expect(providerSignal).toBeInstanceOf(AbortSignal);
+    controller.abort();
+    expect(providerSignal?.aborted).toBe(true);
   });
+
+  it.each([false, true])(
+    "times out delayed image preparation before starting the provider (native=%s)",
+    async (modelHasVision) => {
+      vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+      const operationController = new AbortController();
+      const timeoutSpy = vi
+        .spyOn(AbortSignal, "timeout")
+        .mockReturnValue(operationController.signal);
+      let markLoadStarted!: () => void;
+      const loadStarted = new Promise<void>((resolve) => {
+        markLoadStarted = resolve;
+      });
+      const loadWebMedia: MockImageLoadWebMedia = vi.fn(async () => {
+        markLoadStarted();
+        return await new Promise<never>(() => {});
+      });
+      const spies = makeDescribeSpies();
+      installAbortImageDeps(loadWebMedia, spies);
+
+      await withTempAgentDir(async (agentDir) => {
+        const cfg = createMinimaxImageConfig();
+        const tool = createRequiredImageTool({ config: cfg, agentDir, modelHasVision });
+        try {
+          const execution = tool.execute("t1", {
+            prompt: "Describe the image.",
+            path: "https://example.test/a.png",
+            ...(modelHasVision ? {} : { model: "minimax/MiniMax-VL-01" }),
+          });
+          await loadStarted;
+          operationController.abort(new DOMException("owner timeout", "TimeoutError"));
+
+          await expect(execution).rejects.toThrow("Image inspection timed out after 600000ms");
+          expect(timeoutSpy).toHaveBeenCalledWith(600_000);
+          expect(spies.describeImage).not.toHaveBeenCalled();
+          expect(spies.describeImages).not.toHaveBeenCalled();
+        } finally {
+          timeoutSpy.mockRestore();
+        }
+      });
+    },
+  );
 
   it("throws before downloading or calling the provider when the run signal is already aborted", async () => {
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
@@ -3639,7 +3788,8 @@ describe("image tool run abort", () => {
     });
     const loadWebMedia: MockImageLoadWebMedia = vi.fn(async (_url, options) => {
       const downloadSignal = options?.requestInit?.signal;
-      expect(downloadSignal).toBe(controller.signal);
+      expect(downloadSignal).toBeInstanceOf(AbortSignal);
+      expect(downloadSignal?.aborted).toBe(false);
       markDownloadStarted?.();
       return await new Promise<never>((_, reject) => {
         downloadSignal?.addEventListener(

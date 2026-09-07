@@ -45,8 +45,9 @@ const CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS = 30_000;
 const CODEX_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS = 120_000;
 const CODEX_DYNAMIC_COMPUTER_GATEWAY_TIMEOUT_MS = 30_000;
 const CODEX_DYNAMIC_COMPUTER_COMPLETION_GRACE_MS = 30_000;
-/** Timeout for image-understanding style dynamic tool calls. */
-const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
+/** Outer timeout for image inspection: owner operation cap plus completion grace. */
+const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS =
+  CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS + CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS;
 /** Timeout for message-delivery dynamic tool calls. */
 const CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS = 600_000;
 /** Outer default for collector waits: full swarm budget plus completion grace. */
@@ -535,6 +536,23 @@ export function resolveDynamicToolCallTimeoutMs(params: {
   if (params.call.tool === "message") {
     return CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS;
   }
+  if (params.call.tool === "view_image") {
+    // The image owner shares one bounded deadline across every request. This
+    // watchdog only ensures its structured terminal result has time to arrive.
+    return CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS;
+  }
+  if (params.call.tool === "image_generate") {
+    const imageModel = params.config?.agents?.defaults?.mediaModels?.image;
+    const configuredMs =
+      imageModel && typeof imageModel === "object"
+        ? readPositiveFiniteTimeoutMs(imageModel.timeoutMs)
+        : undefined;
+    return clampDynamicToolTimeoutMs(
+      readDynamicToolCallTimeoutMs(params.call.arguments) ??
+        configuredMs ??
+        CODEX_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS,
+    );
+  }
   if (params.call.tool === "agents_wait") {
     // Collector waits default to the full swarm budget, but an operator's
     // configured per-tool timeout still wins over that default. The outer
@@ -543,7 +561,6 @@ export function resolveDynamicToolCallTimeoutMs(params: {
     // being aborted by the harness first.
     const requestedMs =
       readDynamicToolCallTimeoutMs(params.call.arguments) ??
-      readConfiguredDynamicToolTimeoutMs(params.call.tool, params.config) ??
       CODEX_DYNAMIC_AGENTS_WAIT_TOOL_TIMEOUT_MS;
     return Math.max(
       1,
@@ -554,9 +571,7 @@ export function resolveDynamicToolCallTimeoutMs(params: {
     );
   }
   return clampDynamicToolTimeoutMs(
-    readDynamicToolCallTimeoutMs(params.call.arguments) ??
-      readConfiguredDynamicToolTimeoutMs(params.call.tool, params.config) ??
-      CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+    readDynamicToolCallTimeoutMs(params.call.arguments) ?? CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
   );
 }
 
@@ -603,49 +618,6 @@ function readDynamicToolCallTimeoutMs(value: JsonValue | undefined): number | un
   return timeoutSecondsMs === undefined
     ? undefined
     : addTimerTimeoutGraceMs(timeoutSecondsMs, CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS);
-}
-
-function readConfiguredDynamicToolTimeoutMs(
-  toolName: string,
-  config: EmbeddedRunAttemptParams["config"],
-): number | undefined {
-  if (toolName === "image_generate") {
-    const imageModel = config?.agents?.defaults?.mediaModels?.image;
-    if (!imageModel || typeof imageModel !== "object") {
-      return CODEX_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS;
-    }
-    return (
-      readPositiveFiniteTimeoutMs(imageModel.timeoutMs) ??
-      CODEX_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS
-    );
-  }
-
-  if (toolName === "view_image") {
-    const candidates = (config?.tools?.media?.models ?? []).filter(
-      (entry) => !entry.capabilities || entry.capabilities.includes("image"),
-    );
-    const capabilityTimeoutMs = readTimeoutSecondsAsMs(config?.tools?.media?.image?.timeoutSeconds);
-    return Math.max(
-      capabilityTimeoutMs ?? CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS,
-      ...candidates.map(
-        (entry) =>
-          readTimeoutSecondsAsMs(entry.timeoutSeconds) ??
-          capabilityTimeoutMs ??
-          CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS,
-      ),
-    );
-  }
-
-  if (toolName === "message") {
-    return CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS;
-  }
-
-  return undefined;
-}
-
-function readTimeoutSecondsAsMs(value: unknown): number | undefined {
-  const seconds = readPositiveFiniteTimeoutMs(value);
-  return seconds === undefined ? undefined : seconds * 1000;
 }
 
 function readDynamicToolTimeoutSecondsAsMs(value: unknown): number | undefined {

@@ -51,7 +51,7 @@ describe("describeImageWithModelCore", () => {
         fileName: "image.png",
         mime: "image/png",
         prompt: "Describe the image.",
-        timeoutMs: 1000,
+        timeoutMs: 10_000,
       }),
     ).rejects.toThrow(
       "Model does not support images: lmstudio/text-only (resolved lmstudio/text-only input: text)",
@@ -127,6 +127,7 @@ describe("describeImageWithModelCore", () => {
   });
 
   it("clamps oversized image description timeouts before scheduling", async () => {
+    vi.useFakeTimers();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
@@ -518,7 +519,7 @@ describe("describeImageWithModelCore", () => {
     expect(releasePreparedModelRuntimeMock).toHaveBeenCalledOnce();
   });
 
-  it("keeps the full configured timeout for provider requests after slow setup", async () => {
+  it("keeps the full CLI provider request timeout after runtime setup", async () => {
     vi.useFakeTimers();
     const slowSetupMs = 400;
     discoverModelsMock.mockReturnValue({
@@ -549,7 +550,15 @@ describe("describeImageWithModelCore", () => {
         return { authStorage, model, modelRegistry };
       },
     );
-    completeMock.mockImplementation(() => new Promise(() => {}));
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "ok" }],
+    });
 
     const result = describeImageWithModelCore({
       cfg: {},
@@ -575,13 +584,65 @@ describe("describeImageWithModelCore", () => {
       throw new Error("Expected image completion abort signal");
     }
     expect(options.timeoutMs).toBe(1000);
+    await expect(result).resolves.toEqual({ text: "ok", model: "gpt-5.4-mini" });
+  });
 
-    const assertion = expect(result).rejects.toThrow(
-      `image description request timed out after 1000ms (setup took ${slowSetupMs}ms before provider request started)`,
-    );
-    await vi.advanceTimersByTimeAsync(1000);
-    await assertion;
-    expect(options.signal.aborted).toBe(true);
+  it("keeps the full provider request timeout for a reasoning retry", async () => {
+    vi.useFakeTimers();
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4-mini",
+        input: ["text", "image"],
+        baseUrl: "https://api.openai.com/v1",
+      })),
+    });
+    completeMock
+      .mockImplementationOnce(async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 400);
+        });
+        return {
+          role: "assistant",
+          api: "openai-responses",
+          provider: "openai",
+          model: "gpt-5.4-mini",
+          stopReason: "stop",
+          timestamp: Date.now(),
+          content: [{ type: "thinking", thinking: "internal", thinkingSignature: "reasoning" }],
+        };
+      })
+      .mockResolvedValueOnce({
+        role: "assistant",
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.4-mini",
+        stopReason: "stop",
+        timestamp: Date.now(),
+        content: [{ type: "text", text: "retry ok" }],
+      });
+
+    const result = describeImageWithModelCore({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    await vi.advanceTimersByTimeAsync(400);
+    await expect(result).resolves.toEqual({ text: "retry ok", model: "gpt-5.4-mini" });
+    expect(
+      expectDefined(completeMock.mock.calls[0], "initial image completion call 0")[2].timeoutMs,
+    ).toBe(1000);
+    expect(
+      expectDefined(completeMock.mock.calls[1], "retry image completion call 1")[2].timeoutMs,
+    ).toBe(1000);
   });
 
   it("rejects when image runtime setup exceeds the request timeout", async () => {

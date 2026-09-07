@@ -20,7 +20,7 @@ const dynamicCallContext = { threadId: "thread-1", turnId: "turn-1", namespace: 
 
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
 const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
-const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
+const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 630_000;
 const CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS = CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS;
 const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
 
@@ -126,7 +126,7 @@ describe("dynamic tool execution helpers", () => {
           },
         },
       }),
-    ).toBe(180_000);
+    ).toBe(CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS);
     expect(
       resolveDynamicToolCallTimeoutMs({
         call: {
@@ -152,7 +152,7 @@ describe("dynamic tool execution helpers", () => {
           },
         },
       }),
-    ).toBe(180_000);
+    ).toBe(CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS);
   });
 
   it("uses default media and message dynamic tool deadlines", () => {
@@ -228,7 +228,7 @@ describe("dynamic tool execution helpers", () => {
     ).toBe(CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS);
   });
 
-  it("uses media image config and caps excessive dynamic tool timeouts", () => {
+  it("keeps the view_image outer budget independent and caps explicit tool timeouts", () => {
     expect(
       resolveDynamicToolCallTimeoutMs({
         call: {
@@ -249,7 +249,7 @@ describe("dynamic tool execution helpers", () => {
           },
         },
       }),
-    ).toBe(180_000);
+    ).toBe(CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS);
     expect(
       resolveDynamicToolCallTimeoutMs({
         call: {

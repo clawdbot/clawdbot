@@ -155,7 +155,7 @@ export function resolveProviderOperationTimeoutMs(params: {
 }
 
 /** Builds the canonical error for an exhausted provider operation deadline. */
-function createProviderOperationTimeoutError(deadline: ProviderOperationDeadline): Error {
+export function createProviderOperationTimeoutError(deadline: ProviderOperationDeadline): Error {
   const timeoutLabel =
     typeof deadline.timeoutMs === "number" ? ` after ${deadline.timeoutMs}ms` : "";
   return new Error(`${deadline.label} timed out${timeoutLabel}`);

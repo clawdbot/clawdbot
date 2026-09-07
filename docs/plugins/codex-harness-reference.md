@@ -764,23 +764,24 @@ first available timeout in this order:
 - For `image_generate`, `agents.defaults.mediaModels.image.timeoutMs`.
 - For `image_generate` without a configured timeout, the 120 second
   image-generation default.
-- For the media-understanding `view_image` tool, the selected image-capable `tools.media.models[]` entry's `timeoutSeconds`
-  converted to milliseconds, or the 60 second media default. For image
-  understanding, this applies to the request itself and is not reduced by
-  earlier preparation work.
+- For the media-understanding `view_image` tool, a fixed 630 second outer
+  watchdog. The OpenClaw-owned image operation has a separate fixed 600 second
+  ceiling so its structured result has 30 seconds to reach Codex. Selected
+  image-capable `tools.media.models[]` entries keep their `timeoutSeconds` as a
+  full per-provider-request allowance; preparation does not consume it.
 - For the `message` tool, a fixed 600 second outer budget that covers Gateway delivery and bounded same-key reconciliation.
 - The 90 second dynamic-tool default.
 
 This watchdog is the outer dynamic `item/tool/call` budget. Provider-specific
 request timeouts run inside that call and keep their own timeout semantics.
-Ordinary dynamic tool budgets are capped at 600000 ms. `agents_wait` adds 30000 ms
-of outer completion grace. Human-interaction tools use the validated question
-wait plus 30000 ms: `ask_user` and `secrets` credential requests honor their question
-timeout, while delegated `openclaw` calls use the fixed 930000 ms default. That
-budget covers the ten-minute approval window plus staging and application;
-model-authored arguments cannot override it. The app-server request watchdog
-leaves another 30000 ms beyond the applicable tool budget for the result to reach
-Codex.
+Dynamic tool budgets are capped at 600000 ms. `view_image` and `agents_wait`
+add 30000 ms of outer completion grace. The app-server request watchdog leaves
+another 30000 ms beyond the applicable tool budget, allowing up to 660000 ms
+for their structured result to reach Codex. Human-interaction tools use the
+validated question wait plus 30000 ms: `ask_user` and `secrets` credential
+requests honor their question timeout, while delegated `openclaw` calls use
+the fixed 930000 ms default. That budget covers the ten-minute approval window
+plus staging and application; model-authored arguments cannot override it.
 
 On timeout, OpenClaw aborts the tool signal where supported and returns a failed
 dynamic-tool response to Codex so the turn can continue instead of leaving the
