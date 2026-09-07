@@ -19,6 +19,63 @@ const fail = (message: string): never => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("worker deploy build plugin", () => {
+  it.each(["escaped.mjs", "worker/extra.mjs", "worker/native.node", "worker/runtime.wasm"])(
+    "rejects an unstaged emitted %s before publishing the worker graph",
+    (fileName) => {
+      const plugin = createWorkerDeployBuildPlugin();
+      expect(() =>
+        plugin.generateBundle.call(
+          { error: fail },
+          {},
+          {
+            "worker/worker.mjs": { type: "chunk", fileName: "worker/worker.mjs", isEntry: true },
+            [fileName]: { type: fileName.endsWith(".mjs") ? "chunk" : "asset", fileName },
+          },
+        ),
+      ).toThrow(`Worker deploy artifact emits unstaged runtime asset ${fileName}.`);
+    },
+  );
+
+  it("keeps the complete deploy graph inside its single staged worker file", async () => {
+    const { build } = await import("tsdown");
+    const { default: configs } = await import("../../tsdown.config.ts");
+    const config = configs.find(
+      (candidate) =>
+        typeof candidate.entry === "object" &&
+        !Array.isArray(candidate.entry) &&
+        candidate.entry?.["worker/worker"] === "src/worker/worker-deploy-entry.ts",
+    );
+    if (!config) {
+      throw new Error("Worker deploy build config is missing");
+    }
+    const root = tempDirs.make("openclaw-worker-complete-graph-");
+    const bundles = await build({
+      ...config,
+      config: false,
+      outDir: path.join(root, "dist"),
+      dts: false,
+      logLevel: "silent",
+    });
+    try {
+      // A dynamic import cycle can leave an unstaged root facade even with code splitting off.
+      expect(bundles.flatMap((bundle) => bundle.chunks.map((chunk) => chunk.fileName))).toEqual([
+        "worker/worker.mjs",
+      ]);
+      const { collectWorkerDeployArtifactErrors } =
+        await import("../../scripts/check-cli-bootstrap-imports.mts");
+      expect(
+        collectWorkerDeployArtifactErrors({
+          rootDir: root,
+          workerDeployEntrypoints: ["dist/worker/worker.mjs"],
+        }),
+      ).toEqual([]);
+    } finally {
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
+    }
+  });
+
   it("preserves WebSocket transport and lazy transcription in relocated worker output", async () => {
     const { build } = await import("tsdown");
     const { default: buildConfigs } = await import("../../tsdown.config.ts");

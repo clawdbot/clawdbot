@@ -10,15 +10,15 @@ import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { resolveOpenClawRegisteredAgentDatabasePath } from "../state/openclaw-state-db.paths.js";
-import { sha256Hex } from "./crypto-digest.js";
 import { resolveUserPath } from "./home-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
+import { hasNodeErrorCode } from "./path-guards.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-location.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
+import { resolveUpdateCandidateStatePath } from "./update-candidate-paths.js";
 
 const UpdateStateSchemaVersionsSchema = z.array(
   z.object({
@@ -236,40 +236,6 @@ export async function readUpdateStateSchemaVersions({
     );
   }
   return UpdateStateSchemaVersionsSchema.parse(JSON.parse(result.stdout.toString("utf8")));
-}
-
-/** Shared with config projection so custom agent directories use their copied database. */
-export function resolveUpdateCandidateStatePath(
-  sourceRoot: string,
-  targetRoot: string,
-  source: string,
-): string {
-  // Registered link/../ locators can identify a different inode from their
-  // normalized spelling; flattening them would overwrite another copied database.
-  const relative =
-    path.normalize(source) === source && isPathInside(sourceRoot, source)
-      ? path.relative(sourceRoot, source)
-      : path.join("candidate-external", sha256Hex(source));
-  return path.join(targetRoot, relative);
-}
-
-/** Plugin locators cannot overwrite the separately snapshotted state databases. */
-export function resolveUpdateCandidatePluginPath(
-  sourceRoot: string,
-  targetRoot: string,
-  source: string,
-): string {
-  const managed = ["npm", "extensions"].some((directory) =>
-    isPathInside(path.join(sourceRoot, directory), source),
-  );
-  return managed
-    ? resolveUpdateCandidateStatePath(sourceRoot, targetRoot, source)
-    : path.join(
-        targetRoot,
-        "candidate-plugins",
-        sha256Hex(path.parse(source).root),
-        path.relative(path.parse(source).root, source),
-      );
 }
 
 /** Keep snapshot dependencies out of schema inspection; rebind registry paths to private copies. */
