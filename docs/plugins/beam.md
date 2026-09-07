@@ -134,11 +134,19 @@ A continuation belongs to the authenticated operator who creates it. From then o
 
 User turns are attributed to the verified publisher of the current snapshot, using their current profile name and avatar, including merged profiles. Beam's upload format does not identify individual authors within a multi-user transcript. The uploader reference shares the snapshot's seven-day retention and is replaced on each upload. Shared-token uploads, failed profile resolution, and older snapshots without a recorded uploader display **User**; they never inherit the viewer's identity or a previous uploader's identity. Reupload an older snapshot through personal authentication to attribute it.
 
+### Delete
+
+Any operator with `operator.write` can delete a Beam from its sidebar row menu.
+Deletion is permanent and immediate. Re-uploading the same `beamId` recreates the
+row, whether through the manual skill or a still-active mirror's next upload.
+Mirrors skip unchanged snapshots, so recreation does not necessarily happen on
+the next poll. Deleting a Beam does not affect continuations already created from it.
+
 ## Security boundary
 
 Beam publication is not remote control.
 
-- Continuing makes an independent Gateway-owned session. Beam itself has no archive, terminal, tool, or node capability.
+- Continuing makes an independent Gateway-owned session. Beam itself has no filesystem, terminal, tool, or node capability.
 - It accepts text-only normalized transcript items, not HTML, scripts, archives, attachments, or server-fetched URLs.
 - The official skill removes raw tool results, reasoning, prompts, local paths, credentials, cookies, and auth material before upload.
 - The receiver treats every transcript as untrusted text. The first message in the Beam composer is the explicit operator action that copies it into a new session.

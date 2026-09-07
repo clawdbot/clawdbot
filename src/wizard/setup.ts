@@ -550,7 +550,8 @@ async function runSetupWizardOnce(
     config: gateway.nextConfig,
     workspace: workspaceDir,
     preserveCandidateRoster: usedImportFlow && hasAuthoredRoster,
-    baseConfig,
+    // Pending setup choices must remain changes relative to the saved snapshot.
+    baseConfig: currentSetupSnapshot.runtimeConfig ?? currentSetupSnapshot.config,
     ...(firstAgent ? { firstAgent } : {}),
   });
   nextConfig = onboardingAgent.config;

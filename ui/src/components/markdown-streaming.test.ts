@@ -2,13 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import * as markdownDetails from "./markdown-details.ts";
 import { splitStableStreamingMarkdown } from "./markdown-streaming.ts";
+import { htmlFragment } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
-
-function htmlFragment(html: string): HTMLElement {
-  const container = document.createElement("div");
-  container.innerHTML = html;
-  return container;
-}
 
 describe("toStreamingMarkdownParts", () => {
   it("does not rescan completed disclosures in appended prefixes", () => {

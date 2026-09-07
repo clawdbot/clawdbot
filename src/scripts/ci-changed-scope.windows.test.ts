@@ -265,6 +265,7 @@ describe("detectChangedScope Windows routing", () => {
       paths: [
         "src/plugin-sdk/node-host.ts",
         "src/plugin-sdk/node-host.test.ts",
+        "src/node-host/invoke-agent-cli-claude.test.ts",
         "src/process/supervisor/supervisor.anchored-shell.real.test.ts",
         "src/process/terminal-pty.test.ts",
         "src/tui/tui.ts",

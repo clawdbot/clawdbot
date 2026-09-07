@@ -3,6 +3,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { ControlUiPanel } from "../../../../src/plugin-sdk/control-ui.js";
+import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
 import type { BrowserTabSelection } from "../../components/browser/browser-target.ts";
 import { icons } from "../../components/icons.ts";
 import { renderPanelLoadingSkeleton } from "../../components/panel-loading-skeleton.ts";
@@ -139,6 +140,10 @@ export function sidebarPanelDefinitions(
         data-chat-autotype-exempt
         .client=${state.connected ? state.client : null}
         .available=${state.browserPanelAvailable}
+        .remoteAvailable=${isBrowserPanelAvailable({
+          phase: state.connected ? "connected" : "offline",
+          hello: state.hello,
+        })}
         .presented=${params?.browserPresented ?? false}
         .refreshOnPresentation=${params?.browserRefreshOnPresentation ?? true}
         .sessionKey=${state.sessionKey}

@@ -469,6 +469,12 @@ the durable write succeeds. A future network-backed owner must preserve that
 ordering while awaiting its driver.
 
 Session reclamation keeps its deletion transaction on a worker connection.
+The worker opens its database under the session writer, then releases that writer
+while full integrity and foreign-key checks run on the same connection. Unrelated
+session writes can continue during those checks. It reacquires the writer and
+revalidates current authority before index repair, schema work, or deletion.
+The connection and lease remain owned throughout admission; refusal unwinds that
+owner, and final writer admission remains held until the worker exits.
 Archive publication and cascading deletion remain atomic. Before COMMIT, the
 worker publishes its authorization request in shared memory and waits for the
 parent's current owner check. Synchronous writers service that request at the shared
