@@ -660,6 +660,14 @@ Other approval helpers:
   duplicate `approval-runtime` exports and its unused
   `matchesApprovalRequestSessionFilter` export have been retired. The core
   implementations are unchanged.
+- Use `createNativeApprovalControlRegistry` from
+  `openclaw/plugin-sdk/approval-native-runtime` for process-local native card
+  tokens. Each instance owns a 1,024-binding FIFO registry and holds its claim
+  through Gateway resolution and the terminal card update. Missing approvals
+  retire their tokens; other failures release the claim for retry. Plugins
+  validate native event scope and authorize the actor before calling `settle`,
+  retain their lookup-expiry policy through `releaseClaimOnLookupExpiry`, and
+  use `onComplete` for transport-owned cleanup such as manual-prompt suppression.
 - Use `createNativeApprovalChannelRouteGates` from
   `openclaw/plugin-sdk/approval-native-runtime` when a channel supports both
   session-origin native delivery and explicit approval forwarding targets. The

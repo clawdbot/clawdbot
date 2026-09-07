@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  getGoogleChatApprovalCardBinding,
+  googleChatApprovalControls,
   registerGoogleChatManualApprovalFollowupSuppression as registerGoogleChatManualApprovalFollowupSuppressionRaw,
   registerGoogleChatApprovalCardBinding as registerGoogleChatApprovalCardBindingRaw,
   shouldSuppressGoogleChatManualExecApprovalFollowupPayload,
   shouldSuppressGoogleChatManualExecApprovalFollowupText,
-  unregisterGoogleChatApprovalCardBindings,
   unregisterGoogleChatManualApprovalFollowupSuppression,
 } from "./approval-card-actions.js";
 
@@ -50,7 +49,7 @@ function registerExecApprovalCard(overrides?: {
 
 describe("Google Chat approval card action registry", () => {
   afterEach(() => {
-    unregisterGoogleChatApprovalCardBindings([...registeredTokens]);
+    googleChatApprovalControls.unregister([...registeredTokens]);
     for (const registeredApprovalId of registeredApprovalIds) {
       unregisterGoogleChatManualApprovalFollowupSuppression(registeredApprovalId);
     }
@@ -146,7 +145,7 @@ describe("Google Chat approval card action registry", () => {
       messageName: "spaces/AAA/messages/msg-1",
       expiresAtMs: Date.now() + 60_000,
     });
-    expect(getGoogleChatApprovalCardBinding(firstToken)).not.toBeNull();
+    expect(googleChatApprovalControls.get(firstToken)).not.toBeNull();
 
     for (let i = 1; i <= 1024; i += 1) {
       registerGoogleChatApprovalCardBinding({
@@ -162,8 +161,8 @@ describe("Google Chat approval card action registry", () => {
       });
     }
 
-    expect(getGoogleChatApprovalCardBinding(firstToken)).toBeNull();
-    expect(getGoogleChatApprovalCardBinding("token-fill-1024")).not.toBeNull();
+    expect(googleChatApprovalControls.get(firstToken)).toBeNull();
+    expect(googleChatApprovalControls.get("token-fill-1024")).not.toBeNull();
   });
 
   it("evicts oldest manual approval follow-up suppressions once the cache exceeds its cap", () => {

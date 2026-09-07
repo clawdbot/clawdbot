@@ -1,6 +1,7 @@
 /**
  * Runtime SDK subpath for native approval routing, target matching, and forwarding gates.
  */
+export { createNativeApprovalControlRegistry } from "./approval-native-controls.js";
 export {
   createChannelApprovalForwardingEvaluator,
   createChannelApproverDmTargetResolver,
