@@ -24,7 +24,6 @@ import {
   clearActiveEmbeddedRun,
   queueEmbeddedAgentMessageWithOutcome,
   setActiveEmbeddedRun,
-  type AbortAndDrainEmbeddedAgentRunResult,
   type EmbeddedAgentQueueMessageOptions,
 } from "../agents/embedded-agent-runner/runs.js";
 import { runStructuredInput } from "../agents/harness/structured-input-execution.js";
@@ -37,11 +36,15 @@ import {
 } from "../agents/harness/structured-input.js";
 import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
 import { inferToolMetaFromArgsCore } from "../agents/tool-display.js";
+import { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
+import { expandToolGroups } from "../agents/tool-policy-shared.js";
 import {
   buildWatchedSessionsPromptLines,
   prepareWatchedSessionsPrompt,
 } from "../agents/watched-sessions-prompt.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveExecModePolicy } from "../infra/exec-approvals-core.js";
+import { maxAsk, minSecurity } from "../infra/exec-approvals-policy.js";
 import type { ImageContent } from "../llm/types.js";
 import { redactToolDetail } from "../logging/redact.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
@@ -49,6 +52,9 @@ import { truncateUtf16Safe } from "../utils.js";
 
 /** Default truncation limit for user-facing tool progress output. */
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
+
+/** Core exec mode algebra for plugin-owned policy adapters. */
+export const execPolicy = Object.freeze({ resolveExecModePolicy, minSecurity, maxAsk });
 
 /**
  * Renders the Watched Sessions prompt block for plugin-owned harness prompts.
@@ -306,7 +312,6 @@ export {
   resolveActiveEmbeddedRunSessionId,
   setActiveEmbeddedRun,
 };
-export type { AbortAndDrainEmbeddedAgentRunResult as AbortAndDrainAgentHarnessRunResult };
 
 /**
  * @deprecated Active-run queueing is an internal runtime concern. This legacy
@@ -392,6 +397,24 @@ export async function loadCodexBundleMcpThreadConfig(
     await import("../agents/codex-mcp-config.js");
   return load(params);
 }
+
+/** Load shared MCP request and subprocess ownership only when opening a connection. */
+export const mcpStdioRuntime = Object.freeze({
+  async load() {
+    const [{ createMcpStdioClient }, { OpenClawStdioClientTransport }, lifecycle] =
+      await Promise.all([
+        import("../agents/mcp-stdio-client.js"),
+        import("../agents/mcp-stdio-transport.js"),
+        import("../agents/mcp-client-lifecycle.js"),
+      ]);
+    return {
+      createMcpStdioClient,
+      OpenClawStdioClientTransport,
+      connectMcpClient: lifecycle.connectMcpClient,
+      disposeMcpClient: lifecycle.disposeMcpClient,
+    };
+  },
+});
 
 export type { McpToolCatalog, SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 export { assignSafeServerNames as assignMcpCatalogSafeServerNames } from "../agents/agent-bundle-mcp-names.js";
@@ -644,3 +667,5 @@ export function classifyAgentHarnessTerminalOutcome(
 function hasVisibleAssistantText(assistantTexts: readonly string[]): boolean {
   return assistantTexts.some((text) => text.trim().length > 0);
 }
+
+export const toolPolicy = Object.freeze({ createToolPolicyMatcher, expandToolGroups });

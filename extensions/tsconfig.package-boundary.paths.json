@@ -927,6 +927,9 @@
       ],
       "openclaw/plugin-sdk/provider-model-metadata": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/provider-model-metadata.d.ts"
+      ],
+      "openclaw/plugin-sdk/websocket-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/websocket-runtime.d.ts"
       ]
     }
   }

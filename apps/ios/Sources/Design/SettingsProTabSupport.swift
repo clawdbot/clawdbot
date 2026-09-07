@@ -6,16 +6,9 @@ import UserNotifications
 
 enum SettingsRoute: Hashable {
     case gateway
-    case systemAgent
     case appleWatch
     case approvals
-    case permissions
-    case channels
-    case skills
-    case voice
     case diagnostics
-    case privacy
-    case notifications
     case licenses
     case about
 }
@@ -312,28 +305,6 @@ enum SettingsNotificationPresentation: Equatable {
         case .denied: String(localized: "Denied")
         case .notSet: String(localized: "Not Enabled")
         case .unknown: String(localized: "Unknown")
-        }
-    }
-
-    var detail: String {
-        switch self {
-        case .checking:
-            String(localized: "Checking iOS notification permission.")
-        case .enabled:
-            String(
-                localized: "OpenClaw can show approval prompts and event alerts when the app is not active.")
-        case .off:
-            String(localized: "OpenClaw notifications are off.")
-        case .setup:
-            String(
-                localized: "Finish notification setup to receive alerts when the app is not active.")
-        case .denied:
-            String(localized: "Notifications have been denied. Enable them in iOS Settings.")
-        case .notSet:
-            String(
-                localized: "Enable notifications to receive approval prompts and event alerts outside the app.")
-        case .unknown:
-            String(localized: "OpenClaw cannot determine the current notification permission state.")
         }
     }
 

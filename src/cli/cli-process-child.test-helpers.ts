@@ -44,6 +44,49 @@ export function formatCliProcessFailure(params: {
   )}\n--- child stdout (tail) ---\n${formatOutputTail(params.stdout)}`;
 }
 
+/** Observe a marker without taking ownership of the shared stderr pipe. */
+export function waitForCliProcessStderrMarker(
+  child: ChildProcessWithoutNullStreams,
+  marker: string,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let stderr = "";
+    const cleanup = () => {
+      child.stderr.off("data", onData);
+      child.stderr.off("end", onEnd);
+      child.stderr.off("close", onClose);
+      child.stderr.off("error", onError);
+      child.off("error", onError);
+    };
+    const fail = (reason: string, cause?: Error) => {
+      cleanup();
+      reject(
+        new Error(`CLI stderr ${reason} before marker ${JSON.stringify(marker)}\n${stderr}`, {
+          cause,
+        }),
+      );
+    };
+    const onData = (chunk: string | Buffer) => {
+      stderr += chunk.toString();
+      if (stderr.includes(marker)) {
+        cleanup();
+        resolve();
+      }
+    };
+    const onEnd = () => fail("ended");
+    const onClose = () => fail("closed");
+    const onError = (error: Error) => fail(`failed: ${error.message}`, error);
+    child.stderr.on("data", onData);
+    child.stderr.once("end", onEnd);
+    child.stderr.once("close", onClose);
+    child.stderr.once("error", onError);
+    child.once("error", onError);
+    if (child.stderr.readableEnded || child.stderr.destroyed) {
+      onEnd();
+    }
+  });
+}
+
 /** Runs one CLI child to completion under {@link CLI_PROCESS_DEADLOCK_GUARD_MS}. */
 export async function runCliProcessChild(params: {
   nodeArgs: string[];

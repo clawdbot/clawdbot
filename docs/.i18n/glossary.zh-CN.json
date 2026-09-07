@@ -2448,6 +2448,42 @@
     "target": "PDF 工具"
   },
   {
+    "source": "Run Codex on another machine",
+    "target": "在其他机器上运行 Codex"
+  },
+  {
+    "source": "Codex routing and deployment",
+    "target": "Codex 路由与部署"
+  },
+  {
+    "source": "Codex harness configuration",
+    "target": "Codex harness 配置"
+  },
+  {
+    "source": "Codex app-server policy",
+    "target": "Codex app-server 策略"
+  },
+  {
+    "source": "Codex plugin config fields",
+    "target": "Codex 插件配置字段"
+  },
+  {
+    "source": "Codex commands and diagnostics",
+    "target": "Codex 命令与诊断"
+  },
+  {
+    "source": "Codex runtime behavior",
+    "target": "Codex 运行时行为"
+  },
+  {
+    "source": "Native Codex state and features",
+    "target": "原生 Codex 状态与功能"
+  },
+  {
+    "source": "Codex harness troubleshooting",
+    "target": "Codex harness 故障排查"
+  },
+  {
     "source": "Security trust model",
     "target": "安全信任模型"
   },

@@ -64,6 +64,7 @@ import {
   estimateToolResultTextChars,
   resolveLiveToolResultMaxChars,
   sliceToolResultTextToBudget,
+  sliceUtf16Safe,
 } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CodexDynamicToolsLoading } from "./config.js";
 import { finalizeCodexToolAvailability } from "./dynamic-tool-availability.js";
@@ -1390,10 +1391,53 @@ function normalizeToolResultMaxChars(maxChars: number): number {
     ? Math.floor(maxChars)
     : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 }
+function sanitizeToolTextRuns(
+  rawContent: Array<TextContent | ImageContent>,
+): Array<TextContent | ImageContent> {
+  const content: Array<TextContent | ImageContent> = [];
+  for (let index = 0; index < rawContent.length;) {
+    const item = rawContent[index]!;
+    if (item.type !== "text") {
+      content.push(item);
+      index += 1;
+      continue;
+    }
+
+    const textRun: TextContent[] = [];
+    while (index < rawContent.length) {
+      const next = rawContent[index]!;
+      if (next.type !== "text") {
+        break;
+      }
+      textRun.push(next);
+      index += 1;
+    }
+
+    const sanitizedText = sanitizeToolResult(textRun.map((entry) => entry.text).join(""));
+    let offset = 0;
+    content.push(
+      ...textRun.map((entry, runIndex) => {
+        const targetEnd =
+          runIndex === textRun.length - 1
+            ? sanitizedText.length
+            : Math.min(sanitizedText.length, offset + entry.text.length);
+        const text = sliceUtf16Safe(sanitizedText, offset, targetEnd);
+        const sanitized = Object.assign({}, entry, { text });
+        offset += text.length;
+        return sanitized;
+      }),
+    );
+  }
+  return content;
+}
 function convertToolContents(
-  content: Array<TextContent | ImageContent>,
+  rawContent: Array<TextContent | ImageContent>,
   toolResultMaxChars = DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
 ): CodexDynamicToolCallOutputContentItem[] {
+  // Adjacent text items form one model-visible stream, so sanitize each full run before
+  // repartitioning and budgeting. Image blocks keep their bytes; the storage-oriented
+  // whole-result branch of sanitizeToolResult would drop them.
+  const content = sanitizeToolTextRuns(rawContent);
   const maxChars = normalizeToolResultMaxChars(toolResultMaxChars);
   const totalTextChars = content.reduce(
     (total, item) => total + (item.type === "text" ? item.text.length : 0),
