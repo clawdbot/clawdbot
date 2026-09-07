@@ -2349,7 +2349,6 @@ src/cli/program/register.migrate.ts	12
 src/cli/program/register.onboard.ts	27
 src/cli/program/register.setup.ts	2
 src/cli/program/register.status-health-sessions.ts	29
-src/cli/program/route-specs.ts	1
 src/cli/run-main.ts	1
 src/cli/sandbox-cli.ts	4
 src/cli/secrets-cli.ts	2
