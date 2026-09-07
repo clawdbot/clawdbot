@@ -8,6 +8,7 @@ import {
   resolveOpenClawCrablineChannelDriverSelection,
 } from "@openclaw/crabline";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readRegularFile } from "openclaw/plugin-sdk/file-access-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { parseBooleanValue, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -79,6 +80,7 @@ import {
   qaTransportSupportsModuleFlows,
   type QaTransportId,
 } from "./qa-transport-registry.js";
+import { compareQaRunConditions } from "./run-comparability.js";
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
@@ -1175,6 +1177,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
 }
 
 export async function runQaParityReportCommand(opts: {
+  crossHarness?: boolean;
   repoRoot?: string;
   candidateSummary?: string;
   baselineSummary?: string;
@@ -1186,6 +1189,11 @@ export async function runQaParityReportCommand(opts: {
   tokenEfficiency?: boolean;
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  if (opts.crossHarness && (opts.runtimeAxis || opts.tokenEfficiency)) {
+    throw new Error(
+      "--cross-harness cannot be combined with --runtime-axis or --token-efficiency.",
+    );
+  }
   if (opts.tokenEfficiency === true && opts.runtimeAxis !== true) {
     throw new Error("--token-efficiency requires --runtime-axis.");
   }
@@ -1244,6 +1252,28 @@ export async function runQaParityReportCommand(opts: {
   }
   const candidateSummaryPath = path.resolve(repoRoot, opts.candidateSummary);
   const baselineSummaryPath = path.resolve(repoRoot, opts.baselineSummary);
+  if (opts.crossHarness) {
+    // Completed summaries are input artifacts, not unbounded transcript streams.
+    const readSummary = async (filePath: string): Promise<unknown> => {
+      const { buffer } = await readRegularFile({ filePath, maxBytes: 16 * 1024 * 1024 });
+      return JSON.parse(buffer.toString("utf8"));
+    };
+    const candidate = await readSummary(candidateSummaryPath);
+    const baseline = await readSummary(baselineSummaryPath);
+    const comparison = compareQaRunConditions(candidate, baseline);
+    const summaryPath = path.join(outputDir, "qa-cross-harness-comparison.json");
+    await fs.writeFile(summaryPath, `${JSON.stringify(comparison, null, 2)}\n`, {
+      mode: 0o600,
+      flag: "wx",
+    });
+    process.stdout.write(`QA cross-harness comparison: ${summaryPath}\n`);
+    process.stdout.write(`QA cross-harness conditions: ${comparison.status}\n`);
+    if (comparison.status === "not-comparable") {
+      process.stdout.write(`${comparison.reasons.join("\n")}\n`);
+      process.exitCode = 1;
+    }
+    return;
+  }
   const candidateSummary = (await readCompletedQaSuiteSummaryFile(
     candidateSummaryPath,
   )) as QaParitySuiteSummary;

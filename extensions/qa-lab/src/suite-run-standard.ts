@@ -359,6 +359,7 @@ export async function runQaFlowSuiteStandard(
       const finishedAt = new Date();
       const { evidence, evidencePath, report, reportPath, summaryPath } =
         await writeQaSuiteArtifacts({
+          comparisonIdentity: context.comparisonIdentity,
           repoRoot,
           outputDir,
           startedAt,

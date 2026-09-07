@@ -5,6 +5,7 @@ import { asSafeIntegerInRange, isRecord } from "openclaw/plugin-sdk/string-coerc
 import { QaSuiteArtifactError } from "./errors.js";
 import type { QaEvidenceSummaryJson, QaEvidenceTiming } from "./evidence-summary.js";
 import type { QaProviderMode } from "./model-selection.js";
+import type { QaRunComparisonIdentity } from "./run-comparability.js";
 import type { RuntimeId, RuntimeParityResult } from "./runtime-parity.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
@@ -49,6 +50,7 @@ export type QaSuiteSummaryJson = {
   };
   evidence?: QaEvidenceSummaryJson;
   run: {
+    comparisonIdentity?: QaRunComparisonIdentity;
     status: "running" | "completed";
     startedAt: string;
     finishedAt: string;

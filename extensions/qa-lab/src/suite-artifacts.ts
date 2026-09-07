@@ -12,6 +12,10 @@ import type { QaProviderMode } from "./model-selection.js";
 import type { QaTransportDriver } from "./qa-transport-registry.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { renderQaMarkdownReport, type QaReportScenario } from "./report.js";
+import {
+  finalizeQaRunComparisonIdentity,
+  type QaRunComparisonIdentity,
+} from "./run-comparability.js";
 import type { RuntimeId } from "./runtime-parity.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
@@ -49,6 +53,7 @@ export async function invalidateQaSuiteArtifactGeneration(outputDir: string) {
 }
 
 export type QaSuiteSummaryJsonParams = {
+  comparisonIdentity?: QaRunComparisonIdentity;
   status?: QaSuiteSummaryJson["run"]["status"];
   scenarios: QaSuiteScenarioResult[];
   startedAt: Date;
@@ -109,6 +114,7 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
     ...(params.metrics ? { metrics: params.metrics } : {}),
     ...(params.evidence ? { evidence: params.evidence } : {}),
     run: {
+      ...(params.comparisonIdentity ? { comparisonIdentity: params.comparisonIdentity } : {}),
       status: params.status ?? "completed",
       startedAt: params.startedAt.toISOString(),
       finishedAt: params.finishedAt.toISOString(),
@@ -134,6 +140,7 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
 }
 
 export async function writeQaSuiteArtifacts(params: {
+  comparisonIdentity?: QaRunComparisonIdentity;
   status?: QaSuiteSummaryJson["run"]["status"];
   repoRoot?: string;
   outputDir: string;
@@ -255,6 +262,10 @@ export async function writeQaSuiteArtifacts(params: {
         content: `${JSON.stringify(
           buildQaSuiteSummaryJson({
             ...params,
+            comparisonIdentity:
+              params.comparisonIdentity && params.repoRoot
+                ? finalizeQaRunComparisonIdentity(params.comparisonIdentity, params.repoRoot)
+                : undefined,
             channelDriverSelection: effectiveChannelDriverSelection,
           }),
           null,

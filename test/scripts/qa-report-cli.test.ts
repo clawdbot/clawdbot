@@ -1,5 +1,7 @@
 // Qa report cli tests cover source entrypoint operator errors.
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -18,6 +20,40 @@ function expectNoNodeStack(stderr: string) {
 }
 
 describe("QA report source CLIs", () => {
+  it("forwards cross-harness mode to the comparison report instead of the release parity gate", () => {
+    const scratch = realpathSync(mkdtempSync(path.join(os.tmpdir(), "qa-source-comparison-")));
+    try {
+      writeFileSync(path.join(scratch, "candidate.json"), "{}");
+      writeFileSync(path.join(scratch, "baseline.json"), "{}");
+      const result = runSourceScript(
+        "scripts/qa-parity-report.ts",
+        "--cross-harness",
+        "--repo-root",
+        scratch,
+        "--candidate-summary",
+        "candidate.json",
+        "--baseline-summary",
+        "baseline.json",
+        "--output-dir",
+        "out",
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain("QA cross-harness conditions: not-comparable");
+      const report = JSON.parse(
+        readFileSync(path.join(scratch, "out/qa-cross-harness-comparison.json"), "utf8"),
+      );
+      expect(report).toEqual({
+        status: "not-comparable",
+        reasons: [
+          "Candidate lacks valid completed-run comparison metadata.",
+          "Baseline lacks valid completed-run comparison metadata.",
+        ],
+      });
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
   it("prints QA coverage help without an error", () => {
     const result = runSourceScript("scripts/qa-coverage-report.ts", "--help");
 
