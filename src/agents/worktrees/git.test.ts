@@ -426,31 +426,31 @@ describe("Git checkout discovery", () => {
     await expect(hasSelfContainedGitMetadata(root)).resolves.toBe(false);
   });
 
-  it.skipIf(process.platform !== "win32")(
-    "parses linked worktree paths and lock reasons from Windows Git output",
-    async () => {
-      const root = tempDirs.make("openclaw-git-worktree-list-");
-      const repo = path.join(root, "repo");
-      const linked = path.join(root, "linked");
-      expect((await runGit(root, ["init", "-b", "main", repo])).code).toBe(0);
-      expect((await runGit(repo, ["config", "user.name", "OpenClaw Test"])).code).toBe(0);
-      expect(
-        (await runGit(repo, ["config", "user.email", "openclaw-test@example.invalid"])).code,
-      ).toBe(0);
-      await fs.writeFile(path.join(repo, "README.md"), "base\n");
-      expect((await runGit(repo, ["add", "README.md"])).code).toBe(0);
-      expect((await runGit(repo, ["commit", "-m", "initial"])).code).toBe(0);
-      expect((await runGit(repo, ["worktree", "add", "-b", "linked", linked, "HEAD"])).code).toBe(
-        0,
-      );
-      expect(
-        (await runGit(repo, ["worktree", "lock", "--reason", "held by test", linked])).code,
-      ).toBe(0);
+  it("parses existing linked worktree paths and lock reasons", async () => {
+    const root = tempDirs.make("openclaw-git-worktree-list-");
+    const repo = path.join(root, "repo");
+    const linked = path.join(root, "linked");
+    expect((await runGit(root, ["init", "-b", "main", repo])).code).toBe(0);
+    expect((await runGit(repo, ["config", "user.name", "OpenClaw Test"])).code).toBe(0);
+    expect(
+      (await runGit(repo, ["config", "user.email", "openclaw-test@example.invalid"])).code,
+    ).toBe(0);
+    await fs.writeFile(path.join(repo, "README.md"), "base\n");
+    expect((await runGit(repo, ["add", "README.md"])).code).toBe(0);
+    expect((await runGit(repo, ["commit", "-m", "initial"])).code).toBe(0);
+    expect((await runGit(repo, ["worktree", "add", "-b", "linked", linked, "HEAD"])).code).toBe(0);
+    expect(
+      (await runGit(repo, ["worktree", "lock", "--reason", "held by test", linked])).code,
+    ).toBe(0);
 
-      expect(await listGitWorktrees(repo)).toContainEqual({
-        path: await fs.realpath(linked),
-        lockedReason: "held by test",
-      });
-    },
-  );
+    // These fixtures exist; compare identity without imposing Git's separator spelling.
+    const worktrees = await listGitWorktrees(repo);
+    for (const entry of worktrees) {
+      entry.path = await fs.realpath(entry.path);
+    }
+    expect(worktrees).toContainEqual({
+      path: await fs.realpath(linked),
+      lockedReason: "held by test",
+    });
+  });
 });
