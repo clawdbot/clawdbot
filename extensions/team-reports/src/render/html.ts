@@ -1,3 +1,4 @@
+import { DAY_MS } from "../periods.js";
 import type { PersonDay, PeriodListEntry } from "../store.js";
 import type { Period, Person, ReportDocument, SummaryDocument } from "../types.js";
 import {
@@ -63,15 +64,14 @@ function renderTrend(days: TrendDay[]): string {
   const maximum = Math.max(1, ...days.flatMap((day) => [day.github, day.discord]));
   const timestamps = days.map((day) => Date.parse(`${day.key}T00:00:00Z`));
   const startMs = timestamps[0] ?? 0;
-  const spanMs = Math.max(86_400_000, (timestamps.at(-1) ?? startMs) - startMs);
+  const spanMs = Math.max(DAY_MS, (timestamps.at(-1) ?? startMs) - startMs);
   const x = (index: number) => 42 + (((timestamps[index] ?? startMs) - startMs) / spanMs) * 696;
   const y = (value: number) => 152 - (value / maximum) * 128;
   const line = (kind: "github" | "discord") => {
     const path = days
       .map((day, index) => {
         const previous = timestamps[index - 1];
-        const connected =
-          previous !== undefined && (timestamps[index] ?? 0) - previous === 86_400_000;
+        const connected = previous !== undefined && (timestamps[index] ?? 0) - previous === DAY_MS;
         return `${connected ? "L" : "M"}${x(index).toFixed(1)},${y(day[kind]).toFixed(1)}`;
       })
       .join(" ");

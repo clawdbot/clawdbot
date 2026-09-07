@@ -13,6 +13,8 @@ import {
   runSqliteImmediateTransactionSync,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { MAX_REPORT_BYTES } from "./limits.js";
+import { DAY_MS } from "./periods.js";
 import {
   reportDocumentSchema,
   runPeriodsSchema,
@@ -21,9 +23,6 @@ import {
   TEAM_REPORTS_SCHEMA_SQL,
 } from "./store-schema.js";
 import type { Period, ReportDocument, SummaryDocument } from "./types.js";
-
-const MAX_REPORT_BYTES = 2 * 1024 * 1024;
-const DAY_MS = 86_400_000;
 
 type StoredPeriod = {
   report: ReportDocument;

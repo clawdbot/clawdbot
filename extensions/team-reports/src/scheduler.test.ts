@@ -2,16 +2,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseTeamReportsConfig, type TeamReportsConfig } from "./config.js";
 import { describePeriod } from "./periods.js";
+import { completion, type Complete } from "./reports.fixtures.js";
 import type { ReportSourceFactory, ResolvedTeamReportsConfig } from "./run.js";
 import { TeamReportsScheduler } from "./scheduler.js";
 import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
 import type { DiscordSource, GithubSource, SourceRuntime, SourceStatus } from "./types.js";
 
-type Complete = OpenClawPluginApi["runtime"]["llm"]["complete"];
 const resources: Array<{
   scheduler: TeamReportsScheduler;
   store: TeamReportsStore;
@@ -132,8 +131,8 @@ function setup(
 }
 
 function modelResponse(): Awaited<ReturnType<Complete>> {
-  return {
-    text: JSON.stringify({
+  return completion(
+    JSON.stringify({
       globalSummary:
         "Widget resizing was corrected. One member recorded activity.\n\n- **Widgets:** Resize correction.\n- **Reviews:** No review comments recorded.\n- **Discord:** No messages recorded.\n- **Coverage:** Configured GitHub sources collected.",
       highlights: [
@@ -150,13 +149,7 @@ function modelResponse(): Awaited<ReturnType<Complete>> {
         },
       ],
     }),
-    provider: "openai",
-    model: "gpt-5.6-sol",
-    agentId: "main",
-    usage: {},
-    execution: { mode: "direct-provider", owner: { kind: "provider", id: "openai" } },
-    audit: { caller: { kind: "plugin", id: "team-reports" } },
-  };
+  );
 }
 
 beforeEach(() => {

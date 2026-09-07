@@ -301,13 +301,12 @@ export async function generateSummaries(params: {
   llm: SummaryLlm;
   previous?: { report: ReportDocument; summary: SummaryDocument };
   signal?: AbortSignal;
-  nowMs?: number;
 }): Promise<SummaryResult> {
   const { report, options, previous, signal } = params;
   signal?.throwIfAborted();
   const digest = buildEvidenceDigest(report);
   const fingerprint = createHash("sha256").update(digest).digest("hex");
-  const generatedAtMs = params.nowMs ?? Date.now();
+  const generatedAtMs = Date.now();
   if (
     previous?.summary.fingerprint === fingerprint &&
     previous.report.period.period === report.period.period &&

@@ -1,5 +1,3 @@
-// Domain contract shared by the report core and the activity sources.
-
 export type Period = "day" | "week" | "month";
 
 /** Report window. Day windows are UTC [00:00, 24:00); weeks are ISO weeks (Monday start); months are calendar months. */
@@ -171,10 +169,6 @@ export type SummaryDocument = {
   /** sha256 of the evidence digest; regeneration is skipped while unchanged. */
   fingerprint: string;
 };
-
-// ---------------------------------------------------------------------------
-// Source contracts (implemented under src/sources/github and src/sources/discord)
-// ---------------------------------------------------------------------------
 
 type SourceLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;

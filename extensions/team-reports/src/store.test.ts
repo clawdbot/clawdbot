@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, describe, expect, it } from "vitest";
+import { githubCounts as counts } from "./reports.fixtures.js";
 import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
-import type { GithubCounts, PeriodDescriptor, ReportDocument, SummaryDocument } from "./types.js";
+import type { PeriodDescriptor, ReportDocument, SummaryDocument } from "./types.js";
 
 const DAY_MS = 86_400_000;
 const resources: Array<{ store: TeamReportsStore; directory: string }> = [];
@@ -14,22 +15,6 @@ function openStore() {
   const store = createTeamReportsStore({ stateDir: directory });
   resources.push({ directory, store });
   return { store, dbPath: path.join(directory, "plugins", "team-reports", "team-reports.sqlite") };
-}
-
-function counts(total = 0): GithubCounts {
-  return {
-    total,
-    commits: total,
-    prsOpened: 0,
-    prsMerged: 0,
-    prsClosed: 0,
-    issuesOpened: 0,
-    issuesClosed: 0,
-    issueComments: 0,
-    reviewComments: 0,
-    securityAdvisories: 0,
-    repos: total ? { "example/project": total } : {},
-  };
 }
 
 function report(key = "2026-08-20", logins = ["alice", "bob"]): ReportDocument {

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { periodSchema } from "./periods.js";
 import type { ReportDocument, SummaryDocument } from "./types.js";
 
 export const TEAM_REPORTS_SCHEMA_SQL = `
@@ -50,7 +51,6 @@ CREATE INDEX IF NOT EXISTS idx_team_reports_runs_started
   ON team_reports_runs(started_at_ms DESC);
 `;
 
-const periodSchema = z.enum(["day", "week", "month"]);
 const countsSchema = z.object({
   total: z.number(),
   commits: z.number(),

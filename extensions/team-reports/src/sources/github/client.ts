@@ -2,19 +2,15 @@ import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime"
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "zod";
 import type { GithubSourceConfig, SourceRuntime, SourceStatus } from "../../types.js";
-import { checkAbort, parseApiBase, wait } from "../http.js";
+import { checkAbort, createResponseParser, parseApiBase, wait } from "../http.js";
 
 export const ABORT_LABEL = "GitHub collection aborted";
 
 export class GithubSourceError extends Error {}
 
-export function parse<T>(schema: z.ZodType<T>, value: unknown): T {
-  const result = schema.safeParse(value);
-  if (!result.success) {
-    throw new GithubSourceError("Invalid API response; check API compatibility");
-  }
-  return result.data;
-}
+export const parse = createResponseParser(
+  () => new GithubSourceError("Invalid API response; check API compatibility"),
+);
 
 export function pathWithQuery(path: string, query: Record<string, string>): string {
   return `${path}?${new URLSearchParams({ per_page: "100", ...query })}`;

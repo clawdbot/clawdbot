@@ -1,11 +1,10 @@
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { z } from "zod";
-import { describePeriod } from "./periods.js";
+import { describePeriod, periodSchema } from "./periods.js";
 import type { TeamReportsScheduler } from "./scheduler.js";
 import type { TeamReportsStore } from "./store.js";
 
-const periodSchema = z.enum(["day", "week", "month"]);
 const listSchema = z.strictObject({ period: periodSchema.optional() });
 const getSchema = z.strictObject({
   period: periodSchema,

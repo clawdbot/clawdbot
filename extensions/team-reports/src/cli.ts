@@ -5,9 +5,9 @@ import {
 } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { z } from "zod";
+import { periodSchema } from "./periods.js";
 
 type CliContext = Parameters<Parameters<OpenClawPluginApi["registerCli"]>[0]>[0];
-const periodSchema = z.enum(["day", "week", "month"]);
 
 async function request(method: string, options: GatewayRpcOpts, params: unknown): Promise<unknown> {
   return await callGatewayFromCli(`team-reports.${method}`, options, params, {

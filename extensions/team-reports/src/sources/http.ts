@@ -1,3 +1,15 @@
+import type { z } from "zod";
+
+export function createResponseParser(createError: () => Error) {
+  return <T>(schema: z.ZodType<T>, data: unknown): T => {
+    const parsed = schema.safeParse(data);
+    if (!parsed.success) {
+      throw createError();
+    }
+    return parsed.data;
+  };
+}
+
 export function checkAbort(signal: AbortSignal | undefined, label: string): void {
   if (signal?.aborted) {
     // Abort reasons and transport errors may contain credentials supplied by callers.

@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { TLSSocket } from "node:tls";
-import { describePeriod } from "./periods.js";
+import { DAY_MS, describePeriod } from "./periods.js";
 import {
   renderIndexPage,
   renderPeoplePage,
@@ -21,7 +21,6 @@ type TeamReportsHttpOptions = {
   people: () => Person[];
 };
 
-const DAY_MS = 86_400_000;
 const KEY_PATTERNS: Record<Period, RegExp> = {
   day: /^\d{4}-\d{2}-\d{2}$/,
   week: /^\d{4}-W\d{2}$/,

@@ -7,23 +7,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTeamReportsHttpHandler } from "./http.js";
 import { describePeriod } from "./periods.js";
 import { renderMarkdown } from "./render/markdown.js";
+import { githubCounts } from "./reports.fixtures.js";
 import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
-import type { GithubCounts, Period, ReportDocument, SummaryDocument } from "./types.js";
+import type { Period, ReportDocument, SummaryDocument } from "./types.js";
 
 const maliciousTitle = '<script>alert("report")</script>';
-const counts: GithubCounts = {
-  total: 1,
-  commits: 1,
-  prsOpened: 0,
-  prsMerged: 0,
-  prsClosed: 0,
-  issuesOpened: 0,
-  issuesClosed: 0,
-  issueComments: 0,
-  reviewComments: 0,
-  securityAdvisories: 0,
-  repos: { "example/project": 1 },
-};
+const counts = githubCounts(1);
 
 function report(period: Period, key: string, partial = false): ReportDocument {
   const descriptor = describePeriod(period, key);

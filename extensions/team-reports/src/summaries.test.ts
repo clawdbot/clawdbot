@@ -1,24 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { completion, githubCounts as counts, type Complete } from "./reports.fixtures.js";
 import { generateSummaries } from "./summaries.js";
-import type { GithubCounts, PersonReport, ReportDocument } from "./types.js";
-
-type Complete = Parameters<typeof generateSummaries>[0]["llm"]["complete"];
-
-function counts(): GithubCounts {
-  return {
-    total: 0,
-    commits: 0,
-    prsOpened: 0,
-    prsMerged: 0,
-    prsClosed: 0,
-    issuesOpened: 0,
-    issuesClosed: 0,
-    issueComments: 0,
-    reviewComments: 0,
-    securityAdvisories: 0,
-    repos: {},
-  };
-}
+import type { PersonReport, ReportDocument } from "./types.js";
 
 function member(login: string): PersonReport {
   return {
@@ -93,20 +76,11 @@ function response() {
   };
 }
 
-function completion(text: string): Awaited<ReturnType<Complete>> {
-  return {
-    text,
-    provider: "openai",
-    model: "gpt-5.6-sol",
-    agentId: "main",
-    usage: {},
-    execution: { mode: "direct-provider", owner: { kind: "provider", id: "openai" } },
-    audit: { caller: { kind: "plugin", id: "team-reports" } },
-  };
-}
+afterEach(() => vi.restoreAllMocks());
 
 describe("team report summaries", () => {
   it.each([false, true])("accepts complete JSON output (fenced: %s)", async (fenced) => {
+    vi.spyOn(Date, "now").mockReturnValue(20);
     const json = JSON.stringify(response());
     const complete = vi
       .fn<Complete>()
@@ -115,7 +89,6 @@ describe("team report summaries", () => {
       report: report(),
       options: { enabled: true, reasoning: "high", model: "openai/gpt-5.6-sol" },
       llm: { complete },
-      nowMs: 20,
     });
     expect(result.summary).toMatchObject({
       source: "model",
@@ -182,10 +155,11 @@ describe("team report summaries", () => {
   });
 
   it("uses deterministic fallback without calling a model when summaries are disabled", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(20);
     const complete = vi.fn<Complete>();
     const input = report();
     input.sources.github = { ok: false, warnings: ["Collection incomplete"], stats: {} };
-    const params = { report: input, options: { enabled: false }, llm: { complete }, nowMs: 20 };
+    const params = { report: input, options: { enabled: false }, llm: { complete } };
     const first = await generateSummaries(params);
     const second = await generateSummaries(params);
     expect(first).toEqual(second);

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { DiscordMessage, DiscordSource, SourceRuntime, SourceStatus } from "../../types.js";
-import { checkAbort } from "../http.js";
+import { checkAbort, createResponseParser } from "../http.js";
 import { ABORT_LABEL, createClient } from "./client.js";
 
 const snowflake = z.string().regex(/^\d{1,20}$/);
@@ -29,13 +29,9 @@ const epochMs = 1420070400000n;
 type Channel = z.infer<typeof channelSchema>;
 type Target = { id: string; parentId: string; name: string };
 
-function parse<T>(schema: z.ZodType<T>, data: unknown): T {
-  const parsed = schema.safeParse(data);
-  if (!parsed.success) {
-    throw new Error("Discord returned an unexpected response shape.");
-  }
-  return parsed.data;
-}
+const parse = createResponseParser(
+  () => new Error("Discord returned an unexpected response shape."),
+);
 
 export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
   return {
@@ -45,7 +41,7 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
         warnings: [],
         stats: { apiCalls: 0, channelsScanned: 0, threadsScanned: 0 },
       };
-      const collected = new Map<string, { message: DiscordMessage; url: string }>();
+      const collected = new Map<string, DiscordMessage>();
       const warn = (scope: string, error: unknown) => {
         checkAbort(runtime.signal, ABORT_LABEL);
         const detail = error instanceof Error ? error.message : "Discord collection failed.";
@@ -169,16 +165,13 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
                 continue;
               }
               collected.set(entry.id, {
-                url: `https://discord.com/channels/${config.guildId}/${target.id}/${entry.id}`,
-                message: {
-                  channelId: target.id,
-                  parentChannelId: target.parentId,
-                  channelName: target.name,
-                  authorId: entry.author.id,
-                  authorIsBot: false,
-                  atMs,
-                  content,
-                },
+                channelId: target.id,
+                parentChannelId: target.parentId,
+                channelName: target.name,
+                authorId: entry.author.id,
+                authorIsBot: false,
+                atMs,
+                content,
               });
             }
             if (crossedEnd || page.length < 100) {
@@ -196,12 +189,14 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
         }
       }
       checkAbort(runtime.signal, ABORT_LABEL);
-      const messages = [...collected.values()]
+      const messages = [...collected]
         .toSorted(
-          (left, right) =>
-            left.message.atMs - right.message.atMs || left.url.localeCompare(right.url),
+          ([leftId, left], [rightId, right]) =>
+            left.atMs - right.atMs ||
+            left.channelId.localeCompare(right.channelId) ||
+            leftId.localeCompare(rightId),
         )
-        .map((entry) => entry.message);
+        .map(([, message]) => message);
       return { messages, status };
     },
   };

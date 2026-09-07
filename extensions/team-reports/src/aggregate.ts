@@ -1,3 +1,4 @@
+import { MAX_REPORT_BYTES } from "./limits.js";
 import { periodDayKeys } from "./periods.js";
 import { isBotLogin, primaryLogin } from "./roster.js";
 import { truncateGraphemes } from "./text.js";
@@ -16,7 +17,6 @@ import type {
   SourceStatus,
 } from "./types.js";
 
-const MAX_REPORT_BYTES = 2 * 1024 * 1024;
 const COUNT_FIELDS = [
   "total",
   "commits",

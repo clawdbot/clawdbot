@@ -1,6 +1,8 @@
+import { z } from "zod";
 import type { Period, PeriodDescriptor } from "./types.js";
 
-const DAY_MS = 86_400_000;
+export const DAY_MS = 86_400_000;
+export const periodSchema = z.enum(["day", "week", "month"]);
 
 function dateKey(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);

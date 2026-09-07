@@ -4,7 +4,7 @@ import type {
   OpenClawPluginServiceContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { TeamReportsConfig } from "./config.js";
-import { describePeriod } from "./periods.js";
+import { DAY_MS, describePeriod } from "./periods.js";
 import {
   createReportSources,
   generateReportPeriods,
@@ -15,17 +15,13 @@ import {
 import type { TeamReportsStore } from "./store.js";
 import type { Person, PeriodDescriptor, SourceStatus } from "./types.js";
 
-const DAY_MS = 86_400_000;
 const RUN_DEADLINE_MS = 45 * 60_000;
 const STOP_TIMEOUT_MS = 30_000;
 type RunKind = "closed-day" | "intraday" | "manual";
 type ActiveRun = { id: string; controller: AbortController; done: Promise<void> };
 
-function nextClosedDayDue(
-  nowMs: number,
-  schedule: TeamReportsConfig["schedule"],
-  random = Math.random(),
-): number {
+function nextClosedDayDue(nowMs: number, schedule: TeamReportsConfig["schedule"]): number {
+  const random = Math.random();
   const [hours = 0, minutes = 0] = schedule.closedDayUtc.split(":").map(Number);
   const today = describePeriod("day", nowMs).sinceMs;
   const jitter = Math.floor(Math.max(0, Math.min(1, random)) * schedule.jitterMinutes * 60_000);
