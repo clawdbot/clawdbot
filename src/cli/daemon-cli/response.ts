@@ -1,12 +1,7 @@
 // JSON/text response helpers for Gateway service lifecycle commands.
 import { Writable } from "node:stream";
 import type { GatewayService } from "../../daemon/service.js";
-import {
-  isSystemdUnavailableDetail,
-  renderSystemdUnavailableHints,
-} from "../../daemon/systemd-hints.js";
-import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailable.js";
-import { isWSL } from "../../infra/wsl.js";
+import { renderSystemdErrorHints } from "../../daemon/systemd-hints.js";
 import { defaultRuntime } from "../../runtime.js";
 
 /** Gateway service action emitted by lifecycle commands. */
@@ -62,7 +57,8 @@ function classifyDaemonHintText(text: string): DaemonHintKind {
   }
   if (
     text.startsWith("On a headless server (SSH/no desktop session):") ||
-    text.startsWith("Also ensure XDG_RUNTIME_DIR is set:")
+    text.startsWith("Also ensure XDG_RUNTIME_DIR is set:") ||
+    text.startsWith("If `/run/user/$(id -u)/bus` is missing,")
   ) {
     return "systemd-headless";
   }
@@ -212,17 +208,6 @@ export function createDaemonActionContext(params: { action: DaemonAction; json: 
   return { stdout, warnings, emit, fail };
 }
 
-async function buildInstallFailureHints(error: unknown): Promise<string[] | undefined> {
-  const detail = String(error);
-  if (process.platform !== "linux" || !isSystemdUnavailableDetail(detail)) {
-    return undefined;
-  }
-  return renderSystemdUnavailableHints({
-    wsl: await isWSL(),
-    kind: classifySystemdUnavailableDetail(detail),
-  });
-}
-
 /** Install a service, convert platform install failures to hints, and emit the final response. */
 export async function installDaemonServiceAndEmit(params: {
   serviceNoun: string;
@@ -244,7 +229,7 @@ export async function installDaemonServiceAndEmit(params: {
   } catch (err) {
     params.fail(
       `${params.serviceNoun} install failed: ${String(err)}`,
-      await buildInstallFailureHints(err),
+      await renderSystemdErrorHints(err),
     );
     return;
   }
@@ -255,7 +240,7 @@ export async function installDaemonServiceAndEmit(params: {
   } catch (err) {
     params.fail(
       `${params.serviceNoun} install verification failed: ${String(err)}`,
-      await buildInstallFailureHints(err),
+      await renderSystemdErrorHints(err),
     );
     return;
   }

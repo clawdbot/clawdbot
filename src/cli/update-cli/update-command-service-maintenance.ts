@@ -15,6 +15,7 @@ import {
   type GatewayServiceState,
 } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { renderSystemdErrorHints } from "../../daemon/systemd-hints.js";
 import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
@@ -64,6 +65,8 @@ export type PreManagedServiceStop = {
   serviceMutationSkipMessage?: string;
   serviceUpdateVerdict?: ManagedGatewayUpdateVerdict;
   blockMessage?: string;
+  /** Classified service-manager repair hints behind an unavailable inspection; Doctor appends them to its own refusal. */
+  serviceInspectionHints?: string[];
   serviceEnv?: NodeJS.ProcessEnv;
   serviceDefinitionEnv?: NodeJS.ProcessEnv;
   serviceNodeRunner?: string;
@@ -321,14 +324,20 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   timeoutMs?: number;
 }): Promise<PreManagedServiceStop> {
   const uninspected = { stopped: false, inspected: false, runtimeInspected: false, running: false };
+  // Only the classified systemd family reaches operator text; raw inspection
+  // errors stay out of update output, which chat-triggered updates relay verbatim.
   const markInspectionUnavailable = (
     base: PreManagedServiceStop,
-    message: string,
+    hints: string[] = [],
   ): PreManagedServiceStop => ({
     ...base,
     serviceMutationAllowed: false,
-    serviceUpdateVerdict: { kind: "unavailable", message },
-    blockMessage: GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE,
+    ...(hints.length > 0 ? { serviceInspectionHints: hints } : {}),
+    serviceUpdateVerdict: {
+      kind: "unavailable",
+      message: [GATEWAY_SERVICE_INSPECTION_UNAVAILABLE_MESSAGE, ...hints].join("\n"),
+    },
+    blockMessage: [GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE, ...hints].join("\n"),
   });
   const serviceMutationSkipMessage = resolveGatewayServiceManagementBlockMessageForUpdate(
     process.env,
@@ -350,7 +359,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     if (err instanceof GatewayServiceUpdateOwnershipError) {
       return { ...uninspected, serviceMutationAllowed: false, blockMessage: err.message };
     }
-    return markInspectionUnavailable(uninspected, GATEWAY_SERVICE_INSPECTION_UNAVAILABLE_MESSAGE);
+    return markInspectionUnavailable(uninspected, await renderSystemdErrorHints(err));
   }
   const serviceUpdateVerdict = await revalidateManagedGatewayServiceAfterUpdate({
     root: params.root,
@@ -390,7 +399,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     serviceUpdateVerdict,
   };
   if (serviceUpdateVerdict.kind === "unavailable") {
-    return markInspectionUnavailable(inspected, serviceUpdateVerdict.message);
+    return markInspectionUnavailable(inspected);
   }
   if (serviceUpdateVerdict.kind === "foreign") {
     return {

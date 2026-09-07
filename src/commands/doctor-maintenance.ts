@@ -100,10 +100,16 @@ function assertDoctorMaintenanceInspection(
   ) {
     return;
   }
+  if (kind === "owned" && inspection.blockMessage) {
+    throw new Error(inspection.blockMessage);
+  }
+  // Update-flavored block text does not apply to Doctor; keep its own refusal
+  // and append the classified service-manager cause so the operator can repair it.
   throw new Error(
-    kind === "owned" && inspection.blockMessage
-      ? inspection.blockMessage
-      : `Gateway service ownership or shutdown could not be verified. Run ${formatCliCommand("openclaw gateway status --deep", env)} and stop it through its service owner before retrying.`,
+    [
+      `Gateway service ownership or shutdown could not be verified. Run ${formatCliCommand("openclaw gateway status --deep", env)} and stop it through its service owner before retrying.`,
+      ...(inspection.serviceInspectionHints ?? []),
+    ].join("\n"),
   );
 }
 
