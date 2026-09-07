@@ -105,6 +105,12 @@ Sessions in these stores support the same view, continue, and archive actions,
 and the selected OpenClaw agent still owns the resulting connection; `homes`
 only adds catalog sources.
 
+Fresh native terminal sessions use the primary local profile, shown as
+`Local Codex`, or an eligible paired node. Additional local homes are session
+discovery and resume sources, not separate fresh-start destinations. The selected
+working directory controls Codex's project configuration without changing its home
+or login. See [Native CLI starts](/web/control-ui/sessions-and-sidebar#start-a-native-coding-cli).
+
 Only existing directories are included. Equivalent paths are canonicalized and
 deduplicated against the automatic homes, and automatic homes keep priority
 under the 100-source catalog cap. Changes require a Gateway restart.

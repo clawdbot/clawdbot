@@ -125,10 +125,20 @@ Ordinary **New Chat** and explicit catalog continuation remain separate flows.
 Native starts require `operator.admin`, `gateway.cliAgents.enabled`,
 an enabled catalog plugin, and its installed CLI. Terminals are on by default;
 `gateway.terminal.enabled: false` blocks native starts.
-No matching OpenClaw model route is required. The host picker lists only local
-CLI sources and connected nodes with the exact fresh-start command currently
-invocable. Resume-only nodes are not eligible. After installing a CLI or approving
-a node capability change, reconnect the node and refresh the host picker.
+No matching OpenClaw model route is required. Each machine has one launch
+destination. The **Where** picker appears only when there is a choice or the
+previously selected machine is unavailable. It lists the Gateway's native CLI
+and connected nodes with the exact fresh-start command currently invocable;
+resume-only nodes are not eligible. Availability updates after Gateway reconnects
+and node connection or capability changes. After installing a CLI, reconnect to
+the Gateway; after approving a node capability change, reconnect that node.
+
+New Gateway-local Codex sessions use the primary native Codex profile configured
+for its catalog, normally the Gateway user's `CODEX_HOME` or `~/.codex`. Selecting
+a folder lets Codex load that project's trusted configuration; it does not select
+another account or Codex home. Additional Codex homes remain available for browsing
+and resuming existing sessions with their original profile. An OpenClaw agent's
+temporary app-server login is separate from a native CLI login.
 
 On the Gateway, the folder/worktree controls still provision the selected managed
 worktree before launching. On a node, enter an existing absolute directory on
@@ -137,6 +147,8 @@ OpenClaw worker placement, cloud/Auto selection, attachment submission, model
 controls, or Incognito. Add files and change native CLI settings in the terminal.
 A missing directory, disabled capability, or disconnected host produces an error;
 OpenClaw never starts a Chat or substitutes another host or home directory.
+If the CLI exits during startup, the terminal retains its output and exit status.
+If startup is rejected, the draft remains available to correct and retry.
 
 ### OpenClaw Chat workspace startup
 

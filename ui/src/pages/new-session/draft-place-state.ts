@@ -42,13 +42,18 @@ type DraftPlaceCallbacks = {
 
 export class DraftPlaceState {
   terminalHostId = "gateway:local";
+  private terminalHostInitialized = false;
 
   get terminalOnNode(): boolean {
     return this.terminalHostId.startsWith("node:");
   }
 
   selectTerminalHost(hostId: string) {
-    if (this.read().submitting || hostId === this.terminalHostId) {
+    if (this.read().submitting) {
+      return;
+    }
+    this.terminalHostInitialized = true;
+    if (hostId === this.terminalHostId) {
       return;
     }
     this.terminalHostId = hostId;
@@ -61,6 +66,16 @@ export class DraftPlaceState {
       this.repositoryState.load();
     }
     this.callbacks.requestUpdate();
+  }
+
+  synchronizeTerminalHosts() {
+    const hosts = this.read().data?.terminalHosts;
+    if (this.terminalHostInitialized || !hosts?.length) {
+      return;
+    }
+    this.selectTerminalHost(
+      hosts.find((host) => host.hostId === this.terminalHostId)?.hostId ?? hosts[0]!.hostId,
+    );
   }
   private agentIdValue = "";
   private folderValue = "";
@@ -415,6 +430,7 @@ export class DraftPlaceState {
 
   resetDraft() {
     this.terminalHostId = "gateway:local";
+    this.terminalHostInitialized = false;
     this.agentSelectedByUser = false;
     this.folderValue = "";
     this.browser.clearProjectSelection();

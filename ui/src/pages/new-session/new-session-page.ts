@@ -198,6 +198,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
             }
             if (isPlaceTopologyEvent(event.event)) {
               void this.gateway.refreshCloudProfiles();
+              this.gateway.handleCatalogRetry();
               return;
             }
             const presence = event.event === "presence" ? readPresenceEntries(event.payload) : null;
@@ -208,6 +209,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
             if (signature !== this.presenceSignature) {
               this.presenceSignature = signature;
               void this.gateway.refreshCloudProfiles();
+              this.gateway.handleCatalogRetry();
             }
           });
         },
@@ -320,6 +322,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       });
     }
     this.place.restorePreferenceSelections();
+    this.place.synchronizeTerminalHosts();
     activateDraft(this.submission, openKey);
     this.submission.resumeInterruptedSubmission();
   }
