@@ -25,6 +25,7 @@ import {
   createBuzzReplayDispatchQueue,
   resolveBuzzRoomHistoryLimit,
 } from "./replay-dispatch.js";
+import { queryBuzzEventById } from "./reply-context.js";
 import { startBuzzRoomMembershipNotifications } from "./room-membership-notification.js";
 import { queryBuzzRoomMemberships } from "./room-membership-query.js";
 import { createBuzzRoomMembershipTracker } from "./room-membership-tracker.js";
@@ -53,6 +54,14 @@ export interface BuzzBus {
     threadId?: string;
     replyToId?: string;
   }) => Promise<void>;
+  /**
+   * Look up one room message by event id, for resolving what a reply points at.
+   * Resolves `null` when the relay has no such message.
+   */
+  fetchMessageById: (params: {
+    eventId: string;
+    signal?: AbortSignal;
+  }) => Promise<BuzzInboundMessage | null>;
   close: () => Promise<void>;
 }
 
@@ -299,6 +308,14 @@ export async function startBuzzBus(options: {
     publicKey,
     directory,
     refreshDirectory: async () => await directoryRelay?.refreshRooms(options.channelIds),
+    fetchMessageById: async ({ eventId, signal: querySignal }) => {
+      const event = await queryBuzzEventById({
+        relay,
+        eventId,
+        signal: querySignal ?? signal,
+      });
+      return event ? parseBuzzMessageEvent(event) : null;
+    },
     sendText: async ({ channelId, text, threadId, replyToId }) => {
       signal.throwIfAborted();
       const mentionSyntax = inspectBuzzMentionSyntax(text);

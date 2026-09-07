@@ -97,6 +97,16 @@ describe("BuzzConfigSchema", () => {
     expect(parseBuzzConfig(config).success).toBe(valid);
     expectJsonSchemaValidity(`buzz.reply-mode.${replyToMode}`, config, valid);
   });
+  it.each([
+    ["all", true],
+    ["allowlist", true],
+    ["allowlist_quote", true],
+    ["hidden", false],
+  ])("validates contextVisibility %s in runtime and JSON schemas", (contextVisibility, valid) => {
+    const config = { contextVisibility, groupPolicy: "allowlist" };
+    expect(parseBuzzConfig(config).success).toBe(valid);
+    expectJsonSchemaValidity(`buzz.context-visibility.${contextVisibility}`, config, valid);
+  });
 
   it.each([
     "ws://localhost:3000",

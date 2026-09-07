@@ -400,6 +400,24 @@ This changes delivery only: inbound thread context and session identity remain
 intact. Explicit message-tool or CLI sends with a thread or reply target still
 honor that target. To restore the default, use `"all"` or remove the setting.
 
+### Reply context
+
+When someone replies to a message, Buzz loads the message the reply points at
+and passes it to the agent as quote context (`ReplyToBody` / `ReplyToSender`),
+as Telegram and Signal do. The lookup is bounded to two seconds; if the relay
+does not answer, the turn runs without the quote rather than stalling.
+
+Quotes follow `contextVisibility` (see [Groups](/channels/groups)). Under
+`allowlist`, a quoted message is shown only when its author passes the room's
+`groupAllowFrom` - the bot's own earlier messages included; `allowlist_quote`
+shows quotes regardless. Set it on `channels.buzz.contextVisibility`, per
+account, or via `channels.defaults.contextVisibility`.
+
+Reply lookups share one small per-relay allowance with every other transient
+Buzz query (profiles, room metadata, membership, history paging). When that
+allowance is busy, a reply turn runs without its quote rather than waiting, so
+the agent still answers promptly.
+
 ## Manual configuration
 
 Guided setup is recommended. The equivalent configuration looks like:

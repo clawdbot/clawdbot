@@ -19,7 +19,9 @@ type BuzzInboundMessageKind = (typeof BUZZ_INBOUND_MESSAGE_KINDS)[number];
 // own stricter validator. Keep inbound admission aligned with those limits.
 const BUZZ_MESSAGE_CONTENT_MAX_BYTES = 256 * 1024;
 const BUZZ_DIFF_CONTENT_MAX_BYTES = 60 * 1024;
-const HEX_PUBLIC_KEY_PATTERN = /^[0-9a-f]{64}$/u;
+/** Nostr ids and pubkeys are both 32-byte lowercase hex. */
+export const BUZZ_HEX_ID_PATTERN = /^[0-9a-f]{64}$/u;
+const HEX_PUBLIC_KEY_PATTERN = BUZZ_HEX_ID_PATTERN;
 const BUZZ_DIFF_CONTEXT_FIELD_MAX_CHARS = 256;
 const BUZZ_DIFF_AGENT_CONTEXT_MAX_CHARS = 4_000;
 const BUZZ_DIFF_AGENT_CONTEXT_TRUNCATED_SUFFIX = "\n...[Buzz diff truncated for model context]";

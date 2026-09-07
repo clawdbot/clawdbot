@@ -9,6 +9,9 @@ export const relayMocks = {
   close: vi.fn(),
   connected: true,
   stallProfileQueryEose: false,
+  stallReplyTargetEose: false,
+  // The lease is keyed per relay instance, so tests need the live one.
+  lastRelay: undefined as unknown,
   stallRoomEoseChannelId: undefined as string | undefined,
   membershipEvents: [] as Event[],
   roomMetadataEvents: [] as Event[],
@@ -33,6 +36,9 @@ export function mockBuzzRelay() {
       onauth?: (template: unknown) => Promise<unknown>;
       idleSince: number | undefined;
       ongoingOperations = 0;
+      constructor() {
+        relayMocks.lastRelay = this;
+      }
       get connected() {
         return relayMocks.connected;
       }
@@ -54,7 +60,17 @@ export function mockBuzzRelay() {
         const filter = filters[0] ?? {};
         const close = vi.fn();
         relayMocks.subscriptions.push({ filter, filters, handlers, close });
-        if (filter.kinds?.includes(39002)) {
+        if (filter.ids?.length) {
+          // Reply-target lookups resolve one stored event by id.
+          if (!relayMocks.stallReplyTargetEose) {
+            for (const event of relayMocks.roomHistoryEvents) {
+              if (filter.ids.includes(event.id)) {
+                handlers.onevent(event);
+              }
+            }
+            handlers.oneose?.();
+          }
+        } else if (filter.kinds?.includes(39002)) {
           for (const event of relayMocks.membershipEvents) {
             handlers.onevent(event);
           }

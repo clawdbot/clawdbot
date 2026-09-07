@@ -1,4 +1,4 @@
-import { finalizeEvent, getPublicKey, verifyEvent, type Event } from "nostr-tools";
+import { finalizeEvent, getPublicKey, verifyEvent, type Event, type Relay } from "nostr-tools";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
@@ -18,6 +18,8 @@ import {
   BUZZ_TYPING_INDICATOR_KIND,
   type BuzzInboundMessage,
 } from "./message-event.js";
+import { BUZZ_MAX_CONCURRENT_RELAY_QUERIES, acquireBuzzQueryLease } from "./query-lease.js";
+import { BuzzQueryLeaseUnavailableError } from "./relay-subscription.js";
 import { setBuzzRuntime } from "./runtime.js";
 import type { ResolvedBuzzAccount } from "./types.js";
 
@@ -51,6 +53,41 @@ describe("Buzz bus lifecycle", () => {
     ).rejects.toThrow("Buzz supports at most 1020 configured rooms per account");
 
     expect(relayMocks.connect).not.toHaveBeenCalled();
+  });
+
+  it("refuses a reply-target lookup while transient queries hold the allowance", async () => {
+    relayMocks.auth.mockResolvedValue("ok");
+    const bus = await startTestBus({});
+    const held: Array<(() => void) | null> = [];
+    try {
+      for (let index = 0; index < BUZZ_MAX_CONCURRENT_RELAY_QUERIES; index += 1) {
+        held.push(await acquireBuzzQueryLease(relayMocks.lastRelay as Relay));
+      }
+      const idsSubscriptionsBefore = relayMocks.subscriptions.filter(
+        (entry) => entry.filter.ids?.length,
+      ).length;
+
+      // Profile, membership and history queries share this allowance, so a
+      // reply lookup must degrade instead of opening a subscription past it.
+      await expect(bus.fetchMessageById({ eventId: "f".repeat(64) })).rejects.toThrow(
+        BuzzQueryLeaseUnavailableError,
+      );
+      expect(relayMocks.subscriptions.filter((entry) => entry.filter.ids?.length).length).toBe(
+        idsSubscriptionsBefore,
+      );
+
+      // Freeing one slot lets the next lookup reach the relay again.
+      held.shift()?.();
+      await expect(bus.fetchMessageById({ eventId: "f".repeat(64) })).resolves.toBeNull();
+      expect(relayMocks.subscriptions.filter((entry) => entry.filter.ids?.length).length).toBe(
+        idsSubscriptionsBefore + 1,
+      );
+    } finally {
+      for (const release of held) {
+        release?.();
+      }
+      await bus.close();
+    }
   });
 
   it("closes the relay and aborts NIP-11 discovery when authentication fails", async () => {
