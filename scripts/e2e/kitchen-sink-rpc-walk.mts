@@ -569,10 +569,10 @@ export function runCommand(
       );
       forceKillTimer.unref();
     }, resolvedTimeoutMs);
-    child.stdout?.on("data", (chunk) => {
+    child.stdout?.setEncoding("utf8").on("data", (chunk) => {
       stdout = appendBoundedTail(stdout, chunk, outputCaptureChars);
     });
-    child.stderr?.on("data", (chunk) => {
+    child.stderr?.setEncoding("utf8").on("data", (chunk) => {
       stderr = appendBoundedTail(stderr, chunk, outputCaptureChars);
     });
     child.on("error", (error) => {
