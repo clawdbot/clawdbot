@@ -213,7 +213,7 @@ describe("Markdown table interactions", () => {
   it.each([true, false])(
     "dismisses middle-clicks while preserving right-click menus (browser panel: %s)",
     async (openInBrowserPanel) => {
-      const routing = await startNativeLinkRouting({
+      const routing = startNativeLinkRouting({
         shouldOpenInControlUiBrowser: () => openInBrowserPanel,
       });
       const { owner } = interactiveOwner(

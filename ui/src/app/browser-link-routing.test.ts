@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BROWSER_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 
-let nativeRouting: Awaited<ReturnType<typeof startNativeLinkRouting>> | undefined;
+let nativeRouting: ReturnType<typeof startNativeLinkRouting> | undefined;
 let stopCollectingBrowserRequests: (() => void) | undefined;
 
 function appendLink(href: string, attributes: Record<string, string> = {}) {
@@ -28,8 +28,8 @@ function mouseEvent(type: "click" | "auxclick", init: MouseEventInit = {}) {
   });
 }
 
-async function startBrowserLinkRouting(available = true) {
-  nativeRouting = await startNativeLinkRouting({
+function startBrowserLinkRouting(available = true) {
+  nativeRouting = startNativeLinkRouting({
     shouldOpenInControlUiBrowser: () => available,
   });
 }
@@ -60,7 +60,7 @@ afterEach(() => {
 
 describe("Control UI browser link routing", () => {
   it("preserves existing browser behavior by default", async () => {
-    await startBrowserLinkRouting(false);
+    startBrowserLinkRouting(false);
     const event = mouseEvent("click");
 
     appendLink("https://example.com/report").dispatchEvent(event);
@@ -71,7 +71,7 @@ describe("Control UI browser link routing", () => {
   it("routes primary, modified, middle, and new-window links to new browser-panel tabs", async () => {
     const urls: string[] = [];
     collectBrowserRequests(urls);
-    await startBrowserLinkRouting();
+    startBrowserLinkRouting();
 
     const cases: Array<[HTMLAnchorElement, MouseEvent]> = [
       [appendLink("https://example.com/primary"), mouseEvent("click")],
@@ -97,7 +97,7 @@ describe("Control UI browser link routing", () => {
   it("preserves link handlers that cancel navigation", async () => {
     const urls: string[] = [];
     collectBrowserRequests(urls);
-    await startBrowserLinkRouting();
+    startBrowserLinkRouting();
     const anchor = appendLink("https://example.com/handled");
     anchor.addEventListener("click", (event) => event.preventDefault());
     const event = mouseEvent("click");
@@ -126,7 +126,7 @@ describe("Control UI browser link routing", () => {
       window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, listener);
       stopCollectingBrowserRequests = () =>
         window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, listener);
-      await startBrowserLinkRouting(enabled);
+      startBrowserLinkRouting(enabled);
       const event = mouseEvent("click");
 
       appendLink("https://example.com/report").dispatchEvent(event);
@@ -146,7 +146,7 @@ describe("Control UI browser link routing", () => {
   it("ignores local, download, file, non-web, Shift/Alt, and right-click targets", async () => {
     const urls: string[] = [];
     collectBrowserRequests(urls);
-    await startBrowserLinkRouting();
+    startBrowserLinkRouting();
     const cases: Array<[HTMLAnchorElement, MouseEvent]> = [
       [appendLink(`${location.origin}/usage`), mouseEvent("click")],
       [

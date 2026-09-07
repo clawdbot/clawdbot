@@ -22,7 +22,8 @@ let routing: ReturnType<typeof startNativeLinkRouting> | undefined;
 
 afterEach(async () => {
   menuLoad.ready.resolve();
-  (await routing)?.dispose();
+  routing?.dispose();
+  await vi.dynamicImportSettled();
   document.body.replaceChildren();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
