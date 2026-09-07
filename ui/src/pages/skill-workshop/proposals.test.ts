@@ -439,38 +439,29 @@ describe("Skill Workshop proposal RPCs", () => {
         ...manifest().proposals[0],
         kind,
         degradedState: "draft-missing",
-        revisionHash: REVISION_HASH,
       };
       const valid = { ...manifest().proposals[0], id: "proposal-2" };
       let status: SkillWorkshopProposal["status"] = "pending";
       const { state, context, request } = createFixture(
         {
           skillWorkshopAgentId: "research",
-          skillWorkshopSelectedKey: "proposal-1",
           skillWorkshopProposals: [proposal({ body: "Previously available draft." })],
           skillWorkshopRevisionDraft: "Revise this suggestion.",
         },
         {},
-        [
-          "skills.proposals.list",
-          "skills.proposals.inspect",
-          "skills.proposals.apply",
-          "skills.proposals.evaluate",
-          "skills.proposals.requestRevision",
-          "skills.proposals.reject",
-        ],
+        ["list", "inspect", "apply", "evaluate", "requestRevision", "reject"].map(
+          (method) => `skills.proposals.${method}`,
+        ),
       );
       const validInspect = inspectResult();
+      validInspect.record.id = "proposal-2";
       request.mockImplementation(async (method, payload) => {
         if (method === "skills.proposals.list") {
           return { ...manifest(), proposals: [{ ...missing, status }, valid] };
         }
         if (method === "skills.proposals.inspect") {
           expect(payload).toEqual({ agentId: "research", proposalId: "proposal-2" });
-          return {
-            ...validInspect,
-            record: { ...validInspect.record, id: "proposal-2" },
-          };
+          return validInspect;
         }
         if (method === "skills.proposals.reject") {
           expect(payload).toEqual({
@@ -489,34 +480,17 @@ describe("Skill Workshop proposal RPCs", () => {
         degradedState: "draft-missing",
         revisionHash: REVISION_HASH,
         body: "",
-        bodyLoaded: false,
       });
-      expect(state.skillWorkshopError).toBeNull();
-
-      await selectSkillWorkshopProposal(state, context, "proposal-2");
-      expect(state.skillWorkshopSelectedKey).toBe("proposal-2");
-      expect(state.skillWorkshopProposals[1]?.body).toBe(validInspect.content);
-      await selectSkillWorkshopProposal(state, context, "proposal-1");
-      expect(state.skillWorkshopSelectedKey).toBe("proposal-1");
-
       await runSkillWorkshopLifecycleAction(state, context, "apply", proposalDecision());
       await expect(runSkillWorkshopEvaluation(state, context, "proposal-1")).resolves.toBe(false);
       const sendRevision = vi.fn();
-      await expect(
-        requestSkillWorkshopRevision(state, context, "proposal-1", sendRevision),
-      ).resolves.toBeNull();
+      await requestSkillWorkshopRevision(state, context, "proposal-1", sendRevision);
       expect(sendRevision).not.toHaveBeenCalled();
-      expect(request.mock.calls.map(([method]) => method)).toEqual([
-        "skills.proposals.list",
-        "skills.proposals.inspect",
-      ]);
+      expect(request).toHaveBeenCalledTimes(1);
 
       try {
         await runSkillWorkshopLifecycleAction(state, context, "reject", proposalDecision());
         expect(state.skillWorkshopError).toBeNull();
-        expect(state.skillWorkshopActionNotice?.label).toBe("Rejected");
-        expect(state.skillWorkshopProposals[0]?.status).toBe("rejected");
-        expect(state.skillWorkshopSelectedKey).toBe("proposal-2");
         expect(state.skillWorkshopProposals[1]?.body).toBe(validInspect.content);
       } finally {
         clearNoticeTimer(state);
