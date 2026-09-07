@@ -144,6 +144,10 @@ In `auto` mode, the Gateway maintains one weekly automation per agent. It is
 a normal isolated agent turn: cron owns scheduling, cancellation, and run
 history. `propose` and `off` disable these reviews.
 
+Reviews request `low` thinking independently of the agent's normal thinking
+default. They retain the normal agent model and fallback selection; the selected
+model's supported thinking levels still apply.
+
 The reviewer reads and edits the agent's Workshop directory with normal file
 tools. Directory listings are paged to fit the selected model instead of putting
 every file path into the initial prompt. The reviewer follows each continuation

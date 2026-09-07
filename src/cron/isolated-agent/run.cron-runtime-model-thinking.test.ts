@@ -6,6 +6,8 @@ import {
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveSkillCollectionReviewMonitorSpecs } from "../skill-collection-review-monitor.js";
 import {
   clearFastTestEnv,
   isThinkingLevelSupportedMock,
@@ -86,6 +88,65 @@ describe("runCronIsolatedAgentTurn runtime model thinking", () => {
   afterEach(() => {
     restoreFastTestEnv(previousFastTestEnv);
   });
+
+  it.each(["off", "high", "xhigh"] as const)(
+    "runs weekly skill reviews at low while ordinary cron retains the %s default",
+    async (thinkingDefault) => {
+      const cfg = {
+        agents: {
+          defaults: { model: { primary: "anthropic/claude-opus-4-6" }, thinkingDefault },
+        },
+        skills: { workshop: { autonomous: { mode: "auto" } } },
+      } satisfies OpenClawConfig;
+      const [spec] = resolveSkillCollectionReviewMonitorSpecs(cfg, { schedulerSeed: "test-seed" });
+      if (!spec || spec.input.payload.kind !== "agentTurn") {
+        throw new Error("expected a skill collection review agent turn");
+      }
+      const reviewJob = {
+        ...spec.input,
+        id: "weekly-review-job",
+        createdAtMs: 0,
+        updatedAtMs: 0,
+        state: {},
+      };
+      isThinkingLevelSupportedMock.mockReturnValue(true);
+
+      await runCronIsolatedAgentTurn({
+        cfg,
+        deps: {} as never,
+        job: reviewJob,
+        message: spec.input.payload.message,
+        sessionKey: "cron:weekly-review-job",
+      });
+
+      expect(firstMockArg(runEmbeddedAgentMock)).toMatchObject({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        thinkLevel: "low",
+      });
+
+      runEmbeddedAgentMock.mockClear();
+      resolveCronSessionMock.mockReturnValue(makeCronSession());
+      await runCronIsolatedAgentTurn({
+        cfg,
+        deps: {} as never,
+        job: {
+          ...reviewJob,
+          id: "ordinary-cron-job",
+          declarationKey: undefined,
+          payload: { kind: "agentTurn", message: "summarize" },
+        },
+        message: "summarize",
+        sessionKey: "cron:ordinary-cron-job",
+      });
+
+      expect(firstMockArg(runEmbeddedAgentMock)).toMatchObject({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        thinkLevel: thinkingDefault,
+      });
+    },
+  );
 
   it("hydrates live catalog metadata for a runtime-only cron model override", async () => {
     resolveAllowedModelRefMock.mockReturnValue({
