@@ -3,6 +3,7 @@ import { live } from "lit/directives/live.js";
 import { renderAgentPicker, renderDialog } from "../../components/host-components.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { renderLinkedPlainText } from "../../lib/linkify-text.ts";
 import { workboardCardSessionKey } from "../../lib/workboard/card-state.ts";
 import {
   addWorkboardCardComment,
@@ -373,7 +374,9 @@ export function renderCardModal(props: WorkboardProps) {
                       comments.length
                         ? html`
                             <ol>
-                              ${comments.map((comment) => html`<li>${comment.body}</li>`)}
+                              ${comments.map(
+                                (comment) => html`<li>${renderLinkedPlainText(comment.body)}</li>`,
+                              )}
                             </ol>
                           `
                         : nothing

@@ -3,6 +3,7 @@ import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
+import { renderLinkedPlainText } from "../../lib/linkify-text.ts";
 import {
   isActiveWorkboardCard,
   nextWorkboardCardPosition,
@@ -357,8 +358,8 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
         ${live ? html`<span class="workboard-live">${t("workboard.live")}</span>` : nothing}
       </div>
       <h3>${card.title}</h3>
-      ${card.notes ? html`<p>${card.notes}</p>` : nothing} ${renderLifecycle(card, props, task)}
-      ${renderDependencyBadges(dependencies)}
+      ${card.notes ? html`<p>${renderLinkedPlainText(card.notes)}</p>` : nothing}
+      ${renderLifecycle(card, props, task)} ${renderDependencyBadges(dependencies)}
       ${
         card.labels.length
           ? html`<div class="workboard-labels">
