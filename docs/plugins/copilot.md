@@ -153,6 +153,20 @@ BYOK sessions are keyed separately from subscription sessions and from other
 BYOK endpoints or credentials. Rotating the key, headers, model, or endpoint
 starts a fresh Copilot SDK session instead of resuming incompatible state.
 
+### BYOK request envelope
+
+The Copilot BYOK loopback proxy accepts an aggregate serialized request body of
+up to **32 MiB**. This limit includes the JSON envelope, prompt content,
+conversation state, tool schemas, and base64-encoded attachments. Requests that
+exceed it receive HTTP `413 Payload too large` before any upstream provider
+request is made.
+
+OpenClaw's standard prompt-image loader limits each image to 6 MiB before
+encoding. Two images at that per-image limit, plus the surrounding request
+envelope, are covered by the supported 32 MiB proxy budget. Custom providers
+remain responsible for their own API-specific limits; reduce, compress, or
+split larger custom payloads before sending them through Copilot BYOK.
+
 ## Auth
 
 Precedence, applied per agent during `runCopilotAttempt`:
