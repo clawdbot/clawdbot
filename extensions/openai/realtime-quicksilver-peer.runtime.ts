@@ -42,6 +42,10 @@ type InboundRtpState = {
   pendingPackets: Map<number, WeriftRtpPacket>;
 };
 
+// SSRC switches and large backward sequence jumps violate stream invariants the
+// peer never resyncs, so they must stay fatal instead of dropping audio forever.
+class InboundRtpInvariantError extends Error {}
+
 export type OpenAIQuicksilverAudioPeerCallbacks = {
   onAudio: (audio: Buffer) => void;
   onError: (error: Error) => void;
@@ -306,7 +310,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       if (this.activeInboundSsrc === undefined) {
         this.activeInboundSsrc = packet.header.ssrc;
       } else if (packet.header.ssrc !== this.activeInboundSsrc) {
-        throw new Error("GPT-Live WebRTC audio source changed unexpectedly");
+        throw new InboundRtpInvariantError("GPT-Live WebRTC audio source changed unexpectedly");
       }
       const state = this.inboundRtpState;
       if (state.nextSequence === undefined) {
@@ -320,7 +324,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
         if (backwardDistance <= INBOUND_MAX_LATE_PACKETS) {
           return;
         }
-        throw new Error("GPT-Live WebRTC RTP sequence changed unexpectedly");
+        throw new InboundRtpInvariantError("GPT-Live WebRTC RTP sequence changed unexpectedly");
       }
       if (state.pendingPackets.has(sequenceNumber)) {
         return;
@@ -336,6 +340,12 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       this.flushInboundReorderWindow(state);
       this.scheduleInboundFlush(state);
     } catch (error) {
+      // Stream-invariant violations never recover, so they stay fatal; only
+      // genuine per-packet failures (decode/reorder) are downgraded.
+      if (error instanceof InboundRtpInvariantError) {
+        this.state.callbacks.onError(error);
+        return;
+      }
       this.reportMediaError(error);
     }
   }
@@ -386,7 +396,12 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       }
       state.pendingPackets.delete(state.nextSequence);
       state.nextSequence = (state.nextSequence + 1) & 0xffff;
-      this.decodeInboundPacket(packet);
+      try {
+        this.decodeInboundPacket(packet);
+      } catch (error) {
+        // One undecodable packet must not strand the queued audio behind it.
+        this.reportMediaError(error);
+      }
     }
     if (state.pendingPackets.size === 0) {
       this.clearInboundFlushTimer(state);

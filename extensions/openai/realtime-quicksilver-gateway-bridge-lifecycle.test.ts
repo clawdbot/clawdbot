@@ -161,7 +161,49 @@ describe("OpenAI Quicksilver gateway bridge lifecycle", () => {
       iceServers: [],
     });
     type TestableAudioPeer = {
-      state: { decoder: { decode(packet: unknown): Int16Array } };
+      state: { decoder: { decode(packet: Uint8Array): Int16Array } };
+      handleInboundRtp(packet: unknown): void;
+    };
+    const testPeer = peer as unknown as TestableAudioPeer;
+    vi.spyOn(testPeer.state.decoder, "decode").mockImplementation((opusPacket) => {
+      if (opusPacket[0] === 11) {
+        throw new Error("bad RTP packet payload");
+      }
+      return new Int16Array(960 * 2);
+    });
+    const packet = (sequenceNumber: number, ssrc: number) =>
+      new RtpPacket(
+        new RtpHeader({
+          payloadType: 111,
+          sequenceNumber,
+          ssrc,
+          timestamp: (sequenceNumber * 960) >>> 0,
+        }),
+        Buffer.from([sequenceNumber & 0xff]),
+      );
+    try {
+      testPeer.handleInboundRtp(packet(10, 1));
+      testPeer.handleInboundRtp(packet(11, 1));
+
+      expect(onMediaError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "bad RTP packet payload" }),
+      );
+      expect(onError).not.toHaveBeenCalled();
+    } finally {
+      peer.close();
+    }
+  });
+
+  it("keeps stream-invariant failures fatal when onMediaError is provided", async () => {
+    const { RtpHeader, RtpPacket } = await import("werift");
+    const onError = vi.fn();
+    const onMediaError = vi.fn();
+    const peer = await OpenAIQuicksilverAudioPeer.create({
+      callbacks: { onAudio: vi.fn(), onError, onMediaError },
+      iceServers: [],
+    });
+    type TestableAudioPeer = {
+      state: { decoder: { decode(packet: Uint8Array): Int16Array } };
       handleInboundRtp(packet: unknown): void;
     };
     const testPeer = peer as unknown as TestableAudioPeer;
@@ -177,15 +219,91 @@ describe("OpenAI Quicksilver gateway bridge lifecycle", () => {
         Buffer.from([sequenceNumber & 0xff]),
       );
     try {
-      testPeer.handleInboundRtp(packet(10, 1));
+      testPeer.handleInboundRtp(packet(40_000, 1));
+      // A large backward sequence jump never resyncs, so it stays fatal.
+      testPeer.handleInboundRtp(packet(10_000, 1));
+      // An SSRC switch shares no decoder state, so it stays fatal too.
       testPeer.handleInboundRtp(packet(200, 2));
 
-      expect(onMediaError).toHaveBeenCalledWith(
+      expect(onError).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          message: "GPT-Live WebRTC RTP sequence changed unexpectedly",
+        }),
+      );
+      expect(onError).toHaveBeenNthCalledWith(
+        2,
         expect.objectContaining({ message: "GPT-Live WebRTC audio source changed unexpectedly" }),
       );
-      expect(onError).not.toHaveBeenCalled();
+      expect(onMediaError).not.toHaveBeenCalled();
     } finally {
       peer.close();
+    }
+  });
+
+  it("drains buffered audio behind a malformed packet after the flush window", async () => {
+    const { RtpHeader, RtpPacket } = await import("werift");
+    const onAudio = vi.fn();
+    const onError = vi.fn();
+    const onMediaError = vi.fn();
+    const peer = await OpenAIQuicksilverAudioPeer.create({
+      callbacks: { onAudio, onError, onMediaError },
+      iceServers: [],
+    });
+    type TestableAudioPeer = {
+      state: {
+        decoder: {
+          decode(packet: Uint8Array): Int16Array;
+          decodePacketLoss(frameSize?: number): Int16Array;
+        };
+      };
+      handleInboundRtp(packet: unknown): void;
+    };
+    const testPeer = peer as unknown as TestableAudioPeer;
+    const decodeOrder: Array<number | "plc"> = [];
+    vi.spyOn(testPeer.state.decoder, "decode").mockImplementation((opusPacket) => {
+      const marker = opusPacket[0] ?? -1;
+      decodeOrder.push(marker);
+      if (marker === 42) {
+        throw new Error("bad RTP packet payload");
+      }
+      return new Int16Array(960 * 2);
+    });
+    vi.spyOn(testPeer.state.decoder, "decodePacketLoss").mockImplementation(() => {
+      decodeOrder.push("plc");
+      return new Int16Array(960 * 2);
+    });
+    const packet = (sequenceNumber: number) =>
+      new RtpPacket(
+        new RtpHeader({
+          payloadType: 111,
+          sequenceNumber,
+          ssrc: 1,
+          timestamp: (sequenceNumber * 960) >>> 0,
+        }),
+        Buffer.from([sequenceNumber & 0xff]),
+      );
+    vi.useFakeTimers();
+    try {
+      for (const sequenceNumber of [40, 42, 43, 44]) {
+        testPeer.handleInboundRtp(packet(sequenceNumber));
+      }
+      expect(decodeOrder).toEqual([40]);
+      // No further packets arrive: the flush timer alone must drain the tail.
+      await vi.advanceTimersByTimeAsync(80);
+
+      expect(decodeOrder).toEqual([40, "plc", 42, 43, 44]);
+      expect(onMediaError).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ message: "bad RTP packet payload" }),
+      );
+      expect(onError).not.toHaveBeenCalled();
+      // 40, the concealed 41, and 43/44 still play; only 42 is dropped.
+      expect(Buffer.concat(onAudio.mock.calls.map(([audio]) => audio))).toHaveLength(
+        (4 * 480 - 7) * 2,
+      );
+    } finally {
+      peer.close();
+      vi.useRealTimers();
     }
   });
 
