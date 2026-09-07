@@ -53,6 +53,7 @@ import {
   refuseStartupMigrationsForLiveGatewayOwner,
   throwStartupMigrationGuardRejected,
 } from "./doctor-startup-migration-refusal.js";
+import { noteStaleUpdateRuns } from "./doctor-update-run.js";
 import type { CronCodexRuntimePolicyTarget } from "./doctor/cron/store-migration.js";
 import {
   commitAutomaticConfigRepair,
@@ -132,6 +133,7 @@ export async function runDoctorConfigPreflight(
       env: process.env,
     });
   }
+  noteStaleUpdateRuns(options);
   const measurePreflightStep = <T>(name: string, run: () => T | Promise<T>) =>
     measureDoctorConfigPreflightStep(name, run, options.measure);
   const migrationCheckpointRequired =
@@ -756,9 +758,7 @@ export async function runDoctorConfigPreflight(
       ...(postSessionPluginMigrationPlanBound ? { postSessionPluginMigrationPlanBound: true } : {}),
     };
   } finally {
-    if (startupMigrationHeartbeat) {
-      clearInterval(startupMigrationHeartbeat);
-    }
+    clearInterval(startupMigrationHeartbeat);
     startupMigrationLease?.release();
   }
 }

@@ -212,6 +212,8 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
         dispatcher: createDispatcher(),
         replyOptions: { [REPLY_OPERATION_RUN_STATE]: runState },
         replyResolver: async (_ctx, opts) => {
+          // Queue and question owners publish their decisions after outer operation admission.
+          Object.assign(runState, state);
           if (failed) {
             opts?.onAgentRunTerminalOutcome?.("failed");
           }

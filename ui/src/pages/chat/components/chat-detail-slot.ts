@@ -7,7 +7,7 @@ import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import "./chat-sidebar.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import { openSessionWorkspaceFile, revealSessionWorkspaceFile } from "./chat-session-workspace.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type { SidebarContent, SidebarSelection } from "./chat-sidebar.ts";
 import { resetTaskDetail, type TaskDetailHost } from "./chat-task-detail-state.ts";
 import { renderTaskDetailPanel } from "./chat-task-detail.ts";
 import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
@@ -20,7 +20,7 @@ function detailSlotOpen(layout: SidebarLayout): boolean {
 }
 
 export function openTaskDetailId(
-  content: SidebarContent | null | undefined,
+  content: SidebarSelection | null | undefined,
   layout: SidebarLayout,
 ): string | undefined {
   return content?.kind === "task" && detailSlotOpen(layout) ? content.taskId : undefined;

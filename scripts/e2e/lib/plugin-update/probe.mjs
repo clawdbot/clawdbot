@@ -207,6 +207,23 @@ async function assertOutput(logPath) {
   }
 }
 
+function assertCorruptTargetUnavailable(updateJsonPath, pluginId) {
+  const result = readJson(updateJsonPath);
+  const details = (result.steps ?? []).map((step) => step.stderrTail ?? "").join("\n");
+  if (
+    result.status !== "error" ||
+    result.reason !== "plugin-target-unavailable" ||
+    result.recovery?.serviceRestartSafe !== true ||
+    !details.includes(`requires @openclaw/${pluginId}@0.0.1 for core `) ||
+    !details.includes(`Package not found on npm: @openclaw/${pluginId}@0.0.1`) ||
+    (result.steps ?? []).some((step) => step.name === "global install swap")
+  ) {
+    throw new Error(
+      `expected unavailable-target refusal before activation: ${JSON.stringify(result)}`,
+    );
+  }
+}
+
 function assertCorruptUpdate(updateJsonPath, pluginId) {
   const payload = readJson(updateJsonPath);
   if (payload.status !== "ok") {
@@ -353,6 +370,7 @@ const commands = {
   snapshot: () => process.stdout.write(JSON.stringify(pluginRecordSnapshot(), null, 2)),
   "assert-snapshot": () => assertSnapshot(arg),
   "assert-output": () => assertOutput(arg),
+  "assert-corrupt-unavailable": () => assertCorruptTargetUnavailable(arg, arg2),
   "assert-corrupt-update": () => assertCorruptUpdate(arg, arg2),
   "assert-corrupt-plugin-result": () => assertCorruptPluginResult(arg, arg2),
   "assert-corrupt-policy-preserved": () => assertCorruptPluginPolicyPreserved(arg, arg2),

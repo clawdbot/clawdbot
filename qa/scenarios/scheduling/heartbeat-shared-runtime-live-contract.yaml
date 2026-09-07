@@ -1,0 +1,323 @@
+title: Heartbeat shared runtime live contract
+scenario:
+  id: heartbeat-shared-runtime-live-contract
+  surface: cron
+  category: automation.heartbeat
+  coverage:
+    primary:
+      - automation.manual-cron-runs
+      - automation.chat-announce-delivery
+    secondary:
+      - automation.heartbeat-scheduling
+      - automation.wake-and-cooldown-handling
+      - gateway.task-and-automation-apis
+  gatewayConfigPatch:
+    logging:
+      consoleStyle: json
+    agents:
+      defaults:
+        heartbeat:
+          every: 24h
+          isolatedSession: true
+          target: qa-channel
+          to: dm:qa-heartbeat-live-contract
+          directPolicy: allow
+          prompt: Follow the current heartbeat monitor scratch instructions exactly. Finish with the available heartbeat_respond tool. Do not use a message tool or change automation configuration.
+    session:
+      dmScope: main
+    tools:
+      allow: [message, heartbeat_respond]
+    messages:
+      visibleReplies: message_tool
+  objective: Prove structured heartbeat silence, alert delivery, scratch replacement, and natural main-session cron execution through the same real isolated Gateway.
+  successCriteria:
+    - Structured quiet and alert results replace monitor scratch through the runtime owner.
+    - Quiet completion records an intentional non-outcome and sends no channel message.
+    - A subsequent user turn recalls the isolated silent outcome without reading automation state.
+    - Alert completion delivers exactly once to the configured synthetic DM.
+    - Empty scratch skips the monitor without an agent transcript turn.
+    - A natural main-session cron reminder bypasses empty monitor scratch and delivers once.
+  docsRefs:
+    - docs/gateway/heartbeat.md
+    - docs/automation/cron-jobs.md
+  codeRefs:
+    - src/infra/heartbeat-runner-run.ts
+    - src/cron/service/timer-execution.ts
+    - src/agents/tools/heartbeat-response-tool.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Owns heartbeat policy, scratch, and a main-session route in an ephemeral Gateway.
+    channel: qa-channel
+    retryCount: 0
+    timeoutMs: 600000
+    summary: >-
+      Run with --provider-mode live-frontier --scenario
+      heartbeat-shared-runtime-live-contract, optionally adding
+      --runtime-pair openclaw,codex. Use source-owned model defaults.
+      Verify structured quiet and alert outcomes, scratch replacement,
+      silent-outcome recall through the message tool, empty-scratch suppression,
+      natural main-session cron delivery, and transcript mirror diagnostics.
+    config:
+      requiredProviderMode: live-frontier
+      conversationId: qa-heartbeat-live-contract
+      sessionKey: agent:qa:main
+      cases:
+        - name: quiet
+          notify: false
+        - name: alert
+          notify: true
+flow:
+  steps:
+    - name: exercises structured monitor results and exact delivery
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: This scenario requires the live provider lane.
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 120000]
+        - call: waitForQaChannelReady
+          args: [{ ref: env }, 120000]
+        - call: env.gateway.call
+          saveAs: inventory
+          args: [cron.list, { includeDisabled: true }, { timeoutMs: 30000 }]
+        - set: monitor
+          value:
+            expr: "inventory.jobs.find((job) => job.agentId === 'qa' && job.payload?.kind === 'heartbeat' && job.declarationKey === 'heartbeat:qa')"
+        - assert:
+            expr: "Boolean(monitor?.id) && monitor.enabled"
+            message: Expected the existing config-owned heartbeat monitor.
+        - set: verdicts
+          value: { expr: "[]" }
+        - forEach:
+            items: { expr: config.cases }
+            item: phase
+            actions:
+              - call: reset
+              - set: marker
+                value: { expr: "`QA-HEARTBEAT-${phase.name}-${randomUUID().slice(0, 8)}`" }
+              - set: replacementScratch
+                value: { expr: "`Completed ${marker}. No further action is requested.`" }
+              - call: env.gateway.call
+                saveAs: priorScratch
+                args: [cron.scratch.get, { id: { ref: monitor.id } }]
+              - call: env.gateway.call
+                saveAs: seeded
+                args:
+                  - cron.scratch.set
+                  - id: { ref: monitor.id }
+                    expectedRevision: { ref: priorScratch.currentRevision }
+                    content:
+                      expr: "'For this check, call heartbeat_respond exactly once with these arguments: ' + JSON.stringify({outcome: 'done', notify: phase.notify, summary: marker, ...(phase.notify ? {notificationText: marker} : {}), scratch: replacementScratch}) + '. Do not call other tools. Do not send any separate assistant message.'"
+              - assert:
+                  expr: "seeded.ok === true"
+                  message: Scratch setup lost its revision race.
+              - set: startedAt
+                value: { expr: "Date.now()" }
+              - call: env.gateway.call
+                saveAs: triggered
+                args: [cron.run, { id: { ref: monitor.id }, mode: force }, { timeoutMs: 30000 }]
+              - assert:
+                  expr: "triggered.ok === true && triggered.ran !== false"
+                  message: Monitor run was not admitted.
+              - call: waitForCronRunCompletion
+                saveAs: completed
+                args:
+                  - callGateway: { expr: "env.gateway.call.bind(env.gateway)" }
+                    jobId: { ref: monitor.id }
+                    afterTs: { ref: startedAt }
+                    timeoutMs: { expr: "liveTurnTimeoutMs(env, 120000)" }
+              - assert:
+                  expr: "completed.status === 'ok'"
+                  message: { expr: "JSON.stringify(completed)" }
+              - call: env.gateway.call
+                saveAs: scratch
+                args: [cron.scratch.get, { id: { ref: monitor.id } }]
+              - assert:
+                  expr: "scratch.scratch?.content === replacementScratch && scratch.currentRevision === seeded.currentRevision + 1"
+                  message: The structured result did not commit its exact scratch replacement.
+              - call: env.gateway.call
+                saveAs: heartbeat
+                args: [last-heartbeat, {}]
+              - assert:
+                  expr: "heartbeat.ts >= startedAt && heartbeat.status === (phase.notify ? 'sent' : 'ok-token')"
+                  message: { expr: "JSON.stringify(heartbeat)" }
+              - call: sleep
+                args: [2000]
+              - set: outbound
+                value:
+                  {
+                    expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound' && !message.deleted)",
+                  }
+              - assert:
+                  expr: "phase.notify ? outbound.length === 1 && outbound[0].conversation.kind === 'direct' && outbound[0].conversation.id === config.conversationId && outbound[0].text.trim() === marker : outbound.length === 0"
+                  message:
+                    {
+                      expr: "JSON.stringify(outbound.map((message) => ({conversation: message.conversation, text: message.text})))",
+                    }
+              - if:
+                  expr: "!phase.notify"
+                  then:
+                    - call: readSessionTranscriptSummary
+                      saveAs: beforeRecall
+                      args: [{ ref: env }, { expr: config.sessionKey }, { allowEmpty: true }]
+                    - sendInbound:
+                        conversation:
+                          id: { expr: config.conversationId }
+                          kind: direct
+                          title: QA Heartbeat Context
+                        senderId: qa-heartbeat-context-user
+                        senderName: QA Context User
+                        text: "What is the exact QA-HEARTBEAT marker recorded in the latest silent heartbeat outcome? Send only that marker as your reply using the available message tool. Do not run tools to inspect files, scratch, or automation state."
+                    - call: waitForOutboundMessage
+                      saveAs: recalledOutcome
+                      args:
+                        - ref: state
+                        - lambda:
+                            params: [message]
+                            expr: "message.direction === 'outbound' && message.conversation.kind === 'direct' && message.conversation.id === config.conversationId && message.text.trim() === marker"
+                        - expr: "liveTurnTimeoutMs(env, 120000)"
+                    - call: waitForCondition
+                      args:
+                        - lambda:
+                            async: true
+                            params: []
+                            expr: "env.gateway.call('sessions.list', {}, {timeoutMs: 30000}).then((result) => result.sessions?.find((session) => session.key === config.sessionKey && session.hasActiveRun === false))"
+                        - expr: "liveTurnTimeoutMs(env, 180000)"
+                        - 100
+                    - call: readSessionTranscriptSummary
+                      saveAs: recallTranscript
+                      args:
+                        - ref: env
+                        - expr: config.sessionKey
+                        - afterEventCursor: { ref: beforeRecall.eventCursor }
+                    - assert:
+                        expr: "recallTranscript.successfulToolCallCounts.message === 1"
+                        message: Recall did not complete exactly one successful message-tool call.
+                    - assert:
+                        expr: "Object.keys(recallTranscript.assistantToolCallCounts).every((name) => ['message', 'exec', 'wait', 'tool_search_code', 'tool_search', 'tool_describe', 'tool_call'].includes(name))"
+                        message:
+                          { expr: "JSON.stringify(recallTranscript.assistantToolCallCounts)" }
+              - set: recorded
+                value:
+                  {
+                    expr: "verdicts.push({phase: phase.name, status: heartbeat.status, scratchRevision: scratch.currentRevision, outboundCount: outbound.length})",
+                  }
+      detailsExpr: "JSON.stringify(verdicts)"
+    - name: skips empty monitor scratch without executing another model turn
+      actions:
+        - call: reset
+        - call: readRawQaSessionStore
+          saveAs: monitorSessions
+          args: [{ ref: env }]
+        - set: monitorRunSessionKey
+          value:
+            {
+              expr: "Object.entries(monitorSessions).find(([, entry]) => entry.heartbeatIsolatedBaseSessionKey === config.sessionKey)?.[0]",
+            }
+        - assert:
+            expr: "Boolean(monitorRunSessionKey) && monitorRunSessionKey !== config.sessionKey"
+            message: Expected an isolated monitor transcript distinct from the user session.
+        - call: readSessionTranscriptSummary
+          saveAs: beforeEmpty
+          args: [{ ref: env }, { ref: monitorRunSessionKey }]
+        - call: env.gateway.call
+          saveAs: emptyScratch
+          args: [cron.scratch.set, { id: { ref: monitor.id }, content: "# Empty checklist" }]
+        - set: emptyStartedAt
+          value: { expr: "Date.now()" }
+        - call: env.gateway.call
+          args: [cron.run, { id: { ref: monitor.id }, mode: force }, { timeoutMs: 30000 }]
+        - call: waitForCronRunCompletion
+          saveAs: emptyRun
+          args:
+            - callGateway: { expr: "env.gateway.call.bind(env.gateway)" }
+              jobId: { ref: monitor.id }
+              afterTs: { ref: emptyStartedAt }
+              timeoutMs: { expr: "liveTurnTimeoutMs(env, 120000)" }
+        - assert:
+            expr: "emptyRun.status === 'skipped' && String(emptyRun.error ?? '').includes('empty-heartbeat-file')"
+            message: { expr: "JSON.stringify(emptyRun)" }
+        - call: readSessionTranscriptSummary
+          saveAs: afterEmpty
+          args: [{ ref: env }, { ref: monitorRunSessionKey }]
+        - assert:
+            expr: "afterEmpty.eventCursor === beforeEmpty.eventCursor"
+            message: Empty monitor scratch unexpectedly executed an agent turn.
+        - call: waitForNoOutbound
+          args: [{ ref: state }, 2000]
+      detailsExpr: "JSON.stringify({status: emptyRun.status, transcriptUnchanged: true})"
+    - name: naturally fires a main-session reminder despite empty monitor scratch
+      actions:
+        - call: readRawQaSessionStore
+          saveAs: sessions
+          args: [{ ref: env }]
+        - call: seedQaSessionEntries
+          args:
+            - ref: env
+            - expr: "[{agentId: 'qa', sessionKey: config.sessionKey, entry: {...sessions[config.sessionKey], delivery: {...sessions[config.sessionKey]?.delivery, kind: 'external', route: {channel: 'qa-channel', target: {to: `dm:${config.conversationId}`, chatType: 'direct'}}, context: {channel: 'qa-channel', to: `dm:${config.conversationId}`}, origin: {provider: 'qa-channel', surface: 'qa-channel', chatType: 'direct', to: `dm:${config.conversationId}`}}}}]"
+        - set: reminderMarker
+          value: { expr: "`QA-MAIN-CRON-${randomUUID().slice(0, 8)}`" }
+        - set: reminderStartedAt
+          value: { expr: "Date.now()" }
+        - call: env.gateway.call
+          saveAs: reminder
+          args:
+            - cron.add
+            - agentId: qa
+              name: { expr: "`qa-main-runtime-${randomUUID()}`" }
+              enabled: true
+              deleteAfterRun: false
+              schedule:
+                kind: at
+                at: { expr: "new Date(reminderStartedAt + 12000).toISOString()" }
+              sessionTarget: main
+              sessionKey: { expr: config.sessionKey }
+              wakeMode: now
+              payload:
+                kind: systemEvent
+                text:
+                  {
+                    expr: "'Send this reminder by calling heartbeat_respond once with outcome=done, notify=true, summary and notificationText both exactly ' + reminderMarker + '. Do not use a separate message tool.'",
+                  }
+            - timeoutMs: 30000
+        - call: waitForCronRunCompletion
+          saveAs: reminderRun
+          args:
+            - callGateway: { expr: "env.gateway.call.bind(env.gateway)" }
+              jobId: { ref: reminder.id }
+              afterTs: { ref: reminderStartedAt }
+              timeoutMs: { expr: "liveTurnTimeoutMs(env, 120000)" }
+        - assert:
+            expr: "reminderRun.status === 'ok' && reminderRun.runAtMs >= new Date(reminder.schedule.at).getTime()"
+            message: { expr: "JSON.stringify(reminderRun)" }
+        - call: waitForOutboundMessage
+          saveAs: reminderMessage
+          args:
+            - ref: state
+            - lambda:
+                params: [message]
+                expr: "message.direction === 'outbound' && message.conversation.kind === 'direct' && message.conversation.id === config.conversationId && message.text.trim() === reminderMarker"
+            - expr: "liveTurnTimeoutMs(env, 45000)"
+        - call: sleep
+          args: [8000]
+        - set: reminderMatches
+          value:
+            {
+              expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound' && String(message.text ?? '').includes(reminderMarker))",
+            }
+        - assert:
+            expr: "reminderMatches.length === 1"
+            message: Natural main-session cron delivered a duplicate reminder.
+      detailsExpr: "JSON.stringify({natural: true, status: reminderRun.status, delivered: reminderMessage.text, count: reminderMatches.length})"
+    - name: records native transcript mirror diagnostics
+      actions:
+        - call: readGatewayLogs
+          saveAs: runtimeLogs
+        - set: mirrorWarnings
+          value:
+            expr: "runtimeLogs.split('\\n').filter((line) => line.includes('failed to mirror codex app-server') || line.includes('codex settled-turn finalization context is unavailable')).map((line) => { const row = JSON.parse(line); return {message: row.message, error: row.error, reason: row.reason}; })"
+        - assert:
+            expr: "mirrorWarnings.every((warning) => warning.message === 'codex settled-turn finalization context is unavailable' && warning.reason === 'native_auth_finalization_unsupported')"
+            message: { expr: "JSON.stringify(mirrorWarnings)" }
+      detailsExpr: "JSON.stringify(mirrorWarnings)"

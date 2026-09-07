@@ -37,6 +37,23 @@ const acceptanceSchema = ["schema_meta", "config_machine_state", "update_runs"]
   })
   .join("\n");
 
+/** A descriptor reserves its history for fenced recovery, even when its driver died.
+ * Presence is exclusion only: corrupt or older evidence never grants cleanup authority. */
+export function hasStoredUpdateRecovery(db: DatabaseSync, runId: string): boolean {
+  return (
+    tableExists(db, "config_machine_state") &&
+    Boolean(
+      executeSqliteQueryTakeFirstSync(
+        db,
+        getNodeSqliteKysely<RecoveryDatabase>(db)
+          .selectFrom("config_machine_state")
+          .select("state_key")
+          .where("state_key", "=", UPDATE_RECOVERY_KEY_PREFIX + runId),
+      ),
+    )
+  );
+}
+
 function readRecoveryRows(db: DatabaseSync) {
   if (!tableExists(db, "config_machine_state")) {
     return [];

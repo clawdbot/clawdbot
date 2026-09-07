@@ -218,6 +218,30 @@ gets a separate `runId`.
 
 `openclaw update --json` includes `runId` and the `run` record. `openclaw update status --json`
 includes `activeRun` when a run is active and `lastRun` when history exists.
+When the active row has been inactive for more than 30 minutes and its recorded
+driver is verifiably dead, status also reports `abandonedRun` with its `runId`
+and reconciliation `rule`. Status remains read-only: the stored row stays in
+`activeRun` until the Gateway or explicit repair commits the outcome.
+Identityless rows are never reconciled automatically, even when their only
+step is `requested/in_progress`. For stale identityless rows, JSON includes
+`staleRun` with `runId` and `guidance`; human status and Doctor preflight report
+"no activity since &lt;time&gt;; if no update is running, run `openclaw update repair`
+or start a new `openclaw update`".
+
+An explicit new `openclaw update` (including `--dry-run`) supersedes the old row
+only when it is the sole active run, has no recorded driver identity, and has
+had no activity for more than 30 minutes. Admission atomically finishes that
+row as `failed` with reason `superseded` and a retained `reconcile:superseded`
+step, then creates the new run. Recent rows and rows with recorded identities
+are preserved. Inherited update continuations and automatic campaigns do not
+supersede legacy history. Configuration writes remain suspended until the
+active row is reconciled.
+
+OpenClaw 2026.9.2 can admit a new CLI update while an older row remains running;
+the stale row does not block updater admission. Upgrade normally, then run
+`openclaw update repair` from the updated installation if status still shows the
+old run. See [Updating](/install/updating#stale-update-history).
+
 Human output, chat completion notices, the Control UI update view, and the
 `openclaw status` update line use the same report, including on success. The report shows recorded facts; an absent verification fact
 means that check has not been observed.
@@ -244,6 +268,27 @@ Phases are `requested`, `staging`, `validating`, optional `repairing`, `activati
 automatic rollback cannot complete. Phase timings, repair attempts, and
 verification facts are included only when observed. Chat reports are limited to 1,500 characters;
 `update.runs.get` preserves the bounded record for detailed inspection.
+
+Current updaters record their process identities and refresh the ledger
+every 30 seconds during long build, install, and finalization phases. The Gateway checks for
+abandoned runs at startup and while following active updates. After more than
+30 minutes without step or heartbeat activity, verifiably dead recorded drivers
+allow the Gateway to finish the run as `failed` with reason `abandoned` and a
+`reconcile:abandoned` step naming the rule. A live, unreadable, or foreign-host
+driver prevents reconciliation. Each helper or finalization child records its
+own identity and retains earlier drivers, because detached children can outlive
+their parent. If process identity recording is unavailable, the update continues
+with one warning and the run requires explicit recovery. Known parent identities
+remain protected, and automatic reconciliation stays disabled for that run.
+Heartbeat write errors warn once per driver run and do not interrupt a running
+build, install, or finalization phase.
+
+Historical rows without a driver identity require explicit `update repair` or
+a new operator-started `openclaw update`.
+An old `requested` row alone does not prove that its updater exited: the 2026.9.2
+updater can still be waiting on package-manager or registry preflight before it
+records its first staging step. Stop an unrecorded old updater before explicitly
+recovering its stale row. See [Database schemas](/reference/database-schemas#update-run-ledger).
 
 The run records `downtimeMs` from the service stop request until a Gateway is
 verified running. Staging, candidate validation, and pre-activation repair are excluded. Verification
@@ -292,7 +337,33 @@ openclaw update repair --accept-capabilities
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes while repairing plugin state.                                                                                                                                                                                                                   |
 | `--no-restart`                                   | Accepted for parity; repair never restarts the Gateway.                                                                                                                                                                                                                                          |
 
-`update repair` runs `openclaw doctor --fix`, reloads the repaired config and
+`update repair` first inspects stale update history. When the installed Gateway
+generation is healthy and the only remaining problem is an inactive ledger row,
+repair records `failed` / `abandoned` and exits successfully without Doctor,
+maintenance, or a service stop. It also acknowledges a Gateway-reconciled row
+once within 30 minutes of reconciliation. Later repair invocations use full
+finalization, so historical recovery cannot suppress plugin convergence.
+Explicit recovery permits identityless historical rows only
+after more than 30 minutes of inactivity; a recorded live or uninspectable driver
+still blocks recovery. JSON output identifies reconciled run IDs in
+`reconciledRuns`, with `status: "ok"`, `mode: "repair"`, and `restart: false`.
+
+Explicit channel or capability changes and known incomplete post-core work use
+full finalization. Recorded activation, restart, verification, or finalization steps require
+that convergence even if the Gateway has already reconciled the run. Repair
+checks newer abandoned history as well as active rows; an older stale row cannot
+hide unfinished work from a newer update. If the bounded history inspection is
+incomplete, repair also uses full finalization. If that
+work needs maintenance while the managed service is
+running, stop the service through its owner before retrying. Doctor cannot stop
+or restart the service on the update parent's behalf.
+Successful full finalization then reconciles the selected stale rows before
+reporting completion. Failed convergence leaves the selected rows intact. If any
+selected run resumes before reconciliation, the whole selection is preserved.
+Full finalization JSON includes `reconciledRuns` when stale rows were selected
+for recovery, listing the IDs reconciled by that invocation.
+
+For full finalization, `update repair` runs `openclaw doctor --fix`, reloads the repaired config and
 install records, syncs tracked plugins for the active update channel, updates
 managed npm plugin installs, repairs missing configured plugin payloads,
 refreshes the plugin registry, and writes converged install-record metadata.

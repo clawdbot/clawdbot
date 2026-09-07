@@ -408,6 +408,31 @@ describe("plugin update unchanged Docker E2E", () => {
     expect(result.stderr).toContain(expectedError);
   });
 
+  it.each(["unavailable", "unknown-version", "activated", "unsafe-recovery"] as const)(
+    "accepts only a pre-activation unavailable-target refusal: %s",
+    (outcome) => {
+      const result = runProbeStatus("assert-corrupt-unavailable", {
+        status: "error",
+        reason: "plugin-target-unavailable",
+        recovery: { serviceRestartSafe: outcome !== "unsafe-recovery" },
+        steps: [
+          {
+            name: outcome === "activated" ? "global install swap" : "package update",
+            exitCode: 1,
+            stderrTail:
+              outcome === "unknown-version"
+                ? "cannot determine the required version because the target core version is unknown"
+                : "Plugin demo-corrupt-plugin requires @openclaw/demo-corrupt-plugin@0.0.1 for core 2026.9.99-first-hop.0: Package not found on npm: @openclaw/demo-corrupt-plugin@0.0.1",
+          },
+        ],
+      });
+      expect(result.status).toBe(outcome === "unavailable" ? 0 : 1);
+      if (outcome !== "unavailable") {
+        expect(result.stderr).toContain("expected unavailable-target refusal before activation");
+      }
+    },
+  );
+
   it("accepts disabled or quarantined corrupt plugin warnings and rejects neither", () => {
     const disabledAfterFailure = {
       status: "ok",

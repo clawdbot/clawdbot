@@ -23,6 +23,7 @@ const legacyOperator =
     : undefined;
 const SCENARIOS = new Set([
   "base",
+  "abandoned-update",
   "legacy-operator-state",
   "mobile-pairing-reconnect",
   "acpx-openclaw-tools-bridge",

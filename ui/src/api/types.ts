@@ -1,5 +1,6 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
+  ArtifactSummary as ProtocolArtifactSummary,
   CronJob as ProtocolCronJob,
   CronListParams,
   CronRunLogEntry as ProtocolCronRunLogEntry,
@@ -29,7 +30,6 @@ import type {
   SessionContextBudgetStatus,
   SessionGoal,
 } from "../../../src/config/sessions/types.js";
-import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 import type { FastModeSource } from "../../../src/shared/fast-mode.js";
 import type {
   GatewayAgentRuntime,
@@ -40,6 +40,10 @@ import type {
   SessionsPatchResultBase,
 } from "../../../src/shared/session-types.js";
 export type {
+  AgentIdentityResult,
+  ArtifactsDownloadResult as ArtifactDownloadResult,
+  ConfigSchemaResponse,
+  ModelsListResult as ModelCatalogResult,
   AgentsFileEntry as AgentFileEntry,
   AgentsFilesListResult,
   AgentsFilesGetResult,
@@ -207,13 +211,6 @@ export type ConfigSnapshot = {
   issues?: ConfigSnapshotIssue[] | null;
 };
 
-export type ConfigSchemaResponse = {
-  schema: unknown;
-  uiHints: ConfigUiHints;
-  version: string;
-  generatedAt: string;
-};
-
 export type PresenceEntry = ProtocolPresenceEntry;
 
 export type GatewaySessionsDefaults = {
@@ -235,40 +232,11 @@ export type { GatewayContextWindowOption, GatewayThinkingLevelOption };
 
 export type AgentsListResult = ProtocolAgentsListResult;
 
-export type AgentIdentityResult = {
-  agentId: string;
-  name: string;
-  nameSource?: "config" | "agent" | "workspace" | "default";
-  avatar: string;
-  avatarSource?: string | null;
-  avatarStatus?: "none" | "local" | "remote" | "data" | null;
-  avatarReason?: string | null;
-  emoji?: string;
-};
-
-type SessionWorkspaceArtifactEntry = {
-  id: string;
-  type: string;
-  title: string;
-  mimeType?: string;
-  sizeBytes?: number;
-  source?: string;
-  download: {
-    mode: "bytes" | "url" | "unsupported";
-  };
-};
+type SessionWorkspaceArtifactEntry = ProtocolArtifactSummary;
 
 // The workspace view joins file results with separately fetched artifacts.
 export type SessionWorkspaceListResult = ProtocolSessionsFilesListResult & {
   artifacts?: SessionWorkspaceArtifactEntry[];
-};
-
-export type ArtifactDownloadResult = {
-  artifact: SessionWorkspaceArtifactEntry;
-  encoding?: "base64";
-  data?: string;
-  url?: string;
-  expiresAt?: string;
 };
 
 type SubagentRunState = "active" | "interrupted" | "historical";
@@ -466,16 +434,10 @@ export type StatusSummary = Record<string, unknown>;
 export type HealthSnapshot = Record<string, unknown>;
 
 /** A model entry returned by the gateway model-catalog endpoint. */
-export type ModelCatalogEntry = Omit<ProtocolModelChoice, "input"> & {
-  input?: Array<"text" | "image" | "document">;
-};
+export type ModelCatalogEntry = ProtocolModelChoice;
 
 export type ModelCatalogProviderOutcome =
   import("../../../packages/gateway-protocol/src/schema/agents-models-skills.js").ModelCatalogProviderOutcome;
-export type ModelCatalogResult = {
-  models: ModelCatalogEntry[];
-  providerOutcomes?: ModelCatalogProviderOutcome[];
-};
 
 export type ToolCatalogProfile =
   import("../../../packages/gateway-protocol/src/schema.js").ToolCatalogProfile;

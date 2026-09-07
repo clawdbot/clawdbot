@@ -145,6 +145,77 @@ downtime. Each JSON column has a 16 KiB hard limit with deterministic truncation
 and redaction. The ledger stores bounded diagnostic summaries, not raw logs or
 credentials. There is no automatic history deletion.
 
+New drivers store optional `origin.driver` fields `host` (the hostname), `pid`,
+and `startIdentity` (the operating system's process-start identity as a decimal
+string) in the existing `origin_json` column. Each adopter becomes the current
+driver and retains distinct earlier identities in `origin.previousDrivers`.
+There are at most eight identities in total. Only positively dead identities
+are pruned; adoption is refused rather than dropping a live or uninspectable
+driver at capacity. If local process identity cannot be captured, adoption
+continues with one warning and a retained `driver:identity-unavailable` step.
+That marker permanently excludes the run from automatic reconciliation, even
+if known parents later exit; existing recorded identities remain protected.
+A fresh run without identity follows the legacy explicit repair/supersession
+rules below.
+This is additive JSON metadata;
+there are no new columns, tables, or schema versions. The separate
+`verification.pid` still identifies the Gateway service, not the updater.
+Adoption records a retained `driver:adopted` step. Detached children can outlive
+their parent, so either lifetime can prevent reconciliation. Adopting a terminal
+run is refused. Long command and finalization phases renew `updated_at_ms`
+every 30 seconds; only current or retained identities may renew a row. Heartbeat
+write failures warn once per driver run and do not abort commands or finalization;
+step and outcome writes retain their existing failure behavior. Encoding
+reserves space for exact identity bytes before bounding and redacting other
+origin diagnostics.
+
+The ledger owns abandonment classification and terminalization. Automatic
+recovery requires more than 30 minutes since both `updated_at_ms` and the latest
+step timestamp, plus positive evidence that every recorded driver is dead on the
+same host: its PID is gone or its process-start identity differs. Unreadable and
+foreign-host identities are inconclusive. The Gateway performs reconciliation
+at startup and on active-run polls, rechecking the current row and process
+identity in the terminal write transaction. The shared 30-minute constant also
+owns the older-updater schema-publication bound below.
+
+Reconciliation writes status `failed`, reason `abandoned`, and a retained
+`reconcile:abandoned` step whose detail names `inactive-driver-dead` or
+`operator-reconciled-inactive-run`. All unfinished steps become terminal, and
+history is retained. Explicit `update repair` can reconcile inactive identityless
+rows when the current Gateway generation is healthy and no post-core repair is
+pending. It cannot override a live or inconclusive recorded driver. The
+[2026.9.2 updater](https://github.com/openclaw/openclaw/blob/v2026.9.2/src/cli/update-cli/update-command.ts#L465)
+does not record adoption: package-manager and registry preflight can
+leave a live updater at its single `requested/in_progress` step. Older writers
+may drop unknown driver JSON fields; identityless rows require explicit recovery.
+`update status` only reports classification and never commits reconciliation.
+
+Explicit new CLI update admission can supersede a legacy row only when it is
+the sole running row, has no current or previous driver identity, and exceeds
+the same inactivity bound. The transaction finishes it as `failed` with reason
+`superseded` and a retained `reconcile:superseded` step whose detail is
+`operator-started-update-supersedes-inactive-identityless-run`, then creates the
+new row. This includes dry-run admission, but excludes inherited continuations
+and campaigns. `abandoned` and `superseded` are additive values in the existing
+free-text reason contract. Neither recovery path deletes history.
+
+Successful ledger-only repair records a retained `reconcile:acknowledged` step.
+A terminal abandoned row can substitute for full repair only once, within
+30 minutes of its finish time; later repair invocations keep normal plugin
+convergence behavior.
+Repair also inspects newer failed/abandoned history for unacknowledged post-core
+work, regardless of its age. An older active row cannot hide that work. If the
+bounded history prefix does not reach the selected recovery rows, repair uses
+full finalization rather than claiming that no post-core work remains.
+When full finalization is required, the selected inactive rows are rechecked
+and reconciled only after successful convergence, before success output.
+Explicit recovery validates and commits its selected rows in one transaction;
+renewed activity in any selected run preserves the entire selection. Ledger-only
+repair also refuses the write if another active run falls outside that selection.
+Finalization (`finalize:*`) and post-update verification markers survive step-count
+and diagnostic-byte eviction because repair relies on that history. If retained
+metadata alone exceeds a hard limit, the write fails without changing the row.
+
 The CLI and Gateway share WAL-backed transactions, including while the Gateway
 is stopped. The first terminal outcome wins; subsequent verification can enrich
 its observed facts without rewriting success, failure, skip, or rollback status.

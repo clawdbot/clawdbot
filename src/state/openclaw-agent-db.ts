@@ -15,6 +15,7 @@ import {
   confirmSqliteFileIntegrity,
   isTerminalSqliteIntegrityError,
   runSqliteIntegrityOperationSync,
+  type SqliteIntegrityDiagnostics,
   type SqliteIntegrityOperation,
   type SqliteIntegrityConfirmation,
 } from "../infra/sqlite-integrity.js";
@@ -291,7 +292,13 @@ function* openOpenClawAgentDatabaseSteps(
         env: leaseEnvironment,
       });
   }
-  const finishPhase = startAgentDatabaseOpenTiming(agentId, pathname, pending ? "async" : "sync");
+  const diagnostics: SqliteIntegrityDiagnostics = {};
+  const finishPhase = startAgentDatabaseOpenTiming(
+    agentId,
+    pathname,
+    pending ? "async" : "sync",
+    diagnostics,
+  );
   let openedDb: DatabaseSync | undefined;
   let openedDatabase: OpenClawAgentDatabase | undefined;
   let openedWalMaintenance: SqliteWalMaintenance | undefined;
@@ -324,6 +331,7 @@ function* openOpenClawAgentDatabaseSteps(
           db,
           agentId,
           pathname,
+          diagnostics,
         );
         if (isValidatedReopen && (!existingSchema || requiresCurrentVersionConvergence)) {
           // New files and same-version divergence cannot inherit an earlier validation.

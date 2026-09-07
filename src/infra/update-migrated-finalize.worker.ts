@@ -24,7 +24,7 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contra
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createManagedUpdateRequesterAuthority } from "./update-requester-authority.js";
-import { getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
+import { adoptUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery.js";
 
 async function finalizeMigratedUpdate(): Promise<void> {
@@ -82,6 +82,12 @@ async function finalizeInput(
     throw new Error("Candidate finalization requires its migrated update run.");
   }
   const { requesterAuthority: descriptor, ...runIdentity } = transferredRun;
+  // Legacy finalization retains its parent immediately. Durable history cannot
+  // change until the delegated executor has accepted the exact handoff below.
+  if (!input.recoveryHandoff) {
+    executorFence?.assertCurrent();
+    adoptUpdateRun(runIdentity.runId, { env: runIdentity.env });
+  }
   // Parent closures cannot cross JSON. Only the fresh installed runtime rebinds
   // the captured requester to the same current installation policy.
   const run: NonNullable<UpdateCommandOptions["run"]> = {
@@ -108,6 +114,9 @@ async function finalizeInput(
       fence: executorFence,
       moduleUrl: import.meta.url,
     });
+    executorFence.assertCurrent();
+    adoptUpdateRun(run.runId, { env: run.env });
+    executorFence.assertCurrent();
     const next = await runUpdateCommandCandidateMutations(params, input.bufferedSteps);
     if (next) {
       const response: CandidateContinuation = {

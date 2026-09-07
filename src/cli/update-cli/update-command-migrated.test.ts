@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
@@ -8,7 +9,11 @@ import { appendTranscriptEventsInTransaction } from "../../config/sessions/sessi
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
-import { createUpdateRun, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import {
+  adoptUpdateRun,
+  createUpdateRun,
+  recordUpdateRunStep,
+} from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import {
@@ -196,12 +201,12 @@ it.each([
 );
 
 it.each([
-  { json: false, legacy: false },
-  { json: true, legacy: false },
-  { json: false, legacy: true },
+  { json: false, legacy: false, parentOwns: false },
+  { json: true, legacy: false, parentOwns: true },
+  { json: false, legacy: true, parentOwns: true },
 ])(
-  "fences migrated candidate finalization (json=$json, legacy=$legacy)",
-  async ({ json, legacy }) => {
+  "fences migrated candidate finalization (json=$json, legacy=$legacy, parentOwns=$parentOwns)",
+  async ({ json, legacy, parentOwns }) => {
     const stateDir = await fs.realpath(dirs.make("migrated-update-"));
     const env = {
       ...process.env,
@@ -233,6 +238,9 @@ it.each([
       );
     }
     const created = createUpdateRun({ trigger: "cli" }, { env });
+    const parentDriver = parentOwns
+      ? adoptUpdateRun(created.runId, { env }).origin.driver
+      : undefined;
     const run = { runId: created.runId, env };
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     vi.useFakeTimers();
@@ -383,12 +391,21 @@ it.each([
     const inspected = new DatabaseSync(database.path, { readOnly: true });
     try {
       const row = inspected
-        .prepare("SELECT status, reason, steps_json FROM update_runs WHERE run_id = ?")
+        .prepare("SELECT status, reason, origin_json, steps_json FROM update_runs WHERE run_id = ?")
         .get(created.runId);
       expect(row).toMatchObject({ status: "failed", reason: "state-migrated-no-rollback" });
       expect(JSON.parse(String(row?.steps_json))).toEqual(
         expect.arrayContaining([progress.pendingSteps.at(-1)]),
       );
+      const origin = JSON.parse(String(row?.origin_json));
+      const driver = origin.driver;
+      expect(driver).toMatchObject({
+        host: os.hostname(),
+        pid: expect.any(Number),
+        startIdentity: expect.any(String),
+      });
+      expect(driver.pid).not.toBe(process.pid);
+      expect(origin.previousDrivers).toEqual(parentOwns ? [parentDriver] : undefined);
     } finally {
       inspected.close();
     }

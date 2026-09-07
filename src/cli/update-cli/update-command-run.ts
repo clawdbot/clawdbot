@@ -30,11 +30,14 @@ import {
   resolveManagedUpdateRequester,
 } from "../../infra/update-requester-authority.js";
 import { normalizeControlPlaneUpdateResult } from "../../infra/update-restart-sentinel-payload.js";
+import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
+  adoptUpdateRun,
   createUpdateRun,
   finishInterruptedUpdatePreviewInTransaction,
   finishUpdateRun,
   getUpdateRun,
+  heartbeatUpdateRun,
   recordUpdateRunPhase,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
@@ -140,15 +143,20 @@ export async function admitUpdateCommandRun(params: {
     env,
     recoverOrphanedSidecars: false,
   });
-  const record = createUpdateRun(
+  const driver = readUpdateRunDriver();
+  const created = createUpdateRun(
     {
       runId: env[UPDATE_RUN_ID_ENV]?.trim() || undefined,
       trigger: "cli",
+      origin: { driver },
+      supersedeStaleIdentityless:
+        !env[UPDATE_RUN_ID_ENV]?.trim() && env[POST_CORE_UPDATE_ENV] !== "1",
       target: { channel: params.opts.channel, tag: params.opts.tag },
       before: { version: VERSION },
     },
     { env },
   );
+  const record = adoptUpdateRun(created.runId, { env });
   const requester = resolveManagedUpdateRequester(record.origin.requester);
   const requesterAuthority = requester
     ? await createManagedUpdateRequesterAuthority(requester, env)
@@ -265,6 +273,7 @@ export function createUpdateRunProgress(
   pendingSteps: UpdateRunStep[];
 } {
   let deferred = false;
+  const driver = readUpdateRunDriver();
   const pendingSteps: UpdateRunStep[] = [];
   const record = (step: UpdateRunStep) => {
     if (deferred) {
@@ -275,6 +284,11 @@ export function createUpdateRunProgress(
   };
   return {
     pendingSteps,
+    onHeartbeat() {
+      if (!deferred) {
+        heartbeatUpdateRun(run.runId, driver, { env: run.env });
+      }
+    },
     deferLedgerWrites() {
       // Candidate Doctor can advance SQLite beyond this process's reader. Hold
       // activation receipts until the supported runtime owns ledger writes.
