@@ -253,11 +253,13 @@ export class SessionActivityController implements ReactiveController {
     this.requestState = reason === "retry" ? "retrying" : "loading";
     this.error = undefined;
     if (!sameQuery) {
+      this.eventRefresh.reset();
       this.result = undefined;
       this.incomplete = false;
     }
     this.refreshPending = false;
     this.host.requestUpdate();
+    this.eventRefresh.requestStarted();
     void client
       .request<SessionsListResult>("sessions.list", request, { signal: pending.signal })
       .then((result) => {

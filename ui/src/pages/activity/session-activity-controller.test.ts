@@ -82,10 +82,15 @@ it("holds a trailing Activity refresh through page hiding and retires it on disc
     pageEvents.dispatchEvent(new Event("pageshow"));
     await vi.advanceTimersByTimeAsync(0);
     expect(request).toHaveBeenCalledTimes(3);
+    for (let index = 0; index < 7; index += 1) {
+      controller.invalidate();
+      await vi.advanceTimersByTimeAsync(300);
+    }
+    expect(request).toHaveBeenCalledTimes(5);
     controller.invalidate();
     controller.hostDisconnected();
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenCalledTimes(5);
   } finally {
     complete(result);
     controller.hostDisconnected();

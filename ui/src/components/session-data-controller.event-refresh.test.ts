@@ -617,7 +617,7 @@ describe("filtered sidebar session event refresh", () => {
     publishSessionChanged();
     await Promise.resolve();
     publishSessionChanged();
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(1000);
     expect(list).toHaveBeenCalledOnce();
 
     resolveFirstRefresh(refreshedPage);

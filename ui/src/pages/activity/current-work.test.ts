@@ -109,7 +109,7 @@ it.each([false, true])(
           activeRunIds: [],
           status: "done",
         });
-        await vi.advanceTimersByTimeAsync(200);
+        await vi.advanceTimersByTimeAsync(round === 0 ? 200 : 1000);
       }
       expect(controller.incomplete).toBe(true);
       responses[3]!.resolve(listing([active]));

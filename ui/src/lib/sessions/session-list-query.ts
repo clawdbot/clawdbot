@@ -49,6 +49,10 @@ export type QueuedSessionRefresh = {
   }>;
 };
 
+export function isForegroundReplacement(options: SessionRefreshOptions): boolean {
+  return options.append !== true && options.backgroundHydrate !== true;
+}
+
 export function isPrimarySessionListQuery(options: SessionListScope): boolean {
   if (options.includeDerivedTitles === false || options.includeLastMessage === false) {
     return false;
