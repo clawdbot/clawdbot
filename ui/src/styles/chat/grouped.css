@@ -641,7 +641,6 @@
 .chat-avatar.user {
   background: var(--accent-subtle);
   color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 /* Attributed sender initials carry their stable identity color inline. */
