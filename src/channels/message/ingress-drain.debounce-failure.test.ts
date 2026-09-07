@@ -8,6 +8,7 @@ import {
   type IngressDrainTestPayload as Payload,
   withTempState,
 } from "./ingress-drain.test-helpers.js";
+import { markIngressBoundedProcessingStarted } from "./ingress-processing-handoff.js";
 
 type ChannelIngressDispatchLifecycle = Parameters<
   Parameters<typeof createChannelIngressDrain>[0]["dispatchClaimedEvent"]
@@ -81,6 +82,63 @@ describe("channel ingress drain debounce failures", () => {
       expect(await queue.enqueue("debounced-retry", { text: "retry me" })).toMatchObject({
         kind: "completed",
       });
+      drain.dispose();
+    });
+  });
+
+  it("preserves processing ownership through the inbound debounce boundary", async () => {
+    vi.useFakeTimers();
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir);
+      await queue.enqueue("debounced-processing", { text: "process me" }, { laneKey: "shared" });
+      let releaseProcessing!: () => void;
+      const processingReleased = new Promise<void>((resolve) => {
+        releaseProcessing = resolve;
+      });
+      let resolveProcessingStarted!: (start: (() => void) | undefined) => void;
+      const processingStarted = new Promise<(() => void) | undefined>((resolve) => {
+        resolveProcessingStarted = resolve;
+      });
+      const debouncer = createInboundDebouncer<{ lifecycle: ChannelIngressDispatchLifecycle }>({
+        debounceMs: 0,
+        buildKey: () => "shared",
+        onFlush: (entries, createFlush) =>
+          createFlush({
+            lifecycle: entries[0]?.lifecycle,
+            dispatch: async (lifecycle) => {
+              resolveProcessingStarted(() =>
+                markIngressBoundedProcessingStarted(lifecycle.abortSignal),
+              );
+              await processingReleased;
+              await lifecycle.onAdopted();
+            },
+          }),
+        onError: (error) => {
+          throw error;
+        },
+      });
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        adoptionStallTimeoutMs: 5_000,
+        dispatchClaimedEvent: async (_event, lifecycle) => {
+          await debouncer.enqueue({ lifecycle });
+          return { kind: "deferred" };
+        },
+      });
+
+      await drain.drainOnce();
+      await vi.advanceTimersByTimeAsync(0);
+      const start = await processingStarted;
+      expect(start).toBeTypeOf("function");
+      start?.();
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(await queue.listClaims()).toHaveLength(1);
+
+      releaseProcessing();
+      await debouncer.drain();
+      await drain.waitForIdle();
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
+      expect(await queue.listClaims()).toEqual([]);
       drain.dispose();
     });
   });

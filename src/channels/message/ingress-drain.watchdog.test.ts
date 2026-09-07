@@ -8,6 +8,7 @@ import {
   type IngressDrainTestPayload as Payload,
   withTempState,
 } from "./ingress-drain.test-helpers.js";
+import { markIngressBoundedProcessingStarted } from "./ingress-processing-handoff.js";
 
 async function deferNext(
   queue: ReturnType<typeof createTestIngressQueue>,
@@ -131,6 +132,48 @@ describe("channel ingress drain watchdog", () => {
           lastError: expect.stringContaining("handler-timeout"),
         },
       ]);
+      drain.dispose();
+    });
+  });
+
+  it("keeps a processing-owned claim past the ingress watchdog until adoption", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir);
+      await queue.enqueue("evt-processing", { text: "processing" }, { laneKey: "lane" });
+      let releaseDispatch!: () => void;
+      const dispatchReleased = new Promise<void>((resolve) => {
+        releaseDispatch = resolve;
+      });
+      let deferredHeartbeat: (() => void) | undefined;
+      let adopted: (() => void | Promise<void>) | undefined;
+      let processingAbort: AbortSignal | undefined;
+
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        adoptionStallTimeoutMs: 5_000,
+        dispatchClaimedEvent: async (_event, lifecycle) => {
+          lifecycle.onDeferred();
+          processingAbort = lifecycle.abortSignal;
+          deferredHeartbeat = lifecycle.onDeferredHeartbeat;
+          adopted = lifecycle.onAdopted;
+          await dispatchReleased;
+          return { kind: "deferred" };
+        },
+      });
+
+      await drain.drainOnce();
+      expect(processingAbort).toBeDefined();
+      markIngressBoundedProcessingStarted(processingAbort);
+      deferredHeartbeat?.();
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(await queue.listClaims()).toHaveLength(1);
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
+
+      await adopted?.();
+      releaseDispatch();
+      await drain.waitForIdle();
+      expect(await queue.listClaims()).toEqual([]);
+      expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
       drain.dispose();
     });
   });

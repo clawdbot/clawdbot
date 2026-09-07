@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { prepareGitCoauthorAttribution } from "../../agents/git-coauthor-attribution.js";
+import { markIngressBoundedProcessingStarted } from "../../channels/message/ingress-processing-handoff.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
@@ -186,6 +187,7 @@ export async function executePreparedReplyAgentRun(
   };
 
   await typingSignals.signalRunStart();
+  markIngressBoundedProcessingStarted(turnAdoptionLifecycle?.abortSignal);
 
   const preflightAdmission = readPendingUserTurnTranscriptAdmission(
     followupRun.userTurnTranscriptRecorder,

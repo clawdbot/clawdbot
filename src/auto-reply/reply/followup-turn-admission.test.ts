@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { bindIngressBoundedProcessingStarted } from "../../channels/message/ingress-processing-handoff.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { FollowupRun } from "./queue.js";
 
@@ -554,6 +555,29 @@ describe("admitFollowupTurn", () => {
       expect(result.turn.preflightCompactionApplied).toBe(true);
     }
     expect(operation.updateSessionId).toHaveBeenCalledWith("compacted-session");
+  });
+
+  it("hands pre-adoption ownership to the bounded followup runtime before preflight", async () => {
+    const operation = createOperation();
+    const entry: SessionEntry = { sessionId: "queued-session", updatedAt: 1 };
+    state.admitReply.mockResolvedValue({ status: "owned", operation, sessionEntry: entry });
+    state.loadEntry.mockReturnValue(entry);
+    state.preflight.mockResolvedValue(entry);
+    const onProcessingStarted = vi.fn();
+    const abort = new AbortController();
+    bindIngressBoundedProcessingStarted(abort.signal, onProcessingStarted);
+    const queued = createRun();
+    queued.turnAdoptionLifecycle = { onAdopted: vi.fn(), abortSignal: abort.signal };
+
+    await admitFollowupTurn({
+      queued,
+      defaults: createDefaults({ sessionStore: { main: entry }, sessionEntry: entry }),
+    });
+
+    expect(onProcessingStarted).toHaveBeenCalledTimes(1);
+    expect(onProcessingStarted.mock.invocationCallOrder[0]).toBeLessThan(
+      state.preflight.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
   });
 
   it("adopts a generation already published by owned preflight compaction", async () => {

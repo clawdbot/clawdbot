@@ -31,6 +31,10 @@ import {
   type ChannelIngressDrainDispatchResult,
 } from "./ingress-drain-state.js";
 import { supersedeActiveStatesIfNeeded } from "./ingress-drain-supersede.js";
+import {
+  bindIngressBoundedProcessingStarted,
+  runWithIngressBoundedProcessingStarted,
+} from "./ingress-processing-handoff.js";
 import type {
   ChannelIngressQueue,
   ChannelIngressQueueClaim,
@@ -362,7 +366,11 @@ export function createChannelIngressDrain<
       },
       onDeferredHeartbeat: () => {
         // Abort also covers disposal; retired callbacks cannot restart the watchdog.
-        if (state.phase === "deferred" && !state.abortController.signal.aborted) {
+        if (
+          state.phase === "deferred" &&
+          !state.processingStarted &&
+          !state.abortController.signal.aborted
+        ) {
           armStallWatchdog(state);
         }
       },
@@ -431,10 +439,24 @@ export function createChannelIngressDrain<
       occupiesLane: true,
       guillotined: false,
       superseded: false,
+      processingStarted: false,
       task: Promise.resolve(),
       settleOnce: async () => {},
     } as ActiveHandlerState<TPayload, TMetadata>;
     state.settleOnce = createIngressSettleOwner(state, removeActive);
+    const startBoundedProcessing = () => {
+      if (
+        (state.phase !== "dispatching" && state.phase !== "deferred") ||
+        state.guillotined ||
+        state.superseded
+      ) {
+        return;
+      }
+      // The bounded reply runtime now owns timeout and failure settlement.
+      state.processingStarted = true;
+      clearStallTimer(state);
+    };
+    bindIngressBoundedProcessingStarted(abortController.signal, startBoundedProcessing);
     const lifecycle = createLifecycle(state);
     armStallWatchdog(state);
     armClaimRefresh(state);
@@ -446,13 +468,15 @@ export function createChannelIngressDrain<
     // so the dead lease cannot make session admission refuse the turn as
     // draining. A real restart drain still refuses both paths at admission.
     const releaseRootWork = retainGatewayRootWorkAdmissionContinuation();
+    const dispatchClaimed = () =>
+      runWithIngressBoundedProcessingStarted(startBoundedProcessing, () =>
+        options.dispatchClaimedEvent(claim, lifecycle),
+      );
     state.task = (async () => {
       try {
         const result = await (releaseRootWork
-          ? options.dispatchClaimedEvent(claim, lifecycle)
-          : runOutsideGatewayRootWorkAdmission(() =>
-              options.dispatchClaimedEvent(claim, lifecycle),
-            ));
+          ? dispatchClaimed()
+          : runOutsideGatewayRootWorkAdmission(dispatchClaimed));
         // dispose() leaves claims for recovery. Session abort mid-flight
         // (skipped/void) also leaves the claim; a terminal completed/failed
         // result still settles even if abort raced the return.

@@ -34,6 +34,8 @@ export type ActiveHandlerState<TPayload, TMetadata> = {
   guillotined: boolean;
   /** Closed code: pre-adoption supersede has claimed settle ownership. */
   superseded: boolean;
+  /** Bounded reply processing retired the shorter ingress stall watchdog. */
+  processingStarted: boolean;
   /** Single settle owner for complete / fail / release / supersede / guillotine. */
   settleOnce: (fn: () => Promise<void>) => Promise<void>;
 };
