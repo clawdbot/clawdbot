@@ -590,6 +590,29 @@ export async function editMessageFeishu(params: {
   return { messageId, contentType: "post" };
 }
 
+export async function deleteMessageFeishu(params: {
+  cfg: ClawdbotConfig;
+  messageId: string;
+  accountId?: string;
+}): Promise<{ messageId: string }> {
+  const { cfg, messageId, accountId } = params;
+  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
+  if (!account.configured) {
+    throw new Error(`Feishu account "${account.accountId}" not configured`);
+  }
+
+  const client = createFeishuClient(account);
+  const response = await client.im.message.delete({
+    path: { message_id: messageId },
+  });
+
+  if (response.code !== 0) {
+    throw new Error(`Feishu message delete failed: ${response.msg || `code ${response.code}`}`);
+  }
+
+  return { messageId };
+}
+
 /** Header configuration for structured Feishu cards. */
 export type CardHeaderConfig = {
   /** Header title text, e.g. "💻 Coder" */

@@ -22,6 +22,7 @@ vi.mock("./bot.js", () => {
 
 vi.mock("./send.js", () => {
   return {
+    deleteMessageFeishu: vi.fn(),
     sendCardFeishu: sendCardFeishuMock,
     getMessageFeishu: getMessageFeishuMock,
   };

@@ -456,6 +456,7 @@ function describeFeishuMessageTool({
     "send",
     "read",
     "edit",
+    "delete",
     "thread-reply",
     "pin",
     "list-pins",
@@ -1095,7 +1096,12 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           return [
             "- Feishu targeting: omit `target` to reply to the current conversation (auto-inferred). Explicit targets: `user:open_id` or `chat:chat_id`.",
             "- Feishu supports interactive cards plus native image, file, audio, and video/media delivery.",
-            "- Feishu supports `send`, `read`, `edit`, `thread-reply`, pins, and channel/member lookup, plus reactions when enabled.",
+            "- Feishu supports `send`, `read`, `edit`, `delete`, `thread-reply`, pins, and channel/member lookup, plus reactions when enabled.",
+            ...(actions?.includes("delete")
+              ? [
+                  "- Feishu `action=delete`: recalls a message this bot sent (`messageId` required). Only the configured app's own messages can be deleted; other senders are refused before any recall.",
+                ]
+              : []),
             ...(actions?.includes("sticker")
               ? [
                   "- Feishu stickers: use `action=sticker` with `fileId` (or the first `stickerId`) from a sticker this bot previously received. Sticker upload is not supported.",
@@ -1437,6 +1443,50 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               ok: true,
               channel: "feishu",
               action: "edit",
+              ...result,
+            });
+          }
+
+          if (ctx.action === "delete") {
+            const messageId = resolveFeishuMessageId(ctx.params);
+            if (!messageId) {
+              throw new Error("Feishu delete requires messageId.");
+            }
+            const runtime = await loadFeishuChannelRuntime();
+            const message = await requireAuthorizedFeishuMessage({
+              ctx,
+              account,
+              runtime,
+              messageId,
+            });
+            // Feishu allows group admins to recall others' messages, so the API
+            // contract alone is insufficient. Verify the message was sent by
+            // this configured bot. For app-sent messages the Feishu message.get
+            // sender is { sender_type: "app", id_type: "app_id", id: <app_id> },
+            // so the ownership check compares that app_id to the configured
+            // bot's app_id from the cached bot-info probe (probeFeishu), the
+            // canonical identity source shared with health checks.
+            if (message.senderType !== "app" || !message.senderId) {
+              throw new Error("Feishu delete only allows messages sent by the bot.");
+            }
+            const probe = await runtime.probeFeishu(account);
+            if (!probe.ok || !probe.appId) {
+              throw new Error(
+                `Feishu delete could not verify bot identity: ${probe.error ?? "missing bot app_id"}`,
+              );
+            }
+            if (message.senderId !== probe.appId) {
+              throw new Error("Feishu delete only allows messages sent by the bot.");
+            }
+            const result = await runtime.deleteMessageFeishu({
+              cfg: ctx.cfg,
+              messageId,
+              accountId: ctx.accountId ?? undefined,
+            });
+            return jsonActionResult({
+              ok: true,
+              channel: "feishu",
+              action: "delete",
               ...result,
             });
           }

@@ -11,6 +11,7 @@ import { maybeHandleFeishuQuickActionMenu } from "./card-ux-launcher.js";
 const sendCardFeishuMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./send.js", () => ({
+  deleteMessageFeishu: vi.fn(),
   sendCardFeishu: sendCardFeishuMock,
 }));
 

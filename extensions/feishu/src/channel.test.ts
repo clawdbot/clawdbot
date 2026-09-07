@@ -23,6 +23,7 @@ const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
 const sendStickerFeishuMock = vi.hoisted(() => vi.fn());
 const getMessageFeishuMock = vi.hoisted(() => vi.fn());
 const editMessageFeishuMock = vi.hoisted(() => vi.fn());
+const deleteMessageFeishuMock = vi.hoisted(() => vi.fn());
 const createPinFeishuMock = vi.hoisted(() => vi.fn());
 const listPinsFeishuMock = vi.hoisted(() => vi.fn());
 const removePinFeishuMock = vi.hoisted(() => vi.fn());
@@ -65,6 +66,7 @@ vi.mock("./channel.runtime.js", () => ({
   feishuChannelRuntime: {
     addReactionFeishu: addReactionFeishuMock,
     createPinFeishu: createPinFeishuMock,
+    deleteMessageFeishu: deleteMessageFeishuMock,
     editMessageFeishu: editMessageFeishuMock,
     getChatInfo: getChatInfoMock,
     getChatMembers: getChatMembersMock,
@@ -317,6 +319,7 @@ describe("feishuPlugin actions", () => {
       "send",
       "read",
       "edit",
+      "delete",
       "thread-reply",
       "pin",
       "list-pins",
@@ -388,7 +391,7 @@ describe("feishuPlugin actions", () => {
   );
 
   it("declares native chat IDs as delivery targets for guarded message mutations", () => {
-    for (const action of ["edit", "pin", "unpin"] as const) {
+    for (const action of ["edit", "delete", "pin", "unpin"] as const) {
       expect(feishuPlugin.actions?.messageActionTargetAliases?.[action]).toEqual({
         aliases: ["messageId", "chatId", "chat_id", "channel_id"],
         deliveryTargetAliases: ["chatId", "chat_id", "channel_id"],
@@ -414,6 +417,7 @@ describe("feishuPlugin actions", () => {
       "send",
       "read",
       "edit",
+      "delete",
       "thread-reply",
       "pin",
       "list-pins",
@@ -452,6 +456,7 @@ describe("feishuPlugin actions", () => {
       "send",
       "read",
       "edit",
+      "delete",
       "thread-reply",
       "pin",
       "list-pins",
@@ -464,6 +469,7 @@ describe("feishuPlugin actions", () => {
       "send",
       "read",
       "edit",
+      "delete",
       "thread-reply",
       "pin",
       "list-pins",
@@ -3057,6 +3063,105 @@ describe("feishuPlugin actions", () => {
     expect(details.messageId).toBe("om_pin");
   });
 
+  it("advertises delete with its bot-owned limit in the message tool hint", () => {
+    const hints = feishuPlugin.agentPrompt
+      ?.messageToolHints?.({ cfg, accountId: undefined })
+      ?.join("\n");
+    expect(hints).toContain("`delete`");
+    expect(hints).toContain("this bot sent");
+    expect(getDescribedActions(cfg)).toContain("delete");
+  });
+
+  it("deletes messages", async () => {
+    getMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_delete",
+      chatId: "oc_group_1",
+      chatType: "group",
+      content: "delete me",
+      contentType: "text",
+      senderId: "cli_bot",
+      senderType: "app",
+    });
+    probeFeishuMock.mockResolvedValueOnce({ ok: true, appId: "cli_bot" });
+    deleteMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_delete" });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "delete",
+      params: { messageId: "om_delete" },
+      cfg,
+      accountId: undefined,
+      conversationReadOrigin: "direct-operator",
+    } as never);
+
+    expect(deleteMessageFeishuMock).toHaveBeenCalledWith({
+      cfg,
+      messageId: "om_delete",
+      accountId: undefined,
+    });
+    const delDetails = resultDetails(result);
+    expect(delDetails.ok).toBe(true);
+    expect(delDetails.messageId).toBe("om_delete");
+  });
+
+  it("rejects delete of user messages", async () => {
+    getMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_user_msg",
+      chatId: "oc_group_1",
+      chatType: "group",
+      content: "not mine",
+      contentType: "text",
+      senderType: "user",
+    });
+
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "delete",
+        params: { messageId: "om_user_msg" },
+        cfg,
+        accountId: undefined,
+        conversationReadOrigin: "direct-operator",
+      } as never),
+    ).rejects.toThrow("Feishu delete only allows messages sent by the bot.");
+
+    expect(deleteMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects delete of messages from a different app", async () => {
+    getMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_other_app",
+      chatId: "oc_group_1",
+      chatType: "group",
+      content: "other app msg",
+      contentType: "text",
+      senderId: "cli_other_app",
+      senderType: "app",
+    });
+    probeFeishuMock.mockResolvedValueOnce({ ok: true, appId: "cli_bot" });
+
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "delete",
+        params: { messageId: "om_other_app" },
+        cfg,
+        accountId: undefined,
+        conversationReadOrigin: "direct-operator",
+      } as never),
+    ).rejects.toThrow("Feishu delete only allows messages sent by the bot.");
+
+    expect(deleteMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("requires messageId for delete", async () => {
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "delete",
+        params: {},
+        cfg,
+        accountId: undefined,
+      } as never),
+    ).rejects.toThrow("Feishu delete requires messageId.");
+  });
+
   it("fetches channel info", async () => {
     getChatInfoMock.mockResolvedValueOnce({ chat_id: "oc_group_1", name: "Eng" });
 
@@ -3579,6 +3684,11 @@ describe("feishuPlugin actions", () => {
       name: "message edits",
       action: "edit",
       params: { messageId: "om_blocked", chatId: "oc_blocked", text: "blocked" },
+    },
+    {
+      name: "message deletes",
+      action: "delete",
+      params: { messageId: "om_blocked", chatId: "oc_blocked" },
     },
     {
       name: "reaction addition",
