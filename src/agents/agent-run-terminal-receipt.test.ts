@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   formatAgentRunRouteChange,
-  isAgentRunModelRerouted,
   type AgentRunTerminalReceipt,
 } from "./agent-run-terminal-receipt.js";
+import { isProviderModelRerouted } from "./provider-model-route.js";
 
 const visibleRerouteReceipt: AgentRunTerminalReceipt = {
   runId: "run-1",
@@ -16,7 +16,7 @@ const visibleRerouteReceipt: AgentRunTerminalReceipt = {
   terminalDisposition: "visible",
 };
 
-describe("isAgentRunModelRerouted", () => {
+describe("isProviderModelRerouted", () => {
   it("keeps an equivalent vendor wire id from producing a model-switch fact", () => {
     const requested = { provider: "arcee", model: "trinity-large-thinking" };
     const effective = {
@@ -24,7 +24,7 @@ describe("isAgentRunModelRerouted", () => {
       model: "arcee-ai/trinity-large-thinking",
       responseModel: "arcee-ai/trinity-large-thinking",
     };
-    const rerouted = isAgentRunModelRerouted(requested, effective);
+    const rerouted = isProviderModelRerouted(requested, effective);
     expect(rerouted).toBe(false);
     expect(
       formatAgentRunRouteChange(
@@ -52,7 +52,7 @@ describe("isAgentRunModelRerouted", () => {
     },
   ])("retains a real change to $provider/$model with response $responseModel", (effective) => {
     expect(
-      isAgentRunModelRerouted({ provider: "arcee", model: "trinity-large-thinking" }, effective),
+      isProviderModelRerouted({ provider: "arcee", model: "trinity-large-thinking" }, effective),
     ).toBe(true);
   });
 });

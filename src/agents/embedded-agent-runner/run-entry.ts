@@ -4,7 +4,6 @@ import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
 import {
   formatAgentRunRouteChange,
-  isAgentRunModelRerouted,
   normalizeAgentRunTerminalReceipt,
 } from "../agent-run-terminal-receipt.js";
 import {
@@ -35,6 +34,7 @@ import type {
   ModelFallbackRouteResolution,
 } from "../model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
+import { isProviderModelRerouted } from "../provider-model-route.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback,
@@ -249,7 +249,7 @@ function mergeRunEntryExecutionTrace<T extends EmbeddedAgentRunResult>(params: {
           requested,
           rerouted:
             terminalReceipt.rerouted ||
-            isAgentRunModelRerouted(requested, terminalReceipt.effective),
+            isProviderModelRerouted(requested, terminalReceipt.effective),
         },
       }
     : params.result.meta.agentMeta;
@@ -313,7 +313,7 @@ function buildTerminal(params: {
           },
           successfulToolNames: ["message"],
           sourceReplyDelivered: true as const,
-          rerouted: isAgentRunModelRerouted(params.requested, {
+          rerouted: isProviderModelRerouted(params.requested, {
             provider: agentMeta.provider,
             model: agentMeta.model,
           }),

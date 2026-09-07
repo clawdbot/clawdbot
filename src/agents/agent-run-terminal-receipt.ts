@@ -1,28 +1,9 @@
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { redactSensitiveText } from "../logging/redact.js";
-import { canonicalizeProviderModelId } from "./provider-model-route.js";
 
 type AgentRunTerminalModelRef = { provider: string; model: string };
 
 const AGENT_RUN_ROUTE_CHANGE_MAX_CHARS = 320;
-
-/** Wire-id normalization is not a switch to another provider-owned model. */
-export function isAgentRunModelRerouted(
-  requested: AgentRunTerminalModelRef,
-  effective: AgentRunTerminalModelRef & { responseModel?: string },
-): boolean {
-  const provider = normalizeProviderId(requested.provider);
-  if (provider !== normalizeProviderId(effective.provider)) {
-    return true;
-  }
-  const model = canonicalizeProviderModelId(provider, requested.model);
-  return (
-    canonicalizeProviderModelId(provider, effective.model) !== model ||
-    (effective.responseModel !== undefined &&
-      canonicalizeProviderModelId(provider, effective.responseModel) !== model)
-  );
-}
 
 export type AgentRunTerminalReceipt = {
   runId: string;

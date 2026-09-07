@@ -1,6 +1,6 @@
 /** Generic core consumers for provider-owned model route facts. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { resolveMergedModelProviderEntry } from "../config/model-provider-config.js";
+import { projectModelProviderConfig } from "../config/model-provider-config.js";
 import type { ModelApi, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
@@ -15,6 +15,23 @@ import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 export function canonicalizeProviderModelId(providerId: string, modelId: string): string {
   const provider = normalizeProviderId(providerId);
   return (provider && resolveProviderModelCatalogId({ provider, modelId })) || modelId;
+}
+
+/** Wire-id normalization is not a switch to another provider-owned model. */
+export function isProviderModelRerouted(
+  requested: { provider: string; model: string },
+  effective: { provider: string; model: string; responseModel?: string },
+): boolean {
+  const provider = normalizeProviderId(requested.provider);
+  if (provider !== normalizeProviderId(effective.provider)) {
+    return true;
+  }
+  const model = canonicalizeProviderModelId(provider, requested.model);
+  return (
+    canonicalizeProviderModelId(provider, effective.model) !== model ||
+    (effective.responseModel !== undefined &&
+      canonicalizeProviderModelId(provider, effective.responseModel) !== model)
+  );
 }
 
 function normalizeRouteBaseUrl(value: string): string {
@@ -110,31 +127,9 @@ export function projectProviderModelRouteConfig(params: {
   config?: OpenClawConfig;
   route: ProviderModelRouteCandidate;
 }): OpenClawConfig {
-  const provider = normalizeProviderId(params.provider);
-  const providers = params.config?.models?.providers ?? {};
-  const providerEntry = resolveMergedModelProviderEntry(params.config, provider);
-  const providerKey = providerEntry?.providerKey ?? provider;
-  const providerConfig = providerEntry?.providerConfig ?? { models: [] };
-  // Materialization exposes one selected-key owner so a normalized duplicate
-  // cannot resurrect a different route after selection.
-  const routeProviders = Object.fromEntries(
-    Object.entries(providers).filter(
-      ([candidate]) => normalizeProviderId(candidate) !== provider || candidate === providerKey,
-    ),
-  );
-  return {
-    ...params.config,
-    models: {
-      ...params.config?.models,
-      providers: {
-        ...routeProviders,
-        [providerKey]: {
-          ...providerConfig,
-          auth: params.route.authRequirement === "subscription" ? "oauth" : "api-key",
-          api: params.route.api,
-          baseUrl: params.route.baseUrl,
-        },
-      },
-    },
-  };
+  return projectModelProviderConfig(params.config, params.provider, {
+    auth: params.route.authRequirement === "subscription" ? "oauth" : "api-key",
+    api: params.route.api,
+    baseUrl: params.route.baseUrl,
+  });
 }

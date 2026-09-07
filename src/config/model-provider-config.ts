@@ -242,3 +242,29 @@ export function resolveMergedModelProviderConfig(
 ): ModelProviderConfig | undefined {
   return resolveMergedModelProviderEntry(config, provider)?.providerConfig;
 }
+
+/** Projects a resolved request onto one transient canonical provider entry. */
+export function projectModelProviderConfig(
+  config: OpenClawConfig | undefined,
+  providerId: string,
+  overrides: Partial<ModelProviderConfig>,
+): OpenClawConfig {
+  const provider = normalizeProviderId(providerId);
+  const entry = resolveMergedModelProviderEntry(config, provider);
+  const providerKey = entry?.providerKey ?? provider;
+  const providers = Object.fromEntries(
+    Object.entries(config?.models?.providers ?? {}).filter(
+      ([candidate]) => normalizeProviderId(candidate) !== provider || candidate === providerKey,
+    ),
+  );
+  return {
+    ...config,
+    models: {
+      ...config?.models,
+      providers: {
+        ...providers,
+        [providerKey]: { ...(entry?.providerConfig ?? { models: [] }), ...overrides },
+      },
+    },
+  };
+}

@@ -2,12 +2,10 @@ import { copyReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { estimateAggregateUsageCost } from "../../../utils/usage-format.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
-import {
-  isAgentRunModelRerouted,
-  type AgentRunTerminalReceipt,
-} from "../../agent-run-terminal-receipt.js";
+import type { AgentRunTerminalReceipt } from "../../agent-run-terminal-receipt.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
+import { isProviderModelRerouted } from "../../provider-model-route.js";
 import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-provenance.js";
 import type { NormalizedUsage, UsageLike } from "../../usage.js";
 import { hasMessagingToolDeliveryEvidence } from "../delivery-evidence.js";
@@ -184,7 +182,7 @@ export function prepareEmbeddedRunTerminal(input: {
       },
       successfulToolNames,
       sourceReplyDelivered: attempt.sourceReplyDelivered,
-      rerouted: isAgentRunModelRerouted(
+      rerouted: isProviderModelRerouted(
         { provider: input.provider, model: input.model },
         { ...reportedModelRef, responseModel },
       ),
