@@ -1670,6 +1670,69 @@ export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => voi
   );
 }
 
+/**
+ * Curated allowlist of `emitTrustedDiagnosticEvent` event types that the
+ * plugin SDK exposes via {@link onModelDiagnosticEvent}.
+ *
+ * The `trusted` flag is an emit-side marker, not an integrity attestation.
+ * `emitTrustedDiagnosticEvent` is publicly exported from
+ * `openclaw/plugin-sdk/diagnostic-runtime`, so any plugin can mark its own
+ * emissions as trusted. The flag exists so the runtime can distinguish its
+ * own model lifecycle emissions from arbitrary plugin emissions to keep
+ * the general {@link onDiagnosticEvent} surface narrow — it does not
+ * cryptographically prove core provenance. Model-call telemetry exposed
+ * here (provider, model, durations, byte counts, token usage, cost,
+ * failover reason) is the same information a plugin observing the agent
+ * runtime could already reconstruct from other channels, so this listener
+ * is intended for observability and span/cost attribution, not for
+ * security-sensitive accounting where plugin-origin telemetry must be
+ * distinguished from runtime-origin telemetry.
+ */
+const PLUGIN_VISIBLE_TRUSTED_MODEL_EVENT_TYPES: ReadonlySet<DiagnosticEventPayload["type"]> =
+  new Set<DiagnosticEventPayload["type"]>([
+    "model.call.started",
+    "model.call.completed",
+    "model.call.error",
+    "model.usage",
+    "model.failover",
+  ]);
+
+/**
+ * Plugin-facing subscription to the model-call diagnostic events the
+ * runtime emits via {@link emitTrustedDiagnosticEvent}.
+ *
+ * The general {@link onDiagnosticEvent} API drops trusted events to keep
+ * the plugin surface narrow. Observability and cost-attribution plugins
+ * need exactly the model lifecycle events to populate per-call spans and
+ * pricing — this helper exposes only those types and otherwise behaves
+ * identically to {@link onDiagnosticEvent} (cloned & frozen payloads,
+ * unsubscribe disposer).
+ *
+ * Trust gating: this API only delivers events whose dispatcher metadata
+ * is `trusted: true`, so forged `emitDiagnosticEvent` calls cannot inject
+ * into the stream. {@link emitTrustedDiagnosticEvent} is also publicly
+ * exported, however, so the trust flag alone does not prove core
+ * provenance — a plugin can call the trusted emitter and produce events
+ * indistinguishable from runtime telemetry on this listener. The API is
+ * therefore intended as a focused observability stream (span/cost
+ * attribution for OTel exporters, cost trackers, agentweave-bridge), not
+ * an integrity-attested feed. Consumers that need plugin-vs-runtime
+ * distinction must add their own attribution out of band.
+ */
+export function onModelDiagnosticEvent(
+  listener: (evt: DiagnosticEventPayload) => void,
+): () => void {
+  return onInternalDiagnosticEvent((event, metadata) => {
+    if (!metadata.trusted) {
+      return;
+    }
+    if (!PLUGIN_VISIBLE_TRUSTED_MODEL_EVENT_TYPES.has(event.type)) {
+      return;
+    }
+    listener(event);
+  });
+}
+
 /** Returns whether listener metadata marks dispatcher-internal provenance. */
 export function isInternalDiagnosticEventMetadata(metadata: DiagnosticEventMetadata): boolean {
   return metadata.internal === true;

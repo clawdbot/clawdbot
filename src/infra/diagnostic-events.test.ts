@@ -19,6 +19,7 @@ import {
   isDiagnosticsEnabled,
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
+  onModelDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
@@ -279,6 +280,155 @@ describe("diagnostic-events", () => {
     ]);
     expect(isInternalDiagnosticEventMetadata({ trusted: false })).toBe(false);
   });
+
+  it("onModelDiagnosticEvent delivers only model.* trusted events to plugins", async () => {
+    const seen: string[] = [];
+    onModelDiagnosticEvent((event) => {
+      seen.push(event.type);
+    });
+
+    // Trusted model events — should all be delivered
+    emitTrustedDiagnosticEvent({
+      type: "model.call.started",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+    emitTrustedDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.5",
+      durationMs: 42,
+    });
+    emitTrustedDiagnosticEvent({
+      type: "model.call.error",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.5",
+      durationMs: 12,
+      errorCategory: "timeout",
+    });
+    emitTrustedDiagnosticEvent({
+      type: "model.usage",
+      usage: { total: 1234 },
+    });
+    emitTrustedDiagnosticEvent({
+      type: "model.failover",
+      reason: "rate_limit",
+    });
+
+    // Trusted non-model event — should be filtered out
+    emitTrustedDiagnosticEvent({
+      type: "log.record",
+      level: "info",
+      message: "hi",
+    } as never);
+
+    // Untrusted event — also filtered (this API is model-only)
+    emitDiagnosticEvent({
+      type: "message.queued",
+      source: "plugin",
+    });
+
+    // model.call.* are async-queued (see ASYNC_DIAGNOSTIC_EVENT_TYPES) so
+    // their delivery is interleaved with sync model.usage/model.failover.
+    // Order is not load-bearing here — assert membership.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(seen.toSorted()).toEqual([
+      "model.call.completed",
+      "model.call.error",
+      "model.call.started",
+      "model.failover",
+      "model.usage",
+    ]);
+  });
+
+  it("onModelDiagnosticEvent ignores untrusted model.* events", async () => {
+    // emitDiagnosticEvent (without "Trusted") is publicly exported, so
+    // any plugin could in principle emit a forged model.usage or
+    // model.call.completed. Those untrusted events must NOT reach the
+    // trusted-model subscription — otherwise plugins downstream cannot
+    // distinguish forged telemetry from real runtime emissions.
+    const seen: string[] = [];
+    onModelDiagnosticEvent((event) => {
+      seen.push(event.type);
+    });
+
+    emitDiagnosticEvent({
+      type: "model.usage",
+      usage: { total: 9999 },
+    });
+    emitDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "forged-run",
+      callId: "forged-call",
+      provider: "forged",
+      model: "forged-model",
+      durationMs: 1,
+    } as never);
+
+    // A real trusted emission still lands.
+    emitTrustedDiagnosticEvent({
+      type: "model.usage",
+      usage: { total: 1 },
+    });
+
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(seen).toEqual(["model.usage"]);
+  });
+
+  it("onDiagnosticEvent still hides model.* trusted events from plugins", async () => {
+    // Defends the safety contract of the original API — model events stay
+    // accessible only via the explicit opt-in onModelDiagnosticEvent.
+    const seen: string[] = [];
+    onDiagnosticEvent((event) => {
+      seen.push(event.type);
+    });
+
+    emitTrustedDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.5",
+      durationMs: 5,
+    });
+    emitDiagnosticEvent({
+      type: "message.queued",
+      source: "plugin",
+    });
+
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(seen).toEqual(["message.queued"]);
+  });
+
+  it("onModelDiagnosticEvent unsubscribe stops further delivery", () => {
+    const seen: string[] = [];
+    const stop = onModelDiagnosticEvent((event) => {
+      seen.push(event.type);
+    });
+    emitTrustedDiagnosticEvent({
+      type: "model.usage",
+      usage: { total: 1 },
+    });
+    stop();
+    emitTrustedDiagnosticEvent({
+      type: "model.usage",
+      usage: { total: 2 },
+    });
+    expect(seen).toEqual(["model.usage"]);
+  });
+
 
   it("prepares trusted events synchronously without cloning private data", async () => {
     const diagnosticTrace = createDiagnosticTraceContext({
