@@ -7,7 +7,7 @@ status: active
 doc-schema-version: 1
 ---
 
-A cloud session is an ordinary session whose coding work runs on another machine. It appears in the sidebar, streams into chat, and keeps its transcript exactly like a local session — the Gateway stays the owner of the conversation, the reconciled workspace, model credentials, and placement records, while commands, file edits, and tool work execute remotely. The session and its durable state survive a remote failure. Reclaimed or suspended cloud workers restart on the next message; failed placements require cleanup and explicit redispatch. An offline paired device keeps its placement and waits for the device to return.
+A cloud session is an ordinary session whose coding work runs on another machine. It appears in the sidebar, streams into chat, and keeps its transcript exactly like a local session — the Gateway stays the owner of the conversation, the reconciled workspace, model credentials, and placement records, while commands, file edits, and tool work execute remotely. The session and its durable state survive a remote failure. Reclaimed or suspended cloud workers restart on the next message, including idle workers released after a Gateway build update; failed placements require cleanup and explicit redispatch. An offline paired device keeps its placement and waits for the device to return.
 
 Sessions can run in three places, and every one of them uses the same session, the same chat, and the same Place picker:
 
@@ -17,9 +17,17 @@ Sessions can run in three places, and every one of them uses the same session, t
 | Paired device     | Your own hardware, connected once with `openclaw connect`                         | Spare Macs, build boxes, servers you already own            | `operator.write`  |
 | Cloud worker      | A throwaway machine leased through [Crabbox](https://github.com/openclaw/crabbox) | Burst capacity, long jobs, isolation from your own machines | `operator.admin`  |
 
-In all remote placements, model inference stays proxied through the Gateway — provider credentials never reach the remote machine — and completed work reconciles back into the session's managed worktree. Both the OpenClaw runtime (`worker-turn`) and Codex (`remote-exec`) can use the same destinations.
+In all remote placements, model inference stays proxied through the Gateway — provider credentials never reach the remote machine — and completed work is retained with the Gateway as accepted repository checkpoints or changes in a Gateway-source managed worktree. Both the OpenClaw runtime (`worker-turn`) and Codex (`remote-exec`) can use the same destinations.
 
 A **session** is the conversation clients attach to. A **device** is paired hardware (`node` in the protocol); **runner** is an internal term for an execution host. Placement chooses where work runs, while isolation describes the boundary on that host, not another destination.
+
+## Start without a Gateway checkout
+
+In **New Session**, select a GitHub repository in **Place**, choose a paired device or cloud profile, and optionally set the source ref under **Remote checkout**. The Gateway records the source; the node fetches it and creates the session branch. No project clone or worktree is created on the Gateway. Startup waits for active placement before sending your prompt, and retry/reload recovery preserves the repository and ref.
+
+Both OpenClaw and Codex use the managed node connection for repository preparation. A provider with only an SSH carrier cannot host this source. Selecting an existing Gateway folder instead keeps the [managed-worktree flow](/concepts/managed-worktrees), including local changes and unpublished commits.
+
+The first preparation pins the resolved upstream commit. Accepted changes survive Stop and replacement as immutable checkpoints; restoration still depends on the pinned upstream commit remaining available. An explicit **Move session… → Gateway** fetches that source and materializes a managed worktree. See [dispatch and recovery](/gateway/cloud-workers#dispatching-a-session) for the RPC sequence and setup permissions.
 
 ## Images and attachments
 
@@ -59,7 +67,9 @@ See [Cloud Workers](/gateway/cloud-workers) for profiles, requirements, dispatch
 
 ## Viewing the session desktop
 
-Open **Desktop** from a session to view its execution machine. Cloud sessions select their worker desktop; sessions on paired devices select that device. The pop-out window keeps the session in its link. Both viewers follow placement changes and disconnect from the previous machine when the session moves or stops. A stopped cloud session does not switch either viewer to the Gateway desktop.
+Open **Desktop** from a session to view its execution machine. Cloud sessions select their worker desktop; sessions on paired devices select that device. By default, the pop-out window keeps the session in its link, so both viewers follow placement changes and disconnect from the previous machine when the session moves or stops. A stopped cloud session does not switch either viewer to the Gateway desktop.
+
+If you choose a source in the Desktop picker, the panel keeps that choice when the session's placement changes. **Open desktop in new window** opens that source and requests the panel's current view-only or control mode. Desktop links contain no credentials and do not grant control; the new viewer still performs its normal authentication and permission checks.
 
 The machine must already support desktop viewing. For cloud workers, enable the [Cloud Worker Desktop lab and desktop profile setting](/gateway/cloud-workers#desktop-interactive). Opening Desktop starts in view-only mode and does not change the machine's permissions or the agent's tool policy. The global Desktop command in the command palette still opens the machine picker, including on chat pages.
 
@@ -72,6 +82,8 @@ Use a vision-capable model and a tool profile that permits `computer`. For the `
 Worker transcripts retain screenshots. Codex exposes the computer tool directly, outside code mode, so screenshot results reach the model as images. To keep later model requests within the transport limit, OpenClaw can replace older, already processed images with a text marker in the model context while preserving the current computer frame and unprocessed images. Opaque provider replay remains unchanged; if its required context cannot fit, the turn fails with recovery guidance.
 
 Computer control stays bound to the admitted turn, placement, node connection, and provider. If an OpenClaw worker disconnects, its computer execution closes even between tool calls; start a new turn to regain computer control after reconnecting. Other durable session operations can still finish. Stopping or replacing the machine invalidates old tool handles; an unavailable desktop never selects another connected computer. Disposable cloud desktops remain absent from the ordinary paired-computer picker. See [Computer use](/nodes/computer-use) for supported actions and [Cloud Worker Desktop](/gateway/cloud-workers#desktop-interactive) for setup and viewing permissions.
+
+For `remote-exec` turns, computer cleanup finishes before workspace reconciliation. If cleanup fails, OpenClaw keeps the captured reply, usage, delivery evidence, and any earlier error or interruption, adds a bounded cleanup diagnostic, and does not automatically replay the turn. A workspace recovery failure reports both problems. Security-sensitive resource cleanup still rejects completion rather than becoming an advisory warning; resolve the reported cleanup problem before retrying.
 
 ## Automatic load balancing across devices
 
@@ -86,7 +98,7 @@ Two profile settings turn cloud workers from always-on machines into compute tha
 - `suspendAfter: "2h"` — after the session has been idle for the duration, the Gateway performs the same safe stop as **Stop cloud worker…**: it reconciles the workspace first, then releases the machine. While suspended, you pay for retained snapshot storage only. The next message provisions a replacement automatically — no button to press.
 - `settings.warmImage` — prepare the project's committed checkout and node runtime, then capture a reusable image before node enrollment. Later sessions for the same project and profile can start from that image; the first session does not have to stop first. Enabled by default when the effective machine class is known and `setupEnv` is empty. Profiles that forward host environment into setup capture only when you opt in explicitly, and `settings.warmImage: false` keeps any profile cold.
 
-Linked session worktrees share a stable project identity. A warm image retains the pristine committed seed and verified runtime, while every new session gets fresh enrollment and its current workspace files. A matching seed skips origin access and a full Git pack transfer, including for private or unpublished commits. Changed commits prepare a new seed and can refresh the project's image. The first dispatch includes preparation and any needed capture; provider startup and capture costs still determine overall latency.
+For sessions sourced from a Gateway checkout, linked worktrees share a stable project identity. A warm image retains the pristine committed seed and verified runtime, while every new session gets fresh enrollment and its current workspace files. A matching seed skips origin access and a full Git pack transfer, including for private or unpublished commits. Changed commits prepare a new seed and can refresh the project's image. Repository-only sessions instead fetch on the node and can reuse machine/runtime images and verified Git seeds; they do not prepare a project image from a Gateway checkout. The first dispatch includes preparation and any needed capture; provider startup and capture costs still determine overall latency.
 
 Each allocation keeps its original cold start or exact checkpoint choice through retries and Gateway restart. If an upgrade reports older warm-image state, follow [Upgrade warm-image state](/gateway/cloud-workers#upgrade-warm-image-state); Doctor preserves known images and cleanup obligations, and reports manual recovery steps for leases whose original choice is unknown.
 
@@ -94,7 +106,11 @@ Suspension never interrupts work: sessions with an active turn, queued messages,
 
 ## What stays with the Gateway
 
-Placement is disposable; the session is not. The transcript, the last-reconciled workspace files, placement history, and every provider credential live with the Gateway in all placements. After a clean reclaim or idle suspension, the next message provisions a replacement — warm when an image exists, cold otherwise. Failed placements keep their diagnostic visible; resolve pending cleanup, then redispatch and retry. An offline paired device is different by design: the placement stays active and waits for the device to reconnect, and **Continue on Gateway…** works while the device is offline, resuming from the last Gateway-synced workspace and discarding unsynced device changes. Workspace changes made after the last reconciliation are the only loss window, and clean stops (including auto-suspension) reconcile before releasing the machine.
+Placement is disposable; the session is not. The transcript, the last-reconciled workspace files, placement history, and every provider credential live with the Gateway in all placements. After a clean reclaim or idle suspension, the next message provisions a replacement — warm when an image exists, cold otherwise. After a Gateway update releases an idle worker built for the previous build, the same automatic replacement applies; a worker interrupted mid-turn or holding unaccepted results still fails and needs explicit redispatch. Failed placements keep their diagnostic visible; resolve pending cleanup, then redispatch and retry. An offline paired device is different by design: the placement stays active and waits for the device to reconnect, and **Continue on Gateway…** works while the device is offline, resuming from the last Gateway-synced workspace and discarding unsynced device changes. Workspace changes made after the last reconciliation are the only loss window, and clean stops (including auto-suspension) reconcile before releasing the machine.
+
+Repository-only checkpoint history remains until session deletion. While a worker runs, **Files** and diffs use its checkout. After Stop, changed-file previews remain available from the accepted checkpoint; editing, unchanged upstream files, and full diffs require restarting the worker. Publication can use an accepted Git-normalized checkpoint without a Gateway checkout. See [what survives a dead machine](/gateway/cloud-workers#what-survives-a-dead-machine).
+
+Reset keeps the repository and accepted changes but ends unfinished publication requests from the previous session lifecycle. Review the retained changes and request publication again after reset. Existing GitHub commits and pull requests remain unchanged.
 
 ## Related
 
@@ -102,5 +118,5 @@ Placement is disposable; the session is not. The transcript, the last-reconciled
 - [Nodes](/nodes) — pairing, session hosting, capacity, container isolation
 - [Control UI](/web/control-ui) — the Place picker and session badges
 - [Connect](/cli/connect) — one-command device onboarding
-- [Managed worktrees](/concepts/managed-worktrees) — the workspace cloud sessions reconcile into
+- [Managed worktrees](/concepts/managed-worktrees) — isolation for sessions sourced from a Gateway checkout
 - [Sandboxing](/gateway/sandboxing) — reducing blast radius for local execution instead

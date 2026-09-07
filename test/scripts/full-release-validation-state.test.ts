@@ -3,7 +3,10 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, assert, describe, expect, it } from "vitest";
-import { buildFullReleaseCandidateBinding } from "../../scripts/full-release-candidate-contract.mjs";
+import {
+  buildFullReleaseCandidateBinding,
+  buildFullReleaseCandidateRequest,
+} from "../../scripts/full-release-candidate-contract.mjs";
 import {
   composeReleaseAttemptJobs,
   isReleaseGhArtifactMissingError,
@@ -57,22 +60,14 @@ function candidateRequestInput(overrides: Record<string, unknown> = {}) {
     upgradeSurvivorScenarios: "reported-issues",
     allowFrozenTargetScenarioOmissions: false,
     allowUnreleasedChangelog: false,
+    packagePublished: false,
     sharedImagePolicy: "no-push-artifact",
     ...overrides,
   };
 }
 
-function candidateRequestEnvironment(overrides: Record<string, string> = {}) {
-  return {
-    CANDIDATE_RELEASE_SOAK: "true",
-    CANDIDATE_UPGRADE_SURVIVOR_BASELINE: "openclaw@latest",
-    CANDIDATE_UPGRADE_SURVIVOR_BASELINES: "",
-    CANDIDATE_UPGRADE_SURVIVOR_SCENARIOS: "reported-issues",
-    CANDIDATE_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "false",
-    CANDIDATE_ALLOW_UNRELEASED_CHANGELOG: "false",
-    CANDIDATE_SHARED_IMAGE_POLICY: "no-push-artifact",
-    ...overrides,
-  };
+function canonicalCandidateRequest(overrides: Record<string, unknown> = {}) {
+  return buildFullReleaseCandidateRequest(candidateRequestInput(overrides));
 }
 
 function candidateBinding(requestOverrides: Record<string, unknown> = {}) {
@@ -217,7 +212,7 @@ function runPlanSubprocess(overrides: Record<string, unknown>) {
   const output = join(root, "full-release-execution-plan.json");
   const planInputs = {
     candidateBindingResult: "skipped",
-    candidateRequestInput: candidateRequestInput(),
+    candidateRequestInput: canonicalCandidateRequest(),
     children: {},
     dockerPreflightResult: "success",
     evidenceReuse: false,
@@ -2849,6 +2844,17 @@ describe("release state artifacts", () => {
 });
 
 describe("collector subprocess", () => {
+  it.each([false, true])(
+    "seals the canonical packagePublished=%s candidate request without reconstruction",
+    (packagePublished) => {
+      const candidateRequest = canonicalCandidateRequest({ packagePublished });
+      const { output, result } = runPlanSubprocess({ candidateRequestInput: candidateRequest });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(output, "utf8")).candidateRequest).toEqual(candidateRequest);
+    },
+  );
+
   it.each([
     {
       changedPaths: [],
@@ -2895,7 +2901,7 @@ console.log(JSON.stringify({
 `,
     );
     const planInputs = {
-      candidateRequestInput: candidateRequestInput(),
+      candidateRequestInput: canonicalCandidateRequest(),
       children: {},
       dockerPreflightResult: "skipped",
       evidenceChangedPaths: reuse.changedPaths,
@@ -3381,7 +3387,7 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
       'console.error("sealed reuse selection rejected"); process.exit(1);\n',
     );
     const planInputs = {
-      candidateRequestInput: candidateRequestInput(),
+      candidateRequestInput: canonicalCandidateRequest(),
       children: {},
       dockerPreflightResult: "skipped",
       evidenceChangedPaths: [],
@@ -3445,13 +3451,18 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
     );
   });
 
-  it.each(["success", "failure"])(
-    "restores the phased plan and legacy %s Docker gate on a collector retry",
-    (dockerPreflightResult) => {
+  it.each([
+    { dockerPreflightResult: "success", packagePublished: false },
+    { dockerPreflightResult: "success", packagePublished: true },
+    { dockerPreflightResult: "failure", packagePublished: false },
+    { dockerPreflightResult: "failure", packagePublished: true },
+  ])(
+    "restores packagePublished=$packagePublished and the legacy $dockerPreflightResult Docker gate",
+    ({ dockerPreflightResult, packagePublished }) => {
       const root = mkdtempSync(join(tmpdir(), "frv-plan-restore-"));
       const output = join(root, "full-release-execution-plan.json");
       const githubOutput = join(root, "github-output");
-      const candidate = candidateBinding();
+      const candidate = candidateBinding({ packagePublished });
       const phasedChildren = {
         normalCi: { result: "success", runAttempt: 1, runId: "101" },
         pluginPrereleaseIndependent: { result: "success", runAttempt: 1, runId: "202" },
@@ -3487,7 +3498,7 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
       const result = spawnSync(process.execPath, [SCRIPT, "plan"], {
         env: {
           ...process.env,
-          ...candidateRequestEnvironment(),
+          CANDIDATE_REQUEST_JSON: JSON.stringify(candidate.request),
           FULL_RELEASE_EXECUTION_PLAN_PATH: output,
           FULL_RELEASE_PLAN_INPUTS_JSON: "must-not-be-read-during-restore",
           FULL_RELEASE_RESTORE_PLAN: "true",
@@ -3508,6 +3519,7 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
       const restored = JSON.parse(readFileSync(output, "utf8")) as typeof sealed;
       expect(restored).toMatchObject({
         attemptEvidenceVersion: 3,
+        candidateRequest: { packagePublished },
         parentRunAttempt: 1,
         sha256: sealed.sha256,
       });
@@ -3580,7 +3592,7 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
         FRV_GH_READY: ghReady,
         FULL_RELEASE_EXECUTION_PLAN_PATH: output,
         FULL_RELEASE_PLAN_INPUTS_JSON: JSON.stringify({
-          candidateRequestInput: candidateRequestInput(),
+          candidateRequestInput: canonicalCandidateRequest(),
           children: { normalCi: { result: "skipped", runAttempt: "", runId: "" } },
           dockerPreflightResult: "skipped",
           evidenceChangedPaths: [],

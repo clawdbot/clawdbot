@@ -7,6 +7,7 @@ import {
 } from "./vitest.pattern-file.ts";
 import { sharedVitestConfig } from "./vitest.shared.config.ts";
 import { UiE2eSequencer } from "./vitest.ui-e2e.sequencer.ts";
+import { controlUiE2eTestGlobs } from "./vitest.ui-paths.mjs";
 
 const mediaTranscriptRealGatewayTest =
   "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts";
@@ -14,33 +15,50 @@ const sessionHostCommandStateRealGatewayTest =
   "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts";
 const openClawDelegationRealGatewayTest =
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts";
+const automationManagementRealGatewayTest =
+  "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts";
 const uiE2eIncludePatterns = [
-  "ui/src/**/*.e2e.test.ts",
+  ...controlUiE2eTestGlobs,
   mediaTranscriptRealGatewayTest,
   sessionHostCommandStateRealGatewayTest,
   openClawDelegationRealGatewayTest,
+  automationManagementRealGatewayTest,
 ];
 export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
+  "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
   "ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
   "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
+  "ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts",
   "ui/src/e2e/logs-lifecycle.e2e.test.ts",
   "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
+  "ui/src/e2e/profile-page.real-gateway.e2e.test.ts",
   sessionHostCommandStateRealGatewayTest,
   "ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts",
   "ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
   mediaTranscriptRealGatewayTest,
   openClawDelegationRealGatewayTest,
+  automationManagementRealGatewayTest,
 ];
 
 // These files own their server instead of leasing the global production bundle.
 // Keep any shared source-module optimizer cache under one worker.
 export const uiE2ePrivateServerTestFiles = [
+  "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
   "ui/src/e2e/approval-bootstrap.e2e.test.ts",
   "ui/src/e2e/build-info-unicode.e2e.test.ts",
+  "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-code-block-fences.e2e.test.ts",
   "ui/src/e2e/chat-export-attribution.e2e.test.ts",
+  "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
   "ui/src/e2e/child-session-load-errors.e2e.test.ts",
+  "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
   "ui/src/e2e/community-invite-showing.e2e.test.ts",
   "ui/src/e2e/composer-draft-store.e2e.test.ts",
   "ui/src/e2e/composer-recovery-fences.e2e.test.ts",
@@ -54,6 +72,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/mobile-chat-session-menu.e2e.test.ts",
   "ui/src/e2e/mobile-sidebar-session-menu.e2e.test.ts",
   "ui/src/e2e/mount-recovery.e2e.test.ts",
+  "ui/src/e2e/native-notifications-loading.e2e.test.ts",
   "ui/src/e2e/session-management.delete.e2e.test.ts",
   "ui/src/e2e/settings-loading-skeletons.e2e.test.ts",
   "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
@@ -137,9 +156,12 @@ export function createUiE2eVitestConfig(
       include,
       maxWorkers: Math.min(2, baseTest.maxWorkers),
       // ui-e2e-projects-contract-v1: frozen-target preflight may select these projects.
+      // Each project already composes the complete shared config and must not inherit it again.
       projects: [
         {
           ...base,
+          // Each resource owner supplies its complete inventory and setup.
+          extends: false,
           cacheDir: ".artifacts/vite-ui-e2e-bundled",
           test: {
             ...projectTest,
@@ -152,6 +174,7 @@ export function createUiE2eVitestConfig(
         },
         {
           ...base,
+          extends: false,
           cacheDir: ".artifacts/vite-ui-e2e-standalone",
           test: {
             ...projectTest,
@@ -163,6 +186,7 @@ export function createUiE2eVitestConfig(
         },
         {
           ...base,
+          extends: false,
           cacheDir: ".artifacts/vite-ui-e2e-serial",
           test: {
             ...projectTest,
@@ -175,6 +199,7 @@ export function createUiE2eVitestConfig(
         },
         {
           ...base,
+          extends: false,
           cacheDir: ".artifacts/vite-ui-e2e-serial-standalone",
           test: {
             ...projectTest,

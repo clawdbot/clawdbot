@@ -23,7 +23,7 @@
     "get_goal": {"emoji":"🎯","title":"Get Goal","detailKeys":[]},
     "create_goal": {"emoji":"🎯","title":"Create Goal","detailKeys":["objective","token_budget"]},
     "update_goal": {"emoji":"🎯","title":"Update Goal","detailKeys":["status"]},
-    "progress_card": {"emoji":"🗺️","title":"Progress Card","detailKeys":["plan.0.step","markdown"]},
+    "progress_card": {"emoji":"🗺️","title":"Progress Card"},
     "ask_user": {"emoji":"❓","title":"Ask User","detailKeys":["questions.0.question"]},
     "secrets": {"emoji":"🔑","title":"Secrets","detailKeys":["action","name","kind"]},
     "suggest_task": {"emoji":"✨","title":"Suggest Task","detailKeys":["title","tldr","cwd"]},

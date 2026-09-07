@@ -1,5 +1,8 @@
-import { arrayItemSchema, arrayItemSchemaIndexes } from "./config-form.array-items.ts";
-// Control UI view renders config form.analyze screen content.
+import {
+  arrayItemSchema,
+  arrayItemSchemaIndexes,
+  collectAllOfSchemas,
+} from "./config-form.array-items.ts";
 import {
   objectAdditionalPropertiesSchema,
   objectPropertyKeys,
@@ -203,18 +206,7 @@ function schemaAllowsNull(schema: JsonSchema, seen = new Set<JsonSchema>()): boo
 }
 
 function hasUnrepresentableComposedAdditionalProperties(schema: JsonSchema): boolean {
-  const schemas: JsonSchema[] = [];
-  const pending = [schema];
-  const seen = new Set<JsonSchema>();
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (!current || seen.has(current)) {
-      continue;
-    }
-    seen.add(current);
-    schemas.push(current);
-    pending.push(...(current.allOf ?? []));
-  }
+  const schemas = collectAllOfSchemas(schema);
   if (schemas.length <= 1) {
     return false;
   }

@@ -3,11 +3,13 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   ONE_PIXEL_PNG_B64,
   SESSION_LIST_DEFAULTS,
@@ -24,6 +26,7 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
+const rosterMatch = { includeGlobal: true };
 const SESSION_KEY = "agent:main:dashboard:0f403cb8-3920-4cf1-8eb7-79f2f00ce488";
 const RUN_ID = "transition-proof-run";
 const captureProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -48,6 +51,19 @@ async function captureProof(page: import("playwright").Page, fileName: string) {
   }
   const proofDir = transitionProofDir();
   await mkdir(proofDir, { recursive: true });
+  if (page.video()) {
+    await writeFile(
+      path.join(proofDir, fileName),
+      await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+        page
+          .locator(
+            ".new-session-page__message:visible, .agent-chat__composer-combobox textarea:visible",
+          )
+          .first(),
+      ]),
+    );
+    return;
+  }
   await page.screenshot({ fullPage: true, path: path.join(proofDir, fileName) });
 }
 
@@ -135,11 +151,7 @@ suite.define(() => {
   });
 
   it("uses shifted Enter for background start in modifier mode", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const gatewayUrl = controlUiBundledGatewayUrl(suite.server.baseUrl);
     await context.addInitScript(
       ({ key, url }) => {
@@ -174,11 +186,7 @@ suite.define(() => {
   });
 
   it("creates and lists a session with the default mock Gateway", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page);
     try {
@@ -215,11 +223,12 @@ suite.define(() => {
       await expect.poll(() => page.locator(".new-session-page__error").count()).toBe(0);
       await captureProof(page, "default-mock-created.png");
 
-      const listRequestsBeforeReconnect = (await gateway.getRequests("sessions.list")).length;
+      const listRequestsBeforeReconnect = (await gateway.getRequests("sessions.list", rosterMatch))
+        .length;
       await gateway.closeLatest(1006, "mock reconnect");
       await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(1);
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(listRequestsBeforeReconnect);
       for (const sessionKey of sessionKeys) {
         await expect
@@ -235,11 +244,7 @@ suite.define(() => {
   });
 
   it("commits the confirmed session URL before Chat loads and animates only the ready composer", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const thinkingLevels = ["off", "low", "medium", "high", "xhigh"].map((id) => ({
       id,
@@ -311,14 +316,15 @@ suite.define(() => {
       const start = page.locator(".new-session-page__start-submit");
       await message.fill("keep progress moving");
       await expect.poll(() => start.isEnabled()).toBe(true);
-      await gateway.waitForRequest("sessions.list");
+      await gateway.waitForRequest("sessions.list", { match: rosterMatch });
       expect(
         await page.locator(`.sidebar-recent-session[data-session-key="${SESSION_KEY}"]`).count(),
       ).toBe(0);
-      const listRequestsBeforeSubmit = (await gateway.getRequests("sessions.list")).length;
+      const listRequestsBeforeSubmit = (await gateway.getRequests("sessions.list", rosterMatch))
+        .length;
 
       await gateway.deferNext("sessions.create");
-      await gateway.deferNext("sessions.list");
+      await gateway.deferNext("sessions.list", rosterMatch);
       await start.click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({ thinkingLevel: "xhigh" });
@@ -338,7 +344,10 @@ suite.define(() => {
         runId: RUN_ID,
         runStarted: true,
       });
-      await gateway.waitForRequest("sessions.list", { after: listRequestsBeforeSubmit });
+      await gateway.waitForRequest("sessions.list", {
+        after: listRequestsBeforeSubmit,
+        match: rosterMatch,
+      });
       await expect.poll(() => chatModuleRequested).toBe(true);
 
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(SESSION_KEY));
@@ -415,7 +424,9 @@ suite.define(() => {
         .toBe("xhigh");
       await waitForCommittedChatRoute(page);
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(SESSION_KEY));
-      expect(await gateway.getRequests("sessions.list")).toHaveLength(listRequestsBeforeSubmit + 1);
+      expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(
+        listRequestsBeforeSubmit + 1,
+      );
       expect(await gateway.getRequests("sessions.resolve")).toHaveLength(0);
       const invalidFrames = await page.evaluate(() => {
         const frames = Reflect.get(

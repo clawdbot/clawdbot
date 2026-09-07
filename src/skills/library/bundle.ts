@@ -132,7 +132,8 @@ function validateSkillBundlePath(filePath: string): void {
         ) ||
         /[ .]$/u.test(part) ||
         part !== part.normalize("NFC") ||
-        /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu.test(part),
+        /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu.test(part) ||
+        /^(conin|conout)\$$/iu.test(part),
     )
   ) {
     throw new SkillLibraryError("INVALID_BUNDLE", `Non-portable skill file path: ${filePath}`);

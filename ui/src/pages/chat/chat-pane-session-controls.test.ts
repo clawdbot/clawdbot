@@ -7,12 +7,15 @@ import type {
   UsersListModelAccountsResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import {
   createTestGatewayClient,
   type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
+import { makeChatHost } from "./chat-host.test-support.ts";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -174,6 +177,46 @@ describe("chat account selection", () => {
 });
 
 describe("chat pane composer controls", () => {
+  it("renders the selected Gateway model while keeping its model picker locked", () => {
+    const selectedSession: GatewaySessionRow = {
+      key: "main",
+      kind: "direct",
+      model: "gpt-5.6-sol",
+      modelProvider: "openai",
+      modelSelectionLocked: true,
+      agentRuntime: { id: "codex", source: "model" },
+    };
+    const state = makeChatHost({
+      sessionKey: selectedSession.key,
+      sessionsResult: { ...createSessionsListResult(), sessions: [selectedSession] },
+      chatModelCatalog: [{ id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" }],
+      chatModelSwitchPromises: {},
+      requestHandlers: {},
+    });
+    const controls = renderChatPaneComposerControls({
+      state: state as unknown as ChatPageHost,
+      selectedSession: state.sessionsResult?.sessions[0],
+      agentDefaultModel: "openai/gpt-5.6-luna",
+      modelAccess: { allowed: true, requiredScope: "operator.write" },
+      effortAccess: { allowed: true, requiredScope: "operator.write" },
+      permissionAccess: { allowed: true, requiredScope: "operator.write" },
+      canSelectFull: true,
+      onModelSetup: vi.fn(),
+    });
+    const container = document.createElement("div");
+    render(controls.composerControls, container);
+
+    const trigger = container.querySelector<HTMLElement>("[data-chat-model-select]");
+    expect(trigger?.textContent).toContain("GPT-5.6 Sol");
+    expect(trigger?.getAttribute("aria-label")).toBe("Chat model: GPT-5.6 Sol");
+    expect(trigger?.dataset.chatModelLocked).toBe("true");
+    expect(container.querySelector(".chat-controls__locked-model-value")?.textContent).toBe(
+      "GPT-5.6 Sol",
+    );
+    expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
+    expect(state.request).not.toHaveBeenCalled();
+  });
+
   it.each([
     { label: "empty", cached: false, connected: true, error: null, message: "No models available" },
     {

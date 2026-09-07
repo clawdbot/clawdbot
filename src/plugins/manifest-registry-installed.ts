@@ -16,6 +16,7 @@ import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import { discoverConfiguredPluginLoadPaths, type PluginCandidate } from "./discovery.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
+import { getInstalledPluginIndexFacts } from "./installed-plugin-index-facts.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
 import {
   isInstalledPluginIndexInstallOwnerAmbiguous,
@@ -43,7 +44,6 @@ import {
   pluginCacheRealpathSync,
   readPluginCacheFile,
 } from "./plugin-cache-files.js";
-import { getPluginCache } from "./plugin-cache.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import {
   normalizePluginDependencySpecs,
@@ -56,25 +56,11 @@ type InstalledPackageMetadata = {
   packageOptionalDependencies?: PluginDependencySpecMap;
 };
 
-function isDeepFrozenJsonLike(value: unknown, seen = new WeakSet<object>()): boolean {
-  if (!value || typeof value !== "object") {
-    return true;
-  }
-  const object = value;
-  if (seen.has(object)) {
-    return true;
-  }
-  if (!Object.isFrozen(object)) {
-    return false;
-  }
-  seen.add(object);
-  return Object.values(value).every((entry) => isDeepFrozenJsonLike(entry, seen));
-}
-
 export function resolveInstalledManifestRegistryIndexFingerprint(
   index: InstalledPluginIndex,
 ): string {
-  const cached = getPluginCache().metadata.indexFingerprints.get(index);
+  const facts = getInstalledPluginIndexFacts(index);
+  const cached = facts?.fingerprint;
   if (cached) {
     return cached;
   }
@@ -98,8 +84,8 @@ export function resolveInstalledManifestRegistryIndexFingerprint(
       }),
     ),
   });
-  if (isDeepFrozenJsonLike(index)) {
-    getPluginCache().metadata.indexFingerprints.set(index, fingerprint);
+  if (facts) {
+    facts.fingerprint = fingerprint;
   }
   return fingerprint;
 }
@@ -140,23 +126,18 @@ function normalizePackageChannelConfiguredState(
   if (!isRecord(configuredState)) {
     return undefined;
   }
-  const env = isRecord(configuredState.env)
-    ? {
-        ...(normalizeOptionalTrimmedStringList(configuredState.env.allOf)?.length
-          ? { allOf: normalizeOptionalTrimmedStringList(configuredState.env.allOf) }
-          : {}),
-        ...(normalizeOptionalTrimmedStringList(configuredState.env.anyOf)?.length
-          ? { anyOf: normalizeOptionalTrimmedStringList(configuredState.env.anyOf) }
-          : {}),
-      }
-    : undefined;
+  const rawEnv = isRecord(configuredState.env) ? configuredState.env : undefined;
+  const allOf = rawEnv ? normalizeOptionalTrimmedStringList(rawEnv.allOf) : undefined;
+  const anyOf = rawEnv ? normalizeOptionalTrimmedStringList(rawEnv.anyOf) : undefined;
+  const env =
+    allOf || anyOf ? { ...(allOf ? { allOf } : {}), ...(anyOf ? { anyOf } : {}) } : undefined;
   const specifier = normalizeOptionalString(configuredState.specifier);
   const exportName = normalizeOptionalString(configuredState.exportName);
-  return specifier || exportName || (env && Object.keys(env).length > 0)
+  return specifier || exportName || env
     ? {
         ...(specifier ? { specifier } : {}),
         ...(exportName ? { exportName } : {}),
-        ...(env && Object.keys(env).length > 0 ? { env } : {}),
+        ...(env ? { env } : {}),
       }
     : undefined;
 }
@@ -322,6 +303,16 @@ function normalizePackageChannelSetup(setup: unknown): PluginPackageChannel["set
   return { fields };
 }
 
+const PACKAGE_CHANNEL_NORMALIZERS = [
+  ["exposure", normalizePackageChannelExposure],
+  ["commands", normalizeManifestChannelCommandDefaults],
+  ["configuredState", normalizePackageChannelConfiguredState],
+  ["persistedAuthState", normalizePackageChannelPersistedAuthState],
+  ["doctorCapabilities", normalizePackageChannelDoctorCapabilities],
+  ["setup", normalizePackageChannelSetup],
+  ["cliAddOptions", normalizePackageChannelCliOptions],
+] as const;
+
 function normalizePersistedPackageChannel(value: unknown): PluginPackageChannel | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -372,15 +363,7 @@ function normalizePersistedPackageChannel(value: unknown): PluginPackageChannel 
       channel[key] = value[key];
     }
   }
-  for (const [key, normalize] of [
-    ["exposure", normalizePackageChannelExposure],
-    ["commands", normalizeManifestChannelCommandDefaults],
-    ["configuredState", normalizePackageChannelConfiguredState],
-    ["persistedAuthState", normalizePackageChannelPersistedAuthState],
-    ["doctorCapabilities", normalizePackageChannelDoctorCapabilities],
-    ["setup", normalizePackageChannelSetup],
-    ["cliAddOptions", normalizePackageChannelCliOptions],
-  ] as const) {
+  for (const [key, normalize] of PACKAGE_CHANNEL_NORMALIZERS) {
     const normalized = normalize(value[key]);
     if (normalized) {
       Object.assign(channel, { [key]: normalized });
@@ -509,12 +492,13 @@ export function selectInstalledPluginManifestRecords(
       .filter((plugin) => includeDisabled || plugin.enabled)
       .map((plugin) => plugin.pluginId),
   );
-  return registry.plugins
-    .filter((plugin) => enabledPluginIds.has(plugin.id))
-    .filter((plugin) => !pluginIds || pluginIds.has(plugin.id));
+  return registry.plugins.filter(
+    (plugin) => enabledPluginIds.has(plugin.id) && (!pluginIds || pluginIds.has(plugin.id)),
+  );
 }
 
 export function loadPluginManifestRegistryForInstalledIndex(params: {
+  registryPath?: string;
   index: InstalledPluginIndex;
   manifestRegistry?: PluginManifestRegistry;
   config?: OpenClawConfig;
@@ -582,6 +566,7 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
           return candidate;
         });
       return loadPluginManifestRegistryCore({
+        registryPath: params.registryPath,
         config: params.config,
         workspaceDir: params.workspaceDir,
         env,

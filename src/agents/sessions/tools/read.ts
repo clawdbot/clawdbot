@@ -392,7 +392,7 @@ export function createReadToolDefinition(
         path,
         offset,
         limit,
-        cursor,
+        cursor = 0,
         optional,
       }: { path: string; offset?: number; limit?: number; cursor?: number; optional?: true },
       signal?: AbortSignal,
@@ -404,7 +404,7 @@ export function createReadToolDefinition(
       if (offset !== undefined && (!Number.isSafeInteger(offset) || offset < 1)) {
         throw new Error("Offset must be an integer at least 1");
       }
-      if (cursor !== undefined && (!Number.isSafeInteger(cursor) || cursor < 0)) {
+      if (!Number.isSafeInteger(cursor) || cursor < 0) {
         throw new Error("Cursor must be an integer at least 0");
       }
       return new Promise<{
@@ -519,14 +519,36 @@ export function createReadToolDefinition(
               const textContent = (
                 decodedText.startsWith("\uFEFF") ? decodedText.slice(1) : decodedText
               ).replaceAll("\r\n", "\n");
-              const allLines = textContent.split("\n");
-              if (allLines.at(-1) === "") {
-                allLines.pop();
-              }
-              const totalFileLines = allLines.length;
-              // Apply offset if specified. Convert from 1-indexed input to 0-indexed array access.
               const startLine = offset === undefined ? 0 : offset - 1;
               const startLineDisplay = startLine + 1;
+              const requestedLines =
+                limit === undefined ? undefined : normalizePositiveLimit(limit, DEFAULT_MAX_LINES);
+              let totalFileLines = 0;
+              let selectedStart = 0;
+              let selectedEnd = 0;
+              let selectedLineCount = 0;
+              let firstLineEnd = 0;
+              let selectedHasText = false;
+              // Count through EOF without materializing lines that the page budget may discard.
+              for (let start = 0; start < textContent.length;) {
+                const newline = textContent.indexOf("\n", start);
+                const end = newline === -1 ? textContent.length : newline;
+                if (
+                  totalFileLines >= startLine &&
+                  (requestedLines === undefined || selectedLineCount < requestedLines)
+                ) {
+                  if (selectedLineCount === 0) {
+                    selectedStart = start;
+                    firstLineEnd = end;
+                  }
+                  selectedEnd = end;
+                  selectedLineCount += 1;
+                  selectedHasText ||= end > start;
+                }
+                totalFileLines += 1;
+                start = end + 1;
+              }
+              const firstLineLength = firstLineEnd - selectedStart;
               let outputText: string;
               if (totalFileLines === 0) {
                 outputText =
@@ -535,37 +557,21 @@ export function createReadToolDefinition(
                     : `File contains no readable text (${buffer.length} bytes).`;
               } else if (startLine >= totalFileLines) {
                 outputText = `Offset ${offset} is beyond end of file (${totalFileLines} lines total). Retry with offset <= ${totalFileLines}.`;
-              } else if (cursor !== undefined && cursor >= allLines[startLine]!.length) {
+              } else if (cursor > 0 && cursor >= firstLineLength) {
                 const nextLine =
                   startLine + 1 < totalFileLines
                     ? ` Use offset=${startLineDisplay + 1} to continue.`
                     : "";
-                outputText = `Cursor ${cursor} is at or beyond the end of line ${startLineDisplay} (${allLines[startLine]!.length} characters).${nextLine}`;
+                outputText = `Cursor ${cursor} is at or beyond the end of line ${startLineDisplay} (${firstLineLength} characters).${nextLine}`;
               } else {
-                const firstLine = allLines[startLine]!;
-                if (
-                  cursor !== undefined &&
-                  cursor > 0 &&
-                  firstLine.codePointAt(cursor - 1)! > 0xffff
-                ) {
+                if (cursor > 0 && textContent.codePointAt(selectedStart + cursor - 1)! > 0xffff) {
                   throw new Error(
                     `Cursor ${cursor} splits a UTF-16 surrogate pair; retry with cursor=${cursor - 1} or cursor=${cursor + 1}.`,
                   );
                 }
-                const endLine =
-                  limit === undefined
-                    ? totalFileLines
-                    : Math.min(
-                        startLine + normalizePositiveLimit(limit, DEFAULT_MAX_LINES),
-                        totalFileLines,
-                      );
-                const selectedLines = allLines.slice(startLine, endLine);
-                if (cursor !== undefined) {
-                  selectedLines[0] = firstLine.slice(cursor);
-                }
-                const userLimitedLines = limit === undefined ? undefined : endLine - startLine;
-                if (selectedLines.every((line) => line.length === 0)) {
-                  const selectedLineCount = selectedLines.length;
+                const endLine = startLine + selectedLineCount;
+                const userLimitedLines = limit === undefined ? undefined : selectedLineCount;
+                if (!selectedHasText) {
                   const subject =
                     startLine === 0 && endLine === totalFileLines ? "File" : "Selected range";
                   outputText = `${subject} contains ${selectedLineCount} blank line${selectedLineCount === 1 ? "" : "s"}.`;
@@ -574,10 +580,10 @@ export function createReadToolDefinition(
                     outputText += `\n\n[${remaining} more line${remaining === 1 ? "" : "s"} in file. Use offset=${endLine + 1} to continue.]`;
                   }
                 } else {
-                  let selectedContent = selectedLines.join("\n");
-                  if (endLine === totalFileLines && textContent.endsWith("\n")) {
-                    selectedContent += "\n";
-                  }
+                  const selectedContent = textContent.slice(
+                    selectedStart + cursor,
+                    endLine === totalFileLines ? textContent.length : selectedEnd,
+                  );
                   const noteBytes = note ? Buffer.byteLength(`${note}\n`, "utf8") : 0;
                   const page = createBoundedReadTextPage({
                     content: selectedContent,
@@ -592,9 +598,13 @@ export function createReadToolDefinition(
                     pageMaxBytes: Math.min(DEFAULT_MAX_BYTES, maxBytes) - noteBytes,
                     adaptive: options?.maxBytes !== undefined,
                   });
-                  outputText = page.content;
                   if (page.kind === "truncated") {
                     truncated = page;
+                    outputText = page.content;
+                  } else {
+                    // Even full-fit custom decoder text can borrow a larger source. Copy only
+                    // the bounded result, preserving UTF-16 units including lone surrogates.
+                    outputText = Buffer.from(page.content, "utf16le").toString("utf16le");
                   }
                 }
               }

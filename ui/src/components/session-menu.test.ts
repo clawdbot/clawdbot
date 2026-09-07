@@ -16,7 +16,12 @@ import {
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import "./session-menu.ts";
 import type { SessionMenuData } from "./session-menu-actions.ts";
-import type { SessionMenuAction, SessionMenuActionKind, SessionMenuWork } from "./session-menu.ts";
+import type {
+  PluginSessionMenuAction,
+  SessionMenuAction,
+  SessionMenuActionKind,
+  SessionMenuWork,
+} from "./session-menu.ts";
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
 type SessionMenuElement = HTMLElement & {
   anchor: { x: number; y: number };
@@ -43,7 +48,7 @@ async function mountMenu(
     copyMarkdownAllowed?: boolean;
     splitAllowed?: boolean;
     work?: SessionMenuWork | null;
-    workboard?: { captured: boolean; busy: boolean } | null;
+    pluginActions?: readonly PluginSessionMenuAction[];
     archiveAllowed?: boolean;
     deleteAllowed?: boolean;
     cloudWorkerStopAllowed?: boolean;
@@ -93,15 +98,14 @@ async function mountMenu(
       .forkDisabled=${false}
       .forkFromLastCompleted=${options.forkFromLastCompleted ?? false}
       .archiveAllowed=${options.archiveAllowed ?? true}
-      .deleteAllowed=${options.deleteAllowed ??
-      (session.archived || (options.archiveAllowed ?? true))}
+      .deleteAllowed=${
+        options.deleteAllowed ?? (session.archived || (options.archiveAllowed ?? true))
+      }
       .cloudWorkerStopAllowed=${options.cloudWorkerStopAllowed ?? false}
       .groups=${options.groups ?? []}
       .currentOwner=${options.currentOwner ?? null}
       .work=${options.work ?? null}
-      .workboard=${options.workboard === undefined
-        ? { captured: false, busy: false }
-        : options.workboard}
+      .pluginActions=${options.pluginActions ?? []}
       .onAction=${options.onAction ?? (() => {})}
       .onClose=${options.onClose ?? (() => {})}
     ></openclaw-session-menu>`,
@@ -330,13 +334,7 @@ describe("session menu", () => {
     expect(pin.disabled).toBe(true);
     expect(pin.getAttribute("title")).toBe("This action requires operator.write access.");
     expect(deleteItem.disabled).toBe(true);
-    deleteItem.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        composed: true,
-        detail: { item: { value: "delete" } },
-      }),
-    );
+    selectMenuValue(menu, "delete");
     expect(onAction).not.toHaveBeenCalled();
   });
 
@@ -357,7 +355,6 @@ describe("session menu", () => {
       "Icon & color",
       "Move to group",
       "Assign to…",
-      "Add to Workboard",
       "Fork conversation",
       "Copy",
       "Open in",
@@ -385,55 +382,29 @@ describe("session menu", () => {
     expect(menuItemLabels(menu)).toContain("Icon & color");
     expect(menuItemLabels(menu)).toContain("Move to group");
 
-    selectMenuValue(menu, "compact:open-open-in");
-    await menu.updateComplete;
-    expect(menuItemLabels(menu)).toEqual([
-      "Back",
-      "New tab",
-      "New window",
-      "Cursor",
-      "VS Code",
-      "Windsurf",
-      "Zed",
-    ]);
-
-    selectMenuValue(menu, "compact:back");
-    await menu.updateComplete;
-    selectMenuValue(menu, "compact:open-copy");
-    await menu.updateComplete;
-    expect(menuItemLabels(menu)).toEqual([
-      "Back",
-      "Session link",
-      "Conversation as Markdown",
-      "Session ID",
-    ]);
-
-    selectMenuValue(menu, "compact:back");
-    await menu.updateComplete;
-    selectMenuValue(menu, "compact:open-assign-owner");
-    await menu.updateComplete;
-    expect(menuItemLabels(menu)).toEqual(["Back", "Me", "Research owner"]);
-
-    selectMenuValue(menu, "compact:back");
-    await menu.updateComplete;
-    selectMenuValue(menu, "compact:open-icon");
-    await menu.updateComplete;
-    expect(menuItemLabels(menu)).toEqual(["Back"]);
-    expect(menu.querySelectorAll(".session-menu__color-choice")).toHaveLength(9);
-    expect(menu.querySelector(".session-menu__icon-picker")?.getAttribute("slot")).toBeNull();
-
-    selectMenuValue(menu, "compact:back");
-    await menu.updateComplete;
-    selectMenuValue(menu, "compact:open-group");
-    await menu.updateComplete;
-    expect(menuItemLabels(menu)).toEqual(["Back", "Research", "Operations", "New group"]);
-    expect(menu.querySelector("[slot='submenu']")).toBeNull();
+    for (const [view, labels] of [
+      ["open-in", ["Back", "New tab", "New window", "Cursor", "VS Code", "Windsurf", "Zed"]],
+      ["copy", ["Back", "Session link", "Preview link", "Conversation as Markdown", "Session ID"]],
+      ["assign-owner", ["Back", "Me", "Research owner"]],
+      ["icon", ["Back"]],
+      ["group", ["Back", "Research", "Operations", "New group"]],
+    ] as const) {
+      selectMenuValue(menu, `compact:open-${view}`);
+      await menu.updateComplete;
+      expect(menuItemLabels(menu)).toEqual(labels);
+      expect(menu.querySelector("[slot='submenu']")).toBeNull();
+      if (view === "icon") {
+        expect(menu.querySelectorAll(".session-menu__color-choice")).toHaveLength(9);
+        expect(menu.querySelector(".session-menu__icon-picker")?.getAttribute("slot")).toBeNull();
+      }
+      selectMenuValue(menu, "compact:back");
+      await menu.updateComplete;
+    }
   });
 
   it("omits root placement actions for child sessions", async () => {
     const menu = await mountMenu({
       session: { isChild: true },
-      workboard: null,
     });
 
     expect(menuItemLabels(menu)).toEqual([
@@ -499,10 +470,32 @@ describe("session menu", () => {
     expect(menuItemLabels(menu)).not.toContain("Archive 2");
   });
 
-  it("omits Workboard when unavailable", async () => {
-    const menu = await mountMenu({ workboard: null });
+  it("dispatches a namespaced plugin action after closing the menu", async () => {
+    const onAction = vi.fn<(action: SessionMenuAction) => void>();
+    const onClose = vi.fn();
+    const menu = await mountMenu({
+      pluginActions: [{ id: "review/open", label: "Open review" }],
+      onAction,
+      onClose,
+    });
+    menuItem(menu, "Open review").click();
+    expect(onAction).toHaveBeenCalledWith({ kind: "plugin", id: "review/open" });
+    expect(onClose.mock.invocationCallOrder[0]).toBeLessThan(onAction.mock.invocationCallOrder[0]!);
+  });
 
-    expect(menuItemLabels(menu)).not.toContain("Add to Workboard");
+  it.each([
+    { pluginActions: [{ id: "review/open", label: "Open review", disabled: true }] },
+    {
+      pluginActions: [{ id: "review/open", label: "Open review" }],
+      actionDisabledReasons: { plugin: "Admin access required" },
+    },
+    { pluginActions: [{ id: "review/open", label: "Open review" }], selectionCount: 2 },
+    { pluginActions: [] },
+  ])("does not dispatch an unavailable plugin action: %j", async (options) => {
+    const onAction = vi.fn<(action: SessionMenuAction) => void>();
+    const menu = await mountMenu({ ...options, onAction });
+    selectMenuValue(menu, "plugin:review/open");
+    expect(onAction).not.toHaveBeenCalled();
   });
 
   it("restores archived sessions while keeping delete enabled and pin disabled", async () => {
@@ -560,6 +553,7 @@ describe("session menu", () => {
     expect(copyGroup.getAttribute("aria-keyshortcuts")).toBe("C");
     expect(menuItemLabels(copyGroup)).toEqual([
       "Session link",
+      "Preview link",
       "Conversation as Markdown",
       "Session ID",
     ]);
@@ -595,6 +589,7 @@ describe("session menu", () => {
     for (const kind of [
       "copy-session-id",
       "copy-session-link",
+      "copy-session-preview-link",
       "copy-markdown",
       "open-new-tab",
       "open-new-window",
@@ -947,21 +942,18 @@ describe("session menu", () => {
     expect(keydown.defaultPrevented).toBe(true);
   });
 
-  it("keeps conversation destinations without showing absent workspace actions", async () => {
-    const menu = await mountMenu();
+  it.each([
+    { name: "absent", work: null },
+    { name: "unresolved", work: { loading: true, pullRequestUrl: null, worktreePath: null } },
+  ])(
+    "keeps conversation destinations without showing $name workspace actions",
+    async ({ work }) => {
+      const menu = await mountMenu({ work });
 
-    expect(menuItemLabels(menu)).not.toContain("Open PR");
-    expect(menuItemLabels(menuItem(menu, "Open in"))).toEqual(["New tab", "New window"]);
-  });
-
-  it("hides unresolved work actions while keeping conversation destinations available", async () => {
-    const menu = await mountMenu({
-      work: { loading: true, pullRequestUrl: null, worktreePath: null },
-    });
-
-    expect(menuItemLabels(menu)).not.toContain("Open PR");
-    expect(menuItemLabels(menuItem(menu, "Open in"))).toEqual(["New tab", "New window"]);
-  });
+      expect(menuItemLabels(menu)).not.toContain("Open PR");
+      expect(menuItemLabels(menuItem(menu, "Open in"))).toEqual(["New tab", "New window"]);
+    },
+  );
 
   it("dispatches open-pr with the resolved URL from click or the G shortcut", async () => {
     const url = "https://github.com/openclaw/openclaw/pull/12345";

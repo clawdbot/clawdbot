@@ -1,5 +1,4 @@
 import { consume } from "@lit/context";
-import { initialState, Task, TaskStatus } from "@lit/task";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
@@ -21,7 +20,7 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { isUsageCacheIncomplete } from "./cache-status.ts";
 import type { ProviderUsageSummary } from "./data-types.ts";
 import { UsageDetailsController } from "./detail-controller.ts";
-import { createUsageJsonExportTask } from "./export.ts";
+import { createUsageJsonExportRequest } from "./export.ts";
 import {
   currentLocalDate,
   selectUsageSessionKeys,
@@ -35,12 +34,12 @@ import {
   type ProviderUsageSnapshot,
   requestUsageSnapshot,
 } from "./request-usage-snapshot.ts";
+import { createUsageRequest } from "./request.ts";
 import {
   DEFAULT_VISIBLE_COLUMNS,
   type SessionLogRole,
   type UsageProps,
   type UsageRouteData,
-  type UsageTaskValue,
 } from "./types.ts";
 import { renderUsage } from "./view.ts";
 
@@ -92,9 +91,6 @@ class UsagePage extends OpenClawLightDomElement {
 
   private dateDebounceTimer: number | null = null;
   private queryDebounceTimer: number | null = null;
-  // Invalidation runs the Task with a null client to supersede stale completions.
-  // Track real gateway work separately so that no-op runs cannot block reconnect retries.
-  private usageTaskActiveClient: GatewayBrowserClient | null = null;
   // The client survives transport reconnects, so retry budgets need a separate epoch.
   private connectionEpoch: object = {};
   private routeDataInitialized = false;
@@ -115,10 +111,9 @@ class UsagePage extends OpenClawLightDomElement {
         return;
       }
       this.refreshPolicy.interrupt();
-      this.usageTaskActiveClient = null;
-      void this.usageTask.run(this.usageTaskArgs(null));
+      this.usageRequest.cancel();
       this.details.cancel();
-      void this.usageExportTask.run([null]);
+      this.usageExportRequest.cancel();
     },
     onSnapshot: (change) => this.handleGatewaySnapshot(change),
     onPageActivation: () => this.refreshPolicy.request("focus"),
@@ -133,41 +128,26 @@ class UsagePage extends OpenClawLightDomElement {
     this.requestUpdate();
   });
 
-  private usageTaskArgs(client = this.gateway.connected ? this.gateway.client : null) {
-    return [
-      client,
-      this.usageLoadStartDate,
-      this.usageLoadEndDate,
-      this.usageScope,
-      this.usageTimeZone,
-      normalizeLowercaseStringOrEmpty(this.usageAgentId ?? "") || null,
-    ] as const;
-  }
-
-  private readonly usageTask = new Task(this, {
-    autoRun: false,
-    args: () => this.usageTaskArgs(),
-    task: async ([client, startDate, endDate, scope, timeZone, normalizedAgentId], { signal }) => {
-      if (!client) {
-        return initialState;
-      }
-      if (this.routeDataEnabled) {
-        return initialState;
-      }
+  private readonly usageRequest = createUsageRequest(this, {
+    task: async (client: GatewayBrowserClient, { signal }) => {
       this.refreshPolicy.beginLoad();
       const epoch = this.connectionEpoch;
-      const agentId = normalizedAgentId || undefined;
       return {
         epoch,
         snapshot: await requestUsageSnapshot(
           client,
-          { startDate, endDate, agentId, scope, timeZone },
+          {
+            startDate: this.usageLoadStartDate,
+            endDate: this.usageLoadEndDate,
+            scope: this.usageScope,
+            timeZone: this.usageTimeZone,
+            agentId: normalizeLowercaseStringOrEmpty(this.usageAgentId ?? "") || undefined,
+          },
           signal,
         ),
-      } satisfies UsageTaskValue;
+      };
     },
     onComplete: (value) => {
-      this.usageTaskActiveClient = null;
       const snapshot = value.snapshot;
       if (snapshot.ok) {
         this.usageResult = snapshot.value.result;
@@ -189,14 +169,13 @@ class UsagePage extends OpenClawLightDomElement {
       this.refreshPolicy.flushPending();
     },
     onError: (error) => {
-      this.usageTaskActiveClient = null;
       this.applyUsageError(error);
       this.applyUsageLoadState({ state: "pending" }, this.connectionEpoch, null);
       this.refreshPolicy.flushPending();
     },
   });
 
-  private readonly usageExportTask = createUsageJsonExportTask(this, this.gateway, () => ({
+  private readonly usageExportRequest = createUsageJsonExportRequest(this, this.gateway, () => ({
     startDate: this.usageLoadStartDate,
     endDate: this.usageLoadEndDate,
     scope: this.usageScope,
@@ -238,10 +217,9 @@ class UsagePage extends OpenClawLightDomElement {
     this.clearDateDebounce();
     this.clearQueryDebounce();
     this.refreshPolicy.dispose();
-    this.usageTaskActiveClient = null;
-    void this.usageTask.run(this.usageTaskArgs(null));
+    this.usageRequest.cancel();
     this.details.cancel();
-    void this.usageExportTask.run([null]);
+    this.usageExportRequest.cancel();
     super.disconnectedCallback();
   }
 
@@ -295,8 +273,7 @@ class UsagePage extends OpenClawLightDomElement {
 
   private resetForClientChange() {
     this.clearDateDebounce();
-    this.usageTaskActiveClient = null;
-    void this.usageTask.run(this.usageTaskArgs(null));
+    this.usageRequest.cancel();
     if (this.routeDataInitialized) {
       this.routeDataEnabled = false;
     }
@@ -359,7 +336,7 @@ class UsagePage extends OpenClawLightDomElement {
   }
 
   private get usageLoading(): boolean {
-    return !this.routeDataInitialized || this.usageTaskActiveClient !== null;
+    return !this.routeDataInitialized || this.usageRequest.pending;
   }
 
   private loadUsage(): Promise<void> {
@@ -368,14 +345,13 @@ class UsagePage extends OpenClawLightDomElement {
       this.refreshPolicy.markLoadDeferred();
       return Promise.resolve();
     }
-    // Filter changes must supersede active work; Task.run fences the old result
+    // Filter changes must supersede active work; the request fences the old result
     // so it cannot publish under the newly rendered query controls.
     this.routeDataEnabled = false;
     this.usageLoadStartDate = this.usageStartDate;
     this.usageLoadEndDate = this.usageEndDate;
     this.usageError = null;
-    this.usageTaskActiveClient = client;
-    return this.usageTask.run();
+    return this.usageRequest.run(client);
   }
 
   private clearSelections() {
@@ -391,7 +367,7 @@ class UsagePage extends OpenClawLightDomElement {
   }
 
   private clearSelectionsAndDetails() {
-    void this.usageExportTask.run([null]);
+    this.usageExportRequest.cancel();
     this.clearSelections();
     this.clearDetails();
   }
@@ -465,7 +441,7 @@ class UsagePage extends OpenClawLightDomElement {
     const props: UsageProps = {
       data: {
         loading: this.usageLoading,
-        exporting: this.usageExportTask.status === TaskStatus.PENDING,
+        exporting: this.usageExportRequest.pending,
         error: this.usageError,
         sessions: this.usageResult?.sessions ?? [],
         agents:
@@ -603,7 +579,7 @@ class UsagePage extends OpenClawLightDomElement {
         },
         display: {
           onExportJson: (data) => {
-            void this.usageExportTask.run([data]);
+            void this.usageExportRequest.run(data);
           },
           onChartModeChange: (mode) => (this.usageChartMode = mode),
           onDailyChartModeChange: (mode) => (this.usageDailyChartMode = mode),

@@ -10,7 +10,7 @@ import { runCodeModeScriptHeadless, type CodeModeHeadlessResult } from "../agent
 import { clearToolSearchCatalog } from "../agents/tool-search.js";
 import { jsonResult, type AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createCronScriptRuntime } from "./trigger-script.js";
+import { createCronScriptRuntimeFixture as createCronScriptRuntime } from "./trigger-script.test-helpers.js";
 
 type EvaluatorDeps = Parameters<typeof createCronScriptRuntime>[0];
 type HeadlessParams = Parameters<NonNullable<EvaluatorDeps["runHeadless"]>>[0];
@@ -46,13 +46,7 @@ function createPreparedRuntime(config: OpenClawConfig) {
   );
   return {
     tools: [tool],
-    ctx: {
-      config,
-      runtimeConfig: config,
-      agentId: "main",
-      sessionKey: "cron:test:trigger",
-    },
-    hookContext: { config, agentId: "main", sessionKey: "cron:test:trigger" },
+    context: { config, agentId: "main", sessionKey: "cron:test:trigger" },
   };
 }
 

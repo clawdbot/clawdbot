@@ -29,6 +29,28 @@ import {
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 const execFileAsync = promisify(execFile);
 const parentKey = "agent:main:dashboard:project-parent";
+const parentCreateParams = {
+  key: parentKey,
+  agentId: "main",
+  worktree: true,
+  worktreeName: "parent",
+  worktreeBaseRef: "main",
+};
+const adminRequest = {
+  client: {
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: {
+        id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+        version: "test",
+        platform: "web",
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+      },
+      scopes: ["operator.admin"],
+    },
+  },
+};
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let repository: string;
 let storePath: string;
@@ -107,8 +129,8 @@ beforeEach(async () => {
   ({ storePath } = await createSessionStoreDir());
   const created = await directSessionReq<CreatedWorktreeSession>(
     "sessions.create",
-    { key: parentKey, agentId: "main", worktree: true, worktreeName: "parent", cwd: repository },
-    { client: { connect: { scopes: ["operator.admin"] } } as never },
+    { ...parentCreateParams, cwd: repository },
+    adminRequest,
   );
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
   parent = created.payload!.entry;
@@ -131,6 +153,63 @@ test("trusted same-agent worktree spawns inherit the parent's selected project",
   const childPath = created.payload!.worktree.path;
   expect(await fs.readFile(path.join(childPath, "README.md"), "utf8")).toBe("selected-project\n");
   await expect(fs.stat(path.join(childPath, "setup-marker.txt"))).rejects.toThrow();
+});
+
+test("keyed worktree creation reuses its recorded base after reopening the registry", async () => {
+  const params = { ...parentCreateParams, cwd: repository };
+  closeOpenClawStateDatabaseForTest();
+  const reused = await directSessionReq<CreatedWorktreeSession>(
+    "sessions.create",
+    params,
+    adminRequest,
+  );
+  expect(reused.ok, JSON.stringify(reused.error)).toBe(true);
+  expect(reused.payload?.entry.sessionId).toBe(parent.sessionId);
+  expect(reused.payload?.worktree.id).toBe(parent.worktree?.id);
+  const recorded = managedWorktrees.findLiveByOwner("session", parentKey);
+  expect(recorded?.baseRef).toBe("main");
+
+  for (const changed of [{ worktreeBaseRef: "HEAD" }, { worktreeName: "other-name" }]) {
+    const rejected = await directSessionReq(
+      "sessions.create",
+      { ...params, ...changed },
+      adminRequest,
+    );
+    expect(rejected).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: expect.stringContaining("already bound") },
+    });
+  }
+  const otherRepository = await createRepository("other-replay-project");
+  const wrongRepository = await directSessionReq(
+    "sessions.create",
+    { ...params, cwd: otherRepository },
+    adminRequest,
+  );
+  expect(wrongRepository).toMatchObject({
+    ok: false,
+    error: { message: "session worktree belongs to a different repository" },
+  });
+  const foreign = await managedWorktrees.create({
+    repoRoot: repository,
+    baseRef: "main",
+    ownerKind: "manual",
+    name: "foreign-owner",
+    runSetupScript: false,
+  });
+  replaceSessionEntrySync(
+    { agentId: "main", sessionKey: parentKey, storePath },
+    {
+      ...parent,
+      worktree: { id: foreign.id, branch: foreign.branch, repoRoot: foreign.repoRoot },
+    },
+  );
+  const wrongOwner = await directSessionReq("sessions.create", params, adminRequest);
+  expect(wrongOwner).toMatchObject({
+    ok: false,
+    error: { message: "session worktree binding has a different owner" },
+  });
+  expect(managedWorktrees.findLiveByOwner("session", parentKey)).toEqual(recorded);
 });
 
 test.each(["cwd", "project", "cross-agent"] as const)(

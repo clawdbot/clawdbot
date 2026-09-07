@@ -1,22 +1,26 @@
 ---
-summary: "Adds the iMessage channel surface for sending and receiving OpenClaw messages."
+summary: "OpenClaw iMessage channel plugin using imsg on a signed-in Mac."
 read_when:
   - You are installing, configuring, or auditing the imessage plugin
-title: "iMessage plugin"
+title: "iMessage plugin reference"
 ---
 
-# iMessage plugin
+<!-- Generated file. Do not edit by hand.
+Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
+between the openclaw-plugin-reference:manual-start and
+openclaw-plugin-reference:manual-end comment markers. -->
 
-Adds the iMessage channel surface for sending and receiving OpenClaw messages.
+OpenClaw iMessage channel plugin using imsg on a signed-in Mac.
 
 ## Distribution
 
 - Package: `@openclaw/imessage`
-- Install route: npm; ClawHub: `clawhub:@openclaw/imessage`
+- Install route: npm or ClawHub: `clawhub:@openclaw/imessage`
 
 ## Surface
 
-channels: `imessage`; skills
+- Channels: `imessage`
+- Skills
 
 ## Related docs
 

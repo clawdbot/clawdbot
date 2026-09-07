@@ -38,15 +38,13 @@ const browserClientMocks = vi.hoisted(() => ({
   browserSystemProfiles: vi.fn(
     async (..._args: unknown[]): Promise<Array<Record<string, unknown>>> => [],
   ),
-  browserSnapshot: vi.fn(
-    async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
-      ok: true,
-      format: "ai",
-      targetId: "t1",
-      url: "https://example.com",
-      snapshot: "ok",
-    }),
-  ),
+  browserSnapshot: vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
+    ok: true,
+    format: "ai",
+    targetId: "t1",
+    url: "https://example.com",
+    snapshot: "ok",
+  })),
   browserStart: vi.fn(async (..._args: unknown[]) => ({})),
   browserStatus: vi.fn(async (..._args: unknown[]) => ({
     ok: true,
@@ -82,28 +80,22 @@ const browserActionsMocks = vi.hoisted(() => ({
       },
     ],
   })),
-  browserRequests: vi.fn(
-    async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
-      ok: true,
-      targetId: "t1",
-      requests: [],
-    }),
-  ),
-  browserErrors: vi.fn(
-    async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
-      ok: true,
-      targetId: "t1",
-      errors: [],
-    }),
-  ),
-  browserPageText: vi.fn(
-    async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
-      ok: true,
-      targetId: "t1",
-      text: "Page prose",
-      truncated: false,
-    }),
-  ),
+  browserRequests: vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
+    ok: true,
+    targetId: "t1",
+    requests: [],
+  })),
+  browserErrors: vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
+    ok: true,
+    targetId: "t1",
+    errors: [],
+  })),
+  browserPageText: vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
+    ok: true,
+    targetId: "t1",
+    text: "Page prose",
+    truncated: false,
+  })),
   browserEmulateSetting: vi.fn(async (..._args: unknown[]) => ({ ok: true, targetId: "t1" })),
   browserNavigate: vi.fn(async (): Promise<Record<string, unknown>> => ({ ok: true })),
   browserDownload: vi.fn(async () => ({
@@ -116,13 +108,11 @@ const browserActionsMocks = vi.hoisted(() => ({
     },
   })),
   browserPdfSave: vi.fn(async () => ({ ok: true, path: "/tmp/test.pdf" })),
-  browserScreenshotAction: vi.fn(
-    async (..._args: unknown[]): Promise<BrowserActionPathResult> => ({
-      ok: true,
-      path: "/tmp/test.png",
-      targetId: "tab-1",
-    }),
-  ),
+  browserScreenshotAction: vi.fn(async (..._args: unknown[]): Promise<BrowserActionPathResult> => ({
+    ok: true,
+    path: "/tmp/test.png",
+    targetId: "tab-1",
+  })),
   browserWaitForDownload: vi.fn(async () => ({
     ok: true,
     targetId: "tab-1",
@@ -183,12 +173,10 @@ const nodesUtilsMocks = vi.hoisted(() => ({
 
 const gatewayMocks = vi.hoisted(() => ({
   hasGatewayToolRoutingContext: vi.fn(() => true),
-  callGatewayTool: vi.fn(
-    async (): Promise<Record<string, unknown>> => ({
-      ok: true,
-      payload: { result: { ok: true, running: true } },
-    }),
-  ),
+  callGatewayTool: vi.fn(async (): Promise<Record<string, unknown>> => ({
+    ok: true,
+    payload: { result: { ok: true, running: true } },
+  })),
 }));
 
 const configMocks = vi.hoisted(() => ({
@@ -229,13 +217,11 @@ const sessionTabRegistryMocks = vi.hoisted(() => ({
 vi.mock("./browser/session-tab-registry.js", () => sessionTabRegistryMocks);
 
 const toolCommonMocks = vi.hoisted(() => ({
-  fetchBrowserJson: vi.fn(
-    async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
-      ok: true,
-      running: true,
-      source: "gateway-host",
-    }),
-  ),
+  fetchBrowserJson: vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
+    ok: true,
+    running: true,
+    source: "gateway-host",
+  })),
   imageResultFromFile: vi.fn<typeof import("./sdk-setup-tools.js").imageResultFromFile>(),
   describeImageFile: vi.fn(async () => ({ text: undefined, decision: { outcome: "skipped" } })),
   normalizeBrowserScreenshot: vi.fn(async (buffer: Buffer) => ({ buffer })),
@@ -1107,11 +1093,16 @@ describe("browser tool snapshot maxChars", () => {
     );
   });
 
-  it("uses config snapshot defaults when mode is not provided", async () => {
+  it("updates snapshot defaults for retained tools when mode is not provided", async () => {
+    const tool = createBrowserTool();
+    configMocks.loadConfig.mockReturnValue({ browser: {} });
+    await tool.execute?.("call-before-reload", { action: "snapshot", target: "host" });
+    expect(
+      lastMockCallArg<{ mode?: string }>(browserClientMocks.browserSnapshot, 1).mode,
+    ).toBeUndefined();
     configMocks.loadConfig.mockReturnValue({
       browser: { snapshotDefaults: { mode: "efficient" } },
     });
-    const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "snapshot", target: "host" });
 
     const opts = lastMockCallArg<{ mode?: string }>(browserClientMocks.browserSnapshot, 1);

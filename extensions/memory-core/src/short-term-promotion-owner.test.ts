@@ -1,21 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { buildPromotionRecallAnnotations } from "./short-term-promotion-metadata.js";
 import {
   applyShortTermPromotions,
   rankShortTermPromotionCandidates,
   recordShortTermRecalls,
-  type PromotionCandidate,
 } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 const logger = { info: vi.fn(), warn: vi.fn() };
-
-function resultEntryFor(promoted: PromotionCandidate): string {
-  return `- ${promoted.snippet} Source: ${promoted.path}#L${promoted.startLine}-L${promoted.endLine} ${buildPromotionRecallAnnotations(promoted)}`;
-}
 
 async function recordConsolidationRecall(workspaceDir: string) {
   await recordShortTermRecalls({
@@ -58,10 +52,8 @@ describe("short-term promotion consolidation ownership", () => {
     if (!promoted) {
       throw new Error("expected ranked candidate");
     }
-    const resultEntry = resultEntryFor(promoted);
     const output = JSON.stringify({
-      memory: `# Memory\n\n${resultEntry}\n`,
-      operations: [{ candidateKey: promoted.key, action: "added", resultEntry, priorEntries: [] }],
+      operations: [{ candidateKey: promoted.key, action: "added", priorEntries: [] }],
     });
     const subagent = { complete: vi.fn(async () => ({ text: output })) };
 

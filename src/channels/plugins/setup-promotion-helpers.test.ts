@@ -2,27 +2,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getLoadedChannelPluginMock = vi.hoisted(() => vi.fn());
-const getBundledChannelPluginMock = vi.hoisted(() => vi.fn());
-const getBundledChannelSetupPluginMock = vi.hoisted(() => vi.fn());
-const hasBundledChannelPackageSetupFeatureMock = vi.hoisted(() => vi.fn());
 const resolveBundledSurfaceMock = vi.hoisted(() => vi.fn());
-const loadManifestRegistryMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: loadManifestRegistryMock,
-}));
-
-vi.mock("./bundled.js", () => ({
-  getBundledChannelPlugin: getBundledChannelPluginMock,
-  getBundledChannelSetupPlugin: getBundledChannelSetupPluginMock,
-  hasBundledChannelPackageSetupFeature: hasBundledChannelPackageSetupFeatureMock,
-}));
 
 vi.mock("./registry-loaded.js", () => ({
   getLoadedChannelPluginForRead: getLoadedChannelPluginMock,
 }));
 
-import { resolveDiscoveredChannelSetupPromotionSurface } from "./setup-promotion-discovery.js";
 import { resolveSingleAccountPromotion } from "./setup-promotion-helpers.js";
 
 function resolveSingleAccountKeysToMove(
@@ -52,36 +37,8 @@ function valuesFor(keys: readonly string[]): Record<string, string> {
 
 describe("setup promotion helpers", () => {
   beforeEach(() => {
-    getBundledChannelPluginMock.mockReset();
-    getBundledChannelSetupPluginMock.mockReset();
-    hasBundledChannelPackageSetupFeatureMock.mockReset();
     getLoadedChannelPluginMock.mockReset();
     resolveBundledSurfaceMock.mockReset();
-    loadManifestRegistryMock.mockReset().mockReturnValue({ plugins: [] });
-  });
-
-  it("resolves bundled promotion from the setup-only plugin", () => {
-    hasBundledChannelPackageSetupFeatureMock.mockReturnValue(true);
-    getBundledChannelSetupPluginMock.mockReturnValue({
-      setup: { singleAccountKeysToMove: ["customAuth"] },
-    });
-
-    expect(resolveDiscoveredChannelSetupPromotionSurface("demo", {})).toEqual({
-      singleAccountKeysToMove: ["customAuth"],
-    });
-    expect(getBundledChannelSetupPluginMock).toHaveBeenCalledWith("demo");
-    expect(getBundledChannelPluginMock).not.toHaveBeenCalled();
-  });
-
-  it("resolves bundled promotion from a channel-owned setup contract", () => {
-    hasBundledChannelPackageSetupFeatureMock.mockReturnValue(true);
-    getBundledChannelSetupPluginMock.mockReturnValue({
-      setupContract: { singleAccountKeysToMove: ["signalNumber"] },
-    });
-
-    expect(resolveDiscoveredChannelSetupPromotionSurface("signal", {})).toEqual({
-      singleAccountKeysToMove: ["signalNumber"],
-    });
   });
 
   it("resolves generic migration keys without importing plugin runtime", () => {
@@ -99,7 +56,6 @@ describe("setup promotion helpers", () => {
     expect(keys).toEqual(["dmPolicy", "allowFrom", "groupPolicy", "groupAllowFrom"]);
     expect(getLoadedChannelPluginMock).toHaveBeenCalledWith("demo");
     expect(resolveBundledSurfaceMock).not.toHaveBeenCalled();
-    expect(getBundledChannelSetupPluginMock).not.toHaveBeenCalled();
   });
 
   describe.each(["caller", "loaded", "discovered"])(

@@ -110,6 +110,8 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     var progressCardGeneration: UInt64 = 0
     @ObservationIgnored
+    var preparedProgressCardTarget: (session: SessionSnapshot, generation: UInt64, target: OpenClawChatSessionTarget)?
+    @ObservationIgnored
     var lastIssuedProgressCardRequestID: UInt64 = 0
     @ObservationIgnored
     var legacyProgressCardRevision = 0
@@ -424,6 +426,7 @@ public final class OpenClawChatViewModel {
         var pendingRunIDs: Set<String>
         var visibleMessagesByID: [UUID: OpenClawChatMessage]
         var historyMutationGeneration: UInt64
+        var progressCardGeneration: UInt64
         var runOwnershipGeneration: UInt64
         var latestUserTurn: LatestUserTurn?
     }
@@ -904,6 +907,7 @@ extension OpenClawChatViewModel {
         self.isLoading = true
         self.errorText = nil
         self.invalidateSessionMetadataReadiness()
+        self.invalidateProgressCardTarget()
         self.invalidateOutboxBranchReconciliation()
         self.healthOK = false
         clearPendingRuns(reason: nil)
@@ -982,7 +986,10 @@ extension OpenClawChatViewModel {
             guard self.isCurrentBootstrap(context) else { return }
             await self.fetchModels(sessionSnapshot: context.session)
             guard self.isCurrentBootstrap(context) else { return }
-            self.errorText = nil
+            // An optional progress fetch may already have reported a required Gateway update.
+            if self.errorText != OpenClawChatTransportUpgradeMessage.progressCardAgentScope {
+                self.errorText = nil
+            }
         } catch {
             guard self.isCurrentBootstrap(context) else { return }
             self.errorText = error.localizedDescription

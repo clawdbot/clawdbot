@@ -27,6 +27,12 @@ internal object TalkModeGatewayConfigParser {
     // configured only at provider level still routes Android to native Talk.
     val realtime = talk?.get("realtime").asObjectOrNull()
     val realtimeProvider = realtime?.get("provider").asStringOrNull()
+    val realtimeClientHints =
+      config
+        ?.get("clientHints")
+        .asObjectOrNull()
+        ?.get("realtime")
+        .asObjectOrNull()
     val realtimeModel =
       realtime?.get("model").asStringOrNull()
         ?: realtimeProvider?.let { provider ->
@@ -44,7 +50,9 @@ internal object TalkModeGatewayConfigParser {
       speechLocale = normalizeSpeechLocaleTag(talk?.get("speechLocale").asStringOrNull()),
       interruptOnSpeech = talk?.get("interruptOnSpeech").asBooleanOrNull(),
       silenceTimeoutMs = resolvedSilenceTimeoutMs(talk),
-      realtimeRelayModelSupported = isAndroidRealtimeRelayModelSupported(realtimeModel),
+      realtimeRelayModelSupported =
+        realtimeClientHints?.get("gatewayRelaySupported").asBooleanOrNull()
+          ?: isAndroidRealtimeRelayModelSupported(realtimeModel),
     )
   }
 

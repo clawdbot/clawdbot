@@ -1,4 +1,3 @@
-// Discord plugin module implements handle action.guild admin behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   readNonNegativeIntegerParam,
@@ -425,6 +424,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   if (action === "thread-reply") {
     const content = readStringParam(actionParams, "message", {
       required: true,
+      trim: false,
     });
     const mediaUrl =
       readStringParam(actionParams, "media", { trim: false }) ??

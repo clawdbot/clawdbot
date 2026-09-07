@@ -92,10 +92,21 @@ describe("detectMarkerLineWithGateway", () => {
     expect(detectMarkerLineWithGateway(CLAWDBOT_GATEWAY_CONTENTS)).toBe("clawdbot");
   });
 
-  it("handles line continuations — marker and gateway split across physical lines", () => {
-    const contents = `[Service]\nExecStart=/usr/bin/node /opt/openclaw/dist/entry.js \\\n  gateway --port 18789\n`;
-    expect(detectMarkerLineWithGateway(contents)).toBe("openclaw");
+  it.each([
+    "ExecStart=/usr/bin/openclaw \\\n  gateway",
+    "# comment \\\nExecStart=/usr/bin/openclaw gateway",
+    "; comment \\\nExecStart=/usr/bin/openclaw gateway",
+    "ExecStart=/usr/bin/openclaw \\\n# comment\n  gateway",
+  ])("detects commands through native comments and continuations: %s", (command) => {
+    expect(detectMarkerLineWithGateway(`[Service]\n${command}\n`)).toBe("openclaw");
   });
+
+  it.each(["After", "Requires", "Description", "Environment"])(
+    "ignores gateway mentions in %s instead of an executable directive",
+    (key) => {
+      expect(detectMarkerLineWithGateway(`${key}=openclaw gateway\n`)).toBeNull();
+    },
+  );
 
   it("ignores dependency-only references to the gateway unit", () => {
     expect(detectMarkerLineWithGateway(COMPANION_SERVICE_CONTENTS)).toBeNull();
@@ -341,14 +352,17 @@ describe("findExtraGatewayServices (linux / scanSystemdDir) — real filesystem"
     },
   );
 
-  it.skipIf(!isLinux)(
-    "reports custom-named gateway units that execute openclaw gateway",
-    async () => {
+  it.skipIf(!isLinux).each(["", "# comment \\\n", "; comment \\\n"])(
+    "reports custom-named gateway units after a physical comment: %j",
+    async (comment) => {
       const tmpHome = tempDirs.make("openclaw-test-", os.tmpdir());
       const systemdDir = path.join(tmpHome, ".config", "systemd", "user");
       const unitPath = path.join(systemdDir, "custom-openclaw.service");
       await fs.mkdir(systemdDir, { recursive: true });
-      await fs.writeFile(unitPath, CUSTOM_OPENCLAW_GATEWAY_CONTENTS);
+      await fs.writeFile(
+        unitPath,
+        CUSTOM_OPENCLAW_GATEWAY_CONTENTS.replace("ExecStart=", `${comment}ExecStart=`),
+      );
       const result = await findExtraGatewayServices({ HOME: tmpHome });
       expect(result).toEqual([
         {

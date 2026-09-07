@@ -3,6 +3,17 @@ import { describe, expect, it } from "vitest";
 import { normalizeLegacyDeliveryInput } from "./legacy-delivery.js";
 
 describe("legacy delivery threadId support", () => {
+  it("preserves false and zero legacy delivery hints", () => {
+    expect(
+      normalizeLegacyDeliveryInput({
+        payload: { deliver: false, bestEffortDeliver: false, threadId: 0 },
+      }),
+    ).toEqual({
+      delivery: { mode: "none", threadId: "0", bestEffort: false },
+      mutated: true,
+    });
+  });
+
   it("treats threadId as a legacy delivery hint", () => {
     expect(normalizeLegacyDeliveryInput({ payload: { threadId: "42" } })).toEqual({
       delivery: { mode: "announce", threadId: "42" },

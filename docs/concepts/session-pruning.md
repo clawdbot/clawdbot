@@ -42,13 +42,13 @@ not gate this path.
 
 OpenClaw derives the request parameters without adding config options:
 
-| Parameter           | Value                                                                                    |
-| ------------------- | ---------------------------------------------------------------------------------------- |
-| `trigger`           | Input tokens: `max(50000, floor(contextWindow * 0.3))`                                   |
-| `keep`              | The 3 most recent tool uses and their results                                            |
-| `clear_at_least`    | Input tokens: `max(12500, floor(contextWindow * 0.05))`                                  |
-| `exclude_tools`     | Names excluded by `tools.deny`, plus exposed tools outside `tools.allow` when configured |
-| `clear_tool_inputs` | `false`, preserving tool-call arguments                                                  |
+| Parameter           | Value                                                                                               |
+| ------------------- | --------------------------------------------------------------------------------------------------- |
+| `trigger`           | Input tokens: `max(50000, floor(contextWindow * 0.3))`                                              |
+| `keep`              | The 3 most recent tool uses and their results                                                       |
+| `clear_at_least`    | Input tokens: `max(12500, floor(contextWindow * 0.05))`                                             |
+| `exclude_tools`     | Current and historical tool names excluded by `tools.deny` or outside `tools.allow` when configured |
+| `clear_tool_inputs` | `false`, preserving tool-call arguments                                                             |
 
 The request includes the `clear_tool_uses_20250919` edit and
 `context-management-2025-06-27` beta header. If server-side compaction is enabled,
@@ -70,7 +70,7 @@ Amazon Bedrock, Google, Microsoft Foundry, OAuth, proxies, Vertex, and other
 cache-TTL-eligible routes keep client-side pruning. New pruning rounds are gated
 on both a time check and a context-size check:
 
-1. Wait for the cache TTL to expire (default 5 minutes when set manually; see [Smart defaults](#smart-defaults) for the Anthropic auto-default). Before the TTL elapses, no new pruning occurs; existing projections still replay unchanged.
+1. Wait for the cache TTL to expire (default 5 minutes when set manually; see [Smart defaults](#smart-defaults) for the Anthropic auto-default). Each successful model request refreshes the in-memory clock to its request start time, including tool-loop requests before turn settlement. Failed requests do not refresh it. Before the TTL elapses, no new pruning occurs; existing projections still replay unchanged.
 2. Once the TTL has elapsed, estimate total context size against the model's context window. Below roughly 30% usage, pruning is skipped and the TTL clock keeps running.
 3. **Soft-trim** oversized tool results: results over 4,000 characters keep their first and last 1,500 characters with `...` in between.
 4. If context usage is still at or above roughly 50% and at least 50,000 characters of prunable tool content remain, **hard-clear** those results: replace their content with a placeholder (default `[Old tool result content cleared]`, configurable via `agents.defaults.contextPruning.hardClear.placeholder`; set `hardClear.enabled: false` to skip this step).
@@ -91,6 +91,7 @@ Only `toolResult` messages are eligible; normal conversation text is left alone.
 OpenClaw also builds a separate idempotent replay view for sessions that persist raw image blocks or prompt-hydration media markers in history.
 
 - It preserves the **3 most recent completed turns** byte-for-byte so prompt cache prefixes for recent follow-ups stay stable. This count includes all completed turns, not just image-bearing ones, so text-only turns consume the window too.
+- The window advances only when a new user turn begins, never within a tool loop.
 - In the replay view, older already-processed image blocks from `user` or `toolResult` history are replaced with `[image data removed - already processed by model]`.
 - Older textual media references such as `[media attached: ...]`, `[Image: source: ...]`, and `media://inbound/...` are replaced with `[media reference removed - already processed by model]`. Current-turn attachment markers stay intact so vision models can still hydrate fresh images.
 - The raw session transcript is not rewritten, so history viewers can still render the original message entries and their images.

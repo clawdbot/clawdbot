@@ -179,6 +179,8 @@ on:
         required: false
         default: openclaw@beta
         type: string
+      target_context_ref:
+        type: string
       package_url:
         description: HTTPS .tgz URL when source=url or source=trusted-url
         required: false
@@ -642,6 +644,7 @@ jobs:
           PACKAGE_SOURCE_SHA: ${{ inputs.package_source_sha }}
           PACKAGE_VERSION: ${{ inputs.package_version }}
           PREPUBLISH_PLUGIN_REGISTRY_JSON: ${{ steps.registry_input.outputs.json }}
+          PUBLISHED_ARTIFACT: ${{ fromJSON(inputs.candidate_artifact_json || '{}').packagePublished == true }}
           TELEGRAM_MODE: ${{ inputs.telegram_mode }}
           TRUSTED_SOURCE_ID: ${{ inputs.trusted_source_id }}
           OPENCLAW_TRUSTED_PACKAGE_TOKEN: ${{ secrets.OPENCLAW_TRUSTED_PACKAGE_TOKEN }}
@@ -665,6 +668,7 @@ jobs:
 
           set --
           if [[ -z "$PREPUBLISH_PLUGIN_REGISTRY_JSON" &&
+                "${PUBLISHED_ARTIFACT:-false}" != "true" &&
                 "$TELEGRAM_MODE" != "none" &&
                 ("$SOURCE" == "ref" || "$SOURCE" == "artifact") ]]; then
             set -- \
@@ -790,29 +794,35 @@ jobs:
       - name: Resolve published upgrade survivor baselines
         id: upgrade_survivor_baselines
         env:
+          CANDIDATE_VERSION: ${{ steps.resolve.outputs.package_version }}
+          CANDIDATE_PUBLISHED: ${{ inputs.source == 'npm' || fromJSON(inputs.candidate_artifact_json || '{}').packagePublished == true }}
           FALLBACK_BASELINE: ${{ inputs.published_upgrade_survivor_baseline }}
           REQUESTED_BASELINES: ${{ inputs.published_upgrade_survivor_baselines }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           fallback_baseline="$FALLBACK_BASELINE"
+          npm_versions_json=""
+          if [[ "$fallback_baseline" == "openclaw@latest" ||
+                "$REQUESTED_BASELINES" == *"release-history"* ||
+                "$REQUESTED_BASELINES" == *"all-since-"* ||
+                "$REQUESTED_BASELINES" == *"last-stable-"* ]]; then
+            npm_versions_json="$RUNNER_TEMP/openclaw-npm-versions.json"
+            npm view openclaw versions --json --silent --prefer-online > "$npm_versions_json"
+          fi
           if [[ "$fallback_baseline" == "openclaw@latest" ]]; then
-            fallback_version="$(npm view openclaw@latest version --prefer-online)"
-            [[ "$fallback_version" =~ ^[0-9]{4}\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] || {
-              echo "Could not resolve openclaw@latest to an exact release version." >&2
-              exit 1
-            }
-            fallback_baseline="openclaw@${fallback_version}"
+            fallback_baseline="$(node scripts/lib/release-upgrade-baseline.mjs \
+              --candidate-version "$CANDIDATE_VERSION" \
+              --candidate-published "$CANDIDATE_PUBLISHED" \
+              --target-context-ref "$TARGET_CONTEXT_REF" \
+              --versions-json "$npm_versions_json")"
           fi
           releases_json=""
-          npm_versions_json=""
           if [[ "$REQUESTED_BASELINES" == *"release-history"* || "$REQUESTED_BASELINES" == *"all-since-"* || "$REQUESTED_BASELINES" == *"last-stable-"* ]]; then
             releases_json=".artifacts/package-candidate-input/openclaw-releases.json"
-            npm_versions_json=".artifacts/package-candidate-input/openclaw-npm-versions.json"
-            mkdir -p "$(dirname "$releases_json")"
             gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,publishedAt,isPrerelease > "$releases_json"
-            npm view openclaw versions --json > "$npm_versions_json"
           fi
           args=(
             --requested "$REQUESTED_BASELINES"
@@ -1094,7 +1104,7 @@ jobs:
       package_sha256: ${{ needs.resolve_package.outputs.package_sha256 }}
       package_source_sha: ${{ needs.resolve_package.outputs.package_source_sha }}
       package_version: ${{ needs.resolve_package.outputs.package_version }}
-      enable_prepublish_plugin_registry: ${{ contains(fromJSON('["artifact","ref"]'), inputs.source) }}
+      enable_prepublish_plugin_registry: ${{ contains(fromJSON('["artifact","ref"]'), inputs.source) && fromJSON(inputs.candidate_artifact_json || '{}').packagePublished != true }}
       prepublish_plugin_registry_artifact_name: ${{ startsWith(fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactName || '', 'docker-e2e-prepublish-plugin-registry-') && fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactName || '' }}
       prepublish_plugin_registry_artifact_id: ${{ startsWith(fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactName || '', 'docker-e2e-prepublish-plugin-registry-') && fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactId || '' }}
       prepublish_plugin_registry_artifact_digest: ${{ startsWith(fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactName || '', 'docker-e2e-prepublish-plugin-registry-') && fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactDigest || '' }}

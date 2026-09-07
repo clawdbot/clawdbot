@@ -199,7 +199,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "openai",
       fallback: "fallback-provider",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
@@ -255,7 +254,6 @@ describe("memory index", () => {
         provider: "openai",
         fallback: "fallback-provider",
         cacheEnabled: true,
-        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
       }),
       "cli",
     );

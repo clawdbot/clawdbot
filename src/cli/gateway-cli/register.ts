@@ -393,7 +393,7 @@ function resolveSupportExportRpcOptions(
 }
 
 function parseOptionalPositiveIntegerOption(raw: unknown, label: string): number | undefined {
-  if (raw === undefined || raw === null || raw === "") {
+  if (raw === undefined) {
     return undefined;
   }
   const parsed = parseStrictPositiveInteger(raw);
@@ -831,15 +831,9 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
         async () => {
           const [
             { readSourceConfigBestEffort },
-            { discoverGatewayBeacons },
+            { discoverGatewayBeacons, resolveGatewayDiscoveryEndpoint },
             { resolveWideAreaDiscoveryDomain },
-            {
-              dedupeBeacons,
-              parseDiscoverTimeoutMs,
-              pickBeaconHost,
-              pickGatewayPort,
-              renderBeaconLines,
-            },
+            { dedupeBeacons, parseDiscoverTimeoutMs, renderBeaconLines },
             { withProgress },
           ] = await Promise.all([
             loadConfigModule(),
@@ -869,12 +863,10 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
           );
 
           if (opts.json) {
-            const enriched = deduped.map((b) => {
-              const host = pickBeaconHost(b);
-              const port = pickGatewayPort(b);
-              const scheme = b.gatewayTls === true ? "wss" : "ws";
-              return { ...b, wsUrl: host ? `${scheme}://${host}:${port}` : null };
-            });
+            const enriched = deduped.map((beacon) => ({
+              ...beacon,
+              wsUrl: resolveGatewayDiscoveryEndpoint(beacon)?.wsUrl ?? null,
+            }));
             defaultRuntime.writeJson({
               timeoutMs,
               domains,

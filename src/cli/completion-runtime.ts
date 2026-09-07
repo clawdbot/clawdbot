@@ -12,6 +12,7 @@ import { isErrno } from "../infra/errors.js";
 import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
 import { pathExists } from "../utils.js";
 import { publishOutputFileAtomically } from "./output-file.runtime.js";
+import { quotePowerShellArg } from "./quote-cli-arg.js";
 
 export const COMPLETION_SHELLS = ["zsh", "bash", "powershell", "fish"] as const;
 export type CompletionShell = (typeof COMPLETION_SHELLS)[number];
@@ -111,7 +112,7 @@ export async function completionCacheExists(
 
 function quoteCompletionPath(shell: CompletionShell, value: string): string {
   if (shell === "powershell") {
-    return `'${value.replace(/'/g, "''")}'`;
+    return quotePowerShellArg(value);
   }
   // Single quotes also keep pasted reload hints literal when interactive history expansion is on.
   const escaped =
@@ -141,16 +142,16 @@ function appendCompletionProfilePath(
   return `${nativeDirectory}${separator}${segments.join(pathApi.sep)}`;
 }
 
-/** Formats the command users can run to reload the shell profile after installation. */
-export function formatCompletionReloadCommand(shell: CompletionShell, profilePath: string): string {
+/** Formats a current-shell command to load a profile or cached completion script. */
+export function formatCompletionReloadCommand(shell: CompletionShell, scriptPath: string): string {
   if (shell === "powershell") {
-    return `. ${quoteCompletionPath(shell, profilePath)}`;
+    return `. ${quoteCompletionPath(shell, scriptPath)}`;
   }
-  if (/^[a-zA-Z0-9_./~+-]+$/u.test(profilePath)) {
-    return `source ${profilePath}`;
+  if (/^[a-zA-Z0-9_./~+-]+$/u.test(scriptPath)) {
+    return `source ${scriptPath}`;
   }
-  const homePrefix = profilePath.startsWith("~/") ? "~/" : "";
-  const value = profilePath.slice(homePrefix.length);
+  const homePrefix = scriptPath.startsWith("~/") ? "~/" : "";
+  const value = scriptPath.slice(homePrefix.length);
   return `source ${homePrefix}${quoteCompletionPath(shell, value)}`;
 }
 
@@ -195,12 +196,20 @@ function isPreviousCompletionSourceLine(
   const sourcePath =
     legacyPath ??
     (quoteShell === "powershell"
-      ? escapedPath.replaceAll("''", "'")
+      ? escapedPath.replace(/(['‘-‛])\1/gu, "$1")
       : quoteShell === "fish"
         ? escapedPath.replace(/\\([\\'])/gu, "$1")
         : escapedPath.replaceAll("'\\''", "'"));
+  // v2026.8.2 escaped only ASCII quotes in PowerShell profiles. Recognize those
+  // owned lines during replacement, while new writes use the complete literal rule.
+  const matchesLegacyPowerShellLiteral =
+    quoteShell === "powershell" && `'${sourcePath.replaceAll("'", "''")}'` === quotedPath;
   // Only our complete literal operand is owned; never consume compound profile commands.
-  if (!legacyPath && quoteCompletionPath(quoteShell, sourcePath) !== quotedPath) {
+  if (
+    !legacyPath &&
+    !matchesLegacyPowerShellLiteral &&
+    quoteCompletionPath(quoteShell, sourcePath) !== quotedPath
+  ) {
     return false;
   }
   const sourcePaths = sourcePath.includes("\\") ? path.win32 : path;

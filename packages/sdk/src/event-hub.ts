@@ -66,7 +66,8 @@ export class EventHub<T> {
   stream(filter?: (event: T) => boolean, options: EventStreamOptions = {}): AsyncIterable<T> {
     return {
       [Symbol.asyncIterator]: (): AsyncIterator<T> => {
-        const queue: T[] = options.replay ? this.snapshot(filter) : [];
+        let queue: (T | undefined)[] = options.replay ? this.snapshot(filter) : [];
+        let queueHead = 0;
         let stopped = false;
         let streamError: unknown;
         let hasStreamError = false;
@@ -93,6 +94,8 @@ export class EventHub<T> {
             return;
           }
           stopped = true;
+          // Iterator retirement discards its backlog; hub close alone still permits draining.
+          queue.length = 0;
           this.listeners.delete(listener);
           finishPendingReads();
         };
@@ -106,7 +109,8 @@ export class EventHub<T> {
             cleanup();
             return;
           }
-          if (!matches) {
+          // A filter can synchronously return this iterator before publication resumes.
+          if (!matches || stopped) {
             return;
           }
           const pending = pendingReads.shift();
@@ -131,8 +135,16 @@ export class EventHub<T> {
               }
               return { done: true, value: undefined };
             }
-            if (queue.length > 0) {
-              return { done: false, value: queue.shift() as T };
+            if (queueHead < queue.length) {
+              const value = queue[queueHead] as T;
+              // Release consumed payloads immediately; lagging consumers compact only
+              // after a substantial prefix reaches half the buffer, amortizing dequeue.
+              queue[queueHead++] = undefined;
+              if (queueHead >= 1024 && queueHead * 2 >= queue.length) {
+                queue = queue.slice(queueHead);
+                queueHead = 0;
+              }
+              return { done: false, value };
             }
             if (!this.closed) {
               return await new Promise<IteratorResult<T>>((resolve, reject) => {

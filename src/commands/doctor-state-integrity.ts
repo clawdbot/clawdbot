@@ -485,6 +485,32 @@ function tryReadLinuxMountInfo(): string | null {
   }
 }
 
+function resolveLinuxStateMount(
+  stateDir: string,
+  deps?: {
+    mountInfo?: string;
+    resolveRealPath?: (targetPath: string) => string | null;
+  },
+): LinuxSdBackedStateDir | null {
+  const linuxPath = path.posix;
+  const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
+  const resolvedStatePath =
+    resolvePathThroughExistingAncestor(stateDir, resolveRealPath, linuxPath) ??
+    linuxPath.resolve(stateDir);
+  const mountInfo = deps?.mountInfo ?? tryReadLinuxMountInfo();
+  const mountEntry = mountInfo
+    ? findLinuxMountInfoEntryForPath(resolvedStatePath, parseLinuxMountInfo(mountInfo), linuxPath)
+    : null;
+  return mountEntry
+    ? {
+        path: linuxPath.resolve(resolvedStatePath),
+        mountPoint: linuxPath.resolve(mountEntry.mountPoint),
+        fsType: mountEntry.fsType,
+        source: mountEntry.source,
+      }
+    : null;
+}
+
 /** Detects Linux state directories mounted from SD/eMMC-style block devices. */
 export function detectLinuxSdBackedStateDir(
   stateDir: string,
@@ -500,29 +526,15 @@ export function detectLinuxSdBackedStateDir(
     return null;
   }
   const linuxPath = path.posix;
-
-  const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
-  const resolvedStatePath =
-    resolvePathThroughExistingAncestor(stateDir, resolveRealPath, linuxPath) ??
-    linuxPath.resolve(stateDir);
-  const mountInfo = deps?.mountInfo ?? tryReadLinuxMountInfo();
-  if (!mountInfo) {
+  const stateMount = resolveLinuxStateMount(stateDir, deps);
+  if (!stateMount) {
     return null;
   }
 
-  const mountEntry = findLinuxMountInfoEntryForPath(
-    resolvedStatePath,
-    parseLinuxMountInfo(mountInfo),
-    linuxPath,
-  );
-  if (!mountEntry) {
-    return null;
-  }
-
-  const sourceCandidates = [mountEntry.source];
-  if (mountEntry.source.startsWith("/dev/")) {
+  const sourceCandidates = [stateMount.source];
+  if (stateMount.source.startsWith("/dev/")) {
     const resolvedDevicePath = (deps?.resolveDeviceRealPath ?? tryResolveRealPath)(
-      mountEntry.source,
+      stateMount.source,
     );
     if (resolvedDevicePath) {
       sourceCandidates.push(linuxPath.resolve(resolvedDevicePath));
@@ -532,12 +544,7 @@ export function detectLinuxSdBackedStateDir(
     return null;
   }
 
-  return {
-    path: linuxPath.resolve(resolvedStatePath),
-    mountPoint: linuxPath.resolve(mountEntry.mountPoint),
-    fsType: mountEntry.fsType,
-    source: mountEntry.source,
-  };
+  return stateMount;
 }
 
 /** Formats the warning for state stored on SD/eMMC media. */
@@ -559,11 +566,7 @@ export function formatLinuxSdBackedStateDirWarning(
   ].join("\n");
 }
 
-type LinuxVolatileStateDir = {
-  path: string;
-  mountPoint: string;
-  fsType: string;
-};
+type LinuxVolatileStateDir = Omit<LinuxSdBackedStateDir, "source">;
 
 /** Filesystems whose state disappears on reboot. Docker overlayfs is intentionally excluded. */
 const VOLATILE_FS_TYPES = new Set(["tmpfs", "ramfs"]);
@@ -581,31 +584,12 @@ export function detectLinuxVolatileStateDir(
   if (platform !== "linux") {
     return null;
   }
-  const linuxPath = path.posix;
-
-  const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
-  const resolvedStatePath =
-    resolvePathThroughExistingAncestor(stateDir, resolveRealPath, linuxPath) ??
-    linuxPath.resolve(stateDir);
-  const mountInfo = deps?.mountInfo ?? tryReadLinuxMountInfo();
-  if (!mountInfo) {
+  const stateMount = resolveLinuxStateMount(stateDir, deps);
+  if (!stateMount || !VOLATILE_FS_TYPES.has(stateMount.fsType)) {
     return null;
   }
-
-  const mountEntry = findLinuxMountInfoEntryForPath(
-    resolvedStatePath,
-    parseLinuxMountInfo(mountInfo),
-    linuxPath,
-  );
-  if (!mountEntry || !VOLATILE_FS_TYPES.has(mountEntry.fsType)) {
-    return null;
-  }
-
-  return {
-    path: linuxPath.resolve(resolvedStatePath),
-    mountPoint: linuxPath.resolve(mountEntry.mountPoint),
-    fsType: mountEntry.fsType,
-  };
+  const { source: _source, ...volatileStateMount } = stateMount;
+  return volatileStateMount;
 }
 
 /** Formats the warning for state stored on a volatile Linux filesystem. */

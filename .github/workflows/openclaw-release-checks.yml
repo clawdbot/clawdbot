@@ -169,7 +169,7 @@ jobs:
       package_required: ${{ steps.inputs.outputs.package_required }}
       docker_required: ${{ steps.inputs.outputs.docker_required }}
       install_smoke_scheduled: ${{ steps.inputs.outputs.install_smoke_scheduled }}
-      frozen_upgrade_baseline: ${{ steps.frozen_upgrade_baseline.outputs.value }}
+      source_upgrade_baseline: ${{ steps.source_upgrade_baseline.outputs.value }}
       fail_fast: ${{ steps.inputs.outputs.fail_fast }}
       run_maturity_scorecard: ${{ steps.inputs.outputs.run_maturity_scorecard }}
       allow_unreleased_changelog: ${{ steps.inputs.outputs.allow_unreleased_changelog }}
@@ -187,6 +187,7 @@ jobs:
       qa_live_whatsapp_enabled: ${{ steps.inputs.outputs.qa_live_whatsapp_enabled }}
       qa_live_slack_enabled: ${{ steps.inputs.outputs.qa_live_slack_enabled }}
       package_mode: ${{ steps.inputs.outputs.package_mode }}
+      candidate_published: ${{ steps.inputs.outputs.candidate_published }}
       candidate_artifact_json: ${{ steps.inputs.outputs.candidate_artifact_json }}
       release_package_spec: ${{ steps.inputs.outputs.release_package_spec }}
       package_acceptance_package_spec: ${{ steps.inputs.outputs.package_acceptance_package_spec }}
@@ -488,10 +489,13 @@ jobs:
             exit 1
           fi
           package_mode=source
+          candidate_published=false
           if [[ -n "$candidate_artifact_json" ]]; then
             package_mode=artifact
+            candidate_published="$(jq -er 'select(.packagePublished | type == "boolean") | .packagePublished | tostring' <<< "$candidate_artifact_json")"
           elif [[ -n "$release_package_spec" ]]; then
             package_mode=published
+            candidate_published=true
           fi
           qa_live_matrix_enabled=true
           qa_live_buzz_enabled=true
@@ -803,6 +807,7 @@ jobs:
             printf 'qa_live_whatsapp_enabled=%s\n' "$qa_live_whatsapp_enabled"
             printf 'qa_live_slack_enabled=%s\n' "$qa_live_slack_enabled"
             printf 'package_mode=%s\n' "$package_mode"
+            printf 'candidate_published=%s\n' "$candidate_published"
             printf 'candidate_artifact_json=%s\n' "$candidate_artifact_json"
             printf 'release_package_spec=%s\n' "$release_package_spec"
             printf 'package_acceptance_package_spec=%s\n' "$package_acceptance_package_spec"
@@ -813,14 +818,9 @@ jobs:
             printf 'qa_parity_scheduled=%s\n' "$qa_parity_scheduled"
           } >> "$GITHUB_OUTPUT"
 
-      # A frozen extended-stable target must not downgrade from npm latest.
-      - name: Resolve frozen upgrade baseline
-        id: frozen_upgrade_baseline
-        if: >-
-          (steps.inputs.outputs.install_smoke_scheduled == 'true' ||
-          steps.inputs.outputs.package_acceptance_scheduled == 'true') &&
-          (startsWith(inputs.target_context_ref, 'extended-stable/') ||
-          startsWith(inputs.target_context_ref, 'refs/heads/extended-stable/'))
+      - name: Resolve source checkout upgrade baseline
+        id: source_upgrade_baseline
+        if: steps.inputs.outputs.install_smoke_scheduled == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
@@ -934,11 +934,13 @@ jobs:
       artifact_name: ${{ steps.artifact.outputs.name || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageArtifactName }}
       artifact_run_attempt: ${{ steps.artifact.outputs.run_attempt || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageArtifactRunAttempt }}
       artifact_run_id: ${{ steps.artifact.outputs.run_id || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageArtifactRunId }}
+      candidate_artifact_json: ${{ needs.resolve_target.outputs.candidate_artifact_json || format('{{"packagePublished":{0},"packageArtifactName":{1},"packageArtifactId":{2},"packageArtifactDigest":{3},"packageArtifactRunId":{4},"packageArtifactRunAttempt":{5},"packageFileName":{6},"packageSourceSha":{7},"packageSha256":{8},"packageVersion":{9}}}', needs.resolve_target.outputs.candidate_published, toJSON(steps.artifact.outputs.name), toJSON(steps.release_package_upload.outputs.artifact-id), toJSON(steps.release_package_upload.outputs.artifact-digest), toJSON(steps.artifact.outputs.run_id), toJSON(steps.artifact.outputs.run_attempt), toJSON(steps.artifact.outputs.file_name), toJSON(steps.package.outputs.source_sha), toJSON(steps.package.outputs.sha256), toJSON(steps.package.outputs.package_version)) }}
       package_file_name: ${{ steps.artifact.outputs.file_name || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageFileName }}
       package_sha256: ${{ steps.package.outputs.sha256 || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageSha256 }}
       package_version: ${{ steps.package.outputs.package_version || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageVersion }}
       prepublish_plugin_registry_json: ${{ steps.registry_identity.outputs.json }}
       source_sha: ${{ steps.package.outputs.source_sha || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageSourceSha }}
+      upgrade_baseline: ${{ steps.upgrade_baseline.outputs.value }}
     steps:
       - name: Checkout trusted workflow ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -988,6 +990,7 @@ jobs:
         shell: bash
         env:
           CROSS_OS_SCHEDULED: ${{ needs.resolve_target.outputs.cross_os_scheduled }}
+          CANDIDATE_PUBLISHED: ${{ needs.resolve_target.outputs.candidate_published }}
           DOCKER_REQUIRED: ${{ needs.resolve_target.outputs.docker_required }}
           PACKAGE_REF: ${{ needs.resolve_target.outputs.revision }}
           PROVIDER: ${{ needs.resolve_target.outputs.provider }}
@@ -1029,7 +1032,7 @@ jobs:
               '$provider + $docker | unique | sort'
           )"
           registry_args=()
-          if [[ "$required_packages" != '[]' ]]; then
+          if [[ "$CANDIDATE_PUBLISHED" != "true" && "$required_packages" != '[]' ]]; then
             registry_args=(
               --plugin-registry-output-dir .artifacts/prepublish-plugin-registry
               --required-plugin-packages-json "$required_packages"
@@ -1061,6 +1064,20 @@ jobs:
             echo "- Version: \`$version\`"
             echo "- Source SHA: \`$source_sha\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Resolve package upgrade baseline
+        id: upgrade_baseline
+        env:
+          CANDIDATE_PUBLISHED: ${{ needs.resolve_target.outputs.candidate_published }}
+          CANDIDATE_VERSION: ${{ steps.package.outputs.package_version || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageVersion }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
+        run: |
+          set -euo pipefail
+          baseline="$(node scripts/lib/release-upgrade-baseline.mjs \
+            --candidate-version "$CANDIDATE_VERSION" \
+            --candidate-published "$CANDIDATE_PUBLISHED" \
+            --target-context-ref "$TARGET_CONTEXT_REF")"
+          echo "value=${baseline#openclaw@}" >> "$GITHUB_OUTPUT"
 
       - name: Upload release package artifact
         id: release_package_upload
@@ -1158,6 +1175,7 @@ jobs:
              .packageSourceSha == $sha and
              (.packageSha256 | hex64) and
              (.packageVersion | type == "string" and length > 0) and
+             (.packagePublished | type == "boolean") and
              (.imageArtifactName | type == "string" and length > 0) and
              (.imageArtifactId | tostring | digits) and
              (.imageArtifactDigest | hex64) and
@@ -1260,7 +1278,7 @@ jobs:
       allow_unreleased_changelog: ${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       run_bun_global_install_smoke: true
-      update_baseline_version: ${{ needs.resolve_target.outputs.frozen_upgrade_baseline || 'latest' }}
+      update_baseline_version: ${{ needs.resolve_target.outputs.source_upgrade_baseline }}
 
   cross_os_release_checks:
     needs: [resolve_target, prepare_release_package]
@@ -1271,6 +1289,7 @@ jobs:
       advisory: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       target_context_ref: ${{ inputs.target_context_ref }}
+      previous_version: ${{ needs.prepare_release_package.outputs.upgrade_baseline }}
       provider: ${{ needs.resolve_target.outputs.provider }}
       mode: ${{ needs.resolve_target.outputs.mode }}
       suite_filter: ${{ needs.resolve_target.outputs.cross_os_suite_filter }}
@@ -1401,7 +1420,7 @@ jobs:
       package_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}
       package_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
       package_version: ${{ needs.prepare_release_package.outputs.package_version }}
-      enable_prepublish_plugin_registry: ${{ needs.resolve_target.outputs.package_mode != 'published' }}
+      enable_prepublish_plugin_registry: ${{ fromJSON(needs.prepare_release_package.outputs.candidate_artifact_json).packagePublished != true }}
       prepublish_plugin_registry_artifact_name: ${{ fromJSON(needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactName || '' }}
       prepublish_plugin_registry_artifact_id: ${{ fromJSON(needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactId || '' }}
       prepublish_plugin_registry_artifact_digest: ${{ fromJSON(needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactDigest || '' }}
@@ -1409,13 +1428,14 @@ jobs:
       prepublish_plugin_registry_artifact_run_attempt: ${{ fromJSON(needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactRunAttempt || '' }}
       prepublish_plugin_registry_manifest_sha256: ${{ fromJSON(needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}
       codex_plugin_spec: ${{ needs.resolve_target.outputs.codex_plugin_spec }}
+      published_upgrade_survivor_baseline: ${{ format('openclaw@{0}', needs.prepare_release_package.outputs.upgrade_baseline) }}
       shared_image_artifact_namespace: release-docker
-      shared_image_artifact_name: ${{ fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').imageArtifactName || '' }}
-      shared_image_artifact_id: ${{ fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').imageArtifactId || '' }}
-      shared_image_artifact_digest: ${{ fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').imageArtifactDigest || '' }}
-      shared_image_artifact_run_id: ${{ fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').imageArtifactRunId || '' }}
-      shared_image_artifact_run_attempt: ${{ fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').imageArtifactRunAttempt || '' }}
-      shared_image_archive_sha256: ${{ fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').imageArchiveSha256 || '' }}
+      shared_image_artifact_name: ${{ fromJSON(needs.prepare_release_package.outputs.candidate_artifact_json).imageArtifactName || '' }}
+      shared_image_artifact_id: ${{ fromJSON(needs.prepare_release_package.outputs.candidate_artifact_json).imageArtifactId || '' }}
+      shared_image_artifact_digest: ${{ fromJSON(needs.prepare_release_package.outputs.candidate_artifact_json).imageArtifactDigest || '' }}
+      shared_image_artifact_run_id: ${{ fromJSON(needs.prepare_release_package.outputs.candidate_artifact_json).imageArtifactRunId || '' }}
+      shared_image_artifact_run_attempt: ${{ fromJSON(needs.prepare_release_package.outputs.candidate_artifact_json).imageArtifactRunAttempt || '' }}
+      shared_image_archive_sha256: ${{ fromJSON(needs.prepare_release_package.outputs.candidate_artifact_json).imageArchiveSha256 || '' }}
       shared_image_policy: no-push-artifact
     secrets: *live_e2e_release_secrets
 
@@ -1433,26 +1453,27 @@ jobs:
       advisory: false
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
       workflow_ref: ${{ github.sha }}
-      source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.package_mode == 'published') && 'npm' || 'artifact' }}
-      package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || needs.resolve_target.outputs.release_package_spec || 'openclaw@beta' }}
+      source: ${{ needs.resolve_target.outputs.package_acceptance_package_spec != '' && 'npm' || 'artifact' }}
+      package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || 'openclaw@beta' }}
+      target_context_ref: ${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && inputs.target_context_ref || '' }}
       artifact_digest: ${{ needs.prepare_release_package.outputs.artifact_digest }}
       artifact_id: ${{ needs.prepare_release_package.outputs.artifact_id }}
       artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
       artifact_run_attempt: ${{ needs.prepare_release_package.outputs.artifact_run_attempt }}
       artifact_run_id: ${{ needs.prepare_release_package.outputs.artifact_run_id }}
       package_file_name: ${{ needs.prepare_release_package.outputs.package_file_name }}
-      package_sha256: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.package_mode != 'published') && needs.prepare_release_package.outputs.package_sha256 || '' }}
+      package_sha256: ${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.package_sha256 || '' }}
       package_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
       package_version: ${{ needs.prepare_release_package.outputs.package_version }}
       prepublish_plugin_registry_json: ${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '' }}
       suite_profile: custom
       docker_lanes: release-typed-onboarding doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor update-first-hop-compat published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update plugin-binding-command-escape
-      published_upgrade_survivor_baseline: ${{ needs.resolve_target.outputs.frozen_upgrade_baseline && format('openclaw@{0}', needs.resolve_target.outputs.frozen_upgrade_baseline) || 'openclaw@latest' }}
+      published_upgrade_survivor_baseline: ${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && format('openclaw@{0}', needs.prepare_release_package.outputs.upgrade_baseline) || 'openclaw@latest' }}
       published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}
       telegram_mode: ${{ (needs.resolve_target.outputs.telegram_waiver != '' || needs.resolve_target.outputs.skip_package_telegram_e2e == 'true') && 'none' || 'mock-openai' }}
       telegram_advisory: true
       shared_image_artifact_namespace: release-package
-      candidate_artifact_json: ${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.candidate_artifact_json || '' }}
+      candidate_artifact_json: ${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.candidate_artifact_json || '' }}
       shared_image_policy: no-push-artifact
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

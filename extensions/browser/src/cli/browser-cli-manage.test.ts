@@ -26,7 +26,7 @@ describe("browser manage output", () => {
 
   beforeEach(() => {
     previousExitCode = process.exitCode;
-    process.exitCode = undefined;
+    process.exitCode = 0;
     getBrowserManageCallBrowserRequestMock().mockClear();
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
     getBrowserCliRuntime().exit.mockClear();
@@ -34,7 +34,7 @@ describe("browser manage output", () => {
   });
 
   afterEach(() => {
-    process.exitCode = previousExitCode;
+    process.exitCode = previousExitCode ?? 0;
   });
 
   it("shows chrome-mcp transport for existing-session status without fake CDP fields", async () => {
@@ -531,7 +531,7 @@ describe("browser manage output", () => {
     expect(lastRuntimeLog()).toContain(
       "WARN extension-version: running 2.0.0; bundled 2.2.0 (mismatch); Reload the OpenClaw extension.",
     );
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
     expect(getBrowserManageCallBrowserRequestMock().mock.calls[0]?.[1]).toMatchObject({
       path: "/doctor",
       query: { profile: "chrome" },
@@ -570,7 +570,7 @@ describe("browser manage output", () => {
 
     expect(lastRuntimeLog()).toContain("INFO extension-version: version data unavailable");
     expect(lastRuntimeLog()).not.toContain("WARN extension-version");
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
   });
 
   it("preserves one nonfatal JSON report for confirmed extension version drift", async () => {
@@ -609,7 +609,7 @@ describe("browser manage output", () => {
       ]),
     });
     expect(getBrowserCliRuntime().writeJson).toHaveBeenCalledTimes(1);
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
   });
 
   it("runs exactly one deep snapshot after consuming the canonical doctor report", async () => {
@@ -719,7 +719,7 @@ describe("browser manage output", () => {
     expect(output).toContain("OK tabs: 1 visible, use tab reference t1");
     expect(getBrowserCliRuntime().writeJson).not.toHaveBeenCalled();
     expect(getBrowserCliRuntime().exit).not.toHaveBeenCalled();
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
   });
 
   it("prints one complete JSON browser doctor failure before setting exit status", async () => {
@@ -788,7 +788,7 @@ describe("browser manage output", () => {
     expect(getBrowserCliRuntimeCapture().runtimeErrors).toEqual([]);
     expect(getBrowserCliRuntime().writeJson).toHaveBeenCalledTimes(1);
     expect(getBrowserCliRuntime().exit).not.toHaveBeenCalled();
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(0);
   });
 
   it("prints a readable browser doctor failure when gateway auth SecretRefs are unavailable", async () => {

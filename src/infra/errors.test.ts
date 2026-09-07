@@ -33,8 +33,8 @@ describe("error helpers", () => {
     const display = formatErrorMessageForDisplay(wrapper);
     expect(display).toContain("Authorization: Bearer");
     expect(display).not.toContain(secret);
-    expect(display.length).toBeLessThanOrEqual("outer failure\n".length + 2_048);
-    expect(formatErrorMessage(wrapper)).toBe("outer failure");
+    expect(display.length).toBeLessThanOrEqual('outer failure | {"cause":{}}\n'.length + 2_048);
+    expect(formatErrorMessage(wrapper)).toBe('outer failure | {"cause":{}}');
     expect(Object.getOwnPropertyDescriptors(error)).toEqual(before);
     expect(formatErrorMessageForDisplay(new Error("unrelated failure"))).toBe("unrelated failure");
   });
@@ -44,9 +44,13 @@ describe("error helpers", () => {
     const second = attachErrorDiagnostic(new Error("second"), "second diagnostic");
     const aggregate = new AggregateError([first, second], "outer");
     first.cause = aggregate;
-    expect(formatErrorMessageForDisplay(aggregate)).toBe("outer\nfirst diagnostic");
+    expect(formatErrorMessageForDisplay(aggregate)).toBe(
+      "outer | first | second\nfirst diagnostic",
+    );
     attachErrorDiagnostic(aggregate, "outer diagnostic");
-    expect(formatErrorMessageForDisplay(aggregate)).toBe("outer\nouter diagnostic");
+    expect(formatErrorMessageForDisplay(aggregate)).toBe(
+      "outer | first | second\nouter diagnostic",
+    );
   });
 
   it.each([
