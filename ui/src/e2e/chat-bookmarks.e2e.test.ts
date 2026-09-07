@@ -1,4 +1,4 @@
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   captureUiProof,
@@ -19,6 +19,34 @@ async function setView(page: Page, value: "tool-calls" | "commentary", checked: 
   await page
     .locator('wa-dropdown-item[value="view:tool-calls"]:visible')
     .waitFor({ state: "hidden" });
+}
+
+async function expectContainedFocus(input: Locator) {
+  await input.focus();
+  await expect
+    .poll(() =>
+      input.evaluate((element) => {
+        const style = getComputedStyle(element);
+        const shadows = style.boxShadow
+          .split(/,(?![^()]*\))/u)
+          .filter((shadow) => !shadow.includes("inset"))
+          .map((shadow) => {
+            const [x = 0, y = 0, blur = 0, spread = 0] = (
+              shadow.match(/-?\d*\.?\d+px/gu) ?? []
+            ).map(Number.parseFloat);
+            return Math.max(Math.abs(x), Math.abs(y)) + blur + spread;
+          });
+        const outline =
+          style.outlineStyle === "none"
+            ? 0
+            : Number.parseFloat(style.outlineWidth) + Number.parseFloat(style.outlineOffset);
+        return {
+          focused: element.matches(":focus-visible"),
+          outset: Math.max(0, outline, ...shadows),
+        };
+      }),
+    )
+    .toEqual({ focused: true, outset: 0 });
 }
 
 const suite = createChatFlowE2eSuite();
@@ -301,6 +329,7 @@ suite.define(() => {
         await gateway.deferNext("users.prefs.set");
         await source.hover();
         await page.locator(".chat-bookmark-name").click();
+        await expectContainedFocus(page.getByRole("textbox", { name: "Name", exact: true }));
         await page.getByRole("textbox", { name: "Name", exact: true }).fill("Reviewed decision");
         await page.getByRole("button", { name: "Save", exact: true }).click();
         await expect
@@ -351,6 +380,22 @@ suite.define(() => {
         expect(await retired.locator(".chat-bookmarks-dialog__source").isDisabled()).toBe(true);
         for (const width of [1440, 390]) {
           await page.setViewportSize({ width, height: 900 });
+          const searchInput = page.locator('.chat-bookmarks-dialog input[type="search"]');
+          await expectContainedFocus(searchInput);
+          const searchBounds = await searchInput.boundingBox();
+          const checkboxBounds = await page
+            .getByRole("checkbox", { name: "All conversations" })
+            .boundingBox();
+          expect(checkboxBounds!.y - searchBounds!.y - searchBounds!.height).toBeGreaterThanOrEqual(
+            8,
+          );
+          const renameBounds = await retired
+            .getByRole("button", { name: "Rename", exact: true })
+            .boundingBox();
+          const removeBounds = await retired
+            .getByRole("button", { name: "Remove", exact: true })
+            .boundingBox();
+          expect(Math.abs(renameBounds!.y - removeBounds!.y)).toBeLessThanOrEqual(1);
           expect(
             await retired
               .locator(".chat-bookmarks-dialog__source")
@@ -368,7 +413,7 @@ suite.define(() => {
           status: "ok",
           entries: { "chat.bookmark:decision": renamed },
         });
-        await retired.getByRole("button", { name: "Remove bookmark", exact: true }).click();
+        await retired.getByRole("button", { name: "Remove", exact: true }).click();
         await retired.waitFor({ state: "hidden" });
         expect((await gateway.getRequests("users.prefs.set")).at(-1)?.params).toEqual({
           entries: { "chat.bookmark:deleted": null },

@@ -137,7 +137,7 @@ export function renderChatBookmarksDialog(
                                 ?disabled=${state.saving}
                                 @click=${() => state.edit(item.messageId, item)}
                               >
-                                ${t("chat.bookmarks.rename")}
+                                ${t("common.rename")}
                               </button>
                               <button
                                 class="btn btn--ghost"
@@ -147,7 +147,7 @@ export function renderChatBookmarksDialog(
                                   void state.remove(item);
                                 }}
                               >
-                                ${t("chat.bookmarks.remove")}
+                                ${t("common.remove")}
                               </button>
                             `
                           : nothing

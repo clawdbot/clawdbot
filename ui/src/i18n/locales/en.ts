@@ -83,6 +83,7 @@ export const en: TranslationMap & {
     resizeSplitView: "Resize split view",
     delete: "Delete",
     remove: "Remove",
+    rename: "Rename",
     dismiss: "Dismiss",
     dismissAndDontShowAgain: "Dismiss and don't show again",
     unselect: "Unselect",

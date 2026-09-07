@@ -2,6 +2,14 @@
   width: min(560px, calc(100vw - 32px));
 }
 
+.chat-bookmarks-dialog > .field + .field {
+  margin-top: 12px;
+}
+
+.chat-bookmarks-dialog input:not([type="checkbox"]) {
+  --focus-ring: inset 0 0 0 2px var(--ring);
+}
+
 .chat-bookmarks-dialog__list {
   list-style: none;
   padding: 0;
@@ -20,7 +28,7 @@
 
 .chat-bookmarks-dialog__source {
   display: block;
-  flex: 1 1 12rem;
+  flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;
   white-space: normal;
