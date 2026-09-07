@@ -345,7 +345,19 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     if (params.packageTransaction && !retireBackup) {
       const retained = await params.packageTransaction.complete({ activationVerified: false });
       if (retained) {
-        finalResult.steps = [...finalResult.steps, retained];
+        const backupPath = params.packageTransaction.backupRoot;
+        finalResult.steps = [
+          ...finalResult.steps,
+          {
+            ...retained,
+            stderrTail:
+              retained.exitCode === 0 || retained.stderrTail?.includes(backupPath)
+                ? retained.stderrTail
+                : [retained.stderrTail, `Recovery transaction backup path: ${backupPath}`]
+                    .filter(Boolean)
+                    .join("\n"),
+          },
+        ];
       }
     }
     recordNextAction(finalResult);

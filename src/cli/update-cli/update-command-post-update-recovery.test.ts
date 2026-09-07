@@ -5,7 +5,11 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
+import {
+  swapStagedPackageInstall,
+  type PackageUpdateTransaction,
+} from "../../infra/package-update-swap.js";
+import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
@@ -527,9 +531,43 @@ describe("failed package update recovery safety", () => {
     vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
   });
 
-  it("retains and reports the recovery backup after an older-target backup move partially fails", async () => {
+  it("retains and reports the recovery backup after candidate publication and compensation fail", async () => {
     const base = tempDirs.make("update-older-target-backup-");
-    const { result, transaction, packageRoot } = await createRetainedPackageSwap(base, true);
+    const { params, packageRoot } = await createPackageSwapFixture(base);
+    let retained: PackageUpdateTransaction | undefined;
+    const rename = fs.rename.bind(fs);
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
+      if (
+        String(args[0]) === params.stage.packageRoot ||
+        String(args[0]) === retained?.backupRoot
+      ) {
+        throw Object.assign(new Error("package publication or compensation refused"), {
+          code: "EACCES",
+        });
+      }
+      return rename(...args);
+    });
+    let result;
+    try {
+      result = await swapStagedPackageInstall({
+        ...params,
+        onTransaction: (value) => {
+          retained = value;
+        },
+      });
+      if (!retained) {
+        throw new Error("The package owner did not retain its recovery transaction.");
+      }
+      expect((await retained.rollback()).exitCode).toBe(1);
+      expect(renameSpy).toHaveBeenCalledWith(retained.backupRoot, packageRoot);
+    } finally {
+      renameSpy.mockRestore();
+    }
+    if (!retained) {
+      throw new Error("The package owner did not retain its recovery transaction.");
+    }
+    const transaction = retained;
+    expect(result.status).toBe("failed");
     const backupRuntime = path.join(transaction.backupRoot, "dist", "index.js");
     const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(base, "state") };
     const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
