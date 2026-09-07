@@ -9,6 +9,7 @@ import {
   loadStoredSidebarSessionOwnerFilter,
   loadStoredSidebarSessionsShowPreview,
   setStoredSessionCatalogHidden,
+  storeCollapsedSessionSections,
   storeSidebarSessionSortMode,
   storeSidebarSessionStatusFilter,
   storeSidebarSessionOwnerFilter,
@@ -157,6 +158,47 @@ describe("sidebar session sort preference", () => {
 describe("collapsed sidebar sections preference", () => {
   it("defaults Coding to compact while Online remains expanded", () => {
     expect([...loadStoredCollapsedSessionSections()]).toEqual(["work"]);
+  });
+
+  it.each([
+    [String.raw`C:\Work\Repo\.CLAUDE\WORKTREES\task\src`, String.raw`C:\Work\Repo`],
+    [String.raw`\\host\share\Repo\.CLAUDE\WORKTREES\task`, String.raw`\\host\share\Repo`],
+    [String.raw`\Work\Repo\.CLAUDE\WORKTREES\task`, String.raw`\Work\Repo`],
+  ])(
+    "migrates regular project collapse keys and preserves later expansion: %s",
+    (oldPath, path) => {
+      const storageKey = "openclaw:sidebar:sessions:collapsed-sections";
+      const unchanged = [
+        "work",
+        "category:project:example",
+        "catalog-project:codex:gateway:local:project:C:\\Work\\Repo",
+        "project:/work/Repo/.CLAUDE/WORKTREES/task",
+      ];
+      localStorage.setItem(storageKey, JSON.stringify([`project:${oldPath}`, ...unchanged]));
+
+      const collapsed = loadStoredCollapsedSessionSections();
+      expect([...collapsed]).toEqual([`project:${path}`, ...unchanged]);
+      expect(JSON.parse(localStorage.getItem(storageKey) ?? "[]")).toEqual([...collapsed]);
+      expect(loadStoredCollapsedSessionSections()).toEqual(collapsed);
+
+      // A later user expansion must not be undone by an old alias on reload.
+      storeCollapsedSessionSections(new Set(unchanged));
+      expect([...loadStoredCollapsedSessionSections()]).toEqual(unchanged);
+    },
+  );
+
+  it("keeps migrated collapse preferences when storage rejects writes", () => {
+    localStorage.setItem(
+      "openclaw:sidebar:sessions:collapsed-sections",
+      JSON.stringify([String.raw`project:C:\Work\Repo\.CLAUDE\WORKTREES\task`, "groups"]),
+    );
+    localStorage.setItem = () => {
+      throw new Error("storage is read-only");
+    };
+    expect([...loadStoredCollapsedSessionSections()]).toEqual([
+      String.raw`project:C:\Work\Repo`,
+      "groups",
+    ]);
   });
 });
 

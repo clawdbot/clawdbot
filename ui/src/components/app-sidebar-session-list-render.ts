@@ -7,7 +7,10 @@ import type { CatalogOpenTarget } from "../app/settings.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { isPresenceViewerIdle, projectPresenceViewers } from "../lib/presence-users.ts";
-import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
+import {
+  migrateCollapsedCatalogProjectSection,
+  type CatalogProjectGrouping,
+} from "../lib/sessions/catalog-project-grouping.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.ts";
@@ -463,6 +466,19 @@ function renderSessionCatalog(params: {
           display,
         }),
       onToggleSection: (sectionId) => host.toggleSection(sectionId),
+      onMigrateCollapsedProjectSection: (prefix, id, projectIdentity) => {
+        const sections = migrateCollapsedCatalogProjectSection(
+          host.collapsedSessionSections,
+          prefix,
+          id,
+          projectIdentity,
+        );
+        if (!sections) {
+          return false;
+        }
+        host.sessionOrganizer.saveCollapsedSessionSections(sections);
+        return true;
+      },
       draggingSectionId: host.sessionOrganizer.draggingSidebarSection,
       sectionDropTarget: host.sessionOrganizer.sidebarSectionDropTarget,
       onSectionDragOver: (event, sectionId) => host.sectionDragOver(event, sectionId),

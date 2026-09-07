@@ -16,6 +16,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
 import type { SessionWorkContext } from "../lib/session-display.ts";
 import {
+  foldWorktreeCheckoutPath,
   normalizeCatalogProjectGrouping,
   type CatalogProjectGrouping,
 } from "../lib/sessions/catalog-project-grouping.ts";
@@ -349,11 +350,33 @@ export function loadStoredCollapsedSessionSections(): ReadonlySet<string> {
       return new Set(["work"]);
     }
     const parsed: unknown = JSON.parse(raw);
-    return new Set(
+    const sections = new Set(
       Array.isArray(parsed)
         ? parsed.flatMap((value) => (typeof value === "string" && value ? [value] : []))
         : [],
     );
+    let changed = false;
+    const migrated = new Set(
+      [...sections].map((id) => {
+        if (!id.startsWith("project:")) {
+          return id;
+        }
+        // Regular sidebar keys use the folded display path, not the catalog
+        // identity. Migrate before rendering so expansion cannot revive an alias.
+        const path = foldWorktreeCheckoutPath(id.slice("project:".length));
+        const nextId = path ? `project:${path}` : id;
+        changed ||= nextId !== id;
+        return nextId;
+      }),
+    );
+    if (changed) {
+      try {
+        storeCollapsedSessionSections(migrated);
+      } catch {
+        // Preserve the migrated in-memory choice when storage is read-only.
+      }
+    }
+    return migrated;
   } catch {
     return new Set(["work"]);
   }

@@ -28,11 +28,15 @@ export function sessionActorGroupId(owner: SessionCreatedActor | undefined): str
 // paths or worktrees with no origin repo.
 export function foldWorktreeCheckoutPath(path: string): string | null {
   const trimmed = path.replace(/[\\/]+$/, "");
-  if (!trimmed) {
+  if (!trimmed || /^[A-Za-z]:$/.test(trimmed)) {
     return null;
   }
-  const match = trimmed.match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/);
-  return match ? match[1] || null : trimmed;
+  const pattern = isWindowsPath(trimmed)
+    ? /^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/i
+    : /^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/;
+  const match = trimmed.match(pattern);
+  const folded = match ? match[1] || null : trimmed;
+  return folded && !/^[A-Za-z]:$/.test(folded) ? folded : null;
 }
 
 /** Basename shown for a checkout path in project sections. */
@@ -50,6 +54,61 @@ type CatalogProjectGroup = {
   title: string;
   sessions: SessionCatalogSession[];
 };
+
+type WindowsPathRootKind = "drive" | "unc" | "rooted";
+
+function windowsPathRootKind(value: string): WindowsPathRootKind | undefined {
+  if (/^[A-Za-z]:[\\/]/.test(value)) {
+    return "drive";
+  }
+  if (value.startsWith("\\\\")) {
+    return "unc";
+  }
+  if (value.startsWith("\\")) {
+    return "rooted";
+  }
+  return undefined;
+}
+
+function isWindowsPath(value: string): boolean {
+  return windowsPathRootKind(value) !== undefined;
+}
+
+function catalogProjectPathIdentity(p: string): string {
+  const value = isWindowsPath(p) ? (p.split(/[\\/]\.claude[\\/]worktrees[\\/]/i)[0] ?? p) : p;
+  const rootKind = windowsPathRootKind(value);
+  if (!rootKind) {
+    return value;
+  }
+  return `windows:${rootKind}:${value
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    .map((segment) => segment.toLowerCase())
+    .join("/")}`;
+}
+
+export function migrateCollapsedCatalogProjectSection(
+  sections: ReadonlySet<string>,
+  prefix: string,
+  id: string,
+  projectIdentity: string,
+): ReadonlySet<string> | null {
+  const migrated = new Set(
+    [...sections].filter((candidate) => {
+      if (candidate === id || !candidate.startsWith(prefix)) {
+        return true;
+      }
+      const suffix = candidate.slice(prefix.length);
+      const legacyPath = suffix.startsWith("project:") ? suffix.slice("project:".length) : suffix;
+      return catalogProjectPathIdentity(legacyPath) !== projectIdentity;
+    }),
+  );
+  if (migrated.size === sections.size) {
+    return null;
+  }
+  migrated.add(id);
+  return migrated;
+}
 
 export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogSession[]): {
   groups: CatalogProjectGroup[];
@@ -92,17 +151,18 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
       ungrouped.push(session);
       continue;
     }
-    let group = projectGroupsByPath.get(projectPath);
+    const pathIdentity = catalogProjectPathIdentity(projectPath);
+    let group = projectGroupsByPath.get(pathIdentity);
     if (!group) {
       group = {
         kind: "project",
-        key: `project:${projectPath}`,
+        key: `project:${pathIdentity}`,
         legacySectionKey: projectPath,
         label: checkoutDisplayName(projectPath),
         title: projectPath,
         sessions: [],
       };
-      projectGroupsByPath.set(projectPath, group);
+      projectGroupsByPath.set(pathIdentity, group);
       projectGroups.push(group);
     }
     group.sessions.push(session);
