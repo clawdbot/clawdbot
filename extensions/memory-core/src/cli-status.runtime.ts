@@ -148,6 +148,8 @@ export async function runMemoryStatus(
   hostOptions?: MemoryCoreRuntimeHost,
 ) {
   setVerbose(Boolean(opts.verbose));
+  // `--index` implies `--deep`: gate the probes and the deep-only output on the same flag.
+  const deep = Boolean(opts.deep || opts.index);
   const allResults: Array<{
     agentId: string;
     status: ReturnType<MemoryManager["status"]>;
@@ -168,7 +170,6 @@ export async function runMemoryStatus(
     inspectSources: true,
     ...hostOptions,
     run: async ({ manager, agentId }) => {
-      const deep = Boolean(opts.deep || opts.index);
       let embeddingProbe: MemoryEmbeddingProbeResult | undefined;
       let indexError: string | undefined;
       const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
@@ -341,7 +342,7 @@ export async function runMemoryStatus(
         lines.push(`${label("Embeddings error")} ${warn(embeddingProbe.error)}`);
       }
     }
-    const llamaCppRuntime = opts.deep ? readLlamaCppRuntimeStatus(status) : null;
+    const llamaCppRuntime = deep ? readLlamaCppRuntimeStatus(status) : null;
     if (llamaCppRuntime) {
       const runtime = llamaCppRuntime;
       const backend = runtime.backend ?? "unknown";
