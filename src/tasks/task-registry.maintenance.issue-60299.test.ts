@@ -390,6 +390,7 @@ describe("task-registry maintenance issue #60299", () => {
     const activeRunning = makeStaleTask({
       taskId: "task-running-live",
       runtime: "cli",
+      taskKind: "exec",
       status: "running",
       createdAt: now,
       startedAt: now,
@@ -418,6 +419,7 @@ describe("task-registry maintenance issue #60299", () => {
     expect(blockers[0]?.taskId).toBe("task-running-live");
     expect(blockers[0]?.status).toBe("running");
     expect(blockers[0]?.runtime).toBe("cli");
+    expect(blockers[0]?.taskKind).toBe("exec");
     expect(blockers[0]?.runId).toBe("run-running-live");
   });
 
