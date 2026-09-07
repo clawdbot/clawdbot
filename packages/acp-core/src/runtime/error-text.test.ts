@@ -1,7 +1,12 @@
 // ACP Core tests cover error text behavior.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { configureAcpErrorRedactor } from "../error-format.js";
 import { formatAcpRuntimeErrorText, toAcpRuntimeErrorText } from "./error-text.js";
-import { AcpRuntimeError, toAcpRuntimeError } from "./errors.js";
+import { AcpRuntimeError, formatAcpErrorChain, toAcpRuntimeError } from "./errors.js";
+
+afterEach(() => {
+  configureAcpErrorRedactor(undefined);
+});
 
 describe("formatAcpRuntimeErrorText", () => {
   it("adds actionable next steps for known ACP runtime error codes", () => {
@@ -63,5 +68,45 @@ describe("formatAcpRuntimeErrorText", () => {
     expect(text).toContain(
       "ACP error (ACP_TURN_FAILED): Internal error: Unknown config option: timeout",
     );
+  });
+
+  it("redacts Authorization bearer credentials from raw AcpRuntimeError messages", () => {
+    const bearer = "sk-abcdefghijklmnopqrstuvwxyz123456";
+    const message = `Upstream failed: Authorization: Bearer ${bearer}`;
+    const error = new AcpRuntimeError("ACP_TURN_FAILED", message);
+
+    // Sibling chain path already redacts; error-text historically did not.
+    expect(formatAcpErrorChain(error)).not.toContain(bearer);
+
+    const text = formatAcpRuntimeErrorText(error);
+    expect(text).toContain("ACP error (ACP_TURN_FAILED):");
+    expect(text).toContain("next: Retry, or use `/acp cancel` and send the message again.");
+    expect(text).not.toContain(bearer);
+    expect(text).toContain("Authorization: Bearer");
+  });
+
+  it("redacts credentials through toAcpRuntimeErrorText conversion", () => {
+    const bearer = "sk-abcdefghijklmnopqrstuvwxyz123456";
+    const text = toAcpRuntimeErrorText({
+      error: new Error(`Upstream failed: Authorization: Bearer ${bearer}`),
+      fallbackCode: "ACP_TURN_FAILED",
+      fallbackMessage: "fallback",
+    });
+
+    expect(text).toContain("ACP error (ACP_TURN_FAILED):");
+    expect(text).toContain("next: Retry");
+    expect(text).not.toContain(bearer);
+  });
+
+  it("uses a configured host redactor for formatAcpRuntimeErrorText replies", () => {
+    configureAcpErrorRedactor((value) => value.replaceAll("custom-secret", "[CUSTOM]"));
+
+    const text = formatAcpRuntimeErrorText(
+      new AcpRuntimeError("ACP_BACKEND_MISSING", "backend missing custom-secret"),
+    );
+
+    expect(text).toContain("[CUSTOM]");
+    expect(text).not.toContain("custom-secret");
+    expect(text).toContain("next: Run `/acp doctor`");
   });
 });

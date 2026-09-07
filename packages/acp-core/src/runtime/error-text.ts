@@ -1,4 +1,5 @@
 // ACP Core module implements error text behavior.
+import { redactSensitiveText } from "../error-format.js";
 import { type AcpRuntimeErrorCode, AcpRuntimeError, toAcpRuntimeError } from "./errors.js";
 
 function resolveAcpRuntimeErrorNextStep(error: AcpRuntimeError): string | undefined {
@@ -26,10 +27,12 @@ function resolveAcpRuntimeErrorNextStep(error: AcpRuntimeError): string | undefi
 /** Formats ACP runtime errors with the operator next-step hint attached when known. */
 export function formatAcpRuntimeErrorText(error: AcpRuntimeError): string {
   const next = resolveAcpRuntimeErrorNextStep(error);
-  if (!next) {
-    return `ACP error (${error.code}): ${error.message}`;
-  }
-  return `ACP error (${error.code}): ${error.message}\nnext: ${next}`;
+  const text = next
+    ? `ACP error (${error.code}): ${error.message}\nnext: ${next}`
+    : `ACP error (${error.code}): ${error.message}`;
+  // Match formatAcpErrorChain: user/model-visible replies must not leak credentials
+  // from raw error.message (host redactor + fallback secret patterns).
+  return redactSensitiveText(text);
 }
 
 /** Normalizes unknown failures into ACP runtime error text for user-facing surfaces. */
