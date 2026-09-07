@@ -2,7 +2,6 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { z } from "zod";
 import { formatErrorMessage } from "./errors.js";
 import {
   copyPackagePathEntry,
@@ -13,179 +12,33 @@ import {
   createPackageIntegrityReader,
   verifyPackageRecoveryMaterial,
 } from "./package-update-integrity.js";
-
-const text = z.string().min(1).max(32_768);
-const absolute = text.refine((value) => path.isAbsolute(value) && path.resolve(value) === value);
-const launcherName = text.refine(
-  (value) => value !== "." && value !== ".." && !/[\\/]/u.test(value),
-);
-const fingerprint = z.strictObject({
-  digest: z.string().regex(/^[a-f0-9]{64}$/u),
-  identity: z.string().regex(/^\d+:\d+$/u),
-  version: text,
-});
-const selection = z.strictObject({
-  pairId: z.uuid(),
-  ownerRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-});
-const retention = z.discriminatedUnion("state", [
-  selection.extend({ state: z.literal("selected") }),
-  z.strictObject({
-    state: z.literal("unselected"),
-    ownerRevision: selection.shape.ownerRevision,
-  }),
-  selection.extend({
-    state: z.literal("superseded"),
-    replacement: z.strictObject({
-      pairId: z.uuid(),
-      transactionId: z.uuid(),
-      live: fingerprint,
-      retainedRoot: absolute,
-      retained: fingerprint,
-      launchers: z.array(z.strictObject({ name: launcherName, fingerprint: text })).max(64),
-    }),
-  }),
-]);
-
-/** Operational data for Recovery's store, not a sidecar or deletion authority. */
-export const PackageTransactionDescriptorSchema = z
-  .strictObject({
-    version: z.literal(1),
-    transactionId: z.uuid(),
-    packageName: z
-      .string()
-      .regex(/^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/iu)
-      .max(214),
-    liveRoot: absolute,
-    stageRoot: absolute,
-    backupRoot: absolute,
-    binDir: absolute,
-    shimBackupRoot: absolute.nullable(),
-    shimBackupIdentity: text.nullable(),
-    previous: fingerprint.nullable(),
-    candidate: fingerprint,
-    launchers: z
-      .array(
-        z.strictObject({
-          name: launcherName,
-          previous: text.nullable(),
-          candidate: text,
-        }),
-      )
-      .max(64),
-    // Missing launchers observed when a prior activation intent was reconciled
-    // as interrupted. Clear only after verified restoration, not on a retry.
-    interruptedLaunchers: z.array(launcherName).max(64),
-    retention: retention.nullable(),
-  })
-  .superRefine((value, ctx) => {
-    const parent = path.resolve(value.liveRoot, ...value.packageName.split("/").map(() => ".."));
-    if (
-      value.liveRoot === path.parse(value.liveRoot).root ||
-      value.stageRoot === path.parse(value.stageRoot).root ||
-      value.binDir === path.parse(value.binDir).root ||
-      path.join(parent, value.packageName) !== value.liveRoot ||
-      value.packageName === "." ||
-      value.packageName === ".." ||
-      (value.shimBackupRoot === null) !== (value.shimBackupIdentity === null) ||
-      path.dirname(value.backupRoot) !== parent ||
-      !path.basename(value.backupRoot).startsWith(".openclaw.package-backup-") ||
-      value.stageRoot === value.liveRoot ||
-      value.stageRoot.startsWith(`${value.liveRoot}${path.sep}`) ||
-      value.liveRoot.startsWith(`${value.stageRoot}${path.sep}`) ||
-      (value.shimBackupRoot !== null &&
-        (path.dirname(value.shimBackupRoot) !== parent ||
-          !path.basename(value.shimBackupRoot).startsWith(".openclaw.shim-backup-"))) ||
-      value.launchers.some((entry) => entry.previous !== null && !value.shimBackupRoot) ||
-      value.interruptedLaunchers.some(
-        (name) => !value.launchers.some((entry) => entry.name === name),
-      ) ||
-      new Set(value.launchers.map((entry) => entry.name)).size !== value.launchers.length
-    ) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Invalid package recovery paths or launcher inventory",
-      });
-    }
-  });
-
-export type PackageTransactionDescriptor = z.infer<typeof PackageTransactionDescriptorSchema>;
-export type PackageRetentionDecision = z.infer<typeof retention>;
-type PackageRecoveryObservation = {
-  previous: "live" | "retained" | "absent";
-  candidate: "live" | "staged" | "displaced" | "absent";
-  launchers: "previous" | "candidate" | "both" | "mixed" | "interrupted";
-  successorLive: boolean;
-};
-type PackageRecoveryFacts = {
-  roots: Array<{
-    path: string;
-    identity: string | null;
-    match: "unavailable" | "absent" | "previous" | "candidate" | "successor" | "conflict";
-  }>;
-  launchers: Array<{
-    name: string;
-    match: "previous" | "candidate" | "both" | "absent" | "conflict";
-  }>;
-};
-export type PackageRecoveryVerified = {
-  // Verified package roles can include absence or an interrupted transition.
-  // Neither this tag nor its digest attests a running or restartable service.
-  status: "verified";
-  descriptor: PackageTransactionDescriptor;
-  observation: PackageRecoveryObservation;
-  observedIdentity: string;
-};
-export type PackageRecoveryResult =
-  | PackageRecoveryVerified
-  | {
-      status: "conflict" | "unavailable";
-      reason: string;
-      // Unavailability is NOT a no-effects assertion. A pending intent survives
-      // failed writes and failed observation commits until Recovery reconciles it.
-      descriptor: PackageTransactionDescriptor;
-      pendingEffect: PackageRecoveryEffect | null;
-      facts: PackageRecoveryFacts;
-    };
-export const PackageRecoveryEffectSchema = z.strictObject({
-  effectId: z.uuid(),
-  action: z.enum(["activate", "restore", "retire"]),
-  descriptor: PackageTransactionDescriptorSchema,
-});
-export type PackageRecoveryEffect = z.infer<typeof PackageRecoveryEffectSchema>;
-export type PackageRecoveryEffectReceipt = {
-  // Recovery revalidates its current executor and durable revision here. This
-  // is not writer containment; it must never be serialized with the descriptor.
-  assertCurrent: () => void;
-  afterEffect: (
-    observed: PackageRecoveryVerified,
-    outcome: "completed" | "interrupted",
-  ) => Promise<void>;
-};
-/** The package owner supplies verified staging facts before any live mutation. */
-export type PreparePackageRecovery = (
-  source: Pick<PackageTransactionDescriptor, "liveRoot" | "stageRoot" | "previous" | "candidate">,
-) => Promise<PackageRecoveryHooks>;
-
-export type PackageRecoveryHooks = {
-  transactionId: string;
-  /** Persist package facts only. For selection, validate Recovery's ALREADY
-   * committed terminal/selected-pair decision; this callback must not select it.
-   */
-  persistDescriptor: (
-    observed: PackageRecoveryVerified,
-  ) => Promise<Pick<PackageRecoveryEffectReceipt, "assertCurrent">>;
-  /** New: await durable intent. Resume: reacquire the SAME outstanding intent,
-   * checking its exact descriptor and current revision; never append another.
-   * If observation committed but its acknowledgement failed, reconcile the
-   * matching observed effect instead of recording its observation twice.
-   * Both paths carry each returned Recovery revision forward in the live closure.
-   */
-  beforeEffect: (
-    effect: PackageRecoveryEffect,
-    context: { mode: "new" | "resume"; observed: PackageRecoveryVerified },
-  ) => Promise<PackageRecoveryEffectReceipt>;
-};
+import {
+  PackageTransactionDescriptorSchema,
+  type PackageTransactionDescriptor,
+  type PackageRetentionDecision,
+  type PackageRecoveryVerified,
+  type PackageRecoveryResult,
+  PackageRecoveryEffectSchema,
+  type PackageRecoveryEffect,
+  type PackageRecoveryEffectReceipt,
+  type PackageRecoveryHooks,
+  type PackageRecoveryObservation,
+  type PackageRecoveryFacts,
+} from "./package-update-recovery-contract.js";
+export {
+  PackageTransactionDescriptorSchema,
+  PackageRecoveryEffectSchema,
+} from "./package-update-recovery-contract.js";
+export type {
+  PackageTransactionDescriptor,
+  PackageRetentionDecision,
+  PackageRecoveryVerified,
+  PackageRecoveryResult,
+  PackageRecoveryEffect,
+  PackageRecoveryEffectReceipt,
+  PreparePackageRecovery,
+  PackageRecoveryHooks,
+} from "./package-update-recovery-contract.js";
 
 class PackageRecoveryConflict extends Error {}
 
@@ -230,177 +83,199 @@ export function createPackageRecoveryTransaction(
   async function observe(next = descriptor): Promise<PackageRecoveryVerified> {
     facts = { roots: [], launchers: [] };
     const reader = createPackageIntegrityReader(timeoutMs);
-    const observation: PackageRecoveryObservation = {
-      previous: "absent",
-      candidate: "absent",
-      launchers: "mixed",
-      successorLive: false,
-    };
-    for (const [root, previousRole, candidateRole] of [
-      [next.liveRoot, "live", "live"],
-      [next.backupRoot, "retained", null],
-      [next.stageRoot, null, "staged"],
-      [displacedRoot, null, "displaced"],
-    ] as const) {
-      const fact: PackageRecoveryFacts["roots"][number] = {
-        path: root,
-        identity: null,
-        match: "unavailable",
+    return await reader.observe("transaction", async () => {
+      const observation: PackageRecoveryObservation = {
+        previous: "absent",
+        candidate: "absent",
+        launchers: "mixed",
+        successorLive: false,
       };
-      facts.roots.push(fact);
-      if (!(await reader.exists(root))) {
-        fact.match = "absent";
-        continue;
-      }
-      fact.identity = await reader.directoryIdentity(root);
-      const actual = await reader.tree(root, next.liveRoot);
-      if (previousRole && next.previous && isDeepStrictEqual(actual, next.previous)) {
-        if (observation.previous !== "absent") {
-          conflict("Previous package appears in multiple roles");
+      const roles = [
+        [next.liveRoot, "live", "live"],
+        [next.backupRoot, "retained", null],
+        [next.stageRoot, null, "staged"],
+        [displacedRoot, null, "displaced"],
+      ] as const;
+      // The fixed role set shares one unchanged deadline. Join every observation
+      // before interpreting it or calling a durable/effect hook; a slow live tree
+      // must not consume the candidate tree's whole opportunity to be inspected.
+      const roots = await Promise.allSettled(
+        roles.map(async ([root]) => {
+          if (!(await reader.exists(root))) {
+            return null;
+          }
+          const identity = await reader.directoryIdentity(root);
+          const tree = await reader.tree(root, next.liveRoot);
+          return { identity, tree };
+        }),
+      );
+      for (const [index, [root, previousRole, candidateRole]] of roles.entries()) {
+        const fact: PackageRecoveryFacts["roots"][number] = {
+          path: root,
+          identity: null,
+          match: "unavailable",
+        };
+        facts.roots.push(fact);
+        const result = roots[index]!;
+        if (result.status === "rejected") {
+          throw result.reason;
         }
-        observation.previous = previousRole;
-        fact.match = "previous";
-      } else if (candidateRole && isDeepStrictEqual(actual, next.candidate)) {
-        if (observation.candidate !== "absent") {
-          conflict("Candidate package appears in multiple roles");
+        if (!result.value) {
+          fact.match = "absent";
+          continue;
         }
-        observation.candidate = candidateRole;
-        fact.match = "candidate";
-      } else if (
-        root === next.liveRoot &&
-        next.retention?.state === "superseded" &&
-        isDeepStrictEqual(actual, next.retention.replacement.live)
-      ) {
-        observation.successorLive = true;
-        fact.match = "successor";
-      } else {
-        fact.match = "conflict";
-        conflict(`Package generation changed at ${root}`);
-      }
-    }
-    const retiring = next.retention !== null && next.retention.state !== "selected";
-    if (next.shimBackupRoot && (await reader.exists(next.shimBackupRoot))) {
-      if ((await reader.directoryIdentity(next.shimBackupRoot)) !== next.shimBackupIdentity) {
-        conflict("Retained launcher directory identity changed");
-      }
-      const names = await reader.entries(next.shimBackupRoot, 64);
-      const expected = next.launchers
-        .filter((entry) => entry.previous !== null)
-        .map((entry) => entry.name)
-        .toSorted();
-      if (
-        names.some((name) => !expected.includes(name)) ||
-        (!retiring && !isDeepStrictEqual(names, expected))
-      ) {
-        conflict("Retained launcher inventory changed");
-      }
-    }
-    if (
-      next.previous &&
-      observation.previous === "absent" &&
-      next.retention?.state !== "superseded"
-    ) {
-      throw new Error("Previous package recovery material is unavailable");
-    }
-    if (
-      next.retention?.state === "unselected" &&
-      next.previous &&
-      observation.previous !== "live"
-    ) {
-      conflict("Unselected cleanup requires the previous package to be restored live");
-    }
-    let previousLaunchers = true;
-    let candidateLaunchers = true;
-    let interruptedLauncher = false;
-    for (const entry of next.launchers) {
-      const destination = launcherPath(entry.name);
-      const actual = (await reader.exists(destination)) ? await reader.launcher(destination) : null;
-      previousLaunchers &&= actual === entry.previous;
-      candidateLaunchers &&= actual === entry.candidate;
-      const missingDuringEffect =
-        actual === null &&
-        (pendingEffect?.action === "restore" ||
-          pendingEffect?.action === "activate" ||
-          next.interruptedLaunchers.includes(entry.name));
-      facts.launchers.push({
-        name: entry.name,
-        match:
-          actual === entry.previous && actual === entry.candidate
-            ? "both"
-            : actual === entry.previous
-              ? "previous"
-              : actual === entry.candidate
-                ? "candidate"
-                : actual === null
-                  ? "absent"
-                  : "conflict",
-      });
-      if (actual !== entry.previous && actual !== entry.candidate && !observation.successorLive) {
-        if (!missingDuringEffect) {
-          conflict(`Package launcher changed at ${destination}`);
-        }
-        interruptedLauncher = true;
-      }
-      const backup = backupLauncher(entry.name);
-      if (!retiring || (backup && (await reader.exists(backup)))) {
-        if (
-          entry.previous !== null &&
-          (!backup || (await reader.launcher(backup)) !== entry.previous)
+        fact.identity = result.value.identity;
+        const actual = result.value.tree;
+        if (previousRole && next.previous && isDeepStrictEqual(actual, next.previous)) {
+          if (observation.previous !== "absent") {
+            conflict("Previous package appears in multiple roles");
+          }
+          observation.previous = previousRole;
+          fact.match = "previous";
+        } else if (candidateRole && isDeepStrictEqual(actual, next.candidate)) {
+          if (observation.candidate !== "absent") {
+            conflict("Candidate package appears in multiple roles");
+          }
+          observation.candidate = candidateRole;
+          fact.match = "candidate";
+        } else if (
+          root === next.liveRoot &&
+          next.retention?.state === "superseded" &&
+          isDeepStrictEqual(actual, next.retention.replacement.live)
         ) {
-          conflict(`Retained launcher changed: ${entry.name}`);
+          observation.successorLive = true;
+          fact.match = "successor";
+        } else {
+          fact.match = "conflict";
+          conflict(`Package generation changed at ${root}`);
         }
       }
-    }
-    observation.launchers = interruptedLauncher
-      ? "interrupted"
-      : previousLaunchers && candidateLaunchers
-        ? "both"
-        : previousLaunchers
-          ? "previous"
-          : candidateLaunchers
-            ? "candidate"
-            : "mixed";
-    if (next.retention?.state === "superseded") {
-      const replacement = next.retention.replacement;
-      if (
-        new Set(replacement.launchers.map((entry) => entry.name)).size !==
-          replacement.launchers.length ||
-        next.launchers.some(
-          (entry) => !replacement.launchers.some((live) => live.name === entry.name),
-        )
-      ) {
-        conflict("Superseding launcher inventory is incomplete");
-      }
-      for (const entry of replacement.launchers) {
-        if ((await reader.launcher(launcherPath(entry.name))) !== entry.fingerprint) {
-          conflict("Superseding launcher identity changed");
+      const retiring = next.retention !== null && next.retention.state !== "selected";
+      if (next.shimBackupRoot && (await reader.exists(next.shimBackupRoot))) {
+        if ((await reader.directoryIdentity(next.shimBackupRoot)) !== next.shimBackupIdentity) {
+          conflict("Retained launcher directory identity changed");
+        }
+        const names = await reader.entries(next.shimBackupRoot, 64);
+        const expected = next.launchers
+          .filter((entry) => entry.previous !== null)
+          .map((entry) => entry.name)
+          .toSorted();
+        if (
+          names.some((name) => !expected.includes(name)) ||
+          (!retiring && !isDeepStrictEqual(names, expected))
+        ) {
+          conflict("Retained launcher inventory changed");
         }
       }
       if (
-        !observation.successorLive ||
-        replacement.retainedRoot === next.liveRoot ||
-        replacement.retainedRoot === next.backupRoot ||
-        replacement.retainedRoot === displacedRoot ||
-        path.dirname(replacement.retainedRoot) !== path.dirname(next.backupRoot) ||
-        !path.basename(replacement.retainedRoot).startsWith(".openclaw.package-backup-") ||
-        replacement.retained.identity === replacement.live.identity ||
-        !isDeepStrictEqual(
-          await reader.tree(replacement.retainedRoot, next.liveRoot),
-          replacement.retained,
-        )
+        next.previous &&
+        observation.previous === "absent" &&
+        next.retention?.state !== "superseded"
       ) {
-        conflict("Superseding live/retained package pair is not verified");
+        throw new Error("Previous package recovery material is unavailable");
       }
-    }
-    const snapshot = structuredClone(next);
-    return {
-      status: "verified",
-      descriptor: snapshot,
-      observation,
-      observedIdentity: createHash("sha256")
-        .update(JSON.stringify([snapshot, observation]))
-        .digest("hex"),
-    };
+      if (
+        next.retention?.state === "unselected" &&
+        next.previous &&
+        observation.previous !== "live"
+      ) {
+        conflict("Unselected cleanup requires the previous package to be restored live");
+      }
+      let previousLaunchers = true;
+      let candidateLaunchers = true;
+      let interruptedLauncher = false;
+      for (const entry of next.launchers) {
+        const destination = launcherPath(entry.name);
+        const actual = (await reader.exists(destination))
+          ? await reader.launcher(destination)
+          : null;
+        previousLaunchers &&= actual === entry.previous;
+        candidateLaunchers &&= actual === entry.candidate;
+        const missingDuringEffect =
+          actual === null &&
+          (pendingEffect?.action === "restore" ||
+            pendingEffect?.action === "activate" ||
+            next.interruptedLaunchers.includes(entry.name));
+        facts.launchers.push({
+          name: entry.name,
+          match:
+            actual === entry.previous && actual === entry.candidate
+              ? "both"
+              : actual === entry.previous
+                ? "previous"
+                : actual === entry.candidate
+                  ? "candidate"
+                  : actual === null
+                    ? "absent"
+                    : "conflict",
+        });
+        if (actual !== entry.previous && actual !== entry.candidate && !observation.successorLive) {
+          if (!missingDuringEffect) {
+            conflict(`Package launcher changed at ${destination}`);
+          }
+          interruptedLauncher = true;
+        }
+        const backup = backupLauncher(entry.name);
+        if (!retiring || (backup && (await reader.exists(backup)))) {
+          if (
+            entry.previous !== null &&
+            (!backup || (await reader.launcher(backup)) !== entry.previous)
+          ) {
+            conflict(`Retained launcher changed: ${entry.name}`);
+          }
+        }
+      }
+      observation.launchers = interruptedLauncher
+        ? "interrupted"
+        : previousLaunchers && candidateLaunchers
+          ? "both"
+          : previousLaunchers
+            ? "previous"
+            : candidateLaunchers
+              ? "candidate"
+              : "mixed";
+      if (next.retention?.state === "superseded") {
+        const replacement = next.retention.replacement;
+        if (
+          new Set(replacement.launchers.map((entry) => entry.name)).size !==
+            replacement.launchers.length ||
+          next.launchers.some(
+            (entry) => !replacement.launchers.some((live) => live.name === entry.name),
+          )
+        ) {
+          conflict("Superseding launcher inventory is incomplete");
+        }
+        for (const entry of replacement.launchers) {
+          if ((await reader.launcher(launcherPath(entry.name))) !== entry.fingerprint) {
+            conflict("Superseding launcher identity changed");
+          }
+        }
+        if (
+          !observation.successorLive ||
+          replacement.retainedRoot === next.liveRoot ||
+          replacement.retainedRoot === next.backupRoot ||
+          replacement.retainedRoot === displacedRoot ||
+          path.dirname(replacement.retainedRoot) !== path.dirname(next.backupRoot) ||
+          !path.basename(replacement.retainedRoot).startsWith(".openclaw.package-backup-") ||
+          replacement.retained.identity === replacement.live.identity ||
+          !isDeepStrictEqual(
+            await reader.tree(replacement.retainedRoot, next.liveRoot),
+            replacement.retained,
+          )
+        ) {
+          conflict("Superseding live/retained package pair is not verified");
+        }
+      }
+      const snapshot = structuredClone(next);
+      return {
+        status: "verified",
+        descriptor: snapshot,
+        observation,
+        observedIdentity: createHash("sha256")
+          .update(JSON.stringify([snapshot, observation]))
+          .digest("hex"),
+      };
+    });
   }
 
   async function attempt(

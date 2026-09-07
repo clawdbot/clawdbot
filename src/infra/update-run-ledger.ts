@@ -500,6 +500,32 @@ export function finishInterruptedUpdateBeforeActivationInTransaction(
   );
 }
 
+/** Recovery owns the real source/executor interval and commits its historical
+ * preparation marker in this same existing-schema transaction. */
+export function finishAbortedUpdatePreparationInTransaction(
+  db: DatabaseSync,
+  runId: string,
+  options: LedgerOptions,
+): void {
+  if (!db.isTransaction) {
+    throw new Error("Preparation settlement requires its recovery transaction");
+  }
+  mutateRunInTransaction(
+    db,
+    runId,
+    (record) => {
+      if (
+        record.status !== "running" ||
+        !["requested", "staging", "validating"].includes(record.phase)
+      ) {
+        throw new Error("Preparation settlement requires unfinished pre-activation history");
+      }
+      finishRunRecord(record, { status: "failed", reason: "interrupted-preparation" });
+    },
+    options,
+  );
+}
+
 export function recordUpdateRunVerification(
   runId: string,
   verification: UpdateRunRecord["verification"],

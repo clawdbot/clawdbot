@@ -4,6 +4,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
+  createPackageRecoveryTransaction,
   reopenPackageUpdateTransaction,
   type PackageRecoveryEffect,
   type PackageRecoveryHooks,
@@ -190,3 +191,66 @@ it("keeps the existing launcher when a copy is interrupted and reopens the origi
     );
   });
 });
+
+it.each([false, true])(
+  "joins independent root reads within one unchanged deadline (stall=%s)",
+  async (stall) => {
+    await withTestDir({ prefix: "package-root-observation-" }, async (base) => {
+      const hooks: PackageRecoveryHooks = {
+        transactionId: randomUUID(),
+        persistDescriptor: async () => ({ assertCurrent() {} }),
+        beforeEffect: async () => ({ assertCurrent() {}, afterEffect: async () => {} }),
+      };
+      const f = await createRetainedPackageSwap(base, hooks);
+      const descriptor = f.transaction.recovery!.descriptor();
+      const targets = new Set(
+        [descriptor.liveRoot, descriptor.backupRoot].map((root) => path.join(root, "package.json")),
+      );
+      const entered = new Set<string>();
+      let release!: () => void;
+      const barrier = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const open = fs.open.bind(fs);
+      const opens: ReturnType<typeof fs.open>[] = [];
+      const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const file = String(args[0]);
+        if (targets.has(file) && !entered.has(file)) {
+          entered.add(file);
+          if (entered.size === targets.size && !stall) {
+            release();
+          }
+          await barrier;
+        }
+        const opening = open(...args);
+        opens.push(opening);
+        return opening;
+      });
+      try {
+        const result = await createPackageRecoveryTransaction(descriptor, hooks, 500).observe();
+        expect(entered.size).toBe(2);
+        expect(result).toMatchObject(
+          stall
+            ? {
+                status: "unavailable",
+                reason: "Package rollback verification timed out",
+              }
+            : {
+                status: "verified",
+                observation: { previous: "retained", candidate: "live", launchers: "candidate" },
+              },
+        );
+      } finally {
+        release();
+        // Let late OS opens settle before deleting their real fixture roots.
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        for (const handle of await Promise.all(opens)) {
+          await expect.poll(() => handle.fd).toBe(-1);
+        }
+        spy.mockRestore();
+      }
+    });
+  },
+);

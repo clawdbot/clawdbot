@@ -20,6 +20,7 @@ import { UPDATE_RECOVERY_KEY_END, UPDATE_RECOVERY_KEY_PREFIX } from "./update-ru
 import { parseRecoveryPackageObservation } from "./update-run-recovery-package-schema.js";
 import {
   UpdateRecoveryRecordSchema,
+  isUpdateRecoveryPending,
   UpdateRecoveryReadinessReceiptSchema,
   decodeUpdateRecovery,
   encodeUpdateRecovery,
@@ -87,9 +88,7 @@ export function loadUpdateRecovery(
 }
 /** Detection only; finalization owns reconciliation and matching-runtime replay. */
 export function assertNoPendingUpdateRecovery(options: OpenClawStateDatabaseOptions = {}): void {
-  const pending = loadUpdateRecoveries(options).find(
-    (record) => !record.terminal || record.effects.some((effect) => effect.state === "intent"),
-  );
+  const pending = loadUpdateRecoveries(options).find(isUpdateRecoveryPending);
   if (pending) {
     throw new UpdateRecoveryRequiredError(pending);
   }
@@ -105,9 +104,7 @@ export function beginUpdateRecovery(
   return writeRecovery(
     fence,
     (db) => {
-      const pending = readRecoveries(db).find(
-        (record) => !record.terminal || record.effects.some((effect) => effect.state === "intent"),
-      );
+      const pending = readRecoveries(db).find(isUpdateRecoveryPending);
       if (pending) {
         throw new UpdateRecoveryRequiredError(pending);
       }

@@ -110,7 +110,7 @@ export function createPackageIntegrityReader(timeoutMs = MAX_SCAN_MS) {
   }
 
   async function observe<T>(
-    phase: "baseline" | "retained" | "restored",
+    phase: "baseline" | "retained" | "restored" | "transaction",
     operation: () => Promise<T>,
   ): Promise<T> {
     const emit = (event: string, facts?: Record<string, unknown>) => {

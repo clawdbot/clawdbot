@@ -18,6 +18,13 @@ MANAGER_ENV
   )" || return "$?"
   mkdir -p "$shim_dir"
   cp "$(dirname "${BASH_SOURCE[0]}")/systemd-fixture.mjs" "$shim_dir/systemd-fixture.mjs"
+  node - "$shim_dir/systemd-fixture-runtime.json" \
+    "${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE:-$shim_dir/systemctl-shim.pid}" \
+    "${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG:-$shim_dir/systemctl-shim-gateway.log}" <<'RUNTIME_PATHS'
+const fs = require("node:fs");
+const [file, pidFile, daemonLog] = process.argv.slice(2);
+fs.writeFileSync(file, JSON.stringify({ pidFile, daemonLog }), { mode: 0o600 });
+RUNTIME_PATHS
   cat >"$shim_dir/busctl" <<'BUSCTL'
 #!/usr/bin/env bash
 exec node "$(dirname "$0")/systemd-fixture.mjs" busctl "$@"
@@ -135,6 +142,7 @@ const restartWindowMs = 60_000;
 const restartBurst = 5;
 const stopTimeoutMs = 30_000;
 const starts = [];
+let totalStarts = 0;
 let firstExit;
 let child;
 let activeGroupPid;
@@ -222,12 +230,16 @@ const start = () => {
     return finish();
   }
   starts.push(now);
+  totalStarts++;
   child = spawn("bash", ["-c", command], {
     detached: true,
     env: childEnv,
     stdio: ["ignore", output, output],
   });
   activeGroupPid = child.pid;
+  fs.writeFileSync(`${daemonLog}.runtime.json`, JSON.stringify({
+    restarts: totalStarts - 1, entered: Math.trunc(performance.now() * 1000),
+  }));
   const childGroupPid = activeGroupPid;
   child.on("error", (error) => {
     fs.writeSync(output, `[systemctl-shim] gateway spawn failed: ${String(error)}\n`);

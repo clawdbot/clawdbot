@@ -44,6 +44,7 @@ import {
   type UpdateRunStep,
 } from "../../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
+import { isUpdateRecoveryPending } from "../../infra/update-run-recovery-schema.js";
 import { readRecoveries } from "../../infra/update-run-recovery-store.js";
 import { inspectUpdateRecoveries, loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner.js";
@@ -199,7 +200,7 @@ export async function withUpdatePreviewSignals<T>(
         const options = { env, database };
         if (
           readRecoveries(database.db).some(
-            (entry) => entry.runId === expected.runId || !entry.terminal,
+            (entry) => entry.runId === expected.runId || isUpdateRecoveryPending(entry),
           )
         ) {
           return;

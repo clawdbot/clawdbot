@@ -9,7 +9,10 @@ import {
   inspectUpdateCheckpointRestoreResource,
 } from "../../infra/update-checkpoint-restore.js";
 import { validateUpdateRecoveryPublicationDatabaseAtPath } from "../../infra/update-run-recovery-publication.js";
-import { UpdateRecoveryRecordSchema } from "../../infra/update-run-recovery-schema.js";
+import {
+  UpdateRecoveryRecordSchema,
+  isUpdateRecoveryPending,
+} from "../../infra/update-run-recovery-schema.js";
 import {
   inspectUpdateRecoveries,
   loadUpdateRecovery,
@@ -120,17 +123,12 @@ export async function discoverUpdateCommandRecovery(
   env: NodeJS.ProcessEnv,
 ): Promise<UpdateRecoveryRecord | undefined> {
   const databasePath = resolveOpenClawStateSqlitePath(env);
-  const pending = (records: UpdateRecoveryRecord[]) =>
-    records.filter(
-      (record) => !record.terminal || record.effects.some((effect) => effect.state === "intent"),
-    );
+  const pending = (records: UpdateRecoveryRecord[]) => records.filter(isUpdateRecoveryPending);
   const readCurrent = (file: string) => {
     const inspected = inspectUpdateRecoveries({ path: file, env });
     if (
       inspected.some(
-        ({ format, record }) =>
-          format !== "current" &&
-          (!record.terminal || record.effects.some((effect) => effect.state === "intent")),
+        ({ format, record }) => format !== "current" && isUpdateRecoveryPending(record),
       )
     ) {
       throw new UpdateCommandRecoveryPendingError("Legacy recovery remains unresolved.");

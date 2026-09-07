@@ -136,6 +136,9 @@ export function mutateRecovery(
     fence,
     (db) => {
       const { record, raw } = requireRevision(db, expected);
+      if (record.preparationAborted) {
+        throw new UpdateRecoveryConflictError();
+      }
       if (!claimTransition) {
         assertExecutingClaim(record);
       }
@@ -170,7 +173,7 @@ export function mutateRecovery(
   );
 }
 export function assertExecutingClaim(record: UpdateRecoveryRecord): void {
-  if (record.handoff?.state === "prepared") {
+  if (record.preparationAborted || record.handoff?.state === "prepared") {
     throw new UpdateRecoveryConflictError();
   }
 }

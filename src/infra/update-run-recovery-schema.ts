@@ -218,6 +218,15 @@ const recoveryInspectionRecordSchema = z
         pairId: z.uuid().nullable(),
       })
       .optional(),
+    // Historical no-effect settlement, not a serving or rollback receipt.
+    preparationAborted: z
+      .strictObject({
+        reason: z.literal("interrupted-preparation"),
+        committedAtMs: counter,
+        commitRevision: counter,
+        observedIdentity: z.string().regex(/^[a-f0-9]{64}$/u),
+      })
+      .optional(),
     retainedPair: z
       .strictObject({
         pairId: z.uuid(),
@@ -228,6 +237,41 @@ const recoveryInspectionRecordSchema = z
     primaryFailure: z.strictObject({ code: exactText, effectId: z.uuid().nullable() }).nullable(),
   })
   .superRefine((record, ctx) => {
+    const aborted = record.preparationAborted;
+    if (
+      aborted &&
+      (!record.source ||
+        !record.preimages ||
+        !record.nativeManager ||
+        !record.package ||
+        record.claimKind !== "recovery" ||
+        record.effects.length !== 0 ||
+        record.nativeManager.effects.length !== 0 ||
+        record.handoff ||
+        record.checkpoint ||
+        record.afterImages !== undefined ||
+        record.restore ||
+        record.publication ||
+        record.verification ||
+        record.terminal ||
+        record.retainedPair ||
+        record.primaryFailure?.code !== aborted.reason ||
+        record.primaryFailure.effectId !== null ||
+        aborted.commitRevision !== record.revision ||
+        aborted.committedAtMs > record.updatedAtMs ||
+        aborted.observedIdentity !== record.package.observed.observedIdentity ||
+        record.package.descriptor.retention !== null ||
+        record.package.descriptor.interruptedLaunchers.length !== 0 ||
+        record.package.observed.observation.previous !== "live" ||
+        record.package.observed.observation.candidate !== "staged" ||
+        !["previous", "both"].includes(record.package.observed.observation.launchers) ||
+        record.package.observed.observation.successorLive)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Preparation settlement cannot carry effects or serving authority",
+      });
+    }
     const verification = record.verification;
     if (verification) {
       const receipt = verification.receipt;
@@ -636,4 +680,17 @@ export function encodeUpdateRecovery(record: UpdateRecoveryRecord): string {
     throw new Error("Update recovery record exceeds its storage limit");
   }
   return raw;
+}
+
+/** Only decoded records may be tested: an aborted preparation is historical,
+ * and can never confer restart, cleanup, or future claim authority. */
+export function isUpdateRecoveryPending(record: {
+  terminal?: unknown;
+  preparationAborted?: unknown;
+  effects: readonly { state: string }[];
+}): boolean {
+  return (
+    !record.preparationAborted &&
+    (!record.terminal || record.effects.some((effect) => effect.state === "intent"))
+  );
 }

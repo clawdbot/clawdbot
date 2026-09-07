@@ -11,6 +11,7 @@ import { completeUpdateCommandCandidate } from "./update-command-candidate-compl
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { quiesceFailedUpdateCommand } from "./update-command-native-quiescence.js";
+import { resumeUnstartedUpdatePreparation } from "./update-command-preparation-replay.js";
 import {
   UpdateCommandRecoveryPendingError,
   type UpdateCommandRecovery,
@@ -40,6 +41,9 @@ export async function resumePendingUpdateCommand(params: {
   }
   if (found.terminal) {
     return await resumeTerminalUpdateRetirement({ ...params, pending: found, env });
+  }
+  if (!found.checkpoint) {
+    return await resumeUnstartedUpdatePreparation({ ...params, pending: found, env });
   }
   if (
     !found.checkpoint ||

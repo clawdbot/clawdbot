@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
+import { readLoadedSystemdServiceRuntime } from "../../src/daemon/systemd-loaded-runtime.js";
 import { readSystemdServiceRuntime } from "../../src/daemon/systemd-runtime.js";
 import {
   readSystemdServiceExecStart,
@@ -60,8 +61,13 @@ function fixture(customPaths = true, registry?: string) {
 
 describe.skipIf(process.platform === "win32")("survivor manager fixture", () => {
   it("distinguishes confirmed absence from unsupported inspection and reads the generated service", async () => {
-    const { home, env, systemctl, unit } = fixture();
+    const { home, env, systemctl, unit, paths } = fixture();
     // First install must reach the same effective reader used by the guarded writer.
+    expect(await readLoadedSystemdServiceRuntime(env)).toMatchObject({ status: "unknown" });
+    expect(existsSync(`${unit}.loaded-unit`)).toBe(false);
+    expect(
+      await readSystemdServiceExecStart(env, { requireEffective: true, requireLoaded: true }),
+    ).toBeNull();
     expect(await readSystemdServiceExecStart(env, { requireEffective: true })).toBeNull();
     expect(await readSystemdServiceRuntime(env)).toMatchObject({
       status: "stopped",
@@ -90,6 +96,10 @@ describe.skipIf(process.platform === "win32")("survivor manager fixture", () => 
         environmentFiles: [environmentFile],
       }),
     );
+    await expect(
+      readSystemdServiceExecStart(env, { requireEffective: true, requireLoaded: true }),
+    ).rejects.toThrow("could not be inspected");
+    expect(existsSync(`${unit}.loaded-unit`)).toBe(false);
     const command = await readSystemdServiceExecStart(env, { requireEffective: true });
     const stoppedRuntime = await readSystemdServiceRuntime(env);
     expect(stoppedRuntime).toMatchObject({
@@ -98,6 +108,18 @@ describe.skipIf(process.platform === "win32")("survivor manager fixture", () => 
       systemd: { unit: "openclaw-gateway.service" },
     });
     expect(stoppedRuntime.missingUnit).not.toBe(true);
+    const loadedBefore = readFileSync(`${unit}.loaded-unit`, "utf8");
+    const commandsBefore = readFileSync(paths.log, "utf8");
+    expect(
+      await readSystemdServiceExecStart(env, { requireEffective: true, requireLoaded: true }),
+    ).toEqual(command);
+    expect(await readLoadedSystemdServiceRuntime(env)).toMatchObject({
+      status: "stopped",
+      systemd: { managerUid: process.getuid?.(), tasksCurrent: 0 },
+    });
+    expect(readFileSync(`${unit}.loaded-unit`, "utf8")).toBe(loadedBefore);
+    expect(readFileSync(paths.log, "utf8")).toBe(commandsBefore);
+
     // Published 8.1 omits LoadState from its runtime query during baseline bootstrap.
     const legacyRuntime = systemctl(
       "show",
@@ -252,6 +274,11 @@ raise SystemExit(code if code >= 0 else 128 - code)
       );
       expect(restarted.status, restarted.stdout + restarted.stderr).toBe(0);
       await waitForStarts(1);
+      expect(await readLoadedSystemdServiceRuntime(env)).toMatchObject({
+        status: "running",
+        pid: Number(readFileSync(paths.pid, "utf8").trim()),
+        systemd: { managerUid: process.getuid?.() },
+      });
       expect.soft(systemctl("is-active", "openclaw-gateway.service").status).toBe(0);
       const inspected = await readSystemdServiceExecStart(env, { requireEffective: true });
       expect(records()[0]).toEqual({

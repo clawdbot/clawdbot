@@ -4,6 +4,7 @@ import {
   getUpdateRun,
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
+import { isUpdateRecoveryPending } from "../../infra/update-run-recovery-schema.js";
 import { readRecoveries, writeRecovery } from "../../infra/update-run-recovery-store.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -74,7 +75,11 @@ export async function withMutableUpdateSignals<T>(
       { assertCurrent },
       (db) => {
         assertCurrent();
-        if (readRecoveries(db).some((entry) => entry.runId === run.runId || !entry.terminal)) {
+        if (
+          readRecoveries(db).some(
+            (entry) => entry.runId === run.runId || isUpdateRecoveryPending(entry),
+          )
+        ) {
           return;
         }
         finishInterruptedUpdateBeforeActivationInTransaction(db, expected, { env });
