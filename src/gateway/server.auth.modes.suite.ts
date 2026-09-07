@@ -108,6 +108,7 @@ export function registerAuthModesSuite(): void {
       const ws = await openWs(port);
       const res = await connectReq(ws, { token: "secret" });
       expect(res.ok).toBe(true);
+      expect(res.payload).toMatchObject({ auth: { method: "token" } });
       ws.close();
     });
 
