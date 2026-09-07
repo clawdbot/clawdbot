@@ -2003,11 +2003,15 @@ describe("readSystemdServiceExecStart", () => {
   it("fairly reserves the shared deadline across all three manager queries", async () => {
     mockReadGatewayServiceFile(["[Service]", "ExecStart=/usr/bin/openclaw gateway run"]);
     mockSystemdManagerSnapshot({ programArguments: ["/usr/bin/openclaw", "gateway", "run"] });
-    vi.spyOn(performance, "now")
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(1_100)
-      .mockReturnValueOnce(1_400);
+    let elapsed = 1_000;
+    vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    const execute = expectDefined(execFileMock.getMockImplementation(), "manager command fixture");
+    let calls = 0;
+    execFileMock.mockImplementation((...args) => {
+      const result = execute(...args);
+      elapsed += [100, 300, 0][calls++] ?? 0;
+      return result;
+    });
 
     await readSystemdServiceExecStart({ HOME: TEST_SERVICE_HOME }, { timeoutMs: 1_200 });
 

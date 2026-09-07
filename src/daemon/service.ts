@@ -235,7 +235,10 @@ export async function readGatewayServiceState(
       : (service.hasInstalledDefinition?.({ env, timeoutMs }).catch(() => false) ?? false),
     readGatewayServiceLoadState(service, { env, timeoutMs }),
     service
-      .readRuntime(env, { timeoutMs })
+      .readRuntime(env, {
+        timeoutMs,
+        ...(args.requireEffective && args.requireLoadedCommand ? { requireLoaded: true } : {}),
+      })
       .catch((error: unknown) => createServiceRuntimeInspectionFailure(error)),
     // Update policy needs definition authority; ordinary status/start reads do not.
     args.requireEffective

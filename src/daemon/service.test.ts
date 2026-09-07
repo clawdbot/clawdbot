@@ -186,9 +186,10 @@ describe("resolveGatewayService", () => {
 });
 
 describe("readGatewayServiceState", () => {
-  it("passes update loaded-only admission to the real command adapter", async () => {
+  it("passes update loaded-only admission to the command and runtime adapters", async () => {
     const readCommand = vi.fn(async () => null);
-    const service = createService({ readCommand });
+    const readRuntime = vi.fn(async () => ({ status: "stopped" }));
+    const service = createService({ readCommand, readRuntime });
     await readGatewayServiceState(service, {
       requireEffective: true,
       requireLoadedCommand: true,
@@ -196,6 +197,10 @@ describe("readGatewayServiceState", () => {
     });
     expect(readCommand).toHaveBeenCalledWith(expect.anything(), {
       requireEffective: true,
+      requireLoaded: true,
+      timeoutMs: 100,
+    });
+    expect(readRuntime).toHaveBeenCalledWith(expect.anything(), {
       requireLoaded: true,
       timeoutMs: 100,
     });

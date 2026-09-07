@@ -22,6 +22,7 @@ import {
   isSystemdUnitNotEnabled,
   readSystemctlDetail,
 } from "./systemd-exec.js";
+import { readLoadedSystemdServiceRuntime } from "./systemd-loaded-runtime.js";
 import { findInstalledSystemdGatewayScope } from "./systemd-scope.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
 
@@ -141,6 +142,9 @@ export async function readSystemdServiceRuntime(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
   opts?: GatewayServiceReadOptions,
 ): Promise<GatewayServiceRuntime> {
+  if (opts?.requireLoaded) {
+    return await readLoadedSystemdServiceRuntime(env, opts.timeoutMs);
+  }
   const timeoutMs = opts?.timeoutMs;
   const installed = await findInstalledSystemdGatewayScope(env).catch(() => null);
   if (installed?.scope !== "system") {

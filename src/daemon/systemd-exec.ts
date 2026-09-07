@@ -251,8 +251,23 @@ async function execSystemdUserCommand(
   timeoutMs?: number,
 ): Promise<ExecResult> {
   const { machineUser, preferMachineScope } = resolveSystemctlUserScope(env);
-  const run = (scopeArgs: string[]) =>
-    execSystemdCommand(command, [...scopeArgs, ...args], env, timeoutMs);
+  const deadline =
+    timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? performance.now() + timeoutMs
+      : undefined;
+  const run = async (scopeArgs: string[]): Promise<ExecResult> => {
+    const remaining = deadline === undefined ? undefined : Math.ceil(deadline - performance.now());
+    if (remaining !== undefined && remaining <= 0) {
+      return {
+        code: 1,
+        termination: "timeout",
+        stdout: "",
+        stderr: "systemd user manager command deadline expired",
+      };
+    }
+    // The machine fallback is part of this operation, not a fresh timeout budget.
+    return await execSystemdCommand(command, [...scopeArgs, ...args], env, remaining ?? timeoutMs);
+  };
 
   // Under sudo-to-root, prefer the invoking non-root user's scope directly via machine scope.
   if (preferMachineScope && machineUser) {
