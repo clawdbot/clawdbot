@@ -35,8 +35,8 @@
     },
     {
       "path": "export-evidence.mjs",
-      "bytes": 7838,
-      "sha256": "0d6a74ba36412d3210818422a817a6d5084667997d9f8d3c60cb00f7f771ef3c"
+      "bytes": 8523,
+      "sha256": "c15eb9d1499148a6e3028bbc5b21e90db29399a79f05af06970d7a6ab0ca5087"
     },
     {
       "path": "fixture.mjs",
@@ -45,8 +45,8 @@
     },
     {
       "path": "proof-admission.mjs",
-      "bytes": 7820,
-      "sha256": "cee4fa0aafbcda6533d25576e174ac4aa86ecb896e3758bcec56a4a937bf17bf"
+      "bytes": 8182,
+      "sha256": "88feed8ea88b4ee05c4cbde2e59d20356b05eeff314f6725e90fb33268c31d22"
     },
     {
       "path": "proof-admission.test.mjs",
@@ -65,8 +65,8 @@
     },
     {
       "path": "run-hosted.mjs",
-      "bytes": 23843,
-      "sha256": "f7ec54ec81fcb971f462c728d60f121d2948b11760b01504f53627ad6d942c98"
+      "bytes": 24441,
+      "sha256": "e367055785f285b4c4b99c7a4817d0589e17ad672b492458efdfd5413f57b26d"
     },
     {
       "path": "ui-case.swift",

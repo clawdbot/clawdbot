@@ -768,21 +768,19 @@ jobs:
             # Frozen release targets before the iOS lint lane have no equivalent target-owned step.
             echo "Swift lint wrappers are absent; skipping iOS lint for this frozen target."
           fi
-      - name: Build iOS app
-        id: f26_prebuilt_app
+      - name: Generate iOS project
+        id: f26_project_generation
         run: |
           set -euo pipefail
-          pnpm ios:build 2>&1 | tee apps/ios/build/F26Prebuild/public/app-build.log
+          pnpm ios:gen 2>&1 | tee apps/ios/build/F26Prebuild/public/project-generation.log
       - name: Run F26 exact-target native baseline proof
         id: f26_native
-        env:
-          F26_PREBUILD_OUTCOME: ${{ steps.f26_prebuilt_app.outcome }}
         run: node .ci-harness/scripts/proof/f26-read-notice/run-hosted.mjs
       - name: Encrypt F26 complete available evidence
         id: f26_export
         if: ${{ always() && steps.f26_admission.outcome != '' && steps.f26_admission.outcome != 'skipped' }}
         env:
-          F26_PREBUILD_OUTCOME: ${{ steps.f26_prebuilt_app.outcome }}
+          F26_PROJECT_GENERATION_OUTCOME: ${{ steps.f26_project_generation.outcome }}
           F26_NATIVE_OUTCOME: ${{ steps.f26_native.outcome }}
         run: node .ci-harness/scripts/proof/f26-read-notice/export-evidence.mjs
       - name: Retain F26 encrypted evidence

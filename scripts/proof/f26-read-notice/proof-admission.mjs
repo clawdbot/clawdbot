@@ -2,6 +2,17 @@ import assert from "node:assert/strict";
 import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
+export function recordStoppedProof({ record, details, measure, exitCode }) {
+  record("joined-stop", details);
+  try {
+    record("stop-resource-observation", { complete: true, measurement: measure() });
+    return exitCode;
+  } catch (error) {
+    record("stop-resource-observation", { complete: false, error: String(error) });
+    return exitCode || 1;
+  }
+}
+
 // Launch receipts prove roots. The birth interval also charges uncertain detached consumers;
 // it never labels them owned or interprets summed resident bytes as unique physical pages.
 export class ProofMemoryScope {

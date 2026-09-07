@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   createReadStream,
   existsSync,
@@ -49,13 +49,10 @@ const outcomes = {
   harness: preflight.harness,
   run: preflight.run,
   attempt: preflight.attempt,
-  build: process.env.F26_PREBUILD_OUTCOME,
+  projectGeneration: process.env.F26_PROJECT_GENERATION_OUTCOME,
+  build: "not-started",
   native: process.env.F26_NATIVE_OUTCOME,
 };
-writeFileSync(
-  path.join(root, "public/workflow-outcomes.json"),
-  JSON.stringify(outcomes, null, 2) + "\n",
-);
 let productsDirectory;
 try {
   const buildAdmission = JSON.parse(
@@ -70,11 +67,24 @@ try {
   );
   for (const key of ["baseline", "harness", "run", "attempt"])
     assert.equal(buildAdmission[key], preflight[key]);
+  const launchPath = path.join(root, "public/native-build-launch.json");
+  let nativeBuildLaunch;
+  if (existsSync(launchPath)) {
+    outcomes.build = "unverified-launch-receipt";
+    nativeBuildLaunch = JSON.parse(readFileSync(launchPath));
+    for (const key of ["baseline", "harness", "run", "attempt"])
+      assert.equal(nativeBuildLaunch[key], preflight[key]);
+    assert.equal(nativeBuildLaunch.kind, "native-build-test");
+    assert.equal(nativeBuildLaunch.command, "xcodebuild");
+    assert.equal(nativeBuildLaunch.args[0], "test");
+    assert(Number.isSafeInteger(nativeBuildLaunch.pid) && nativeBuildLaunch.pid > 0);
+    outcomes.build = "native-build-test-started";
+  }
   if (
     preflight.sourceVerified &&
     buildAdmission.sourceVerified &&
     buildAdmission.state === "admitted" &&
-    ["success", "failure", "cancelled"].includes(outcomes.build) &&
+    nativeBuildLaunch &&
     existsSync(path.join(process.cwd(), "apps/ios/OpenClaw.xcodeproj"))
   ) {
     const captureDeadline = Date.now() + 60000;
@@ -203,6 +213,10 @@ try {
     ) + "\n",
   );
 }
+writeFileSync(
+  path.join(root, "public/workflow-outcomes.json"),
+  JSON.stringify(outcomes, null, 2) + "\n",
+);
 await exportEvidenceArchive({
   root,
   recipient,

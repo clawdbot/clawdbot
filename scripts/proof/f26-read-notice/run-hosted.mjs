@@ -14,7 +14,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { captureAppIdentity } from "./app-identity.mjs";
 import { readCommand } from "./command-read.mjs";
-import { admitProof, ProofMemoryScope } from "./proof-admission.mjs";
+import { admitProof, ProofMemoryScope, recordStoppedProof } from "./proof-admission.mjs";
 
 const processCensusSource = String.raw`import ctypes
 import errno
@@ -70,16 +70,27 @@ class DarwinProcesses:
                 "exitAbstime": str(usage.exit_abstime), "executableUUID": bytes(usage.uuid).hex(), "status": result, "errno": 0}
 
 
-def observe_process(reader, pid, journal):
+def observe_process(reader, pid, result):
     observation = {"pid": pid}
-    journal.append(observation)
+    result["observations"].append(observation)
     try:
         observation["sample"] = reader.sample(pid)
     except Exception as error:
         observation["failure"] = {"type": type(error).__name__, "message": str(error),
                                   "errno": getattr(error, "errno", None), "capture": getattr(error, "capture", None)}
+        if isinstance(error, OSError) and error.errno == errno.ESRCH:
+            result["notPresent"].append({"pid": pid, "errno": error.errno, "error": str(error)})
+            return None
         raise
     return {"pid": pid, **observation["sample"]}
+
+
+def reconcile_pids(reader, result):
+    current = reader.pids()
+    result["enumerations"].append(sorted(current))
+    if current.intersection(entry["pid"] for entry in result["notPresent"]):
+        raise RuntimeError("An unobserved PID is still listed; process ownership is unknown")
+    return current
 
 
 def census(reader, boot_session, clock=time.monotonic):
@@ -88,31 +99,27 @@ def census(reader, boot_session, clock=time.monotonic):
     deadline = clock() + 9
     try:
         pending = reader.pids()
+        result["enumerations"].append(sorted(pending))
         while pending:
-            result["enumerations"].append(sorted(pending))
             for pid in sorted(pending):
                 if clock() >= deadline:
                     raise RuntimeError("Process census collection deadline; no partial admission")
-                try:
-                    rows[pid] = observe_process(reader, pid, result["observations"])
-                except OSError as error:
-                    if error.errno != errno.ESRCH:
-                        raise
-                    result["notPresent"].append({"pid": pid, "errno": error.errno, "error": str(error)})
-            current = reader.pids()
-            pending = current - rows.keys()
-            # A returned PID with no readable instance is missing, not a zero-size process.
-            if pending.intersection(entry["pid"] for entry in result["notPresent"]):
-                raise RuntimeError("An unobserved PID is still listed; process ownership is unknown")
+                observed = observe_process(reader, pid, result)
+                if observed is not None:
+                    rows[pid] = observed
+            current = reconcile_pids(reader, result)
             for pid in sorted(current.intersection(rows)):
                 if clock() >= deadline:
                     raise RuntimeError("Process census collection deadline; no partial admission")
-                recheck = observe_process(reader, pid, result["observations"])
+                recheck = observe_process(reader, pid, result)
+                if recheck is None:
+                    del rows[pid]
+                    continue
                 if recheck["startAbstime"] != rows[pid]["startAbstime"]:
                     raise RuntimeError(f"Process {pid} changed birth tag during census collection")
                 rows[pid] = recheck
-            current = reader.pids()
-            pending |= current - rows.keys()
+            current = reconcile_pids(reader, result)
+            pending = current - rows.keys()
             rows = {pid: row for pid, row in rows.items() if pid in current}
         result["processes"] = list(rows.values())
         result["complete"] = True
@@ -261,7 +268,6 @@ const admitted = admitProof({
     attempt: process.env.GITHUB_RUN_ATTEMPT,
     node: process.version,
     phase: admissionOnly ? "prebuild" : "runtime",
-    prebuildOutcome: process.env.F26_PREBUILD_OUTCOME,
   },
   redact: clean,
   verifySource: (recorder) => {
@@ -338,6 +344,20 @@ function start(name, command, args, env = environment) {
     }
   });
   if (child.pid) processGroups.add(child.pid);
+  if (name === "native-ui" && child.pid !== undefined) {
+    writeFileSync(
+      path.join(publicOutput, "native-build-launch.json"),
+      JSON.stringify({
+        ...memoryIdentity,
+        kind: "native-build-test",
+        pid: child.pid,
+        command,
+        args,
+        at: Date.now(),
+      }) + "\n",
+      { flag: "wx", mode: 0o600 },
+    );
+  }
   record("started", { name, pid: child.pid, command, args });
   for (const stream of [child.stdout, child.stderr]) {
     const lines = createInterface({ input: stream });
@@ -406,7 +426,12 @@ async function joinStop() {
       process.exitCode = 1;
     }
   }
-  record("joined-stop", { simulator, remainingGroups, monitorFailure, measurement: measure() });
+  process.exitCode = recordStoppedProof({
+    record,
+    details: { simulator, remainingGroups, monitorFailure },
+    measure,
+    exitCode: process.exitCode,
+  });
 }
 monitor = setInterval(() => {
   try {
@@ -637,7 +662,9 @@ try {
     destination: `platform=iOS Simulator,id=${simulator}`,
     phase: "tested",
     baseline,
-    buildStepOutcome: preflight.prebuildOutcome,
+    buildStepOutcome: result.signal
+      ? `native-build-test-signal-${result.signal}`
+      : `native-build-test-exit-${result.code}`,
   });
   await run("app-archive", "tar", [
     "-czf",
