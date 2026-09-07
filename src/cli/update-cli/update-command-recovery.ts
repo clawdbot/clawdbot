@@ -46,6 +46,7 @@ export function assertUpdateCommandRecovery(
   opts: UpdateCommandOptions,
   expected = opts.recovery?.getRecord(),
 ): void {
+  opts.run?.executorFence?.assertCurrent();
   if (!opts.run) {
     if (opts.recovery) {
       throw new UpdateCommandRecoveryPendingError("Recovery requires its admitted update run.");

@@ -29,6 +29,7 @@ import { gatewayHealthResponse } from "../gateway/health-response.test-support.j
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PackageUpdateTransaction } from "../infra/package-update-steps.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
+import * as updateTempRoot from "../infra/tmp-openclaw-dir.js";
 import { isBetaTag } from "../infra/update-channels.js";
 import { applyDevUpdateTargetEnv } from "../infra/update-dev-target.js";
 import {
@@ -37,6 +38,7 @@ import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   writeUpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
+import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
@@ -1844,6 +1846,7 @@ describe("update-cli", () => {
   };
 
   beforeEach(async () => {
+    const executorTmp = tempDirs.make("update-cli-owner-");
     absentServicePort = await getFreePort();
     const gatewayEntrypoint = await import("../daemon/gateway-entrypoint.js");
     const actualGatewayEntrypoint = await vi.importActual<
@@ -1865,6 +1868,7 @@ describe("update-cli", () => {
     }
     restartHealthTestControl.snapshot = undefined;
     vi.resetAllMocks();
+    vi.spyOn(updateTempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(executorTmp);
     pluginAvailabilityPreflight.mockResolvedValue(undefined);
     triageAfterFailure.mockResolvedValue(undefined);
     managedUpdateHandoff.activate.mockResolvedValue(false);
@@ -7811,6 +7815,40 @@ describe("update-cli", () => {
       }
     },
   );
+
+  it("keeps the live package unchanged when its executor is rebound during candidate validation", async () => {
+    const root = await mockPackageInstallAtCaseDir("openclaw-update-revoked-executor");
+    mockFileBackedPathExists();
+    const before = await fs.readFile(path.join(root, "package.json"));
+    candidateValidation.mockImplementationOnce(async (options) => {
+      const { createManagedHandoffLeaseStore } =
+        await import("../infra/update-managed-service-handoff-lease.js");
+      const store = createManagedHandoffLeaseStore();
+      const found = store.read(resolveUpdateInstallRoot(root));
+      if (found.kind !== "current") {
+        throw new Error("Expected the real startup executor before candidate validation");
+      }
+      await Promise.resolve();
+      expect(store.bind(found.lease, process.pid)).not.toBeNull();
+      return reportCandidateSteps(options, {
+        status: "ok",
+        steps: [
+          {
+            name: "candidate gateway canary",
+            command: "openclaw gateway",
+            cwd: options.root,
+            durationMs: 1,
+            exitCode: 0,
+          },
+        ],
+      });
+    });
+    await expect(updateCommand({ yes: true, json: true })).rejects.toThrow();
+    expect(await fs.readFile(path.join(root, "package.json"))).toEqual(before);
+    expect(doctorCommandCall()).toBeUndefined();
+    expect(serviceStop).not.toHaveBeenCalled();
+    expect(serviceRestart).not.toHaveBeenCalled();
+  });
 
   it("refuses activation when successful Doctor leaves the validated candidate schema unapplied", async () => {
     const root = await mockPackageInstallAtCaseDir("openclaw-update-incomplete-migration");

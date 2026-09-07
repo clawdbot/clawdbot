@@ -49,6 +49,10 @@ import {
 } from "./shared.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
 import { printUpdateDryRun } from "./update-command-dry-run.js";
+import {
+  withUpdateCommandExecutor,
+  type UpdateCommandExecutor,
+} from "./update-command-executor.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import {
   reportPreMutationUpdateFailure,
@@ -117,8 +121,17 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
     const execute = () =>
       withUpdateFailureTriage({ ...opts, invocationCwd }, recoveryState.triageTarget, async () => {
         await withUpdateInProgressEnv(invocationCwd, async () => {
-          await withUpdateCommandRecoveryUnwind(opts, recoveryState, () =>
-            updateCommandInternal(opts, recoveryState, invocationCwd, prepared, presentation),
+          await withUpdateCommandExecutor(run.runId, (executor) =>
+            withUpdateCommandRecoveryUnwind(opts, recoveryState, () =>
+              updateCommandInternal(
+                opts,
+                recoveryState,
+                invocationCwd,
+                prepared,
+                presentation,
+                executor,
+              ),
+            ),
           );
         });
       });
@@ -134,6 +147,7 @@ async function updateCommandInternal(
   invocationCwd: string | undefined,
   prepared: NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>,
   presentation: ReturnType<typeof createUpdateProgress>,
+  executor: UpdateCommandExecutor,
 ): Promise<void> {
   const {
     startedAt,
@@ -580,17 +594,24 @@ async function updateCommandInternal(
   > = {};
   let mutableUpdatePrepared = false;
   const prepareMutableUpdate = async (env?: NodeJS.ProcessEnv) => {
+    const fence = await executor.enter(root);
+    run.executorFence = fence;
+    fence.assertCurrent();
     if (mutableUpdatePrepared) {
       return;
     }
     // Cleanup, state-write admission and updater autostart belong after complete target admission.
     await withOwnedManagedUpdateEnv(env, async () => {
       await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
+      fence.assertCurrent();
       await assertOpenClawStateWriteAllowedAtPath({
         databasePath: resolveOpenClawStateSqlitePath(process.env),
       });
+      fence.assertCurrent();
       await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
+      fence.assertCurrent();
       preUpdatePluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
+      fence.assertCurrent();
     });
     mutableUpdatePrepared = true;
   };
@@ -627,6 +648,7 @@ async function updateCommandInternal(
       progress.deferLedgerWrites();
     },
   });
+  run.executorFence?.assertCurrent();
   if (!execution) {
     return;
   }
@@ -687,6 +709,7 @@ async function updateCommandInternal(
     config: finalizationConfigSnapshot.config,
     env: ownedManagedUpdateContext?.env ?? run.env,
   });
+  run.executorFence?.assertCurrent();
   if (rollbackBlockedReason) {
     // A migrated database belongs to the candidate runtime. The old process
     // must not reopen it, including during error reporting or outer cleanup.

@@ -326,6 +326,7 @@ export async function executeMutableUpdate(params: {
     return { config: context.config, hash: context.configSnapshot.hash };
   };
   const validateCandidate = async (root: string) => {
+    assertUpdateCommandRecovery(params.opts);
     const env = ownedManagedUpdateContext?.env ?? params.opts.run?.env ?? process.env;
     if (params.opts.run) {
       recordUpdateRunPhase(params.opts.run.runId, "validating", undefined, {
@@ -355,6 +356,7 @@ export async function executeMutableUpdate(params: {
           params.progress?.onStepComplete?.({ ...step, index: 0, total: 0 });
         },
       });
+      assertUpdateCommandRecovery(params.opts);
       if (validation.status === "ok") {
         validatedConfigSnapshot = snapshot;
         candidateSchemaVersions = validation.candidateSchemaVersions;
@@ -415,6 +417,7 @@ export async function executeMutableUpdate(params: {
     return validation.steps;
   };
   const beforeActivate = async (roots: readonly string[] = [params.root]) => {
+    assertUpdateCommandRecovery(params.opts);
     const env = ownedManagedUpdateContext?.env ?? params.opts.run?.env ?? process.env;
     const snapshot = await readCandidateSource(env);
     if (
@@ -488,6 +491,7 @@ export async function executeMutableUpdate(params: {
     }
     // Health and candidate work can outlive the inspected service/config generation.
     await recheckSchemas(admittedTargetSchemaVersions);
+    assertUpdateCommandRecovery(params.opts);
     if (params.opts.run) {
       recordUpdateRunPhase(params.opts.run.runId, "activating", undefined, {
         env: params.opts.run.env,
@@ -507,6 +511,7 @@ export async function executeMutableUpdate(params: {
       await stopManagedServiceBeforeMutableUpdate(roots);
     }
     await recheckSchemas(admittedTargetSchemaVersions);
+    assertUpdateCommandRecovery(params.opts);
     // Git owns this fence after its post-stop schema check completes.
     if (params.updateInstallKind === "package") {
       preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
@@ -540,8 +545,8 @@ export async function executeMutableUpdate(params: {
         timeoutMs: params.updateStepTimeoutMs,
       });
       await recheckSchemas(params.packageTargetSchemaVersions);
-      await params.prepareMutableUpdate(admission?.managedEnv);
       await stopManagedServiceBeforeMutableUpdate(undefined, "inspect");
+      await params.prepareMutableUpdate(admission?.managedEnv);
       const packageUpdate: PackageInstallUpdateParams = {
         root: params.root,
         installKind: params.installKind,
@@ -595,8 +600,8 @@ export async function executeMutableUpdate(params: {
           }
           await recheckSchemas(target.schemaVersions);
           if (!gitContextPrepared) {
-            await params.prepareMutableUpdate(admission?.managedEnv);
             await stopManagedServiceBeforeMutableUpdate(gitMutationRoots ?? undefined, "inspect");
+            await params.prepareMutableUpdate(admission?.managedEnv);
             // Later target reads revalidate admission, but must retain the stop
             // and recovery state owned by activation and finalization.
             gitContextPrepared = true;

@@ -195,6 +195,23 @@ beforeEach(() => {
 });
 
 describe("mutable update execution", () => {
+  it("refuses service admission before mutable startup housekeeping", async () => {
+    mocks.maybeStopService.mockImplementation(async ({ phase, handoffFromGateway }) => {
+      if (handoffFromGateway) {
+        throw new UpdatePreMutationError("managed-service-preflight", "service owner changed");
+      }
+      return inspectOrStopService(phase);
+    });
+    const execution = await executeMutableUpdate(executionParams("package"));
+    expect(execution).toMatchObject({
+      mutationStarted: false,
+      result: { status: "error", reason: "managed-service-preflight" },
+    });
+    expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
+    expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
+    expect(mocks.serviceStopped).toBe(false);
+  });
+
   it.each([
     "@openclaw/example@1.0.1: Package not found on npm",
     "@openclaw/example@1.0.1: npm view failed: ECONNRESET",

@@ -34,7 +34,17 @@ export async function withUpdateCommandRecoveryUnwind(
   let failure: { error: unknown } | undefined;
   try {
     await operation();
+    run.executorFence?.assertCurrent();
   } catch (error) {
+    try {
+      run.executorFence?.assertCurrent();
+    } catch (cause) {
+      throw new UpdateCommandPendingRecoveryFailure(
+        primaryResult(error),
+        formatErrorMessage(cause),
+        { cause: new AggregateError([error, cause], "Update executor was lost", { cause: error }) },
+      );
+    }
     if (
       error instanceof UpdateCommandPendingRecoveryFailure ||
       error instanceof UpdateCommandFinalizedRecoveryFailure
