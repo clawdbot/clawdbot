@@ -170,7 +170,9 @@ const run = () =>
       }
       if (borrowed) {
         if (scenario === "borrowed-output") {
-          await new Promise((resolve) => setTimeout(resolve, 11_000));
+          await new Promise((resolve) => {
+            setTimeout(resolve, 11_000);
+          });
         }
         console.error("Borrowed caller completed.");
       }
