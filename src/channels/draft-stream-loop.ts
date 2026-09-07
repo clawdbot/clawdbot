@@ -5,7 +5,15 @@
  */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 
-/** Throttled draft-stream sender used by channels that edit in-progress replies. */
+/**
+ * Throttled draft-stream sender used by channels that edit in-progress replies.
+ *
+ * `update`/`flush` both gate on the caller-supplied `isStopped()`. Callers that reuse
+ * this loop past a terminal seal (see `createFinalizableDraftLifecycle`'s `seal()`) must
+ * flip `isStopped()` to true for the rest of the draft's lifetime, not just during the
+ * in-flight send seal() awaits — this loop has no lifecycle of its own and will keep
+ * sending queued `update()` calls for as long as `isStopped()` reports false.
+ */
 export type DraftStreamLoop<T = string> = {
   update: (value: T) => void;
   flush: () => Promise<void>;

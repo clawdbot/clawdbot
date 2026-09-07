@@ -307,4 +307,79 @@ describe("draft-stream-controls", () => {
     expect(sendOrEditStreamMessage).toHaveBeenCalledWith("stale");
     expect(deleteMessage).not.toHaveBeenCalled();
   });
+
+  it("lifecycle seal blocks an update queued while the in-flight send it awaits settles", async () => {
+    // Regression for #118348: a concurrent update landing in the microtask gap between
+    // the in-flight send starting and seal()'s waitForInFlight() resolving must not
+    // reach sendOrEditStreamMessage after finalization, or it can overwrite the final edit.
+    const state = { stopped: false, final: false };
+    let messageId: string | undefined = "m-6";
+    const draftLoop: { loop?: { update: (value: string) => void } } = {};
+    const sendOrEditStreamMessage = vi.fn(async (value: string) => {
+      if (value === "first") {
+        // Yield one microtask tick so this resumes only once seal() reaches its
+        // await, after loop.stop()'s synchronous timer clear has already run.
+        await Promise.resolve();
+        draftLoop.loop?.update("second");
+      }
+      return true;
+    });
+    const deleteMessage = vi.fn(async () => {});
+
+    const lifecycle = createFinalizableDraftLifecycle({
+      throttleMs: 250,
+      state,
+      sendOrEditStreamMessage,
+      readMessageId: () => messageId,
+      clearMessageId: () => {
+        messageId = undefined;
+      },
+      isValidMessageId: (value): value is string => typeof value === "string",
+      deleteMessage,
+      warnPrefix: "cleanup failed",
+    });
+    draftLoop.loop = lifecycle.loop;
+
+    lifecycle.update("first");
+    await lifecycle.seal();
+    // Let any background send that leaked past seal() settle before asserting.
+    await lifecycle.loop.waitForInFlight();
+
+    expect(sendOrEditStreamMessage).not.toHaveBeenCalledWith("second");
+    expect(sendOrEditStreamMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("seal makes the raw loop permanently terminal, not just for the racing update", async () => {
+    // The `loop` seal() returns is public SDK surface (createDraftStreamLoop is
+    // re-exported via plugin-sdk/channel-outbound.ts), so a third-party plugin can call
+    // loop.update() directly. seal() must keep that escape hatch inert for the rest of
+    // the draft's lifetime, not only during the in-flight send it awaits.
+    const state = { stopped: false, final: false };
+    let messageId: string | undefined = "m-7";
+    const sendOrEditStreamMessage = vi.fn(async () => true);
+    const deleteMessage = vi.fn(async () => {});
+
+    const lifecycle = createFinalizableDraftLifecycle({
+      throttleMs: 250,
+      state,
+      sendOrEditStreamMessage,
+      readMessageId: () => messageId,
+      clearMessageId: () => {
+        messageId = undefined;
+      },
+      isValidMessageId: (value): value is string => typeof value === "string",
+      deleteMessage,
+      warnPrefix: "cleanup failed",
+    });
+
+    lifecycle.update("stale");
+    await lifecycle.seal();
+    sendOrEditStreamMessage.mockClear();
+
+    lifecycle.loop.update("resurrected");
+    await lifecycle.loop.flush();
+
+    expect(sendOrEditStreamMessage).not.toHaveBeenCalled();
+    expect(state.stopped).toBe(true);
+  });
 });
