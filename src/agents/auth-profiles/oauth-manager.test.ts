@@ -10,6 +10,7 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   connectUserModelAccount,
@@ -24,6 +25,7 @@ import {
   isSafeToAdoptMainStoreOAuthIdentity,
 } from "./oauth-shared.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
+import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
@@ -739,7 +741,7 @@ describe("createOAuthManager", () => {
     });
   });
 
-  it("uses a different-identity stored credential after a CAS race", async () => {
+  it("does not use a different-identity stored credential after a CAS race", async () => {
     await withOAuthTempRoot("oauth-manager-cas-different-identity-", async (tempRoot) => {
       const mainAgentDir = path.join(tempRoot, "agents", "main", "agent");
       const agentDir = path.join(tempRoot, "agents", "sub", "agent");
@@ -792,16 +794,16 @@ describe("createOAuthManager", () => {
         readBootstrapCredential: () => null,
       });
 
-      const result = await manager.resolveOAuthAccess({
-        store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-          allowKeychainPrompt: false,
+      await expect(
+        manager.resolveOAuthAccess({
+          store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+            allowKeychainPrompt: false,
+          }),
+          profileId,
+          credential: expired,
+          agentDir,
         }),
-        profileId,
-        credential: expired,
-        agentDir,
-      });
-
-      expect(result?.apiKey).toBe("relogged-access");
+      ).rejects.toThrow("OAuth token refresh failed");
       const persisted = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
         allowKeychainPrompt: false,
       });
@@ -811,6 +813,71 @@ describe("createOAuthManager", () => {
         refresh: "relogged-refresh",
         accountId: "acct-456",
       });
+    });
+  });
+
+  it("keeps invalid_grant primary when owner cleanup and recovery reload both fail", async () => {
+    await withOAuthTempRoot("oauth-manager-cleanup-errors-", async (tempRoot) => {
+      const agentDir = path.join(tempRoot, "agents", "main", "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      const profileId = "openai:oauth";
+      const expired = createCredential({
+        access: "expired-access",
+        refresh: "expired-refresh",
+        expires: Date.now() - 60_000,
+        accountId: "acct-123",
+      });
+      saveAuthProfileStore({ version: 1, profiles: { [profileId]: expired } }, agentDir, {
+        filterExternalAuthProfiles: false,
+      });
+      const initiatingError = Object.assign(new Error("provider rejected invalid_grant"), {
+        oauthRefreshFailure: {
+          errorType: "invalid_grant_error",
+          reason: "invalid_grant",
+          status: 401,
+          summary: "provider rejected invalid_grant",
+        },
+      });
+      const manager = createOAuthManager({
+        buildApiKey: async (_provider, credential) => credential.access,
+        canRefreshCredential: async () => true,
+        refreshCredential: vi.fn(async () => {
+          clearRuntimeAuthProfileStoreSnapshots();
+          closeOpenClawAgentDatabasesForTest(tempRoot);
+          await fs.writeFile(resolveAuthProfileDatabasePath(agentDir), "not a sqlite database");
+          throw initiatingError;
+        }),
+        readBootstrapCredential: () => null,
+      });
+
+      try {
+        await manager.resolveOAuthAccess({
+          store: { version: 1, profiles: { [profileId]: expired } },
+          profileId,
+          credential: expired,
+          agentDir,
+        });
+        throw new Error("Expected refresh failure");
+      } catch (caught) {
+        if (!(caught instanceof OAuthManagerRefreshError)) {
+          throw caught;
+        }
+        expect(caught.message).toContain("provider rejected invalid_grant");
+        expect(caught.message).not.toContain("unreadable");
+        expect(caught.errorType).toBe("invalid_grant_error");
+        expect(caught.reason).toBe("invalid_grant");
+        expect(caught.status).toBe(401);
+        expect(caught.summary).toBe("provider rejected invalid_grant");
+        expect(caught.cause).toBeInstanceOf(AggregateError);
+        const aggregate = caught.cause as AggregateError;
+        expect(aggregate.errors).toHaveLength(3);
+        expect(aggregate.cause).toBe(aggregate.errors[0]);
+        expect(formatErrorMessage(aggregate.errors[0])).toContain(
+          "provider rejected invalid_grant",
+        );
+        expect(formatErrorMessage(aggregate.errors[1])).toContain("is unreadable");
+        expect(formatErrorMessage(aggregate.errors[2])).toContain("is unreadable");
+      }
     });
   });
 

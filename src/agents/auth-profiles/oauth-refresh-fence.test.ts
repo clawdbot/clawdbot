@@ -8,13 +8,19 @@ import { inlineAuthProfileCredentialSchema } from "./credential-schema.js";
 import { testing as externalAuthTesting } from "./external-auth.test-support.js";
 import { createOAuthManager } from "./oauth-manager.js";
 import { refreshSerializedOAuthCredential } from "./oauth-refresh-fence.js";
-import { createFailedOAuthRefreshFence, createOAuthRefreshFence } from "./oauth-refresh-marker.js";
-import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import {
-  ensureAuthProfileStoreWithoutExternalProfiles,
-  saveAuthProfileStore,
-} from "./store-runtime.js";
+  createFailedOAuthRefreshFence,
+  createOAuthRefreshFence,
+  isPendingOAuthRefreshFence,
+} from "./oauth-refresh-marker.js";
+import { loadPersistedAuthProfileStore } from "./persisted.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
+import * as authProfileStoreRuntime from "./store-runtime.js";
 import type { OAuthCredential } from "./types.js";
+import { upsertAuthProfileAfterLoginWithLockOrThrow } from "./upsert-with-lock.js";
+
+const { ensureAuthProfileStoreWithoutExternalProfiles, saveAuthProfileStore } =
+  authProfileStoreRuntime;
 
 function createCredential(overrides: Partial<OAuthCredential> = {}): OAuthCredential {
   return {
@@ -38,6 +44,7 @@ async function withOAuthTempRoot(
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   externalAuthTesting.resetResolveExternalAuthProfilesForTest();
   clearRuntimeAuthProfileStoreSnapshots();
   closeOpenClawStateDatabaseForTest();
@@ -127,6 +134,191 @@ describe("OAuth refresh generation fence", () => {
         access: "serialized-rotated-access",
         refresh: "serialized-rotated-refresh",
       });
+    });
+  });
+
+  it("rejects a different-account replacement for serialized owner and observer settlement", async () => {
+    const profileId = "openai:default";
+    const expired = createCredential({
+      access: "account-a-access",
+      refresh: "account-a-refresh",
+      expires: 1,
+      accountId: "acct-a",
+    });
+    let persisted = JSON.stringify({ [profileId]: expired });
+    const backend = {
+      withLock<T>(fn: (current: string | undefined) => { result: T; next?: string }): T {
+        const update = fn(persisted);
+        if (update.next !== undefined) {
+          persisted = update.next;
+        }
+        return update.result;
+      },
+    };
+    let finish: ((result: { apiKey: string; credential: OAuthCredential }) => void) | undefined;
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const refresh = vi.fn(
+      () =>
+        new Promise<{ apiKey: string; credential: OAuthCredential }>((resolve) => {
+          finish = resolve;
+          markStarted?.();
+        }),
+    );
+    const run = (
+      refreshOwner: (
+        credential: OAuthCredential,
+      ) => Promise<{ apiKey: string; credential: OAuthCredential } | null>,
+    ) =>
+      refreshSerializedOAuthCredential({
+        backend,
+        profileId,
+        label: "test serialized identity replacement",
+        timeoutMs: 1_000,
+        parse: (current) => JSON.parse(current ?? "{}") as Record<string, OAuthCredential>,
+        serialize: JSON.stringify,
+        readCredential: (data) => data[profileId],
+        writeCredential: (data, credential) => ({ ...data, [profileId]: credential }),
+        canRefresh: async () => true,
+        refresh: refreshOwner,
+        resolve: async (credential) => ({ apiKey: credential.access, credential }),
+        commit: () => {},
+      });
+
+    const owner = run(refresh);
+    await started;
+    const peerRefresh = vi.fn(async () => null);
+    const observer = run(peerRefresh);
+    persisted = JSON.stringify({
+      [profileId]: createCredential({
+        access: "account-b-access",
+        refresh: "account-b-refresh",
+        expires: Date.now() + 600_000,
+        accountId: "acct-b",
+      }),
+    });
+
+    await expect(observer).resolves.toBeNull();
+    finish?.({
+      apiKey: "rotated-a-access",
+      credential: createCredential({
+        access: "rotated-a-access",
+        refresh: "rotated-a-refresh",
+        expires: Date.now() + 600_000,
+        accountId: "acct-a",
+      }),
+    });
+    await expect(owner).rejects.toThrow("owner changed");
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(peerRefresh).not.toHaveBeenCalled();
+    expect(JSON.parse(persisted)[profileId]).toMatchObject({
+      access: "account-b-access",
+      refresh: "account-b-refresh",
+      accountId: "acct-b",
+    });
+  });
+
+  it("rejects a different-account login while an owner and observer settle account A", async () => {
+    await withOAuthTempRoot("openclaw-oauth-account-replacement-", async () => {
+      const profileId = "openai:default";
+      const original = createCredential({
+        access: "account-a-access",
+        refresh: "account-a-refresh",
+        expires: 1,
+        accountId: "acct-a",
+      });
+      saveAuthProfileStore({ version: 1, profiles: { [profileId]: original } }, undefined);
+
+      let finishRefresh: (() => void) | undefined;
+      let markRefreshStarted: (() => void) | undefined;
+      const refreshStarted = new Promise<void>((resolve) => {
+        markRefreshStarted = resolve;
+      });
+      const refreshCredential = vi.fn(async () => {
+        markRefreshStarted?.();
+        await new Promise<void>((resolve) => {
+          finishRefresh = resolve;
+        });
+        return createCredential({
+          access: "rotated-a-access",
+          refresh: "rotated-a-refresh",
+          expires: Date.now() + 600_000,
+          accountId: "acct-a",
+        });
+      });
+      const createManager = (onBootstrap?: () => void) =>
+        createOAuthManager({
+          buildApiKey: async (_provider, credential) => credential.access,
+          refreshCredential,
+          canRefreshCredential: async () => true,
+          readBootstrapCredential: () => {
+            onBootstrap?.();
+            return null;
+          },
+        });
+      let watchObserverReads = false;
+      let markObserverReadFence: (() => void) | undefined;
+      const observerReadFence = new Promise<void>((resolve) => {
+        markObserverReadFence = resolve;
+      });
+      const originalLoad = authProfileStoreRuntime.loadAuthProfileStoreWithoutExternalProfiles;
+      const loadSpy = vi
+        .spyOn(authProfileStoreRuntime, "loadAuthProfileStoreWithoutExternalProfiles")
+        .mockImplementation((...args: Parameters<typeof originalLoad>) => {
+          const store = originalLoad(...args);
+          const credential = store.profiles[profileId];
+          if (
+            watchObserverReads &&
+            credential?.type === "oauth" &&
+            isPendingOAuthRefreshFence(credential)
+          ) {
+            markObserverReadFence?.();
+          }
+          return store;
+        });
+
+      const owner = createManager().resolveOAuthAccess({
+        store: ensureAuthProfileStoreWithoutExternalProfiles(undefined),
+        profileId,
+        credential: original,
+      });
+      await refreshStarted;
+      let markObserverEntered: (() => void) | undefined;
+      const observerEntered = new Promise<void>((resolve) => {
+        markObserverEntered = resolve;
+      });
+      watchObserverReads = true;
+      const observer = createManager(markObserverEntered).resolveOAuthAccess({
+        store: ensureAuthProfileStoreWithoutExternalProfiles(undefined),
+        profileId,
+        credential: original,
+      });
+      await observerEntered;
+      await observerReadFence;
+      watchObserverReads = false;
+      const relogin = upsertAuthProfileAfterLoginWithLockOrThrow({
+        profileId,
+        credential: createCredential({
+          access: "account-b-access",
+          refresh: "account-b-refresh",
+          expires: Date.now() + 600_000,
+          accountId: "acct-b",
+        }),
+      });
+      await relogin;
+
+      await expect(observer).resolves.toBeNull();
+      finishRefresh?.();
+      await expect(owner).rejects.toThrow("OAuth token refresh failed");
+      expect(refreshCredential).toHaveBeenCalledOnce();
+      expect(loadPersistedAuthProfileStore(undefined)?.profiles[profileId]).toMatchObject({
+        access: "account-b-access",
+        refresh: "account-b-refresh",
+        accountId: "acct-b",
+      });
+      loadSpy.mockRestore();
     });
   });
 

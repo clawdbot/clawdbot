@@ -6,6 +6,7 @@ import {
   isOAuthRefreshFence,
   isPendingOAuthRefreshFence,
 } from "./oauth-refresh-marker.js";
+import { isSafeOAuthPostClaimSettlement } from "./oauth-shared.js";
 import type { OAuthCredential } from "./types.js";
 
 /** Full structural equality for compare-and-swap of persisted OAuth credentials. */
@@ -27,13 +28,13 @@ type SerializedOAuthRefreshResult = {
 
 type SerializedOAuthRefreshCandidate<TData> =
   | { kind: "unavailable" }
-  | { kind: "observe" }
+  | { kind: "observe"; generation: OAuthCredential }
   | { kind: "use"; credential: OAuthCredential; data: TData }
   | { kind: "claimable"; credential: OAuthCredential };
 
 type SerializedOAuthRefreshClaim<TData> =
   | { kind: "unavailable" }
-  | { kind: "observe" }
+  | { kind: "observe"; generation: OAuthCredential }
   | { kind: "use"; credential: OAuthCredential; data: TData }
   | {
       kind: "claimed";
@@ -125,7 +126,7 @@ export async function refreshSerializedOAuthCredential<TData>(params: {
   resolve: (credential: OAuthCredential) => Promise<SerializedOAuthRefreshResult | null>;
   commit: (data: TData) => void;
 }): Promise<SerializedOAuthRefreshResult | null> {
-  const observeFence = async () =>
+  const observeFence = async (generation: OAuthCredential) =>
     await observeOAuthRefreshFenceSettlement({
       label: params.label,
       timeoutMs: params.timeoutMs,
@@ -136,7 +137,7 @@ export async function refreshSerializedOAuthCredential<TData>(params: {
         }),
       isPending: ({ credential }) => isPendingOAuthRefreshFence(credential),
       resolve: async ({ credential, data }) => {
-        if (!credential || !hasUnexpiredOAuthCredential(credential)) {
+        if (!isSafeOAuthPostClaimSettlement(generation, credential)) {
           return null;
         }
         params.commit(data);
@@ -151,7 +152,7 @@ export async function refreshSerializedOAuthCredential<TData>(params: {
       return { result: { kind: "unavailable" } };
     }
     if (isPendingOAuthRefreshFence(credential)) {
-      return { result: { kind: "observe" } };
+      return { result: { kind: "observe", generation: credential } };
     }
     if (isOAuthRefreshFence(credential)) {
       return { result: { kind: "unavailable" } };
@@ -165,7 +166,7 @@ export async function refreshSerializedOAuthCredential<TData>(params: {
     return null;
   }
   if (candidate.kind === "observe") {
-    return await observeFence();
+    return await observeFence(candidate.generation);
   }
   if (candidate.kind === "use") {
     params.commit(candidate.data);
@@ -183,7 +184,7 @@ export async function refreshSerializedOAuthCredential<TData>(params: {
     }
     if (!isExactOAuthCredential(credential, candidate.credential)) {
       if (isPendingOAuthRefreshFence(credential)) {
-        return { result: { kind: "observe" } };
+        return { result: { kind: "observe", generation: credential } };
       }
       if (isOAuthRefreshFence(credential)) {
         return { result: { kind: "unavailable" } };
@@ -203,7 +204,7 @@ export async function refreshSerializedOAuthCredential<TData>(params: {
     return null;
   }
   if (claim.kind === "observe") {
-    return await observeFence();
+    return await observeFence(claim.generation);
   }
   if (claim.kind === "use") {
     params.commit(claim.data);
@@ -253,12 +254,9 @@ export async function refreshSerializedOAuthCredential<TData>(params: {
           };
         }
         return {
-          result:
-            authoritative &&
-            authoritative.provider === claim.credential.provider &&
-            hasUnexpiredOAuthCredential(authoritative)
-              ? { credential: authoritative, data, persisted: false }
-              : null,
+          result: isSafeOAuthPostClaimSettlement(claim.credential, authoritative)
+            ? { credential: authoritative, data, persisted: false }
+            : null,
         };
       });
       if (!settled) {

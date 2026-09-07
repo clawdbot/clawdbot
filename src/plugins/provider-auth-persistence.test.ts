@@ -8,7 +8,11 @@ import {
 } from "../agents/auth-profiles/store-runtime.js";
 import type { OAuthCredential } from "../agents/auth-profiles/types.js";
 import { runSecretsAudit } from "../secrets/audit.js";
-import { readSecretStoreValue } from "../secrets/store/secret-store.js";
+import {
+  listSecretStoreEntries,
+  readSecretStoreValue,
+  updateSecretStoreAllowedHosts,
+} from "../secrets/store/secret-store.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -16,6 +20,7 @@ import {
   persistProviderAuthProfileBatch,
   persistProviderAuthProfilesAfterLogin,
   stageProviderAuthProfileBatch,
+  stageProviderAuthProfilesForPersistence,
 } from "./provider-auth-persistence.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -276,6 +281,79 @@ describe("provider auth protected persistence", () => {
         profile: { provider: "openai", type: "token" },
         token: "candidate-a",
       });
+    });
+  });
+
+  it("reports unconfirmed protected rollback after a policy-only owner change", async () => {
+    const rootDir = tempDirs.make("openclaw-provider-auth-policy-rollback-");
+    const stateDir = path.join(rootDir, "state");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const profileId = "openai:default";
+    const database = { env };
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      await persistProviderAuthProfileBatch({
+        profiles: [protectedTokenProfile(profileId, "baseline-c")],
+        config: {},
+        env,
+        stateDir,
+        agentDir,
+      });
+      const staged = await stageProviderAuthProfilesForPersistence({
+        profiles: [protectedTokenProfile(profileId, "candidate-a")],
+        config: {},
+        env,
+        stateDir,
+      });
+      const credential = staged.profiles[0]?.credential;
+      if (credential?.type !== "token" || !credential.tokenRef) {
+        throw new Error("Expected staged protected tokenRef");
+      }
+      updateSecretStoreAllowedHosts({
+        scope: { kind: "team" },
+        name: credential.tokenRef.id,
+        allowedHosts: ["api.example.test"],
+        updatedBy: "cli",
+        database,
+      });
+
+      let rollbackError: unknown;
+      try {
+        await staged.rollback();
+      } catch (error) {
+        rollbackError = error;
+      }
+      expect(rollbackError).toBeInstanceOf(AggregateError);
+      await expect(staged.rollback()).rejects.toBe(rollbackError);
+      await expect(staged.commit()).rejects.toThrow(
+        "Cannot commit provider auth persistence after rollback failed",
+      );
+      expect(
+        readSecretStoreValue({
+          scope: { kind: "team" },
+          name: credential.tokenRef.id,
+          database,
+        }),
+      ).toEqual({ ok: true, value: "candidate-a" });
+      expect(listSecretStoreEntries({ scope: { kind: "team" }, database })[0]).toMatchObject({
+        allowedHosts: ["api.example.test"],
+      });
+
+      const successor = await stageProviderAuthProfilesForPersistence({
+        profiles: [protectedTokenProfile(profileId, "candidate-b")],
+        config: {},
+        env,
+        stateDir,
+      });
+      await successor.commit();
+      expect(
+        readSecretStoreValue({
+          scope: { kind: "team" },
+          name: credential.tokenRef.id,
+          database,
+        }),
+      ).toEqual({ ok: true, value: "candidate-b" });
     });
   });
 

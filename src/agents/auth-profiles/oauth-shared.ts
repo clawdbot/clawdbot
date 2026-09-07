@@ -91,6 +91,19 @@ export function hasMatchingOAuthIdentity(
   return hasOAuthIdentity(existing) && isSafeToCopyOAuthIdentity(existing, incoming);
 }
 
+/** Returns true when a claimed generation may settle with a live credential. */
+export function isSafeOAuthPostClaimSettlement(
+  claimedGeneration: OAuthCredential,
+  candidate: OAuthCredential | undefined,
+): candidate is OAuthCredential {
+  return (
+    candidate?.type === "oauth" &&
+    candidate.provider === claimedGeneration.provider &&
+    hasUsableOAuthCredential(candidate) &&
+    hasMatchingOAuthIdentity(claimedGeneration, candidate)
+  );
+}
+
 // Different adoption paths have different safety thresholds. Bootstrap can
 // adopt missing identities, while stored overwrite requires an identity match.
 type OAuthIdentitySafetyPolicy = {
