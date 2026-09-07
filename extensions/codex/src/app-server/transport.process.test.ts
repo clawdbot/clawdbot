@@ -338,6 +338,8 @@ process.stdin.on("end", () => process.exit(0));
       let inspection = 0;
       let descendantSignalled = false;
       const actualSnapshot = processSnapshot.readCodexAppServerProcessSnapshot;
+      const actualProcess = processSnapshot.readCodexAppServerProcess;
+      let rootStopObserved = false;
       const actualKill = process.kill.bind(process);
       const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
         const signalled = actualKill(pid, signal);
@@ -362,6 +364,18 @@ process.stdin.on("end", () => process.exit(0));
         }
         if (!rows) {
           throw new processSnapshot.ProcessInspectionError("unavailable");
+        }
+        if (
+          !rootStopObserved &&
+          rows.some((row) => row.pid === rootIdentity.pid && row.state === "T")
+        ) {
+          // Do not let synthetic stopped rows outrun delivery of the real SIGSTOP.
+          while (
+            !(await actualProcess(rootIdentity.pid, inspectionDeadline))?.state.startsWith("T")
+          ) {
+            await delay(1);
+          }
+          rootStopObserved = true;
         }
         return rows;
       };
