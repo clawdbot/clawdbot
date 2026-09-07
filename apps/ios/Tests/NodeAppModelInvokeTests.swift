@@ -4236,6 +4236,14 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     }
 
     @Test @MainActor func `enabling Voice Wake during standalone PTT remains suppressed`() async {
+        let previousEnabled = UserDefaults.standard.object(forKey: VoiceWakePreferences.enabledKey)
+        defer {
+            if let previousEnabled {
+                UserDefaults.standard.set(previousEnabled, forKey: VoiceWakePreferences.enabledKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: VoiceWakePreferences.enabledKey)
+            }
+        }
         let appModel = NodeAppModel(talkMode: TalkModeManager(allowSimulatorCapture: true))
         appModel.acquirePttVoiceWakeLease(for: "standalone-ptt")
 
@@ -4244,11 +4252,46 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         #expect(appModel.voiceWake.statusText == "Paused")
         #expect(!appModel.voiceWake.isListening)
+        #expect(UserDefaults.standard.bool(forKey: VoiceWakePreferences.enabledKey))
 
         appModel.releasePttVoiceWakeLease(for: "standalone-ptt")
         await appModel.voiceWake._test_waitForScheduledStart()
         #expect(appModel.voiceWake.statusText == "Voice Wake isn’t supported on Simulator")
         appModel.voiceWake.stop()
+    }
+
+    @Test @MainActor func `Talk toggle preserves Voice Wake preference and enabled owner state`() async {
+        let keys = [VoiceWakePreferences.enabledKey, "talk.enabled"]
+        let previousValues = keys.map { ($0, UserDefaults.standard.object(forKey: $0)) }
+        for key in keys {
+            UserDefaults.standard.set(false, forKey: key)
+        }
+        let appModel = NodeAppModel(talkMode: TalkModeManager())
+        defer {
+            appModel.setVoiceWakeEnabled(false)
+            appModel.setTalkEnabled(false)
+            for (key, previous) in previousValues {
+                if let previous {
+                    UserDefaults.standard.set(previous, forKey: key)
+                } else {
+                    UserDefaults.standard.removeObject(forKey: key)
+                }
+            }
+        }
+
+        appModel.setVoiceWakeEnabled(true)
+        appModel.setTalkEnabled(true)
+        #expect(appModel.talkMode.isEnabled)
+        #expect(appModel.voiceWake.isEnabled)
+        #expect(appModel.voiceWake.statusText == "Paused")
+        #expect(UserDefaults.standard.bool(forKey: VoiceWakePreferences.enabledKey))
+
+        appModel.setTalkEnabled(false)
+        await appModel.voiceWake._test_waitForScheduledStart()
+        #expect(!appModel.talkMode.isEnabled)
+        #expect(appModel.voiceWake.isEnabled)
+        #expect(UserDefaults.standard.bool(forKey: VoiceWakePreferences.enabledKey))
+        #expect(!UserDefaults.standard.bool(forKey: "talk.enabled"))
     }
 
     @Test @MainActor func `voice note start cannot race an acquired PTT lease`() async {

@@ -1,6 +1,8 @@
-import crypto from "node:crypto";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
-import type { ExecApprovalDecision } from "openclaw/plugin-sdk/approval-runtime";
+import {
+  createNativeApprovalControlRegistry,
+  type ExecApprovalDecision,
+} from "openclaw/plugin-sdk/approval-runtime";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GoogleChatActionParameter, GoogleChatEvent } from "./types.js";
@@ -25,9 +27,12 @@ type GoogleChatApprovalCardBinding = {
   expiresAtMs: number;
 };
 
-const approvalCardBindings = new Map<string, GoogleChatApprovalCardBinding>();
-const approvalCardResolvingTokens = new Set<string>();
-const GOOGLECHAT_APPROVAL_CARD_BINDING_MAX_ENTRIES = 1024;
+export const googleChatApprovalControls =
+  createNativeApprovalControlRegistry<GoogleChatApprovalCardBinding>({
+    releaseClaimOnLookupExpiry: false,
+    onComplete: (binding) =>
+      unregisterGoogleChatManualApprovalFollowupSuppression(binding.approvalId),
+  });
 const GOOGLECHAT_MANUAL_APPROVAL_SUPPRESSION_MAX_ENTRIES = 1024;
 
 type GoogleChatManualApprovalSuppressionPayload = {
@@ -49,19 +54,10 @@ type GoogleChatManualApprovalFollowupSuppression = {
   expiresAtMs: number;
 };
 
-type GoogleChatApprovalCardClaim =
-  | { kind: "claimed"; binding: GoogleChatApprovalCardBinding }
-  | { kind: "missing" }
-  | { kind: "in-flight" };
-
 const manualApprovalFollowupSuppressions = new Map<
   string,
   GoogleChatManualApprovalFollowupSuppression
 >();
-
-export function createGoogleChatApprovalToken(): string {
-  return crypto.randomBytes(18).toString("base64url");
-}
 
 export function buildGoogleChatApprovalActionParameters(
   token: string,
@@ -114,14 +110,9 @@ export function readGoogleChatApprovalActionToken(event: GoogleChatEvent): strin
 export function registerGoogleChatApprovalCardBinding(
   binding: GoogleChatApprovalCardBinding,
 ): boolean {
-  if (binding.expiresAtMs <= Date.now()) {
+  if (!googleChatApprovalControls.register(binding)) {
     return false;
   }
-  if (approvalCardBindings.has(binding.token)) {
-    approvalCardBindings.delete(binding.token);
-  }
-  approvalCardBindings.set(binding.token, binding);
-  pruneMapToMaxSize(approvalCardBindings, GOOGLECHAT_APPROVAL_CARD_BINDING_MAX_ENTRIES);
   registerGoogleChatManualApprovalFollowupSuppression({
     approvalId: binding.approvalId,
     approvalKind: binding.approvalKind,
@@ -129,20 +120,6 @@ export function registerGoogleChatApprovalCardBinding(
     expiresAtMs: binding.expiresAtMs,
   });
   return true;
-}
-
-export function getGoogleChatApprovalCardBinding(
-  token: string,
-): GoogleChatApprovalCardBinding | null {
-  const binding = approvalCardBindings.get(token);
-  if (!binding) {
-    return null;
-  }
-  if (binding.expiresAtMs <= Date.now()) {
-    approvalCardBindings.delete(token);
-    return null;
-  }
-  return binding;
 }
 
 function normalizeApprovalRef(value: string): string | null {
@@ -195,12 +172,7 @@ function approvalRefMatches(bindingApprovalId: string, approvalRef: string): boo
 }
 
 function pruneExpiredGoogleChatApprovalCardBindings(nowMs: number): void {
-  for (const [token, binding] of approvalCardBindings) {
-    if (binding.expiresAtMs <= nowMs) {
-      approvalCardBindings.delete(token);
-      approvalCardResolvingTokens.delete(token);
-    }
-  }
+  googleChatApprovalControls.pruneExpired(nowMs);
   for (const [approvalId, suppression] of manualApprovalFollowupSuppressions) {
     if (suppression.expiresAtMs <= nowMs) {
       manualApprovalFollowupSuppressions.delete(approvalId);
@@ -214,7 +186,7 @@ function hasActiveGoogleChatExecApprovalCardForManualCommand(params: {
   nowMs: number;
 }): boolean {
   pruneExpiredGoogleChatApprovalCardBindings(params.nowMs);
-  for (const binding of approvalCardBindings.values()) {
+  for (const binding of googleChatApprovalControls.values()) {
     if (
       binding.approvalKind === "exec" &&
       binding.allowedDecisions.includes(params.decision) &&
@@ -277,40 +249,4 @@ export function shouldSuppressGoogleChatManualExecApprovalFollowupPayload(
     return false;
   }
   return shouldSuppressGoogleChatManualExecApprovalFollowupText(text, nowMs);
-}
-
-export function claimGoogleChatApprovalCardBinding(token: string): GoogleChatApprovalCardClaim {
-  const binding = getGoogleChatApprovalCardBinding(token);
-  if (!binding) {
-    return { kind: "missing" };
-  }
-  if (approvalCardResolvingTokens.has(token)) {
-    return { kind: "in-flight" };
-  }
-  approvalCardResolvingTokens.add(token);
-  return { kind: "claimed", binding };
-}
-
-export function completeGoogleChatApprovalCardBinding(token: string): void {
-  const binding = approvalCardBindings.get(token);
-  approvalCardResolvingTokens.delete(token);
-  approvalCardBindings.delete(token);
-  if (binding) {
-    unregisterGoogleChatManualApprovalFollowupSuppression(binding.approvalId);
-  }
-}
-
-export function releaseGoogleChatApprovalCardBinding(token: string): void {
-  approvalCardResolvingTokens.delete(token);
-}
-
-export function unregisterGoogleChatApprovalCardBindings(tokens: readonly string[]): void {
-  for (const token of tokens) {
-    const binding = approvalCardBindings.get(token);
-    approvalCardBindings.delete(token);
-    approvalCardResolvingTokens.delete(token);
-    if (binding) {
-      unregisterGoogleChatManualApprovalFollowupSuppression(binding.approvalId);
-    }
-  }
 }

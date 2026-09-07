@@ -501,6 +501,16 @@ async function runVmExecution(params: {
     if (params.bridge.admissionFailure) {
       throw params.bridge.admissionFailure;
     }
+    const admissionError = params.vm.global
+      .getProp("__openclawAdmissionError")
+      .consume((read) =>
+        params.vm
+          .callFunction(read, params.vm.undefined)
+          .consume((error) => (error.isString ? error.toString() : undefined)),
+      );
+    if (admissionError) {
+      throw new CodeModeWorkerFailure("invalid_input", admissionError);
+    }
     params.vm.global
       .getProp("__openclawDrainQueuedRequests")
       .consume((drain) => params.vm.callFunction(drain, params.vm.undefined).dispose());
@@ -585,26 +595,33 @@ async function run(input: CodeModeWorkerPayload): Promise<CodeModeWorkerResult> 
         vm.evalCode(program.source, USER_SOURCE_FILE, EvalFlags.ASYNC).dispose();
         return;
       }
-      vm.global.getProp("__openclawSettleBridge").consume((settle) => {
-        for (const request of input.settledRequests) {
-          const id = vm.newString(request.id);
-          const payload = vm.newString(JSON.stringify(request.ok ? request.value : request.error));
-          try {
-            vm.callFunction(
-              settle,
-              vm.undefined,
-              id,
-              request.ok ? vm.true : vm.false,
-              payload,
-            ).dispose();
-          } finally {
-            id.dispose();
-            payload.dispose();
+      try {
+        vm.global.getProp("__openclawSettleBridge").consume((settle) => {
+          for (const request of input.settledRequests) {
+            const id = vm.newString(request.id);
+            const payload = vm.newString(request.json);
+            try {
+              vm.callFunction(
+                settle,
+                vm.undefined,
+                id,
+                request.ok ? vm.true : vm.false,
+                payload,
+              ).dispose();
+            } finally {
+              id.dispose();
+              payload.dispose();
+            }
           }
+        });
+        // Guest promises now own the replayed JSON values; release every input-frame alias.
+      } finally {
+        // Drop every alias even if QuickJS rejects an allocation or settlement.
+        for (const request of input.settledRequests) {
+          request.json = "";
         }
-      });
-      // Guest promises now own the replayed JSON values; release every input-frame alias.
-      input.settledRequests.length = 0;
+        input.settledRequests.length = 0;
+      }
     },
   });
 }

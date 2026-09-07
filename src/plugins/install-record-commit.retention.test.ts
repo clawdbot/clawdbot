@@ -77,6 +77,7 @@ describe("retained managed npm record commits", () => {
         });
 
         expect(hasRetainedManagedNpmInstallMarker(installPath)).toBe(false);
+        expect(fs.existsSync(activePath)).toBe(true);
       });
     },
   );

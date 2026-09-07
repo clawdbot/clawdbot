@@ -6,6 +6,7 @@ import { bundledPluginRootAt } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import type { SpawnResult } from "../process/exec.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
@@ -51,6 +52,14 @@ const installPluginFromClawHubMock = vi.fn();
 const installPluginFromGitSpecMock = vi.fn();
 const resolveBundledPluginSourcesMock = vi.fn();
 const runCommandWithTimeoutMock = vi.fn();
+const failedNpmVersionQueryResult: SpawnResult = {
+  code: 1,
+  stdout: "",
+  stderr: "npm version query failed",
+  signal: null,
+  killed: false,
+  termination: "exit",
+};
 const validatePackageExtensionEntriesForInstallMock = vi.fn();
 const markClawPackageIndependentlyOwnedMock = vi.fn();
 const withClawPackageLifecycleLeaseMock = vi.fn(
@@ -1441,6 +1450,7 @@ describe("updateNpmInstalledPlugins", () => {
       installerVersion: "2026.5.2-beta.2",
       installerResolvedSpec: "@openclaw/acpx@2026.5.2-beta.2",
     });
+    runCommandWithTimeoutMock.mockResolvedValueOnce(failedNpmVersionQueryResult);
 
     const result = await updatePlugin(config, "acpx", { syncOfficialPluginInstalls: true });
 
@@ -1533,6 +1543,36 @@ describe("updateNpmInstalledPlugins", () => {
       expect(npmInstallCall()?.spec).toBe("@openclaw/codex@2026.9.2");
       expect(result.config.plugins?.installs?.codex?.spec).toBe("@openclaw/codex");
       expect(result.config.plugins?.installs?.codex?.resolvedSpec).toBe("@openclaw/codex@2026.9.2");
+    },
+  );
+
+  it.each(["@openclaw/codex", "@openclaw/codex@latest", "@openclaw/codex@2026.9.3"])(
+    "targets the activated core for version-bound post-update plugins while preserving %s",
+    async (spec) => {
+      const targetVersion = spec.endsWith("@2026.9.3") ? "2026.9.3" : "2026.9.4";
+      const { config } = createNpmUpdateFixture({
+        pluginId: "codex",
+        packageName: "@openclaw/codex",
+        installedVersion: "2026.9.2",
+        spec,
+        installerVersion: targetVersion,
+        installerResolvedSpec: `@openclaw/codex@${targetVersion}`,
+      });
+      runCommandWithTimeoutMock.mockImplementation(async (argv) => ({
+        code: 0,
+        stdout: JSON.stringify({
+          name: "@openclaw/codex",
+          version: argv.includes(`@openclaw/codex@${targetVersion}`) ? targetVersion : "2026.9.2",
+        }),
+        stderr: "",
+      }));
+      await updatePlugin(config, "codex", {
+        updateChannel: "stable",
+        coreVersion: "2026.9.4",
+        versionBoundPluginIds: new Set(["codex"]),
+        syncOfficialPluginInstalls: true,
+      });
+      expect(npmInstallCall()?.spec).toBe(`@openclaw/codex@${targetVersion}`);
     },
   );
 
@@ -1690,6 +1730,7 @@ describe("updateNpmInstalledPlugins", () => {
       installerVersion: "2026.5.2",
       installerResolvedSpec: "@openclaw/acpx@2026.5.2",
     });
+    runCommandWithTimeoutMock.mockResolvedValueOnce(failedNpmVersionQueryResult);
     const result = await updatePlugin(config, "acpx", { syncOfficialPluginInstalls: true });
 
     expect(npmInstallCall()?.spec).toBe("@openclaw/acpx");
@@ -2003,6 +2044,7 @@ describe("updateNpmInstalledPlugins", () => {
       installerVersion: "2026.5.28-beta.3",
       installerResolvedSpec: "@openclaw/msteams@2026.5.28-beta.3",
     });
+    runCommandWithTimeoutMock.mockResolvedValueOnce(failedNpmVersionQueryResult);
 
     const result = await updatePlugin(config, "msteams");
 

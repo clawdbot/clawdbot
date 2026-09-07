@@ -13,6 +13,8 @@ import { runCodexAuthDoctorMigrationProof } from "./codex-auth-product-proof.tes
 
 const PRIMARY_MODEL = "openai/gpt-5.4";
 const FALLBACK_MODEL = "openai/gpt-5.4-mini";
+const REPAIRED_MODEL_ID = "gpt-5.6-terra";
+const REPAIRED_FALLBACK_MODEL = "openai/gpt-5.6-luna";
 const LATER_TURN_TEXT = "QA_CODEX_LATER_TURN_OK";
 type AppServerMessage = {
   method?: string;
@@ -137,6 +139,16 @@ describe("Gateway Codex failure recovery product proof", () => {
         oauthAccess: "synthetic-codex-refusal-oauth",
         shape: "oauth-only",
       });
+      expect(JSON.parse(await fs.readFile(instance.configPath, "utf8"))).toMatchObject({
+        agents: {
+          defaults: {
+            model: {
+              primary: `openai/${REPAIRED_MODEL_ID}`,
+              fallbacks: [REPAIRED_FALLBACK_MODEL],
+            },
+          },
+        },
+      });
       await instance.startGateway();
       const client = await connectGatewayStatusClient(instance);
       try {
@@ -189,7 +201,7 @@ describe("Gateway Codex failure recovery product proof", () => {
         const allTurnStarts = allEntries.filter((entry) => entry.method === "turn/start");
         const proof = {
           failureKind: scenario.failureKind,
-          configuredFallback: FALLBACK_MODEL,
+          configuredFallback: REPAIRED_FALLBACK_MODEL,
           firstTurnStartCount: firstTurnStarts.length,
           compactionRequestCount: firstEntries.filter(
             (entry) => entry.method === "thread/compact/start",
@@ -205,7 +217,7 @@ describe("Gateway Codex failure recovery product proof", () => {
         console.log(`[gateway Codex failure recovery proof] ${JSON.stringify(proof)}`);
         expect(proof).toEqual({
           failureKind: scenario.failureKind,
-          configuredFallback: FALLBACK_MODEL,
+          configuredFallback: REPAIRED_FALLBACK_MODEL,
           firstTurnStartCount: scenario.firstTurnStartCount,
           compactionRequestCount: 0,
           firstStatus: scenario.firstStatus,
@@ -214,7 +226,7 @@ describe("Gateway Codex failure recovery product proof", () => {
           totalTurnStartCount: scenario.totalTurnStartCount,
           threadStartCount: 1,
           nativeThreadIds: [expect.any(String)],
-          selectedModels: ["gpt-5.4"],
+          selectedModels: [REPAIRED_MODEL_ID],
         });
         expect(JSON.stringify(history)).not.toContain("biological risk");
         expect(JSON.stringify(history)).not.toContain("/new");

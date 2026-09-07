@@ -1,7 +1,11 @@
 // Model picker flow lets users select provider models for config defaults.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveAgentConfig, resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveAgentEffectiveModelPrimary,
+  resolveDefaultAgentDir,
+} from "../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import {
@@ -36,6 +40,7 @@ import {
   normalizeAgentModelRefForConfig,
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
+  toAgentModelListLike,
 } from "../config/model-input.js";
 import { computeModelPolicyAllowlist } from "../config/model-policy-allowlist-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -139,7 +144,10 @@ function resolveConfiguredModelKeys(cfg: OpenClawConfig): string[] {
 }
 
 function resolveModelPickerConfig(cfg: OpenClawConfig, agentId?: string): OpenClawConfig {
-  const agent = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
+  if (!agentId) {
+    return cfg;
+  }
+  const agent = resolveAgentConfig(cfg, agentId);
   if (agent?.model === undefined && agent?.models === undefined) {
     return cfg;
   }
@@ -149,7 +157,14 @@ function resolveModelPickerConfig(cfg: OpenClawConfig, agentId?: string): OpenCl
       ...cfg.agents,
       defaults: {
         ...cfg.agents?.defaults,
-        ...(agent.model !== undefined ? { model: agent.model } : {}),
+        ...(agent.model !== undefined
+          ? {
+              model: {
+                ...toAgentModelListLike(agent.model),
+                primary: resolveAgentEffectiveModelPrimary(cfg, agentId),
+              },
+            }
+          : {}),
         ...(agent.models !== undefined
           ? { models: { ...cfg.agents?.defaults?.models, ...agent.models } }
           : {}),

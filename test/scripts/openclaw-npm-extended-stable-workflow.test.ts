@@ -443,7 +443,11 @@ describe("minimal npm extended-stable workflow", () => {
     });
     expect(plugins.run).toContain("--selection-mode all-publishable");
     expect(plugins.run).toContain("--npm-dist-tag extended-stable");
-    expect(plugins.run).toContain("scripts/check-plugin-npm-runtime-builds.mts");
+    // A validation target can predate this verifier; plugin runtime qualification
+    // must run from the trusted workflow checkout while inspecting target packages.
+    expect(plugins.run).toMatch(
+      /TSX_TSCONFIG_PATH="\$tooling_dir\/tsconfig\.json" \\\n\s+node --import "\$tooling_dir\/scripts\/tsx\.mjs" "\$tooling_dir\/scripts\/check-plugin-npm-runtime-builds\.mts"/,
+    );
     expect(plugins.run).toContain("scripts/plugin-npm-publish.sh --pack");
     expect(plugins.run).toContain("OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR");
     expect(plugins.run).not.toContain("--publish");
@@ -489,6 +493,9 @@ describe("minimal npm extended-stable workflow", () => {
     );
     expect(verifyReleaseContents.if).toBeUndefined();
     expect(verifyReleaseContents.run).toContain('--tarball "$PREPARED_TARBALL_PATH"');
+    expect(verifyReleaseContents.run).toMatch(
+      /TSX_TSCONFIG_PATH="\$tooling_dir\/tsconfig\.json" \\\n\s+node --import "\$tooling_dir\/scripts\/tsx\.mjs" "\$tooling_dir\/scripts\/openclaw-npm-prepublish-verify\.ts"/,
+    );
 
     const save = step(preflight, "Save preflight build outputs");
     const setup = step(preflight, "Setup Node environment");

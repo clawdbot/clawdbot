@@ -1130,7 +1130,7 @@ describe("memory-core dreaming phases", () => {
     });
   });
 
-  it("keeps edited flush-quarantined daily files untrusted", async () => {
+  it("keeps edited flush-quarantined daily files untrusted and out of ranking", async () => {
     const workspaceDir = await createDreamingWorkspace();
     const relativePath = `memory/${DREAMING_TEST_DAY}.md`;
     const filePath = path.join(workspaceDir, relativePath);
@@ -1163,10 +1163,11 @@ describe("memory-core dreaming phases", () => {
       minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
     });
-    expect(candidates.length).toBeGreaterThan(0);
-    expect(candidates.every((candidate) => candidate.provenance?.originClass === "untrusted")).toBe(
-      true,
-    );
+    const store = await shortTermTesting.readRecallStore(workspaceDir, "2026-04-05T10:05:00.000Z");
+    const entries = Object.values(store.entries).filter((entry) => entry.path === relativePath);
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries.every((entry) => entry.provenance?.originClass === "untrusted")).toBe(true);
+    expect(candidates).toHaveLength(0);
   });
 
   it("checkpoints session transcript ingestion and skips unchanged transcripts", async () => {
@@ -1245,6 +1246,24 @@ describe("memory-core dreaming phases", () => {
     expect(corpus).not.toContain("🎉");
     expect(corpus).not.toContain("🌍");
 
+    // These messages have no owner marker, so ingestion keeps them untrusted.
+    // Check stored recall content independently of promotion eligibility.
+    const store = await shortTermTesting.readRecallStore(workspaceDir, "2026-04-05T19:00:00.000Z");
+    const recalled = Object.values(store.entries).filter((entry) =>
+      entry.path.includes("session-corpus"),
+    );
+    expect(recalled.map((entry) => entry.path)).toContain(
+      "memory/.dreams/session-corpus/2026-04-05.txt",
+    );
+    for (const entry of recalled) {
+      expect(entry.provenance).toMatchObject({
+        originClass: "untrusted",
+        sessionKind: "interactive",
+      });
+    }
+    const snippets = recalled.map((entry) => entry.snippet);
+    expectIncludesSubstring(snippets, "Move backups to S3 Glacier.");
+    expectIncludesSubstring(snippets, "Set retention to 365 days.");
     const ranked = await rankShortTermPromotionCandidates({
       workspaceDir,
       minScore: 0,
@@ -1252,15 +1271,7 @@ describe("memory-core dreaming phases", () => {
       minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-05T19:00:00.000Z"),
     });
-    expect(ranked.map((candidate) => candidate.path)).toContain(
-      "memory/.dreams/session-corpus/2026-04-05.txt",
-    );
-    expect(
-      ranked.find((candidate) => candidate.path.includes("session-corpus"))?.provenance,
-    ).toMatchObject({ sessionKind: "interactive" });
-    const snippets = ranked.map((candidate) => candidate.snippet);
-    expectIncludesSubstring(snippets, "Move backups to S3 Glacier.");
-    expectIncludesSubstring(snippets, "Set retention to 365 days.");
+    expect(ranked).toHaveLength(0);
   });
 
   it("records policy exclusions and keeps forgotten sessions excluded after policy removal and resweeps", async () => {

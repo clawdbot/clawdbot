@@ -1,6 +1,11 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { ref } from "lit/directives/ref.js";
+import { keyed } from "lit/directives/keyed.js";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
+import {
+  handleComposerMenuKeydown,
+  renderComposerMenu,
+  renderComposerMenuOption,
+} from "../../../components/composer-menu.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import {
@@ -14,11 +19,7 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
-import {
-  paneDomId,
-  scrollActiveMenuOptionIntoView,
-  syncComposerMenuScroll,
-} from "./chat-composer-dom.ts";
+import { paneDomId } from "./chat-composer-dom.ts";
 import {
   beginInlineFreeformSlashArguments,
   commitInlineSlashSelection,
@@ -260,11 +261,17 @@ function selectSlashCommand(
   state: SlashMenuState,
   host: SlashMenuHost,
   requestUpdate: () => void,
+  completeOnly = false,
 ): void {
-  if (host.activateComposerMode?.(cmd)) {
+  if (!completeOnly && host.activateComposerMode?.(cmd)) {
     return;
   }
-  if (cmd.source !== "skill" && !host.canRun(true) && state.slashMenuCompletion?.inline) {
+  if (
+    !completeOnly &&
+    cmd.source !== "skill" &&
+    !host.canRun(true) &&
+    state.slashMenuCompletion?.inline
+  ) {
     return;
   }
   const inlineReplacement = cmd.source === "skill" ? `$${cmd.name}` : `/${cmd.name}`;
@@ -272,6 +279,7 @@ function selectSlashCommand(
     return;
   }
   if (
+    !completeOnly &&
     state.slashMenuCompletion?.inline &&
     executesInlineImmediately(cmd) &&
     host.canRun(true) &&
@@ -301,7 +309,11 @@ function selectSlashCommand(
     requestUpdate();
     return;
   }
-  if (cmd.executeLocal && !cmd.args) {
+  if (completeOnly) {
+    host.commitDraft(cmd.args ? `/${cmd.name} ` : `/${cmd.name}`);
+    resetSlashMenuState(state);
+    requestUpdate();
+  } else if (cmd.executeLocal && !cmd.args) {
     resetSlashMenuState(state);
     host.commitDraft(`/${cmd.name}`);
     host.runCommand();
@@ -309,38 +321,6 @@ function selectSlashCommand(
     host.commitDraft(`/${cmd.name} `);
     closeSlashMenuIfNeeded(state, requestUpdate);
   }
-}
-
-function tabCompleteSlashCommand(
-  cmd: SlashCommandDef,
-  state: SlashMenuState,
-  host: SlashMenuHost,
-  requestUpdate: () => void,
-): void {
-  const inlineReplacement = cmd.source === "skill" ? `$${cmd.name}` : `/${cmd.name}`;
-  if (beginInlineSlashArguments(cmd, state, host, requestUpdate)) {
-    return;
-  }
-  if (commitInlineSlashSelection(inlineReplacement, state, host)) {
-    resetSlashMenuState(state);
-    requestUpdate();
-    return;
-  }
-  const argOptions = host.resolveArgOptions(cmd);
-  if (argOptions.length > 0) {
-    host.commitDraft(`/${cmd.name} `);
-    state.slashMenuMode = "args";
-    state.slashMenuCommand = cmd;
-    state.slashMenuArgItems = argOptions;
-    state.slashMenuOpen = true;
-    state.slashMenuIndex = 0;
-    state.slashMenuItems = [];
-    requestUpdate();
-    return;
-  }
-  host.commitDraft(cmd.args ? `/${cmd.name} ` : `/${cmd.name}`);
-  resetSlashMenuState(state);
-  requestUpdate();
 }
 
 function selectSlashArg(
@@ -473,48 +453,34 @@ export function handleSlashMenuKeydown(
   if (!state.slashMenuOpen) {
     return false;
   }
-  if (event.key === "Escape") {
-    event.preventDefault();
-    resetSlashMenuState(state);
-    requestUpdate();
-    return true;
-  }
   const items = state.slashMenuMode === "args" ? state.slashMenuArgItems : state.slashMenuItems;
-  if (items.length === 0) {
-    return false;
-  }
-  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-    event.preventDefault();
-    const offset = event.key === "ArrowDown" ? 1 : items.length - 1;
-    state.slashMenuIndex = (state.slashMenuIndex + offset) % items.length;
-    requestUpdate();
-    scrollActiveMenuOptionIntoView(getActiveSlashMenuOptionId(state, host.paneId));
-    return true;
-  }
-  if (event.key !== "Tab" && event.key !== "Enter") {
-    return false;
-  }
-  event.preventDefault();
-  if (state.slashMenuMode === "args") {
-    const arg = state.slashMenuArgItems[state.slashMenuIndex];
-    if (arg !== undefined) {
-      selectSlashArg(arg, state, host, requestUpdate, event.key === "Enter");
-    }
-  } else {
-    const command = state.slashMenuItems[state.slashMenuIndex];
-    if (command) {
-      if (event.key === "Enter") {
-        selectSlashCommand(command, state, host, requestUpdate);
+  return handleComposerMenuKeydown(event, {
+    count: items.length,
+    index: state.slashMenuIndex,
+    consumeEmpty: false,
+    close: () => {
+      resetSlashMenuState(state);
+      requestUpdate();
+    },
+    move: (index) => {
+      state.slashMenuIndex = index;
+      requestUpdate();
+      return getActiveSlashMenuOptionId(state, host.paneId);
+    },
+    select: (key) => {
+      if (state.slashMenuMode === "args") {
+        const arg = state.slashMenuArgItems[state.slashMenuIndex];
+        if (arg !== undefined) {
+          selectSlashArg(arg, state, host, requestUpdate, key === "Enter");
+        }
       } else {
-        tabCompleteSlashCommand(command, state, host, requestUpdate);
+        const command = state.slashMenuItems[state.slashMenuIndex];
+        if (command) {
+          selectSlashCommand(command, state, host, requestUpdate, key === "Tab");
+        }
       }
-    }
-  }
-  return true;
-}
-
-function syncComposerMenuScrollEvent(event: Event): void {
-  syncComposerMenuScroll(event.currentTarget instanceof Element ? event.currentTarget : undefined);
+    },
+  });
 }
 
 export function isSlashMenuVisible(state: SlashMenuState): boolean {
@@ -561,38 +527,23 @@ function renderSlashCommandOption(params: {
   state: SlashMenuState;
 }): TemplateResult {
   const { cmd, index, query, requestUpdate, host, state } = params;
-  return html`
-    <div
-      id=${getSlashCommandOptionId(host.paneId, cmd)}
-      class="slash-menu-item ${index === state.slashMenuIndex ? "slash-menu-item--active" : ""}"
-      role="option"
-      aria-selected=${index === state.slashMenuIndex}
-      @mousedown=${(event: MouseEvent) => event.preventDefault()}
-      @click=${() => selectSlashCommand(cmd, state, host, requestUpdate)}
-      @mouseenter=${() => {
-        state.slashMenuIndex = index;
-        requestUpdate();
-      }}
-    >
-      <span class="slash-menu-icon"
-        >${
-          cmd.source === "skill"
-            ? icons.pencilSparkles
-            : cmd.icon
-              ? renderSlashIcon(cmd.icon)
-              : icons.terminal
-        }</span
-      >
-      <span class="slash-menu-copy">
-        <span class="slash-menu-name"
-          >/${renderSlashMatchedName(cmd.name, query)}${
-            cmd.args ? html`<span class="slash-menu-args"> ${cmd.args}</span>` : nothing
-          }</span
-        >
-        <span class="slash-menu-desc">${getSlashCommandDescription(cmd)}</span>
-      </span>
-    </div>
-  `;
+  return renderComposerMenuOption({
+    id: getSlashCommandOptionId(host.paneId, cmd),
+    active: index === state.slashMenuIndex,
+    select: () => selectSlashCommand(cmd, state, host, requestUpdate),
+    hover: () => {
+      state.slashMenuIndex = index;
+      requestUpdate();
+    },
+    icon:
+      cmd.source === "skill"
+        ? icons.pencilSparkles
+        : cmd.icon
+          ? renderSlashIcon(cmd.icon)
+          : icons.terminal,
+    name: html`/${renderSlashMatchedName(cmd.name, query)}${cmd.args ? html`<span class="slash-menu-args"> ${cmd.args}</span>` : nothing}`,
+    description: getSlashCommandDescription(cmd),
+  });
 }
 
 export function renderSlashMenu(
@@ -600,66 +551,47 @@ export function renderSlashMenu(
   host: SlashMenuHost,
   draft: string,
   requestUpdate: () => void,
-): TemplateResult | typeof nothing {
+): ReturnType<typeof keyed> | typeof nothing {
   const listboxId = paneDomId(host.paneId, "slash-menu-listbox");
   if (!state.slashMenuOpen) {
     return nothing;
   }
 
+  // Each mode owns its scroll viewport; switching modes starts at the first option.
   if (
     state.slashMenuMode === "args" &&
     state.slashMenuCommand &&
     state.slashMenuArgItems.length > 0
   ) {
-    return html`
-      <div
-        id=${listboxId}
-        class="slash-menu"
-        role="listbox"
-        aria-label=${t("chat.commands.arguments")}
-      >
-        <div
-          class="slash-menu__scroll"
-          ${ref(syncComposerMenuScroll)}
-          @scroll=${syncComposerMenuScrollEvent}
-        >
-          <div class="slash-menu-group">
-            <div class="slash-menu-group__label">
-              /${state.slashMenuCommand.name} ${getSlashCommandDescription(state.slashMenuCommand)}
-            </div>
-            ${state.slashMenuArgItems.map(
-              (arg, i) => html`
-                <div
-                  id=${getSlashArgOptionId(host.paneId, state.slashMenuCommand?.name ?? "", arg)}
-                  class="slash-menu-item ${
-                    i === state.slashMenuIndex ? "slash-menu-item--active" : ""
-                  }"
-                  role="option"
-                  aria-selected=${i === state.slashMenuIndex}
-                  @click=${() => selectSlashArg(arg, state, host, requestUpdate, true)}
-                  @mouseenter=${() => {
-                    state.slashMenuIndex = i;
-                    requestUpdate();
-                  }}
-                >
-                  <span class="slash-menu-icon"
-                    >${
-                      state.slashMenuCommand?.icon
-                        ? renderSlashIcon(state.slashMenuCommand.icon)
-                        : icons.terminal
-                    }</span
-                  >
-                  <span class="slash-menu-copy">
-                    <span class="slash-menu-name">${arg}</span>
-                    <span class="slash-menu-desc">/${state.slashMenuCommand?.name} ${arg}</span>
-                  </span>
-                </div>
-              `,
-            )}
+    return keyed(
+      "args",
+      renderComposerMenu({
+        id: listboxId,
+        label: t("chat.commands.arguments"),
+        content: html` <div class="slash-menu-group">
+          <div class="slash-menu-group__label">
+            /${state.slashMenuCommand.name} ${getSlashCommandDescription(state.slashMenuCommand)}
           </div>
-        </div>
-      </div>
-    `;
+          ${state.slashMenuArgItems.map((arg, i) =>
+            renderComposerMenuOption({
+              id: getSlashArgOptionId(host.paneId, state.slashMenuCommand?.name ?? "", arg),
+              active: i === state.slashMenuIndex,
+              preserveFocus: false,
+              select: () => selectSlashArg(arg, state, host, requestUpdate, true),
+              hover: () => {
+                state.slashMenuIndex = i;
+                requestUpdate();
+              },
+              icon: state.slashMenuCommand?.icon
+                ? renderSlashIcon(state.slashMenuCommand.icon)
+                : icons.terminal,
+              name: arg,
+              description: html`/${state.slashMenuCommand?.name} ${arg}`,
+            }),
+          )}
+        </div>`,
+      }),
+    );
   }
 
   if (state.slashMenuItems.length === 0) {
@@ -682,13 +614,12 @@ export function renderSlashMenu(
     }
   }
 
-  return html`
-    <div id=${listboxId} class="slash-menu" role="listbox" aria-label=${t("chat.commands.menu")}>
-      <div
-        class="slash-menu__scroll"
-        ${ref(syncComposerMenuScroll)}
-        @scroll=${syncComposerMenuScrollEvent}
-      >
+  return keyed(
+    "command",
+    renderComposerMenu({
+      id: listboxId,
+      label: t("chat.commands.menu"),
+      content: html`
         ${groups.map(
           ([category, entries]) => html`<div class="slash-menu-group">
             <div class="slash-menu-group__label">${getSlashCommandCategoryLabel(category)}</div>
@@ -721,7 +652,7 @@ export function renderSlashMenu(
               </div>`
             : nothing
         }
-      </div>
-    </div>
-  `;
+      `,
+    }),
+  );
 }

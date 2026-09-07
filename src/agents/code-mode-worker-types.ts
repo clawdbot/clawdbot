@@ -1,7 +1,9 @@
-import type { Result } from "@openclaw/normalization-core/result";
 import type { Snapshot } from "quickjs-wasi";
 import type { CodeModeJsonSource, CodeModeOutputSource } from "./code-mode-json.js";
 import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
+
+// Also bounds queued ordinary guest requests independently of configured in-flight slots.
+export const MAX_CODE_MODE_PENDING_TOOL_CALLS = 128;
 
 type CodeModeBridgeMethod =
   | "search"
@@ -34,7 +36,7 @@ export type PendingBridgeRequest = {
   args: unknown[];
 };
 
-export type SettledBridgeRequest = { id: string } & Result<unknown, string>;
+export type SettledBridgeRequest = { id: string; ok: boolean; json: string };
 
 type SerializedCodeModeNamespaceValue =
   | { kind: "array"; items: SerializedCodeModeNamespaceValue[] }

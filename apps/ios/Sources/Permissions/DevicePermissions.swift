@@ -1,9 +1,8 @@
 import Contacts
 import EventKit
 import Photos
-import SwiftUI
 
-/// Closed grant state for one device permission shown in Settings.
+/// Native permission state published by the device-settings bridge.
 enum DevicePermissionGrant: Equatable {
     case granted
     case limited
@@ -11,42 +10,7 @@ enum DevicePermissionGrant: Equatable {
     case denied
 }
 
-/// Device permissions managed by the Privacy & Access Settings section.
-enum DevicePermissionKind {
-    case photos
-    case contacts
-    case calendar
-    case reminders
-
-    var symbol: String {
-        switch self {
-        case .photos: "photo.on.rectangle"
-        case .contacts: "person.crop.circle.fill"
-        case .calendar: "calendar"
-        case .reminders: "checklist"
-        }
-    }
-
-    var tint: Color {
-        switch self {
-        case .photos: .orange
-        case .contacts: .blue
-        case .calendar: .teal
-        case .reminders: .green
-        }
-    }
-
-    var title: LocalizedStringResource {
-        switch self {
-        case .photos: LocalizedStringResource("Photos")
-        case .contacts: LocalizedStringResource("Contacts")
-        case .calendar: LocalizedStringResource("Calendar")
-        case .reminders: LocalizedStringResource("Reminders")
-        }
-    }
-}
-
-/// Pure status→grant maps keep every Settings row on one vocabulary.
+/// Native authorization states share one grant vocabulary across snapshots.
 enum DevicePermissionStatusMap {
     static func contacts(_ status: CNAuthorizationStatus) -> DevicePermissionGrant {
         switch status {

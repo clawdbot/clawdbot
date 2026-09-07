@@ -1,6 +1,7 @@
 // Session manager tests cover SQLite persistence and in-memory tree behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -16,7 +17,6 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { redactIdentifier } from "../../logging/redact-identifier.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import {
   buildSessionContext,

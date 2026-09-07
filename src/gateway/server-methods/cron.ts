@@ -21,6 +21,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bindCronSelfRemovalCommitGuard } from "../../cron/active-jobs.js";
+import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
 import {
   assertValidCronAnnounceDelivery,
@@ -621,11 +622,14 @@ export const cronHandlers: GatewayRequestHandlers = {
               }) && cronJobIsVisible(job, cronVisibility, defaultAgentId),
           })
         : await context.cron.listPage(listOptions);
+    const jobs = page.jobs.map((job) => ({
+      ...(p.compact === true ? compactCronListJob(job) : cronJobReadView(job)),
+      effectiveAgentId: tryResolveCronJobEffectiveAgentId(job, defaultAgentId) ?? null,
+    }));
     if (p.compact === true) {
-      respond(true, { ...page, jobs: page.jobs.map(compactCronListJob) }, undefined);
+      respond(true, { ...page, jobs }, undefined);
       return;
     }
-    const jobs = page.jobs.map(cronJobReadView);
     if (p.includeDeliveryPreviews === false) {
       // Full job rows are the default because editors need their payloads. Delivery
       // previews are independently suppressible so list-only callers avoid per-job I/O

@@ -126,15 +126,14 @@ function makeMismatchedWrapperRepo({
   git(linked, ["commit", "-m", "test: local wrapper"]);
   const localRevision = git(linked, ["rev-parse", "HEAD"]).stdout.trim();
 
-  if (realModules) {
-    mkdirSync(join(canonical, "node_modules"));
-    // Use installed third-party packages only, never workspace source or loader mocks.
-    for (const dependency of ["tsx", "zod", "minimatch", "yaml"]) {
-      symlinkSync(
-        realpathSync(join("node_modules", dependency)),
-        join(canonical, "node_modules", dependency),
-      );
-    }
+  mkdirSync(join(canonical, "node_modules"));
+  // Use installed third-party packages only, never workspace source or loader mocks.
+  for (const dependency of ["tsx", "zod", "minimatch", "yaml"]) {
+    symlinkSync(
+      realpathSync(join("node_modules", dependency)),
+      join(canonical, "node_modules", dependency),
+      process.platform === "win32" ? "junction" : "dir",
+    );
   }
 
   return {
@@ -258,7 +257,8 @@ describe("scripts/pr wrappers", () => {
     expect(common).toContain('gh pr view "$pr" --json "$fields"');
     expect(worktree).toContain('metadata=$(read_pr_view_json "$pr"');
     expect(review).toContain('gh_plain pr edit "$pr" --add-assignee "$reviewer"');
-    expect(push).toContain('gh_plain api graphql --input - <<< "$payload"');
+    expect(push).toContain('gh_plain api graphql --input "$payload_file"');
+    expect(push).not.toContain("gh_plain api graphql --input -");
     expect(merge).toContain('gh_plain pr merge "$pr"');
     expect(merge).toContain('"repos/$repo_nwo/issues/$pr/comments"');
     expect(merge).toContain("--jq '.html_url // empty'");
@@ -773,6 +773,28 @@ fi
         expect.soft(result.status, `${entry}\n${result.stdout}\n${result.stderr}`).toBe(exitCode);
         expect.soft(result.stderr, entry).toContain(message);
       }
+      // A later install may remove or redirect the canonical package aliases.
+      // The materialized owner must keep its original installed dependency.
+      const canonicalYaml = join(fixture.canonical, "node_modules/yaml");
+      rmSync(canonicalYaml);
+      const replacementYaml = join(fixture.root, "replacement-yaml");
+      mkdirSync(replacementYaml);
+      writeFileSync(join(replacementYaml, "package.json"), '{"main":"index.js"}');
+      writeFileSync(
+        join(replacementYaml, "index.js"),
+        'throw new Error("replacement yaml executed");\n',
+      );
+      for (const state of ["removed", "redirected"]) {
+        if (state === "redirected") {
+          symlinkSync(replacementYaml, canonicalYaml, "dir");
+        }
+        const verified = run(["scripts/verify-pr-hosted-gates.mjs"]);
+        expect.soft(verified.status, `${state}\n${verified.stderr}`).toBe(1);
+        expect
+          .soft(verified.stderr, state)
+          .toContain("Usage: node scripts/verify-pr-hosted-gates.mjs");
+      }
+
       const attribution = run([
         "scripts/check-changelog-attributions.mjs",
         "--is-forbidden-handle",
@@ -986,11 +1008,6 @@ exit 99
         dispatchBody: `node "$script_parent_dir/${script}" ${args};`,
       });
       if (dependency) {
-        symlinkSync(
-          realpathSync("node_modules"),
-          join(fixture.canonical, "node_modules"),
-          process.platform === "win32" ? "junction" : "dir",
-        );
         writeFileSync(
           join(fixture.linked, "caller-dependency.mts"),
           `export const ${binding} = null;\nthrow new Error("caller workspace dependency executed");\n`,
@@ -1035,15 +1052,12 @@ exit 99
     },
   );
 
-  it.each([
-    { script: "watch-pr-ci.mjs", dependency: "zod" },
-    { script: "verify-pr-hosted-gates.mjs", dependency: "minimatch" },
-  ])(
-    "reports the missing $dependency toolchain without installing dependencies",
-    ({ script, dependency }) => {
-      const fixture = makeMismatchedWrapperRepo({
-        dispatchBody: `node "$script_parent_dir/${script}" --help;`,
-      });
+  it.each(["tsx", "zod", "minimatch", "yaml"])(
+    "refuses the missing %s toolchain before handoff without installing dependencies",
+    (dependency) => {
+      const fixture = makeMismatchedWrapperRepo();
+      const installedDependency = join(fixture.canonical, "node_modules", dependency);
+      rmSync(installedDependency);
       writeFileSync(
         join(fixture.bin, "pnpm"),
         `#!/bin/sh\ntouch "${join(fixture.root, "installed")}"\nexit 1\n`,
@@ -1055,9 +1069,19 @@ exit 99
         env: { ...fixture.env, TMPDIR: fixture.root },
       });
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain(`Cannot find package '${dependency}'`);
+      expect(result.stderr).toContain(
+        `Cannot resolve installed scripts/pr dependency '${dependency}'`,
+      );
+      expect(result.stderr).toContain(
+        "Restore frozen dependencies in a clean trusted-main checkout",
+      );
+      expect(result.stderr).not.toContain("running wrapper code materialized from");
       expect(existsSync(join(fixture.root, "installed"))).toBe(false);
-      expect(existsSync(join(fixture.canonical, "node_modules"))).toBe(false);
+      expect(existsSync(installedDependency)).toBe(false);
+      expect(fixture.git(fixture.canonical, ["for-each-ref", "refs/openclaw"]).stdout).toBe("");
+      expect(
+        readdirSync(fixture.root).filter((name) => name.startsWith("openclaw-pr-anchor.")),
+      ).toEqual([]);
     },
   );
 

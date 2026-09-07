@@ -15,6 +15,7 @@
     "../../src/gateway/**",
     "../../src/infra/**",
     "../../src/commands/**",
+    "../../src/wizard/**",
     "../../src/plugins/**",
     "../../src/config/**",
     "../../src/cli/**",

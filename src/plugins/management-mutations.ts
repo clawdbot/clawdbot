@@ -28,16 +28,14 @@ import {
   resolveOfficialEntryById,
 } from "./management-catalog.js";
 import { readPluginMutationSnapshot } from "./management-config.js";
-import {
-  type ManagedPluginSourceInstallRequest,
-  installManagedPluginSource,
-} from "./management-install.js";
+import type { ManagedPluginSourceInstallRequest } from "./management-install.js";
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 import {
   loadFreshManagedPluginMetadata,
   refreshManagedPluginMetadata,
   listManagedPlugins,
 } from "./management-service.js";
+import { isBundledManifestOwner } from "./manifest-owner-policy.js";
 import {
   getOfficialExternalPluginCatalogManifest,
   listOfficialExternalPluginCatalogEntries,
@@ -226,6 +224,7 @@ export async function installManagedPlugin(params: {
   request: ManagedPluginInstallRequest;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ plugin: ManagedPluginCatalogEntry; warnings?: string[] }> {
+  const { installManagedPluginSource } = await import("./management-install.js");
   const env = params.env ?? process.env;
   return await withPluginLifecycleLease({ env }, async () => {
     const snapshot = await readPluginMutationSnapshot(env);
@@ -382,8 +381,10 @@ export async function mutateManagedPluginEnabled(
       }
       next = enableResult.config;
       policyPluginId = enableResult.pluginId;
-      // CLI slot inspection uses the enabled config, including legacy runtime-only kinds.
-      const slotResult = applySlotSelectionForPlugin(next, pluginId, cli ? undefined : metadata);
+      // Bundled kinds are already prepared under this lease. External CLI inspection
+      // still needs the enabled config to resolve legacy runtime-only kinds.
+      const slotMetadata = cli && !isBundledManifestOwner(installedPlugin) ? undefined : metadata;
+      const slotResult = applySlotSelectionForPlugin(next, pluginId, slotMetadata);
       next = slotResult.config;
       slotWarnings.push(...slotResult.warnings);
     } else {
@@ -454,5 +455,3 @@ export async function setManagedPluginEnabled(params: ManagedPluginEnableRequest
     };
   });
 }
-
-export { uninstallManagedPlugin } from "./management-uninstall.js";

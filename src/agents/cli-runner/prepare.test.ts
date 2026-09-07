@@ -3202,35 +3202,96 @@ describe("prepareCliRunContext", () => {
     });
   });
 
-  it("applies direct-run prepend system context helpers on the CLI path", async () => {
-    mockBuildActiveImageGenerationTaskPromptContextForSession.mockReturnValue("active image task");
-    mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue("active video task");
-    const hookRunner = {
-      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
-      runBeforePromptBuild: vi.fn(async () => ({
-        systemPrompt: "hook system",
-        prependSystemContext: "hook prepend system",
-      })),
-    };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+  it.each([false, true])(
+    "keeps media progress in current-turn context with plugin execution %s",
+    async (pluginExecution) => {
+      const config = createCliBackendConfig({ bundleMcp: true });
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime: vi.fn(() => ({
+          port: 31783,
+          ownerToken: "loopback-owner-token",
+          nonOwnerToken: "loopback-non-owner-token",
+        })),
+        resolveMcpLoopbackScopedTools: vi.fn(() => ({
+          agentId: "main",
+          tools: ["image_generate", "video_generate"].map((name) => ({
+            name,
+            label: name,
+            description: name,
+            parameters: Type.Object({}),
+            execute: vi.fn(),
+          })),
+        })),
+      });
+      if (pluginExecution) {
+        setCliBackendForPrepareTest({
+          id: "test-cli",
+          bundleMcp: true,
+          prepareExecution: () => ({
+            async *execute() {
+              yield { type: "result" };
+            },
+          }),
+        });
+      }
+      mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReturnValue(
+        "active video task",
+      );
+      const hookRunner = {
+        hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+        runBeforePromptBuild: vi.fn(async () => ({
+          systemPrompt: "hook system",
+          prependSystemContext: "hook prepend system",
+        })),
+      };
+      mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
 
-    const context = await fixture.prepare({
-      sessionKey: "agent:main:test",
-      trigger: "user",
-    });
+      const prepareTurn = () =>
+        fixture.prepare({
+          sessionKey: "agent:main:test",
+          trigger: "user",
+          config,
+          prompt: "latest ask",
+          transcriptPrompt: "latest ask",
+        });
+      mockBuildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(
+        "image task queued",
+      );
+      const first = await prepareTurn();
+      mockBuildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(
+        "image task running",
+      );
+      const second = await prepareTurn();
 
-    expect(context.systemPrompt).toBe(
-      `${wrappedPluginSystemContext("hook prepend system")}\n\nhook system${SYSTEM_PROMPT_CACHE_BOUNDARY}active image task\n\nactive video task\n\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.`,
-    );
-    expect(mockBuildActiveImageGenerationTaskPromptContextForSession).toHaveBeenCalledWith(
-      "agent:main:test",
-      "main",
-    );
-    expect(mockBuildActiveVideoGenerationTaskPromptContextForSession).toHaveBeenCalledWith(
-      "agent:main:test",
-      "main",
-    );
-  });
+      expect(second.systemPrompt).toBe(first.systemPrompt);
+      expect(second.systemPrompt).toBe(
+        `${wrappedPluginSystemContext("hook prepend system")}\n\nhook system${SYSTEM_PROMPT_CACHE_BOUNDARY}\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.`,
+      );
+      const carrier = [
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        "## Media Generation Tasks",
+        "image task running",
+        "active video task",
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      ].join("\n");
+      expect(second.params.prompt).toBe(
+        pluginExecution ? "latest ask" : `latest ask\n\n${carrier}`,
+      );
+      expect(second.promptContext).toEqual(
+        pluginExecution ? { appendContext: carrier } : undefined,
+      );
+      expect(second.params.transcriptPrompt).toBe("latest ask");
+      expect(second.contextEngineTurnPrompt).toBe("latest ask");
+      expect(mockBuildActiveImageGenerationTaskPromptContextForSession).toHaveBeenCalledWith(
+        "agent:main:test",
+        "main",
+      );
+      expect(mockBuildActiveVideoGenerationTaskPromptContextForSession).toHaveBeenCalledWith(
+        "agent:main:test",
+        "main",
+      );
+    },
+  );
 
   it("skips bundle MCP preparation when tools are disabled", async () => {
     const getActiveMcpLoopbackRuntime = vi.fn(() => ({

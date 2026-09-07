@@ -9,7 +9,6 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
-import { retireSessionMcpRuntimeForSessionKey } from "../agent-bundle-mcp-tools.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { waitForAgentRunReply } from "../run-wait.js";
 import {
@@ -91,10 +90,6 @@ export async function runAgentStep(params: {
       inputProvenance,
       allowModelOverride: false,
     });
-    await retireSessionMcpRuntimeForSessionKey({
-      sessionKey: params.sessionKey,
-      reason: "nested-agent-step-complete",
-    });
     return extractAgentCommandReply(result);
   }
   const response = await gatewayCall({
@@ -133,12 +128,6 @@ export async function runAgentStep(params: {
     timeoutMs: Math.min(params.timeoutMs, 60_000),
     callGateway: gatewayCall,
   });
-  if (result.status === "ok" || result.status === "error") {
-    await retireSessionMcpRuntimeForSessionKey({
-      sessionKey: params.sessionKey,
-      reason: "nested-agent-step-complete",
-    });
-  }
   if (result.status !== "ok") {
     return undefined;
   }

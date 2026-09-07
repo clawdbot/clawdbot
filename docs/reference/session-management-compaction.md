@@ -344,7 +344,7 @@ preflight excludes the already-admitted waiting user; post-reply flushing includ
 the completed turn. Any compaction inside the flush affects only its private view;
 the original conversation has a separate compaction step.
 
-Config (`agents.defaults.compaction.memoryFlush`), full reference at [/gateway/config-agents](/gateway/config-agents#agents-defaults-compaction):
+Config (`agents.defaults.compaction.memoryFlush`), full reference at [/gateway/config-agents](/gateway/config-agents/heartbeat-compaction-and-streaming#agents-defaults-compaction):
 
 | Key                         | Default | Notes                                                                                                                                                  |
 | --------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
