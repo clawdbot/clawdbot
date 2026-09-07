@@ -118,7 +118,6 @@ const ComputerActV1ParamsSchema = Type.Union([
     fromX: Type.Optional(Type.Number({ minimum: 0 })),
     fromY: Type.Optional(Type.Number({ minimum: 0 })),
     durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
-    modifiers: Type.Optional(Type.String()),
     ...optionalScreenFields,
     ...optionalReferenceFields,
   }),

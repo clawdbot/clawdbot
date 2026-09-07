@@ -557,14 +557,7 @@ class McpCuaDriverSession implements CuaDriverSession {
   }
 
   async drag(
-    input: {
-      fromX: number;
-      fromY: number;
-      toX: number;
-      toY: number;
-      durationMs?: bigint;
-      modifier?: string[];
-    },
+    input: { fromX: number; fromY: number; toX: number; toY: number; durationMs?: bigint },
     signal?: AbortSignal,
   ) {
     return await this.sessionTool(
@@ -575,7 +568,6 @@ class McpCuaDriverSession implements CuaDriverSession {
         to_x: input.toX,
         to_y: input.toY,
         ...(input.durationMs === undefined ? {} : { duration_ms: Number(input.durationMs) }),
-        ...(input.modifier?.length ? { modifier: input.modifier } : {}),
         target: MCP_DESKTOP_TARGET,
       },
       signal,

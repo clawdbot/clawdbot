@@ -168,23 +168,6 @@ describe("createComputerTool v1 execution", () => {
       }),
     ],
     [
-      "maps a modifier-held drag through the computer.act execution path",
-      {
-        action: "left_click_drag",
-        startCoordinate: [1, 2],
-        coordinate: [3, 4],
-        text: "shift",
-      },
-      expectedAct("left_click_drag", {
-        displayFrameId: "display-0-frame",
-        fromX: 1,
-        fromY: 2,
-        x: 3,
-        y: 4,
-        modifiers: "shift",
-      }),
-    ],
-    [
       "maps scroll input without leaking pointer fields",
       { action: "scroll", scrollDirection: "Down", scrollAmount: 999, text: "cmd" },
       expectedAct("scroll", {

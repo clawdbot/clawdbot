@@ -196,99 +196,42 @@ describe("cua-computer platform modifiers", () => {
     }
   });
 
-  it.each(platforms)(
-    "refuses a modifier-held window drag before native input on $platform",
-    async ({ platform }) => {
-      const native = windowDriver();
-      const computer = await execution(native.session, platform);
-      try {
-        const target = await observeWindow(computer);
-        await expect(
-          computer.act(
-            JSON.stringify({
-              action: "left_click_drag",
-              ...target,
-              fromX: 10,
-              fromY: 15,
-              x: 20,
-              y: 30,
-              modifiers: "Command+Shift",
-            }),
-          ),
-        ).rejects.toThrow("COMPUTER_UNSUPPORTED_ACTION: modifier-held drags are not delivered");
-        expect(native.callTool).toHaveBeenCalledTimes(2);
-        expect(native.drag).not.toHaveBeenCalled();
-      } finally {
-        await computer.close("completion");
-      }
-    },
-  );
-
-  it.each(platforms)(
-    "refuses a modifier-held desktop drag before native input on $platform",
-    async ({ platform }) => {
-      const native = driver();
-      const computer = await execution(native.session, platform);
-      try {
-        const screen = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}')) as {
-          displayFrameId: string;
-          width: number;
-        };
-        await expect(
-          computer.act(
-            JSON.stringify({
-              action: "left_click_drag",
-              displayFrameId: screen.displayFrameId,
-              refWidth: screen.width,
-              fromX: 10,
-              fromY: 15,
-              x: 20,
-              y: 30,
-              modifiers: "Command+Shift",
-            }),
-          ),
-        ).rejects.toThrow("COMPUTER_UNSUPPORTED_ACTION: modifier-held drags are not delivered");
-        expect(native.drag).not.toHaveBeenCalled();
-        expect(native.callTool).not.toHaveBeenCalled();
-      } finally {
-        await computer.close("completion");
-      }
-    },
-  );
-
-  it("omits the modifier key from an unmodified desktop drag", async () => {
-    const native = driver();
-    const computer = await execution(native.session, "linux");
+  it("rejects unsupported drag modifiers at the public request boundary", async () => {
+    const native = windowDriver();
+    const computer = await execution(native.session, "darwin");
     try {
-      const screen = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}')) as {
-        displayFrameId: string;
-        width: number;
-      };
-      await computer.act(
-        JSON.stringify({
-          action: "left_click_drag",
-          displayFrameId: screen.displayFrameId,
-          refWidth: screen.width,
-          fromX: 10,
-          fromY: 15,
-          x: 20,
-          y: 30,
-        }),
-      );
-      expect(native.drag).toHaveBeenLastCalledWith(
-        { fromX: 10, fromY: 15, toX: 20, toY: 30 },
-        undefined,
-      );
+      const target = await observeWindow(computer);
+      await expect(
+        computer.act(
+          JSON.stringify({
+            action: "left_click_drag",
+            ...target,
+            fromX: 10,
+            fromY: 15,
+            x: 20,
+            y: 30,
+            modifiers: "cmd",
+          }),
+        ),
+      ).rejects.toThrow("COMPUTER_INVALID_REQUEST");
+      expect(native.callTool).toHaveBeenCalledTimes(2);
+      expect(native.drag).not.toHaveBeenCalled();
     } finally {
       await computer.close("completion");
     }
   });
 
-  it.each(platforms)(
-    "routes a modifier-held desktop click through the raw click tool on $platform",
-    async ({ platform, command }) => {
+  it.each([
+    { action: "left_click", button: "left", count: 1 },
+    { action: "right_click", button: "right", count: 1 },
+    { action: "middle_click", button: "middle", count: 1 },
+    { action: "double_click", button: "left", count: 2 },
+    { action: "triple_click", button: "left", count: 3 },
+  ] as const)(
+    "routes modifier-held desktop $action through raw click on Linux",
+    async ({ action, button, count }) => {
       const native = driver();
-      const computer = await execution(native.session, platform);
+      const computer = await execution(native.session, "linux");
       try {
         const screen = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}')) as {
           displayFrameId: string;
@@ -296,12 +239,12 @@ describe("cua-computer platform modifiers", () => {
         };
         await computer.act(
           JSON.stringify({
-            action: "left_click",
+            action,
             displayFrameId: screen.displayFrameId,
             refWidth: screen.width,
             x: 20,
             y: 30,
-            modifiers: "Command+Shift",
+            modifiers: "Command+Ctrl+Shift",
           }),
         );
         expect(native.callTool).toHaveBeenLastCalledWith(
@@ -309,9 +252,9 @@ describe("cua-computer platform modifiers", () => {
           {
             x: 20,
             y: 30,
-            button: "left",
-            count: 1,
-            modifier: [command, "shift"],
+            button,
+            count,
+            modifier: ["meta", "ctrl", "shift"],
             target: { kind: "desktop", display_id: "primary" },
           },
           undefined,
@@ -323,9 +266,41 @@ describe("cua-computer platform modifiers", () => {
     },
   );
 
-  it("omits the raw click tool for an unmodified desktop click", async () => {
+  it.each(platforms.filter(({ platform }) => platform !== "linux"))(
+    "preserves unsupported modifier-held desktop click on $platform",
+    async ({ platform }) => {
+      const native = driver();
+      const computer = await execution(native.session, platform);
+      try {
+        const screen = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}')) as {
+          displayFrameId: string;
+          width: number;
+        };
+        await expect(
+          computer.act(
+            JSON.stringify({
+              action: "left_click",
+              displayFrameId: screen.displayFrameId,
+              refWidth: screen.width,
+              x: 20,
+              y: 30,
+              modifiers: "Command+Shift",
+            }),
+          ),
+        ).rejects.toThrow(
+          "COMPUTER_UNSUPPORTED_ACTION: modifier-held desktop clicks are unsupported by cua-driver",
+        );
+        expect(native.click).not.toHaveBeenCalled();
+        expect(native.callTool).not.toHaveBeenCalled();
+      } finally {
+        await computer.close("completion");
+      }
+    },
+  );
+
+  it.each(platforms)("keeps unmodified desktop click typed on $platform", async ({ platform }) => {
     const native = driver();
-    const computer = await execution(native.session, "linux");
+    const computer = await execution(native.session, platform);
     try {
       const screen = JSON.parse(await computer.snapshot('{"format":"png","maxWidth":100}')) as {
         displayFrameId: string;

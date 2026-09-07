@@ -65,14 +65,7 @@ export interface CuaDriverSession {
     signal?: AbortSignal,
   ): Promise<CuaToolResult>;
   drag(
-    input: {
-      fromX: number;
-      fromY: number;
-      toX: number;
-      toY: number;
-      durationMs?: bigint;
-      modifier?: string[];
-    },
+    input: { fromX: number; fromY: number; toX: number; toY: number; durationMs?: bigint },
     signal?: AbortSignal,
   ): Promise<CuaToolResult>;
   moveCursor(input: { x: number; y: number }, signal?: AbortSignal): Promise<CuaToolResult>;
@@ -202,14 +195,7 @@ class DirectCuaDriverSession implements CuaDriverSession {
     );
   }
   async drag(
-    input: {
-      fromX: number;
-      fromY: number;
-      toX: number;
-      toY: number;
-      durationMs?: bigint;
-      modifier?: string[];
-    },
+    input: { fromX: number; fromY: number; toX: number; toY: number; durationMs?: bigint },
     signal?: AbortSignal,
   ) {
     return await this.invoke(signal, () =>
@@ -425,14 +411,7 @@ class LazyCuaDriverSession implements CuaDriverSession {
     return await (await this.requireRuntime()).click(input, signal);
   }
   async drag(
-    input: {
-      fromX: number;
-      fromY: number;
-      toX: number;
-      toY: number;
-      durationMs?: bigint;
-      modifier?: string[];
-    },
+    input: { fromX: number; fromY: number; toX: number; toY: number; durationMs?: bigint },
     signal?: AbortSignal,
   ) {
     return await (await this.requireRuntime()).drag(input, signal);

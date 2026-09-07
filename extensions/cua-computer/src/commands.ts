@@ -223,12 +223,19 @@ function createImageProcessor(env: NodeJS.ProcessEnv): ImageProcessor {
 }
 
 function clickArgs(
+  platform: NodeJS.Platform,
   frame: CuaLastFrame,
   params: CuaComputerActParams,
   button: ClickButton,
   count: 1 | 2 | 3,
 ) {
   const point = scalePoint(frame, params.x, params.y, params.action);
+  const modifiers = normalizeModifiers(params.modifiers, platform);
+  if (modifiers.length > 0) {
+    throw new Error(
+      "COMPUTER_UNSUPPORTED_ACTION: modifier-held desktop clicks are unsupported by cua-driver",
+    );
+  }
   return {
     ...point,
     button,
@@ -350,7 +357,7 @@ async function handleDesktopAct(
                 ? 3
                 : 1;
           const modifier = normalizeModifiers(desktopParams.modifiers, platform);
-          if (modifier.length > 0) {
+          if (platform === "linux" && modifier.length > 0) {
             // The typed ClickInput has no modifier field (SDK 0.22.2). The raw
             // `click` tool accepts desktop target + modifier and, on X11, holds
             // the modifier via XTest for the duration of the click (confirmed
@@ -375,7 +382,7 @@ async function handleDesktopAct(
             break;
           }
           assertToolSuccess(
-            await driver.click(clickArgs(frame, desktopParams, button, count), signal),
+            await driver.click(clickArgs(platform, frame, desktopParams, button, count), signal),
             "click",
           );
           break;
@@ -388,16 +395,6 @@ async function handleDesktopAct(
         case "left_click_drag": {
           const from = scalePoint(frame, desktopParams.fromX, desktopParams.fromY, "drag start");
           const to = scalePoint(frame, desktopParams.x, desktopParams.y, "drag end");
-          // The typed DragInput (SDK 0.22.2) accepts a modifier array, but a real
-          // X11 event capture showed the held modifier never reaches the target
-          // during the drag (unlike click above, which does): the driver performs
-          // an unmodified drag and reports success. Refuse before native input so
-          // a modifier-constrained gesture cannot silently run as a different one.
-          if (normalizeModifiers(desktopParams.modifiers, platform).length > 0) {
-            throw new Error(
-              "COMPUTER_UNSUPPORTED_ACTION: modifier-held drags are not delivered by cua-driver (the modifier is accepted but not held on the target)",
-            );
-          }
           assertToolSuccess(
             await driver.drag(
               {

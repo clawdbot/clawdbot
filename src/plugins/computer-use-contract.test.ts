@@ -47,61 +47,6 @@ describe("Computer Use wire contract", () => {
     );
   });
 
-  it("pins the left_click_drag wire shape: modifiers only present when non-empty", () => {
-    // An unmodified drag must keep the exact pre-existing wire shape (no
-    // `modifiers` key at all), so an older node that predates modifier-held
-    // drag support keeps working unchanged.
-    expect(
-      parseComputerActParamsJSON(
-        JSON.stringify({
-          action: "left_click_drag",
-          displayFrameId: "frame-1",
-          fromX: 10,
-          fromY: 20,
-          x: 30,
-          y: 40,
-          refWidth: 1280,
-        }),
-      ),
-    ).toEqual({
-      action: "left_click_drag",
-      displayFrameId: "frame-1",
-      fromX: 10,
-      fromY: 20,
-      x: 30,
-      y: 40,
-      refWidth: 1280,
-    });
-
-    // A modifier-held drag carries an optional `modifiers` string. An older
-    // node's schema (predating this field) rejects it as an unrecognized
-    // property, giving a structured COMPUTER_INVALID_REQUEST refusal instead
-    // of silently dropping the modifier.
-    expect(
-      parseComputerActParamsJSON(
-        JSON.stringify({
-          action: "left_click_drag",
-          displayFrameId: "frame-1",
-          fromX: 10,
-          fromY: 20,
-          x: 30,
-          y: 40,
-          refWidth: 1280,
-          modifiers: "shift",
-        }),
-      ),
-    ).toEqual({
-      action: "left_click_drag",
-      displayFrameId: "frame-1",
-      fromX: 10,
-      fromY: 20,
-      x: 30,
-      y: 40,
-      refWidth: 1280,
-      modifiers: "shift",
-    });
-  });
-
   it("projects the canonical screen.snapshot result", () => {
     expect(
       parseScreenSnapshotResult({

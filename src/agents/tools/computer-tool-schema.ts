@@ -81,7 +81,7 @@ export function createComputerToolSchema(
       Type.String({
         description:
           'type: text to type; key/hold_key: key combo such as "cmd+shift+t" or "Return"; ' +
-          'click/drag/scroll actions: modifier keys to hold ("shift", "ctrl", "alt", "cmd").',
+          'click/scroll actions: modifier keys to hold ("shift", "ctrl", "alt", "cmd").',
       }),
     ),
     scrollDirection: optionalStringEnum(["up", "down", "left", "right"] as const),

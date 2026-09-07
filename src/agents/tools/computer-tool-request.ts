@@ -41,7 +41,6 @@ const COORDINATE_OPTIONAL_ACTIONS = new Set<ComputerToolAction>([
 
 const MODIFIER_TEXT_ACTIONS = new Set<ComputerToolAction>([
   ...ELEMENT_TARGETABLE_CLICK_ACTIONS,
-  "left_click_drag",
   "left_mouse_down",
   "left_mouse_up",
   "scroll",
