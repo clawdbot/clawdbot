@@ -56,7 +56,7 @@ openclaw-activity-page {
 
 .activity-current-work {
   display: flex;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   flex-direction: column;
   gap: var(--space-2);
   min-height: 0;
