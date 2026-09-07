@@ -6,7 +6,10 @@
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import type { SubagentRunReadRecord, SubagentRunRecord } from "./subagent-registry.types.js";
-import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
+import {
+  compareSubagentRunGeneration,
+  recordLatestSubagentRun,
+} from "./subagent-run-generation.js";
 import { hasSubagentRunEnded, isLiveUnendedSubagentRun } from "./subagent-run-liveness.js";
 
 function resolveControllerSessionKey(
@@ -104,16 +107,6 @@ export type SubagentRunReadIndex<T extends SubagentRunReadRecord = SubagentRunRe
 export type LatestSubagentRunReadIndex = {
   getLatestSubagentRun(childSessionKey: string): SubagentRunRecord | null;
 };
-
-/** Keeps the newest generation at the grouping key prepared by the caller. */
-export function recordLatestSubagentRun<
-  T extends Pick<SubagentRunReadRecord, "runId" | "createdAt" | "generation">,
->(map: Map<string, T>, key: string, entry: T): void {
-  const existing = map.get(key);
-  if (!existing || compareSubagentRunGeneration(entry, existing) > 0) {
-    map.set(key, entry);
-  }
-}
 
 /** Builds a reusable latest-generation lookup from one registry snapshot. */
 export function buildLatestSubagentRunReadIndexFromRuns(
