@@ -8,5 +8,11 @@
     "../../src/infra/**/*.test.tsx",
     "../../src/logging/**/*.test.ts",
     "../../src/logging/**/*.test.tsx"
+  ],
+  "exclude": [
+    "../../node_modules",
+    "../../dist",
+    "../../**/dist/**",
+    "../../src/infra/outbound/**"
   ]
 }
