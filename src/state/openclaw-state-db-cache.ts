@@ -147,8 +147,8 @@ function getOpenClawStateDatabaseRuntimeFailure(pathname: string): Error | undef
     if (cachedDataVersions.get(cached.db) === dataVersion) {
       return undefined;
     }
-    // data_version is the cheap external-commit trigger. Re-read user_version
-    // only when another connection changed the file.
+    // data_version is the cheap external-commit trigger. Recheck published and
+    // content versions only when another connection changed the file.
     assertSupportedStateSchemaVersion(cached.db, resolvedPath);
     cachedDataVersions.set(cached.db, dataVersion);
     return undefined;

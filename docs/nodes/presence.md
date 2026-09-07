@@ -136,5 +136,5 @@ connection and command failures, see [Node troubleshooting](/nodes/troubleshooti
 - [Nodes](/nodes)
 - [Nodes CLI](/cli/nodes)
 - [System presence](/concepts/presence)
-- [Gateway protocol](/gateway/protocol#presence)
+- [Gateway protocol](/gateway/protocol/presence#presence)
 - [macOS app](/platforms/macos)

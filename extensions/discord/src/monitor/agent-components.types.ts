@@ -12,6 +12,7 @@ import type {
 } from "../internal/discord.js";
 import type { DiscordGuildEntryResolved } from "./allow-list.js";
 import type { formatDiscordUserTag } from "./format.js";
+import type { DiscordLivePolicyReader } from "./live-policy.js";
 
 export type DiscordUser = Parameters<typeof formatDiscordUserTag>[0];
 
@@ -37,6 +38,8 @@ export type DiscordChannelContext = {
 };
 
 export type AgentComponentContext = {
+  isPolicyCurrent?: () => boolean;
+  readPolicy?: DiscordLivePolicyReader;
   cfg: OpenClawConfig;
   accountId: string;
   discordConfig?: DiscordAccountConfig;

@@ -258,7 +258,7 @@ export default definePluginEntry({
           agentId: params.agentId,
           agentSessionKey: params.agentSessionKey,
         });
-        return context ? buildMemoryPromptSection({ ...params, sources: context.sources }) : [];
+        return context ? buildMemoryPromptSection(params) : [];
       },
       flushPlanResolver: buildMemoryFlushPlan,
       runtime: memoryRuntime,

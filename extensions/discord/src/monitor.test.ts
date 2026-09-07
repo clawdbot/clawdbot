@@ -1,5 +1,6 @@
 // Discord tests cover monitor plugin behavior.
 import { GatewayDispatchEvents } from "discord-api-types/v10";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { createRequireRecord, typedCases } from "openclaw/plugin-sdk/test-fixtures";
@@ -20,6 +21,7 @@ import {
   resolveGroupDmAllow,
   shouldEmitDiscordReactionNotification,
 } from "./monitor/allow-list.js";
+import { createDiscordLivePolicyReader } from "./monitor/live-policy.js";
 import { resolveDiscordReplyTarget, sanitizeDiscordThreadName } from "./monitor/threading.js";
 type DiscordReactionEvent = Parameters<
   import("./monitor/listeners.js").DiscordReactionListener["handle"]
@@ -1191,6 +1193,44 @@ describe("discord DM reaction handling", () => {
     await listener.handle(data, client);
 
     expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+  });
+
+  it("applies DM allowlist edits and revokes reactions awaiting channel metadata", async () => {
+    const params = makeReactionListenerParams({ dmPolicy: "allowlist", allowFrom: [] });
+    let cfg: OpenClawConfig = {
+      channels: { discord: { dmPolicy: "allowlist", allowFrom: [] } },
+    };
+    const listener = new DiscordReactionListener({
+      ...params,
+      readPolicy: createDiscordLivePolicyReader({
+        cfg,
+        accountId: params.accountId,
+        readConfig: () => cfg,
+      }),
+    });
+    const data = makeReactionEvent({ botAsAuthor: true, userId: "user-1" });
+    const client = makeReactionClient({ channelType: ChannelType.DM });
+    await listener.handle(data, client);
+    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+    cfg = { channels: { discord: { dmPolicy: "allowlist", allowFrom: ["user:user-1"] } } };
+    await listener.handle(data, client);
+    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
+
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const fetchChannel = client.fetchChannel.bind(client);
+    vi.spyOn(client, "fetchChannel").mockImplementationOnce(async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return fetchChannel(...args);
+    });
+    const pending = listener.handle(data, client);
+    await entered.promise;
+    cfg = { channels: { discord: { dmPolicy: "allowlist", allowFrom: [] } } };
+    release.resolve();
+    await pending;
+    await listener.handle(data, client);
+    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
   });
 
   it("blocks DM reactions for unauthorized sender in allowlist mode", async () => {

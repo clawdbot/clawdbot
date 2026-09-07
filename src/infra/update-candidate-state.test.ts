@@ -167,6 +167,32 @@ it.each(["DELETE", "WAL"])(
   },
 );
 
+it("retains deferred content in both inspection and rehearsal snapshots", async () => {
+  const stateDir = path.join(root, "deferred");
+  const file = path.join(stateDir, "state", "openclaw.sqlite");
+  await createDatabase(
+    file,
+    `
+    PRAGMA user_version = 15;
+    CREATE TABLE config_machine_state (state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER);
+    INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '16', 0);
+  `,
+  );
+  const inspected = await readUpdateStateSchemaVersions({ stateDir, config: {} });
+  expect(inspected.find((entry) => entry.path === file)).toEqual({
+    path: file,
+    userVersion: 15,
+    contentVersion: 16,
+  });
+  expect(
+    await runSnapshotWorker({
+      stateDir,
+      targetStateDir: path.join(root, "rehearsal"),
+      config: {},
+    }),
+  ).toEqual(inspected);
+});
+
 it("reads committed WAL schemas without ending the live writer's transaction", async () => {
   const stateDir = path.join(root, "live");
   const file = path.join(stateDir, "state", "openclaw.sqlite");

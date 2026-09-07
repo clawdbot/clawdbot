@@ -76,6 +76,11 @@
       "import": "./dist/internal/anthropic.mjs",
       "default": "./dist/internal/anthropic.mjs"
     },
+    "./internal/google-model-family": {
+      "types": "./dist/internal/google-model-family.d.mts",
+      "import": "./dist/internal/google-model-family.mjs",
+      "default": "./dist/internal/google-model-family.mjs"
+    },
     "./internal/openai": {
       "types": "./dist/internal/openai.d.mts",
       "import": "./dist/internal/openai.mjs",

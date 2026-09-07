@@ -243,10 +243,23 @@ export function readProviderUsageStaleWhileRevalidate(
   return matching?.usageByProvider ?? new Map();
 }
 
-/** Returns cached provider usage while network refreshes run in the background for capable clients. */
-async function loadProviderUsageSummaryStaleWhileRevalidate(
-  params: ProviderUsageCacheParams,
-): Promise<UsageSummary> {
+/** Shares the models.authStatus cache contract with the unscoped usage.status RPC. */
+export async function loadUsageStatusStaleWhileRevalidate(options: {
+  config: OpenClawConfig;
+  coldRead?: "refresh-marker";
+  now?: number;
+}): Promise<UsageSummary> {
+  const snapshot = getProviderUsageRuntimeSnapshot({ config: options.config });
+  const params: ProviderUsageCacheParams = {
+    agentId: snapshot.agentId,
+    agentDir: snapshot.agentDir,
+    authStore: snapshot.store,
+    configRef: snapshot.configRef,
+    credentialKey: snapshot.credentialKey,
+    providerIds: snapshot.providerIds,
+    coldRead: options.coldRead,
+    now: options.now ?? Date.now(),
+  };
   if (params.providerIds.length === 0) {
     usageCacheByAgentId.delete(params.agentId);
     return { updatedAt: params.now, providers: [] };
@@ -275,23 +288,4 @@ async function loadProviderUsageSummaryStaleWhileRevalidate(
   }
   void refresh.catch(() => {});
   return { updatedAt: params.now, providers: [], refreshing: true };
-}
-
-/** Shares the models.authStatus cache contract with the unscoped usage.status RPC. */
-export async function loadUsageStatusStaleWhileRevalidate(params: {
-  config: OpenClawConfig;
-  coldRead?: "refresh-marker";
-  now?: number;
-}): Promise<UsageSummary> {
-  const snapshot = getProviderUsageRuntimeSnapshot({ config: params.config });
-  return await loadProviderUsageSummaryStaleWhileRevalidate({
-    agentId: snapshot.agentId,
-    agentDir: snapshot.agentDir,
-    authStore: snapshot.store,
-    configRef: snapshot.configRef,
-    credentialKey: snapshot.credentialKey,
-    providerIds: snapshot.providerIds,
-    coldRead: params.coldRead,
-    now: params.now ?? Date.now(),
-  });
 }

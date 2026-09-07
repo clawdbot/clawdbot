@@ -180,24 +180,20 @@ export async function submitEmbeddedAttemptPrompt(input: {
   attachPromptCompactionRequestBudget(promptOptions, input.compactionRequestBudget);
   const cleanupProviderPromptHistoryTransform = installProviderPromptHistoryTransform();
   try {
-    if (input.runtimeOnly) {
+    // Persist after the user (or synthetic runtime prompt), retiring unconsumed
+    // context when preflight handles or rejects the prompt before the loop starts.
+    const cleanupRuntimeContextMessage =
+      input.appendOnlyRuntimeContext && input.runtimeContextMessage
+        ? activeSession[agentSessionQueuePromptContext](input.runtimeContextMessage)
+        : installRuntimeContextMessageForPrompt({
+            session: activeSession,
+            message: input.runtimeContextMessage,
+            persistedUserIdempotencyKey,
+          });
+    try {
       await input.promptActiveSession(input.transcriptPrompt, promptOptions);
-    } else {
-      // The scoped queue persists after the user but retires unconsumed context
-      // if preflight handles or rejects this prompt before the agent loop starts.
-      const cleanupRuntimeContextMessage =
-        input.appendOnlyRuntimeContext && input.runtimeContextMessage
-          ? activeSession[agentSessionQueuePromptContext](input.runtimeContextMessage)
-          : installRuntimeContextMessageForPrompt({
-              session: activeSession,
-              message: input.runtimeContextMessage,
-              persistedUserIdempotencyKey,
-            });
-      try {
-        await input.promptActiveSession(input.transcriptPrompt, promptOptions);
-      } finally {
-        cleanupRuntimeContextMessage();
-      }
+    } finally {
+      cleanupRuntimeContextMessage();
     }
     if (input.leasedSteering) {
       ackPendingAgentSteeringItems(input.leasedSteering);

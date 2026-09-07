@@ -32,7 +32,7 @@ import {
   createCodeModeRunOwner,
   createPendingBridgeStates,
   pendingBridgeStatesForSettlement,
-  settledBridgeRequestsInCompletionOrder,
+  takeSettledBridgeRequests,
   waitForPendingBridgeSettlement,
   type PendingBridgeState,
 } from "./code-mode-state.js";
@@ -233,7 +233,7 @@ export async function runCodeModeScriptHeadless(params: {
     1,
     MAX_HEADLESS_TOOL_CALLS,
   );
-  const owner = createCodeModeRunOwner(params.ctx);
+  const owner = createCodeModeRunOwner(params.ctx, config);
   const abortScope = createHeadlessDeadlineScope(owner.bindCall(params.signal), wallClockMs);
   const deadline = abortScope.deadline;
   const output = new CodeModeOutputState(config.maxOutputBytes);
@@ -318,6 +318,7 @@ export async function runCodeModeScriptHeadless(params: {
       pending.push(
         ...createPendingBridgeStates(newRequests, {
           config,
+          inbox: owner.inbox,
           runtime,
           catalogProjection,
           namespaceRuntime,
@@ -342,19 +343,23 @@ export async function runCodeModeScriptHeadless(params: {
         });
       }
       await abortScope.wait(waitForPendingBridgeSettlement(pending, settlementMode));
-      const settledRequests = settledBridgeRequestsInCompletionOrder(pending);
+      const delivery = takeSettledBridgeRequests(pending);
       pending = pending.filter((entry) => !entry.settled);
-      result = await runHeadlessWorkerLeg({
-        input: {
-          kind: "resume",
-          snapshot: result.snapshot,
-          settledRequests,
-          pendingRequests: pending.map(({ id, method, args }) => ({ id, method, args })),
-        },
-        config,
-        deadline,
-        signal: abortScope.signal,
-      });
+      try {
+        result = await runHeadlessWorkerLeg({
+          input: {
+            kind: "resume",
+            snapshot: result.snapshot,
+            settledRequests: delivery.requests,
+            pendingRequests: pending.map(({ id, method, args }) => ({ id, method, args })),
+          },
+          config,
+          deadline,
+          signal: abortScope.signal,
+        });
+      } finally {
+        delivery.release();
+      }
     }
   } catch (error) {
     const timedOut = error instanceof CodeModeHeadlessTimeoutError;

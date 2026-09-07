@@ -2,10 +2,7 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import {
-  registerMSTeamsApprovalCardBinding,
-  unregisterMSTeamsApprovalCardBindings,
-} from "./approval-card-actions.js";
+import { msTeamsApprovalControls } from "./approval-card-actions.js";
 import {
   buildMSTeamsExpiredApprovalCard,
   buildMSTeamsPendingApprovalCard,
@@ -107,7 +104,7 @@ export const msTeamsApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
       const tokens: string[] = [];
       for (const actionToken of entry.actionTokens) {
         if (
-          registerMSTeamsApprovalCardBinding({
+          msTeamsApprovalControls.register({
             token: actionToken.token,
             accountId: entry.accountId,
             approvalId: request.id,
@@ -124,9 +121,9 @@ export const msTeamsApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
       }
       return tokens.length > 0 ? tokens : null;
     },
-    unbindPending: ({ binding }) => unregisterMSTeamsApprovalCardBindings(binding),
+    unbindPending: ({ binding }) => msTeamsApprovalControls.unregister(binding),
     cancelDelivered: ({ entry }) =>
-      unregisterMSTeamsApprovalCardBindings(entry.actionTokens.map(({ token }) => token)),
+      msTeamsApprovalControls.unregister(entry.actionTokens.map(({ token }) => token)),
   },
   observe: {
     onDeliveryError: ({ cfg, error, plannedTarget, request, approvalKind, pendingPayload }) => {

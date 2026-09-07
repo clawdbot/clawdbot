@@ -10,14 +10,12 @@ import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachment
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
-  buildAssistantDisplayContentFromReplyPayloads,
+  buildAssistantReplyContent,
   combineNonStreamingReplyParts,
   extractAssistantDisplayText,
   extractAssistantDisplayTextFromContent,
   hasAssistantDisplayMediaContent,
-  hasSensitiveMediaPayload,
   hasVisibleAssistantFinalMessage,
-  replaceAssistantContentTextBlocks,
   stripManagedOutgoingAssistantContentBlocks,
 } from "./chat-assistant-content.js";
 import {
@@ -265,10 +263,17 @@ export async function finalizeChatSendDispatchedReplies(params: {
     latestStorePath ? [latestStorePath] : undefined,
   );
   let managedMediaPrepareFailed = false;
-  const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
+  const mediaMessage = await buildWebchatAssistantMessageFromReplyPayloads(finalPayloads, {
+    localRoots: mediaLocalRoots,
+    onLocalAudioAccessDenied: (err) => {
+      context.logGateway.warn(`webchat audio embedding denied local path: ${formatForLog(err)}`);
+    },
+  });
+  const { assistantContent, persistedAssistantContent } = await buildAssistantReplyContent({
     sessionKey: transcriptSessionKey,
     agentId: transcriptAgentId,
     payloads: finalPayloads,
+    transcriptMediaMessage: mediaMessage,
     managedMediaLocalRoots: mediaLocalRoots,
     includeSensitiveMedia: false,
     includeSensitiveDisplay: true,
@@ -280,32 +285,9 @@ export async function finalizeChatSendDispatchedReplies(params: {
       context.logGateway.warn(`webchat sensitive display skipped attachment: ${message}`);
     },
   });
-  const mediaMessage = await buildWebchatAssistantMessageFromReplyPayloads(finalPayloads, {
-    localRoots: mediaLocalRoots,
-    onLocalAudioAccessDenied: (err) => {
-      context.logGateway.warn(`webchat audio embedding denied local path: ${formatForLog(err)}`);
-    },
-  });
-  const hasSensitiveMedia = hasSensitiveMediaPayload(finalPayloads);
   const ttsSupplementMarker = finalPayloads
     .map((payload) => buildMediaOnlyTtsSupplementTranscriptMarker(payload))
     .find((marker): marker is GatewayInjectedTtsSupplementMarker => Boolean(marker));
-  const persistedAssistantContent = replaceAssistantContentTextBlocks(
-    hasSensitiveMedia
-      ? await buildAssistantDisplayContentFromReplyPayloads({
-          sessionKey: transcriptSessionKey,
-          agentId: transcriptAgentId,
-          payloads: finalPayloads,
-          managedMediaLocalRoots: mediaLocalRoots,
-          includeSensitiveMedia: false,
-          onManagedMediaPrepareError: (message) => {
-            managedMediaPrepareFailed = true;
-            context.logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
-          },
-        })
-      : assistantContent,
-    mediaMessage,
-  );
   const persistedContentForAppend = hasAssistantDisplayMediaContent(persistedAssistantContent)
     ? persistedAssistantContent
     : undefined;

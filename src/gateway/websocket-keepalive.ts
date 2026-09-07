@@ -1,4 +1,12 @@
-import { WebSocket } from "ws";
+export type WebSocketKeepaliveSocket = {
+  readonly readyState: number;
+  readonly bufferedAmount: number;
+  ping(data?: undefined, mask?: undefined, callback?: (error?: Error) => void): void;
+  on(event: "pong", listener: () => void): unknown;
+  off(event: "pong" | "close", listener: () => void): unknown;
+  once(event: "close", listener: () => void): unknown;
+  terminate(): void;
+};
 
 type PingWrite = { pingWriteState: "pending" | "completed" | "failed" };
 export type WebSocketHeartbeatDiagnostics = PingWrite & {
@@ -8,7 +16,7 @@ export type WebSocketHeartbeatDiagnostics = PingWrite & {
 
 /** Keep idle transports active; only the connection owner may impose a pong deadline. */
 export function startWebSocketKeepalive(
-  socket: WebSocket,
+  socket: WebSocketKeepaliveSocket,
   onMissedPong?: (diagnostics: WebSocketHeartbeatDiagnostics) => void,
 ): () => void {
   let awaitingPong: PingWrite | undefined;
@@ -27,7 +35,7 @@ export function startWebSocketKeepalive(
   socket.on("pong", onPong);
   socket.once("close", stop);
   const timer = setInterval(() => {
-    if (socket.readyState !== WebSocket.OPEN) {
+    if (socket.readyState !== 1 /* OPEN */) {
       stop();
       return;
     }
