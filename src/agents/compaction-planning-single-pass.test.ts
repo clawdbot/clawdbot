@@ -257,11 +257,13 @@ describe("single-pass overhead across the worker projection", () => {
 
     // The projection really does shorten the transcript it hands the planner.
     const projectedChars = projected.reduce(
-      (sum, message) => sum + JSON.stringify(message.content ?? "").length,
+      (sum, message) =>
+        sum + JSON.stringify("content" in message ? (message.content ?? "") : "").length,
       0,
     );
     const originalChars = messages.reduce(
-      (sum, message) => sum + JSON.stringify(message.content ?? "").length,
+      (sum, message) =>
+        sum + JSON.stringify("content" in message ? (message.content ?? "") : "").length,
       0,
     );
     expect(projectedChars).toBeLessThan(originalChars);
