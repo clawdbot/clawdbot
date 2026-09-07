@@ -3563,7 +3563,6 @@ src/state/backup-run-records.ts	1
 src/state/config-machine-state.ts	1
 src/state/local-onboarding-state.ts	1
 src/state/openclaw-agent-board-schema.ts	1
-src/state/openclaw-agent-db-migration-required.ts	1
 src/state/openclaw-agent-db-permissions.ts	1
 src/state/openclaw-agent-db-readonly.ts	1
 src/state/openclaw-agent-db-registry-listing.ts	3
@@ -3586,7 +3585,6 @@ src/state/openclaw-state-db-operator-approval-migration.ts	1
 src/state/openclaw-state-db-readonly.ts	1
 src/state/openclaw-state-db-schema-additive.ts	1
 src/state/openclaw-state-db-schema-helpers.ts	4
-src/state/openclaw-state-db-schema-migration-required.ts	2
 src/state/openclaw-state-db-schema-repair.ts	2
 src/state/openclaw-state-ownership.ts	1
 src/state/openclaw-state-snapshot-sanitizer.ts	1
