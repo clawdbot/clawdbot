@@ -64,6 +64,7 @@ import {
   estimateToolResultTextChars,
   resolveLiveToolResultMaxChars,
   sliceToolResultTextToBudget,
+  sliceUtf16Safe,
 } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CodexDynamicToolsLoading } from "./config.js";
 import { finalizeCodexToolAvailability } from "./dynamic-tool-availability.js";
@@ -1416,12 +1417,13 @@ function sanitizeToolTextRuns(
     let offset = 0;
     content.push(
       ...textRun.map((entry, runIndex) => {
-        const end =
+        const targetEnd =
           runIndex === textRun.length - 1
             ? sanitizedText.length
             : Math.min(sanitizedText.length, offset + entry.text.length);
-        const sanitized = Object.assign({}, entry, { text: sanitizedText.slice(offset, end) });
-        offset = end;
+        const text = sliceUtf16Safe(sanitizedText, offset, targetEnd);
+        const sanitized = Object.assign({}, entry, { text });
+        offset += text.length;
         return sanitized;
       }),
     );

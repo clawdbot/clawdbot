@@ -1966,6 +1966,34 @@ describe("createCodexDynamicToolBridge", () => {
     expect(text).toContain("Artifacts remain available.");
   });
 
+  it("preserves Unicode characters when redaction repartitions adjacent text items", async () => {
+    const bridge = createBridgeWithToolResult("credential_lookup", {
+      content: [
+        { type: "text", text: "Authorization: Bearer abcdefg\n" },
+        { type: "text", text: "123😀tail" },
+      ],
+      details: {},
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-split-unicode",
+      namespace: null,
+      tool: "credential_lookup",
+      arguments: {},
+    });
+
+    const textItems = result.contentItems.flatMap((item) =>
+      item.type === "inputText" && typeof item.text === "string" ? [item.text] : [],
+    );
+    const unpairedSurrogate =
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+    expect(textItems).toHaveLength(2);
+    expect(textItems.every((text) => !unpairedSurrogate.test(text))).toBe(true);
+    expect(textItems.join("")).toBe("Authorization: Bearer ***\n123😀tail");
+  });
+
   it("redacts a credential that crosses the dynamic tool result budget", async () => {
     const maxChars = 16_000;
     const totalChars = 20_000;
