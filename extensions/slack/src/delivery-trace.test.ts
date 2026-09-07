@@ -905,10 +905,12 @@ describe("slack delivery trace goldens", () => {
     expect(traceRuntimeError).not.toHaveBeenCalled();
   });
 
-  it.each(["oversized", "invalid_blocks"])(
+  it.each(["oversized", "invalid_blocks", "edit_window_closed", "cant_update_message"])(
     "delivers a definitely rejected recovered final through normal delivery (%s)",
     async (failure) => {
+      const acknowledgedPrefix = "The acknowledged answer prefix.";
       const finalText = failure === "oversized" ? "a".repeat(12001) : "The final answer.";
+      let rejectedUpdates = 0;
       const events = await runDeliveryTraceScenario({
         scenario: {
           name: "oversized-expired-native-final",
@@ -918,6 +920,7 @@ describe("slack delivery trace goldens", () => {
             { kind: "tool-progress", name: "write", phase: "start" },
             { kind: "advance", ms: 2000 },
             { kind: "tool-progress", name: "write", phase: "result" },
+            { kind: "final", text: acknowledgedPrefix },
             { kind: "final", text: finalText },
             { kind: "idle" },
           ],
@@ -925,15 +928,16 @@ describe("slack delivery trace goldens", () => {
         setup: async (recorder) => {
           const dispatch = await setupSlackTrace(recorder, "progress-native-unified");
           traceState.rejectAppendStreamCode = "message_not_in_streaming_state";
-          if (failure === "invalid_blocks") {
+          if (failure !== "oversized") {
             const client = traceState.client as unknown as {
               chat: { update: (args: Record<string, unknown>) => Promise<unknown> };
             };
             const update = client.chat.update;
             client.chat.update = async (args) => {
               if (JSON.stringify(args.blocks).includes(finalText)) {
-                const error = new Error("An API error occurred: invalid_blocks");
-                Object.assign(error, { data: { ok: false, error: "invalid_blocks" } });
+                rejectedUpdates += 1;
+                const error = new Error(`An API error occurred: ${failure}`);
+                Object.assign(error, { data: { ok: false, error: failure } });
                 throw error;
               }
               return await update(args);
@@ -944,9 +948,20 @@ describe("slack delivery trace goldens", () => {
         normalize: createSlackTsNormalizer(),
       });
       const posted = events.filter((event) => event.kind === "chat.postMessage");
-      expect(posted.length).toBeGreaterThan(failure === "oversized" ? 1 : 0);
+      if (failure === "oversized") {
+        expect(posted.length).toBeGreaterThan(1);
+      } else {
+        expect(posted).toHaveLength(1);
+      }
+      expect(rejectedUpdates).toBe(failure === "oversized" ? 0 : 1);
+      expect(
+        events.some(
+          (event) =>
+            event.kind === "chat.update" && JSON.stringify(event.data).includes(acknowledgedPrefix),
+        ),
+      ).toBe(true);
       expect(collectSlackWireTexts(posted).join("")).toBe(finalText);
-      expect(traceState.counts.final).toBe(1);
+      expect(traceState.counts.final).toBe(2);
       expect(events.some((event) => event.kind === "chat.stopStream")).toBe(false);
       expect(traceRuntimeError).not.toHaveBeenCalled();
     },

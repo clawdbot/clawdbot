@@ -173,7 +173,10 @@ async function updateSlackStreamMessage(
       code &&
       (BENIGN_SLACK_FINALIZE_ERROR_CODES.has(code) ||
         code === "missing_scope" ||
-        code === "invalid_blocks")
+        code === "invalid_blocks" ||
+        // Editing this message may be forbidden while posting a reply is allowed.
+        code === "edit_window_closed" ||
+        code === "cant_update_message")
     ) {
       // Slack rejected the update itself. Only its pending tail may use the
       // ordinary sender; the acknowledged prefix remains on the original ts.
