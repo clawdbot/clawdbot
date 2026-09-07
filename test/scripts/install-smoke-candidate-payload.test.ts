@@ -12,6 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   sealInstallSmokeCandidatePayload,
@@ -261,6 +262,14 @@ describe("install smoke candidate payload", () => {
 });
 
 describe("candidate packager orchestration", () => {
+  function flagValue(args: string[], flag: string): string {
+    const index = args.indexOf(flag);
+    if (index < 0) {
+      throw new Error(`missing required Docker flag: ${flag}`);
+    }
+    return expectDefined(args[index + 1], `${flag} value`);
+  }
+
   function runPackager(
     options: {
       buildStatus?: number;
@@ -389,7 +398,8 @@ if (args[0] === "image") {
     expect(result.stdout.trim()).toBe("{}");
     const runs = calls.filter(([command]) => command === "run");
     expect(runs).toHaveLength(2);
-    const [build, seal] = runs;
+    const build = expectDefined(runs[0], "build invocation");
+    const seal = expectDefined(runs[1], "seal invocation");
     for (const args of runs) {
       expect(args).toContain(`sha256:${"a".repeat(64)}`);
       expect(args).toContain("ALL");
@@ -398,23 +408,26 @@ if (args[0] === "image") {
       expect(args.join("\n")).not.toContain("host-actions-env");
       expect(args.join("\n")).not.toContain("docker.sock");
     }
-    expect(build[build.indexOf("--user") + 1]).toBe("node");
+    expect(flagValue(build, "--user")).toBe("node");
     expect(build).toContain("ALLOW_UNRELEASED_CHANGELOG=true");
     expect(build).toContain(`${fixture.archivePath}:/input/candidate.tar.gz:ro`);
     expect(build.some((arg) => arg.includes("pnpm install --frozen-lockfile"))).toBe(true);
     expect(build.some((arg) => arg.endsWith(":/payload"))).toBe(false);
-    const mutableOutput = build.find((arg) => arg.endsWith(":/output"))!;
+    const mutableOutput = expectDefined(
+      build.find((arg) => arg.endsWith(":/output")),
+      "mutable build output mount",
+    );
     expect(seal).toContain(`${mutableOutput.slice(0, -":/output".length)}:/package:ro`);
-    expect(seal[seal.indexOf("--network") + 1]).toBe("none");
+    expect(flagValue(seal, "--network")).toBe("none");
     expect(seal).toContain("/harness/scripts/docker/pack-candidate-data.py");
     expect(seal).toContain(harnessSha);
     expect(seal).toContain(IDENTITY.targetSha);
     expect(calls.filter(([command]) => command === "rm")).toHaveLength(2);
     expect(readdirSync(scratch)).toEqual([]);
-    const buildName = build[build.indexOf("--name") + 1];
-    expect(calls.findIndex((args) => args[0] === "rm" && args.includes(buildName))).toBeLessThan(
-      calls.indexOf(seal),
-    );
+    const buildName = flagValue(build, "--name");
+    const removalIndex = calls.findIndex((args) => args[0] === "rm" && args.includes(buildName));
+    expect(removalIndex).toBeGreaterThanOrEqual(0);
+    expect(removalIndex).toBeLessThan(calls.indexOf(seal));
     const snapshotFiles = JSON.parse(
       readFileSync(path.join(fixture.root, "harness-inventory.json"), "utf8"),
     ) as string[];
@@ -447,9 +460,12 @@ if (args[0] === "image") {
     );
     expect(readdirSync(scratch)).toHaveLength(options.retainedScratch ? 1 : 0);
     if (options.retainedScratch) {
-      const buildName = calls.find(([command]) => command === "run")!;
+      const build = expectDefined(
+        calls.find(([command]) => command === "run"),
+        "build invocation",
+      );
       expect(result.stderr).not.toContain(
-        `confirmed candidate container absent: ${buildName[buildName.indexOf("--name") + 1]}`,
+        `confirmed candidate container absent: ${flagValue(build, "--name")}`,
       );
     }
   });
@@ -463,7 +479,10 @@ if (args[0] === "image") {
   it.each(["package", "registry-only"])("separates registry outputs in %s mode", (mode) => {
     const { result, calls } = runPackager({ mode, registry: true });
     expect(result.status, result.stderr).toBe(0);
-    const [build, seal] = calls.filter(([command]) => command === "run");
+    const runs = calls.filter(([command]) => command === "run");
+    expect(runs).toHaveLength(2);
+    const build = expectDefined(runs[0], "build invocation");
+    const seal = expectDefined(runs[1], "seal invocation");
     expect(build).toContain(`MODE=${mode}`);
     expect(build).toContain(`CANDIDATE_VERSION=${PACKAGE_VERSION}`);
     expect(build.some((arg) => arg.endsWith(":/registry-output"))).toBe(true);
@@ -488,17 +507,23 @@ if (args[0] === "image") {
       extraArgs: options.policy ? ["--install-policy", options.policy] : [],
     });
     expect(result.status, result.stderr).toBe(0);
-    const build = calls.find((args) => args[0] === "run" && args.includes("/bin/bash"))!;
-    const guest = build.at(-1)!;
-    const selector = guest.match(
-      / {4}if \[\[ [^\n]+ \]\]; then\n {6}pnpm install[\s\S]+?\n {4}fi/u,
-    )?.[0];
-    expect(selector).toBeDefined();
+    const build = expectDefined(
+      calls.find((args) => args[0] === "run" && args.includes("/bin/bash")),
+      "build invocation",
+    );
+    const guest = expectDefined(build.at(-1), "guest script");
+    const selector = expectDefined(
+      guest.match(/ {4}if \[\[ [^\n]+ \]\]; then\n {6}pnpm install[\s\S]+?\n {4}fi/u)?.[0],
+      "dependency install policy selector",
+    );
     const environment: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: fixture.root };
     for (let index = 0; index < build.length; index += 1) {
       if (build[index] === "-e") {
-        const entry = build[index + 1];
+        const entry = expectDefined(build[index + 1], "Docker environment entry");
         const equals = entry.indexOf("=");
+        if (equals <= 0) {
+          throw new Error(`invalid Docker environment entry: ${entry}`);
+        }
         environment[entry.slice(0, equals)] = entry.slice(equals + 1);
       }
     }
@@ -856,7 +881,7 @@ describe("candidate registry sealing", () => {
     "packed identity",
   ])("rejects registry %s failure through the actual verifier boundary", (kind) => {
     const fixture = registryFixture();
-    const entry = fixture.manifest.packages[0];
+    const entry = expectDefined(fixture.manifest.packages[0], "first registry package");
     const tarball = path.join(fixture.raw, entry.tarball);
     if (kind === "digest") {
       entry.sha256 = "f".repeat(64);

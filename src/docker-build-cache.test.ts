@@ -58,11 +58,7 @@ describe("docker build cache layout", () => {
   });
 
   it("uses pnpm cache mounts in Dockerfiles that install repo dependencies", async () => {
-    for (const path of [
-      "Dockerfile",
-      "scripts/e2e/Dockerfile.qr-import",
-      "scripts/docker/cleanup-smoke/Dockerfile",
-    ]) {
+    for (const path of ["Dockerfile", "scripts/docker/cleanup-smoke/Dockerfile"]) {
       const dockerfile = await readRepoFile(path);
       expect(
         dockerfile,
@@ -122,6 +118,8 @@ describe("docker build cache layout", () => {
     const dockerfile = await readRepoFile("scripts/e2e/Dockerfile.qr-import");
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
 
+    expect(dockerfile).toContain("pnpm install --frozen-lockfile --ignore-scripts");
+    expect(dockerfile).not.toMatch(/--mount=type=cache/u);
     expect(
       indexOfPattern(
         dockerfile,

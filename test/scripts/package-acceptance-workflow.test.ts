@@ -11546,7 +11546,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       ).with?.["install-deps"],
     ).toBe("true");
     expect(installSmoke.jobs?.preflight?.["timeout-minutes"]).toBe(15);
-    expect(installSmoke.jobs?.["install-smoke-fast"]?.["timeout-minutes"]).toBe(120);
+    expect(installSmoke.jobs?.["install-smoke-fast"]).toBeUndefined();
     expect(installSmoke.jobs?.root_dockerfile_image?.["timeout-minutes"]).toBe(60);
     expect(installSmoke.jobs?.root_dockerfile_image_ready?.["timeout-minutes"]).toBe(5);
     expect(installSmoke.jobs?.qr_package_install_smoke?.["timeout-minutes"]).toBe(30);
@@ -11557,7 +11557,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     expect(installSmoke.jobs?.installer_smoke_nonroot?.["timeout-minutes"]).toBe(60);
     expect(installSmoke.jobs?.installer_smoke?.["timeout-minutes"]).toBe(5);
     expect(installSmoke.jobs?.bun_global_install_smoke?.["timeout-minutes"]).toBe(60);
-    expect(installSmoke.jobs?.["docker-e2e-fast"]?.["timeout-minutes"]).toBe(12);
+    expect(installSmoke.jobs?.["docker-e2e-fast"]).toBeUndefined();
     expect(crossOs.jobs?.prepare?.["timeout-minutes"]).toBe(90);
     expect(crossOs.jobs?.cross_os_release_checks?.["timeout-minutes"]).toBe(60);
     expect(qaLive.jobs?.authorize_actor?.["timeout-minutes"]).toBe(10);
@@ -12175,11 +12175,7 @@ esac
   it("keeps release history checks blobless", () => {
     const fullHistoryCheckouts: Array<[string, string, string]> = [
       [LIVE_E2E_WORKFLOW, "validate_selected_ref", "Checkout workflow repository"],
-      [
-        RELEASE_CHECKS_WORKFLOW,
-        "resolve_target",
-        "Checkout selected ref for reachability fallback",
-      ],
+      [RELEASE_CHECKS_WORKFLOW, "resolve_target", "Checkout resolved candidate for admission"],
       [PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package", "Checkout package workflow ref"],
       [PLUGIN_NPM_RELEASE_WORKFLOW, "preview_plugins_npm", "Checkout"],
       [PLUGIN_CLAWHUB_RELEASE_WORKFLOW, "preview_plugins_clawhub", "Checkout"],
@@ -12220,11 +12216,7 @@ esac
 
     const metadataOnlyCheckouts: Array<[string, string, string]> = [
       [LIVE_E2E_WORKFLOW, "validate_selected_ref", "Checkout workflow repository"],
-      [
-        RELEASE_CHECKS_WORKFLOW,
-        "resolve_target",
-        "Checkout selected ref for reachability fallback",
-      ],
+      [RELEASE_CHECKS_WORKFLOW, "resolve_target", "Checkout resolved candidate for admission"],
     ];
     for (const [workflowPath, jobName, stepName] of metadataOnlyCheckouts) {
       expect(workflowStep(workflowJob(workflowPath, jobName), stepName).with).toMatchObject({

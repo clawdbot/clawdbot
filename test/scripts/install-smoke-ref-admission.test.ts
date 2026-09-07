@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
@@ -10,7 +11,10 @@ const root = process.cwd();
 const workflow = parse(readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8")) as {
   jobs: Record<string, { steps?: Step[]; needs?: string[]; if?: string }>;
 };
-const steps = workflow.jobs.resolve_target.steps!;
+const steps = expectDefined(
+  expectDefined(workflow.jobs.resolve_target, "resolve_target job").steps,
+  "resolve_target steps",
+);
 const tempDirs = createTempDirTracker();
 let remote: string;
 let mainSha: string;
@@ -105,44 +109,56 @@ function admit(ref: string, expected = "", afterResolution?: () => void) {
   if (resolved.status !== 0) {
     return resolved;
   }
+  const refKind = expectDefined(resolved.outputs.ref_kind, "resolved ref kind");
+  const resolvedSha =
+    refKind === "unknown" ? "" : expectDefined(resolved.outputs.sha, "resolved immutable SHA");
   afterResolution?.();
   const source = tempDirs.make("installer-admission-source-");
   git(source, "init", "-q");
   git(source, "remote", "add", "origin", remote);
   // Mirror checkout's immutable selection, including the legacy fallback path.
-  const selection = resolved.outputs.ref_kind === "unknown" ? ref : resolved.outputs.sha;
+  const selection = refKind === "unknown" ? ref : resolvedSha;
   try {
     git(source, "fetch", "--quiet", "--no-tags", "origin", selection);
     git(source, "checkout", "--quiet", "--detach", "FETCH_HEAD");
   } catch {
     return { ...resolved, status: 1, stderr: "candidate checkout failed", outputs: {} };
   }
-  const finalized = run(steps.find((step) => step.name === "Finalize resolved SHA")!.run!, source, {
-    RESOLVED_SHA: resolved.outputs.ref_kind === "unknown" ? "" : resolved.outputs.sha,
+  const finalize = expectDefined(
+    steps.find((step) => step.name === "Finalize resolved SHA"),
+    "finalize resolved SHA step",
+  );
+  const finalized = run(expectDefined(finalize.run, "finalize run body"), source, {
+    RESOLVED_SHA: resolvedSha,
     EXPECTED_SHA: expected,
   });
   if (finalized.status !== 0) {
     return finalized;
   }
-  const admission = steps.find(
-    (step) => step.name === "Validate selected ref belongs to this repository",
-  )!;
+  const selectedSha = expectDefined(finalized.outputs.sha, "finalized SHA");
+  const admission = expectDefined(
+    steps.find((step) => step.name === "Validate selected ref belongs to this repository"),
+    "ref admission step",
+  );
   if (
     admission.if === "steps.fast_ref.outputs.fallback == 'true'" &&
     resolved.outputs.fallback !== "true"
   ) {
     return { ...resolved, outputs: { admitted: "true" } };
   }
-  return run(admission.run!, source, {
+  return run(expectDefined(admission.run, "ref admission run body"), source, {
     RELEASE_REF: ref,
-    SELECTED_SHA: finalized.outputs.sha,
+    SELECTED_SHA: selectedSha,
     GITHUB_TOKEN: "",
   });
 }
 
 function plan(admitted: string, overrides: Record<string, string> = {}) {
-  const capture = steps.find((step) => step.name === "Capture selected inputs")!;
-  const captured = run(capture.run!, root, {
+  const capture = expectDefined(
+    steps.find((step) => step.name === "Capture selected inputs"),
+    "capture selected inputs step",
+  );
+  const captured = run(expectDefined(capture.run, "capture selected inputs run body"), root, {
     CANDIDATE_ARTIFACT_JSON_INPUT: "",
     RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT: "false",
     RELEASE_CODEX_PLUGIN_SPEC_INPUT: "",
@@ -170,8 +186,11 @@ function plan(admitted: string, overrides: Record<string, string> = {}) {
   if (captured.status !== 0) {
     return captured;
   }
-  const guard = steps.find((step) => step.name === "Enforce selected ref execution boundary");
-  const guarded = run(guard?.run ?? ":", root, {
+  const guard = expectDefined(
+    steps.find((step) => step.name === "Enforce selected ref execution boundary"),
+    "ref execution boundary step",
+  );
+  const guarded = run(expectDefined(guard.run, "ref execution boundary run body"), root, {
     SELECTED_REF_ADMITTED: admitted,
     ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "false",
     ...Object.fromEntries(
@@ -203,11 +222,10 @@ describe("installer ref admission", () => {
       const ref = kind === "PR ref" ? "refs/pull/123/head" : kind === "PR SHA" ? prSha : orphanSha;
       const result = admit(ref);
       expect(result.status, result.stderr).toBe(0);
-      expect(result.outputs.admitted).toBe("false");
-      expect(plan(result.outputs.admitted).status).toBe(0);
-      expect(plan(result.outputs.admitted, { RELEASE_RERUN_GROUP_INPUT: "all" }).status).not.toBe(
-        0,
-      );
+      const admitted = expectDefined(result.outputs.admitted, "ref admission output");
+      expect(admitted).toBe("false");
+      expect(plan(admitted).status).toBe(0);
+      expect(plan(admitted, { RELEASE_RERUN_GROUP_INPUT: "all" }).status).not.toBe(0);
     },
   );
 
@@ -247,7 +265,7 @@ describe("installer ref admission", () => {
     }
   });
 
-  it.each([
+  const incompatibleSelections: Array<Record<string, string>> = [
     { RELEASE_RERUN_GROUP_INPUT: "all" },
     { RELEASE_RERUN_GROUP_INPUT: "qa" },
     { RELEASE_RERUN_GROUP_INPUT: "live-e2e" },
@@ -261,7 +279,8 @@ describe("installer ref admission", () => {
     { RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT: "openclaw@2026.9.1" },
     { RELEASE_LIVE_SUITE_FILTER_INPUT: "qa-live-matrix" },
     { RELEASE_CROSS_OS_SUITE_FILTER_INPUT: "ubuntu" },
-  ])("rejects unadmitted incompatible plan %j", (selection) => {
+  ];
+  it.each(incompatibleSelections)("rejects unadmitted incompatible plan %j", (selection) => {
     expect(plan("false", selection).status).not.toBe(0);
   });
 

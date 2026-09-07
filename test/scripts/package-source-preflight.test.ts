@@ -2,6 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { validateBundledPackageDependencyAlignment } from "../../scripts/package-source-dependencies.mjs";
@@ -739,15 +740,32 @@ describe("package source preflight", () => {
     const packageCandidate = workflowStep(
       workflow,
       "installer_smoke_candidate_payload",
-      "Package candidate only inside pinned harness",
+      "Package and seal candidate in pinned harness",
     );
-    expect(packageCandidate.run).toContain('-v "$PWD/.release-harness:/harness:ro"');
-    expect(packageCandidate.run).toContain(
-      'node /harness/scripts/package-source-preflight.mjs "${preflight_args[@]}"',
+    const run = expectDefined(packageCandidate.run, "candidate packaging run body");
+    expect(run).toContain("bash .release-harness/scripts/docker/pack-candidate-in-container.sh");
+    expect(run).toContain('--harness-dir "$PWD/.release-harness"');
+    expect(run).not.toContain("--mode registry-only");
+    expect(run).toContain("set -euo pipefail");
+
+    const helper = readFileSync("scripts/docker/pack-candidate-in-container.sh", "utf8");
+    expect(helper).toContain('mode="package"');
+    expect(helper).toContain('-v "$scratch/harness:/harness:ro"');
+    expect(helper).not.toContain('-v "$PWD/.release-harness:/harness:ro"');
+    expect(helper).toContain("set -euo pipefail");
+    const preflight = 'node /harness/scripts/package-source-preflight.mjs "${preflight_args[@]}"';
+    expect(helper).toContain(
+      'if [[ "$MODE" == "package" ]]; then\n      preflight_args=(--source-dir "$source_dir")',
     );
-    expect(packageCandidate.run!.indexOf("package-source-preflight.mjs")).toBeLessThan(
-      packageCandidate.run!.indexOf("pnpm install --frozen-lockfile"),
-    );
+    const preflightIndex = helper.indexOf(preflight);
+    expect(preflightIndex).toBeGreaterThanOrEqual(0);
+    const installs = [...helper.matchAll(/^\s+pnpm install --frozen-lockfile.*$/gm)];
+    expect(installs).toHaveLength(2);
+    for (const install of installs) {
+      expect(install.index).toBeGreaterThanOrEqual(0);
+      expect(preflightIndex).toBeLessThan(install.index);
+    }
+    expect(helper.indexOf('if [[ "$MODE" == "package" ]]; then')).toBeLessThan(preflightIndex);
   });
 
   it("guards npm source producers with trusted tooling before Node setup", () => {

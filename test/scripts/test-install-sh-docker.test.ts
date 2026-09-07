@@ -2825,7 +2825,14 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
           "${{ runner.temp }}/install-smoke-candidate-payload",
         OPENCLAW_INSTALL_SMOKE_GROUP: testCase.group,
       });
-      expect(run.run).toBe("bash .release-harness/scripts/test-install-sh-docker.sh");
+      if (typeof run.run !== "string") {
+        throw new Error(`missing run body: ${testCase.testName}`);
+      }
+      expect(
+        run.run
+          .split("\n")
+          .filter((line) => line === "bash .release-harness/scripts/test-install-sh-docker.sh"),
+      ).toHaveLength(1);
     }
 
     const payload = workflow.jobs.installer_smoke_candidate_payload;
