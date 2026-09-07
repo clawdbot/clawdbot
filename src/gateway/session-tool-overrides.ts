@@ -27,11 +27,13 @@ export function normalizeSessionToolOverrides(
   );
   const mcpServers = normalizeBooleanMap(raw.mcpServers);
   const skills = normalizeBooleanMap(raw.skills);
+  // Keep both true and false: session enable overrides (base off → webSearch:true)
+  // must persist the same way skills/mcpServers boolean maps do.
   const normalized: SessionToolOverrides = {
     ...(mcpServers ? { mcpServers } : {}),
     ...(Object.keys(mcpToolsDeny).length > 0 ? { mcpToolsDeny } : {}),
     ...(skills ? { skills } : {}),
-    ...(raw.webSearch === false ? { webSearch: false } : {}),
+    ...(typeof raw.webSearch === "boolean" ? { webSearch: raw.webSearch } : {}),
   };
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }

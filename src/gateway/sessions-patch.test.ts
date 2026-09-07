@@ -818,6 +818,37 @@ describe("gateway sessions patch", () => {
     expect(set.toolOverrides).toEqual({
       mcpServers: { alpha: true, zeta: false },
       mcpToolsDeny: { alpha: ["read", "write"] },
+      webSearch: true,
+    });
+
+    const enableOnly = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, toolOverrides: { webSearch: true } },
+      }),
+    );
+    expect(enableOnly.toolOverrides).toEqual({ webSearch: true });
+
+    const denyOnly = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, toolOverrides: { webSearch: false } },
+      }),
+    );
+    expect(denyOnly.toolOverrides).toEqual({ webSearch: false });
+
+    const withSkillsTrue = expectPatchOk(
+      await runPatch({
+        store,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          toolOverrides: { skills: { docs: true }, webSearch: true },
+        },
+      }),
+    );
+    expect(withSkillsTrue.toolOverrides).toEqual({
+      skills: { docs: true },
+      webSearch: true,
     });
 
     const replaced = expectPatchOk(
