@@ -319,6 +319,32 @@ describe("login gate failure recovery", () => {
     expect(element.querySelectorAll("button.login-gate__connect")).toHaveLength(1);
   });
 
+  it("shows automatic pairing recovery only while reconnect is pending", async () => {
+    const element = await mountFailure(
+      "pairing required",
+      ConnectErrorDetailCodes.PAIRING_REQUIRED,
+    );
+    element.props = { ...element.props, reconnectPending: true };
+    await element.updateComplete;
+
+    expect(element.textContent).toContain(
+      "Waiting for approval… this page connects on its own once the request is approved.",
+    );
+    expect(element.textContent).not.toContain("Once approved, click Connect.");
+    expect(element.querySelector('[aria-hidden="true"].session-run-spinner')).not.toBeNull();
+    const checkNow = element.querySelector<HTMLButtonElement>(".login-gate__connect")!;
+    expect(checkNow.textContent?.trim()).toBe("Check now");
+    checkNow.click();
+    expect(element.props.onConnect).toHaveBeenCalledOnce();
+
+    element.props = { ...element.props, reconnectPending: false };
+    await element.updateComplete;
+    expect(element.textContent).toContain("Once approved, click Connect.");
+    expect(element.textContent).not.toContain("Waiting for approval…");
+    expect(element.querySelector(".session-run-spinner")).toBeNull();
+    expect(checkNow.textContent?.trim()).toBe("Connect");
+  });
+
   it("renders only a normalized pairing request in the approve command", async () => {
     const safe = await mountFailure(
       "scope upgrade pending approval (requestId: req-123)",

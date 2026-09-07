@@ -39,6 +39,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { readSqliteDataVersion } from "./node-sqlite.js";
 import { clearApnsRegistrationFromDatabase } from "./push-apns-store-transaction.js";
 
 export type DevicePairingStoreState = {
@@ -101,14 +102,6 @@ function resolveDevicePairingStateDbOptions(baseDir?: string): OpenClawStateData
   return baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {};
 }
 
-function readDataVersion(database: DatabaseSync): number {
-  const row = database.prepare("PRAGMA data_version").get() as { data_version?: unknown };
-  if (typeof row.data_version !== "number") {
-    throw new Error("SQLite did not return a numeric PRAGMA data_version");
-  }
-  return row.data_version;
-}
-
 function readTotalChanges(database: DatabaseSync): number {
   const row = database.prepare("SELECT total_changes() AS value").get() as { value?: unknown };
   if (typeof row.value !== "number") {
@@ -121,7 +114,7 @@ function readDevicePairingStoreValidityToken(
   database: DatabaseSync,
 ): DevicePairingStoreValidityToken {
   return {
-    dataVersion: readDataVersion(database),
+    dataVersion: readSqliteDataVersion(database),
     totalChanges: readTotalChanges(database),
   };
 }

@@ -197,6 +197,9 @@ async function runDoctorHealthFlowWithResult(
       const { assertNoPendingLegacyExecApprovals } =
         await import("../infra/exec-approvals-migration-gate.js");
       assertNoPendingLegacyExecApprovals({ operation: "doctor" });
+      const { repairGatewayMaintenanceStartupFailures } =
+        await import("../infra/gateway-boot-lifecycle.js");
+      repairGatewayMaintenanceStartupFailures();
     }
     await maintenance?.finish(ctx.cfg);
     doctorResult = ctx.postInstallDoctorResult ?? { status: "ok" };

@@ -20,7 +20,7 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-wor
 import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-location.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 
-export const UpdateStateSchemaVersionsSchema = z.array(
+const UpdateStateSchemaVersionsSchema = z.array(
   z.object({
     path: z.string(),
     userVersion: z.number().nullable(),
@@ -28,6 +28,10 @@ export const UpdateStateSchemaVersionsSchema = z.array(
   }),
 );
 export type UpdateStateSchemaVersion = z.infer<typeof UpdateStateSchemaVersionsSchema>[number];
+export const UpdateCandidateStateSnapshotSchema = z.object({
+  versions: UpdateStateSchemaVersionsSchema,
+  pluginPaths: z.record(z.string(), z.string()),
+});
 type StateInput = { stateDir: string; config: OpenClawConfig; env?: NodeJS.ProcessEnv };
 type CandidateStateDatabase = Pick<
   DB,
@@ -249,10 +253,29 @@ export function resolveUpdateCandidateStatePath(
   return path.join(targetRoot, relative);
 }
 
+/** Plugin locators cannot overwrite the separately snapshotted state databases. */
+export function resolveUpdateCandidatePluginPath(
+  sourceRoot: string,
+  targetRoot: string,
+  source: string,
+): string {
+  const managed = ["npm", "extensions"].some((directory) =>
+    isPathInside(path.join(sourceRoot, directory), source),
+  );
+  return managed
+    ? resolveUpdateCandidateStatePath(sourceRoot, targetRoot, source)
+    : path.join(
+        targetRoot,
+        "candidate-plugins",
+        sha256Hex(path.parse(source).root),
+        path.relative(path.parse(source).root, source),
+      );
+}
+
 /** Keep snapshot dependencies out of schema inspection; rebind registry paths to private copies. */
 export async function snapshotUpdateCandidateState(
-  input: StateInput & { targetStateDir: string },
-): Promise<UpdateStateSchemaVersion[]> {
+  input: StateInput & { targetStateDir: string; candidateRoot: string },
+): Promise<z.infer<typeof UpdateCandidateStateSnapshotSchema>> {
   const { createVerifiedSqliteSnapshot } = await import("./sqlite-snapshot.js");
   const sourceRoot = path.resolve(input.stateDir);
   const shared = path.join(sourceRoot, "state", "openclaw.sqlite");
@@ -329,5 +352,7 @@ export async function snapshotUpdateCandidateState(
       ...(contentVersion === undefined ? {} : { contentVersion }),
     });
   }
-  return versions;
+  const { projectUpdateCandidatePlugins } = await import("./update-candidate-plugins.js");
+  const pluginPaths = await projectUpdateCandidatePlugins(input);
+  return { versions, pluginPaths };
 }

@@ -41,6 +41,8 @@ launcher scripts).
 
 Failed update and repair attempts enter [recovery triage](/cli/update#recover-a-failed-update)
 after service recovery and cleanup finish.
+A verified rollback does not start triage: the previous generation is running
+again, and the report keeps the failing check as the reason.
 
 After a final interactive update failure, **Diagnose update failure** and
 **Report update failure** are separate choices. Reporting first shows the exact
@@ -159,7 +161,9 @@ openclaw triage --agent codex
 Use `openclaw triage --non-interactive` to collect diagnostics without starting
 an agent. Add `--update-result <path>` to include a saved update-failure artifact.
 
-Validation failures leave the serving Gateway untouched. After activation, a
+Validation failures leave the serving Gateway untouched. If stopping the managed
+service unloads it and then fails before activation, OpenClaw attempts to restore
+the verified original runtime after rechecking service ownership. After activation, a
 failed verification can [restore the previous package](/cli/update#validation-and-activation)
 when database schemas are unchanged and the config file still matches the
 candidate’s activation Doctor output. Preserve migrated state and
@@ -484,8 +488,11 @@ For targets that support candidate validation, the old Gateway keeps serving thr
 plugin resolution and compatibility planning. It also rehearses migrations and
 boots a canary with copied configuration and verified SQLite snapshots in an
 isolated temporary state directory. The copied database registry points to the
-copied agent databases. Channels, cron, automatic updates, and other side
-services are suppressed in this canary.
+copied agent databases. Installed plugin payloads and their dependencies are also
+copied; the rehearsal install records point to those copies, and their OpenClaw
+host links target the staged candidate. The live plugin files and host links stay
+unchanged. Channels, cron, automatic updates, and other side services are
+suppressed in this canary.
 
 Schema checks also use private SQLite copies so inspection does not create or
 modify WAL sidecars beside live databases. Each schema inspection has a

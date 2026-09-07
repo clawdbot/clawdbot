@@ -221,6 +221,8 @@ export async function prepareSource(input: {
   code: string;
   language?: CodeModeLanguage;
   config: Pick<CodeModeConfig, "languages">;
+  onSourceMap?: (sourceMap: string) => void;
+  preflight?: { declarations: string; maxBytes: number };
 }): Promise<string> {
   const language = input.language ?? "javascript";
   if (!input.config.languages.includes(language)) {
@@ -239,13 +241,18 @@ export async function prepareSource(input: {
   if (rejectsModuleAccess(input.code, ts)) {
     throw new ToolInputError("code mode module access is disabled.");
   }
+  if (input.preflight) {
+    const { checkCodeModeTypes } = await import("./code-mode-typecheck.js");
+    await checkCodeModeTypes(ts, input.code, input.preflight);
+  }
   const transformed = ts.transpileModule(input.code, {
     compilerOptions: {
       target: ts.ScriptTarget.ES2022,
       module: ts.ModuleKind.ESNext,
       importsNotUsedAsValues: ts.ImportsNotUsedAsValues.Remove,
-      sourceMap: false,
+      sourceMap: true,
     },
+    fileName: "user.ts",
     reportDiagnostics: true,
   });
   const diagnostics = transformed.diagnostics ?? [];
@@ -270,6 +277,9 @@ export async function prepareSource(input: {
     isShellLikeCodeModeSource(transformed.outputText)
   ) {
     throw new ToolInputError(CODE_MODE_SHELL_SOURCE_ERROR);
+  }
+  if (transformed.sourceMapText) {
+    input.onSourceMap?.(transformed.sourceMapText);
   }
   return transformed.outputText;
 }

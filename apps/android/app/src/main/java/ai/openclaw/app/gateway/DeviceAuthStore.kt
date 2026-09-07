@@ -35,14 +35,14 @@ interface DeviceAuthTokenStore {
     role: String,
   ): String? = loadEntry(gatewayId, deviceId, role)?.token
 
-  /** Persists a role token and deterministic scope metadata under normalized keys. */
+  /** Returns true only after the token and its scope metadata are durably committed. */
   fun saveToken(
     gatewayId: String,
     deviceId: String,
     role: String,
     token: String,
     scopes: List<String> = emptyList(),
-  )
+  ): Boolean
 
   /** Removes both token and metadata for the normalized device/role pair. */
   fun clearToken(
@@ -86,17 +86,19 @@ class DeviceAuthStore(
     role: String,
     token: String,
     scopes: List<String>,
-  ) {
+  ): Boolean {
     val normalizedScopes = normalizeScopes(scopes)
     val key = tokenKey(gatewayId, deviceId, role)
-    prefs.putString(key, token.trim())
-    prefs.putString(
-      metadataKey(gatewayId, deviceId, role),
-      json.encodeToString(
-        PersistedDeviceAuthMetadata(
-          scopes = normalizedScopes,
-          updatedAtMs = System.currentTimeMillis(),
-        ),
+    return prefs.commitSecureStrings(
+      mapOf(
+        key to token.trim(),
+        metadataKey(gatewayId, deviceId, role) to
+          json.encodeToString(
+            PersistedDeviceAuthMetadata(
+              scopes = normalizedScopes,
+              updatedAtMs = System.currentTimeMillis(),
+            ),
+          ),
       ),
     )
   }

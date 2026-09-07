@@ -1,5 +1,5 @@
-// Settings page owning the dashboard's gateway connection draft (URL, token,
-// password, default session key) plus the latest handshake snapshot.
+// Settings page owning this browser's Gateway connection draft (URL, credential,
+// default session) and the live handshake summary.
 import "../../styles/connection.css";
 import { consume } from "@lit/context";
 import { html } from "lit";
@@ -13,6 +13,7 @@ import {
   resolveGatewayCredentialsForUrlEdit,
   type UiSettings,
 } from "../../app/settings.ts";
+import { type CredentialMode, resolveCredentialMode } from "../../components/credential-mode.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
@@ -22,7 +23,6 @@ import {
 } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { isUnknownSystemInfoMethodError, supportsSystemInfo } from "./system-info.ts";
 import { renderConnection } from "./view.ts";
 
@@ -35,6 +35,8 @@ export class ConnectionPage extends OpenClawLightDomElement {
 
   @state() private settings: UiSettings = loadSettings();
   @state() private password = "";
+  // Operator's explicit Token/Password choice; null follows the draft and last error.
+  @state() private credentialMode: CredentialMode | null = null;
   @state() private gatewayTokenVisible = false;
   @state() private gatewayPasswordVisible = false;
   @state() private systemInfo: SystemInfoResult | null = null;
@@ -61,14 +63,9 @@ export class ConnectionPage extends OpenClawLightDomElement {
     },
     onSnapshot: (change) => this.handleGatewaySnapshot(change),
   });
-  private readonly subscriptions = new SubscriptionsController(this).watch(
-    () => this.context?.channels,
-    (channels, notify) => channels.subscribe(notify),
-  );
 
   override disconnectedCallback() {
     this.systemInfoPolling.stop();
-    this.subscriptions.clear();
     this.resetSensitiveUi();
     super.disconnectedCallback();
   }
@@ -170,6 +167,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
     };
     this.password = password;
     this.sessionKeyDirty = false;
+    this.credentialMode = null;
     this.resetSensitiveUi();
   }
 
@@ -206,19 +204,37 @@ export class ConnectionPage extends OpenClawLightDomElement {
 
   override render() {
     const gateway = this.context.gateway.snapshot;
+    const live = this.context.gateway.connection;
+    const dirty =
+      this.sessionKeyDirty ||
+      this.settings.gatewayUrl !== live.gatewayUrl ||
+      this.settings.token !== live.token ||
+      this.password !== live.password;
     const body = renderConnection({
       connected: gateway.phase === "connected",
       hello: gateway.hello,
       settings: this.settings,
+      liveGatewayUrl: live.gatewayUrl,
       password: this.password,
       lastError: gateway.lastError,
-      lastChannelsRefresh: this.context.channels.state.channelsLastSuccess,
       systemInfo: this.systemInfo,
       systemInfoUnavailable: this.systemInfoUnavailable,
+      credentialMode: resolveCredentialMode(
+        {
+          token: this.settings.token,
+          password: this.password,
+          lastErrorCode: gateway.lastErrorCode,
+        },
+        this.credentialMode,
+      ),
+      dirty,
       showGatewayToken: this.gatewayTokenVisible,
       showGatewayPassword: this.gatewayPasswordVisible,
       onConnectionChange: (patch) => this.updateConnection(patch),
       onPasswordChange: (next) => (this.password = next),
+      onCredentialModeChange: (mode) => {
+        this.credentialMode = mode;
+      },
       onSessionKeyChange: (sessionKey) => {
         this.sessionKeyDirty = true;
         this.settings = {
@@ -234,7 +250,6 @@ export class ConnectionPage extends OpenClawLightDomElement {
         this.gatewayPasswordVisible = !this.gatewayPasswordVisible;
       },
       onConnect: () => this.connect(),
-      onRefresh: () => void this.context.channels.refresh(false),
     });
     return html`
       <section class="content-header">

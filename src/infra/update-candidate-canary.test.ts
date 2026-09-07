@@ -53,7 +53,7 @@ beforeEach(async () => {
   await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "2026.9.1" }));
   mocks.snapshot.mockResolvedValue({
     code: 0,
-    stdout: Buffer.from("[]"),
+    stdout: Buffer.from(JSON.stringify({ versions: [], pluginPaths: {} })),
     stderr: Buffer.alloc(0),
     termination: "exit",
   });
@@ -237,6 +237,7 @@ describe("update candidate canary", () => {
       }),
     );
     const rehearsal = await prepareUpdateCandidateRehearsal({
+      candidateRoot: root,
       config,
       stateDir: root,
       env: {},
@@ -411,6 +412,68 @@ describe("update candidate canary", () => {
       targetStateDir: string;
     };
     await expect(fs.access(snapshotInput.targetStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each([0, 1])("bounds multibyte stdout at the byte ceiling plus %i", async (overflow) => {
+    runtimeError = true;
+    const baseSpawn = mocks.spawn.getMockImplementation()!;
+    mocks.spawn.mockImplementation((command, args: string[], options) => {
+      if (!args.includes("plugins")) {
+        return baseSpawn(command, args, options);
+      }
+      const child = new FakeChild(nextPid++);
+      const json = JSON.stringify({ plugins: [], padding: "é".repeat(500_000) });
+      const bytes = Buffer.from(
+        json + " ".repeat(1024 * 1024 + overflow - Buffer.byteLength(json)),
+      );
+      queueMicrotask(() => {
+        child.stdout.write(bytes.subarray(0, 600_000));
+        child.stdout.end(bytes.subarray(600_000));
+        child.emit("close", 0);
+      });
+      return child;
+    });
+    const result = await validateUpdateCandidateCanary({
+      root,
+      stateDir: root,
+      config: {},
+      env: {},
+      timeoutMs: 3_000,
+    });
+    expect(result).toMatchObject({ status: "error", phase: overflow ? "plugins" : "runtime" });
+  });
+
+  it("preserves split UTF-8 diagnostics and final unterminated lines on both pipes", async () => {
+    const expected = ["stdout 診断: café 🦞", "stderr 診断: café 🦞"];
+    mocks.spawn.mockImplementationOnce(() => {
+      const child = new FakeChild(nextPid++);
+      queueMicrotask(() => {
+        for (const [index, stream] of [child.stdout, child.stderr].entries()) {
+          // Real pipe chunks may end inside a code point; EOF need not follow a newline.
+          const bytes = Buffer.from(`${expected[index]}\r\n${expected[index]} final`);
+          for (const byte of bytes) {
+            stream.write(Buffer.from([byte]));
+          }
+          stream.end();
+        }
+        child.emit("close", 1);
+      });
+      return child;
+    });
+    const result = await validateUpdateCandidateCanary({
+      root,
+      stateDir: root,
+      config: {},
+      env: {},
+      timeoutMs: 3_000,
+    });
+    expect(result.status).toBe("error");
+    for (const line of expected) {
+      expect(result.logTail).toContain(line);
+      expect(result.logTail).toContain(`${line} final`);
+      expect(result.steps.at(-1)?.stderrTail).toContain(`${line}\n`);
+      expect(result.steps.at(-1)?.stderrTail).toContain(`${line} final`);
+    }
   });
 
   it("omits the entire oversized log line across chunks while preserving following diagnostics", async () => {

@@ -4,6 +4,7 @@ import {
   serializeConfigResolutionFacts,
 } from "../config/resolution-facts.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
+import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
@@ -239,11 +240,7 @@ export function createPreparedModelCatalogWorker(
     );
   const createPool = () =>
     new WorkerTaskPool<PreparedModelWorkerRequest, PreparedModelWorkerResult>({
-      workerUrl: resolveRuntimeWorkerUrl({
-        currentModuleUrl: import.meta.url,
-        sourceWorkerName: "prepared-model-catalog.worker",
-        distWorkerPath: "agents/prepared-model-catalog.worker.js",
-      }),
+      workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
       maxWorkers: 1,
       // Recreating this worker would import changed plugin code under the old generation.
       // Only the lifecycle owner may retire it; crashes close the generation permanently.

@@ -8,6 +8,8 @@ import {
   resolvePairingHint,
   shouldShowInsecureContextHint,
 } from "../lib/connection-hints.ts";
+import { formatGatewayHost } from "../lib/gateway-host.ts";
+import { isPasswordModeErrorCode } from "./credential-mode.ts";
 
 type LoginFailureKind =
   | "auth-required"
@@ -35,8 +37,6 @@ type LoginFailurePlacement = "form" | "status";
 export type LoginFailureTone = "pending" | "warn" | "danger";
 
 type LoginFormField = "url" | "credential";
-
-export type CredentialMode = "token" | "password";
 
 export type LoginFailureStep = {
   text: string;
@@ -67,26 +67,8 @@ export type LoginFailureFeedback = {
 
 export type LoginFailureFeedbackParams = Parameters<typeof resolveAuthHintKind>[0] & {
   gatewayUrl?: string;
+  reconnectPending?: boolean;
 };
-
-export const PASSWORD_MODE_CODES = new Set<string>([
-  ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
-  ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH,
-  ConnectErrorDetailCodes.AUTH_PASSWORD_NOT_CONFIGURED,
-]);
-
-export function formatGatewayHost(gatewayUrl: string | undefined): string {
-  const raw = gatewayUrl?.trim() ?? "";
-  if (!raw) {
-    return t("common.unknown");
-  }
-  try {
-    const url = new URL(raw);
-    return url.host || raw;
-  } catch {
-    return raw;
-  }
-}
 
 function buildFeedback(params: {
   kind: LoginFailureKind;
@@ -203,7 +185,7 @@ export function resolveLoginFailureFeedback(
       stepKeys: [
         ...(pairing.requestId ? [] : ["login.failure.pairing.stepLatest"]),
         { key: "login.failure.pairing.stepDashboard", commands: ["openclaw dashboard"] },
-        "login.failure.pairing.stepReconnect",
+        ...(params.reconnectPending ? [] : ["login.failure.pairing.stepReconnect"]),
       ],
       stepParams: { host },
     });
@@ -297,10 +279,9 @@ export function resolveLoginFailureFeedback(
       tone: "warn",
       field: "credential",
       rawError,
-      titleKey:
-        lastErrorCode && PASSWORD_MODE_CODES.has(lastErrorCode)
-          ? "login.failure.authRequired.passwordTitle"
-          : "login.failure.authRequired.title",
+      titleKey: isPasswordModeErrorCode(lastErrorCode)
+        ? "login.failure.authRequired.passwordTitle"
+        : "login.failure.authRequired.title",
       summaryKey: "login.failure.authRequired.summary",
       stepKeys: [
         {

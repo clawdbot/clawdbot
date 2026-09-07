@@ -200,9 +200,9 @@ describe("acpx doctor state migration", () => {
       expect.stringContaining("Archived ACPX process-leases legacy source"),
     ]);
     await expect(fs.access(gatewayPath)).rejects.toThrow();
-    await expect(fs.access(`${gatewayPath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${gatewayPath}.migrated`);
     await expect(fs.access(leasePath)).rejects.toThrow();
-    await expect(fs.access(`${leasePath}.migrated`)).resolves.toBeUndefined();
+    await fs.access(`${leasePath}.migrated`);
     await expect(
       createDoctorContext(env)
         .openPluginStateKeyedStore<AcpxGatewayInstanceRecord>({
@@ -254,7 +254,7 @@ describe("acpx doctor state migration", () => {
       changes: [],
       warnings: [],
     });
-    await expect(fs.access(leasePath)).resolves.toBeUndefined();
+    await fs.access(leasePath);
   });
 
   it("leaves legacy leases in place when the canonical gateway id would not reap them", async () => {

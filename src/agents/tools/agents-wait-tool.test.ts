@@ -1,4 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import ts from "typescript";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { applyCodeModeCatalog } from "../code-mode.js";
+import {
+  createCodeModeHarness,
+  resetCodeModeTestState,
+  runUntilCompleted,
+} from "../code-mode.test-support.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
 
 const records = new Map<string, SubagentRunRecord>();
@@ -63,6 +71,79 @@ describe("agents_wait", () => {
   beforeEach(() => {
     records.clear();
     registryEvents.listeners.clear();
+  });
+
+  it("composes real collector outputs through discovery, describe, and generated declarations", async () => {
+    onTestFinished(resetCodeModeTestState);
+    const entry = collectorRun("ready", "agent:main:main", {
+      status: "done",
+      structured: { answer: 42 },
+    });
+    records.set(entry.runId, entry);
+    const h = createCodeModeHarness();
+    const tool = createMainSessionWaitTool();
+    applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, tool] });
+    const execTool = expectDefined(h.tools[0], "Code Mode exec");
+    const waitTool = expectDefined(h.tools[1], "Code Mode wait");
+    expect(execTool.description).toContain("completed: Array<");
+    const listed = await runUntilCompleted({
+      execTool,
+      waitTool,
+      code: 'return await API.list("tools");',
+    });
+    expect(listed).toMatchObject({
+      status: "completed",
+      value: { files: [{ path: "tools/agents_wait.d.ts" }] },
+      telemetry: { describeCount: 0, callCount: 0 },
+    });
+    const result = await runUntilCompleted({
+      execTool,
+      waitTool,
+      code: 'const [wait] = await catalog.search("agents_wait"); const description = await wait.describe(); const file = await API.read("tools/agents_wait.d.ts"); const result = await wait({ids:["ready"],timeoutSeconds:0}); return {description, file, ids:result.completed.map(item=>item.runId), structured:result.completed[0].structured};',
+    });
+    expect(result).toMatchObject({
+      status: "completed",
+      telemetry: { describeCount: 2, callCount: 1 },
+      value: {
+        ids: ["ready"],
+        structured: { answer: 42 },
+        description: { outputSchema: tool.outputSchema },
+      },
+    });
+    const { file } = result.value as { file: { content: string } };
+    // Consume the intact guest declaration, with opaque collector-specific output.
+    expect(file.content).not.toContain("truncated: true");
+    const fileName = "/collector-consumer.ts";
+    const source = ts.createSourceFile(
+      fileName,
+      file.content +
+        "\n" +
+        [
+          "async function consume() {",
+          'const result = await agents_wait({ids:["ready"]});',
+          "const ids: string[] = result.completed.map(item => item.runId);",
+          "// @ts-expect-error No invented builds field.",
+          "result.builds.map(item => item.id);",
+          "// @ts-expect-error Collector structured output is unknown without its own schema.",
+          "result.completed[0].structured.answer;",
+          "return ids;",
+          "}",
+          "// @ts-expect-error Required ids stay required.",
+          "agents_wait({});",
+        ].join("\n"),
+      ts.ScriptTarget.ESNext,
+      true,
+    );
+    const options = { noEmit: true, strict: true, types: [], target: ts.ScriptTarget.ESNext };
+    const host = ts.createCompilerHost(options);
+    const original = host.getSourceFile.bind(host);
+    host.getSourceFile = (name, ...args) => (name === fileName ? source : original(name, ...args));
+    const program = ts.createProgram([fileName], options, host);
+    expect(
+      ts
+        .getPreEmitDiagnostics(program)
+        .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")),
+    ).toEqual([]);
   });
 
   it("settles a parked collector bridge from a registry write event", async () => {

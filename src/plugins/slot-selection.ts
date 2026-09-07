@@ -6,7 +6,6 @@ import {
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
 import { applyExclusiveSlotSelection } from "./slots.js";
-import { buildPluginDiagnosticsReport } from "./status.js";
 
 type SlotSelectionPlugin = {
   id: string;
@@ -37,11 +36,12 @@ function mergeRuntimeKinds(
   };
 }
 
-export function applySlotSelectionForPlugin(
+export async function applySlotSelectionForPlugin(
   config: OpenClawConfig,
   pluginId: string,
   preparedMetadata?: PluginMetadataSnapshot,
-): { config: OpenClawConfig; warnings: string[] } {
+  beforeRuntimeInspection?: () => void,
+): Promise<{ config: OpenClawConfig; warnings: string[] }> {
   // Selection inspects the install candidate, never the running Gateway's inventory.
   const metadataSnapshot =
     preparedMetadata ??
@@ -58,6 +58,9 @@ export function applySlotSelectionForPlugin(
   if (!plugin.kind && !isBundledManifestOwner(plugin)) {
     // Bundled manifests own slot declarations. Only legacy external plugins need
     // runtime kind inspection; enabling a bundled non-slot plugin must not execute its module.
+    const { buildPluginDiagnosticsReport } = await import("./status.js");
+    // Importing diagnostics yields; recheck the install owner before plugin code executes.
+    beforeRuntimeInspection?.();
     const runtimeReport = buildPluginDiagnosticsReport({
       config,
       onlyPluginIds: [plugin.id],

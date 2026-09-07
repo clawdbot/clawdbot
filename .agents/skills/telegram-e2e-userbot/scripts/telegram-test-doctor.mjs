@@ -24,14 +24,20 @@ export async function runTelegramTestDoctor({
   let proxy;
   try {
     const driverEnv = { ...sanitizeChildEnvironment(), ...credential.driverEnv };
-    const status = await runCommandImpl("uv", ["run", USER_DRIVER_PATH, "status", "--json"], {
-      cwd: process.cwd(),
-      env: driverEnv,
-      leaseFailure,
-      timeoutMs: 30_000,
-    });
+    const status = await runCommandImpl(
+      "uv",
+      ["run", USER_DRIVER_PATH, "status", "--check-chat", credential.groupId, "--json"],
+      {
+        cwd: process.cwd(),
+        env: driverEnv,
+        leaseFailure,
+        timeoutMs: 30_000,
+      },
+    );
     if (status.status !== 0 || status.timedOut) {
-      throw new Error("TDLib Test Server user session is not authorized.");
+      throw new Error(
+        "TDLib Test Server user authorization or tester group write-access preflight failed; ask the credential pool owner to verify the leased tester and test group.",
+      );
     }
     const driver = JSON.parse(status.stdout);
     if (
@@ -42,6 +48,11 @@ export async function runTelegramTestDoctor({
       String(driver.user?.id) !== credential.testerUserId
     ) {
       throw new Error("TDLib Test Server user identity does not match the lease.");
+    }
+    if (driver.testerGroupWriteAccess !== true) {
+      throw new Error(
+        "Telegram Test Server tester group membership and text permission were not verified; ask the credential pool owner to repair the leased test group.",
+      );
     }
     proxy = await startProxy({
       leaseHealth: {
@@ -107,6 +118,7 @@ export async function runTelegramTestDoctor({
       sutBot: true,
       groupPrivacyDisabled: true,
       groupMembership: true,
+      testerGroupWriteAccess: true,
     };
   } finally {
     await proxy?.close();

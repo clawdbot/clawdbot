@@ -18,6 +18,10 @@ export const LEASE_ID = operationLeaseId(OPERATION_ID);
 export const CHECKPOINT_ID = "chk_profile_warm";
 export const CLASSLESS_PROFILE = { provider: "aws", ttl: "24h", idleTimeout: "60m" };
 export const PROFILE = { ...CLASSLESS_PROFILE, class: "standard", warmImage: true };
+export const NODE_RUNTIME_IDENTITY = {
+  nodeBootstrapSha256: createNodeBootstrapFixture().sha256,
+  executionMode: "worker-turn" as const,
+};
 const WALLPAPER_PATH = fileURLToPath(
   new URL("../assets/openclaw-worker-wallpaper.png", import.meta.url),
 );
@@ -145,6 +149,7 @@ export async function provisionWarmProfile(
   options?: NonNullable<Parameters<WorkerProvider["provision"]>[2]>,
 ) {
   return provider.provision(profile, operationId, {
+    nodeRuntimeIdentity: NODE_RUNTIME_IDENTITY,
     ...options,
     ...(machineClass ? { machineClass } : {}),
     beginNodeEnrollment:

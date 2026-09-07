@@ -117,3 +117,37 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Credential row: mode switch + secret input share the row's control slot ── */
+
+.connection-credential {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.settings-row:not(.settings-row--stacked) .settings-row__control > .connection-credential {
+  width: 440px;
+  max-width: 100%;
+}
+
+.connection-credential > .settings-segmented {
+  flex: 0 0 auto;
+}
+
+.connection-credential > .settings-secret {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .connection-credential {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .connection-credential > .settings-secret {
+    flex-basis: 100%;
+  }
+}

@@ -21,7 +21,6 @@ import {
   isInvalidConfigError,
 } from "../../config/io.invalid-config.js";
 import { CONFIG_PATH, normalizeStateDirEnv, resolveGatewayPort } from "../../config/paths.js";
-import { SessionStoreMigrationRequiredError } from "../../config/sessions/migration-required.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
@@ -1070,9 +1069,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       isInvalidConfigError(error) ||
       isTailscaleRouteOwnershipConflictError(error) ||
       collectNestedErrorCandidates(error).some(
-        (candidate) =>
-          candidate instanceof SessionStoreMigrationRequiredError ||
-          candidate instanceof GatewayStartupCleanupError,
+        (candidate) => candidate instanceof GatewayStartupCleanupError,
       ) ||
       resolveGatewayStartupMaintenanceReason(error)
     ) {

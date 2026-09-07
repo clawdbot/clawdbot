@@ -12,6 +12,7 @@ import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
 import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
@@ -131,6 +132,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   fetchLinkFavicon?: LinkFaviconFetcher;
+  githubRepo?: MarkdownRenderOptions["githubRepo"];
   autoExpandToolCalls?: boolean;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   typingActors?: readonly { id: string; label: string; preview?: string }[];

@@ -10,6 +10,7 @@ import { runWithToolExecutionValidation } from "./agent-tools.execution-validati
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { bindJoinedCollectorInvocation } from "./subagents/swarm/swarm-collector-capability.js";
+import { markToolContractFailure } from "./tool-contract-error.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import {
   isToolResultError,
@@ -284,7 +285,10 @@ async function validateCatalogSchemaValue(
       value,
     });
   } catch (error) {
-    throw new Error(`Tool "${entry.id}" has an invalid ${schemaName}.`, { cause: error });
+    throw markToolContractFailure(
+      new Error(`Tool "${entry.id}" has an invalid ${schemaName}.`, { cause: error }),
+      "invalid_contract",
+    );
   }
 }
 
@@ -294,7 +298,10 @@ async function assertCatalogInputMatchesSchema(
 ): Promise<void> {
   const validation = await validateCatalogSchemaValue(entry, "inputSchema", value);
   if (validation && !validation.ok) {
-    throw new ToolInputError(formatCatalogInputError(entry, validation.errors, value));
+    throw markToolContractFailure(
+      new ToolInputError(formatCatalogInputError(entry, validation.errors, value)),
+      "input_contract",
+    );
   }
 }
 
@@ -326,8 +333,9 @@ async function assertCatalogOutputMatchesSchema(
   if (!validation || validation.ok) {
     return;
   }
-  throw new Error(
-    `Tool "${entry.id}" returned details that do not match its declared outputSchema.`,
+  throw markToolContractFailure(
+    new Error(`Tool "${entry.id}" returned details that do not match its declared outputSchema.`),
+    "output_contract",
   );
 }
 
