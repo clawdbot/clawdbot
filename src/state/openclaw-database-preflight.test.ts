@@ -164,6 +164,30 @@ describe("OpenClaw database schema preflight", () => {
     },
   );
 
+  it("rejects a canonical configured agent path owned by another agent before writes", async () => {
+    const root = tempDirs.make("openclaw-configured-agent-owner-");
+    const env = { OPENCLAW_STATE_DIR: path.join(root, "active") };
+    const agentDir = path.join(root, "external", "agents", "alpha");
+    const agentPath = path.join(agentDir, "agent", "openclaw-agent.sqlite");
+    const store = path.join(agentDir, "sessions", "sessions.json");
+    openOpenClawAgentDatabase({
+      agentId: "beta",
+      path: agentPath,
+      env: { OPENCLAW_STATE_DIR: path.join(root, "donor") },
+    });
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    const before = sourceManifest(root);
+    await expect(
+      assertOpenClawDatabasesReady({
+        env,
+        operation: "gateway-startup",
+        config: { session: { store } },
+      }),
+    ).rejects.toThrow("belongs to agent beta; requested agent alpha");
+    expect(sourceManifest(root)).toEqual(before);
+  });
+
   it("admits supported forward state migration after the Doctor-owned audit repair", async () => {
     const { env, stateDir, statePath } = createReleasedStateDatabase();
     const { DatabaseSync } = requireNodeSqlite();
@@ -289,6 +313,41 @@ describe("OpenClaw database schema preflight", () => {
       ],
     });
   });
+
+  it.each([false, true])(
+    "admits legacy additive columns without writes, rejecting genuine drift=%s",
+    async (drift) => {
+      const initialPath = createExplicitStateDatabase();
+      const stateDir = path.dirname(initialPath);
+      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+      fs.mkdirSync(path.dirname(databasePath));
+      fs.renameSync(initialPath, databasePath);
+      const database = new (requireNodeSqlite().DatabaseSync)(databasePath);
+      database.exec(
+        "ALTER TABLE task_runs DROP COLUMN tool_use_count; ALTER TABLE task_runs DROP COLUMN last_tool_name; ALTER TABLE apns_registrations DROP COLUMN relay_origin;",
+      );
+      if (drift) {
+        database.exec("ALTER TABLE task_runs ADD COLUMN unrecognized INTEGER NOT NULL DEFAULT 0");
+      }
+      database.close();
+      const before = snapshotSourceFamily(databasePath);
+      expect(await preflightOpenClawStateDatabasePath(databasePath)).toMatchObject({
+        foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+        status: drift ? "incompatible" : "startup-repairable",
+      });
+      const admission = assertOpenClawDatabasesReady({
+        env: { OPENCLAW_STATE_DIR: stateDir },
+        operation: "gateway-startup",
+        config: {},
+      });
+      if (drift) {
+        await expect(admission).rejects.toThrow("requires repair");
+      } else {
+        await expect(admission).resolves.toBeUndefined();
+      }
+      expect(snapshotSourceFamily(databasePath)).toEqual(before);
+    },
+  );
 
   it("classifies the same-version run-end cleanup column as startup-repairable without touching the source", async () => {
     const sourcePath = createExplicitStateDatabase(

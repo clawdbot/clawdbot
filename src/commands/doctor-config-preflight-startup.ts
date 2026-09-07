@@ -18,6 +18,7 @@ import type {
   MigrationMessages,
 } from "../infra/state-migrations.types.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
+import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import {
   migrationCheckpointIdentitiesMatch,
   resolveMigrationCheckpointIdentity,
@@ -49,31 +50,33 @@ export async function readStartupMigrationSnapshot(params: {
   ) => ReturnType<typeof planAutomaticConfigRepair>;
   validateConfig?: (snapshot: ConfigFileSnapshot) => void | Promise<void>;
 }): Promise<DoctorConfigPreflightPluginSnapshotRead> {
-  await refuseStartupMigrationsForLiveGatewayOwner(params.env);
-  try {
-    const selected = await readConfigFileSnapshot({
-      observe: false,
-      pluginValidation: "core-only",
-    });
-    await assertStartupStateMigrationReady({
-      cfg: selected.sourceConfig ?? selected.config,
-      env: params.env,
-    });
-    // Core readiness must be decided before plugin metadata opens shared state.
-    const startupConfig = resolveStartupConfigSnapshot(selected);
-    if (startupConfig) {
-      await params.validateConfig?.(startupConfig);
+  return await withArtifactPreservingStateReads(async () => {
+    await refuseStartupMigrationsForLiveGatewayOwner(params.env);
+    try {
+      const selected = await readConfigFileSnapshot({
+        observe: false,
+        pluginValidation: "core-only",
+      });
+      const startupConfig = resolveStartupConfigSnapshot(selected);
+      await assertStartupStateMigrationReady({
+        cfg: startupConfig?.sourceConfig ?? selected.sourceConfig ?? selected.config,
+        env: params.env,
+      });
+      // Core readiness must be decided before plugin metadata opens shared state.
+      if (startupConfig) {
+        await params.validateConfig?.(startupConfig);
+      }
+      const read = await params.readSnapshot();
+      const repair = read.snapshot.valid ? null : params.planRepair(read);
+      if (!read.snapshot.valid && !repair) {
+        throw new Error('OpenClaw config is invalid; run "openclaw doctor --fix" before startup.');
+      }
+      await params.validateConfig?.(repair?.snapshot ?? read.snapshot);
+      return read;
+    } catch (error) {
+      return throwStartupMigrationRefusal(formatErrorMessage(error), error);
     }
-    const read = await params.readSnapshot();
-    const repair = read.snapshot.valid ? null : params.planRepair(read);
-    if (!read.snapshot.valid && !repair) {
-      throw new Error('OpenClaw config is invalid; run "openclaw doctor --fix" before startup.');
-    }
-    await params.validateConfig?.(repair?.snapshot ?? read.snapshot);
-    return read;
-  } catch (error) {
-    return throwStartupMigrationRefusal(formatErrorMessage(error), error);
-  }
+  });
 }
 
 /** Admission runs before lease acquisition: even acquiring a lease commits SQLite writes. */

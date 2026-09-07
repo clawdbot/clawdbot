@@ -6,6 +6,7 @@ import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
+  withArtifactPreservingStateReads,
 } from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -23,10 +24,14 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-describe.each([
-  ["shared", withExistingOpenClawStateDatabaseReadOnly],
-  ["artifact-preserving", withExistingOpenClawStateDatabaseArtifactPreservingReadOnly],
-] as const)("%s read-only state reads", (_name, readState) => {
+describe.each(["admission", "explicit"] as const)("%s read-only state reads", (mode) => {
+  const readState: typeof withExistingOpenClawStateDatabaseReadOnly =
+    mode === "admission"
+      ? (operation, options) =>
+          withArtifactPreservingStateReads(() =>
+            withExistingOpenClawStateDatabaseReadOnly(operation, options),
+          )
+      : withExistingOpenClawStateDatabaseArtifactPreservingReadOnly;
   it("reads a consolidated WAL database without creating source sidecars", async () => {
     await withTempDir("openclaw-state-readonly-sidecars-", async (stateDir) => {
       const options = createOptions(stateDir);

@@ -1,6 +1,7 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -600,6 +601,7 @@ export async function preflightOpenClawDatabaseSchemas(options: {
         )
       : []),
     ...(options.configuredAgentDatabaseCandidatePaths ?? []).map((candidatePath) => ({
+      agentId: resolveUnsuffixedSqliteTargetFromSessionStorePath(candidatePath).agentId,
       path: candidatePath,
     })),
   ];

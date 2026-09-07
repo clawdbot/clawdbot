@@ -858,7 +858,7 @@ describe("gateway startup-migration refusal", () => {
           ownerId: "live-owner-refusal-test",
           createdAt: new Date().toISOString(),
           configPath,
-          port: 18789,
+          port: 18720,
           stateDir,
           ...(startTime !== null ? { startTime } : {}),
         }),
@@ -868,7 +868,7 @@ describe("gateway startup-migration refusal", () => {
       const result = runBuiltRuntime(
         runtimeRoot,
         env,
-        ["gateway", "run", "--allow-unconfigured"],
+        ["gateway", "run", "--port", "18720", "--allow-unconfigured"],
         30_000,
       );
       const output = `${result.stderr}\n${result.stdout}`;
@@ -880,7 +880,7 @@ describe("gateway startup-migration refusal", () => {
       expect(fs.existsSync(path.join(stateDir, "agents", "main", "agent")), output).toBe(false);
       // No orphan-sidecar quarantine copy either: write admission never ran.
       expect(fs.readdirSync(sharedStateDbDir), output).toEqual(["openclaw.sqlite-wal"]);
-      expect(result.status, output).toBe(1);
+      expect(result.status, output).toBe(78);
       expect(result.stderr, output).toContain("already owns this state directory");
       expect(hasActiveStartupMigrationLease({ env })).toBe(false);
     } finally {

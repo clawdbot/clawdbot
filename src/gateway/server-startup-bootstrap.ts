@@ -81,6 +81,13 @@ export async function prepareGatewayServerBootstrap(input: {
   formatRuntimeGatewayAuthTokenWarning: () => string;
 }) {
   const { port, opts, log, logSecrets, loadWorkerEnvironmentStartupModule } = input;
+  const { assertConfiguredWorkspaceStateReady } = await import("../agents/workspace-state-dirs.js");
+  // Direct callers and repeated server starts also need admission before bootstrap writes.
+  const workspaceSnapshot = await readConfigFileSnapshot({
+    observe: false,
+    pluginValidation: "core-only",
+  });
+  assertConfiguredWorkspaceStateReady({ cfg: workspaceSnapshot.config });
   const formatRuntimeGatewayAuthTokenWarning = input.formatRuntimeGatewayAuthTokenWarning;
   const traceOriginAt = opts.processStartedAt ?? opts.startupStartedAt;
   const startupElapsedMs =
@@ -422,7 +429,6 @@ export async function prepareGatewayServerBootstrap(input: {
     ]);
     return next;
   };
-  const { assertConfiguredWorkspaceStateReady } = await import("../agents/workspace-state-dirs.js");
   const prepareReloadCandidate = (params: {
     runtimeConfig: OpenClawConfig;
     sourceConfig: OpenClawConfig;

@@ -70,6 +70,14 @@ describe("startup admission before persistent writes", () => {
       reason: "Legacy workspace setup state requires migration",
     },
     {
+      name: "session store selected by repaired agent ID",
+      workspace: false,
+      repairedSession: true,
+      repairable: false,
+      config: "local",
+      reason: "Legacy session store requires migration",
+    },
+    {
       name: "missing config",
       workspace: false,
       repairable: false,
@@ -109,7 +117,7 @@ describe("startup admission before persistent writes", () => {
     },
   ])(
     "preserves shipped schema and every persistent artifact on $name refusal",
-    ({ workspace, repairable, config, reason, consolidated, invalidPlugin }) => {
+    ({ workspace, repairable, config, reason, consolidated, invalidPlugin, repairedSession }) => {
       const root = fs.realpathSync(tempDirs.make("openclaw-startup-admission-"));
       const runtimeRoot = createSourceRuntime(root);
       const stateDir = path.join(root, "state");
@@ -140,10 +148,25 @@ describe("startup admission before persistent writes", () => {
               plugins: invalidPlugin
                 ? { load: { paths: [path.join(root, "missing-plugin")] } }
                 : { enabled: false },
-              agents: { defaults: { workspace: workspaceDir } },
-              ...(repairable ? { session: { idleMinutes: 45 } } : {}),
+              agents: repairedSession
+                ? { list: [{ id: "" }] }
+                : { defaults: { workspace: workspaceDir } },
+              ...(repairedSession
+                ? {
+                    session: {
+                      store: path.join(stateDir, "external", "{agentId}", "sessions.json"),
+                    },
+                  }
+                : repairable
+                  ? { session: { idleMinutes: 45 } }
+                  : {}),
             }),
           );
+        }
+        if (repairedSession) {
+          const legacyStore = path.join(stateDir, "external", "agent", "sessions.json");
+          fs.mkdirSync(path.dirname(legacyStore), { recursive: true });
+          fs.writeFileSync(legacyStore, "{}\n");
         }
         if (workspace) {
           fs.writeFileSync(
@@ -163,12 +186,13 @@ describe("startup admission before persistent writes", () => {
         const before = manifest(stateDir);
         expect(schemaBefore.userVersion).toBe(1);
         expect(Boolean(before[path.join("state", "openclaw.sqlite-wal")])).toBe(!consolidated);
-        const entry = workspace
-          ? `
+        const entry =
+          workspace || repairedSession
+            ? `
         const { runDoctorConfigPreflight } = await import("./src/commands/doctor-config-preflight.ts");
         await runDoctorConfigPreflight({ migrateState: true, migrateLegacyConfig: false, requireStartupMigrationCheckpoint: true });
       `
-          : `
+            : `
         const { ensureConfigReady } = await import("./src/cli/program/config-guard.ts");
         const { ExitError } = await import("./src/runtime.ts");
         await ensureConfigReady({
