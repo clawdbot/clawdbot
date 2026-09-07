@@ -145,3 +145,27 @@ describe("failover user copy", () => {
     );
   });
 });
+
+describe("rate limit copy from a failover chain summary", () => {
+  const aggregate =
+    "All models failed (3): anthropic/claude-opus-5: You've hit your session limit · resets 6:20pm (Europe/London) (unknown) | " +
+    "claude-cli/claude-sonnet-5: You've hit your session limit · resets 6:20pm (Europe/London) (unknown) | " +
+    "openai/gpt-5.6-sol: Codex error: The usage limit has been reached (rate_limit)";
+
+  it("keeps the provider reset hint when the summary exceeds the length guard", () => {
+    // The summary is over the 300 char bound, so reading it whole discards a hint the
+    // provider did give. The first leg is the route the user picked.
+    expect(aggregate.length).toBeGreaterThan(300);
+    const copy = renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw: aggregate });
+    expect(copy).toContain("resets 6:20pm (Europe/London)");
+    expect(copy).not.toBe("⚠️ API rate limit reached. Please try again later.");
+  });
+
+  it("still falls back to the generic message when no leg carries a hint", () => {
+    const copy = renderRateLimitOrOverloadedCopy({
+      reason: "rate_limit",
+      raw: "All models failed (2): anthropic/claude: 429 (rate_limit) | openai/gpt-5.4: 429 (rate_limit)",
+    });
+    expect(copy).toContain("API rate limit reached");
+  });
+});

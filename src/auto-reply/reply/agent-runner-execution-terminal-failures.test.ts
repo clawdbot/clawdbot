@@ -61,6 +61,32 @@ describe("executeAgentTurn: terminal failures", () => {
     }
   });
 
+  it("keeps the provider reset hint when the chain summary exceeds the length guard", async () => {
+    // Three legs of ordinary provider text push the summary past the bound that keeps
+    // provider strings from dumping HTML or JSON. This is the mid-turn surfacing path in
+    // agent-runner-execution, where a run returns no usable text and the raw upstream
+    // error is rendered for the user.
+    const hint = "You've hit your session limit \u00b7 resets 6:20pm (Europe/London)";
+    const message =
+      `All models failed (3): anthropic/claude-opus-5: ${hint} (unknown) | ` +
+      `claude-cli/claude-sonnet-5: ${hint} (unknown) | ` +
+      "openai/gpt-5.6-sol: Codex error: The usage limit has been reached (rate_limit)";
+    expect(message.length).toBeGreaterThan(300);
+    state.runWithModelFallbackMock.mockResolvedValueOnce({
+      result: { payloads: [], meta: { error: new Error(message) } },
+      provider: "anthropic",
+      model: "claude-opus-5",
+      attempts: [],
+    });
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createFailureRunAgentTurnParams());
+
+    const rendered = JSON.stringify(result);
+    expect(rendered).toContain("resets 6:20pm (Europe/London)");
+    expect(rendered).not.toContain("API rate limit reached. Please try again later.");
+  });
+
   it("surfaces Codex usage-limit reset details for pure fallback exhaustion", async () => {
     const codexMessage =
       "You've reached your Codex subscription usage limit. Next reset in 42 minutes (2026-05-04T21:34:00.000Z). Run /codex account for current usage details.";

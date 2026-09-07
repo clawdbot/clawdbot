@@ -18,6 +18,7 @@ import {
   isPeriodicUsageLimitErrorMessage,
   isProviderCompletedErrorFinishReasonMessage,
 } from "./classify.js";
+import { splitFailoverAggregateLegs } from "./message-patterns.js";
 import {
   classifyProviderRequestFacets,
   type ProviderRequestFacet,
@@ -129,7 +130,17 @@ function renderRateLimitBaseCopy(context: FailoverUserCopyContext): string {
   if (MODEL_CAPACITY_ERROR_RE.test(raw)) {
     return MODEL_CAPACITY_ERROR_USER_MESSAGE;
   }
-  return extractProviderRateLimitMessage(raw) ?? RATE_LIMIT_ERROR_USER_MESSAGE;
+  const direct = extractProviderRateLimitMessage(raw);
+  if (direct) {
+    return direct;
+  }
+  for (const leg of splitFailoverAggregateLegs(raw)) {
+    const fromLeg = extractProviderRateLimitMessage(leg);
+    if (fromLeg) {
+      return fromLeg;
+    }
+  }
+  return RATE_LIMIT_ERROR_USER_MESSAGE;
 }
 
 const FAILOVER_REASON_BASE_COPY = {
