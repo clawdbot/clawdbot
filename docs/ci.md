@@ -476,6 +476,12 @@ and Android at two because those runner pools are narrower. Compact whole-config
 with a 120-minute batch timeout, while include-pattern groups share the same
 bounded job budget.
 
+Full named bundles include their runtime-build mode when present, so
+`checks-node-bundle-infra-small-runtime-1` and
+`checks-node-bundle-infra-small-1` identify different prerequisite groups.
+Their test inventories and runner limits are unchanged; unique names let release
+collectors retain both jobs without ambiguous attempt evidence.
+
 Type-aware lint on CI runners with fewer than 8 CPUs or 24 GiB of RAM uses the
 existing Go compiler memory policy (`GOGC=30`, `GOMEMLIMIT=3GiB`) to reduce swap
 pressure. Explicit Go settings remain authoritative. The limit is soft and
