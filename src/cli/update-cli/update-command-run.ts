@@ -88,10 +88,17 @@ export async function admitUpdateCommandRun(params: {
   ) {
     // Admission must not load native units or turn unavailable ownership into
     // an absent service and a write to the caller's unrelated profile.
-    const command = await resolveGatewayService().readCommand(env, {
-      requireEffective: true,
-      requireLoaded: true,
-    });
+    const command = await resolveGatewayService()
+      .readCommand(env, {
+        requireEffective: true,
+        requireLoaded: true,
+      })
+      .catch((cause: unknown) => {
+        throw new GatewayServiceUpdateOwnershipError(
+          "Gateway service inspection is unavailable before update admission. Run `openclaw gateway status --deep` from the service's owning account and retry when service access is restored.",
+          cause,
+        );
+      });
     if (command) {
       const usesRoot = await gatewayServiceCommandUsesRoot({ root: params.root, command });
       if (usesRoot === null) {

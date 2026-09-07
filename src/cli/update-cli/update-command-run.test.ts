@@ -26,6 +26,7 @@ import {
   failUpdateCommandRun,
   withUpdatePreviewSignals,
 } from "./update-command-run.js";
+import * as servicePlan from "./update-command-service-plan.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -356,6 +357,9 @@ it.each([
   "timeout",
   "malformed",
   "unresolved-root",
+  "native-rejection",
+  "native-value-rejection",
+  "root-probe-error",
 ] as const)("admits only resolved loaded service ownership (%s)", async (scenario) => {
   const home = dirs.make("update-loaded-admission-");
   const callerState = path.join(home, ".openclaw-caller");
@@ -426,6 +430,14 @@ it.each([
         ];
       });
   const before = snapshot();
+  const nativeFailure =
+    scenario === "native-value-rejection"
+      ? { detail: "inspection-secret-canary" }
+      : new Error("inspection-secret-canary");
+  const rootFailure = new Error("later ownership resolution failed");
+  if (scenario === "root-probe-error") {
+    vi.spyOn(servicePlan, "gatewayServiceCommandUsesRoot").mockRejectedValue(rootFailure);
+  }
   const command =
     scenario === "unresolved-root"
       ? ["opaque-launcher"]
@@ -492,11 +504,22 @@ it.each([
       { type: "as", data: [] },
     ]);
   });
+  if (scenario === "native-rejection" || scenario === "native-value-rejection") {
+    bus.mockRejectedValue(nativeFailure);
+  }
   // Use the real manager reader on every platform; only the native bus is simulated.
   const service = gatewayService.resolveGatewayService();
+  let inspectionFailure: unknown;
   vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue({
     ...service,
-    readCommand: readSystemdServiceExecStart,
+    readCommand: async (...args) => {
+      try {
+        return await readSystemdServiceExecStart(...args);
+      } catch (error) {
+        inspectionFailure = error;
+        throw error;
+      }
+    },
   });
   if (scenario === "owned" || scenario === "foreign" || scenario === "absent") {
     const run = await admitUpdateCommandRun({ opts: {}, root });
@@ -508,9 +531,28 @@ it.each([
       fs.existsSync(path.join(scenario === "owned" ? callerState : serviceState, "state")),
     ).toBe(false);
   } else {
-    await expect(
-      admitUpdateCommandRun({ opts: {}, root }).then(() => "admitted"),
-    ).rejects.toThrow();
+    const failure: unknown = await admitUpdateCommandRun({ opts: {}, root }).then(
+      () => "admitted",
+      (error: unknown) => error,
+    );
+    if (scenario === "owned-pending") {
+      expect(failure).toBeInstanceOf(UpdateRecoveryRequiredError);
+    } else if (scenario === "root-probe-error") {
+      expect(failure).toBe(rootFailure);
+    } else {
+      expect(failure).toBeInstanceOf(servicePlan.GatewayServiceUpdateOwnershipError);
+      if (!(failure instanceof servicePlan.GatewayServiceUpdateOwnershipError)) {
+        throw new Error("Expected safe service ownership error");
+      }
+      if (scenario !== "unresolved-root") {
+        expect(failure.message).toContain("openclaw gateway status --deep");
+        expect(failure.cause).toBe(inspectionFailure);
+        expect(Object.getOwnPropertyDescriptor(failure, "cause")?.enumerable).toBe(false);
+      }
+      expect(String(failure)).not.toContain("inspection-secret-canary");
+      expect(JSON.stringify(failure)).not.toContain("inspection-secret-canary");
+      expect(failure.stack).not.toContain("inspection-secret-canary");
+    }
     expect(snapshot()).toEqual(before);
     if (pending) {
       expect(loadUpdateRecovery(pending.runId, { env: serviceEnv })).toEqual(pending);
