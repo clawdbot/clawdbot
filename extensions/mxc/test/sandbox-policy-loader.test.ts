@@ -1,8 +1,11 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import { loadSandboxBaselinePolicy } from "../src/sandbox-policy-loader.js";
+import {
+  loadSandboxBaselinePolicy,
+  MAX_SANDBOX_POLICY_FILE_BYTES,
+} from "../src/sandbox-policy-loader.js";
 
 const describeOnWindows = describe.runIf(process.platform === "win32");
 
@@ -222,5 +225,57 @@ describeOnWindows("loadSandboxBaselinePolicy validation", () => {
         item.detail,
       );
     }
+  });
+});
+
+describe("sandbox policy bounded reads", () => {
+  test("small valid policy file loads successfully", () => {
+    const dir = makeTestDir();
+    const policyPath = join(dir, "normal-policy.json");
+    writePolicy(policyPath, {
+      filesystem: { additionalReadonlyPaths: [] },
+      process: { timeoutSeconds: 60 },
+    });
+
+    const policy = loadSandboxBaselinePolicy({ policyPaths: [policyPath] });
+
+    expect(policy.process.timeoutSeconds).toBe(60);
+  });
+
+  test("loads a configured policy through a symlink", () => {
+    const dir = makeTestDir();
+    const targetPath = join(dir, "target-policy.json");
+    const policyPath = join(dir, "linked-policy.json");
+    writePolicy(targetPath, { process: { timeoutSeconds: 45 } });
+    symlinkSync(targetPath, policyPath, "file");
+
+    const policy = loadSandboxBaselinePolicy({ policyPaths: [policyPath] });
+
+    expect(policy.process.timeoutSeconds).toBe(45);
+  });
+
+  test("accepts a policy file at the inclusive size limit", () => {
+    const dir = makeTestDir();
+    const policyPath = join(dir, "boundary-policy.json");
+    const policyJson = JSON.stringify({ process: { timeoutSeconds: 45 } });
+    writeFileSync(
+      policyPath,
+      policyJson + " ".repeat(MAX_SANDBOX_POLICY_FILE_BYTES - Buffer.byteLength(policyJson)),
+      "utf-8",
+    );
+
+    const policy = loadSandboxBaselinePolicy({ policyPaths: [policyPath] });
+
+    expect(policy.process.timeoutSeconds).toBe(45);
+  });
+
+  test("oversized policy file is rejected with the documented size limit", () => {
+    const dir = makeTestDir();
+    const policyPath = join(dir, "huge-policy.json");
+    writeFileSync(policyPath, "x".repeat(MAX_SANDBOX_POLICY_FILE_BYTES + 1), "utf-8");
+
+    expect(() => loadSandboxBaselinePolicy({ policyPaths: [policyPath] })).toThrow(
+      `Configured sandbox policy file ${policyPath} exceeds the maximum policy file size of ${MAX_SANDBOX_POLICY_FILE_BYTES} bytes (${MAX_SANDBOX_POLICY_FILE_BYTES / (1024 * 1024)} MiB). Reduce the file to 1 MiB or less or remove it from mxcPolicyPaths.`,
+    );
   });
 });
