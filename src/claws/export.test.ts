@@ -166,7 +166,7 @@ async function installedFixture(
     context: { workspace: join(root, "workspace-worker") },
   });
   let config: OpenClawConfig = {};
-  await applyClawAddPlan(plan, {
+  const added = await applyClawAddPlan(plan, {
     consentPlanIntegrity: plan.planIntegrity,
     env: { OPENCLAW_STATE_DIR: join(root, "state") },
     commitConfig: async (transform) => {
@@ -183,6 +183,11 @@ async function installedFixture(
       }),
     cronGateway: { add: async () => ({ id: "scheduler-daily" }) },
   });
+  if (added.status !== "complete") {
+    throw new Error(
+      `installedFixture applyClawAddPlan incomplete (${added.error?.code ?? "unknown_error"}): ${added.error?.message ?? "missing error details"}`,
+    );
+  }
   if (options.withPackage) {
     persistClawPackageRef(
       plan,
