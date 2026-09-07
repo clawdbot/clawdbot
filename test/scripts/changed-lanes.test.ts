@@ -2117,11 +2117,13 @@ describe("scripts/changed-lanes", () => {
       excludesTests: true,
     })),
     {
+      broad: false,
       name: "routes gitignore changes to tooling instead of all lanes",
       paths: [".gitignore"],
       excludesTests: true,
     },
     {
+      broad: false,
       name: "routes root hygiene config changes to tooling instead of all lanes",
       paths: [
         ".dockerignore",
@@ -2145,11 +2147,13 @@ describe("scripts/changed-lanes", () => {
       excludesTests: true,
     },
     {
+      broad: false,
       name: "routes VS Code workspace settings to tooling instead of all lanes",
       paths: [".vscode/settings.json", ".vscode/extensions.json"],
       excludesTests: true,
     },
     {
+      broad: false,
       name: "routes legacy root sandbox Dockerfile moves to tooling instead of all lanes",
       paths: [
         "Dockerfile.sandbox",
@@ -2162,6 +2166,7 @@ describe("scripts/changed-lanes", () => {
       excludesTests: true,
     },
     {
+      broad: false,
       name: "routes legacy root asset deletions as tooling during root cleanup",
       paths: ["assets/avatar-placeholder.svg", "assets/chrome-extension/icons/icon128.png"],
       excludesTests: false,
