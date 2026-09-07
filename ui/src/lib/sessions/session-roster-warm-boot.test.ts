@@ -247,7 +247,9 @@ describe("session capability warm roster", () => {
       await expect(
         Promise.race([
           settled.then(() => "released"),
-          new Promise<string>((resolve) => setTimeout(() => resolve("held"), 200)),
+          new Promise<string>((resolve) => {
+            setTimeout(() => resolve("held"), 200);
+          }),
         ]),
       ).resolves.toBe("released");
       cached.resolve(roster());
