@@ -54,6 +54,7 @@ export type ResolvedSessionMaintenanceConfig = {
   modelRunPruneAfterMs: number;
   preserveRecentMs?: number | null;
   resetArchiveRetentionMs: number | null;
+  deletedArchiveRetentionMs?: number | null;
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
 };
@@ -96,14 +97,11 @@ function resolveArchiveDashboardAfterMs(maintenance?: SessionMaintenanceConfig):
   }
 }
 
-function resolveResetArchiveRetentionMs(
-  maintenance: SessionMaintenanceConfig | undefined,
-): number | null {
+function resolveArchiveRetentionMs(raw: string | number | false | undefined): number | null {
   // null = keep extracted transcripts indefinitely (the disk budget still removes
   // old archive artifacts under pressure). An explicit duration opts back into
   // wall-clock deletion; parse failures stay on the keep side because losing
   // history is the worse failure mode.
-  const raw = maintenance?.resetArchiveRetention;
   if (raw === false) {
     return null;
   }
@@ -116,6 +114,20 @@ function resolveResetArchiveRetentionMs(
   } catch {
     return null;
   }
+}
+
+function resolveResetArchiveRetentionMs(
+  maintenance: SessionMaintenanceConfig | undefined,
+): number | null {
+  return resolveArchiveRetentionMs(maintenance?.resetArchiveRetention);
+}
+
+function resolveDeletedArchiveRetentionMs(
+  maintenance: SessionMaintenanceConfig | undefined,
+): number | null {
+  return resolveArchiveRetentionMs(
+    maintenance?.deletedArchiveRetention ?? maintenance?.resetArchiveRetention,
+  );
 }
 
 function resolvePreserveRecentMs(maintenance?: SessionMaintenanceConfig): number | null {
@@ -197,6 +209,7 @@ export function resolveMaintenanceConfigFromInput(
     modelRunPruneAfterMs: DEFAULT_MODEL_RUN_PRUNE_AFTER_MS,
     preserveRecentMs: resolvePreserveRecentMs(maintenance),
     resetArchiveRetentionMs: resolveResetArchiveRetentionMs(maintenance),
+    deletedArchiveRetentionMs: resolveDeletedArchiveRetentionMs(maintenance),
     maxDiskBytes,
     highWaterBytes: resolveHighWaterBytes(maintenance, maxDiskBytes),
   };

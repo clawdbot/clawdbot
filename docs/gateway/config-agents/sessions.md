@@ -42,6 +42,7 @@ title: "Configuration — agent sessions"
       maxEntries: 5000,
       preserveRecent: "7d", // opt-in protection; disabled when omitted or false
       resetArchiveRetention: "30d", // duration or false
+      deletedArchiveRetention: "30d", // duration or false; defaults to resetArchiveRetention
       maxDiskBytes: "500mb", // physical disk budget; default "10gb"
       highWaterBytes: "400mb", // optional cleanup target
     },
@@ -90,7 +91,8 @@ title: "Configuration — agent sessions"
   - `preserveRecent`: optional inactivity window that protects recently active interactive sessions and all of their SQLite history generations from automatic age, count, and disk-budget history eviction (for example `"7d"`). Unset or `false` disables this protection. Synthetic model-run, cron, hook, heartbeat, ACP, and sub-agent sessions remain eligible for bounded cleanup. Protection can temporarily keep the store above configured entry or disk targets and does not archive sessions.
   - Short-lived gateway model-run probe sessions use fixed `24h` retention, but cleanup is pressure-gated: it only removes stale strict model-run probe rows when session-entry maintenance/cap pressure is reached. Only strict explicit probe keys matching `agent:*:explicit:model-run-<uuid>` are eligible; normal direct, group, thread, cron, hook, heartbeat, ACP, and sub-agent sessions do not inherit this 24h retention. When model-run cleanup runs, it runs before the broader `pruneAfter` stale-entry cleanup and `maxEntries` cap.
   - Legacy `rotateBytes` is rejected by the current schema; `openclaw doctor --fix` removes it from older configs.
-  - `resetArchiveRetention`: age-based retention for reset/deleted transcript archives. By default, archives remain until disk-budget eviction; set a duration to opt into wall-clock deletion, or `false` to disable it explicitly.
+  - `resetArchiveRetention`: age-based retention for reset transcript archives. By default, reset archives remain until disk-budget eviction; set a duration to opt into wall-clock deletion, or `false` to disable it explicitly.
+  - `deletedArchiveRetention`: age-based retention for deleted transcript archives. When omitted, it inherits `resetArchiveRetention` for backwards compatibility; set a duration or `false` independently when deleted-session history needs a different policy.
   - `maxDiskBytes`: per-agent physical disk budget (default `10gb`), counting the SQLite main file, its `-wal` file, and counted files in the agent sessions directory. In `warn` mode it logs warnings. In `enforce` mode it first reclaims checkpointable database space, then removes old reset/delete artifacts, unreferenced historical generations, and finally the oldest sessions explicitly marked as archived by the active-session cap. Manual, legacy, age-retention, stale-dashboard, and recovery archives remain protected. Protected history and database pages that cannot yet be reclaimed can keep usage above the cleanup target; this is not a guaranteed physical ceiling. Set `false`, `0`, or `"0"` to disable the budget entirely.
   - `highWaterBytes`: optional target after budget cleanup. Defaults to `80%` of `maxDiskBytes`. A value that resolves to zero falls back to the default; negative values are invalid. Disable the budget with `maxDiskBytes`, not with a zero high-water mark.
 - **`threadBindings`**: global defaults for thread-bound session features.

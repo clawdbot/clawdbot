@@ -350,6 +350,44 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     });
   });
 
+  it("passes independent deleted and reset archive retention rules", async () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["stale", { sessionId: "stale-session", updatedAt: now - 30 * DAY_MS }],
+      ["fresh", { sessionId: "fresh-session", updatedAt: now }],
+    ]);
+    const cleanupArchivedSessionTranscripts = vi.fn(async () => {});
+
+    await applyFileBackedSessionStoreMaintenance({
+      storePath: "/tmp/openclaw-sessions/sessions.json",
+      store,
+      maintenanceConfig: {
+        mode: "enforce",
+        pruneAfterMs: 7 * DAY_MS,
+        maxEntries: 500,
+        modelRunPruneAfterMs: DAY_MS,
+        resetArchiveRetentionMs: 14 * DAY_MS,
+        deletedArchiveRetentionMs: 3 * DAY_MS,
+        maxDiskBytes: null,
+        highWaterBytes: null,
+      },
+      log: { warn: () => {}, info: () => {} },
+      artifacts: {
+        archiveRemovedSessionTranscripts: async () => new Set(),
+        removeRemovedSessionTrajectoryArtifacts: async () => {},
+        cleanupArchivedSessionTranscripts,
+      },
+    });
+
+    expect(cleanupArchivedSessionTranscripts).toHaveBeenCalledWith({
+      directories: ["/tmp/openclaw-sessions"],
+      rules: [
+        { reason: "deleted", olderThanMs: 3 * DAY_MS },
+        { reason: "reset", olderThanMs: 14 * DAY_MS },
+      ],
+    });
+  });
+
   it.each([
     { modelRunPruneAfterMs: DAY_MS, modelRunPruned: 1, capped: 0, probePresent: false },
     { modelRunPruneAfterMs: 0, modelRunPruned: 0, capped: 1, probePresent: true },
@@ -966,8 +1004,19 @@ describe("resolveMaintenanceConfigFromInput", () => {
     });
 
     expect(maintenance.resetArchiveRetentionMs).toBe(7 * DAY_MS);
+    expect(maintenance.deletedArchiveRetentionMs).toBe(7 * DAY_MS);
     expect(maintenance.maxDiskBytes).toBeNull();
     expect(maintenance.highWaterBytes).toBeNull();
+  });
+
+  it("allows deleted archive retention to diverge from reset history", () => {
+    const maintenance = resolveMaintenanceConfigFromInput({
+      resetArchiveRetention: false,
+      deletedArchiveRetention: "30d",
+    });
+
+    expect(maintenance.resetArchiveRetentionMs).toBeNull();
+    expect(maintenance.deletedArchiveRetentionMs).toBe(30 * DAY_MS);
   });
 
   it("disables the disk budget when an explicit maxDiskBytes fails to parse", () => {

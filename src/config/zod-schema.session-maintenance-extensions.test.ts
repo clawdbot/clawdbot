@@ -8,6 +8,7 @@ describe("SessionSchema maintenance extensions", () => {
       maintenance: {
         preserveRecent: "7d",
         resetArchiveRetention: "14d",
+        deletedArchiveRetention: "30d",
         maxDiskBytes: "500mb",
         highWaterBytes: "350mb",
       },
@@ -53,6 +54,12 @@ describe("SessionSchema maintenance extensions", () => {
       },
     });
     expect(result.success).toBe(true);
+  });
+
+  it("accepts disabling deleted archive cleanup", () => {
+    expect(
+      SessionSchema.safeParse({ maintenance: { deletedArchiveRetention: false } }).success,
+    ).toBe(true);
   });
 
   it("accepts disabling the session disk budget", () => {
@@ -102,6 +109,12 @@ describe("SessionSchema maintenance extensions", () => {
     );
     expect(
       SessionSchema.safeParse({ maintenance: { resetArchiveRetention: "500ms" } }).success,
+    ).toBe(true);
+  });
+
+  it("accepts positive deletedArchiveRetention values", () => {
+    expect(
+      SessionSchema.safeParse({ maintenance: { deletedArchiveRetention: "30d" } }).success,
     ).toBe(true);
   });
 
