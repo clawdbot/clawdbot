@@ -15,8 +15,10 @@ import {
   flushBrowserResponses,
   stubScreenshotMedia,
   TestBrowserPanelHost,
+  type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
 import { BrowserPanelController } from "./browser-panel-controller.ts";
+import { screencastFrame, TestScreencastSocket } from "./browser-screencast-test-support.ts";
 import "./browser-panel.ts";
 
 const nativeTab = (id: string, url = "https://example.test/page"): NativeBrowserTab => ({
@@ -78,34 +80,45 @@ let hit: Element | null;
 let frames: Map<number, FrameRequestCallback>;
 let nextFrame: number;
 
-function controllerFixture() {
+function controllerFixture(screencast = false) {
   let remoteOpen = true;
-  const { client, request } = createBrowserClient(async (envelope) => {
-    if (envelope.method === "DELETE" && envelope.path === "/tabs/remote") {
-      remoteOpen = false;
+  const { client, request } = createBrowserClient(
+    async (envelope) => {
+      if (envelope.method === "DELETE" && envelope.path === "/tabs/remote") {
+        remoteOpen = false;
+        return { ok: true };
+      }
+      if (envelope.path === "/tabs" && !remoteOpen) {
+        return { running: true, tabs: [] };
+      }
+      if (envelope.path === "/tabs") {
+        return {
+          running: true,
+          tabs: [
+            { tabId: "remote", targetId: "remote", title: "Remote", url: "https://remote.test/" },
+          ],
+        };
+      }
+      if (envelope.path === "/screencast") {
+        return {
+          token: "token",
+          wsPath: "/browser/screencast?token=token",
+          targetId: "remote",
+          url: "https://remote.test/",
+        };
+      }
+      if (envelope.path === "/screenshot") {
+        return { path: "/fresh.png", targetId: "remote", url: "https://remote.test/" };
+      }
+      if (envelope.path === "/act") {
+        return {
+          result: { cssWidth: 100, cssHeight: 100, title: "Remote", url: "https://remote.test/" },
+        };
+      }
       return { ok: true };
-    }
-    if (envelope.path === "/tabs" && !remoteOpen) {
-      return { running: true, tabs: [] };
-    }
-    if (envelope.path === "/tabs") {
-      return {
-        running: true,
-        tabs: [
-          { tabId: "remote", targetId: "remote", title: "Remote", url: "https://remote.test/" },
-        ],
-      };
-    }
-    if (envelope.path === "/screenshot") {
-      return { path: "/fresh.png", targetId: "remote", url: "https://remote.test/" };
-    }
-    if (envelope.path === "/act") {
-      return {
-        result: { cssWidth: 100, cssHeight: 100, title: "Remote", url: "https://remote.test/" },
-      };
-    }
-    return { ok: true };
-  });
+    },
+    { screencast },
+  );
   const host = new TestBrowserPanelHost(client);
   document.body.append(host.renderRoot);
   hit = host.renderRoot.querySelector(".bp-stage");
@@ -151,6 +164,89 @@ afterEach(() => {
 });
 
 describe("native Browser panel ownership", () => {
+  it("keeps native tabs off the screencast and streams only the selected remote tab", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const sockets: TestScreencastSocket[] = [];
+    vi.stubGlobal(
+      "WebSocket",
+      class extends TestScreencastSocket {
+        constructor(url: string) {
+          super(url);
+          sockets.push(this);
+        }
+      },
+    );
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:remote-frame");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const native = fakeNativeBrowser([nativeTab("mac-one")]);
+    const { controller, host, request } = controllerFixture(true);
+    const mintRequests = () =>
+      request.mock.calls.filter(([, params]) => {
+        const envelope = params as BrowserRequestEnvelope;
+        return envelope.method === "POST" && envelope.path === "/screencast";
+      });
+
+    await controller.refreshAll();
+    await controller.refreshView("mac-one");
+    controller.handleViewportResize(200, 200);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(mintRequests()).toHaveLength(0);
+    expect(sockets).toHaveLength(0);
+
+    const selecting = controller.selectTab("remote");
+    await flushBrowserResponses();
+    await flushBrowserResponses();
+    await flushBrowserResponses();
+    expect(mintRequests()).toHaveLength(1);
+    expect(sockets).toHaveLength(1);
+    const socket = sockets[0]!;
+    socket.receive(
+      JSON.stringify({
+        type: "ready",
+        targetId: "remote",
+        url: "https://remote.test/",
+        title: "Remote",
+      }),
+    );
+    socket.receive(screencastFrame("https://remote.test/"));
+    await selecting;
+    expect(controller.view?.dataUrl).toBe("blob:remote-frame");
+
+    await controller.selectTab("mac-one");
+    expect(socket.close).toHaveBeenCalledOnce();
+    flushFrames();
+    expect(native.messages().at(-1)).toMatchObject({
+      type: "present",
+      tabId: "mac-one",
+      visible: true,
+    });
+    await controller.refreshAll();
+    await controller.refreshView("mac-one");
+    controller.handleViewportResize(300, 300);
+    await vi.advanceTimersByTimeAsync(1000);
+    controller.setMode("annotate");
+    await flushBrowserResponses();
+    expect(native.messages()).toContainEqual({ type: "snapshot", tabId: "mac-one" });
+    const capture = controller.view;
+    expect(capture?.dataUrl).toMatch(/^data:image\/png/);
+    socket.receive(screencastFrame("https://remote.test/late"));
+    await flushBrowserResponses();
+    expect(controller.view).toBe(capture);
+    expect(mintRequests()).toHaveLength(1);
+    expect(sockets).toHaveLength(1);
+
+    controller.exitCaptureModes();
+    Object.defineProperty(host, "remoteAvailable", { value: false });
+    request.mockClear();
+    await controller.refreshAll();
+    await controller.refreshView("mac-one");
+    controller.setMode("inspect");
+    await flushBrowserResponses();
+    expect(request).not.toHaveBeenCalled();
+    expect(controller.errorText).toBeNull();
+    expect(sockets).toHaveLength(1);
+  });
+
   it.each([true, false])(
     "selects a reused tab from the open reply when state arrives before the reply: %s",
     async (stateBeforeReply) => {

@@ -30,8 +30,8 @@ import {
   type BrowserPanelSnapshotOutcome,
 } from "./browser-panel-operation-ownership.ts";
 import { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
-import { BrowserPanelStream } from "./browser-panel-stream.ts";
 import { BrowserPanelSnapshotController } from "./browser-panel-snapshot-controller.ts";
+import { BrowserPanelStream } from "./browser-panel-stream.ts";
 import type { BrowserPanelView } from "./browser-panel-surface.ts";
 import { BrowserPanelViewportController } from "./browser-panel-viewport-controller.ts";
 import { browserRouteKey, type BrowserRoute } from "./browser-target.ts";
@@ -65,7 +65,7 @@ export class BrowserPanelController implements ReactiveController {
   readonly operations: BrowserPanelOperationOwnership;
   readonly pendingInput = new BrowserPanelPendingInput();
   private readonly input: BrowserPanelInputController;
-  private readonly stream: BrowserPanelStream;
+  readonly stream: BrowserPanelStream;
   private activeClient: GatewayBrowserClient | null = null;
   urlDraftEditing = false;
   private readonly viewport = new BrowserPanelViewportController(this);
@@ -289,6 +289,14 @@ export class BrowserPanelController implements ReactiveController {
       }
       return false;
     }
+  }
+
+  get observedViewportSize(): { width: number; height: number } | null {
+    return this.viewport.observedViewportSize;
+  }
+
+  scheduleViewportSync(): void {
+    this.viewport.schedule();
   }
 
   handleViewportResize(width: number, height: number): void {

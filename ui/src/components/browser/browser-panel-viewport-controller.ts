@@ -6,6 +6,7 @@ import {
 } from "./browser-client.ts";
 import type { BrowserPanelOperationOwnership } from "./browser-panel-operation-ownership.ts";
 import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
+import type { BrowserPanelStream } from "./browser-panel-stream.ts";
 import type { BrowserPanelView } from "./browser-panel-surface.ts";
 
 interface BrowserPanelViewportHost {
@@ -14,6 +15,7 @@ interface BrowserPanelViewportHost {
   readonly activeTargetId: string | null;
   readonly view: BrowserPanelView | null;
   readonly operations: Pick<BrowserPanelOperationOwnership, "captureClient">;
+  readonly stream: Pick<BrowserPanelStream, "resize">;
   readonly pendingInput: Pick<BrowserPanelPendingInput, "scheduleViewportResize">;
   runAction(action: (client: BrowserRequestClient) => Promise<void>): Promise<boolean>;
 }
@@ -24,7 +26,7 @@ const MAX_VIEWPORT_DIMENSION = 8192;
 
 /** Reconciles the visible screenshot stage with its remote page's CSS viewport. */
 export class BrowserPanelViewportController {
-  private observedViewportSize: { width: number; height: number } | null = null;
+  observedViewportSize: { width: number; height: number } | null = null;
   private lastRequestedViewport: { targetId: string; width: number; height: number } | null = null;
 
   constructor(private readonly controller: BrowserPanelViewportHost) {}
@@ -50,7 +52,7 @@ export class BrowserPanelViewportController {
     this.schedule();
   }
 
-  private schedule(): void {
+  schedule(): void {
     if (this.controller.native.activeTab) {
       return;
     }
@@ -74,6 +76,7 @@ export class BrowserPanelViewportController {
     if (!targetId || !observed) {
       return;
     }
+    this.controller.stream.resize();
     const width = Math.min(
       MAX_VIEWPORT_DIMENSION,
       Math.max(MIN_VIEWPORT_DIMENSION, Math.round(observed.width)),

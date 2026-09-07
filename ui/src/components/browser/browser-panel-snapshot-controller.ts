@@ -1,16 +1,12 @@
 import type { NativeBrowserTab } from "../../app/native-browser-bridge.ts";
+import { isBrowserNavigationBlockedError, type BrowserPanelTab } from "./browser-client.ts";
 import {
-  captureBrowserScreenshot,
-  fetchBrowserScreenshotDataUrl,
-  isBrowserNavigationBlockedError,
-  type BrowserPanelTab,
-} from "./browser-client.ts";
-import {
-  readBrowserPanelOwnedMetrics,
+  captureBrowserPanelOwnedView,
   type BrowserPanelControllerHost,
   type BrowserPanelOperationOwnership,
 } from "./browser-panel-operation-ownership.ts";
-import { loadBrowserPanelImage, type BrowserPanelView } from "./browser-panel-surface.ts";
+import type { BrowserPanelStream } from "./browser-panel-stream.ts";
+import type { BrowserPanelView } from "./browser-panel-surface.ts";
 import type { BrowserPanelViewportController } from "./browser-panel-viewport-controller.ts";
 
 type BrowserPanelSnapshotState = {
@@ -23,6 +19,10 @@ type BrowserPanelSnapshotState = {
 interface BrowserPanelSnapshotHost extends BrowserPanelSnapshotState {
   readonly host: Pick<BrowserPanelControllerHost, "resourceBasePath" | "authToken">;
   readonly native: { readonly activeTab: NativeBrowserTab | undefined };
+  readonly stream: Pick<
+    BrowserPanelStream,
+    "ownsView" | "ensure" | "frameRevision" | "releaseReplacedView"
+  >;
   readonly activeTargetId: string | null;
   readonly operations: Pick<
     BrowserPanelOperationOwnership,
@@ -60,7 +60,7 @@ export class BrowserPanelSnapshotController {
     ) {
       return;
     }
-    if (this.controller.clearUnavailableView()) {
+    if (this.controller.clearUnavailableView() || this.controller.stream.ownsView(targetId)) {
       return;
     }
     const current = this.controller.operations.beginCapture(
@@ -73,57 +73,46 @@ export class BrowserPanelSnapshotController {
       return;
     }
     this.controller.setState("loading", true);
+    const stream = this.controller.stream;
+    let captureRevision = stream.frameRevision;
+    const captureCurrent = () =>
+      current() && captureRevision === stream.frameRevision && !stream.ownsView(targetId);
     try {
-      const shot = await captureBrowserScreenshot(client, targetId);
-      if (!current()) {
+      if (
+        (await stream.ensure(targetId, client, epoch)) ||
+        !current() ||
+        stream.ownsView(targetId)
+      ) {
         return;
       }
-      const dataUrl = await fetchBrowserScreenshotDataUrl({
-        resourceBasePath: this.controller.host.resourceBasePath,
-        authToken: this.controller.host.authToken,
-        path: shot.path,
-      });
-      if (!current()) {
-        return;
-      }
-      const image = await loadBrowserPanelImage(dataUrl);
-      const observedMetrics = await readBrowserPanelOwnedMetrics(
+      captureRevision = stream.frameRevision;
+      const view = await captureBrowserPanelOwnedView({
         client,
         targetId,
-        this.controller.evaluateUnavailable,
-        current,
-        () => this.controller.setState("evaluateUnavailable", true),
-      );
-      if (!current()) {
+        route: this.controller.operations.route,
+        host: this.controller.host,
+        isEvaluateUnavailable: () => this.controller.evaluateUnavailable,
+        current: captureCurrent,
+        markEvaluateUnavailable: () => this.controller.setState("evaluateUnavailable", true),
+      });
+      if (!view || !captureCurrent()) {
         return;
       }
-      // A navigation between screenshot and evaluation changes the coordinate document.
-      const metrics =
-        shot.url && observedMetrics?.url && shot.url !== observedMetrics.url
-          ? null
-          : observedMetrics;
+      const { metrics } = view;
       // Tab snapshots can lag history and in-page navigation. Keep the stable
       // identity aligned with the document this capture owns.
       this.controller.setState(
         "tabs",
-        this.controller.operations.capturedTabs(this.controller.tabs, targetId, metrics, shot.url),
+        this.controller.operations.capturedTabs(this.controller.tabs, targetId, metrics, view.url),
       );
-      this.controller.setState("view", {
-        targetId,
-        dataUrl,
-        image,
-        url: shot.url,
-        metrics,
-        ...(this.controller.operations.route
-          ? { browserTab: { ...this.controller.operations.route, targetId } }
-          : {}),
-      });
+      this.controller.setState("view", view);
+      stream.releaseReplacedView();
       this.viewport.captured(metrics);
-      if (shot.url) {
-        this.controller.syncUrlDraft(shot.url);
+      if (view.url) {
+        this.controller.syncUrlDraft(view.url);
       }
     } catch (error) {
-      if (current()) {
+      if (captureCurrent()) {
         // A capture denial describes the selected tab; a denied navigation
         // describes the destination and must keep the valid source screenshot.
         if (isBrowserNavigationBlockedError(error)) {

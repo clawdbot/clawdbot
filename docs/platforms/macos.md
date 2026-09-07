@@ -175,7 +175,7 @@ page you visited, such as **Usage**, for that Gateway origin. Explicit session
 links and navigation requests take precedence over the remembered page, and
 first-run model setup still runs when needed.
 
-In the macOS app's embedded dashboard, clicking an external web link opens it as a **Mac tab** in the **Browser** tab of the chat side panel. On non-chat routes, it opens in the shell-level Browser dock. WebKit renders Mac tabs natively, alongside **Agent browser tabs** backed by the Gateway-controlled browser.
+In the macOS app's embedded dashboard, clicking an external web link opens it as a **Mac tab** in the **Browser** tab of the chat side panel. On non-chat routes, it opens in the shell-level Browser dock. WebKit renders Mac tabs natively, alongside **Agent browser tabs** backed by the Gateway-controlled browser. Older Control UI bundles that still send the legacy `inline` link request open the default browser; current bundles open Mac tabs through the native Browser bridge.
 
 Use the tab strip to select or close a page, the URL bar to navigate, and the back, forward, reload, stop, and **Open in Default Browser** controls to manage the active Mac tab. Opening the same link again reuses its existing tab, including a retained original URL after an initial redirect. Mac tabs belong to each window and survive chat session switches. **Annotate** and **Inspect** capture a one-shot snapshot of a Mac tab for sharing page context with the agent. Navigating that tab to a different URL discards the capture and restores its live view. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the Browser panel's controls navigate the active page.
 
