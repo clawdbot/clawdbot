@@ -77,8 +77,12 @@ on both a time check and a context-size check:
 5. Record each changed result as a session projection and reset the pruning TTL clock. Follow-up requests reuse the same projected bytes, including tool-loop continuations and later turns.
 
 The TTL gates new pruning rounds, not replay of previous projections. Projections
-survive Gateway restarts through the transcript marker. Compaction drops
-projections for results no longer in the active history; `/new` and session reset
+survive Gateway restarts and eviction from the in-memory session cache through
+the transcript marker. Ordinary tool-result trims and the already-sent boundary
+are also saved before each model request, even with TTL pruning off, so old
+results retain their projected bytes through tool loops and restarts. Original
+text and non-text content stay in the transcript. Compaction drops projections
+for results no longer in the active history; `/new` and session reset
 start without the old session's projections. Cache-TTL marker timestamps still
 support the existing cache and heartbeat bookkeeping.
 

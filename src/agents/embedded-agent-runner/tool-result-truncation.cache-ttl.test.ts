@@ -119,6 +119,84 @@ function toolText(messages: AgentMessage[], id: string): string {
 }
 
 describe("cache-TTL tool-result projection", () => {
+  it.each([
+    { reset: "restart", maxChars: 4_000 },
+    { reset: "restart", maxChars: 8_000 },
+    { reset: "eviction", maxChars: 4_000 },
+    { reset: "eviction", maxChars: 8_000 },
+  ])(
+    "preserves ordinary projected bytes after $reset with a $maxChars character cap",
+    ({ reset, maxChars }) => {
+      const sessionId = `ordinary-${reset}`;
+      const sessionIds = [sessionId];
+      try {
+        const state = getEmbeddedSessionPromptState(sessionId).toolResults;
+        const history: AgentMessage[] = [user("start")];
+        let sent: AgentMessage[] = [];
+        for (let batch = 0; batch < 3; batch++) {
+          history.push(
+            assistant(),
+            tool({ id: `batch-${batch}`, text: `${batch}`.repeat(6_000), image: true }),
+          );
+          sent = truncateOversizedToolResultsInMessages(
+            history,
+            128_000,
+            maxChars,
+            8_000,
+            state,
+          ).messages;
+        }
+        expect(sent.filter((message) => message.role === "toolResult")).toHaveLength(3);
+        expect(toolText(sent, "batch-0").includes("truncated")).toBe(maxChars === 4_000);
+        expect(
+          [0, 1, 2].reduce((sum, batch) => sum + toolText(sent, `batch-${batch}`).length, 0),
+        ).toBeGreaterThan(8_000);
+        const markerData = JSON.stringify(serializeCacheTtlToolResultProjections(state));
+        const entries = [
+          {
+            type: "custom",
+            customType: "openclaw.cache-ttl",
+            data: JSON.parse(markerData),
+          },
+        ];
+        if (reset === "restart") {
+          clearEmbeddedSessionPromptStates([sessionId]);
+        } else {
+          for (let index = 0; index < 65; index++) {
+            const otherId = `${sessionId}-${index}`;
+            sessionIds.push(otherId);
+            getEmbeddedSessionPromptState(otherId);
+          }
+        }
+        const restored = getEmbeddedSessionPromptState(sessionId).toolResults;
+        expect(restored).not.toBe(state);
+        restoreCacheTtlToolResultProjections(restored, entries);
+        expect(
+          JSON.stringify(
+            truncateOversizedToolResultsInMessages(history, 128_000, maxChars, 8_000, restored)
+              .messages,
+          ) === JSON.stringify(sent),
+        ).toBe(true);
+        const compacted = [user("summary"), ...history.slice(-2)];
+        reconcileToolResultPromptProjectionState(compacted, restored);
+        expect(restored.frozen.size).toBe(1);
+        expect(restored.replacements.size).toBe(maxChars === 4_000 ? 1 : 0);
+        const compactedSnapshot = serializeCacheTtlToolResultProjections(restored);
+        expect(JSON.stringify(compactedSnapshot)).not.toContain("batch-0");
+        const reopened = createToolResultPromptProjectionState();
+        restoreCacheTtlToolResultProjections(reopened, [
+          { ...entries[0], data: compactedSnapshot },
+        ]);
+        expect(
+          truncateOversizedToolResultsInMessages(compacted, 128_000, maxChars, 8_000, reopened)
+            .messages,
+        ).toEqual([user("summary"), ...sent.slice(-2)]);
+      } finally {
+        clearEmbeddedSessionPromptStates(sessionIds);
+      }
+    },
+  );
+
   it.each(["soft", "hard"] as const)(
     "replays %s pruning after TTL refresh and restart, until compaction/reset",
     (mode) => {

@@ -900,6 +900,15 @@ const cacheTtlProjectionSnapshotSchema = z.object({
     ]),
   ),
   ambiguousToolResultBaseKeys: z.array(z.string()).optional(),
+  frozenToolResults: z
+    .array(
+      z.object({
+        key: z.string(),
+        sourceHash: z.string(),
+        texts: z.array(z.string()).optional(),
+      }),
+    )
+    .optional(),
 });
 
 /** Reads pruned keys from the active transcript branch, never from a sibling branch. */
@@ -921,6 +930,19 @@ export function restoreCacheTtlToolResultProjections(
     }
     for (const key of parsed.data.ambiguousToolResultBaseKeys ?? []) {
       projectionState.ambiguousBaseKeys.add(key);
+    }
+    for (const { key, sourceHash, texts } of parsed.data.frozenToolResults ?? []) {
+      // A live attempt can be ahead of its last marker; never roll it back.
+      if (projectionState.sourceHashByKey.has(key)) {
+        continue;
+      }
+      projectionState.sourceHashByKey.set(key, sourceHash);
+      projectionState.frozen.add(key);
+      if (texts) {
+        projectionState.replacements.set(key, {
+          content: texts.map((text) => ({ type: "text", text })),
+        });
+      }
     }
     for (const { key, ...mark } of parsed.data.prunedToolResults) {
       if (!projectionState.replacements.get(key)?.cacheTtl) {

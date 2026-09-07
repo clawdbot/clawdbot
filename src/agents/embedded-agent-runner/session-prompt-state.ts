@@ -1,4 +1,4 @@
-/** Process-local prompt projection state owned by an embedded session lifecycle. */
+/** Transcript-backed prompt projection state cached by an embedded session lifecycle. */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -81,7 +81,7 @@ export function recordToolResultPromptProjection(
   });
 }
 
-/** Marker payload stays key-sized: soft trims are recomputed from canonical history, hard clears keep only their placeholder. */
+/** TTL trims are re-derived; ordinary trims retain only text, never images or tool metadata. */
 export function serializeCacheTtlToolResultProjections(state: ToolResultPromptProjectionState) {
   const marks = new Map(state.restoredCacheTtl);
   for (const [key, projection] of state.replacements) {
@@ -97,6 +97,25 @@ export function serializeCacheTtlToolResultProjections(state: ToolResultPromptPr
   return {
     prunedToolResults: [...marks].map(([key, mark]) => Object.assign({ key }, mark)),
     ambiguousToolResultBaseKeys: [...state.ambiguousBaseKeys],
+    frozenToolResults: [...state.sourceHashByKey].flatMap(([key, sourceHash]) => {
+      if (!state.frozen.has(key)) {
+        return [];
+      }
+      const projection = state.replacements.get(key);
+      return [
+        {
+          key,
+          sourceHash,
+          ...(!projection?.cacheTtl && projection
+            ? {
+                texts: projection.content.flatMap((block) =>
+                  block.type === "text" ? [block.text] : [],
+                ),
+              }
+            : {}),
+        },
+      ];
+    }),
   };
 }
 
