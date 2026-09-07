@@ -623,10 +623,14 @@ function convertOpenClawToolToSdkTool(
     const sanitizedResult = sanitizeToolResult(result);
     const resultIsError = isToolResultError(sanitizedResult);
     // The SDK only marks fulfilled tool results as failures when isError is forwarded.
-    const sdkResult = convertMcpCallToolResult({
-      content: result.content,
-      isError: resultIsError,
-    });
+    // Observers already get sanitizeToolResult (which strips image bytes for storage).
+    // Model-facing SDK content must redact text without dropping image/binary payloads.
+    const sdkResult = sanitizeModelVisibleSdkToolResult(
+      convertMcpCallToolResult({
+        content: sanitizeModelVisibleToolContent(result.content),
+        isError: resultIsError,
+      }),
+    );
     const resultError = resultIsError ? extractToolErrorMessage(sanitizedResult) : undefined;
     input.attemptParams.observeToolTerminal?.({
       toolCallId: invocation.toolCallId,
@@ -765,10 +769,57 @@ function createFailureResult(message: string, error: unknown): ToolResultObject 
   // (see `node_modules/@github/copilot-sdk/dist/types.d.ts`). Returning an
   // Error object would produce a non-serializable JSON-RPC payload, so we
   // surface the message string instead.
+  // Observers already receive sanitizeToolResult payloads; keep model-visible
+  // failure fields on the same redact policy.
   return {
-    error: toCopilotToolError(error).message,
+    error: sanitizeToolResult(toCopilotToolError(error).message),
     resultType: "failure",
-    textResultForLlm: message,
+    textResultForLlm: sanitizeToolResult(message),
+  };
+}
+
+/**
+ * Redact model-visible text content for Copilot SDK conversion without running
+ * the storage-oriented sanitizeToolResult object path that strips image bytes.
+ */
+function sanitizeModelVisibleToolContent(
+  content: unknown,
+): Parameters<typeof convertMcpCallToolResult>[0]["content"] {
+  if (!Array.isArray(content)) {
+    // SAFETY: convertMcpCallToolResult accepts an empty content list for non-array payloads.
+    return [] as Parameters<typeof convertMcpCallToolResult>[0]["content"];
+  }
+  return content.map((item) => {
+    if (!item || typeof item !== "object") {
+      return item;
+    }
+    // SAFETY: MCP tool content items are untyped JSON; only text/resource.text are redacted.
+    const entry = item as Record<string, unknown>;
+    if (entry.type === "text" && typeof entry.text === "string") {
+      return Object.assign({}, entry, { text: sanitizeToolResult(entry.text) });
+    }
+    if (entry.type === "resource" && entry.resource && typeof entry.resource === "object") {
+      // SAFETY: resource payloads are untyped JSON; only string resource.text is redacted.
+      const resource = entry.resource as Record<string, unknown>;
+      if (typeof resource.text === "string") {
+        return Object.assign({}, entry, {
+          resource: Object.assign({}, resource, {
+            text: sanitizeToolResult(resource.text),
+          }),
+        });
+      }
+    }
+    return item;
+  }) as Parameters<typeof convertMcpCallToolResult>[0]["content"]; // SAFETY: mapped items keep convertMcpCallToolResult's content union after text-only redaction.
+}
+
+function sanitizeModelVisibleSdkToolResult(result: ToolResultObject): ToolResultObject {
+  // convertMcpCallToolResult joins text parts before the model sees them, so
+  // re-sanitize the joined stream to catch credentials split across adjacent items.
+  return {
+    ...result,
+    textResultForLlm: sanitizeToolResult(result.textResultForLlm),
+    ...(typeof result.error === "string" ? { error: sanitizeToolResult(result.error) } : {}),
   };
 }
 

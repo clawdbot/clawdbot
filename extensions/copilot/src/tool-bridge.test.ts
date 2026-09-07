@@ -42,6 +42,9 @@ type CopilotCodingToolsOptions = NonNullable<
 >;
 const testHostCapabilities = createCopilotTestHostCapabilities();
 
+// Synthetic, non-usable credential fixture for model-visible redaction coverage.
+const SYNTHETIC_BEARER_CREDENTIAL = "bearer-model-visible-credential-1234567890";
+
 function createCopilotToolBridge(input: CopilotToolBridgeTestInput) {
   const { attemptParams, ...baseInput } = input;
   const preparedInput: CopilotToolBridgeInput = {
@@ -2413,6 +2416,82 @@ describe("createCopilotToolBridge tool conversion", () => {
       resultType: "success",
       textResultForLlm: "preview",
     });
+  });
+
+  it("redacts credentials from model-visible successful tool-bridge results", async () => {
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(
+      makeTool(
+        {},
+        {
+          content: [
+            {
+              type: "text",
+              text: `Deployment finished.\nAuthorization: Bearer ${SYNTHETIC_BEARER_CREDENTIAL}`,
+            },
+            { data: "base64-data", mimeType: "image/png", type: "image" },
+          ],
+          details: null,
+        },
+      ),
+      {},
+    );
+
+    const result = (await runSdkTool(sdkTool, {})) as ToolResultObject;
+
+    expect(result.resultType).toBe("success");
+    expect(result.textResultForLlm).not.toContain(SYNTHETIC_BEARER_CREDENTIAL);
+    expect(result.textResultForLlm).toContain("Authorization: Bearer");
+    expect(result.textResultForLlm).toContain("Deployment finished.");
+    expect(result.binaryResultsForLlm).toEqual([
+      {
+        data: "base64-data",
+        mimeType: "image/png",
+        type: "image",
+      },
+    ]);
+  });
+
+  it("redacts credentials split across adjacent model-visible tool text items", async () => {
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(
+      makeTool(
+        {},
+        {
+          content: [
+            { type: "text", text: "Deployment finished.\nAuthorization: Bearer " },
+            { type: "text", text: SYNTHETIC_BEARER_CREDENTIAL },
+            { type: "text", text: "\nArtifacts remain available." },
+          ],
+          details: null,
+        },
+      ),
+      {},
+    );
+
+    const result = (await runSdkTool(sdkTool, {})) as ToolResultObject;
+
+    expect(result.resultType).toBe("success");
+    expect(result.textResultForLlm).not.toContain(SYNTHETIC_BEARER_CREDENTIAL);
+    expect(result.textResultForLlm).toContain("Authorization: Bearer");
+    expect(result.textResultForLlm).toContain("Artifacts remain available.");
+  });
+
+  it("redacts credentials from model-visible failed tool-bridge results", async () => {
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(
+      makeTool({
+        execute: vi.fn(async () => {
+          throw new Error(`Upstream failed: Authorization: Bearer ${SYNTHETIC_BEARER_CREDENTIAL}`);
+        }),
+      }),
+      {},
+    );
+
+    const result = (await runSdkTool(sdkTool, {})) as ToolResultObject;
+
+    expect(result.resultType).toBe("failure");
+    expect(result.textResultForLlm).not.toContain(SYNTHETIC_BEARER_CREDENTIAL);
+    expect(getError(result)).not.toContain(SYNTHETIC_BEARER_CREDENTIAL);
+    expect(result.textResultForLlm).toContain("Authorization: Bearer");
+    expect(result.textResultForLlm).toContain("[copilot-tool-bridge] tool 'tool-a' failed:");
   });
 
   it("returns a failure result when execute throws and preserves the error", async () => {
