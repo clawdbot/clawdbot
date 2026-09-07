@@ -147,7 +147,7 @@ function createReviewFixture() {
       sidebarLayout: state.sidebarLayout,
       presentationId: "review-intent",
       presented: true,
-      gatewaySnapshot: { ...context.gateway.snapshot, client: state.client, phase: "connected" },
+      gatewaySnapshot: { ...context.gateway.snapshot, phase: "connected" },
       setObserverVisibility: vi.fn(),
       updateSidebarLayout: state.updateSidebarLayout,
     });
