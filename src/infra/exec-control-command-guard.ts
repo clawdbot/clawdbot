@@ -394,7 +394,9 @@ function joinWordInternalLineContinuations(command: string): string {
   };
   let i = 0;
   while (i < lines.length) {
-    const line = lines[i];
+    // Index access is guarded by the loop bound; the `?? ""` only satisfies
+    // `noUncheckedIndexedAccess`.
+    const line: string = lines[i] ?? "";
     const top = pending[0];
     if (top && top.quoted) {
       // Quoted here-document: body lines are literal, so they are never
