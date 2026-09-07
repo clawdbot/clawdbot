@@ -74,6 +74,37 @@ describeNonWin("exec live OpenClaw state SQLite guard", () => {
     });
   });
 
+  it("detects ATTACH DATABASE references to the live state database", async () => {
+    await withTempDir("openclaw-exec-live-sqlite-attach-", async (root) => {
+      const stateDir = path.join(root, "state");
+      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+      await fs.mkdir(path.dirname(databasePath), { recursive: true });
+      await fs.writeFile(databasePath, "fixture");
+      const scratchPath = path.join(root, "scratch.db");
+
+      const context = { stateDir, workdir: root };
+      await expect(
+        detectUnsafeExecControlShellCommand(
+          `sqlite3 ${quote(scratchPath)} ${quote(`ATTACH DATABASE '${databasePath}' AS live; INSERT INTO live.t VALUES (1);`)}`,
+          context,
+        ),
+      ).resolves.toBe("live-state-sqlite");
+      await expect(
+        detectUnsafeExecControlShellCommand(
+          `sqlite3 :memory: ${quote(`attach '${databasePath}' as x`)}`,
+          context,
+        ),
+      ).resolves.toBe("live-state-sqlite");
+      // A copy outside the state directory stays allowed.
+      await expect(
+        detectUnsafeExecControlShellCommand(
+          `sqlite3 ${quote(scratchPath)} ${quote(`ATTACH DATABASE '${scratchPath}' AS copy;`)}`,
+          context,
+        ),
+      ).resolves.toBeNull();
+    });
+  });
+
   it("detects relative and symlink-aliased live state targets", async () => {
     await withTempDir("openclaw-exec-live-sqlite-alias-", async (root) => {
       const stateDir = path.join(root, "state");
