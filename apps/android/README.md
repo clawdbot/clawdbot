@@ -26,11 +26,19 @@ Long-press a row on the **Threads** page and choose **Color**, then select a swa
 
 ## Foldable layout
 
-Onboarding and the main app stay within the largest rectangular region clear of
-separating folds and fully occluding hinges reported by AndroidX WindowManager.
-Equal regions prefer the top, then the reading-direction start side. Opening the
-keyboard does not select a different region. Without an intersecting separator,
-the app keeps its full-window layout.
+With a full-height vertical separator reported by AndroidX WindowManager, the
+main app places its sidebar on the reading-direction start plane and the active
+page on the other plane. Both use the reported bounds, including off-center
+hinges. The sidebar remains visible after selecting a page or session.
+
+Book panes require at least 280 dp for the sidebar, 320 dp for the active page,
+and 320 dp of height. Otherwise, onboarding and the main app use the largest
+rectangular region clear of separating folds and fully occluding hinges. Equal
+regions prefer the top, then the reading-direction start side. Opening the
+keyboard does not select a different fallback region. Without an intersecting
+separator, the app keeps its full-window layout and modal sidebar.
+
+Command search and gateway trust prompts retain the single-region host.
 
 Gateway trust, QR scan-error, Replace gateway setup, and Forget gateway prompts
 also stay within one safe region. Their complete contents and actions scroll when
@@ -38,9 +46,8 @@ space is limited; opening the keyboard does not move them to another region.
 If the keyboard covers that region entirely, dismiss the keyboard to reach the
 prompt again.
 
-This is an initial hinge-safety fallback, not a complete foldable layout. The
-other region is temporarily unused. Book-mode companion panes, a tabletop
-transcript/composer split, other dialogs, sheets, and menus are not adapted yet.
+A tabletop transcript/composer split, other dialogs, sheets, and menus are not
+adapted yet.
 
 ## Wear OS companion
 
