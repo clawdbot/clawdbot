@@ -18,6 +18,22 @@ If people must not access each other's sessions, tools, credentials, or files, g
 
 An authenticated Control UI administrator with `operator.admin` can [manage any automation conversationally](/automation/cron-jobs#conversational-management) on that Gateway, including jobs created from another channel or by another person. This authority comes from the admitted administrator turn, without matching channel identities to Gateway profiles. It does not transfer the job's creator attribution or scheduled execution policy.
 
+## World-readable session links
+
+Authenticated teammate visibility and public transcript access are separate.
+Changing a session between **Shared**, **Read-only**, **Suggest**, and **Draft**
+controls signed-in collaborators; none of those settings creates a public link.
+
+The session creator or a Gateway admin can explicitly enable **Public access**.
+Anyone with the resulting bearer URL can then read existing and future conversation
+text without signing in, while tools, reasoning, files, images, widgets, hidden
+messages, and internal metadata remain excluded. Assigning a different owner does
+not transfer this authority. Disable public access to revoke every URL for that
+publication, remembering that downloaded copies cannot be recalled. See
+[Share a session publicly](/web/control-ui/sessions-and-sidebar#share-a-session-publicly)
+for the user flow and [Public session transcripts](/web/urls#public-session-transcripts)
+for the security and deployment contract.
+
 ## The three ownership layers
 
 Every session carries up to three layers of attribution:
