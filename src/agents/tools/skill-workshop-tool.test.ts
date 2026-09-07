@@ -2,9 +2,9 @@
 // applying generated skills to the workspace.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { consumeRunSkillUsage, recordRunSkillUsage } from "../../skills/runtime/run-usage.js";
-import { listSkillProposalEvents } from "../../skills/workshop/service.js";
+import * as workshopService from "../../skills/workshop/service.js";
 import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import type {
@@ -140,9 +140,9 @@ describe("skill_workshop tool", () => {
       },
     });
     expect(
-      listSkillProposalEvents({ config: {}, proposalId: details.id }).events.map(
-        (event) => event.actor,
-      ),
+      workshopService
+        .listSkillProposalEvents({ config: {}, proposalId: details.id })
+        .events.map((event) => event.actor),
     ).toEqual([
       { type: "agent", id: "main" },
       { type: "agent", id: "main" },
@@ -190,21 +190,6 @@ describe("skill_workshop tool", () => {
       disablePluginTools: true,
     });
     expect(tools.some((tool) => tool.name === "skill_workshop")).toBe(true);
-  });
-
-  it("describes the configured foreground repair outcome", () => {
-    const disabled = createSkillWorkshopTool({
-      workspaceDir: "/tmp/openclaw",
-      config: { skills: { workshop: { autonomous: { mode: "off" } } } },
-    });
-    const enabled = createSkillWorkshopTool({
-      workspaceDir: "/tmp/openclaw",
-      config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
-    });
-
-    expect(disabled.description).toContain("Foreground repair is disabled.");
-    expect(enabled.description).toContain("stays pending for review");
-    expect(enabled.description).not.toContain("Experience capture");
   });
 
   it("keeps proposal state inside an injected state directory", async () => {
@@ -770,18 +755,27 @@ describe("skill_workshop tool", () => {
     await expect(fs.access(workshopSkillPath("quarantined-skill", "SKILL.md"))).rejects.toThrow();
   });
 
-  it.each(["off", "propose", "auto"] as const)(
-    "enforces foreground repair receipts in autonomous mode %s",
-    async (mode) => {
-      const workspaceDir = await tempDirs.make(`openclaw-skill-workshop-repair-${mode}-`);
-      const runId = `repair-${mode}`;
-      const skillName = `weather-planner-${mode}`;
+  it.each(
+    (["off", "propose", "auto"] as const).flatMap((mode) =>
+      (["auto", "pending"] as const).map((approvalPolicy) => ({ mode, approvalPolicy })),
+    ),
+  )(
+    "uses foreground approval policy $approvalPolicy in autonomous mode $mode",
+    async ({ mode, approvalPolicy }) => {
+      const workspaceDir = await tempDirs.make("openclaw-skill-workshop-repair-");
+      const runId = `repair-${mode}-${approvalPolicy}`;
+      const skillName = "weather-planner";
+      const config = { skills: { workshop: { autonomous: { mode }, approvalPolicy } } };
       const tool = createSkillWorkshopTool({
         workspaceDir,
-        config: { skills: { workshop: { autonomous: { mode } } } },
-        agentId: "main",
+        config,
         origin: { agentId: "main", runId },
       });
+      expect(tool.description).toContain(
+        approvalPolicy === "auto" ? "scanned and applied immediately" : "stays pending for review",
+      );
+      expect(tool.description).not.toContain("Foreground repair is disabled.");
+      expect(tool.description).not.toContain("Experience capture");
       const created = await tool.execute("repair-create", {
         action: "create",
         name: skillName,
@@ -792,58 +786,77 @@ describe("skill_workshop tool", () => {
         action: "apply",
         proposal_id: (created.details as { id: string }).id,
       });
-
+      const skillFile = workshopSkillPath(skillName, "SKILL.md");
+      const originalContent = await fs.readFile(skillFile, "utf8");
       await tool.execute("repair-read", { action: "read", skill_name: skillName });
-
       const patchArgs = {
         action: "patch",
         skill_name: skillName,
         old_string: "Check weather before outdoor recommendations.",
         new_string: "Check weather and alerts before outdoor recommendations.",
       };
-      if (mode === "off") {
-        await expect(tool.execute("repair-disabled", patchArgs)).rejects.toThrow(
-          "disabled by autonomous mode off",
+      const apply = vi.spyOn(workshopService, "applySkillProposal");
+      try {
+        if (mode === "off") {
+          const noRunTool = createSkillWorkshopTool({ workspaceDir, config });
+          await noRunTool.execute("read", { action: "read", skill_name: skillName });
+          await expect(noRunTool.execute("patch", patchArgs)).rejects.toThrow(
+            "was not used in this run",
+          );
+        }
+        await expect(tool.execute("repair-no-receipt", patchArgs)).rejects.toThrow(
+          "was not used in this run",
         );
-        return;
+        recordRunSkillUsage({
+          runId,
+          name: "another-skill",
+          source: "workspace",
+          activation: "read",
+          skillFile: workshopSkillPath("another-skill", "SKILL.md"),
+        });
+        await expect(tool.execute("repair-unused", patchArgs)).rejects.toThrow(
+          "was not used in this run",
+        );
+        expect(apply).not.toHaveBeenCalled();
+        await expect(fs.readFile(skillFile, "utf8")).resolves.toBe(originalContent);
+        recordRunSkillUsage({
+          runId,
+          name: skillName,
+          source: "workspace",
+          activation: "read",
+          skillFile,
+        });
+        const patch = await tool.execute("repair-patch", patchArgs);
+        expect(patch.details).toMatchObject({
+          status: approvalPolicy === "auto" ? "applied" : "pending",
+          kind: "update",
+        });
+        if (approvalPolicy === "pending") {
+          expect(apply).not.toHaveBeenCalled();
+          expect(patch.content[0]).toMatchObject({
+            type: "text",
+            text: expect.stringContaining("approval policy pending requires operator review"),
+          });
+          await expect(fs.readFile(skillFile, "utf8")).resolves.toBe(originalContent);
+          await expect(
+            tool.execute("repair-inspect", {
+              action: "inspect",
+              proposal_id: (patch.details as { id: string }).id,
+            }),
+          ).resolves.toMatchObject({ details: { status: "pending" } });
+        } else {
+          expect(apply).toHaveBeenCalledTimes(1);
+          expect(patch.content[0]).toMatchObject({
+            type: "text",
+            text: expect.stringContaining("Repaired used skill"),
+          });
+          await expect(fs.readFile(skillFile, "utf8")).resolves.toContain(patchArgs.new_string);
+          await expect(fs.readFile(skillFile, "utf8")).resolves.not.toContain(patchArgs.old_string);
+        }
+      } finally {
+        apply.mockRestore();
+        consumeRunSkillUsage(runId);
       }
-
-      await expect(tool.execute("repair-unused", patchArgs)).rejects.toThrow(
-        "was not used in this run",
-      );
-      recordRunSkillUsage({
-        runId,
-        name: skillName,
-        source: "workspace",
-        activation: "read",
-        skillFile: workshopSkillPath(skillName, "SKILL.md"),
-      });
-      const patch = await tool.execute("repair-patch", patchArgs);
-      expect(patch.details).toMatchObject({
-        status: mode === "auto" ? "applied" : "pending",
-        kind: "update",
-      });
-
-      const skillFile = workshopSkillPath(skillName, "SKILL.md");
-      if (mode === "propose") {
-        await expect(fs.readFile(skillFile, "utf8")).resolves.toContain(
-          "Check weather before outdoor recommendations.",
-        );
-        await expect(
-          tool.execute("repair-apply", {
-            action: "apply",
-            proposal_id: (patch.details as { id: string }).id,
-          }),
-        ).resolves.toMatchObject({ details: { status: "applied" } });
-        await expect(fs.readFile(skillFile, "utf8")).resolves.toContain(
-          "Check weather and alerts before outdoor recommendations.",
-        );
-      } else {
-        await expect(fs.readFile(skillFile, "utf8")).resolves.toContain(
-          "Check weather and alerts before outdoor recommendations.",
-        );
-      }
-      consumeRunSkillUsage(runId);
     },
   );
 

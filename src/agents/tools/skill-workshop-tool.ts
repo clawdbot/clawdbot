@@ -173,7 +173,8 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
     name: "skill_workshop",
     displaySummary: "Propose or improve a reusable skill",
     description: buildSkillWorkshopToolDescription({
-      autonomousMode: workshopConfig.autonomous.mode,
+      // The description mode selects foreground repair wording, not background capture policy.
+      autonomousMode: workshopConfig.approvalPolicy === "auto" ? "auto" : "propose",
       proposalRevision: options.proposalRevision !== undefined,
     }),
     parameters: buildSkillWorkshopToolSchema(options.proposalRevision !== undefined),
@@ -407,9 +408,6 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         throw new ToolInputError("this Skill Workshop session cannot patch live skills");
       }
       const foregroundRepair = action === "patch" && options.proposalOnly !== true;
-      if (foregroundRepair && workshopConfig.autonomous.mode === "off") {
-        throw new ToolInputError("foreground skill repair is disabled by autonomous mode off");
-      }
       let expectedCurrentContentHash: string | undefined;
       let currentSkillContent: string | undefined;
       const patchOldString = action === "patch" ? readSkillPatchText(params).oldString : undefined;
@@ -563,8 +561,8 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             evidence,
           });
           contentText =
-            foregroundRepair && workshopConfig.autonomous.mode === "propose"
-              ? `Created skill patch proposal ${proposal.record.id} (pending) for ${proposal.record.target.skillName}; autonomous mode propose requires operator review.`
+            foregroundRepair && workshopConfig.approvalPolicy === "pending"
+              ? `Created skill patch proposal ${proposal.record.id} (pending) for ${proposal.record.target.skillName}; approval policy pending requires operator review.`
               : proposalMutationText(`Created skill ${action} proposal`, proposal.record);
         } else if (action === "revise") {
           let proposalId = options.proposalRevision?.proposalId;
@@ -619,7 +617,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           });
         }
 
-        if (foregroundRepair && workshopConfig.autonomous.mode === "auto") {
+        if (foregroundRepair && workshopConfig.approvalPolicy === "auto") {
           const applied = await applySkillProposal({
             workspaceDir: options.workspaceDir,
             agentId: options.agentId,
