@@ -443,6 +443,19 @@ describe("outbound audit projection", () => {
     ).toBe("direct");
   });
 
+  it("does not treat Object.prototype keys as target-kind prefixes", () => {
+    // constructor: is a legal destination prefix, not an own key of the kind map.
+    // Looking it up on the object literal used to yield Function.prototype, and
+    // allowedRouteKinds.includes then threw on the audit path.
+    expect(
+      conversationKindFor({
+        channel: "slack",
+        to: "constructor:123",
+        session: { key: "agent:main:slack:default:direct:constructor:123" },
+      }),
+    ).toBe("direct");
+  });
+
   it("does not classify by a policy session that names another conversation", () => {
     // Native command acting on a WhatsApp DM session, response delivered to a
     // Matrix room: the acted-on session must not stamp the destination "direct".

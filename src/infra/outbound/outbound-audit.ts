@@ -237,7 +237,12 @@ function resolveOutboundTargetFacts(context: OutboundAuditDeliveryContext): {
       : [context.channel];
   const withoutProvider = stripTargetProviderPrefix(context.to, ...providerPrefixes);
   const kindPrefix = TARGET_PREFIX_RE.exec(withoutProvider)?.[1]?.toLowerCase();
-  const allowedRouteKinds = kindPrefix ? TARGET_KIND_TO_ROUTE_KINDS[kindPrefix] : undefined;
+  // kindPrefix is destination-controlled. An inherited key such as "constructor"
+  // must not read through to Object.prototype (Function), or .includes throws.
+  const allowedRouteKinds =
+    kindPrefix && Object.hasOwn(TARGET_KIND_TO_ROUTE_KINDS, kindPrefix)
+      ? TARGET_KIND_TO_ROUTE_KINDS[kindPrefix]
+      : undefined;
   const conversationId = stripOutboundTargetKindPrefix(
     withoutProvider,
     Object.keys(TARGET_KIND_TO_ROUTE_KINDS),
