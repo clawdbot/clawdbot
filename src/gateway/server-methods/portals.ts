@@ -91,7 +91,10 @@ export const portalHandlers: GatewayRequestHandlers = {
         return;
       }
       try {
-        await service.close(params.id);
+        // Match device/node pair requestId trimming: clipboard/RPC padding must
+        // still close the live portal (Map keys are exact; store has no normalize).
+        const id = params.id.trim();
+        await service.close(id);
         context.broadcast(
           "portal.changed",
           { portals: service.list().map(redactPortalSummary) },

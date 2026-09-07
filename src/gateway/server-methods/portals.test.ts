@@ -1,3 +1,4 @@
+import { request } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import type {
@@ -5,7 +6,10 @@ import type {
   PortalSummary,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-descriptors.js";
-import type { GatewayPortalService } from "../portals/portal-service.js";
+import {
+  createGatewayPortalService,
+  type GatewayPortalService,
+} from "../portals/portal-service.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
@@ -174,6 +178,67 @@ describe("portal gateway methods", () => {
       undefined,
       expect.objectContaining({ code: "UNAVAILABLE", message: "portal bind failed" }),
     );
+  });
+
+  it("forwards trimmed portal.close ids to the portal service", async () => {
+    const close = vi.fn(async () => {});
+    const service: GatewayPortalService = {
+      list: () => [],
+      listWorkerPortals: () => [],
+      open: vi.fn(),
+      close,
+      closeWorkerPortals: vi.fn(),
+      closeAll: vi.fn(),
+    };
+    const respond = await harness(service).invoke("portal.close", { id: " p3000 " });
+    expect(respond.mock.calls[0]).toEqual([true, { closed: true }, undefined]);
+    expect(close).toHaveBeenCalledWith("p3000");
+  });
+
+  it("closes a live portal when portal.close receives a padded id", async () => {
+    const httpServers: import("node:http").Server[] = [];
+    const service = createGatewayPortalService({
+      httpBindHosts: ["127.0.0.1"],
+      httpServers,
+    });
+    try {
+      const opened = await service.open({ targetPort: 41299, title: "Pad Close" });
+      expect(service.list().some((entry) => entry.id === opened.id)).toBe(true);
+      expect(httpServers.length).toBeGreaterThan(0);
+      expect(httpServers.every((server) => server.listening)).toBe(true);
+      const listenPort = opened.listenPort;
+      expect(
+        await new Promise<number>((resolve, reject) => {
+          const req = request({ host: "127.0.0.1", port: listenPort, path: "/" }, (res) => {
+            res.resume();
+            res.once("end", () => resolve(res.statusCode ?? 0));
+          });
+          req.once("error", reject);
+          req.end();
+        }),
+      ).toBe(401);
+
+      const { invoke } = harness(service);
+      const respond = await invoke("portal.close", { id: ` ${opened.id} ` });
+      expect(respond.mock.calls[0]).toEqual([true, { closed: true }, undefined]);
+      expect(service.list()).toEqual([]);
+      expect(httpServers).toEqual([]);
+      await expect(
+        new Promise<number>((resolve, reject) => {
+          const req = request({ host: "127.0.0.1", port: listenPort, path: "/" }, (res) => {
+            res.resume();
+            res.once("end", () => resolve(res.statusCode ?? 0));
+          });
+          req.once("error", reject);
+          req.end();
+        }),
+      ).rejects.toThrow();
+      // Exact missing still succeeds idempotently; padding must not invent a miss.
+      const again = await invoke("portal.close", { id: ` ${opened.id} ` });
+      expect(again.mock.calls[0]).toEqual([true, { closed: true }, undefined]);
+    } finally {
+      await service.closeAll();
+    }
   });
 
   it("delivers portal changes only to read-capable operators", () => {
