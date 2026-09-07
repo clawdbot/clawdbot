@@ -1938,6 +1938,39 @@ describe("createCodexDynamicToolBridge", () => {
     },
   );
 
+  it("redacts credentials from thrown dynamic tool error content items", async () => {
+    const thrown = new Error(
+      `Upstream failed: Authorization: Bearer ${SYNTHETIC_BEARER_CREDENTIAL}`,
+    );
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "credential_lookup",
+          execute: vi.fn(async () => {
+            throw thrown;
+          }),
+        }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-throw-credential",
+      namespace: null,
+      tool: "credential_lookup",
+      arguments: {},
+    });
+
+    expect(result.success).toBe(false);
+    const text = result.contentItems
+      .map((item) => (item.type === "inputText" && typeof item.text === "string" ? item.text : ""))
+      .join("");
+    expect(text).not.toContain(SYNTHETIC_BEARER_CREDENTIAL);
+    expect(text).toContain("Authorization: Bearer");
+  });
+
   it("redacts credentials split across adjacent dynamic tool text items", async () => {
     const bridge = createBridgeWithToolResult("credential_lookup", {
       content: [

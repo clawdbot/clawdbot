@@ -996,7 +996,7 @@ export function createCodexDynamicToolBridge(params: {
               contentItems: [
                 {
                   type: "inputText",
-                  text: errorMessage,
+                  text: sanitizeToolResult(errorMessage),
                 },
               ],
               success: false,
