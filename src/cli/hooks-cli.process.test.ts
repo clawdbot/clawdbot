@@ -93,7 +93,9 @@ async function createLingeringPluginFixture(): Promise<{
   return { configPath, markerPath, stateDir };
 }
 
-async function createLingeringPreloadFixture(): Promise<{
+async function createRelayPreloadFixture(
+  mode: "linger" | "missing-drain-callbacks" = "linger",
+): Promise<{
   markerPath: string;
   preloadPath: string;
   stateDir: string;
@@ -108,7 +110,14 @@ async function createLingeringPreloadFixture(): Promise<{
     [
       'import fs from "node:fs";',
       'fs.writeFileSync(process.env.LINGER_MARKER, "loaded\\n");',
-      "setInterval(() => {}, 60_000);",
+      ...(mode === "linger"
+        ? ["setInterval(() => {}, 60_000);"]
+        : [
+            "for (const stream of [process.stdout, process.stderr]) {",
+            "  const write = stream.write.bind(stream);",
+            '  stream.write = (chunk, ...args) => chunk === "" ? true : write(chunk, ...args);',
+            "}",
+          ]),
       "",
     ].join("\n"),
   );
@@ -256,6 +265,7 @@ describe("hooks CLI process lifecycle", () => {
   it.each([
     {
       name: "invalid JSON",
+      preloadMode: "linger" as const,
       args: [
         "hooks",
         "relay",
@@ -271,14 +281,22 @@ describe("hooks CLI process lifecycle", () => {
     },
     {
       name: "missing required option",
+      preloadMode: "linger" as const,
+      args: ["hooks", "relay"],
+      stdin: "",
+      diagnostic: "native hook relay failed: Missing required option --provider",
+    },
+    {
+      name: "missing drain callbacks with no lingering handle",
+      preloadMode: "missing-drain-callbacks" as const,
       args: ["hooks", "relay"],
       stdin: "",
       diagnostic: "native hook relay failed: Missing required option --provider",
     },
   ])(
-    "drains a dedicated relay $name error before exiting",
-    async ({ args, stdin, diagnostic }) => {
-      const fixture = await createLingeringPreloadFixture();
+    "preserves a dedicated relay $name failure when exiting",
+    async ({ args, stdin, diagnostic, preloadMode }) => {
+      const fixture = await createRelayPreloadFixture(preloadMode);
       const result = await runHooksCli({
         entryPath: "src/cli/native-hook-relay-entry.ts",
         args,
@@ -383,7 +401,7 @@ describe("hooks CLI process lifecycle", () => {
         .poll(() => nativeHookRelayTesting.getNativeHookRelayBridgeRecordForTests(relay.relayId))
         .toBeDefined();
 
-      const fixture = await createLingeringPreloadFixture();
+      const fixture = await createRelayPreloadFixture();
       const result = await runHooksCli({
         entryPath,
         args: [

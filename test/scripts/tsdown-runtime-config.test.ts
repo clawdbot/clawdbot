@@ -171,6 +171,7 @@ describe("tsdown config", () => {
         (entry as Record<string, unknown>)["worker/worker"] === "src/worker/worker-deploy-entry.ts"
       );
     });
+    const relayGraph = configs.find((config) => config.outDir === "dist/native-hook-relay");
     const inlinePlugins = configs.flatMap(
       (config) =>
         config.plugins?.filter((plugin) => plugin.name === STATE_SCHEMA_INLINE_PLUGIN_NAME) ?? [],
@@ -182,7 +183,10 @@ describe("tsdown config", () => {
     expect(workerGraph?.plugins).toContainEqual(
       expect.objectContaining({ name: STATE_SCHEMA_INLINE_PLUGIN_NAME }),
     );
-    expect(inlinePlugins).toHaveLength(2);
+    expect(relayGraph?.plugins).toContainEqual(
+      expect.objectContaining({ name: STATE_SCHEMA_INLINE_PLUGIN_NAME }),
+    );
+    expect(inlinePlugins).toHaveLength(3);
   });
 
   it("keeps core, plugin runtime, plugin-sdk, bundled root plugins, and bundled hooks in one dist graph", () => {

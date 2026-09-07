@@ -13,4 +13,6 @@ try {
     `native hook relay failed: ${error instanceof Error ? error.message : String(error)}\n`,
   );
 }
+// Preserve the outcome if the event loop drains before the unref'd flush backstop.
+process.exitCode = exitCode;
 drainOneShotOutput(() => process.exit(exitCode));

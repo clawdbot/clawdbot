@@ -827,6 +827,7 @@ const configs: UserConfig[] = [
       entry: { entry: "src/cli/native-hook-relay-entry.ts" },
       outDir: "dist/native-hook-relay",
       deps: unifiedDeps,
+      plugins: [createStateSchemaInlinePlugin()],
     },
     false,
   ),
