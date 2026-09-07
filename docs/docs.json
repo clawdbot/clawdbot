@@ -1745,6 +1745,19 @@
                 "pages": [
                   "automation/index",
                   "automation/cron-jobs",
+                  {
+                    "group": "Automations",
+                    "pages": [
+                      "automation/cron-jobs/how-it-works",
+                      "automation/cron-jobs/schedules",
+                      "automation/cron-jobs/payloads",
+                      "automation/cron-jobs/delivery",
+                      "automation/cron-jobs/managing-jobs",
+                      "automation/cron-jobs/webhooks",
+                      "automation/cron-jobs/gmail",
+                      "automation/cron-jobs/troubleshooting"
+                    ]
+                  },
                   "automation/imap",
                   "automation/tasks",
                   "automation/taskflow",
