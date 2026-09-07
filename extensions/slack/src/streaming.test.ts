@@ -49,10 +49,301 @@ function createNativeStreamClient() {
   });
   const append = vi.spyOn(writeClient.chat, "appendStream").mockResolvedValue({ ok: true });
   const stop = vi.spyOn(writeClient.chat, "stopStream").mockResolvedValue({ ok: true });
-  return { client, start, append, stop };
+  const update = vi.spyOn(writeClient.chat, "update").mockResolvedValue({ ok: true });
+  return { client, start, append, stop, update };
 }
 
 describe("stopSlackStream finalize error handling", () => {
+  it("recovers an expired stream on the same message and preserves subsequent final text and metadata", async () => {
+    const { client, start, append, stop, update } = createNativeStreamClient();
+    const session = await startSlackStream({
+      client,
+      channel: "C123",
+      threadTs: "1700000000.000100",
+      text: "Visible prefix",
+      taskDisplayMode: "plan",
+      chunks: [
+        { type: "plan_update", title: "Inspect" },
+        {
+          type: "task_update",
+          id: "task-1",
+          title: "Read source",
+          status: "in_progress",
+          details: "Full details",
+          output: "Initial output",
+          sources: [{ type: "url", url: "https://example.com/source", text: "Source" }],
+        },
+      ],
+    });
+    append.mockRejectedValueOnce(slackApiError("message_not_in_streaming_state"));
+    await appendSlackStream({
+      session,
+      text: " recovered tail",
+      chunks: [
+        {
+          type: "task_update",
+          id: "task-1",
+          title: "Read source",
+          status: "complete",
+          details: " appended details",
+          output: " appended output",
+        },
+      ],
+    });
+    await appendSlackStream({ session, text: " final answer", chunks: [] });
+    const metadata = {
+      event_type: "assistant_thread_context",
+      event_payload: { channel_id: "C123" },
+    };
+    await expect(
+      stopSlackStream({ session, chunks: [{ type: "plan_update", title: "Done" }], metadata }),
+    ).resolves.toEqual({ messageId: "1700000000.500300" });
+    expect(start).toHaveBeenCalledOnce();
+    expect(append).toHaveBeenCalledOnce();
+    expect(stop).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledTimes(3);
+    expect(
+      update.mock.calls.every(
+        ([args]) => args.channel === "C123" && args.ts === "1700000000.500300",
+      ),
+    ).toBe(true);
+    expect(update.mock.lastCall?.[0]).toMatchObject({
+      metadata,
+      blocks: [
+        { type: "markdown", text: "Visible prefix" },
+        {
+          type: "plan",
+          title: "Done",
+          tasks: [
+            {
+              task_id: "task-1",
+              title: "Read source",
+              status: "complete",
+              details: {
+                type: "rich_text",
+                elements: [
+                  {
+                    type: "rich_text_section",
+                    elements: [{ type: "text", text: "Full details appended details" }],
+                  },
+                ],
+              },
+              output: {
+                type: "rich_text",
+                elements: [
+                  {
+                    type: "rich_text_section",
+                    elements: [{ type: "text", text: "Initial output appended output" }],
+                  },
+                ],
+              },
+              sources: [{ type: "url", url: "https://example.com/source", text: "Source" }],
+            },
+          ],
+        },
+        { type: "markdown", text: " recovered tail final answer" },
+      ],
+    });
+    expect(session).toMatchObject({ stopped: true, delivered: true, pendingText: "" });
+  });
+
+  it("recovers stop-time expiry with final chunks and buffered text", async () => {
+    const { client, stop, update } = createNativeStreamClient();
+    const session = await startSlackStream({
+      client,
+      channel: "C123",
+      threadTs: "1700000000.000100",
+      text: "prefix",
+      chunks: [],
+    });
+    await appendSlackStream({ session, text: " buffered final" });
+    stop.mockRejectedValueOnce(slackApiError("message_not_in_streaming_state"));
+    const metadata = { event_type: "openclaw.reply", event_payload: { turn: "qa" } };
+    await expect(
+      stopSlackStream({
+        session,
+        chunks: [{ type: "markdown_text", text: " final chunk" }],
+        metadata,
+      }),
+    ).resolves.toEqual({ messageId: "1700000000.500300" });
+    expect(update).toHaveBeenCalledExactlyOnceWith({
+      channel: "C123",
+      ts: "1700000000.500300",
+      blocks: [{ type: "markdown", text: "prefix buffered final final chunk" }],
+      metadata,
+    });
+    await stopSlackStream({ session });
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it.each(["before-recovery", "after-recovery"])(
+    "honors Slack Stop %s without another update or final delivery",
+    async (phase) => {
+      const { client, append, stop, update } = createNativeStreamClient();
+      const session = await startSlackStream({
+        client,
+        channel: "C123",
+        threadTs: "1700000000.000100",
+        text: "prefix",
+        chunks: [],
+      });
+      if (phase === "before-recovery") {
+        const response = createDeferred<{ ok: boolean }>();
+        append.mockReturnValueOnce(response.promise);
+        const pending = appendSlackStream({ session, text: " tail", chunks: [] });
+        markSlackStreamsStopped(client, "C123", ["1700000000.500300"]);
+        response.reject(slackApiError("message_not_in_streaming_state"));
+        await pending;
+      } else {
+        append.mockRejectedValueOnce(slackApiError("message_not_in_streaming_state"));
+        await appendSlackStream({ session, text: " tail", chunks: [] });
+        markSlackStreamsStopped(client, "C123", ["1700000000.500300"]);
+      }
+      await appendSlackStream({ session, text: "late final", chunks: [] });
+      await stopSlackStream({ session });
+      expect(update).toHaveBeenCalledTimes(phase === "before-recovery" ? 0 : 1);
+      expect(stop).not.toHaveBeenCalled();
+      expect(session.stoppedBySlack).toBe(true);
+    },
+  );
+
+  it.each([
+    new Error("socket reset"),
+    slackApiError("internal_error"),
+    slackApiError("fatal_error"),
+  ])("does not replay failed recovery updates: %s", async (error) => {
+    const { client, append, stop, update } = createNativeStreamClient();
+    const session = await startSlackStream({
+      client,
+      channel: "C123",
+      threadTs: "1700000000.000100",
+      text: "prefix",
+      chunks: [],
+    });
+    append.mockRejectedValueOnce(slackApiError("message_not_in_streaming_state"));
+    update.mockRejectedValueOnce(error);
+    await expect(appendSlackStream({ session, text: " tail", chunks: [] })).rejects.toBe(error);
+    await appendSlackStream({ session, text: "late final", chunks: [] });
+    await stopSlackStream({ session });
+    expect(update).toHaveBeenCalledOnce();
+    expect(append).toHaveBeenCalledOnce();
+    expect(stop).not.toHaveBeenCalled();
+    expect(session.pendingText).toBe(" tail");
+  });
+
+  it("keeps ordinary tail fallback for definitive expiry without a known message timestamp", async () => {
+    const { client, start, update } = createNativeStreamClient();
+    const error = slackApiError("message_not_in_streaming_state");
+    start.mockRejectedValueOnce(error);
+    await expect(
+      startSlackStream({
+        client,
+        channel: "C123",
+        threadTs: "1700000000.000100",
+        text: "prefix",
+        chunks: [],
+      }),
+    ).rejects.toMatchObject({
+      name: "SlackStreamNotDeliveredError",
+      pendingText: "prefix",
+      slackCode: "message_not_in_streaming_state",
+    });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("preserves all 51 tasks and an old task's late failure across multiple Plan blocks", async () => {
+    const { client, append, update } = createNativeStreamClient();
+    const session = await startSlackStream({
+      client,
+      channel: "C123",
+      threadTs: "1700000000.000100",
+      taskDisplayMode: "plan",
+      chunks: Array.from({ length: 51 }, (_, i) => ({
+        type: "task_update",
+        id: `task-${i}`,
+        title: `Task ${i}`,
+        status: "complete",
+      })),
+    });
+    append.mockRejectedValueOnce(slackApiError("message_not_in_streaming_state"));
+    await appendSlackStream({
+      session,
+      chunks: [{ type: "task_update", id: "task-0", title: "Task 0", status: "error" }],
+    });
+    const args = update.mock.lastCall?.[0];
+    const blocks = args && "blocks" in args ? args.blocks : undefined;
+    expect(blocks).toEqual([
+      {
+        type: "plan",
+        title: "",
+        tasks: Array.from({ length: 50 }, (_, i) => ({
+          task_id: `task-${i}`,
+          title: `Task ${i}`,
+          status: i === 0 ? "error" : "complete",
+        })),
+      },
+      {
+        type: "plan",
+        title: "",
+        tasks: [{ task_id: "task-50", title: "Task 50", status: "complete" }],
+      },
+    ]);
+    await stopSlackStream({ session });
+  });
+
+  it("keeps timeline task positions relative to interleaved narration", async () => {
+    const { client, append, update } = createNativeStreamClient();
+    const session = await startSlackStream({
+      client,
+      channel: "C123",
+      threadTs: "1700000000.000100",
+      taskDisplayMode: "timeline",
+      chunks: [{ type: "task_update", id: "one", title: "One", status: "in_progress" }],
+    });
+    await appendSlackStream({
+      session,
+      text: "Between tasks",
+      chunks: [{ type: "task_update", id: "two", title: "Two", status: "pending" }],
+    });
+    append.mockRejectedValueOnce(slackApiError("message_not_in_streaming_state"));
+    await appendSlackStream({
+      session,
+      chunks: [{ type: "task_update", id: "one", title: "One", status: "complete" }],
+    });
+    const args = update.mock.lastCall?.[0];
+    const blocks = args && "blocks" in args ? args.blocks : undefined;
+    expect(blocks).toEqual([
+      { type: "task_card", task_id: "one", title: "One", status: "complete" },
+      { type: "markdown", text: "Between tasks" },
+      { type: "task_card", task_id: "two", title: "Two", status: "pending" },
+    ]);
+    await stopSlackStream({ session });
+  });
+
+  it.each(["markdown", "blocks"])(
+    "refuses a truncated recovery exceeding Slack %s limits",
+    async (limit) => {
+      const { client, append, update, stop } = createNativeStreamClient();
+      const session = await startSlackStream({
+        client,
+        channel: "C123",
+        threadTs: "1700000000.000100",
+        text: limit === "markdown" ? "x".repeat(12001) : "prefix",
+        chunks:
+          limit === "blocks"
+            ? [{ type: "blocks", blocks: Array.from({ length: 50 }, () => ({ type: "divider" })) }]
+            : [],
+      });
+      append.mockRejectedValueOnce(slackApiError("message_not_in_streaming_state"));
+      await expect(appendSlackStream({ session, text: " tail", chunks: [] })).rejects.toMatchObject(
+        { name: "SlackStreamNotDeliveredError", pendingText: " tail" },
+      );
+      expect(update).not.toHaveBeenCalled();
+      await stopSlackStream({ session });
+      expect(stop).not.toHaveBeenCalled();
+    },
+  );
+
   it("discards a Slack-stopped stream's buffered tail without flushing or falling back", async () => {
     const { client, append, stop } = createNativeStreamClient();
     const session = await startSlackStream({
@@ -370,7 +661,7 @@ describe("stopSlackStream finalize error handling", () => {
     },
   );
 
-  it.each(["team_not_found", "message_not_in_streaming_state"])(
+  it.each(["team_not_found"])(
     "preserves only the rejected tail and tolerates finalize after %s fallback",
     async (code) => {
       const { client, append, stop } = createNativeStreamClient();

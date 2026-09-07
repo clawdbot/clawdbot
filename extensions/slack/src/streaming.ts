@@ -18,6 +18,7 @@ import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getSlackListenerWriteClient } from "./client.js";
 import type { SlackSendIdentity } from "./send.js";
+import { SlackStreamProjection } from "./streaming-projection.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -113,6 +114,97 @@ type SlackClientStreams = {
 const streamsByClient = new WeakMap<WebClient, SlackClientStreams>();
 const stateBySession = new WeakMap<SlackStreamSession, SlackClientStreams>();
 const SLACK_STOPPED_STREAMS_MAX = 1024;
+const recoveryBySession = new WeakMap<
+  SlackStreamSession,
+  {
+    client: WebClient;
+    projection: SlackStreamProjection;
+    updating: boolean;
+  }
+>();
+
+async function updateSlackStreamMessage(
+  session: SlackStreamSession,
+  metadata?: MessageMetadata,
+): Promise<void> {
+  const recovery = recoveryBySession.get(session);
+  const ts = session.streamer.ts;
+  if (!recovery || !ts) {
+    throw new Error("slack-stream: same-message recovery requires a known message and writer");
+  }
+  try {
+    let blocks: ReturnType<SlackStreamProjection["getBlocks"]>;
+    try {
+      blocks = recovery.projection.getBlocks();
+    } catch (error) {
+      // No update was sent, and Slack definitely rejected this tail. Preserve
+      // the existing chunked-delivery route when the full card cannot fit.
+      if (session.pendingText) {
+        throw new SlackStreamNotDeliveredError(
+          session.pendingText,
+          "message_not_in_streaming_state",
+        );
+      }
+      throw error;
+    }
+    if (applySlackStreamStop(session)) {
+      return;
+    }
+    await recovery.client.chat.update({
+      channel: session.channel,
+      ts,
+      blocks,
+      ...(metadata ? { metadata } : {}),
+    });
+    if (applySlackStreamStop(session)) {
+      return;
+    }
+    session.delivered = true;
+    session.pendingText = "";
+  } catch (error) {
+    if (applySlackStreamStop(session)) {
+      return;
+    }
+    session.stopped = true;
+    releaseSlackStream(session);
+    const code = extractSlackErrorCode(error);
+    if (
+      session.pendingText &&
+      code &&
+      (BENIGN_SLACK_FINALIZE_ERROR_CODES.has(code) ||
+        code === "missing_scope" ||
+        code === "invalid_blocks" ||
+        // Editing this message may be forbidden while posting a reply is allowed.
+        code === "edit_window_closed" ||
+        code === "cant_update_message")
+    ) {
+      // Slack rejected the update itself. Only its pending tail may use the
+      // ordinary sender; the acknowledged prefix remains on the original ts.
+      throw new SlackStreamNotDeliveredError(session.pendingText, code);
+    }
+    // A lost response or server error may have committed. Never replay it or
+    // let the old SDK buffer re-enter append/stop.
+    throw error;
+  }
+}
+
+async function recoverExpiredSlackStream(
+  session: SlackStreamSession,
+  error: unknown,
+  metadata?: MessageMetadata,
+): Promise<boolean> {
+  const recovery = recoveryBySession.get(session);
+  if (
+    extractSlackErrorCode(error) !== "message_not_in_streaming_state" ||
+    !session.streamer.ts ||
+    !recovery
+  ) {
+    return false;
+  }
+  recovery.updating = true;
+  await updateSlackStreamMessage(session, metadata);
+  return true;
+}
 
 function getSlackClientStreams(client: WebClient): SlackClientStreams {
   let state = streamsByClient.get(client);
@@ -217,6 +309,12 @@ export async function startSlackStream(
     delivered: false,
     pendingText: "",
   };
+  recoveryBySession.set(session, {
+    client: writeClient,
+    projection: new SlackStreamProjection(taskDisplayMode),
+    updating: false,
+  });
+  recoveryBySession.get(session)?.projection.append(text, chunks);
   // Stop events carry the listener identity; the derived writer only owns I/O.
   const state = getSlackClientStreams(client);
   state.sessions.add(session);
@@ -275,6 +373,12 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
   if (text) {
     session.pendingText += text;
   }
+  const recovery = recoveryBySession.get(session);
+  recovery?.projection.append(text, chunks);
+  if (recovery?.updating) {
+    await updateSlackStreamMessage(session);
+    return;
+  }
   try {
     // Same SDK contract as startSlackStream: null means local-only buffer,
     // non-null means Slack accepted the pending buffer/chunks and it is visible.
@@ -294,6 +398,9 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
     );
   } catch (err) {
     if (applySlackStreamStop(session)) {
+      return;
+    }
+    if (await recoverExpiredSlackStream(session, err)) {
       return;
     }
     releaseSlackStream(session);
@@ -344,10 +451,15 @@ export async function stopSlackStream(
     return {};
   }
 
+  recoveryBySession.get(session)?.projection.append(undefined, chunks);
   session.stopped = true;
   logVerbose(`slack-stream: stopping stream in ${session.channel} thread=${session.threadTs}`);
 
   try {
+    if (recoveryBySession.get(session)?.updating) {
+      await updateSlackStreamMessage(session, metadata);
+      return session.stoppedBySlack ? {} : { messageId: session.streamer.ts };
+    }
     const stopResponse = await session.streamer.stop(
       chunks?.length || metadata
         ? {
@@ -370,6 +482,14 @@ export async function stopSlackStream(
   } catch (err) {
     if (applySlackStreamStop(session)) {
       return {};
+    }
+    // Updating sessions have already made their one update attempt. Its error
+    // must not be interpreted as another recoverable native-stream rejection.
+    if (recoveryBySession.get(session)?.updating) {
+      throw err;
+    }
+    if (await recoverExpiredSlackStream(session, err, metadata)) {
+      return session.stoppedBySlack ? {} : { messageId: session.streamer.ts };
     }
     const code = extractSlackErrorCode(err) ?? "unknown";
     if (!session.pendingText && session.delivered && BENIGN_SLACK_FINALIZE_ERROR_CODES.has(code)) {
@@ -405,7 +525,8 @@ const BENIGN_SLACK_FINALIZE_ERROR_CODES = new Set<string>([
   // DMs that closed between stream start and stop.
   "missing_recipient_user_id",
   "missing_recipient_team_id",
-  // Slack expires established streams server-side; rejected tails can still post normally.
+  // A known message is recovered above. Before ts is known, retain the
+  // existing normal-delivery path for a definitively rejected text buffer.
   "message_not_in_streaming_state",
   // Channels where Slack accepts ordinary messages but not native streaming.
   "method_not_supported_for_channel_type",
@@ -449,6 +570,14 @@ export function markSlackStreamFallbackDelivered(session: SlackStreamSession): v
   if (applySlackStreamStop(session)) {
     return;
   }
+  // Same-message recovery has retired the SDK permanently. Ordinary fallback
+  // must never revive its rejected buffer, including after an update failure.
+  if (recoveryBySession.get(session)?.updating) {
+    return;
+  }
+  // Ordinary delivery now owns the tail. Native cleanup may still stop the
+  // stream, but must not project that text back onto the original message.
+  recoveryBySession.delete(session);
   const nativeStreamWasStarted = session.delivered || Boolean(session.streamer.ts);
   session.pendingText = "";
   // @slack/web-api 7.16.0 retains its private buffer after a failed flush.
