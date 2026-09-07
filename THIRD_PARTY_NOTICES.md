@@ -65,3 +65,13 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## Code Mode URL runtime
+
+The generated `src/agents/code-mode-url-source.generated.ts` incorporates the
+`whatwg-url` implementation and its bundled dependencies for execution inside
+the QuickJS guest. The generator copies each incorporated package's license
+verbatim into the guest asset, alongside its pinned package name and version.
+Regenerate and verify these notices with `pnpm code-mode:url:gen` and
+`pnpm code-mode:url:check`; package-manager metadata remains the dependency
+source of truth.

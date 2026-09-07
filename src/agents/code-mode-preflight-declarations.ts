@@ -13,6 +13,35 @@ declare function clearTimeout(id: number): void;
 declare const console: { log(...values: unknown[]): void; info(...values: unknown[]): void; warn(...values: unknown[]): void; error(...values: unknown[]): void; debug(...values: unknown[]): void };
 declare class TextEncoder { readonly encoding: string; encode(input?: string): Uint8Array; encodeInto(input: string, destination: Uint8Array): { read: number; written: number }; }
 declare class TextDecoder { constructor(label?: string, options?: {fatal?: boolean; ignoreBOM?: boolean}); decode(input?: ArrayBuffer | ArrayBufferView, options?: {stream?: boolean}): string; readonly encoding: string; readonly fatal: boolean; readonly ignoreBOM: boolean; }
+declare class URL {
+  constructor(url: string | URL, base?: string | URL);
+  static canParse(url: string | URL, base?: string | URL): boolean;
+  static parse(url: string | URL, base?: string | URL): URL | null;
+  hash: string; host: string; hostname: string; href: string;
+  readonly origin: string;
+  password: string; pathname: string; port: string; protocol: string; search: string;
+  readonly searchParams: URLSearchParams;
+  username: string;
+  toJSON(): string;
+  toString(): string;
+}
+declare class URLSearchParams implements Iterable<[string, string]> {
+  constructor(init?: string | URLSearchParams | Iterable<readonly [string, string]> | Record<string, string>);
+  readonly size: number;
+  append(name: string, value: string): void;
+  delete(name: string, value?: string): void;
+  get(name: string): string | null;
+  getAll(name: string): string[];
+  has(name: string, value?: string): boolean;
+  set(name: string, value: string): void;
+  sort(): void;
+  entries(): IterableIterator<[string, string]>;
+  keys(): IterableIterator<string>;
+  values(): IterableIterator<string>;
+  [Symbol.iterator](): IterableIterator<[string, string]>;
+  forEach(callback: (value: string, key: string, parent: URLSearchParams) => void, thisArg?: unknown): void;
+  toString(): string;
+}
 type CodeModeHandle = ((input?: unknown) => Promise<unknown>) & { callableName: string; toolName: string; description: string; describe(): Promise<unknown> };
 declare const catalog: { search(query: string, options?: {limit?: number}): Promise<readonly CodeModeHandle[]>; all(): readonly CodeModeHandle[] };
 type CodeModeApiFile = {path: string; description?: string; bytes: number; content: string};

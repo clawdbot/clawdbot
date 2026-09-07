@@ -674,6 +674,18 @@ export function createChangedCheckPlan(
       baseEnv,
     );
   }
+  if (
+    result.paths.some((file) =>
+      [
+        "package.json",
+        "pnpm-lock.yaml",
+        "scripts/generate-code-mode-url.mjs",
+        "src/agents/code-mode-url-source.generated.ts",
+      ].includes(file),
+    )
+  ) {
+    add("Code Mode URL asset", ["code-mode:url:check"]);
+  }
   if (shouldRunPromptSnapshotCheck(result.paths)) {
     add("prompt snapshot drift", ["prompt:snapshots:check"]);
   }

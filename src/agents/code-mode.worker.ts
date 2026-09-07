@@ -21,6 +21,7 @@ import {
   type SourceLocation,
 } from "./code-mode-source-location.js";
 import { prepareSource } from "./code-mode-source.js";
+import { CODE_MODE_URL_SOURCE } from "./code-mode-url-source.generated.js";
 import type {
   CodeModeConfig,
   CodeModeLanguage,
@@ -236,6 +237,9 @@ async function createVm(input: CodeModeWorkerPayload, bridge: BridgeState): Prom
       ] as const) {
         vm.hostToHandle(value).consume((handle) => vm.global.setProp(name, handle));
       }
+      // Pure library code shares the guest heap/deadline. Restore retains these
+      // exact constructors and linked URL/SearchParams instances in the snapshot.
+      vm.evalCode(CODE_MODE_URL_SOURCE, "openclaw-code-mode:url.js").dispose();
       vm.evalCode(CODE_MODE_CONTROLLER_SOURCE, "openclaw-code-mode:controller.js").dispose();
     }
     return {

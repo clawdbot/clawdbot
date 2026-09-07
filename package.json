@@ -1663,6 +1663,8 @@
     "ci:timings:recent": "node scripts/ci-run-timings.mjs --recent 10",
     "ci:timings:trend": "node scripts/ci-run-timings.mjs --trend-hours 72 --compare-hours 12",
     "clean:dist": "node -e \"require('fs').rmSync('dist', {recursive: true, force: true})\"",
+    "code-mode:url:check": "node scripts/generate-code-mode-url.mjs --check",
+    "code-mode:url:gen": "node scripts/generate-code-mode-url.mjs",
     "codex-app-server:protocol:check": "node --import ./scripts/tsx.mjs scripts/check-codex-app-server-protocol.ts",
     "codex-app-server:protocol:sync": "node --import ./scripts/tsx.mjs scripts/sync-codex-app-server-protocol.ts",
     "codex-supervisor:mcp": "node --import ./scripts/tsx.mjs src/mcp/codex-supervision-tools-serve.ts",
@@ -2196,6 +2198,7 @@
     "undici": "8.10.2",
     "web-push": "3.6.7",
     "web-tree-sitter": "0.27.0",
+    "whatwg-url": "16.0.1",
     "ws": "8.21.3",
     "yaml": "2.9.0",
     "zod": "4.4.3"
