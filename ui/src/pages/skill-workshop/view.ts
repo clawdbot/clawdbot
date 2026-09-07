@@ -289,9 +289,13 @@ function renderDetail(props: SkillWorkshopProps, proposal: SkillWorkshopProposal
             <h1>${proposal.slug}</h1>
           </div>
           ${
-            detailLoading
-              ? html`<p class="sw-muted">${t("skillWorkshop.detail.loading")}</p>`
-              : renderSkillDocument(proposal.body)
+            proposal.degradedState
+              ? html`<p class="sw-muted" role="status">
+                  ${t("skillWorkshop.detail.draftMissing")}
+                </p>`
+              : detailLoading
+                ? html`<p class="sw-muted">${t("skillWorkshop.detail.loading")}</p>`
+                : renderSkillDocument(proposal.body)
           }
         </div>
 
@@ -351,11 +355,12 @@ function proposalDecision(proposal: SkillWorkshopProposal): SkillWorkshopProposa
 function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshopProposal) {
   const busy = props.actionBusy?.key === proposal.key ? props.actionBusy.action : null;
   const disabled = Boolean(props.actionBusy);
+  const draftUnavailable = disabled || Boolean(proposal.degradedState);
   return html`
     <div class="sw-action-bar" aria-busy=${busy ? "true" : "false"}>
       <button
         class="sw-btn ${busy === "evaluate" ? "is-busy" : ""}"
-        ?disabled=${disabled || !props.access.canEvaluate}
+        ?disabled=${draftUnavailable || !props.access.canEvaluate}
         @click=${() => props.onEvaluate(proposal.key)}
       >
         ${
@@ -366,14 +371,14 @@ function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshop
       </button>
       <button
         class="sw-btn sw-btn--primary ${busy === "apply" ? "is-busy" : ""}"
-        ?disabled=${disabled || !props.access.canApply}
+        ?disabled=${draftUnavailable || !props.access.canApply}
         @click=${() => props.onApply(proposalDecision(proposal))}
       >
         ${busy === "apply" ? t("skillWorkshop.actions.applying") : t("skillWorkshop.actions.apply")}
       </button>
       <button
         class="sw-btn ${busy === "revise" ? "is-busy" : ""}"
-        ?disabled=${disabled || !props.access.canRevise}
+        ?disabled=${draftUnavailable || !props.access.canRevise}
         @click=${() => props.onRevise(proposal.key)}
       >
         ${

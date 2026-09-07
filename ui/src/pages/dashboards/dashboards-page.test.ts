@@ -3,10 +3,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import type { SessionListOptions, SessionListSnapshot } from "../../lib/sessions/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { settleLitElement } from "../../test-helpers/lit-settle.ts";
 import type { DashboardsRouteData } from "./view.ts";
 import "./dashboards-page.ts";
 
@@ -156,16 +157,16 @@ describe("DashboardsPage", () => {
     await element.updateComplete;
     expect(element.textContent).toContain("Writer dashboard");
     expect(element.querySelector('[role="alert"]')?.textContent).toContain("Writer refresh failed");
-    refreshList.mockClear();
-    element.querySelector<HTMLButtonElement>('[role="alert"] button')?.click();
-    expect(refreshList).toHaveBeenCalledOnce();
-    expect(refreshList).toHaveBeenLastCalledWith({
-      limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-      hasBoard: true,
-      archivedFilter: "all",
+    expect(element.querySelector('[role="alert"] button')).toBeNull();
+    writerListener({
+      result: result(row("agent:writer:current", "Recovered dashboard")),
       agentId: "writer",
-      force: true,
+      loading: false,
+      error: null,
     });
+    await element.updateComplete;
+    expect(element.textContent).toContain("Recovered dashboard");
+    expect(element.querySelector('[role="alert"]')).toBeNull();
 
     element.remove();
     writerListener({
@@ -178,70 +179,95 @@ describe("DashboardsPage", () => {
     expect(element.textContent).not.toContain("Detached refresh failed");
   });
 
-  it("loads every dashboard page so older dashboards remain searchable", async () => {
-    const first = {
-      ...results([row("agent:main:new", "New dashboard")]),
-      totalCount: 2,
-      hasMore: true,
-      nextOffset: 1,
-      offset: 0,
-    };
-    const second = {
-      ...results([row("agent:main:old", "Old dashboard")]),
-      totalCount: 2,
-      hasMore: false,
-      nextOffset: null,
-      offset: 1,
-    };
-    const snapshot = { result: first, agentId: null, loading: false, error: null };
-    const list = vi.fn(async () => second);
-    const context = {
-      basePath: "",
-      gateway: {
-        snapshot: { client: {}, phase: "connected", hello: null },
-        subscribe: () => () => undefined,
-      },
-      sessions: {
-        list,
-        listSnapshot: () => snapshot,
-        subscribeList: () => () => undefined,
-        refreshList: vi.fn(async () => undefined),
-      },
-      agentSelection: {
-        state: { selectedId: "main", scopeId: null },
-        subscribe: () => () => undefined,
-      },
-      agents: { state: { agentsList: null } },
-    } as unknown as ApplicationContext;
-    const element = document.createElement("openclaw-dashboards-page") as DashboardsPageElement;
-    element.routeData = {
-      result: first,
-      error: null,
-      basePath: "",
-      fallbackAgentId: "main",
-      mainKey: "main",
-    };
-    const provider = createApplicationContextProvider(context);
-    provider.append(element);
-    document.body.append(provider);
+  it.each([false, true])(
+    "loads every dashboard page unless its connection is retired (retired: %s)",
+    async (retired) => {
+      const first = {
+        ...results([row("agent:main:new", "New dashboard")]),
+        totalCount: 2,
+        hasMore: true,
+        nextOffset: 1,
+        offset: 0,
+      };
+      const second = {
+        ...results([row("agent:main:old", "Old dashboard")]),
+        totalCount: 2,
+        hasMore: false,
+        nextOffset: null,
+        offset: 1,
+      };
+      const snapshot = { result: first, agentId: null, loading: false, error: null };
+      let resolvePage!: (value: SessionsListResult | null) => void;
+      const pendingPage = new Promise<SessionsListResult | null>((resolve) => {
+        resolvePage = resolve;
+      });
+      const list = vi.fn(async () => (retired ? pendingPage : second));
+      let publishGateway: () => void = () => undefined;
+      const context = {
+        basePath: "",
+        gateway: {
+          snapshot: { client: {}, phase: "connected", hello: null },
+          subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => {
+            publishGateway = () => listener(context.gateway.snapshot);
+            return () => undefined;
+          },
+        },
+        sessions: {
+          list,
+          listSnapshot: () => snapshot,
+          subscribeList: () => () => undefined,
+          refreshList: vi.fn(async () => undefined),
+        },
+        agentSelection: {
+          state: { selectedId: "main", scopeId: null },
+          subscribe: () => () => undefined,
+        },
+        agents: { state: { agentsList: null } },
+      } as unknown as ApplicationContext;
+      const element = document.createElement("openclaw-dashboards-page") as DashboardsPageElement;
+      element.routeData = {
+        result: first,
+        error: null,
+        basePath: "",
+        fallbackAgentId: "main",
+        mainKey: "main",
+      };
+      const provider = createApplicationContextProvider(context);
+      provider.append(element);
+      document.body.append(provider);
 
-    await vi.waitFor(() =>
-      expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(2),
-    );
-    expect(list).toHaveBeenCalledWith({
-      limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-      hasBoard: true,
-      archivedFilter: "all",
-      offset: 1,
-    });
+      if (retired) {
+        await vi.waitFor(() => expect(list).toHaveBeenCalledOnce());
+        for (const phase of ["reconnecting", "connected"] as const) {
+          Object.assign(context.gateway.snapshot, { phase });
+          publishGateway();
+        }
+        resolvePage(null);
+        await settleLitElement(element);
+        expect(element.textContent).toContain("New dashboard");
+        expect(element.textContent).not.toContain("dashboard enumeration returned no result");
+        expect(element.querySelector('[role="alert"]')).toBeNull();
+        return;
+      }
 
-    const search = element.querySelector<HTMLInputElement>('input[type="search"]')!;
-    search.value = "old";
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-    await element.updateComplete;
-    expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(1);
-    expect(element.textContent).toContain("Old dashboard");
-  });
+      await vi.waitFor(() =>
+        expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(2),
+      );
+      expect(list).toHaveBeenCalledWith({
+        limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+        hasBoard: true,
+        archivedFilter: "all",
+        offset: 1,
+      });
+
+      const search = element.querySelector<HTMLInputElement>('input[type="search"]')!;
+      search.value = "old";
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      await element.updateComplete;
+      expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(1);
+      expect(element.textContent).toContain("Old dashboard");
+    },
+  );
 
   it("filters by search and author and sorts visible cards by title", async () => {
     const element = document.createElement("openclaw-dashboards-page") as DashboardsPageElement;

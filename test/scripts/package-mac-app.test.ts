@@ -1303,6 +1303,64 @@ describe("package-mac-app plist stamping", () => {
     expect(helperCopy).toContain('chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"');
   });
 
+  it.each(["primary", "secondary"])(
+    "merges framework architectures when %s file output exceeds the pipe buffer",
+    (verboseFramework) => {
+      const root = tempDirs.make("openclaw-package-framework-pipe-");
+      const primary = path.join(root, "primary.framework");
+      const secondary = path.join(root, "secondary.framework");
+      const destination = path.join(root, "destination.framework");
+      for (const framework of [primary, secondary, destination]) {
+        mkdirSync(framework);
+        writeFileSync(
+          path.join(framework, "Fixture"),
+          framework === secondary ? "arm64 x86_64\n" : "arm64\n",
+        );
+        writeFileSync(path.join(framework, "Info.plist"), "resource\n");
+      }
+      const description = path.join(root, "file-output");
+      // A matching first line followed by more than a pipe can buffer makes an
+      // early-exiting grep kill the producer, without depending on scheduling.
+      writeFileSync(
+        description,
+        "Mach-O universal binary with 2 architectures\n" + "architecture detail\n".repeat(65536),
+      );
+      const helper = getMergeFrameworkMachOsBlock()
+        .replaceAll("/usr/bin/file", "fixture_file")
+        .replaceAll("/usr/bin/lipo", "fixture_lipo");
+      const result = runHelper(`
+        set -euo pipefail
+        fixture_file() {
+          if [[ "$1" == */Info.plist ]]; then
+            printf 'XML document\\n'
+          elif [[ "$1" == */${verboseFramework}.framework/Fixture ]]; then
+            cat ${JSON.stringify(description)}
+          else
+            printf 'Mach-O 64-bit executable\\n'
+          fi
+        }
+        fixture_lipo() {
+          case "$1" in
+            -info) printf 'Architectures in the fat file: %s are: %s\\n' "$2" "$(cat "$2")" ;;
+            -thin)
+              [[ "$2" == x86_64 && "$4" == -output ]] || return 2
+              printf '%s\\n' "$2" > "$5" ;;
+            -create)
+              [[ "$4" == -output ]] || return 2
+              cat "$2" "$3" > "$5" ;;
+            *) return 2 ;;
+          esac
+        }
+        ${helper}
+        merge_framework_machos ${JSON.stringify(primary)} ${JSON.stringify(destination)} ${JSON.stringify(secondary)}
+      `);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(path.join(destination, "Fixture"), "utf8")).toBe("arm64\nx86_64\n");
+      expect(readFileSync(path.join(destination, "Info.plist"), "utf8")).toBe("resource\n");
+    },
+  );
+
   it.runIf(process.platform === "darwin")(
     "merges framework Mach-O binaries when the checkout path contains glob metacharacters",
     () => {

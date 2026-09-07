@@ -770,6 +770,14 @@ those defaults to account entries or remove them from the root; the former
 shadows operator settings and the latter can leave group access open.
 This replaces `buildCommonChannelAccountShape` and its defaulting flags.
 
+Use `refineChannelDmPolicy({ channelId, value, ctx })` from the same subpath
+to validate the root policy against `allowFrom`. Pass `accountId` to validate
+one account with root-policy and allowlist inheritance, including explicit
+empty-array overrides. The helper emits the standard root/account error paths
+and messages for `open` and `allowlist` policies. Keep account iteration,
+disabled-account filtering, and ordering relative to other refinements in the
+channel, since those rules differ between plugins.
+
 Use `mergeAccountConfig` or `resolveMergedAccountConfig` through the existing
 `openclaw/plugin-sdk/account-helpers` export for runtime inheritance. Their
 shared implementation lives at `src/config/channel-account-config.ts`;

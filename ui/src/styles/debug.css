@@ -21,6 +21,17 @@
   white-space: nowrap;
 }
 
+@media (max-width: 640px) {
+  .command-lanes-table-wrap {
+    max-height: none;
+  }
+
+  .settings-table--stacked .command-lane-row__name {
+    max-width: none;
+    white-space: normal;
+  }
+}
+
 openclaw-debug-overlay {
   display: contents;
 }
