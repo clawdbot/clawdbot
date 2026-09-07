@@ -17,7 +17,11 @@ import { isTransientSqliteBackupPath } from "./backup-volatile-filter.js";
 import { hasErrnoCode } from "./errno.js";
 import { collectErrorGraphCandidates, formatErrorMessage } from "./errors.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
-import { resolveSqliteDatabaseFilePaths, SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
+import {
+  isAppleDoubleSqliteMetadataPath,
+  resolveSqliteDatabaseFilePaths,
+  SQLITE_SIDECAR_SUFFIXES,
+} from "./sqlite-files.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import {
   createLegacyAuditDatabaseWitness,
@@ -93,6 +97,9 @@ function resolveBackupAgentDatabaseOwner(
 }
 
 function resolveSqliteBackupDatabasePath(sourcePath: string): string | undefined {
+  if (isAppleDoubleSqliteMetadataPath(sourcePath)) {
+    return undefined;
+  }
   for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
     if (sourcePath.endsWith(suffix)) {
       const databasePath = sourcePath.slice(0, -suffix.length);

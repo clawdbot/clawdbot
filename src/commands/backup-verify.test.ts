@@ -256,6 +256,51 @@ describe("backupVerifyCommand", () => {
     }
   });
 
+  it("treats AppleDouble ._.sqlite metadata as a non-snapshot archive entry", async () => {
+    const archiveDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-backup-verify-appledouble-"),
+    );
+    try {
+      const runtime = createBackupVerifyRuntime();
+      const nowMs = Date.UTC(2026, 2, 9, 0, 0, 1);
+      const archiveRoot = buildBackupArchiveRoot(nowMs);
+      const archivePath = path.join(archiveDir, "backup.tar.gz");
+      const manifestPath = path.join(archiveDir, "manifest.json");
+      const payloadPath = path.join(archiveDir, "._cron.sqlite");
+      const payloadArchivePath = `${archiveRoot}/payload/posix/tmp/.openclaw/._cron.sqlite`;
+      await fs.writeFile(
+        manifestPath,
+        `${JSON.stringify(createBackupManifest(payloadArchivePath, archiveRoot), null, 2)}\n`,
+        "utf8",
+      );
+      await fs.writeFile(payloadPath, "not sqlite\n", "utf8");
+      await tar.c(
+        {
+          file: archivePath,
+          gzip: true,
+          portable: true,
+          preservePaths: true,
+          onWriteEntry: (entry) => {
+            if (isTarSourcePath(entry.path, manifestPath)) {
+              entry.path = `${archiveRoot}/manifest.json`;
+              return;
+            }
+            if (isTarSourcePath(entry.path, payloadPath)) {
+              entry.path = payloadArchivePath;
+            }
+          },
+        },
+        [manifestPath, payloadPath],
+      );
+      const verified = await backupVerifyCommand(runtime, { archive: archivePath });
+
+      expect(verified.ok).toBe(true);
+      expect(verified.assetCount).toBeGreaterThan(0);
+    } finally {
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     {
       name: "missing archive",

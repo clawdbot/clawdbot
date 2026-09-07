@@ -15,7 +15,7 @@ import { isTransientSqliteBackupPath } from "../infra/backup-volatile-filter.js"
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { SQLITE_SIDECAR_SUFFIXES } from "../infra/sqlite-files.js";
+import { isAppleDoubleSqliteMetadataPath, SQLITE_SIDECAR_SUFFIXES } from "../infra/sqlite-files.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
@@ -195,6 +195,9 @@ function resolveCanonicalStateAssetRoot(manifest: BackupManifest): string | unde
 
 function isSqliteSnapshotRelativePath(relativePath: string): boolean {
   const portablePath = resolvePortableArchivePathKey(relativePath);
+  if (isAppleDoubleSqliteMetadataPath(portablePath)) {
+    return false;
+  }
   if (!portablePath.endsWith(".sqlite")) {
     return false;
   }
