@@ -7,7 +7,7 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { loadConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
@@ -207,6 +207,7 @@ export function upsertAuthProfile(params: {
 
 /** Removes auth profiles and related state for a provider, optionally narrowed to exact IDs. */
 export async function removeProviderAuthProfilesWithLock(params: {
+  cfg?: OpenClawConfig;
   provider: string;
   agentDir?: string;
   profileIds?: readonly string[];
@@ -232,7 +233,7 @@ export async function removeProviderAuthProfilesWithLock(params: {
           : { provider: params.provider }),
       }),
     );
-    const result = await removeAuthProfileTargetsWithLocks(targets);
+    const result = await removeAuthProfileTargetsWithLocks(targets, params.cfg ?? {});
     if (result.kind === "updated") {
       return result.stores.at(-1) ?? null;
     }
@@ -314,6 +315,7 @@ type AuthProfileRemovalResult =
 
 async function removeAuthProfileTargetsWithLocks(
   targets: readonly AuthProfileRemovalTarget[],
+  cfg: OpenClawConfig,
 ): Promise<AuthProfileRemovalResult> {
   const lockKeys: OAuthProfileLockKey[] = targets.flatMap((target) =>
     [...target.expectedProfiles].flatMap(([profileId, credential]) =>
@@ -330,7 +332,6 @@ async function removeAuthProfileTargetsWithLocks(
       }
     }
 
-    const cfg = loadConfig();
     for (const target of targets) {
       for (const [profileId, credential] of target.expectedProfiles) {
         if (credential?.type !== "oauth") {
@@ -374,6 +375,7 @@ async function removeAuthProfileTargetsWithLocks(
 
 /** Removes selected auth profiles and every state pointer that references them. */
 export async function removeAuthProfilesWithLock(params: {
+  cfg?: OpenClawConfig;
   profileIds: readonly string[];
   agentDir?: string;
 }): Promise<AuthProfileStore | null> {
@@ -384,9 +386,10 @@ export async function removeAuthProfilesWithLock(params: {
     );
   }
   for (let attempt = 0; attempt < OAUTH_REMOVAL_MAX_ATTEMPTS; attempt += 1) {
-    const result = await removeAuthProfileTargetsWithLocks([
-      createAuthProfileRemovalTarget({ agentDir: params.agentDir, profileIds }),
-    ]);
+    const result = await removeAuthProfileTargetsWithLocks(
+      [createAuthProfileRemovalTarget({ agentDir: params.agentDir, profileIds })],
+      params.cfg ?? {},
+    );
     if (result.kind === "updated") {
       return result.stores[0] ?? null;
     }
@@ -403,6 +406,7 @@ export async function removeAuthProfilesWithLock(params: {
  * store lets the profile reappear on the next status read and auth warmup.
  */
 export async function removeAuthProfilesAcrossOwnerStores(params: {
+  cfg?: OpenClawConfig;
   agentDir?: string;
   profileIds: readonly string[];
 }): Promise<boolean> {
@@ -423,6 +427,7 @@ export async function removeAuthProfilesAcrossOwnerStores(params: {
       [...profilesByOwner].map(([agentDir, profileIds]) =>
         createAuthProfileRemovalTarget({ agentDir, profileIds }),
       ),
+      params.cfg ?? {},
     );
     if (result.kind === "updated") {
       return true;

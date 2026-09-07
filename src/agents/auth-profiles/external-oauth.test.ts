@@ -11,7 +11,10 @@ import { addEnvBackedAgentCredentials } from "../agent-auth-discovery-core.js";
 import { overlayExternalAuthProfiles } from "./external-auth-runtime.js";
 import { syncPersistedExternalCliAuthProfiles } from "./external-auth.js";
 import { testing } from "./external-auth.test-support.js";
-import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
+import {
+  isPersistedExternalCliAuthProfile,
+  readExternalCliBootstrapCredential,
+} from "./external-cli-sync.js";
 import { createFailedOAuthRefreshFence, createOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import { getRuntimeExternalCliProfileIds } from "./runtime-external-profile-references.js";
 import {
@@ -80,6 +83,34 @@ describe("auth external oauth helpers", () => {
   afterEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
     testing.resetResolveExternalAuthProfilesForTest();
+  });
+
+  it("recognizes only persisted external CLI provenance as managed ownership", () => {
+    const profileId = "minimax-portal:minimax-cli";
+    const credential = createCredential({
+      provider: "minimax-portal",
+      authFlow: "external-cli",
+    });
+
+    expect(isPersistedExternalCliAuthProfile({ profileId, credential })).toBe(true);
+    expect(
+      isPersistedExternalCliAuthProfile({
+        profileId,
+        credential: { ...credential, authFlow: "device-code" },
+      }),
+    ).toBe(false);
+    expect(
+      isPersistedExternalCliAuthProfile({
+        profileId,
+        credential: { ...credential, authFlow: undefined },
+      }),
+    ).toBe(false);
+    expect(
+      isPersistedExternalCliAuthProfile({
+        profileId: "openai:default",
+        credential: { ...credential, provider: "openai" },
+      }),
+    ).toBe(false);
   });
 
   it("overlays provider-managed runtime oauth profiles onto the store", () => {
@@ -216,8 +247,54 @@ describe("auth external oauth helpers", () => {
     expect(synced.profiles[profileId]).toMatchObject({
       access: "fresh-minimax-access",
       refresh: "fresh-minimax-refresh",
+      authFlow: "external-cli",
     });
     expect(readMiniMaxCliCredentialsCachedMock).toHaveBeenCalledOnce();
+  });
+
+  it("backfills durable provenance for a matching usable MiniMax CLI profile", () => {
+    const profileId = "minimax-portal:minimax-cli";
+    const expires = createUsableOAuthExpiry();
+    const existing = createCredential({
+      provider: "minimax-portal",
+      access: "shared-minimax-access",
+      refresh: "shared-minimax-refresh",
+      expires,
+    });
+    readMiniMaxCliCredentialsCachedMock.mockReturnValueOnce({
+      ...existing,
+      access: "rotated-minimax-access",
+    });
+
+    const synced = syncPersistedExternalCliAuthProfiles(createStore({ [profileId]: existing }));
+
+    expect(synced.profiles[profileId]).toEqual({
+      ...existing,
+      authFlow: "external-cli",
+    });
+    expect(readMiniMaxCliCredentialsCachedMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not assign CLI provenance from access-token equality alone", () => {
+    const profileId = "minimax-portal:minimax-cli";
+    const existing = createCredential({
+      provider: "minimax-portal",
+      access: "shared-minimax-access",
+      refresh: "native-minimax-refresh",
+      expires: createUsableOAuthExpiry(),
+      authFlow: "device-code",
+    });
+    readMiniMaxCliCredentialsCachedMock.mockReturnValueOnce({
+      ...existing,
+      refresh: "external-minimax-refresh",
+      authFlow: undefined,
+    });
+
+    const store = createStore({ [profileId]: existing });
+    const synced = syncPersistedExternalCliAuthProfiles(store);
+
+    expect(synced).toBe(store);
+    expect(isPersistedExternalCliAuthProfile({ profileId, credential: existing })).toBe(false);
   });
 
   it("refreshes persisted MiniMax without granting runtime CLI ownership", () => {
@@ -245,6 +322,7 @@ describe("auth external oauth helpers", () => {
     expect(prepared.profiles[profileId]).toMatchObject({
       access: "fresh-minimax-access",
       refresh: "fresh-minimax-refresh",
+      authFlow: "external-cli",
     });
     expect(getRuntimeExternalCliProfileIds(prepared)).toEqual([]);
   });

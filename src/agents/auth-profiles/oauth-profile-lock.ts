@@ -11,9 +11,10 @@ export type OAuthProfileLockKey = {
 export async function withOAuthProfileLock<T>(
   key: OAuthProfileLockKey,
   operation: () => Promise<T>,
+  options?: { env?: NodeJS.ProcessEnv },
 ): Promise<T> {
   return await withFileLock(
-    resolveOAuthRefreshLockPath(key.provider, key.profileId),
+    resolveOAuthRefreshLockPath(key.provider, key.profileId, options?.env),
     OAUTH_REFRESH_LOCK_OPTIONS,
     operation,
   );
@@ -23,6 +24,7 @@ export async function withOAuthProfileLock<T>(
 export async function withOAuthProfileLocks<T>(
   keys: readonly OAuthProfileLockKey[],
   operation: () => Promise<T>,
+  options?: { env?: NodeJS.ProcessEnv },
 ): Promise<T> {
   const ordered = [
     ...new Map(keys.map((key) => [`${key.provider}\0${key.profileId}`, key] as const)).values(),
@@ -33,7 +35,7 @@ export async function withOAuthProfileLocks<T>(
   const enter = async (index: number): Promise<T> => {
     const key = ordered[index];
     return key
-      ? await withOAuthProfileLock(key, async () => await enter(index + 1))
+      ? await withOAuthProfileLock(key, async () => await enter(index + 1), options)
       : await operation();
   };
   return await enter(0);

@@ -53,6 +53,10 @@ vi.mock("./external-cli-sync.js", () => ({
     credential.access.trim().length > 0 &&
     Number.isFinite(credential.expires) &&
     credential.expires - now > 5 * 60 * 1000,
+  isPersistedExternalCliAuthProfile: (params: { profileId: string; credential: OAuthCredential }) =>
+    params.profileId === "minimax-portal:minimax-cli" &&
+    params.credential.provider === "minimax-portal" &&
+    params.credential.authFlow === "external-cli",
   readExternalCliBootstrapCredential: () => null,
   resolveExternalCliAuthProfiles: () => [],
   shouldBootstrapFromExternalCliCredential: () => false,

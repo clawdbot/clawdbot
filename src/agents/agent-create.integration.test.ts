@@ -145,11 +145,12 @@ it.each(["workspace", "workspace-write", "config"] as const)(
         await pause();
       }
     });
+    const commit = vi.fn();
     const rollback = vi.fn(async () => await fs.rm(stagedFile));
     const prepareConfigCommit = vi.fn(async () => {
       await fs.writeFile(stagedFile, "staged before publication");
       await pause();
-      return rollback;
+      return { commit, rollback };
     });
     const creation = createAgent({
       name: "prepared",
@@ -174,6 +175,7 @@ it.each(["workspace", "workspace-write", "config"] as const)(
       expect.soft(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
       expect.soft(readAgentProvenance("prepared")).toBeUndefined();
       expect.soft(rollback).toHaveBeenCalledTimes(phase === "config" ? 1 : 0);
+      expect.soft(commit).not.toHaveBeenCalled();
       expect.soft(await fs.stat(stagedFile).catch(() => null)).toBeNull();
       if (phase !== "config") {
         expect.soft(await fs.readdir(workspace)).toEqual([]);
@@ -216,6 +218,7 @@ it("finishes creation bookkeeping when delegated authority closes after successf
   });
   deletion.finish();
   const rollback = vi.fn();
+  const commit = vi.fn();
   try {
     const created = await createAgent({
       name: "published",
@@ -225,7 +228,7 @@ it("finishes creation bookkeeping when delegated authority closes after successf
           throw new Error("creation authority closed");
         }
       },
-      prepareConfigCommit: async () => rollback,
+      prepareConfigCommit: async () => ({ commit, rollback }),
       transformConfig: async (params) => {
         const result = await transformConfigFileWithRetry(params);
         releaseAgentRunDelegatedAuthority(authority);
@@ -238,6 +241,8 @@ it("finishes creation bookkeeping when delegated authority closes after successf
       "agents.entries.published",
     );
     expect(readAgentDeletionJournal("published")).toBeUndefined();
+    expect(commit).toHaveBeenCalledOnce();
+    expect(rollback).not.toHaveBeenCalled();
     expect(readAgentProvenance("published")).toMatchObject({ createdVia: "operator" });
     expect(rollback).not.toHaveBeenCalled();
   } finally {

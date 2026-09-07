@@ -35,7 +35,15 @@ function canonicalizeDatabasePath(databasePath: string): string {
 
 async function collectStateRootCandidates(env: NodeJS.ProcessEnv): Promise<CandidateSource[]> {
   const agentsRoot = path.join(resolveStateDir(env), "agents");
-  const entries = await fs.readdir(agentsRoot, { withFileTypes: true }).catch(() => []);
+  let entries: Awaited<ReturnType<typeof fs.readdir>>;
+  try {
+    entries = await fs.readdir(agentsRoot, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
   return entries
     .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
     .map((entry) => {

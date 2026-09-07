@@ -1,5 +1,4 @@
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { loadConfig } from "../../config/config.js";
 /**
  * OAuth credential manager.
  * Resolves usable access tokens, refreshes expired credentials under global
@@ -13,6 +12,7 @@ import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { OAUTH_REFRESH_CALL_TIMEOUT_MS, authProfilesLog } from "./constants.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
+import { isPersistedExternalCliAuthProfile } from "./external-cli-sync.js";
 import { shouldMirrorRefreshedOAuthCredential } from "./oauth-identity.js";
 import { withOAuthProfileLock } from "./oauth-profile-lock.js";
 import {
@@ -566,7 +566,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       ? resolveAuthProfileDatabasePath(ownerAgentDir)
       : resolveSharedAuthStorePath();
     const globalRefreshLockPath = resolveOAuthRefreshLockPath(params.provider, params.profileId);
-    const peerConfig = params.cfg ?? loadConfig();
+    const peerConfig = params.cfg ?? {};
 
     try {
       return await withOAuthProfileLock(
@@ -579,6 +579,23 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           }
           const storedFence = isOAuthRefreshFence(cred);
           let credentialToRefresh = cred;
+          if (
+            !storedFence &&
+            !personalProfile &&
+            isPersistedExternalCliAuthProfile({
+              profileId: params.profileId,
+              credential: cred,
+            })
+          ) {
+            authProfilesLog.warn(
+              "refused native OAuth refresh for an externally owned credential",
+              {
+                profileId: params.profileId,
+                provider: cred.provider,
+              },
+            );
+            return { kind: "unavailable" };
+          }
 
           if (
             params.forceRefresh &&
@@ -895,7 +912,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     }
 
     params.attemptedCredentials?.push(claim.credential);
-    const peerConfig = params.cfg ?? loadConfig();
+    const peerConfig = params.cfg ?? {};
     let activePeerClaims = claim.peerClaims;
 
     const failClaim = async (): Promise<OAuthCredential | null> => {
@@ -988,7 +1005,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           ...refreshed,
           type: "oauth",
         } satisfies OAuthCredential;
-        if (!hasUsableOAuthCredential(rotated)) {
+        if (!hasUsableOAuthCredential(rotated, { refreshMarginMs: 0 })) {
           throw new Error("OAuth refresh returned an unusable credential");
         }
         const settled = await withOAuthProfileLock(
@@ -1014,6 +1031,15 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
                 }
                 peerSettlementError = error;
               }
+            }
+            const claimSettlement = await settleOAuthRefreshClaim({
+              agentDir: claim.ownerAgentDir,
+              profileId: params.profileId,
+              fence: claim.fence,
+              refreshed: rotated,
+            });
+            if (!claimSettlement) {
+              return null;
             }
             if (!peerSettlementError) {
               try {
@@ -1044,12 +1070,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
                 error: formatErrorMessage(peerSettlementError),
               });
             }
-            return await settleOAuthRefreshClaim({
-              agentDir: claim.ownerAgentDir,
-              profileId: params.profileId,
-              fence: claim.fence,
-              refreshed: rotated,
-            });
+            return claimSettlement;
           },
         );
         if (!settled) {

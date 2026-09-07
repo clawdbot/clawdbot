@@ -2,13 +2,21 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
+import {
+  ensureAuthProfileStore,
+  saveAuthProfileStore,
+} from "../agents/auth-profiles/store-runtime.js";
+import type { OAuthCredential } from "../agents/auth-profiles/types.js";
 import { runSecretsAudit } from "../secrets/audit.js";
 import { readSecretStoreValue } from "../secrets/store/secret-store.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { persistProviderAuthProfileBatch } from "./provider-auth-persistence.js";
+import {
+  persistProviderAuthProfileBatch,
+  persistProviderAuthProfilesAfterLogin,
+  stageProviderAuthProfileBatch,
+} from "./provider-auth-persistence.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -18,6 +26,35 @@ afterEach(() => {
 });
 
 describe("provider auth protected persistence", () => {
+  const protectedTokenProfile = (profileId: string, token: string) => ({
+    profileId,
+    credential: { type: "token" as const, provider: "openai", token },
+    secretStorage: { kind: "store" as const, namePrefix: "OPENAI_TOKEN" },
+  });
+
+  function resolvePersistedToken(params: {
+    agentDir: string;
+    env: NodeJS.ProcessEnv;
+    profileId: string;
+  }) {
+    const profile = ensureAuthProfileStore(params.agentDir, {
+      readOnly: true,
+      syncExternalCli: false,
+    }).profiles[params.profileId];
+    if (!profile || profile.type !== "token" || !profile.tokenRef) {
+      throw new Error("Expected persisted protected token profile");
+    }
+    const resolved = readSecretStoreValue({
+      scope: { kind: "team" },
+      name: profile.tokenRef.id,
+      database: { env: params.env },
+    });
+    if (!resolved.ok) {
+      throw new Error(`Expected resolved protected token: ${resolved.error.message}`);
+    }
+    return { profile, token: resolved.value };
+  }
+
   it("stores a provider-minted token behind a resolvable ref without an audit finding", async () => {
     const rootDir = tempDirs.make("openclaw-provider-auth-store-");
     const stateDir = path.join(rootDir, "state");
@@ -58,7 +95,7 @@ describe("provider auth protected persistence", () => {
           readOnly: true,
           syncExternalCli: false,
         }).profiles["github-copilot:github"];
-        expect(profile).toEqual(persisted.profiles[0]?.credential);
+        expect(profile).toEqual(persisted[0]?.credential);
         expect(profile).not.toHaveProperty("token");
         expect(profile).toMatchObject({
           type: "token",
@@ -90,5 +127,205 @@ describe("provider auth protected persistence", () => {
         ).toBe(false);
       },
     );
+  });
+
+  it("retains protected material when rollback cannot restore a consumed OAuth generation", async () => {
+    const rootDir = tempDirs.make("openclaw-provider-auth-rollback-");
+    const stateDir = path.join(rootDir, "state");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const profileId = "openai:default";
+    const previous = {
+      type: "oauth",
+      provider: "openai",
+      access: "previous-access",
+      refresh: "single-use-refresh",
+      expires: Date.now() + 60_000,
+    } satisfies OAuthCredential;
+    saveAuthProfileStore({ version: 1, profiles: { [profileId]: previous } }, agentDir);
+
+    const persisted = await stageProviderAuthProfileBatch({
+      profiles: [
+        {
+          profileId,
+          credential: {
+            type: "token",
+            provider: "openai",
+            token: "replacement-token",
+          },
+          secretStorage: {
+            kind: "store",
+            namePrefix: "OPENAI_TOKEN",
+          },
+        },
+      ],
+      config: {},
+      env,
+      stateDir,
+      agentDir,
+    });
+    await persisted.rollback();
+
+    const profile = ensureAuthProfileStore(agentDir, {
+      readOnly: true,
+      syncExternalCli: false,
+    }).profiles[profileId];
+    expect(profile).toMatchObject({
+      type: "token",
+      provider: "openai",
+      tokenRef: {
+        source: "store",
+        provider: "default",
+        id: expect.stringMatching(/^OPENAI_TOKEN_[A-F0-9]{24}$/),
+      },
+    });
+    if (!profile || profile.type !== "token" || !profile.tokenRef) {
+      throw new Error("Expected retained tokenRef");
+    }
+    expect(
+      readSecretStoreValue({
+        scope: { kind: "team" },
+        name: profile.tokenRef.id,
+        database: { env },
+      }),
+    ).toEqual({ ok: true, value: "replacement-token" });
+  });
+
+  it("serializes protected and inline same-profile stages before restoring baseline C", async () => {
+    const rootDir = tempDirs.make("openclaw-provider-auth-serialized-rollback-");
+    const stateDir = path.join(rootDir, "state");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const profileId = "openai:default";
+    const persist = (token: string) =>
+      persistProviderAuthProfileBatch({
+        profiles: [protectedTokenProfile(profileId, token)],
+        config: {},
+        env,
+        stateDir,
+        agentDir,
+      });
+    const stage = (token: string, protect = true) =>
+      stageProviderAuthProfileBatch({
+        profiles: [
+          protect
+            ? protectedTokenProfile(profileId, token)
+            : {
+                profileId,
+                credential: { type: "token", provider: "openai", token },
+              },
+        ],
+        config: {},
+        env,
+        stateDir,
+        agentDir,
+      });
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      await persist("baseline-c");
+      const a = await stage("candidate-a");
+      const bPending = stage("candidate-b", false);
+      const bSettledBeforeA = await Promise.race([
+        bPending.then(() => true),
+        new Promise<false>((resolve) => {
+          setTimeout(() => resolve(false), 25);
+        }),
+      ]);
+      expect(bSettledBeforeA).toBe(false);
+
+      await a.rollback();
+      const b = await bPending;
+      await b.rollback();
+
+      expect(resolvePersistedToken({ agentDir, env, profileId })).toMatchObject({
+        profile: { provider: "openai", type: "token" },
+        token: "baseline-c",
+      });
+    });
+  });
+
+  it("keeps committed A after a later B stage rolls back", async () => {
+    const rootDir = tempDirs.make("openclaw-provider-auth-serialized-commit-");
+    const stateDir = path.join(rootDir, "state");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const profileId = "openai:default";
+    const stage = (token: string) =>
+      stageProviderAuthProfileBatch({
+        profiles: [protectedTokenProfile(profileId, token)],
+        config: {},
+        env,
+        stateDir,
+        agentDir,
+      });
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      await persistProviderAuthProfileBatch({
+        profiles: [protectedTokenProfile(profileId, "baseline-c")],
+        config: {},
+        env,
+        stateDir,
+        agentDir,
+      });
+      const a = await stage("candidate-a");
+      await a.commit();
+      const b = await stage("candidate-b");
+      await b.rollback();
+
+      expect(resolvePersistedToken({ agentDir, env, profileId })).toMatchObject({
+        profile: { provider: "openai", type: "token" },
+        token: "candidate-a",
+      });
+    });
+  });
+
+  it("clears completed-login failure state in the immediate-commit path", async () => {
+    const rootDir = tempDirs.make("openclaw-provider-auth-login-reset-");
+    const stateDir = path.join(rootDir, "state");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const profileId = "openai:default";
+    const lastUsed = Date.now() - 10_000;
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: { type: "token", provider: "openai", token: "stale-token" },
+        },
+        usageStats: {
+          [profileId]: {
+            errorCount: 3,
+            cooldownUntil: Date.now() + 60_000,
+            cooldownReason: "auth_permanent",
+            lastUsed,
+          },
+        },
+      },
+      agentDir,
+    );
+
+    await persistProviderAuthProfilesAfterLogin({
+      profiles: [
+        {
+          profileId,
+          credential: { type: "token", provider: "openai", token: "fresh-token" },
+        },
+      ],
+      config: {},
+      env,
+      stateDir,
+      agentDir,
+    });
+
+    expect(
+      ensureAuthProfileStore(agentDir, { readOnly: true, syncExternalCli: false }),
+    ).toMatchObject({
+      profiles: {
+        [profileId]: { type: "token", provider: "openai", token: "fresh-token" },
+      },
+      usageStats: {
+        [profileId]: { errorCount: 0, lastUsed },
+      },
+    });
   });
 });

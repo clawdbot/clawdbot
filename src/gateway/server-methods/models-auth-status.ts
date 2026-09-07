@@ -186,6 +186,7 @@ function createAuthLogoutAbortOps(context: GatewayRequestContext): ChatAbortOps 
 // must remove every owning store or stale profiles reappear on the next status
 // read and provider-auth warmup.
 async function removeProviderAuthProfilesAcrossOwnerStores(params: {
+  cfg: OpenClawConfig;
   provider: string;
   agentDir: string;
   profileIds: string[];
@@ -201,6 +202,7 @@ async function removeProviderAuthProfilesAcrossOwnerStores(params: {
   }
   for (const ownerAgentDir of ownerAgentDirs) {
     const updatedStore = await removeProviderAuthProfilesWithLock({
+      cfg: params.cfg,
       provider: params.provider,
       agentDir: ownerAgentDir,
     });
@@ -522,8 +524,13 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         return;
       }
       const removed = selection.profileIds
-        ? await removeAuthProfilesAcrossOwnerStores({ agentDir, profileIds: removedProfiles })
+        ? await removeAuthProfilesAcrossOwnerStores({
+            cfg,
+            agentDir,
+            profileIds: removedProfiles,
+          })
         : await removeProviderAuthProfilesAcrossOwnerStores({
+            cfg,
             provider,
             agentDir,
             profileIds: removedProfiles,

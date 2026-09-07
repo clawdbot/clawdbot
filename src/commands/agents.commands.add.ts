@@ -36,7 +36,7 @@ import {
   transformConfigWithPendingPluginInstalls,
 } from "../plugins/install-record-commit.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
-import { persistProviderAuthProfileBatch } from "../plugins/provider-auth-persistence.js";
+import { stageProviderAuthProfileBatch } from "../plugins/provider-auth-persistence.js";
 import type { ProviderAuthProfile } from "../plugins/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -502,7 +502,7 @@ export async function agentsAddCommand(
         skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
       });
       const authPersistence = stagedAuthBatch
-        ? await persistProviderAuthProfileBatch(stagedAuthBatch)
+        ? await stageProviderAuthProfileBatch(stagedAuthBatch)
         : undefined;
       try {
         nextConfig = await channelSetup.commit(nextConfig, async (configToCommit) => {
@@ -513,9 +513,10 @@ export async function agentsAddCommand(
           return committed.config;
         });
       } catch (error) {
-        authPersistence?.rollback();
+        await authPersistence?.rollback();
         throw error;
       }
+      await authPersistence?.commit();
       payload = {
         agentId: target.agentId,
         name: agentName,
@@ -535,7 +536,7 @@ export async function agentsAddCommand(
           ...(stagedAuthBatch
             ? {
                 prepareConfigCommit: async () =>
-                  (await persistProviderAuthProfileBatch(stagedAuthBatch)).rollback,
+                  await stageProviderAuthProfileBatch(stagedAuthBatch),
               }
             : {}),
         });

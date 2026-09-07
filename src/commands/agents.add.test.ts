@@ -21,6 +21,7 @@ import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-hel
 type SetupChannels = typeof import("./onboard-channels.js").setupChannels;
 type EnsureWorkspaceAndSessions = typeof import("./onboard-helpers.js").ensureWorkspaceAndSessions;
 type PrepareAuthChoice = typeof import("./auth-choice.js").prepareAuthChoice;
+type CreateAgentParams = Parameters<typeof import("../agents/agent-create.js").createAgent>[0];
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const writeConfigFileMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
@@ -203,50 +204,42 @@ describe("agents add command", () => {
     transformConfigWithPendingPluginInstallsMock.mockClear();
     checkAgentCreationGateMock.mockReset().mockResolvedValue(undefined);
     createAgentMock.mockReset();
-    createAgentMock.mockImplementation(
-      async (params: {
-        name?: string;
-        workspace?: string;
-        entry?: { id: string; name?: string; workspace?: string; agentDir?: string };
-        bindingSpecs?: string[];
-        stagedConfig?: Record<string, unknown>;
-        prepareConfigCommit?: () => Promise<(() => void | Promise<void>) | void>;
-      }) => {
-        const name = params.name ?? params.entry?.name ?? params.entry?.id ?? "";
-        const agentId = (params.entry?.id ?? name).toLowerCase();
-        if (agentId === "openclaw" || agentId === "crestodian") {
-          return { status: "error", reason: "reserved-id", agentId };
-        }
-        const binding = params.bindingSpecs?.[0]
+    createAgentMock.mockImplementation(async (params: CreateAgentParams) => {
+      const name = params.name ?? params.entry?.name ?? params.entry?.id ?? "";
+      const agentId = (params.entry?.id ?? name).toLowerCase();
+      if (agentId === "openclaw" || agentId === "crestodian") {
+        return { status: "error", reason: "reserved-id", agentId };
+      }
+      const binding = params.bindingSpecs?.[0]
+        ? {
+            type: "route",
+            agentId,
+            match: { channel: params.bindingSpecs[0].split(":")[0] },
+          }
+        : undefined;
+      const receipt = await params.prepareConfigCommit?.();
+      await receipt?.commit();
+      return {
+        status: "created" as const,
+        agentId,
+        name,
+        workspace: params.workspace ?? params.entry?.workspace ?? `/tmp/workspace-${agentId}`,
+        agentDir: params.entry?.agentDir ?? `/tmp/agent-${agentId}`,
+        bootstrapPending: true,
+        config: params.stagedConfig ?? {},
+        ...(binding
           ? {
-              type: "route",
-              agentId,
-              match: { channel: params.bindingSpecs[0].split(":")[0] },
+              bindingResult: {
+                config: {},
+                added: [],
+                updated: [],
+                skipped: [],
+                conflicts: [{ binding, existingAgentId: "other-agent" }],
+              },
             }
-          : undefined;
-        await params.prepareConfigCommit?.();
-        return {
-          status: "created" as const,
-          agentId,
-          name,
-          workspace: params.workspace ?? params.entry?.workspace ?? `/tmp/workspace-${agentId}`,
-          agentDir: params.entry?.agentDir ?? `/tmp/agent-${agentId}`,
-          bootstrapPending: true,
-          config: params.stagedConfig ?? {},
-          ...(binding
-            ? {
-                bindingResult: {
-                  config: {},
-                  added: [],
-                  updated: [],
-                  skipped: [],
-                  conflicts: [{ binding, existingAgentId: "other-agent" }],
-                },
-              }
-            : {}),
-        };
-      },
-    );
+          : {}),
+      };
+    });
     wizardMocks.createClackPrompter.mockClear();
     pluginLifecycleMocks.withPluginLifecycleLease.mockClear();
     pluginLifecycleMocks.state.active = false;
@@ -792,25 +785,21 @@ describe("agents add command", () => {
       setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
       useFreshAgentWizard({ workspaceDir, confirmValues: [true] });
       stageGuidedAuth();
-      createAgentMock.mockImplementationOnce(
-        async (params: {
-          stagedConfig?: Record<string, unknown>;
-          prepareConfigCommit?: () => Promise<(() => void | Promise<void>) | void>;
-        }) => {
-          expect(pluginLifecycleMocks.state.active).toBe(true);
-          expect(authProfileMocks.persistBatch).not.toHaveBeenCalled();
-          await params.prepareConfigCommit?.();
-          return {
-            status: "created" as const,
-            agentId: "work",
-            name: "work",
-            workspace: workspaceDir,
-            agentDir,
-            bootstrapPending: true,
-            config: params.stagedConfig ?? {},
-          };
-        },
-      );
+      createAgentMock.mockImplementationOnce(async (params: CreateAgentParams) => {
+        expect(pluginLifecycleMocks.state.active).toBe(true);
+        expect(authProfileMocks.persistBatch).not.toHaveBeenCalled();
+        const receipt = await params.prepareConfigCommit?.();
+        await receipt?.commit();
+        return {
+          status: "created" as const,
+          agentId: "work",
+          name: "work",
+          workspace: workspaceDir,
+          agentDir,
+          bootstrapPending: true,
+          config: params.stagedConfig ?? {},
+        };
+      });
 
       await agentsAddCommand({}, runtime);
 

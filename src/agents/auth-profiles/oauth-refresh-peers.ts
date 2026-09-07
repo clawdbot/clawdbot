@@ -7,6 +7,7 @@ import {
   updateCandidateAuthProfileStore,
   type CandidateAuthProfileStore,
 } from "./candidate-stores.js";
+import { isPersistedExternalCliAuthProfile } from "./external-cli-sync.js";
 import { isExactOAuthCredential } from "./oauth-refresh-fence.js";
 import {
   createFailedOAuthRefreshFence,
@@ -35,11 +36,18 @@ function canonicalDatabasePath(databasePath: string): string {
   return resolvePathViaExistingAncestorSync(databasePath);
 }
 
-function isExternalProfile(store: AuthProfileStore, profileId: string): boolean {
-  return (
+function isExternalProfileOwned(
+  store: AuthProfileStore,
+  profileId: string,
+  credential: OAuthCredential,
+): boolean {
+  if (
     store.runtimeExternalProfileIds?.includes(profileId) === true ||
     getRuntimeExternalCliProfileIds(store).includes(profileId)
-  );
+  ) {
+    return true;
+  }
+  return isPersistedExternalCliAuthProfile({ profileId, credential });
 }
 
 function isEligibleHistoricalOAuthPeer(params: {
@@ -53,12 +61,36 @@ function isEligibleHistoricalOAuthPeer(params: {
     params.credential.provider === params.generation.provider &&
     params.credential.copyToAgents !== true &&
     params.credential.oauthRef === undefined &&
-    !isExternalProfile(params.store, params.profileId) &&
+    !isExternalProfileOwned(params.store, params.profileId, params.credential) &&
     isSameOAuthRefreshGeneration({
       profileId: params.profileId,
       left: params.credential,
       right: params.generation,
     })
+  );
+}
+
+function assertExternalOwnershipAllowsClaim(params: {
+  candidate: CandidateAuthProfileStore;
+  store: AuthProfileStore;
+  profileId: string;
+  credential: OAuthCredential;
+  generation: OAuthCredential;
+}): void {
+  if (
+    !isSameOAuthRefreshGeneration({
+      profileId: params.profileId,
+      left: params.credential,
+      right: params.generation,
+    })
+  ) {
+    return;
+  }
+  if (!isExternalProfileOwned(params.store, params.profileId, params.credential)) {
+    return;
+  }
+  throw new Error(
+    `OAuth refresh generation is still owned by an external credential source: ${params.candidate.databasePath}`,
   );
 }
 
@@ -115,6 +147,13 @@ export async function fenceOAuthRefreshPeers(params: {
         claims.push({ candidate });
         continue;
       }
+      assertExternalOwnershipAllowsClaim({
+        candidate,
+        store,
+        profileId: params.profileId,
+        credential,
+        generation: params.generation,
+      });
       if (
         !isEligibleHistoricalOAuthPeer({
           store,
@@ -146,18 +185,26 @@ export async function fenceOAuthRefreshPeers(params: {
           claims.push({ candidate });
           continue;
         }
-        if (
-          current?.type === "oauth" &&
-          isEligibleHistoricalOAuthPeer({
+        if (current?.type === "oauth") {
+          assertExternalOwnershipAllowsClaim({
+            candidate,
             store: updated.store,
             profileId: params.profileId,
             credential: current,
             generation: params.generation,
-          })
-        ) {
-          throw new Error(
-            `OAuth refresh peer changed before it could be fenced: ${candidate.databasePath}`,
-          );
+          });
+          if (
+            isEligibleHistoricalOAuthPeer({
+              store: updated.store,
+              profileId: params.profileId,
+              credential: current,
+              generation: params.generation,
+            })
+          ) {
+            throw new Error(
+              `OAuth refresh peer changed before it could be fenced: ${candidate.databasePath}`,
+            );
+          }
         }
         continue;
       }

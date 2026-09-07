@@ -643,22 +643,26 @@ describe("createAgent", () => {
       dir: "/tmp/default-researcher",
       bootstrapPending: false,
     });
+    const commit = vi.fn();
     const prepareConfigCommit = vi.fn(async () => {
       expect(mocks.ensureAgentWorkspace).toHaveBeenCalledOnce();
       expect(mocks.mkdir).toHaveBeenCalledOnce();
       expect(mocks.rootWrite).toHaveBeenCalledOnce();
       expect(mocks.persisted).not.toHaveProperty("agents");
+      return { commit, rollback: vi.fn() };
     });
 
     await createAgent({ name: "researcher", prepareConfigCommit });
 
     expect(prepareConfigCommit).toHaveBeenCalledOnce();
+    expect(commit).toHaveBeenCalledOnce();
     expect(mocks.persisted).toHaveProperty("agents.entries.researcher");
   });
 
   it("rolls staged config effects back once when config publication fails", async () => {
     const rollback = vi.fn();
-    const prepareConfigCommit = vi.fn(async () => rollback);
+    const commit = vi.fn();
+    const prepareConfigCommit = vi.fn(async () => ({ commit, rollback }));
     mocks.transformConfigFileWithRetry.mockImplementationOnce(async ({ transform }) => {
       await transform(structuredClone(mocks.config), {
         snapshot: { exists: false },
@@ -672,10 +676,12 @@ describe("createAgent", () => {
     );
 
     expect(prepareConfigCommit).toHaveBeenCalledOnce();
+    expect(commit).not.toHaveBeenCalled();
     expect(rollback).toHaveBeenCalledOnce();
   });
 
   it("does not roll staged config effects back after config publication", async () => {
+    const commit = vi.fn();
     const rollback = vi.fn();
     mocks.recordAgentProvenance.mockImplementationOnce(() => {
       throw new Error("injected provenance failure");
@@ -684,11 +690,12 @@ describe("createAgent", () => {
     await expect(
       createAgent({
         name: "researcher",
-        prepareConfigCommit: async () => rollback,
+        prepareConfigCommit: async () => ({ commit, rollback }),
       }),
     ).rejects.toThrow("injected provenance failure");
 
     expect(mocks.persisted).toHaveProperty("agents.entries.researcher");
+    expect(commit).toHaveBeenCalledOnce();
     expect(rollback).not.toHaveBeenCalled();
   });
 

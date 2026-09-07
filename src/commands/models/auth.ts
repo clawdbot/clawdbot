@@ -20,7 +20,6 @@ import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { removeProviderAuthProfilesWithLock } from "../../agents/auth-profiles.js";
 import {
   promoteAuthProfileInOrder,
-  upsertAuthProfileAfterLoginWithLockOrThrow,
   upsertAuthProfileWithLockOrThrow,
 } from "../../agents/auth-profiles/profiles.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
@@ -42,7 +41,7 @@ import {
   resolveProviderMatch,
 } from "../../plugins/provider-auth-choice-helpers.js";
 import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
-import { prepareProviderAuthProfilesForPersistence } from "../../plugins/provider-auth-persistence.js";
+import { persistProviderAuthProfilesAfterLogin } from "../../plugins/provider-auth-persistence.js";
 import { createVpsAwareOAuthHandlers } from "../../plugins/provider-oauth-flow.js";
 import { resolvePluginProvidersCore } from "../../plugins/providers.runtime.js";
 import {
@@ -419,34 +418,18 @@ async function persistProviderAuthResult(params: {
   );
 
   for (const candidate of profiles) {
-    const prepared = prepareProviderAuthProfilesForPersistence({
+    const persisted = await persistProviderAuthProfilesAfterLogin({
       profiles: [candidate],
       config: params.config,
       env: params.env,
+      agentDir: params.agentDir,
+      ...(params.env?.OPENCLAW_STATE_DIR ? { stateDir: params.env.OPENCLAW_STATE_DIR } : {}),
     });
-    const profile = expectDefined(prepared.profiles[0], "prepared auth profile");
+    const profile = expectDefined(persisted[0], "persisted auth profile");
     const configuredSelection = resolveConfiguredAuthSelectionForProvider(
       params.config,
       profile.credential.provider,
     );
-    try {
-      await upsertAuthProfileAfterLoginWithLockOrThrow({
-        profileId: profile.profileId,
-        credential: profile.credential,
-        agentDir: params.agentDir,
-      });
-    } catch (error) {
-      try {
-        prepared.rollback();
-      } catch (rollbackError) {
-        throw new AggregateError(
-          [error, rollbackError],
-          "Provider auth persistence failed and protected-store rollback could not be confirmed.",
-          { cause: rollbackError },
-        );
-      }
-      throw error;
-    }
     persistedProfiles.push(profile);
     const promotion = await promoteAuthProfileInOrder({
       agentDir: params.agentDir,
@@ -1065,6 +1048,7 @@ export async function runModelsAuthLoginFlowCore(
     // profile.
     try {
       const clearedStore = await removeProviderAuthProfilesWithLock({
+        cfg: context.config,
         provider: selectedProvider.id,
         agentDir: context.agentDir,
       });

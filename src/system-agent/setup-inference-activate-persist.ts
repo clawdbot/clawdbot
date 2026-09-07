@@ -29,6 +29,7 @@ import {
   type ActivateSetupInferenceResult,
 } from "./setup-inference-core.js";
 import {
+  commitManualAuthProfiles,
   configReferencesManualAuthProfiles,
   isCodexInstallRecordPersisted,
   manualAuthProfilesPersisted,
@@ -323,6 +324,9 @@ export async function persistActivatedSetupInference(input: {
       },
     });
     state.gatewayRestartRequired = committed.followUp.requiresRestart;
+    if (manualAuthReceipt) {
+      await commitManualAuthProfiles(manualAuthReceipt);
+    }
     if (pendingCodexInstall) {
       codexInstallOwnership = "owned";
     }
@@ -364,6 +368,7 @@ export async function persistActivatedSetupInference(input: {
           !reconciledRuntime ||
           configReferencesManualAuthProfiles(reconciledRuntime, manualAuthReceipt)
         ) {
+          await commitManualAuthProfiles(manualAuthReceipt);
           throw new SetupInferenceActivationIndeterminateError(
             "Inference activation could not confirm its config commit state. The verified credential was retained because the current config may reference it. Run openclaw doctor --fix before retrying.",
           );
@@ -376,6 +381,9 @@ export async function persistActivatedSetupInference(input: {
         }
       }
       throw error;
+    }
+    if (manualAuthReceipt) {
+      await commitManualAuthProfiles(manualAuthReceipt);
     }
     state.gatewayRestartRequired = pendingCodexInstall !== undefined;
     setupInferenceLog.warn(

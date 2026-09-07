@@ -665,6 +665,7 @@ export async function promptAndConfigureLmstudioInteractive(params: {
     }) ?? (normalizedApiKey ? LMSTUDIO_DEFAULT_API_KEY_ENV_VAR : undefined);
   if (!credential) {
     await removeProviderAuthProfilesWithLock({
+      cfg: params.config,
       provider: PROVIDER_ID,
       agentDir: params.agentDir,
     });
@@ -843,6 +844,7 @@ export async function configureLmstudioNonInteractive(
     : ctx;
   if (useHeaderOnlyAuth) {
     await removeProviderAuthProfilesWithLock({
+      cfg: normalizedCtx.config,
       provider: PROVIDER_ID,
       agentDir: normalizedCtx.agentDir,
     });

@@ -1,6 +1,7 @@
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   registerOpenClawAgentDatabase,
@@ -17,6 +18,18 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("candidate auth profile stores", () => {
+  it("fails closed when the state-root agent inventory cannot be read", async () => {
+    const error = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    vi.spyOn(fsPromises, "readdir").mockRejectedValueOnce(error);
+
+    await expect(
+      listCandidateAuthProfileStores({
+        cfg: {},
+        env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-auth-candidates-denied-") },
+      }),
+    ).rejects.toBe(error);
+  });
+
   it("dedupes configured, state-root, and registered custom database paths", async () => {
     const tempRoot = tempDirs.make("openclaw-auth-candidates-");
     const stateDir = path.join(tempRoot, "state");

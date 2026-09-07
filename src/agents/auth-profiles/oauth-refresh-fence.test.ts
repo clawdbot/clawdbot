@@ -352,7 +352,9 @@ describe("OAuth refresh generation fence", () => {
         accountId: "acct-123",
       }),
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(JSON.parse(persisted)[profileId]).toMatchObject({
       access: "second-rotated-access",
       refresh: "second-rotated-refresh",

@@ -381,6 +381,7 @@ describe("llama-server setup", () => {
       expect.objectContaining({ apiKey: undefined, headers: { "X-Tenant": "one" } }),
     );
     expect(removeProviderAuthProfilesWithLockMock).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
       agentDir: undefined,
       provider: "llama-cpp",
       profileIds: ["llama-cpp:default"],
@@ -549,6 +550,7 @@ describe("llama-server setup", () => {
       order: { "llama-cpp": undefined },
     });
     expect(removeProviderAuthProfilesWithLockMock).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
       agentDir: undefined,
       provider: "llama-cpp",
       profileIds: ["llama-cpp:default"],
@@ -594,6 +596,7 @@ describe("llama-server setup", () => {
     expect(result.profiles).toEqual([]);
     expect(runtimeApiKeyMock).not.toHaveBeenCalled();
     expect(removeProviderAuthProfilesWithLockMock).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
       agentDir: undefined,
       provider: "llama-cpp",
       profileIds: ["llama-cpp:default"],
@@ -734,6 +737,7 @@ describe("llama-server setup", () => {
       expect.objectContaining({ primary: "llama-cpp/qwen/model:Q4_K_M" }),
     );
     expect(removeProviderAuthProfilesWithLockMock).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
       agentDir: undefined,
       provider: "llama-cpp",
       profileIds: ["llama-cpp:default"],
@@ -838,6 +842,7 @@ describe("llama-server setup", () => {
       expect(ctx.toApiKeyCredential).not.toHaveBeenCalled();
       expect(upsertAuthProfileWithLockMock).not.toHaveBeenCalled();
       expect(removeProviderAuthProfilesWithLockMock).toHaveBeenCalledWith({
+        cfg: expect.any(Object),
         agentDir: "/test/agent",
         provider: "llama-cpp",
         profileIds: ["llama-cpp:default"],
