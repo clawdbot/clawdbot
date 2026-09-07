@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
 import type { ProviderMessage, ProviderModel } from "../provider-types.js";
+import { FAILED_ASSISTANT_REPLAY_TEXT } from "../replay-turn-classification.js";
 import type { Message, Model, ToolResultMessage } from "../types.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import { transformMessages } from "./transform-messages.js";
@@ -17,6 +18,50 @@ const model: Model<"openai-completions"> = {
   contextWindow: 128_000,
   maxTokens: 4_096,
 };
+
+describe("failed assistant replay at the provider boundary", () => {
+  it("keeps a text-only failed turn between the user turns it separates", () => {
+    // Native Anthropic, Responses, Completions, Gemini and Mistral all replay through
+    // this owner. Dropping the failed turn left the two user turns adjacent, so the
+    // earlier request looked unanswered and could be redone.
+    const messages = [
+      { role: "user", content: [{ type: "text", text: "summarize the incident" }], timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Starting the incident summary" }],
+        stopReason: "error",
+        timestamp: 2,
+      },
+      { role: "user", content: [{ type: "text", text: "any update?" }], timestamp: 3 },
+    ] as unknown as Message[];
+
+    const transformed = transformMessages(messages, model);
+
+    expect(transformed).toHaveLength(3);
+    expect(transformed[1]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: FAILED_ASSISTANT_REPLAY_TEXT }],
+    });
+    // The partial output itself must not replay.
+    expect(JSON.stringify(transformed)).not.toContain("Starting the incident summary");
+  });
+
+  it("still drops a failed turn that carries tool calls", () => {
+    const messages = [
+      { role: "user", content: [{ type: "text", text: "run it" }], timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call-1", name: "bash", arguments: {} }],
+        stopReason: "aborted",
+        timestamp: 2,
+      },
+    ] as unknown as Message[];
+
+    const transformed = transformMessages(messages, model);
+
+    expect(transformed.some((m) => m.role === "assistant")).toBe(false);
+  });
+});
 
 describe("transformMessages", () => {
   it("normalizes null or missing content before provider transforms", () => {

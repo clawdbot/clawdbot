@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FAILED_ASSISTANT_REPLAY_TEXT } from "../replay-turn-classification.js";
 import type { Model } from "../types.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
@@ -230,7 +231,11 @@ describe("openai completions params", () => {
       undefined,
     );
 
-    const estimatedInputTokens = Math.ceil((userText.length / 4) * 1.25);
+    // The aborted turn replays as a short marker, so its 20,000 characters stay out of
+    // the estimate while the turn itself stays visible to the model.
+    const estimatedInputTokens = Math.ceil(
+      ((userText.length + FAILED_ASSISTANT_REPLAY_TEXT.length) / 4) * 1.25,
+    );
     expect(params.max_completion_tokens).toBe(10_000 - estimatedInputTokens - 1);
   });
 

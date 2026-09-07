@@ -1,7 +1,7 @@
+import { hasOnlyAssistantReasoningContent } from "@openclaw/ai/internal/shared";
 /** Owns side-effect-sensitive retry and silent-reply recovery policy. */
 import { isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
-import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
 import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,

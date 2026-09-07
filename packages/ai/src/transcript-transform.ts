@@ -1,5 +1,9 @@
 import { resolveModelBoundThinkingReplayMode } from "./providers/anthropic-model-contract.js";
 import { isImageWithMediaPayload } from "./providers/tool-result-text.js";
+import {
+  FAILED_ASSISTANT_REPLAY_TEXT,
+  resolveFailedAssistantReplay,
+} from "./replay-turn-classification.js";
 import type {
   Api,
   AssistantMessage,
@@ -173,7 +177,18 @@ export function transformMessages<TApi extends Api>(
     if (message.role === "assistant") {
       message = transformAssistant(message, model, toolCallIdMap, normalizeToolCallId);
       flushToolCalls();
-      if (message.stopReason === "error" || message.stopReason === "aborted") {
+      const failedReplay = resolveFailedAssistantReplay(message, { pairingAware: false });
+      if (failedReplay === "drop") {
+        continue;
+      }
+      if (failedReplay === "marker") {
+        // Dropping a text-only failure leaves the user message before it looking
+        // unanswered, so the model merges it with the next request and can redo work
+        // the turn already did. Same policy the host transport transform applies.
+        result.push({
+          ...message,
+          content: [{ type: "text", text: FAILED_ASSISTANT_REPLAY_TEXT }],
+        });
         continue;
       }
       pendingToolCalls = message.content.filter((block): block is ToolCall => {
