@@ -1,6 +1,21 @@
 // Covers exec allowlist pattern matching.
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { matchAllowlist, type ExecAllowlistEntry } from "./exec-approvals.js";
+
+const nativeParityFixture = JSON.parse(
+  fs.readFileSync(
+    path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../test/fixtures/exec-arg-pattern-native-parity.json",
+    ),
+    "utf8",
+  ),
+) as {
+  cases: Array<{ id: string; pattern: string; accept: boolean; argument: string }>;
+};
 
 describe("exec allowlist matching", () => {
   const baseResolution = {
@@ -154,6 +169,94 @@ describe("exec allowlist matching", () => {
       ];
 
       expect(matchAllowlist(entries, resolution, ["python3", "a.py"])).toBeNull();
+    });
+
+    it.each(nativeParityFixture.cases)(
+      "shares native matcher parity for $id",
+      ({ pattern, accept, argument }) => {
+        const entry = { pattern: "/usr/bin/python3", argPattern: pattern };
+        const match = matchAllowlist([entry], resolution, ["python3", argument]);
+        if (accept) {
+          expect(match).toBe(entry);
+        } else {
+          expect(match).toBeNull();
+        }
+      },
+    );
+
+    it("rejects nested-repetition patterns before they can authorize a matching command", () => {
+      const argPattern = "(a+)+$";
+      const unsafe = { pattern: "/usr/bin/python3", argPattern };
+
+      expect(new RegExp(argPattern).test("aaaa")).toBe(true);
+      expect(matchAllowlist([unsafe], resolution, ["python3", "aaaa"])).toBeNull();
+    });
+
+    it("rejects adjacent overlapping unbounded argPatterns before they can authorize", () => {
+      const argPattern = "^a*a*a*a*a*a*a*a*a*a*b$";
+      const unsafe = { pattern: "/usr/bin/python3", argPattern };
+
+      expect(matchAllowlist([unsafe], resolution, ["python3", `${"a".repeat(40)}!`])).toBeNull();
+    });
+
+    it("rejects overlapping unbounded argPatterns separated by a zero-minimum atom", () => {
+      const optionalSep = { pattern: "/usr/bin/python3", argPattern: "^a*x?a*x?a*x?a*b$" };
+      const starSep = { pattern: "/usr/bin/python3", argPattern: "^a*x*a*b$" };
+      const requiredSep = { pattern: "/usr/bin/python3", argPattern: "^a*xa*b$" };
+
+      expect(
+        matchAllowlist([optionalSep], resolution, ["python3", `${"a".repeat(40)}b`]),
+      ).toBeNull();
+      expect(matchAllowlist([starSep], resolution, ["python3", `${"a".repeat(40)}b`])).toBeNull();
+      expect(matchAllowlist([requiredSep], resolution, ["python3", "axab"])).toBe(requiredSep);
+    });
+
+    it("rejects adjacent alternation groups whose complete branch unions overlap", () => {
+      const overlapping = { pattern: "/usr/bin/python3", argPattern: "^(a|b)*(b|c)*z$" };
+      const disjoint = { pattern: "/usr/bin/python3", argPattern: "^(a|x)*(b|y)*z$" };
+
+      expect(matchAllowlist([overlapping], resolution, ["python3", "bbbbz"])).toBeNull();
+      expect(
+        matchAllowlist(
+          [{ pattern: "/usr/bin/python3", argPattern: "^((a|b))*((b|c))*z$" }],
+          resolution,
+          ["python3", "bbbbz"],
+        ),
+      ).toBeNull();
+      expect(matchAllowlist([disjoint], resolution, ["python3", "axbyz"])).toBe(disjoint);
+    });
+
+    it("rejects repeated overlapping alternatives while preserving disjoint siblings", () => {
+      const duplicate = { pattern: "/usr/bin/python3", argPattern: "^(a|a)+$" };
+      const overlapping = { pattern: "/usr/bin/python3", argPattern: "^(aa|a.)+$" };
+      const safe = { pattern: "/usr/bin/python3", argPattern: "^(?:aa|bb)+$" };
+      const fixedWidthDisjoint = { pattern: "/usr/bin/python3", argPattern: "^(ab|ac)+$" };
+
+      expect(matchAllowlist([duplicate], resolution, ["python3", "aaaa"])).toBeNull();
+      expect(matchAllowlist([overlapping], resolution, ["python3", "aaaa"])).toBeNull();
+      expect(matchAllowlist([safe], resolution, ["python3", "aabb"])).toBe(safe);
+      expect(matchAllowlist([fixedWidthDisjoint], resolution, ["python3", "abac"])).toBe(
+        fixedWidthDisjoint,
+      );
+    });
+
+    it("falls back to an explicit path-only sibling when an argPattern is rejected", () => {
+      const unsafe = { pattern: "/usr/bin/python3", argPattern: "(a+)+$" };
+      const pathOnly = { pattern: "/usr/bin/python3" };
+
+      expect(matchAllowlist([unsafe, pathOnly], resolution, ["python3", "aaaa"])).toBe(pathOnly);
+    });
+
+    it("preserves blank and whitespace-sensitive legacy argPattern semantics", () => {
+      const blank = { pattern: "/usr/bin/python3", argPattern: "" };
+      const whitespace = { pattern: "/usr/bin/python3", argPattern: "^ a $" };
+      const escapedSpace = { pattern: "/usr/bin/python3", argPattern: String.raw`\ ` };
+
+      expect(matchAllowlist([blank], resolution, ["python3", "anything"])).toBe(blank);
+      expect(matchAllowlist([whitespace], resolution, ["python3", " a "])).toBe(whitespace);
+      expect(matchAllowlist([whitespace], resolution, ["python3", "a"])).toBeNull();
+      expect(matchAllowlist([escapedSpace], resolution, ["python3", " "])).toBe(escapedSpace);
+      expect(matchAllowlist([escapedSpace], resolution, ["python3", "x"])).toBeNull();
     });
 
     it("rejects split-arg bypasses against single-arg auto-generated argPattern", () => {

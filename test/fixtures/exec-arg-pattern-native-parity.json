@@ -1,0 +1,94 @@
+{
+  "cases": [
+    {
+      "id": "nested-plus",
+      "pattern": "(a+)+$",
+      "accept": false,
+      "argument": "aaaa"
+    },
+    {
+      "id": "adjacent-star",
+      "pattern": "^a*a*a*a*a*a*a*a*a*a*b$",
+      "accept": false,
+      "argument": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab"
+    },
+    {
+      "id": "unicode-property-adjacent",
+      "pattern": "^\\p{L}*\\p{L}*\\p{L}*z$",
+      "accept": false,
+      "argument": "AAAz"
+    },
+    {
+      "id": "unicode-property-identity-nested",
+      "pattern": "\\p{(a+)+}",
+      "accept": false,
+      "argument": "paaaa"
+    },
+    {
+      "id": "unicode-hex-adjacent",
+      "pattern": "\\u0041*\\u0041*",
+      "accept": false,
+      "argument": "AAAA"
+    },
+    {
+      "id": "unicode-property-alias-adjacent",
+      "pattern": "\\p{Script=Arabic}*\\p{sc=Arab}*",
+      "accept": false,
+      "argument": "ااا"
+    },
+    {
+      "id": "overlapping-unions",
+      "pattern": "^(a|b)*(b|c)*z$",
+      "accept": false,
+      "argument": "bbbbz"
+    },
+    {
+      "id": "wrapped-unions",
+      "pattern": "^((a|b))*((b|c))*z$",
+      "accept": false,
+      "argument": "bbbbz"
+    },
+    {
+      "id": "zero-minimum-omit",
+      "pattern": "^a*x?a*x?a*x?a*b$",
+      "accept": false,
+      "argument": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab"
+    },
+    {
+      "id": "invalid-regex",
+      "pattern": "[",
+      "accept": false,
+      "argument": "x"
+    },
+    {
+      "id": "safe-json-flag",
+      "pattern": "^--json$",
+      "accept": true,
+      "argument": "--json"
+    },
+    {
+      "id": "safe-json-flag-miss",
+      "pattern": "^--json$",
+      "accept": false,
+      "argument": "--files"
+    },
+    {
+      "id": "disjoint-stars",
+      "pattern": "^a*b*$",
+      "accept": true,
+      "argument": "aaabbb"
+    },
+    {
+      "id": "required-separator",
+      "pattern": "^a*xa*b$",
+      "accept": true,
+      "argument": "axab"
+    },
+    {
+      "id": "disjoint-unions",
+      "pattern": "^(a|x)*(b|y)*z$",
+      "accept": true,
+      "argument": "axbyz"
+    }
+  ]
+}

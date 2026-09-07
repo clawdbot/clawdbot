@@ -1651,6 +1651,7 @@
     {"id":"native.apple.78d18b006e111d1a","source":" WHERE gateway_id = ? AND route_generation IS ?","surface":"apple","sites":[{"kind":"conditional-branch","path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/WatchMessageJournal+Storage.swift"}]},
     {"id":"native.apple.0b5548d3903e9047","source":" [\\(initial)]","surface":"apple","sites":[{"kind":"conditional-branch","path":"apps/macos/Sources/OpenClawMacCLI/WizardCommand.swift"}]},
     {"id":"native.apple.27edc41026111de6","source":" [\\(initialIndices.map(String.init).joined(separator: \",\"))]","surface":"apple","sites":[{"kind":"conditional-branch","path":"apps/macos/Sources/OpenClawMacCLI/WizardCommand.swift"}]},
+    {"id":"native.apple.1a7cfafd3300c9d2","source":" || marker === ","surface":"apple","sites":[{"kind":"conditional-branch","path":"apps/macos/Sources/OpenClaw/ExecArgPatternSafetyJS.generated.swift"}]},
     {"id":"native.apple.d1b3ad5bfd7826d1","source":" · ssh \\(parsed.port)","surface":"apple","sites":[{"kind":"conditional-branch","path":"apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift"}]},
     {"id":"native.apple.e60c1ca944b5a0a5","source":" — \\(option.hint!)","surface":"apple","sites":[{"kind":"conditional-branch","path":"apps/macos/Sources/OpenClawMacCLI/WizardCommand.swift"}]},
     {"id":"native.apple.b6f001e69f4f4c76","source":"\"\\(trimmed)\"","surface":"apple","sites":[{"kind":"conditional-branch","path":"apps/ios/Sources/Chat/AppleReviewDemoChatTransport.swift"}]},

@@ -889,6 +889,62 @@ function securityAuditFindingToHealthFinding(finding: SecurityAuditFinding): Hea
   };
 }
 
+const execApprovalArgPatternCheck: HealthCheck = {
+  id: "core/doctor/exec-approval-arg-patterns",
+  kind: "core",
+  description: "Persisted exec approval argPatterns satisfy the runtime safety contract.",
+  source: "doctor",
+  async detect() {
+    const { collectRejectedExecArgPatterns } = await import("../commands/doctor-security.js");
+    return collectRejectedExecArgPatterns().map((finding) => {
+      const pattern =
+        finding.pattern.length > 120 ? `${finding.pattern.slice(0, 117)}...` : finding.pattern;
+      return {
+        checkId: "core/doctor/exec-approval-arg-patterns",
+        severity: "warning" as const,
+        message: `${finding.scope} exec approval ${JSON.stringify(pattern)} has a rejected argPattern (${finding.reason}).`,
+        target: finding.scope,
+        requirement: "Persisted exec approval argPatterns must pass the runtime safety guard.",
+        fixHint: "Remove the rejected entry, then re-approve the command if it is still needed.",
+      };
+    });
+  },
+  async repair(ctx, findings) {
+    const { repairRejectedExecArgPatterns } = await import("../commands/doctor-security.js");
+    const { resolveExecApprovalsDisplayPath } = await import("../infra/exec-approvals.js");
+    const count = findings.length;
+    const target = resolveExecApprovalsDisplayPath();
+    const effect = {
+      kind: "state" as const,
+      action: `remove ${count} rejected exec approval entr${count === 1 ? "y" : "ies"}`,
+      target,
+      dryRunSafe: false,
+    };
+    if (ctx.dryRun === true) {
+      return {
+        status: "repaired" as const,
+        changes: [
+          `Would remove ${count} rejected exec approval entr${count === 1 ? "y" : "ies"} from ${target}.`,
+        ],
+        effects: [effect],
+      };
+    }
+    const removed = repairRejectedExecArgPatterns();
+    return {
+      status: "repaired" as const,
+      changes: [
+        `Removed ${removed.length} rejected exec approval entr${removed.length === 1 ? "y" : "ies"} from ${target}. Re-approve any still-needed command through the normal allow-always flow.`,
+      ],
+      effects: [
+        {
+          ...effect,
+          action: `remove ${removed.length} rejected exec approval entr${removed.length === 1 ? "y" : "ies"}`,
+        },
+      ],
+    };
+  },
+};
+
 const openAIOAuthTlsCheck: HealthCheck = {
   id: "core/doctor/oauth-tls",
   kind: "core",
@@ -1438,6 +1494,7 @@ function createConvertedWorkflowChecks(
     createGatewayHealthCheck(deps),
     createGatewayDaemonCheck(deps),
     createSecurityCheck(deps),
+    execApprovalArgPatternCheck,
     browserCheck,
     openAIOAuthTlsCheck,
     hooksModelCheck,

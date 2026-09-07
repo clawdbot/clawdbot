@@ -84,6 +84,7 @@ export async function runStartupChannelMaintenanceHealth(
 export async function runSecurityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteInstallPolicyHealth } = await import("../commands/doctor-install-policy.js");
   const { noteSecurityWarnings } = await import("../commands/doctor-security.js");
+  await runCoreContributionHealth(ctx, ["core/doctor/exec-approval-arg-patterns"]);
   await noteSecurityWarnings(ctx.cfg);
   await noteInstallPolicyHealth(ctx.cfg, { deep: ctx.options.deep === true, env: ctx.env });
 }

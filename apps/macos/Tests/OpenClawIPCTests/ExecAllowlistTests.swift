@@ -16,6 +16,17 @@ struct ExecAllowlistTests {
         let cases: [Case]
     }
 
+    private struct ArgPatternParityFixture: Decodable {
+        struct Case: Decodable {
+            let id: String
+            let pattern: String
+            let accept: Bool
+            let argument: String
+        }
+
+        let cases: [Case]
+    }
+
     private struct WrapperResolutionParityFixture: Decodable {
         struct Case: Decodable {
             let id: String
@@ -399,6 +410,44 @@ struct ExecAllowlistTests {
             let entry = ExecAllowlistEntry(pattern: executable, argPattern: icuOnlyPattern)
             #expect(ExecAllowlistMatcher.match(entries: [entry], resolution: resolution("aa")) == nil)
         }
+    }
+
+    @Test func `arg pattern shares Node compileExecArgPattern reject and accept cases`() throws {
+        let executable = "/usr/bin/printf"
+        let fixtureURL = Self.fixtureURL(filename: "exec-arg-pattern-native-parity.json")
+        let data = try Data(contentsOf: fixtureURL)
+        let fixture = try JSONDecoder().decode(ArgPatternParityFixture.self, from: data)
+
+        for testCase in fixture.cases {
+            let entry = ExecAllowlistEntry(pattern: executable, argPattern: testCase.pattern)
+            let resolution = ExecCommandResolution(
+                rawExecutable: executable,
+                resolvedPath: executable,
+                resolvedRealPath: executable,
+                executableName: "printf",
+                cwd: nil,
+                argv: [executable, testCase.argument])
+            let match = ExecAllowlistMatcher.match(entries: [entry], resolution: resolution)
+            if testCase.accept {
+                #expect(match?.pattern == executable, "expected accept for \(testCase.id)")
+            } else {
+                #expect(match == nil, "expected reject for \(testCase.id)")
+            }
+        }
+    }
+
+    @Test func `arg pattern safety reports nested-repetition before JS construct`() {
+        let nested = ExecArgPatternSafety.compile("(a+)+$")
+        #expect(nested.accepted == false)
+        #expect(nested.reason == "unsafe-nested-repetition")
+
+        let adjacent = ExecArgPatternSafety.compile("^a*a*$")
+        #expect(adjacent.accepted == false)
+        #expect(adjacent.reason == "unsafe-nested-repetition")
+
+        let safe = ExecArgPatternSafety.compile("^--json$")
+        #expect(safe.accepted == true)
+        #expect(safe.reason == nil)
     }
 
     @Test func `arg pattern fails closed without argv or with invalid regex`() {

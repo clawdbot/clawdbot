@@ -5,6 +5,7 @@ import { safeRealpathSync } from "@openclaw/fs-safe/path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { matchesExecAllowlistPattern } from "./exec-allowlist-pattern.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
+import { compileExecArgPattern } from "./exec-arg-pattern.js";
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 import {
   resolveExecutablePath as resolveExecutableCandidatePath,
@@ -354,27 +355,26 @@ function matchArgPattern(
   const sep = argPattern.includes("\x00") ? "\x00" : " ";
   const argsString =
     sep === "\x00" ? renderGeneratedArgPatternSubject(argv) : argv.slice(1).join(sep);
-  try {
-    const regex = new RegExp(argPattern);
-    if (regex.test(argsString)) {
-      return true;
-    }
-    // On Windows, LLMs may use forward slashes (`C:/path`) or backslashes
-    // (`C:\path`) interchangeably.  Normalize to backslashes and retry so
-    // that an argPattern built from one style still matches the other.
-    // Use the caller-supplied target platform so Linux gateways evaluating
-    // Windows node commands also perform the normalization.
-    const effectivePlatform = normalizeLowercaseStringOrEmpty(platform ?? process.platform);
-    if (effectivePlatform.startsWith("win")) {
-      const normalized = argsString.replace(/\//g, "\\");
-      if (normalized !== argsString && regex.test(normalized)) {
-        return true;
-      }
-    }
-    return false;
-  } catch {
+  const compiled = compileExecArgPattern(argPattern);
+  if (!compiled.regex) {
     return false;
   }
+  if (compiled.regex.test(argsString)) {
+    return true;
+  }
+  // On Windows, LLMs may use forward slashes (`C:/path`) or backslashes
+  // (`C:\path`) interchangeably.  Normalize to backslashes and retry so
+  // that an argPattern built from one style still matches the other.
+  // Use the caller-supplied target platform so Linux gateways evaluating
+  // Windows node commands also perform the normalization.
+  const effectivePlatform = normalizeLowercaseStringOrEmpty(platform ?? process.platform);
+  if (effectivePlatform.startsWith("win")) {
+    const normalized = argsString.replace(/\//g, "\\");
+    if (normalized !== argsString && compiled.regex.test(normalized)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function hasPathSelector(value: string): boolean {

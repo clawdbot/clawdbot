@@ -22,6 +22,8 @@ excluded:
   - ../apps/macos/Sources/OpenClawProtocol/GatewayModels.swift
   # Generated (generate-host-env-security-policy-swift.mts)
   - ../apps/macos/Sources/OpenClaw/HostEnvSecurityPolicy.generated.swift
+  # Generated (generate-macos-exec-arg-pattern-safety.mts)
+  - ../apps/macos/Sources/OpenClaw/ExecArgPatternSafetyJS.generated.swift
 
 analyzer_rules:
   - unused_declaration
