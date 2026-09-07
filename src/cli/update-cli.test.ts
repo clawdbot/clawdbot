@@ -43,6 +43,7 @@ import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
+import * as windowsPrivateDirectory from "../infra/windows-private-directory.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
 import { ManagedPluginLifecycleError } from "../plugins/management-lifecycle-error.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
@@ -1901,6 +1902,15 @@ describe("update-cli", () => {
     }
     restartHealthTestControl.snapshot = undefined;
     vi.resetAllMocks();
+    // Service simulations do not provide foreign-platform ACL libraries. Keep
+    // real exclusive host creation; actual Windows runs retain the native DACL path.
+    if (sqliteHostPlatform !== "win32") {
+      vi.spyOn(windowsPrivateDirectory, "createPrivateWindowsDirectory").mockImplementation(
+        (directoryPath) => {
+          fsSync.mkdirSync(directoryPath, { mode: 0o700 });
+        },
+      );
+    }
     // Native-service platform simulations do not change the actual SQLite VFS.
     vi.spyOn(nodeSqlite, "resolveExistingSqliteFileUri").mockImplementation((file) =>
       existingHostUri(file, sqliteHostPlatform),
