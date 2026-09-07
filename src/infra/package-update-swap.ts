@@ -8,6 +8,7 @@ import {
 } from "./package-dist-inventory.js";
 import {
   activateStagedNpmPackageRoot,
+  discardPackageUpdateBackup,
   copyPackagePathEntry as copyPathEntry,
   PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
   packagePathEntriesMatch as pathEntriesMatch,
@@ -24,6 +25,7 @@ import {
 import {
   createPackageRecoveryTransaction,
   type PackageRecoveryHooks,
+  type PreparePackageRecovery,
   type PackageRecoveryTransaction,
   type PackageRecoveryEffectReceipt,
   type PackageRecoveryResult,
@@ -109,6 +111,7 @@ export async function swapStagedPackageInstall(params: {
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
   timeoutMs?: number;
   recovery?: PackageRecoveryHooks;
+  prepareRecovery?: PreparePackageRecovery;
 }): Promise<StagedPackageSwapResult> {
   const startedAt = Date.now();
   let activePackageRoot = params.installTarget.packageRoot;
@@ -155,23 +158,6 @@ export async function swapStagedPackageInstall(params: {
     targetLayout.globalRoot,
     `.openclaw.package-backup-${process.pid}-${Date.now()}`,
   );
-  const discardBackup = async (backupPath: string, label: string): Promise<string | null> => {
-    if (await removePackageUpdatePath(backupPath)) {
-      return null;
-    }
-    const retiredPath = path.join(
-      targetLayout.globalRoot,
-      path.basename(backupPath).replace(/^\.openclaw\./, ".openclaw-"),
-    );
-    try {
-      // Only obsolete backups enter npm's disposable namespace, after restoration
-      // or activation completes. Retirement cannot change the update outcome.
-      await fs.rename(backupPath, retiredPath);
-      return `preserved ${label} at ${retiredPath} for delayed cleanup`;
-    } catch {
-      return `preserved ${label} at ${backupPath}; remove it manually after verifying the installation`;
-    }
-  };
   let shimBackupDir: string | undefined;
   let hadPackage = false;
   let previousVersion: string | null = null;
@@ -296,7 +282,7 @@ export async function swapStagedPackageInstall(params: {
         [displacedCandidateRoot, "rejected candidate"],
       ] as const) {
         if (root) {
-          const cleanup = await discardBackup(root, label);
+          const cleanup = await discardPackageUpdateBackup(root, label, targetLayout.globalRoot);
           if (cleanup) {
             messages.push(cleanup);
           }
@@ -306,7 +292,10 @@ export async function swapStagedPackageInstall(params: {
     return messages;
   };
   try {
-    if (params.recovery && native) {
+    if (params.recovery && params.prepareRecovery) {
+      throw new Error("Package recovery may be supplied or prepared, never both");
+    }
+    if ((params.recovery || params.prepareRecovery) && native) {
       throw new Error("Durable package recovery is unavailable for this package-manager layout");
     }
     hadPackage = await (native ? pathEntryExists(targetSwapRoot) : baseline.exists(targetSwapRoot));
@@ -374,7 +363,7 @@ export async function swapStagedPackageInstall(params: {
         });
       }
     }
-    if (params.recovery) {
+    if (params.recovery || params.prepareRecovery) {
       if (shims.length > 64) {
         throw new Error("Package recovery launcher inventory exceeds 64 entries");
       }
@@ -391,10 +380,20 @@ export async function swapStagedPackageInstall(params: {
           candidate: await baseline.launcher(shim.source),
         });
       }
+      // Retain staging before entering the persistence owner, including a lost acknowledgement.
+      retained = true;
+      const recovery =
+        params.recovery ??
+        (await params.prepareRecovery!({
+          liveRoot: targetSwapRoot,
+          stageRoot: stagedSwapRoot,
+          previous: previousTree ?? null,
+          candidate,
+        }));
       recoveryTransaction = createPackageRecoveryTransaction(
         {
           version: 1,
-          transactionId: params.recovery.transactionId,
+          transactionId: recovery.transactionId,
           packageName: params.packageName,
           liveRoot: targetSwapRoot,
           stageRoot: stagedSwapRoot,
@@ -410,11 +409,10 @@ export async function swapStagedPackageInstall(params: {
           launchers,
           interruptedLaunchers: [],
         },
-        params.recovery,
+        recovery,
         params.timeoutMs,
       );
       // Persist the exact descriptor before service preparation or package mutation.
-      retained = true;
       await recoveryTransaction.prepare();
     }
     // Validation and launcher backup finish while the old Gateway is serving.
@@ -560,10 +558,10 @@ export async function swapStagedPackageInstall(params: {
           }
           completed = true;
           if (hadPackage) {
-            await discardBackup(backupRoot, "old package");
+            await discardPackageUpdateBackup(backupRoot, "old package", targetLayout.globalRoot);
           }
           if (shimBackupDir) {
-            await discardBackup(shimBackupDir, "shim backup");
+            await discardPackageUpdateBackup(shimBackupDir, "shim backup", targetLayout.globalRoot);
           }
         },
       });
@@ -705,8 +703,12 @@ export async function swapStagedPackageInstall(params: {
       };
     }
     const cleanup = [
-      hadPackage && !retained ? await discardBackup(backupRoot, "old package") : null,
-      shimBackupDir && !retained ? await discardBackup(shimBackupDir, "shim backup") : null,
+      hadPackage && !retained
+        ? await discardPackageUpdateBackup(backupRoot, "old package", targetLayout.globalRoot)
+        : null,
+      shimBackupDir && !retained
+        ? await discardPackageUpdateBackup(shimBackupDir, "shim backup", targetLayout.globalRoot)
+        : null,
     ];
     return {
       status: "committed",
@@ -727,7 +729,7 @@ export async function swapStagedPackageInstall(params: {
     recoveryTransaction?.activationFailed();
     if (error instanceof PackageUpdateActivationError) {
       if (shimBackupDir && !recoveryTransaction) {
-        await discardBackup(shimBackupDir, "shim backup");
+        await discardPackageUpdateBackup(shimBackupDir, "shim backup", targetLayout.globalRoot);
       }
       throw error;
     }

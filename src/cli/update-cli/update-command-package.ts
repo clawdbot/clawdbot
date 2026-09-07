@@ -2,7 +2,10 @@ import path from "node:path";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
-import type { PackageRecoveryHooks } from "../../infra/package-update-recovery.js";
+import type {
+  PackageRecoveryHooks,
+  PreparePackageRecovery,
+} from "../../infra/package-update-recovery.js";
 import {
   markPackagePostInstallDoctorAdvisory,
   runGlobalPackageUpdateSteps,
@@ -200,6 +203,7 @@ export type PackageInstallUpdateParams = {
   beforeActivate: () => Promise<void>;
   onTransaction: (transaction: PackageUpdateTransaction) => void;
   recovery?: PackageRecoveryHooks;
+  prepareRecovery?: PreparePackageRecovery;
 };
 
 export async function runPackageInstallUpdate(
@@ -252,6 +256,7 @@ export async function runPackageInstallUpdate(
     beforeActivate: params.beforeActivate,
     onTransaction: params.onTransaction,
     recovery: params.recovery,
+    prepareRecovery: params.prepareRecovery,
     installTarget,
     installSpec,
     packageName,

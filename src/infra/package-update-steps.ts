@@ -9,7 +9,7 @@ import { formatErrorMessage } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
 import { completePendingPackageLifecycle } from "./package-lifecycle.js";
 import { readPackageVersionIfPresent } from "./package-update-integrity.js";
-import type { PackageRecoveryHooks } from "./package-update-recovery.js";
+import type { PackageRecoveryHooks, PreparePackageRecovery } from "./package-update-recovery.js";
 import {
   isBlockingPackageUpdateStep,
   PackageUpdateActivationError,
@@ -671,6 +671,7 @@ export async function runGlobalPackageUpdateSteps(params: {
   beforeActivate?: () => Promise<void>;
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
   recovery?: PackageRecoveryHooks;
+  prepareRecovery?: PreparePackageRecovery;
   expectedGitCheckout?: GitRuntimeIdentity;
   activateGitRoot?: string;
 }): Promise<PackageUpdateStepsResult> {
@@ -680,6 +681,7 @@ export async function runGlobalPackageUpdateSteps(params: {
     params.beforeActivate ||
     params.onTransaction ||
     params.recovery ||
+    params.prepareRecovery ||
     params.activateGitRoot,
   );
   let stagedInstall: StagedPackageInstall | null = null;
@@ -1182,6 +1184,13 @@ export async function runGlobalPackageUpdateSteps(params: {
             liveTreeMutated = true;
           },
           onTransaction: params.onTransaction,
+          prepareRecovery: params.prepareRecovery
+            ? async (source) => {
+                // Startup persistence may commit before its acknowledgement fails.
+                recoveryOwnsStage = true;
+                return await params.prepareRecovery!(source);
+              }
+            : undefined,
           recovery: recovery
             ? {
                 ...recovery,

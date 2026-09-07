@@ -162,6 +162,11 @@ export type PackageRecoveryEffectReceipt = {
     outcome: "completed" | "interrupted",
   ) => Promise<void>;
 };
+/** The package owner supplies verified staging facts before any live mutation. */
+export type PreparePackageRecovery = (
+  source: Pick<PackageTransactionDescriptor, "liveRoot" | "stageRoot" | "previous" | "candidate">,
+) => Promise<PackageRecoveryHooks>;
+
 export type PackageRecoveryHooks = {
   transactionId: string;
   /** Persist package facts only. For selection, validate Recovery's ALREADY

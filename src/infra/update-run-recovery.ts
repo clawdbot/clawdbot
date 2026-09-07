@@ -11,10 +11,12 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import type { PackageRecoveryVerified } from "./package-update-recovery.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { ensureUpdateRunLedgerSchema } from "./update-run-ledger.js";
 import { appendUpdateRecoveryAfterImage } from "./update-run-recovery-after-image.js";
 import { UPDATE_RECOVERY_KEY_END, UPDATE_RECOVERY_KEY_PREFIX } from "./update-run-recovery-keys.js";
+import { parseRecoveryPackageObservation } from "./update-run-recovery-package-schema.js";
 import {
   UpdateRecoveryRecordSchema,
   UpdateRecoveryReadinessReceiptSchema,
@@ -107,7 +109,10 @@ export function assertNoPendingUpdateRecovery(options: OpenClawStateDatabaseOpti
   }
 }
 export function beginUpdateRecovery(
-  input: Pick<UpdateRecoveryRecord, "runId" | "from" | "to">,
+  input: Pick<UpdateRecoveryRecord, "runId" | "from" | "to"> & {
+    /** Fresh package-owner observation, atomically persisted with the initial claim. */
+    initialPackage?: PackageRecoveryVerified;
+  },
   fence: UpdateRecoveryFence,
   options: OpenClawStateDatabaseOptions = {},
 ): UpdateRecoveryRecord {
@@ -130,17 +135,35 @@ export function beginUpdateRecovery(
       if (!row || row.status !== "running") {
         throw new Error("Recovery requires an existing running update history record");
       }
+      const { initialPackage, ...runtime } = input;
+      const observed = initialPackage ? parseRecoveryPackageObservation(initialPackage) : undefined;
+      if (
+        observed &&
+        (observed.descriptor.liveRoot !== input.from.root ||
+          input.to.root !== input.from.root ||
+          observed.descriptor.previous?.version !== input.from.version ||
+          observed.descriptor.candidate.version !== input.to.version ||
+          observed.descriptor.retention !== null ||
+          observed.descriptor.interruptedLaunchers.length ||
+          observed.observation.previous !== "live" ||
+          observed.observation.candidate !== "staged" ||
+          !["previous", "both"].includes(observed.observation.launchers) ||
+          observed.observation.successorLive)
+      ) {
+        throw new UpdateRecoveryConflictError();
+      }
       const now = Date.now();
       const env = options.env ?? process.env;
       const stateDir = resolveStateDir(env);
       const record: UpdateRecoveryRecord = {
-        ...input,
+        ...runtime,
+        ...(observed ? { package: { descriptor: observed.descriptor, observed } } : {}),
         source: {
           stateDir,
           configPath: resolveConfigPath(env, stateDir),
           profile: normalizeProfileName(env.OPENCLAW_PROFILE),
         },
-        transactionId: randomUUID(),
+        transactionId: observed?.descriptor.transactionId ?? randomUUID(),
         revision: 0,
         claimId: randomUUID(),
         claimKind: "initial",

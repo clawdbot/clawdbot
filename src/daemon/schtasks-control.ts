@@ -42,6 +42,7 @@ import {
 import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
 import { ScheduledTaskAutoStartRecoveryError } from "./schtasks-update-recovery.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
+import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import type {
   GatewayServiceControlArgs,
   GatewayServiceEnv,
@@ -260,14 +261,18 @@ export async function suspendScheduledTaskAutoStartForUpdate(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
   options?: { beforeMutation?: () => Promise<void>; restoreOnFailure?: boolean },
 ): Promise<boolean> {
-  return changeScheduledTaskEnabledState({ env, enabled: false, ...options });
+  return withGatewayServiceOperationLock(env, async () =>
+    changeScheduledTaskEnabledState({ env, enabled: false, ...options }),
+  );
 }
 
 export async function resumeScheduledTaskAutoStartAfterUpdate(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
   options?: { beforeMutation?: () => Promise<void> },
 ): Promise<boolean> {
-  return changeScheduledTaskEnabledState({ env, enabled: true, ...options });
+  return withGatewayServiceOperationLock(env, async () =>
+    changeScheduledTaskEnabledState({ env, enabled: true, ...options }),
+  );
 }
 
 async function shouldControlStartupEntry(env: GatewayServiceEnv): Promise<boolean> {

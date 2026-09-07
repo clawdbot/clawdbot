@@ -31,6 +31,7 @@ import {
 } from "./schtasks.js";
 import { mergeGatewayServiceEnv } from "./service-env-merge.js";
 import { resolveServiceEntrypoint } from "./service-layout.js";
+import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import {
   createServiceRuntimeInspectionFailure,
   type GatewayServiceRuntime,
@@ -456,8 +457,13 @@ function guardGatewayServiceMutation<TArgs extends { env?: GatewayServiceEnv }, 
     if (args.env && args.env !== process.env) {
       assertGatewayServiceMutationAllowed(action, args.env);
     }
-    await assertFutureConfigActionAllowed(action);
-    return await mutate(args);
+    return await withGatewayServiceOperationLock(args.env ?? process.env, async (assertCurrent) => {
+      await assertFutureConfigActionAllowed(action);
+      assertCurrent();
+      const result = await mutate(args);
+      assertCurrent();
+      return result;
+    });
   };
 }
 

@@ -144,3 +144,28 @@ export async function restoreNpmPackageRoot(params: {
     throw error;
   }
 }
+
+/** Retire only obsolete backups after restoration or verified activation. */
+export async function discardPackageUpdateBackup(
+  backupPath: string,
+  label: string,
+  globalRoot: string,
+): Promise<string | null> {
+  try {
+    await removePackagePath(backupPath);
+    return null;
+  } catch {
+    const retiredPath = path.join(
+      globalRoot,
+      path.basename(backupPath).replace(/^\.openclaw\./, ".openclaw-"),
+    );
+    try {
+      // npm may clean the disposable namespace on a later update. Only an
+      // already-obsolete backup can enter it; failure preserves the artifact.
+      await fs.rename(backupPath, retiredPath);
+      return `preserved ${label} at ${retiredPath} for delayed cleanup`;
+    } catch {
+      return `preserved ${label} at ${backupPath}; remove it manually after verifying the installation`;
+    }
+  }
+}

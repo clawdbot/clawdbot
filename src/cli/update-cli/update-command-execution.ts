@@ -81,6 +81,7 @@ import {
   type PreManagedServiceStop,
   type UpdateCommandRecoveryState,
 } from "./update-command-service.js";
+import { beginUpdateCommandStartup } from "./update-command-startup.js";
 
 const CLI_NAME = resolveCliName();
 
@@ -416,6 +417,21 @@ export async function executeMutableUpdate(params: {
     }
     return validation.steps;
   };
+  const prepareRecovery: PackageInstallUpdateParams["prepareRecovery"] =
+    params.opts.recovery || !params.opts.run?.executorFence
+      ? undefined
+      : async (source) => {
+          const startup = await beginUpdateCommandStartup({
+            opts: params.opts,
+            root: params.root,
+            env: ownedManagedUpdateContext?.env ?? params.opts.run!.env,
+            managedService: preManagedServiceStop?.serviceUpdateVerdict?.kind === "owned",
+            timeoutMs: params.updateStepTimeoutMs,
+            source,
+            nodeRunner: params.packageUpdateNodeRunner,
+          });
+          return startup.hooks;
+        };
   const beforeActivate = async (roots: readonly string[] = [params.root]) => {
     assertUpdateCommandRecovery(params.opts);
     const env = ownedManagedUpdateContext?.env ?? params.opts.run?.env ?? process.env;
@@ -571,6 +587,7 @@ export async function executeMutableUpdate(params: {
               options: { env: params.opts.run!.env },
             })
           : undefined,
+        prepareRecovery,
         onTransaction: (transaction) => {
           packageTransaction = transaction;
         },
@@ -607,6 +624,7 @@ export async function executeMutableUpdate(params: {
             gitContextPrepared = true;
           }
         },
+        prepareRecovery,
         onTransaction: (transaction) => {
           packageTransaction = transaction;
         },
